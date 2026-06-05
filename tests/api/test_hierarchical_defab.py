@@ -253,10 +253,68 @@ class TestNestedCIUsesTrueSE_H6:
         )
         # The corrected, full expression must be present verbatim.
         assert (
-            "ate_std=(seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01))"
-            in source
+            "ate_std=(seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01))" in source
         ), "H6: API ate_std must be the cate_se-preferring expression"
         # The buggy raw-dispersion bridge must be gone.
         assert "ate_std=seg.cate_std or 0.01" not in source, (
             "H6 regression: API handler still feeds raw cate_std as the standard error"
         )
+
+
+class TestNestedCIWidthUsesSE_H6:
+    """H6 behavioral - drive the real handler with monkeypatched analyze() so the
+    returned segments carry a SMALL true SE (cate_se) but a LARGE per-unit
+    dispersion (cate_std). The aggregate nested CI must be built from the SE
+    (narrow), proving the call site no longer uses cate_std as the SE.
+    """
+
+    def test_aggregate_ci_is_narrow_when_cate_se_small(self, monkeypatch, hierarchical_request):
+        from fastapi.testclient import TestClient
+
+        from src.api.main import app
+        from src.causal_engine.hierarchical import HierarchicalAnalyzer
+
+        async def fake_analyze(self, X, treatment, outcome):  # noqa: ANN001
+            segs = []
+            for i, mean in enumerate([0.4, 0.5, 0.6]):
+                segs.append(
+                    types.SimpleNamespace(
+                        segment_id=i,
+                        segment_name=f"s{i}",
+                        n_samples=100,
+                        uplift_range=(0.0, 1.0),
+                        cate_mean=mean,
+                        cate_std=10.0,  # large per-unit dispersion (the WRONG quantity)
+                        cate_se=0.1,  # small true SE (the RIGHT quantity)
+                        cate_ci_lower=mean - 0.2,
+                        cate_ci_upper=mean + 0.2,
+                        cate_values=None,
+                        success=True,
+                        error_message=None,
+                    )
+                )
+            return types.SimpleNamespace(
+                segment_results=segs,
+                overall_ate=0.5,
+                overall_ate_ci_lower=0.3,
+                overall_ate_ci_upper=0.7,
+                segment_heterogeneity=0.0,
+                n_segments=3,
+                errors=[],
+                warnings=[],
+            )
+
+        monkeypatch.setattr(HierarchicalAnalyzer, "analyze", fake_analyze)
+
+        records = [{"promotion": i % 2, "trx": 100.0 + i, "age": 30 + i} for i in range(12)]
+        req = dict(hierarchical_request)
+        req["filters"] = {"estimation_data_records": records}
+
+        client = TestClient(app)
+        response = client.post("/api/causal/hierarchical/analyze", json=req)
+        assert response.status_code == 200, response.text[:300]
+        nested = response.json().get("nested_ci")
+        assert nested is not None, "nested_ci must be computed for >=1 successful segment"
+        width = nested["aggregate_ci_upper"] - nested["aggregate_ci_lower"]
+        # SE-based aggregate CI is narrow (~0.2); dispersion-based (cate_std=10) would be ~20+.
+        assert width < 1.0, f"H6: aggregate CI must use the true SE (narrow), got width={width}"
