@@ -185,7 +185,11 @@ class RefutationSuite:
     """Complete refutation analysis results.
 
     Attributes:
-        passed: Whether the overall suite passed (majority of tests)
+        passed: Whether the estimate is NOT blocked (gate is PROCEED or REVIEW).
+            NOTE: this is "not blocked", NOT "majority of tests passed" — a
+            REVIEW-band result has passed=True but is only borderline-robust
+            (see ``needs_review``). Consumers that need true robustness must
+            check ``gate_decision == PROCEED`` / ``needs_review``, not ``passed``.
         confidence_score: Weighted confidence score (0-1)
         tests: List of individual test results
         gate_decision: Aggregate decision (proceed/review/block)
@@ -227,10 +231,21 @@ class RefutationSuite:
         """Total number of tests run (excluding skipped)."""
         return sum(1 for t in self.tests if t.status != RefutationStatus.SKIPPED)
 
+    @property
+    def needs_review(self) -> bool:
+        """True when the gate decision is REVIEW (borderline-robust, NOT 'passed').
+
+        Distinct from ``passed`` (= not blocked): a REVIEW result is "valid to
+        use with caution" but must NOT be surfaced as robust/validated without
+        an expert-review caveat (H2).
+        """
+        return self.gate_decision == GateDecision.REVIEW
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "passed": self.passed,
+            "needs_review": self.needs_review,
             "confidence_score": self.confidence_score,
             "tests": [t.to_dict() for t in self.tests],
             "gate_decision": self.gate_decision.value,
@@ -287,6 +302,8 @@ class RefutationSuite:
             "individual_tests": individual_tests,
             "confidence_adjustment": self.confidence_score,
             "gate_decision": self.gate_decision.value,
+            # H2: distinct signal so a REVIEW-band result is not consumed as robust.
+            "needs_review": self.needs_review,
         }
 
 

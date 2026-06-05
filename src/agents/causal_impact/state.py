@@ -353,6 +353,9 @@ class CausalImpactState(TypedDict):
     fallback_used: NotRequired[bool]
     retry_count: NotRequired[int]
     refutation_passed: NotRequired[bool]
+    needs_review: NotRequired[bool]  # REVIEW-band gate: borderline-robust, not "passed"
+    gate_decision: NotRequired[str]  # refutation gate: "proceed" | "review" | "block"
+    refutation_error: NotRequired[str]  # set when refutation fails-closed (H1)
 
     # Audit chain (tamper-evident logging)
     audit_workflow_id: NotRequired[UUID]
@@ -410,7 +413,9 @@ class CausalImpactOutput(TypedDict):
     assumption_warnings: List[str]  # Contract REQUIRED - assumption violations
     actionable_recommendations: List[str]  # Contract field name (was recommendations)
     requires_further_analysis: bool  # Contract REQUIRED
-    refutation_passed: bool  # Contract REQUIRED - overall refutation status
+    refutation_passed: bool  # Contract REQUIRED - overall refutation status (PROCEED only)
+    needs_review: NotRequired[bool]  # REVIEW band: borderline-robust, expert review needed
+    gate_decision: NotRequired[str]  # refutation gate: "proceed" | "review" | "block"
     executive_summary: str  # Contract REQUIRED - 2-3 sentence summary
 
     # Rich metadata
