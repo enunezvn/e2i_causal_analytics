@@ -1182,10 +1182,20 @@ async def _execute_real_twin_retraining(
             target_column=target_column,
             geographic_scope=model_row.get("geographic_scope", "national"),
         )
+        # Log the trained artifact (estimator + preprocessor bundle) to MLflow
+        # FIRST so the metadata row references a REAL, loadable model_uri rather
+        # than the old fabricated ``models:/.../latest`` stub (#705 H4). Without
+        # this, a retrained model could never be reloaded at /simulate time.
+        # save_twin_artifacts uses the sync mlflow client → run off the loop.
+        from src.digital_twin import twin_persistence
+
+        artifact_ref = await asyncio.to_thread(twin_persistence.save_twin_artifacts, generator)
         persisted_id = await repo.save_model(
             config=config,
             metrics=metrics,
             model_artifact=getattr(generator, "model", None),
+            mlflow_run_id=artifact_ref.run_id,
+            mlflow_model_uri=artifact_ref.model_uri,
         )
     except Exception as e:  # noqa: BLE001 — durable persistence failure → fail closed
         return await _mark_failed(

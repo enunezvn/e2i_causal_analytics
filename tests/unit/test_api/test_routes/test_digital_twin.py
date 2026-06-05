@@ -180,6 +180,11 @@ def mock_twin_repository():
             "training_samples": 5000,
             "is_active": True,
             "created_at": datetime.now(timezone.utc),
+            # Real MLflow refs so the route's load-before-generate step (#705 H4)
+            # has something to resolve; hydration itself is patched in tests via
+            # the mock_twin_hydrate fixture.
+            "mlflow_model_uri": "models:/m-test",
+            "mlflow_run_id": "run-test",
         }
         instance.list_active_models.return_value = [mock_model]
 
@@ -223,6 +228,18 @@ def mock_twin_repository():
         instance.get_model_fidelity_records.return_value = [mock_fidelity_record]
 
         yield instance
+
+
+@pytest.fixture
+def mock_twin_hydrate():
+    """Patch the MLflow round-trip so route tests don't touch a real registry.
+
+    The real hydration is covered by test_twin_persistence.py; here we only need
+    the route's load-before-generate step (#705 H4) to succeed so the simulation
+    flow proceeds to the (mocked) generator/engine.
+    """
+    with patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True) as m:
+        yield m
 
 
 @pytest.fixture
@@ -393,7 +410,7 @@ async def test_get_simulation_history_repo_error_is_generic(mock_twin_repository
 
 @pytest.mark.asyncio
 async def test_compare_scenarios_returns_result(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """POST /simulations/compare must run the base + alternative scenarios and
     return a comparison with a best_scenario_index."""
@@ -426,7 +443,7 @@ async def test_compare_scenarios_returns_result(
 
 @pytest.mark.asyncio
 async def test_compare_scenarios_error_is_generic(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """Compare failure must NOT leak raw exception text in the 5xx detail."""
     from src.api.routes.digital_twin import (
@@ -459,7 +476,7 @@ async def test_compare_scenarios_error_is_generic(
 
 @pytest.mark.asyncio
 async def test_run_simulation_success(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """Test running a successful simulation."""
     from src.api.routes.digital_twin import (
@@ -494,7 +511,7 @@ async def test_run_simulation_success(
 
 @pytest.mark.asyncio
 async def test_run_simulation_with_filters(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """Test simulation with population filters."""
     from src.api.routes.digital_twin import (
@@ -527,7 +544,7 @@ async def test_run_simulation_with_filters(
 
 @pytest.mark.asyncio
 async def test_run_simulation_with_specific_model(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """Test simulation with specific model ID."""
     from src.api.routes.digital_twin import (
@@ -556,7 +573,7 @@ async def test_run_simulation_with_specific_model(
 
 @pytest.mark.asyncio
 async def test_run_simulation_validation_error(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """Test simulation with validation error."""
     from src.api.routes.digital_twin import (
@@ -586,7 +603,7 @@ async def test_run_simulation_validation_error(
 
 @pytest.mark.asyncio
 async def test_run_simulation_general_error(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """Test simulation with general error."""
     from src.api.routes.digital_twin import (
@@ -612,6 +629,86 @@ async def test_run_simulation_general_error(
         await run_simulation(request, user)
 
     assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_503_when_no_active_model(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
+    """No trained model for the brand/twin_type → honest 503 (#705 H4).
+
+    Before H4 a fresh untrained generator raised RuntimeError → an opaque 500.
+    The endpoint must fail closed with 503 + Retry-After and NEVER fabricate a
+    result, so generate() is never even reached.
+    """
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    mock_twin_repository.list_active_models.return_value = []
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign", duration_weeks=8
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await run_simulation(request, user)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers and "Retry-After" in exc_info.value.headers
+    mock_twin_generator.generate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_503_when_model_unloadable(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+):
+    """An active model row whose artifact can't be hydrated → 503, not 500/fake."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    mock_twin_repository.list_active_models.return_value = [
+        {
+            "model_id": str(uuid4()),
+            "twin_type": "hcp",
+            "brand": "Remibrutinib",
+            "mlflow_model_uri": "models:/m-gone",
+            "mlflow_run_id": "run-gone",
+            "is_active": True,
+        }
+    ]
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign", duration_weeks=8
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=False):
+        with pytest.raises(HTTPException) as exc_info:
+            await run_simulation(request, user)
+
+    assert exc_info.value.status_code == 503
+    mock_twin_generator.generate.assert_not_called()
 
 
 # =============================================================================
@@ -1058,7 +1155,7 @@ async def test_get_fidelity_report_poor_performance(mock_fidelity_tracker, mock_
 
 @pytest.mark.asyncio
 async def test_simulation_with_all_intervention_params(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
 ):
     """Test simulation with all intervention parameters."""
     from src.api.routes.digital_twin import (
@@ -1154,7 +1251,11 @@ def _heavy_compute_one_slot(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_simulation_rejects_when_heavy_compute_saturated(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository, _heavy_compute_one_slot
+    mock_twin_generator,
+    mock_simulation_engine,
+    mock_twin_repository,
+    mock_twin_hydrate,
+    _heavy_compute_one_slot,
 ):
     """When the per-worker heavy-compute slot is exhausted, /simulate must reject
     fast (HeavyComputeSaturated) instead of running another ~1.3 GiB simulation
@@ -1192,7 +1293,11 @@ async def test_run_simulation_rejects_when_heavy_compute_saturated(
 
 @pytest.mark.asyncio
 async def test_run_simulation_succeeds_when_slot_available(
-    mock_twin_generator, mock_simulation_engine, mock_twin_repository, _heavy_compute_one_slot
+    mock_twin_generator,
+    mock_simulation_engine,
+    mock_twin_repository,
+    mock_twin_hydrate,
+    _heavy_compute_one_slot,
 ):
     """With a free slot, /simulate runs through the real slot + bounded executor
     and returns the unchanged success response shape."""
@@ -1339,9 +1444,24 @@ async def test_simulate_save_path_uses_injected_client(mock_twin_generator, mock
     result.effect_heterogeneity.model_dump.return_value = {}
     result.memory_usage_mb = 0.0
 
-    with patch(
-        "src.memory.services.factories.get_async_supabase_client",
-        new=AsyncMock(return_value=fake_client),
+    # This test targets the SAVE path; bypass model resolution/loading (covered by
+    # test_twin_persistence.py + the 503 tests) so it reaches save_simulation.
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=fake_client),
+        ),
+        patch(
+            "src.api.routes.digital_twin._resolve_active_model_row",
+            new=AsyncMock(
+                return_value={
+                    "model_id": str(uuid4()),
+                    "mlflow_model_uri": "models:/m-x",
+                    "mlflow_run_id": "run-x",
+                }
+            ),
+        ),
+        patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True),
     ):
         request = SimulateRequest(
             intervention=InterventionConfigRequest(

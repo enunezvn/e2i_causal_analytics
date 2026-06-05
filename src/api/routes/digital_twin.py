@@ -25,6 +25,7 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from enum import Enum
@@ -76,6 +77,74 @@ async def _get_twin_repo() -> "TwinRepository":
 
     client = await get_async_supabase_client()
     return TwinRepository(supabase_client=client)
+
+
+async def _resolve_active_model_row(
+    repo: Any,
+    *,
+    twin_type: Any,
+    brand: Any,
+    model_id: Optional[str],
+) -> Dict[str, Any]:
+    """Resolve the trained model row to simulate with, or fail closed with 503.
+
+    A fresh untrained ``TwinGenerator`` raises ``RuntimeError`` in ``generate()``
+    (surfacing as an opaque 500), and a ``UUID(int=0)`` sentinel would violate
+    the ``twin_simulations.model_id`` FK. Instead we require a REAL persisted
+    model: an explicit ``model_id`` when given, else the highest-fidelity active
+    model for the brand/twin_type. ``None`` → honest 503 + ``Retry-After`` (#705 H4).
+    """
+    if model_id:
+        row = await repo.get_model(UUID(model_id))
+    else:
+        actives = await repo.list_active_models(twin_type=twin_type, brand=brand.value)
+        row = actives[0] if actives else None
+
+    if not row:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No trained digital-twin model is available for {brand.value}/"
+                f"{twin_type.value}. Train a model before running a simulation."
+            ),
+            headers={"Retry-After": "30"},
+        )
+    return row
+
+
+async def _load_trained_generator(
+    *,
+    twin_type: Any,
+    brand: Any,
+    model_row: Dict[str, Any],
+) -> Any:
+    """Hydrate a ``TwinGenerator`` from a persisted model row, or fail closed (503).
+
+    The MLflow round-trip (``hydrate_generator``) is synchronous I/O, so it runs
+    off the event loop. A load failure is a fail-closed 503 — never a fabricated
+    or unscaled-prediction result.
+    """
+    from src.digital_twin import twin_persistence
+    from src.digital_twin.twin_generator import TwinGenerator
+
+    generator = TwinGenerator(twin_type=twin_type, brand=brand)
+    loaded = await asyncio.to_thread(
+        twin_persistence.hydrate_generator,
+        generator,
+        model_row.get("mlflow_model_uri"),
+        model_row.get("mlflow_run_id"),
+    )
+    if not loaded:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Trained model {model_row.get('model_id')} for {brand.value}/"
+                f"{twin_type.value} could not be loaded from the model registry. "
+                "Retry shortly."
+            ),
+            headers={"Retry-After": "30"},
+        )
+    return generator
 
 
 # =============================================================================
@@ -601,7 +670,6 @@ async def run_simulation(
     )
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
-    from src.digital_twin.twin_generator import TwinGenerator
 
     logger.info(f"Simulation requested for {request.intervention.intervention_type}")
 
@@ -638,11 +706,15 @@ async def run_simulation(
         twin_type = TwinType(request.twin_type.value)
         brand = Brand(request.brand.value)
 
-        # Initialize generator
-        generator = TwinGenerator(twin_type=twin_type, brand=brand)
-
-        # Get model ID (from generator or request)
-        model_id = UUID(request.model_id) if request.model_id else generator.model_id or UUID(int=0)
+        # Resolve a REAL trained model BEFORE generating: an explicit model_id, or
+        # the highest-fidelity active model for this brand/twin_type. No model →
+        # honest 503 (not a fresh untrained generator → opaque 500, and not a
+        # UUID(int=0) sentinel → twin_simulations.model_id FK violation) (#705 H4).
+        repo = await _get_twin_repo()
+        model_row = await _resolve_active_model_row(
+            repo, twin_type=twin_type, brand=brand, model_id=request.model_id
+        )
+        model_id = UUID(str(model_row["model_id"]))
 
         if heavy_offload_enabled():
             # P2 offload path (DARK by default): enqueue the heavy compute on
@@ -671,6 +743,10 @@ async def run_simulation(
                 ),
                 "calculate_heterogeneity": request.calculate_heterogeneity,
                 "model_id_value": str(model_id),
+                # The worker rebuilds a fresh generator, so it must hydrate the
+                # SAME persisted model before generating (#705 H4).
+                "model_uri": model_row.get("mlflow_model_uri"),
+                "model_run_id": model_row.get("mlflow_run_id"),
             }
             async_result = celery_app.send_task(
                 "src.tasks.simulate_population", args=[payload], queue="twins"
@@ -693,6 +769,10 @@ async def run_simulation(
             # If the per-worker slot budget is exhausted, heavy_compute_slot()
             # raises HeavyComputeSaturated on enter (mapped to a 503 + Retry-After
             # by the app exception handler) — nothing is queued.
+            generator = await _load_trained_generator(
+                twin_type=twin_type, brand=brand, model_row=model_row
+            )
+
             def _do_sim():
                 population = generator.generate(n=request.twin_count)
                 engine = SimulationEngine(
@@ -708,8 +788,7 @@ async def run_simulation(
             async with heavy_compute_slot():
                 result = await run_in_bounded_executor(_do_sim)
 
-        # Save simulation result
-        repo = await _get_twin_repo()
+        # Save simulation result (reuse the repo resolved above).
         await repo.save_simulation(result, request.brand.value)
 
         return SimulationResponse(
@@ -916,7 +995,6 @@ async def compare_scenarios(
     from src.digital_twin.models.simulation_models import InterventionConfig
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
-    from src.digital_twin.twin_generator import TwinGenerator
 
     logger.info(
         "Scenario comparison requested: base=%s alternatives=%d",
@@ -924,7 +1002,21 @@ async def compare_scenarios(
         len(request.alternative_scenarios),
     )
 
-    def _run_scenario(scenario: ScenarioSimulateRequest) -> SimulationResponse:
+    async def _load_for(scenario: ScenarioSimulateRequest) -> Any:
+        # Each scenario simulates against its own brand/twin_type trained model; a
+        # scenario with no loadable model fails the whole comparison closed (503),
+        # rather than generating from an untrained generator (#705 H4).
+        twin_type = TwinType(scenario.twin_type.value)
+        brand = Brand(scenario.brand)
+        model_row = await _resolve_active_model_row(
+            repo,
+            twin_type=twin_type,
+            brand=brand,
+            model_id=getattr(scenario, "model_id", None),
+        )
+        return await _load_trained_generator(twin_type=twin_type, brand=brand, model_row=model_row)
+
+    def _run_scenario(scenario: ScenarioSimulateRequest, generator: Any) -> SimulationResponse:
         intervention = InterventionConfig(
             intervention_type=scenario.intervention_type,
             target_regions=scenario.target_regions,
@@ -937,9 +1029,7 @@ async def compare_scenarios(
                 **scenario.parameters,
             },
         )
-        twin_type = TwinType(scenario.twin_type.value)
-        brand = Brand(scenario.brand)
-        generator = TwinGenerator(twin_type=twin_type, brand=brand)
+        # generator was hydrated from a real persisted model, so model_id is real.
         model_id = generator.model_id or UUID(int=0)
         population = generator.generate(n=scenario.twin_count)
         engine = SimulationEngine(
@@ -978,8 +1068,15 @@ async def compare_scenarios(
         )
 
     try:
-        base_result = _run_scenario(request.base_scenario)
-        alternative_results = [_run_scenario(s) for s in request.alternative_scenarios]
+        repo = await _get_twin_repo()
+        base_gen = await _load_for(request.base_scenario)
+        alt_gens = [await _load_for(s) for s in request.alternative_scenarios]
+
+        base_result = _run_scenario(request.base_scenario, base_gen)
+        alternative_results = [
+            _run_scenario(s, g)
+            for s, g in zip(request.alternative_scenarios, alt_gens, strict=True)
+        ]
 
         all_results = [base_result, *alternative_results]
         ates = [r.simulated_ate for r in all_results]
@@ -999,6 +1096,9 @@ async def compare_scenarios(
             comparison=comparison,
         )
 
+    except HTTPException:
+        # Honest 503 (no/unloadable model) must propagate, not collapse to 500.
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

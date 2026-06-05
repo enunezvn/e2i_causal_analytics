@@ -17,7 +17,7 @@ exercised with the REAL pydantic/dataclass models.
 from __future__ import annotations
 
 import json
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
@@ -51,6 +51,47 @@ def test_tasks_are_registered_in_the_app():
 
     assert "src.tasks.compute_shap_values" in celery_app.tasks
     assert "src.tasks.simulate_population" in celery_app.tasks
+    assert "src.tasks.train_twin_model" in celery_app.tasks
+
+
+def test_train_twin_model_task_name_and_route():
+    """The offline twin-training task must carry the name its ml-queue route
+    (celery_app.py) already expects (#705 H4)."""
+    from src.tasks.heavy_offload_tasks import train_twin_model
+
+    assert train_twin_model.name == "src.tasks.train_twin_model"
+    assert _route_queue(train_twin_model.name) == "ml"
+
+
+def test_train_twin_model_forwards_to_training_job():
+    """The task must build a real repo and forward the payload to the training job."""
+    from src.tasks.heavy_offload_tasks import train_twin_model
+
+    payload = {
+        "twin_type": "hcp",
+        "brand": "Remibrutinib",
+        "synthetic": True,
+        "n_rows": 1100,
+        "seed": 1,
+    }
+    with (
+        patch(
+            "src.digital_twin.training_job.train_and_persist_twin",
+            new=AsyncMock(return_value={"model_id": "m1", "data_provenance": "synthetic"}),
+        ) as mock_train,
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+        patch("src.digital_twin.twin_repository.TwinRepository", MagicMock()),
+    ):
+        out = train_twin_model.apply(args=[payload]).get()
+
+    assert out["model_id"] == "m1"
+    mock_train.assert_awaited_once()
+    kwargs = mock_train.await_args.kwargs
+    assert kwargs["synthetic"] is True
+    assert kwargs["n_rows"] == 1100
 
 
 # =============================================================================

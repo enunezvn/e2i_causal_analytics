@@ -340,6 +340,13 @@ async def test_worker_records_completion_across_boundary_via_durable_store(
     with (
         patch("src.digital_twin.twin_repository.TwinModelRepository", return_value=repo),
         patch("src.tasks.ab_testing_tasks.TwinGenerator", MagicMock(return_value=gen)),
+        # The mock generator has no real sklearn artifact; the real MLflow
+        # round-trip is covered by test_twin_persistence.py. Stub persistence with
+        # a real ref shape so this test exercises the durable-completion path only.
+        patch(
+            "src.digital_twin.twin_persistence.save_twin_artifacts",
+            return_value=MagicMock(run_id="run-x", model_uri="models:/m-x"),
+        ),
     ):
         out = await _execute_real_twin_retraining(
             retraining_job_id=job.job_id,
