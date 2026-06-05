@@ -535,9 +535,7 @@ class TestRobustnessValidationFlagDefaults:
 class TestRobustnessUnvalidatedLabelingOnRealPath:
     """M-reach3: the real (non-demo) pipeline must label its ATE as unrefuted."""
 
-    def test_sequential_real_response_is_labeled_unvalidated(
-        self, sequential_pipeline_request
-    ):
+    def test_sequential_real_response_is_labeled_unvalidated(self, sequential_pipeline_request):
         df = _make_small_estimation_dataframe()
         sequential_pipeline_request["filters"] = {
             "estimation_data_records": df.to_dict(orient="records"),
@@ -546,9 +544,7 @@ class TestRobustnessUnvalidatedLabelingOnRealPath:
             {"library": "dowhy", "estimator": "propensity_score_matching"},
             {"library": "econml", "estimator": "linear_dml"},
         ]
-        response = client.post(
-            "/api/causal/pipeline/sequential", json=sequential_pipeline_request
-        )
+        response = client.post("/api/causal/pipeline/sequential", json=sequential_pipeline_request)
         assert response.status_code == 200, response.text[:500]
         data = response.json()
         # Real ATE present but explicitly flagged as NOT robustness-validated.
@@ -558,17 +554,13 @@ class TestRobustnessUnvalidatedLabelingOnRealPath:
         # The caveat is also surfaced in the warnings list consumers already read.
         assert any("refut" in w.lower() for w in data.get("warnings", []))
 
-    def test_parallel_real_response_is_labeled_unvalidated(
-        self, parallel_pipeline_request
-    ):
+    def test_parallel_real_response_is_labeled_unvalidated(self, parallel_pipeline_request):
         df = _make_small_estimation_dataframe()
         parallel_pipeline_request["filters"] = {
             "estimation_data_records": df.to_dict(orient="records"),
         }
         parallel_pipeline_request["libraries"] = ["dowhy", "econml"]
-        response = client.post(
-            "/api/causal/pipeline/parallel", json=parallel_pipeline_request
-        )
+        response = client.post("/api/causal/pipeline/parallel", json=parallel_pipeline_request)
         assert response.status_code == 200, response.text[:500]
         data = response.json()
         assert data["robustness_validation_performed"] is False
