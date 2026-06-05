@@ -201,11 +201,25 @@ class TestRunSimulation:
 
         mock_repo = MagicMock()
         mock_repo.save_simulation = AsyncMock()
+        # #705 H4: /simulate resolves + loads an active model before generating.
+        mock_repo.list_active_models = AsyncMock(
+            return_value=[
+                {
+                    "model_id": "660e8400-e29b-41d4-a716-446655440000",
+                    "twin_type": "hcp",
+                    "brand": "Remibrutinib",
+                    "is_active": True,
+                    "mlflow_model_uri": "models:/m-x",
+                    "mlflow_run_id": "run-x",
+                }
+            ]
+        )
 
         with (
             patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator),
             patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine),
             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True),
         ):
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
@@ -235,11 +249,25 @@ class TestRunSimulation:
 
         mock_repo = MagicMock()
         mock_repo.save_simulation = AsyncMock()
+        # #705 H4: /simulate resolves + loads an active model before generating.
+        mock_repo.list_active_models = AsyncMock(
+            return_value=[
+                {
+                    "model_id": "660e8400-e29b-41d4-a716-446655440000",
+                    "twin_type": "hcp",
+                    "brand": "Remibrutinib",
+                    "is_active": True,
+                    "mlflow_model_uri": "models:/m-x",
+                    "mlflow_run_id": "run-x",
+                }
+            ]
+        )
 
         with (
             patch("src.digital_twin.twin_generator.TwinGenerator", return_value=mock_generator),
             patch("src.digital_twin.simulation_engine.SimulationEngine", return_value=mock_engine),
             patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo),
+            patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True),
         ):
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
@@ -260,7 +288,7 @@ class TestListSimulations:
     def test_list_simulations_success(self, mock_simulation_data):
         """Should list simulations with pagination."""
         mock_repo = MagicMock()
-        mock_repo.list_simulations = AsyncMock(return_value=[mock_simulation_data])
+        mock_repo.simulations.list_simulations = AsyncMock(return_value=[mock_simulation_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get("/api/digital-twin/simulations")
@@ -275,7 +303,7 @@ class TestListSimulations:
     def test_list_simulations_filter_by_brand(self, mock_simulation_data):
         """Should filter simulations by brand."""
         mock_repo = MagicMock()
-        mock_repo.list_simulations = AsyncMock(return_value=[mock_simulation_data])
+        mock_repo.simulations.list_simulations = AsyncMock(return_value=[mock_simulation_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get(
@@ -288,7 +316,7 @@ class TestListSimulations:
     def test_list_simulations_pagination(self, mock_simulation_data):
         """Should handle pagination parameters."""
         mock_repo = MagicMock()
-        mock_repo.list_simulations = AsyncMock(return_value=[mock_simulation_data])
+        mock_repo.simulations.list_simulations = AsyncMock(return_value=[mock_simulation_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get(
