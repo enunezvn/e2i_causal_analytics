@@ -3,6 +3,8 @@
 B9.4: Integration tests for hierarchical analysis in heterogeneous_optimizer agent.
 """
 
+import inspect
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -390,3 +392,28 @@ class TestGraphIntegration:
         assert "nested_ci" in annotations
         assert "segment_heterogeneity_score" in annotations
         assert "overall_hierarchical_ate" in annotations
+
+
+class TestNestedCIUsesTrueSE_H6:
+    """H6 - HierarchicalAnalyzerNode._run_hierarchical_analysis must build
+    SegmentEstimate.ate_std from the segment ATE's TRUE standard error
+    (seg.cate_se), not the per-unit CATE dispersion (seg.cate_std). cate_std
+    does not shrink with n; using it as the SE inflates the nested-CI inverse-
+    variance weights and I^2/tau^2, making the aggregate CI ~sqrt(n) too wide.
+    """
+
+    def test_node_builds_ate_std_from_cate_se(self):
+        source = inspect.getsource(HierarchicalAnalyzerNode._run_hierarchical_analysis)
+        assert "seg.cate_se" in source, (
+            "H6 regression: optimizer node must feed the true SE (seg.cate_se) "
+            "into SegmentEstimate.ate_std, not raw cate_std"
+        )
+        # NOTE: ruff format wraps the 28-space-indented ate_std=( ... ) call across
+        # lines (E501), so assert the contiguous INNER conditional that survives the
+        # reflow rather than the glued one-liner (per shard STALE-TEST-RISK guidance).
+        assert "seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01)" in source, (
+            "H6: optimizer node ate_std must be the cate_se-preferring expression"
+        )
+        assert "ate_std=seg.cate_std or 0.01" not in source, (
+            "H6 regression: optimizer node still feeds raw cate_std as the standard error"
+        )
