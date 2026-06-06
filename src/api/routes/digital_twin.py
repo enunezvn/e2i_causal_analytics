@@ -361,6 +361,14 @@ class SimulationResponse(BaseModel):
     is_significant: bool
     effect_direction: str
     created_at: datetime
+    data_provenance: Optional[str] = Field(
+        default=None,
+        description=(
+            "Origin of the ATE estimate: 'synthetic_uplift_v1' (synthetic-DGP-trained "
+            "uplift, ~constant per brand/intervention in v1) or 'rwd_uplift' (real-world). "
+            "None for legacy/error results."
+        ),
+    )
 
 
 class SimulationDetailResponse(SimulationResponse):
@@ -667,6 +675,7 @@ async def run_simulation(
     from src.digital_twin.models.simulation_models import (
         InterventionConfig,
         PopulationFilter,
+        SimulationStatus,
     )
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
@@ -775,10 +784,10 @@ async def run_simulation(
 
             def _do_sim():
                 population = generator.generate(n=request.twin_count)
-                engine = SimulationEngine(
-                    population=population,
-                    model_id=model_id,  # type: ignore[call-arg]
-                )
+                engine = SimulationEngine(population=population)
+                # Pin the resolved DB model id so twin_simulations.model_id FK holds
+                # (engine derives self.model_id from population otherwise) (#705 H4).
+                engine.model_id = model_id
                 return engine.simulate(
                     intervention_config=intervention,
                     population_filter=pop_filter,
@@ -787,6 +796,15 @@ async def run_simulation(
 
             async with heavy_compute_slot():
                 result = await run_in_bounded_executor(_do_sim)
+
+        # A FAILED engine result (sub-threshold population / estimation failure)
+        # carries ate=0.0 / REFINE and must NOT be surfaced as a 200 success or
+        # persisted as a real history row (N1). Fail honestly.
+        if result.status == SimulationStatus.FAILED:
+            raise HTTPException(
+                status_code=422,
+                detail=result.error_message or "Simulation could not be completed.",
+            )
 
         # Save simulation result (reuse the repo resolved above).
         await repo.save_simulation(result, request.brand.value)
@@ -818,6 +836,7 @@ async def run_simulation(
             is_significant=result.is_significant(),
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
+            data_provenance=result.data_provenance,
         )
 
     except HTTPException:
@@ -1042,11 +1061,18 @@ async def compare_scenarios(
         # Use the resolved DB model_id — never a UUID(int=0) sentinel (#705 H4).
         model_id = UUID(str(model_row["model_id"]))
         population = generator.generate(n=scenario.twin_count)
-        engine = SimulationEngine(
-            population=population,
-            model_id=model_id,  # type: ignore[call-arg]
-        )
+        engine = SimulationEngine(population=population)
+        engine.model_id = model_id
         result = engine.simulate(intervention_config=intervention)
+        # A failed scenario carries ate=0.0 / REFINE — fail the comparison closed
+        # rather than reporting a fake zero-effect scenario (N1). result.status is
+        # the domain SimulationStatus enum; compare on its value (SimulationStatus
+        # is not imported in compare_scenarios).
+        if result.status.value == "failed":
+            raise HTTPException(
+                status_code=422,
+                detail=result.error_message or "A scenario simulation could not be completed.",
+            )
 
         return SimulationResponse(
             simulation_id=str(result.simulation_id),
@@ -1075,6 +1101,7 @@ async def compare_scenarios(
             is_significant=result.is_significant(),
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
+            data_provenance=result.data_provenance,
         )
 
     try:

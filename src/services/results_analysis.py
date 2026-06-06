@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 from uuid import UUID
 
 import numpy as np
@@ -124,6 +124,16 @@ class FidelityComparison:
 
     # Calibration recommendations
     calibration_adjustment: Dict[str, Any] = field(default_factory=dict)
+
+
+class _SupportsEffectEstimate(Protocol):
+    """Minimal contract ``compare_with_twin_prediction`` needs from an actual-results
+    record: just the point effect estimate. Both ``ExperimentResults`` and the
+    repository's ``ExperimentResultRecord`` satisfy it structurally, so the new
+    ``compare_experiment_to_twin`` convenience method can feed records straight
+    through without a cast/ignore (#705 N2)."""
+
+    effect_estimate: float
 
 
 @dataclass
@@ -517,7 +527,7 @@ class ResultsAnalysisService:
         self,
         experiment_id: UUID,
         twin_simulation_id: UUID,
-        actual_results: ExperimentResults,
+        actual_results: _SupportsEffectEstimate,
         predicted_effect: float,
         predicted_ci_lower: float,
         predicted_ci_upper: float,
@@ -589,6 +599,63 @@ class ResultsAnalysisService:
         )
 
         return result
+
+    async def compare_experiment_to_twin(
+        self,
+        experiment_id: UUID,
+        twin_simulation_id: Optional[UUID] = None,
+    ) -> FidelityComparison:
+        """Fetch actual results + the twin's predicted effect/CI, then compare.
+
+        Convenience over compare_with_twin_prediction (the 6-arg primitive): both
+        callers — the experiments fidelity route and the fidelity_tracking_update
+        task — passed only the two ids with a ``# type: ignore[call-arg]`` and
+        500'd (#705 N2/H9). Reads the REAL persisted twin columns
+        (simulated_ate / _ci_*); fabricates nothing.
+
+        The fidelity route always supplies an explicit ``twin_simulation_id``. The
+        ``None`` branch falls back to the most-recent simulation **globally** —
+        ``twin_simulations`` has no ``experiment_id`` column, so it cannot yet be
+        scoped to the experiment. That branch is only reachable by the (currently
+        un-wired) fidelity task; R4-H9 tightens the twin<->experiment resolution
+        when it wires that task. Documented limitation, not a silent fabrication.
+        """
+        from src.digital_twin.twin_repository import TwinRepository
+        from src.memory.services.factories import get_async_supabase_client
+        from src.repositories.ab_results import ABResultsRepository
+
+        results = await ABResultsRepository().get_results(experiment_id)
+        if not results:
+            raise ValueError(f"No computed results for experiment {experiment_id}")
+        actual_results = results[0]  # newest (get_results orders computed_at desc)
+
+        client = await get_async_supabase_client()
+        repo = TwinRepository(supabase_client=client)
+        if twin_simulation_id is not None:
+            sim = await repo.get_simulation(twin_simulation_id)
+        else:
+            # Newest simulation GLOBALLY (not experiment-scoped — see docstring).
+            sims = await repo.simulations.list_simulations(limit=1)
+            sim = sims[0] if sims else None
+        if not sim:
+            raise ValueError(f"No twin simulation found ({twin_simulation_id})")
+
+        def _f(obj: Any, key: str) -> float:
+            v = obj.get(key) if isinstance(obj, dict) else getattr(obj, key)
+            return float(v)
+
+        resolved_sim_id = twin_simulation_id or UUID(
+            str(sim["simulation_id"] if isinstance(sim, dict) else sim.simulation_id)
+        )
+
+        return await self.compare_with_twin_prediction(
+            experiment_id=experiment_id,
+            twin_simulation_id=resolved_sim_id,
+            actual_results=actual_results,
+            predicted_effect=_f(sim, "simulated_ate"),
+            predicted_ci_lower=_f(sim, "simulated_ci_lower"),
+            predicted_ci_upper=_f(sim, "simulated_ci_upper"),
+        )
 
     def _calculate_fidelity_score(
         self,
