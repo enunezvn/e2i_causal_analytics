@@ -80,7 +80,10 @@ async def test_agent_run_copies_flag_from_input_into_initial_state() -> None:
 
     captured: dict = {}
 
-    async def _capture_ainvoke(initial_state):
+    async def _capture_ainvoke(initial_state, **kwargs):
+        # ``**kwargs`` absorbs the ``config={"recursion_limit": ...}`` the agent
+        # now passes to graph.ainvoke (data_preparer recursion-limit fix); the
+        # mock must tolerate it or it raises TypeError before capturing.
         captured["initial_state"] = initial_state
         raise _StopAfterCapture()
 
@@ -108,7 +111,10 @@ async def test_agent_run_flag_defaults_false_when_absent() -> None:
 
     captured: dict = {}
 
-    async def _capture_ainvoke(initial_state):
+    async def _capture_ainvoke(initial_state, **kwargs):
+        # ``**kwargs`` absorbs the ``config={"recursion_limit": ...}`` the agent
+        # now passes to graph.ainvoke (data_preparer recursion-limit fix); the
+        # mock must tolerate it or it raises TypeError before capturing.
         captured["initial_state"] = initial_state
         raise _StopAfterCapture()
 
