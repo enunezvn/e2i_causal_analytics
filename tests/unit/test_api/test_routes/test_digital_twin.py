@@ -132,46 +132,41 @@ def mock_twin_repository():
         }
         instance.simulations.list_simulations.return_value = [mock_sim]
 
-        # For get_simulation
-        mock_result = MagicMock()
-        mock_result.simulation_id = uuid4()
-        mock_result.model_id = uuid4()
-        mock_result.intervention_config = MagicMock()
-        mock_result.intervention_config.intervention_type = "email_campaign"
-        mock_result.intervention_config.extra_params = {"brand": "Remibrutinib", "twin_type": "hcp"}
-        mock_result.intervention_config.model_dump.return_value = {
-            "intervention_type": "email_campaign"
+        # For get_simulation — repo.get_simulation returns the RAW twin_simulations
+        # ROW (a dict), not an object (#705 H5b/H11). Mirror the real row shape.
+        mock_result = {
+            "simulation_id": str(uuid4()),
+            "model_id": str(uuid4()),
+            "intervention_type": "email_campaign",
+            "intervention_config": {"channel": "email", "duration_weeks": 8},
+            "brand": "Remibrutinib",
+            "twin_count": 1000,
+            "simulated_ate": 0.075,
+            "simulated_ci_lower": 0.050,
+            "simulated_ci_upper": 0.100,
+            "simulated_std_error": 0.012,
+            "recommendation": "deploy",
+            "recommendation_rationale": "Strong effect",
+            "recommended_sample_size": 500,
+            "recommended_duration_weeks": 8,
+            "simulation_confidence": 0.92,
+            "fidelity_warning": False,
+            "fidelity_warning_reason": None,
+            "simulation_status": "completed",
+            "data_provenance": "synthetic_uplift_v1",
+            "error_message": None,
+            "execution_time_ms": 250,
+            "created_at": datetime.now(timezone.utc),
+            "completed_at": datetime.now(timezone.utc),
+            "population_filters": {},
+            "effect_heterogeneity": {
+                "by_specialty": {},
+                "by_decile": {},
+                "by_region": {},
+                "by_adoption_stage": {},
+                "top_segments": [],
+            },
         }
-        mock_result.twin_count = 1000
-        mock_result.simulated_ate = 0.075
-        mock_result.simulated_ci_lower = 0.050
-        mock_result.simulated_ci_upper = 0.100
-        mock_result.simulated_std_error = 0.012
-        mock_result.effect_size_cohens_d = 0.35
-        mock_result.statistical_power = 0.85
-        mock_result.recommendation = MagicMock(value="deploy")
-        mock_result.recommendation_rationale = "Strong effect"
-        mock_result.recommended_sample_size = 500
-        mock_result.recommended_duration_weeks = 8
-        mock_result.simulation_confidence = 0.92
-        mock_result.fidelity_warning = False
-        mock_result.fidelity_warning_reason = None
-        mock_result.model_fidelity_score = 0.88
-        mock_result.status = MagicMock(value="completed")
-        mock_result.data_provenance = "synthetic_uplift_v1"
-        mock_result.error_message = None
-        mock_result.execution_time_ms = 250
-        mock_result.created_at = datetime.now(timezone.utc)
-        mock_result.completed_at = datetime.now(timezone.utc)
-        mock_result.population_filters = None
-        mock_result.effect_heterogeneity = MagicMock()
-        mock_result.effect_heterogeneity.by_specialty = {}
-        mock_result.effect_heterogeneity.by_decile = {}
-        mock_result.effect_heterogeneity.by_region = {}
-        mock_result.effect_heterogeneity.by_adoption_stage = {}
-        mock_result.effect_heterogeneity.get_top_segments.return_value = []
-        mock_result.is_significant.return_value = True
-        mock_result.effect_direction.return_value = "positive"
 
         instance.get_simulation.return_value = mock_result
 

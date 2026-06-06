@@ -1203,60 +1203,69 @@ async def get_simulation(
         if not result:
             raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
 
+        # repo.get_simulation returns the RAW twin_simulations row (a dict), not a
+        # SimulationResult object. The prior handler accessed it as an object
+        # (result.simulation_id / .is_significant()) under # type: ignore[attr-defined],
+        # which 500'd on every real row — masked only because twin_simulations was
+        # 0 rows. R1 makes rows persist, so this is now a live bug (#705 H5b/H11).
+        # Map from the dict; derive the fields the row does not persist.
+        ci_lower = float(result.get("simulated_ci_lower", 0.0) or 0.0)
+        ci_upper = float(result.get("simulated_ci_upper", 0.0) or 0.0)
+        ate = float(result.get("simulated_ate", 0.0) or 0.0)
+        is_significant = not (ci_lower <= 0.0 <= ci_upper)
+        effect_direction = "positive" if ate > 0 else "negative" if ate < 0 else "neutral"
+
         # Fail-closed ownership check (H11): a non-admin may only read a simulation
-        # whose brand is in their grant. Return 404 (not 403) so we don't leak the
-        # existence of another tenant's simulation. If the brand can't be
-        # determined, deny for non-admins (fail-closed).
-        _ic = getattr(result, "intervention_config", None)
-        _extra = getattr(_ic, "extra_params", None) if _ic is not None else None
-        _sim_brand = _extra.get("brand") if isinstance(_extra, dict) else None
+        # whose brand is in their grant. 404 (not 403) so we don't leak existence;
+        # deny non-admins when the brand can't be determined (fail-closed).
+        sim_brand = result.get("brand")
         if not is_cross_brand_admin(user) and (
-            _sim_brand is None or not resolve_brand_for_read(user, _sim_brand)[0]
+            sim_brand is None or not resolve_brand_for_read(user, sim_brand)[0]
         ):
             raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
 
+        eh = result.get("effect_heterogeneity") or {}
         heterogeneity = EffectHeterogeneityResponse(
-            by_specialty=result.effect_heterogeneity.by_specialty,  # type: ignore[attr-defined]
-            by_decile=result.effect_heterogeneity.by_decile,  # type: ignore[attr-defined]
-            by_region=result.effect_heterogeneity.by_region,  # type: ignore[attr-defined]
-            by_adoption_stage=result.effect_heterogeneity.by_adoption_stage,  # type: ignore[attr-defined]
-            top_segments=result.effect_heterogeneity.get_top_segments(5),  # type: ignore[attr-defined]
+            by_specialty=eh.get("by_specialty", {}),
+            by_decile=eh.get("by_decile", {}),
+            by_region=eh.get("by_region", {}),
+            by_adoption_stage=eh.get("by_adoption_stage", {}),
+            top_segments=(eh.get("top_segments") or [])[:5],
         )
 
         return SimulationDetailResponse(
-            simulation_id=str(result.simulation_id),  # type: ignore[attr-defined]
-            model_id=str(result.model_id),  # type: ignore[attr-defined]
-            intervention_type=result.intervention_config.intervention_type,  # type: ignore[attr-defined]
-            brand=result.intervention_config.extra_params.get("brand", "unknown"),  # type: ignore[attr-defined]
-            twin_type=result.intervention_config.extra_params.get("twin_type", "unknown"),  # type: ignore[attr-defined]
-            twin_count=result.twin_count,  # type: ignore[attr-defined]
-            simulated_ate=round(result.simulated_ate, 4),  # type: ignore[attr-defined]
-            simulated_ci_lower=round(result.simulated_ci_lower, 4),  # type: ignore[attr-defined]
-            simulated_ci_upper=round(result.simulated_ci_upper, 4),  # type: ignore[attr-defined]
-            simulated_std_error=round(result.simulated_std_error, 4),  # type: ignore[attr-defined]
-            effect_size_cohens_d=result.effect_size_cohens_d,  # type: ignore[attr-defined]
-            statistical_power=result.statistical_power,  # type: ignore[attr-defined]
-            recommendation=RecommendationEnum(result.recommendation.value),  # type: ignore[attr-defined]
-            recommendation_rationale=result.recommendation_rationale,  # type: ignore[attr-defined]
-            recommended_sample_size=result.recommended_sample_size,  # type: ignore[attr-defined]
-            recommended_duration_weeks=result.recommended_duration_weeks,  # type: ignore[attr-defined]
-            simulation_confidence=round(result.simulation_confidence, 3),  # type: ignore[attr-defined]
-            fidelity_warning=result.fidelity_warning,  # type: ignore[attr-defined]
-            fidelity_warning_reason=result.fidelity_warning_reason,  # type: ignore[attr-defined]
-            model_fidelity_score=result.model_fidelity_score,  # type: ignore[attr-defined]
-            status=SimulationStatusEnum(result.status.value),  # type: ignore[attr-defined]
-            error_message=result.error_message,  # type: ignore[attr-defined]
-            execution_time_ms=result.execution_time_ms,  # type: ignore[attr-defined]
-            is_significant=result.is_significant(),  # type: ignore[attr-defined]
-            effect_direction=result.effect_direction(),  # type: ignore[attr-defined]
-            created_at=result.created_at,  # type: ignore[attr-defined]
-            completed_at=result.completed_at,  # type: ignore[attr-defined]
-            population_filters=result.population_filters.to_dict()  # type: ignore[attr-defined]
-            if result.population_filters  # type: ignore[attr-defined]
-            else {},
+            simulation_id=str(result.get("simulation_id", "")),
+            model_id=str(result.get("model_id", "")),
+            intervention_type=result.get("intervention_type", "unknown"),
+            brand=result.get("brand", "unknown"),
+            # twin_type is not persisted on the row — mirror list_simulations' default.
+            twin_type=result.get("twin_type", "unknown"),
+            twin_count=result.get("twin_count", 0),
+            simulated_ate=round(ate, 4),
+            simulated_ci_lower=round(ci_lower, 4),
+            simulated_ci_upper=round(ci_upper, 4),
+            simulated_std_error=round(float(result.get("simulated_std_error", 0.0) or 0.0), 4),
+            effect_size_cohens_d=result.get("effect_size_cohens_d"),
+            statistical_power=result.get("statistical_power"),
+            recommendation=RecommendationEnum(result.get("recommendation", "refine")),
+            recommendation_rationale=result.get("recommendation_rationale", ""),
+            recommended_sample_size=result.get("recommended_sample_size"),
+            recommended_duration_weeks=result.get("recommended_duration_weeks"),
+            simulation_confidence=round(float(result.get("simulation_confidence", 0.0) or 0.0), 3),
+            fidelity_warning=bool(result.get("fidelity_warning", False)),
+            fidelity_warning_reason=result.get("fidelity_warning_reason"),
+            model_fidelity_score=result.get("model_fidelity_score"),
+            status=SimulationStatusEnum(result.get("simulation_status", "completed")),
+            error_message=result.get("error_message"),
+            execution_time_ms=result.get("execution_time_ms", 0),
+            is_significant=is_significant,
+            effect_direction=effect_direction,
+            created_at=result.get("created_at", datetime.now(timezone.utc)),
+            completed_at=result.get("completed_at"),
+            population_filters=result.get("population_filters") or {},
             effect_heterogeneity=heterogeneity,
-            intervention_config=result.intervention_config.model_dump(),  # type: ignore[attr-defined]
-            data_provenance=getattr(result, "data_provenance", None),  # #705 H5b
+            intervention_config=result.get("intervention_config") or {},
+            data_provenance=result.get("data_provenance"),  # #705 H5b
         )
 
     except HTTPException:

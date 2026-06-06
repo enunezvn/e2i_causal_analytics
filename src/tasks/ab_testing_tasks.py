@@ -678,9 +678,19 @@ def compute_experiment_results(
             # twin-fidelity comparison so prediction calibration tracks real
             # outcomes. fidelity_tracking_update self-skips when no computed
             # results / twin simulation exist yet — which is the case until the
-            # per-unit metric-observation schema lands (#422); this then becomes
-            # live with no further wiring. The fidelity route (POST /experiments/
-            # {id}/fidelity/{sim}, #705 N2) is the immediate on-demand trigger.
+            # per-unit metric-observation schema lands (#422). The fidelity route
+            # (POST /experiments/{id}/fidelity/{sim}, #705 N2) is the immediate
+            # on-demand trigger.
+            #
+            # ⚠️ FUTURE-WIRING REQUIREMENT (when #422 lands): we enqueue with only
+            # experiment_id, so the task resolves twin_simulation_id=None →
+            # compare_experiment_to_twin falls back to the most-recent simulation
+            # GLOBALLY (twin_simulations has no experiment_id column — see that
+            # method's docstring). Before this path produces live rows, EITHER pass
+            # the experiment's real twin_simulation_id here, OR add a
+            # twin_simulations.experiment_id link + scope the fallback — otherwise
+            # it would associate the experiment with the wrong (possibly
+            # cross-brand) twin. Harmless today (no results → skipped).
             if analysis_type == "final":
                 # Best-effort: a broker/enqueue failure must NOT fail result
                 # computation (the producer is a side-channel, not the result).
