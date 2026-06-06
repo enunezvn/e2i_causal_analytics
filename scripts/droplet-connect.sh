@@ -14,7 +14,7 @@ set -e
 
 # Configuration
 DROPLET_IP="138.197.4.36"
-SSH_KEY="$HOME/.ssh/replit"
+SSH_KEY="$HOME/.ssh/deploy_ed25519"
 SSH_USER="enunez"
 SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 
