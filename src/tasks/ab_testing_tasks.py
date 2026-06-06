@@ -673,6 +673,40 @@ def compute_experiment_results(
                 experiment_id,
                 _AB_METRIC_SCHEMA_REASON,
             )
+
+            # H9 producer (event-driven): a FINAL analysis enqueues the on-demand
+            # twin-fidelity comparison so prediction calibration tracks real
+            # outcomes. fidelity_tracking_update self-skips when no computed
+            # results / twin simulation exist yet — which is the case until the
+            # per-unit metric-observation schema lands (#422). The fidelity route
+            # (POST /experiments/{id}/fidelity/{sim}, #705 N2) is the immediate
+            # on-demand trigger.
+            #
+            # ⚠️ FUTURE-WIRING REQUIREMENT (when #422 lands): we enqueue with only
+            # experiment_id, so the task resolves twin_simulation_id=None →
+            # compare_experiment_to_twin falls back to the most-recent simulation
+            # GLOBALLY (twin_simulations has no experiment_id column — see that
+            # method's docstring). Before this path produces live rows, EITHER pass
+            # the experiment's real twin_simulation_id here, OR add a
+            # twin_simulations.experiment_id link + scope the fallback — otherwise
+            # it would associate the experiment with the wrong (possibly
+            # cross-brand) twin. Harmless today (no results → skipped).
+            if analysis_type == "final":
+                # Best-effort: a broker/enqueue failure must NOT fail result
+                # computation (the producer is a side-channel, not the result).
+                try:
+                    celery_app.send_task(
+                        "src.tasks.fidelity_tracking_update",
+                        args=[experiment_id],
+                        queue="twins",
+                    )
+                except Exception as enqueue_err:
+                    logger.warning(
+                        "Could not enqueue fidelity_tracking_update for %s: %s",
+                        experiment_id,
+                        enqueue_err,
+                    )
+
             return {
                 "status": "insufficient_data",
                 "experiment_id": experiment_id,
@@ -718,70 +752,32 @@ def fidelity_tracking_update(
     start_time = time.time()
 
     async def execute_update():
-        from src.memory.services.factories import get_supabase_client
-        from src.repositories.ab_results import ABResultsRepository
         from src.services.results_analysis import ResultsAnalysisService
 
         try:
             results_service = ResultsAnalysisService()
-            results_repo = ABResultsRepository()
             exp_uuid = UUID(experiment_id)
 
-            # Get the latest experiment results
-            results = await results_repo.get_results(exp_uuid)
-
-            if not results:
-                return {
-                    "status": "skipped",
-                    "experiment_id": experiment_id,
-                    "reason": "No results available for comparison",
-                }
-
-            latest_result = results[0]  # Most recent
-
-            # Find associated Digital Twin simulation
-            client = await get_supabase_client()
-            if not client:
-                return {
-                    "status": "skipped",
-                    "experiment_id": experiment_id,
-                    "reason": "No database client available",
-                }
-
-            # Query for twin simulation
-            if twin_simulation_id:
-                sim_uuid = UUID(twin_simulation_id)
-            else:
-                # Find most recent simulation for this experiment
-                sim_result = await (
-                    client.table("twin_simulations")
-                    .select("id, predicted_effect, confidence_interval")
-                    .eq("experiment_id", experiment_id)
-                    .order("created_at", desc=True)
-                    .limit(1)
-                    .execute()
+            # On-demand calibration: compare actual results with the twin's
+            # predicted effect/CI. compare_experiment_to_twin (R1) does the fetch
+            # from the REAL twin columns (simulated_ate / _ci_*) and raises
+            # ValueError when results or a twin simulation are absent. The prior
+            # inline query hit non-existent columns (id/predicted_effect/
+            # confidence_interval), left predicted_effect/predicted_ci UNBOUND on
+            # the explicit-id branch, and passed predicted_ci= (wrong arg name) —
+            # all eliminated by routing through the convenience method (#705 H9).
+            sim_uuid = UUID(twin_simulation_id) if twin_simulation_id else None
+            try:
+                comparison = await results_service.compare_experiment_to_twin(
+                    experiment_id=exp_uuid,
+                    twin_simulation_id=sim_uuid,  # None → resolves the latest sim
                 )
-
-                if not sim_result.data:
-                    return {
-                        "status": "skipped",
-                        "experiment_id": experiment_id,
-                        "reason": "No Digital Twin simulation found for experiment",
-                    }
-
-                sim_data = sim_result.data[0]
-                sim_uuid = UUID(sim_data["id"])
-                predicted_effect = sim_data.get("predicted_effect", 0)
-                predicted_ci = sim_data.get("confidence_interval", [])
-
-            # Compute fidelity comparison
-            comparison = await results_service.compare_with_twin_prediction(
-                experiment_id=exp_uuid,
-                twin_simulation_id=sim_uuid,
-                actual_results=latest_result,
-                predicted_effect=predicted_effect,
-                predicted_ci=predicted_ci if predicted_ci else None,
-            )
+            except ValueError as ve:
+                return {
+                    "status": "skipped",
+                    "experiment_id": experiment_id,
+                    "reason": str(ve),
+                }
 
             # Check if calibration is needed
             fidelity_config.get("acceptable_error", 0.2)
@@ -800,11 +796,13 @@ def fidelity_tracking_update(
             return {
                 "status": "completed",
                 "experiment_id": experiment_id,
-                "twin_simulation_id": str(sim_uuid),
+                "twin_simulation_id": str(comparison.twin_simulation_id),
                 "predicted_effect": comparison.predicted_effect,
                 "actual_effect": comparison.actual_effect,
                 "prediction_error": comparison.prediction_error,
-                "ci_coverage": comparison.confidence_interval_coverage,
+                # Real FidelityComparison field is ci_coverage (not the non-existent
+                # confidence_interval_coverage, which AttributeError'd) (#705 H9).
+                "ci_coverage": comparison.ci_coverage,
                 "fidelity_score": comparison.fidelity_score,
                 "calibration_needed": calibration_needed,
                 "calibration_adjustment": comparison.calibration_adjustment,

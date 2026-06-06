@@ -401,6 +401,10 @@ class SimulationRepository(BaseRepository):
             "fidelity_warning_reason": result.fidelity_warning_reason,
             "execution_time_ms": result.execution_time_ms,
             "memory_usage_mb": result.memory_usage_mb,
+            # Persist the ATE provenance so history/detail reads carry the same
+            # honest source label R1 surfaced on the live POST (#705 H5b,
+            # migration 030 adds the column).
+            "data_provenance": result.data_provenance,
             "brand": brand,
             "created_at": result.created_at.isoformat() if result.created_at else None,
             "completed_at": result.completed_at.isoformat() if result.completed_at else None,
