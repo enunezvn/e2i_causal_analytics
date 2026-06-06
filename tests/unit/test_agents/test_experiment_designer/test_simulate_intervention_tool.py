@@ -249,6 +249,42 @@ class TestSimulateIntervention:
 
 
 @pytest.mark.xdist_group(name="experiment_designer_tools")
+class TestSimulateInterventionFailsClosed:
+    """R2/H3: with no loadable twin model the tool must FAIL CLOSED (honest error
+    result), never a fabricated 'deploy' with fidelity_warning=False off a random
+    base effect."""
+
+    def test_does_not_fabricate_when_no_model(self, monkeypatch, tool_module):
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Force the fail-closed path: a reachable client but NO active trained model.
+        monkeypatch.setattr(
+            "src.memory.services.factories.get_async_supabase_client",
+            AsyncMock(return_value=MagicMock()),
+        )
+        fake_repo = MagicMock()
+        fake_repo.list_active_models = AsyncMock(return_value=[])
+        # tool_module is a fresh importlib instance; patch its module-global binding.
+        monkeypatch.setattr(tool_module, "TwinRepository", MagicMock(return_value=fake_repo))
+        tool_module._twin_cache.clear()
+
+        out = tool_module.simulate_intervention.invoke(
+            {
+                "intervention_type": "speaker_program_invitation",  # mock would score ~0.14 -> deploy
+                "brand": "Kisqali",
+                "target_population": "hcp",
+                "twin_count": 10000,
+            }
+        )
+        # No fabricated success: a missing model yields refine/error + a fidelity warning.
+        assert out["recommendation"] != "deploy"
+        assert out["fidelity_warning"] is True
+        assert out["simulated_ate"] == 0.0
+        # The fabricator is deleted.
+        assert not hasattr(tool_module, "_create_mock_result")
+
+
+@pytest.mark.xdist_group(name="experiment_designer_tools")
 class TestDigitalTwinWorkflow:
     """Test DigitalTwinWorkflow class."""
 
