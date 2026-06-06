@@ -196,3 +196,28 @@ class TestDoWhyExecutorRefutationOptIn:
         assert "reason" in rr
         # No gate_decision should be claimed on a skip (it was not actually run).
         assert "gate_decision" not in rr
+
+
+class TestParallelInsightWakesOnPopulatedRefutation:
+    """Acceptance #4: the dormant parallel.py:394 consumer fires once
+    refutation_results is populated (it stayed silent while results were {})."""
+
+    def test_insight_fires_when_refutation_results_populated(self) -> None:
+        from src.causal_engine.pipeline.parallel import ParallelPipeline
+
+        df = _build_real_dataframe()
+        state = _build_state(df=df, confounders=["confounder_a"])
+        state["refutation_results"] = {"gate_decision": "proceed", "tests_passed": 3}
+        insights = ParallelPipeline()._generate_parallel_insights(state)
+        assert any("refutation" in i.lower() for i in insights), (
+            f"populated refutation_results must wake the insight; got {insights!r}"
+        )
+
+    def test_insight_silent_when_refutation_results_empty(self) -> None:
+        from src.causal_engine.pipeline.parallel import ParallelPipeline
+
+        df = _build_real_dataframe()
+        state = _build_state(df=df, confounders=["confounder_a"])
+        state["refutation_results"] = {}
+        insights = ParallelPipeline()._generate_parallel_insights(state)
+        assert not any("refutation" in i.lower() for i in insights)
