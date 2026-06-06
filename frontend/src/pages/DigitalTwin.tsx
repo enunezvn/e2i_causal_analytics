@@ -41,6 +41,7 @@ import { useDataFreshness } from '@/hooks/use-data-freshness';
 import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator';
 import {
   InterventionType,
+  SimulationStatus,
   type SimulationResponse,
   type SimulationDetailResponse,
 } from '@/types/digital-twin';
@@ -275,6 +276,13 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
           <p className="text-sm text-[var(--color-text-primary)]">
             {simulation.recommendation_rationale}
           </p>
+          {simulation.data_provenance && (
+            <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+              Estimate source: {simulation.data_provenance === 'synthetic_uplift_v1'
+                ? 'synthetic uplift model (v1 — not brand-specific)'
+                : simulation.data_provenance}
+            </p>
+          )}
         </div>
       </div>
 
@@ -382,11 +390,22 @@ export default function DigitalTwin() {
     isError: isRunError,
     error: runError,
   } = useRunSimulation({
-    onSuccess: () => {
+    onSuccess: (data) => {
       // Show the fresh run result (clear any history selection), refresh list.
       setSelectedId(null);
       setActiveTab('results');
       refetchHistory();
+      // Defense-in-depth: the backend now gates FAILED results to 422 (N1), but a
+      // clicked history row could still carry status='failed' — never toast it as
+      // a success.
+      if (data.status === SimulationStatus.FAILED) {
+        toast({
+          variant: 'destructive',
+          title: 'Simulation Did Not Complete',
+          description: data.error_message || 'The simulation failed; no result to show.',
+        });
+        return;
+      }
       toast({
         title: 'Simulation Complete',
         description: 'Your simulation has been processed successfully.',
