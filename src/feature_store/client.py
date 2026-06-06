@@ -82,10 +82,18 @@ class FeatureStoreClient:
             cache_ttl_seconds: Default TTL for cached features (default: 1 hour)
             enable_cache: Enable Redis caching (default: True)
         """
-        # Read from environment variables if not provided
+        # Read from environment variables if not provided.
+        # The feature store WRITES to feature_groups / features / feature_values,
+        # which migration 058 REVOKED from anon/authenticated (only postgres +
+        # service_role retain grants). So prefer the service-role key, mirroring
+        # the migrated backend (api/dependencies/supabase_client.py): anon
+        # (SUPABASE_KEY) is the dev/test fallback only.
         supabase_url = supabase_url or os.environ.get("SUPABASE_URL")
         supabase_key = (
-            supabase_key or os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_KEY")
+            supabase_key
+            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_SERVICE_KEY")
+            or os.environ.get("SUPABASE_KEY")
         )
         redis_url = redis_url or os.environ.get("REDIS_URL", "redis://localhost:6382")
 

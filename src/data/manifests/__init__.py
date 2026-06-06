@@ -45,6 +45,14 @@ from .optum_feature_manifest import (
     OPTUM_TARGETS,
     optum_contract_for,
 )
+from .optum_mart_feature_manifest import (
+    MART_FORBIDDEN_AS_FEATURES,
+    MART_FORBIDDEN_NON_TARGET,
+    MART_SAFE_FEATURES,
+    MART_TARGETS,
+    OPTUM_MART_FEATURES,
+    optum_mart_contract_for,
+)
 from .synthetic_feature_manifest import (
     SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
@@ -59,9 +67,15 @@ from .synthetic_feature_manifest import (
 # manifest that registers only the ``borderline_genuine_feature`` injected
 # by ``synthetic_rwd_realistic`` for HBLP-contrast testing. It is NOT a
 # disease cohort and emits NO RWD positive-evidence claim (plan §2 C2).
+# ``optum_mart`` is the entity-stacked, pre-engineered Optum drop — the SAME
+# cohort as ``optum`` but a structurally different schema (4/110 column overlap),
+# so it registers its OWN FeatureContract list. Resolved via an explicit
+# feature_manifest_source override on a non-``optum``-prefixed cohort path
+# (autodetect would otherwise flag ``optum_mart`` ambiguous against ``optum``).
 MANIFEST_SOURCES: Mapping[str, Callable[[str], FeatureContract | None]] = {
     "csu": csu_contract_for,
     "optum": optum_contract_for,
+    "optum_mart": optum_mart_contract_for,
     "synthetic": synthetic_contract_for,
 }
 
@@ -107,6 +121,12 @@ __all__ = [
     "OPTUM_SAFE_FEATURES",
     "OPTUM_TARGETS",
     "optum_contract_for",
+    "OPTUM_MART_FEATURES",
+    "MART_FORBIDDEN_AS_FEATURES",
+    "MART_FORBIDDEN_NON_TARGET",
+    "MART_SAFE_FEATURES",
+    "MART_TARGETS",
+    "optum_mart_contract_for",
     "SYNTHETIC_FEATURES",
     "SYNTHETIC_FORBIDDEN_AS_FEATURES",
     "synthetic_contract_for",

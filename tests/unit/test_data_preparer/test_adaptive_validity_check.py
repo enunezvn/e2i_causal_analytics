@@ -886,6 +886,47 @@ def test_resolve_manifest_features_lockstep_with_manifest_sources_registry():
         assert isinstance(result, list)
 
 
+def test_resolve_manifest_features_optum_mart_returns_non_empty_list():
+    """optum_mart (the entity-stacked Optum mart) resolves to its pre-index
+    feature contracts so Layer 1 fingerprint validation runs."""
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _resolve_manifest_features,
+    )
+
+    result = _resolve_manifest_features("optum_mart")
+    assert isinstance(result, list) and len(result) > 0
+
+
+def test_select_features_optum_mart_applies_forbidden_list_no_unknown_warning(caplog):
+    """optum_mart is a registered source: ``_select_features`` applies its
+    forbidden-as-features list (defense-in-depth) and does NOT emit the
+    'unknown manifest_source' warning."""
+    import logging
+
+    import pandas as pd
+
+    from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import (
+        _select_features,
+    )
+    from src.data.manifests import MART_FORBIDDEN_NON_TARGET
+
+    forbidden = MART_FORBIDDEN_NON_TARGET[0]
+    # Force the forbidden column numeric so the numeric filter alone would NOT
+    # drop it — only the manifest forbidden-list can, proving the wiring.
+    df = pd.DataFrame(
+        {
+            "age_at_index": [50, 60],
+            forbidden: [1, 0],
+            "initiated_biologic_180d": [0, 1],
+        }
+    )
+    with caplog.at_level(logging.WARNING):
+        cols = _select_features(df, "initiated_biologic_180d", [], "optum_mart")
+    assert forbidden not in cols
+    assert "age_at_index" in cols
+    assert "unknown manifest_source" not in caplog.text
+
+
 # =============================================================================
 # Phase 2.9 Stage 1 — EnsembleVoter wiring (2026-05-08)
 # =============================================================================
