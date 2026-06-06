@@ -810,9 +810,7 @@ class TestUpdateFidelityComparison:
         """Should update fidelity comparison with latest results."""
         mock_service = MagicMock()
         # Route calls the 2-arg convenience method (#705 N2), not the primitive.
-        mock_service.compare_experiment_to_twin = AsyncMock(
-            return_value=sample_fidelity_comparison
-        )
+        mock_service.compare_experiment_to_twin = AsyncMock(return_value=sample_fidelity_comparison)
 
         with patch(
             "src.services.results_analysis.ResultsAnalysisService",
