@@ -1037,7 +1037,7 @@ async def test_get_model_success(mock_twin_repository):
 
     model_id = str(uuid4())
 
-    result = await get_model(model_id)
+    result = await get_model(model_id, user=_ADMIN_USER)
 
     assert result.model_name == "HCP Twin Model"
     assert result.algorithm == "RandomForest"
@@ -1054,7 +1054,7 @@ async def test_get_model_not_found(mock_twin_repository):
     model_id = str(uuid4())
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_model(model_id)
+        await get_model(model_id, user=_ADMIN_USER)
 
     assert exc_info.value.status_code == 404
 
@@ -1071,7 +1071,7 @@ async def test_get_model_fidelity_all(mock_twin_repository):
 
     model_id = str(uuid4())
 
-    result = await get_model_fidelity(model_id, limit=20, validated_only=False)
+    result = await get_model_fidelity(model_id, limit=20, validated_only=False, user=_ADMIN_USER)
 
     assert result.model_id == model_id
     assert result.total_validations == 1
@@ -1085,7 +1085,7 @@ async def test_get_model_fidelity_validated_only(mock_twin_repository):
 
     model_id = str(uuid4())
 
-    result = await get_model_fidelity(model_id, validated_only=True)
+    result = await get_model_fidelity(model_id, validated_only=True, user=_ADMIN_USER)
 
     assert result.model_id == model_id
 
@@ -1097,7 +1097,7 @@ async def test_get_model_fidelity_grade_distribution(mock_twin_repository):
 
     model_id = str(uuid4())
 
-    result = await get_model_fidelity(model_id)
+    result = await get_model_fidelity(model_id, user=_ADMIN_USER)
 
     assert "excellent" in result.grade_distribution
     assert "good" in result.grade_distribution
@@ -1115,7 +1115,7 @@ async def test_get_fidelity_report_excellent(mock_fidelity_tracker, mock_twin_re
 
     model_id = str(uuid4())
 
-    result = await get_fidelity_report(model_id, lookback_days=90)
+    result = await get_fidelity_report(model_id, lookback_days=90, user=_ADMIN_USER)
 
     assert result.model_id == model_id
     assert result.total_validations == 10
@@ -1142,7 +1142,7 @@ async def test_get_fidelity_report_degrading(mock_fidelity_tracker, mock_twin_re
 
     model_id = str(uuid4())
 
-    result = await get_fidelity_report(model_id)
+    result = await get_fidelity_report(model_id, user=_ADMIN_USER)
 
     assert result.is_degrading is True
     assert result.trend == "degrading"
@@ -1167,7 +1167,7 @@ async def test_get_fidelity_report_insufficient_data(mock_fidelity_tracker, mock
 
     model_id = str(uuid4())
 
-    result = await get_fidelity_report(model_id)
+    result = await get_fidelity_report(model_id, user=_ADMIN_USER)
 
     assert result.trend == "insufficient_data"
     assert "more validated" in result.recommendation.lower()
@@ -1191,7 +1191,7 @@ async def test_get_fidelity_report_poor_performance(mock_fidelity_tracker, mock_
 
     model_id = str(uuid4())
 
-    result = await get_fidelity_report(model_id)
+    result = await get_fidelity_report(model_id, user=_ADMIN_USER)
 
     assert result.trend == "poor"
     assert "below threshold" in result.recommendation.lower()
@@ -1278,7 +1278,7 @@ async def test_fidelity_history_no_records(mock_twin_repository):
 
     model_id = str(uuid4())
 
-    result = await get_model_fidelity(model_id)
+    result = await get_model_fidelity(model_id, user=_ADMIN_USER)
 
     assert result.total_validations == 0
     assert result.average_fidelity_score is None
