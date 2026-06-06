@@ -13,6 +13,7 @@ from .nodes import (
     diagnose_and_remediate_quality,
     enforce_splits,
     evaluate_model,
+    feature_ceiling_diagnostic,
     fit_preprocessing,
     learning_curve,
     load_splits,
@@ -144,6 +145,8 @@ def create_model_trainer_graph() -> CompiledStateGraph:
           ↓
         fit_preprocessing (train only)
           ↓
+        feature_ceiling_diagnostic (advisory; native separability ceiling)
+          ↓
         apply_resampling (train only)
           ↓
         tune_hyperparameters (Optuna on validation)
@@ -182,13 +185,16 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     """
     workflow = StateGraph(ModelTrainerState)
 
-    # Add nodes (11 total)
+    # Add nodes
     workflow.add_node("check_qc_gate", check_qc_gate)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("load_splits", load_splits)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("enforce_splits", enforce_splits)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("augment_training_data", augment_training_data)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("detect_class_imbalance", detect_class_imbalance)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("fit_preprocessing", fit_preprocessing)  # type: ignore[type-var,arg-type,call-overload]
+    # Advisory separability diagnostic — runs on the preprocessed train BEFORE
+    # resampling so it measures the native feature ceiling (does not alter flow).
+    workflow.add_node("feature_ceiling_diagnostic", feature_ceiling_diagnostic)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("apply_resampling", apply_resampling)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("tune_hyperparameters", tune_hyperparameters)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("train_model", train_model)  # type: ignore[type-var,arg-type,call-overload]
@@ -237,8 +243,11 @@ def create_model_trainer_graph() -> CompiledStateGraph:
     # Class imbalance detection → preprocessing (always)
     workflow.add_edge("detect_class_imbalance", "fit_preprocessing")
 
-    # Preprocessing → resampling (always)
-    workflow.add_edge("fit_preprocessing", "apply_resampling")
+    # Preprocessing → separability diagnostic → resampling (always).
+    # The diagnostic is advisory (emits feature_ceiling_* state) and sits here
+    # so it sees the preprocessed, pre-resampling train — the native ceiling.
+    workflow.add_edge("fit_preprocessing", "feature_ceiling_diagnostic")
+    workflow.add_edge("feature_ceiling_diagnostic", "apply_resampling")
 
     # Resampling → HPO (always)
     workflow.add_edge("apply_resampling", "tune_hyperparameters")
