@@ -32,6 +32,8 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 
+from src.mlops.lr_solver_policy import reconcile_lr_solver
+
 logger = logging.getLogger(__name__)
 
 # Default config path
@@ -491,6 +493,9 @@ class OptunaOptimizer:
 
             # Merge with fixed parameters
             all_params = {**params, **fixed_params}
+            # Issue #232 runtime: downgrade saga->lbfgs per-trial when the
+            # sampled penalty permits (l2/None). saga is kept for l1.
+            reconcile_lr_solver(all_params)
 
             try:
                 # Create model
@@ -568,6 +573,9 @@ class OptunaOptimizer:
 
             # Merge with fixed parameters
             all_params = {**params, **fixed_params}
+            # Issue #232 runtime: downgrade saga->lbfgs per-trial when the
+            # sampled penalty permits (l2/None). saga is kept for l1.
+            reconcile_lr_solver(all_params)
 
             # Add early stopping for compatible models
             if early_stopping_rounds:

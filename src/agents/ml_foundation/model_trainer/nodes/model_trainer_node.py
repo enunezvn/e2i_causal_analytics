@@ -19,6 +19,7 @@ from src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner import (
 from src.agents.ml_foundation.model_trainer.random_state import (
     resolve_fold_random_state,
 )
+from src.mlops.lr_solver_policy import reconcile_lr_solver
 
 logger = logging.getLogger(__name__)
 
@@ -683,6 +684,11 @@ def _filter_hyperparameters(
         for _lr_key, _lr_val in _LR_FIXED_PARAMS.items():
             if _lr_key not in filtered:
                 filtered[_lr_key] = _lr_val
+        # Issue #232 runtime: the penalty is KNOWN here (HPO best params or
+        # registry default), so downgrade the saga floor to the faster lbfgs
+        # for l2/None — saga is retained only for l1/elasticnet. Identical AUC,
+        # ~20 iters vs 1000 (see tier0_optum_mart..._disproof_20260606.md).
+        reconcile_lr_solver(filtered)
 
     return filtered
 

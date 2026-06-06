@@ -6691,6 +6691,7 @@ async def run_pipeline(
                     from src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner import (
                         _LR_FIXED_PARAMS,
                     )
+                    from src.mlops.lr_solver_policy import reconcile_lr_solver
 
                     imb_sev = state.get("class_imbalance_info", {}).get("imbalance_severity")
 
@@ -6734,6 +6735,11 @@ async def run_pipeline(
                                 **new_candidate["default_hyperparameters"],
                                 **_LR_FIXED_PARAMS,
                             }
+                            # Issue #232 runtime: the candidate's penalty is known
+                            # here, so downgrade the saga floor to lbfgs for l2/None
+                            # (identical AUC, ~20 iters vs 1000). saga retained for
+                            # l1 — see tier0_optum_mart..._disproof_20260606.md.
+                            reconcile_lr_solver(new_candidate["default_hyperparameters"])
                         # Force class_weight for imbalanced tree/linear models
                         if imb_sev in ("severe", "extreme") and alt["name"] in (
                             "RandomForest",
