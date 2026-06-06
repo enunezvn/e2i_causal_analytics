@@ -86,7 +86,16 @@ def test_failed_simulation_is_not_persisted_as_200(monkeypatch):
         ),
     )
     monkeypatch.setattr(dt, "_get_twin_repo", AsyncMock(return_value=repo))
-    monkeypatch.setattr(dt, "_load_trained_generator", AsyncMock())
+
+    # _load_trained_generator must yield a real generator whose .generate() returns
+    # a real TwinPopulation (NOT a bare AsyncMock, whose .generate() is itself async
+    # and returns an un-awaited coroutine the real engine then chokes on). Only
+    # SimulationEngine.simulate is patched — the real __init__ must accept the pop.
+    from src.digital_twin.models.twin_models import TwinPopulation
+
+    real_pop = TwinPopulation(twin_type=TwinType.HCP, brand=Brand.REMIBRUTINIB, twins=[], size=0)
+    fake_gen = SimpleNamespace(model_id=uuid4(), generate=lambda n: real_pop)
+    monkeypatch.setattr(dt, "_load_trained_generator", AsyncMock(return_value=fake_gen))
 
     with patch.object(SimulationEngine, "simulate", return_value=failed):
 
