@@ -522,9 +522,10 @@ class TestGetModel:
 class TestGetModelFidelity:
     """Tests for GET /digital-twin/models/{model_id}/fidelity."""
 
-    def test_get_model_fidelity_success(self, mock_fidelity_record):
+    def test_get_model_fidelity_success(self, mock_fidelity_record, mock_model_data):
         """Should return fidelity history."""
         mock_repo = MagicMock()
+        mock_repo.get_model = AsyncMock(return_value=mock_model_data)
         mock_repo.get_model_fidelity_records = AsyncMock(return_value=[mock_fidelity_record])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
@@ -539,9 +540,10 @@ class TestGetModelFidelity:
         assert "grade_distribution" in data
         assert "records" in data
 
-    def test_get_model_fidelity_validated_only(self, mock_fidelity_record):
+    def test_get_model_fidelity_validated_only(self, mock_fidelity_record, mock_model_data):
         """Should filter to validated records only."""
         mock_repo = MagicMock()
+        mock_repo.get_model = AsyncMock(return_value=mock_model_data)
         mock_repo.get_model_fidelity_records = AsyncMock(return_value=[mock_fidelity_record])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
@@ -556,9 +558,10 @@ class TestGetModelFidelity:
 class TestGetFidelityReport:
     """Tests for GET /digital-twin/models/{model_id}/fidelity/report."""
 
-    def test_get_fidelity_report_success(self):
+    def test_get_fidelity_report_success(self, mock_model_data):
         """Should return fidelity report with trend analysis."""
         mock_repo = MagicMock()
+        mock_repo.get_model = AsyncMock(return_value=mock_model_data)
 
         mock_tracker = MagicMock()
         mock_tracker.get_model_fidelity_report = MagicMock(
@@ -599,9 +602,10 @@ class TestGetFidelityReport:
         assert "is_degrading" in data
         assert "recommendation" in data
 
-    def test_get_fidelity_report_with_lookback(self):
+    def test_get_fidelity_report_with_lookback(self, mock_model_data):
         """Should respect lookback_days parameter."""
         mock_repo = MagicMock()
+        mock_repo.get_model = AsyncMock(return_value=mock_model_data)
 
         mock_tracker = MagicMock()
         mock_tracker.get_model_fidelity_report = MagicMock(
@@ -633,9 +637,10 @@ class TestGetFidelityReport:
 
         assert response.status_code == 200
 
-    def test_get_fidelity_report_degrading(self):
+    def test_get_fidelity_report_degrading(self, mock_model_data):
         """Should detect degrading model fidelity."""
         mock_repo = MagicMock()
+        mock_repo.get_model = AsyncMock(return_value=mock_model_data)
 
         mock_tracker = MagicMock()
         mock_tracker.get_model_fidelity_report = MagicMock(

@@ -1488,6 +1488,7 @@ async def list_models(
 )
 async def get_model(
     model_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> TwinModelDetailResponse:
     """
     Get detailed information about a twin model.
@@ -1504,6 +1505,15 @@ async def get_model(
         model = await repo.get_model(UUID(model_id))
 
         if not model:
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+
+        # Fail-closed ownership check (H11): a non-admin may only read a model
+        # whose brand is in their grant. 404 (not 403) so existence is not leaked;
+        # deny when the brand cannot be determined. Mirrors get_simulation/{id}.
+        model_brand = model.get("brand")
+        if not is_cross_brand_admin(user) and (
+            model_brand is None or not resolve_brand_for_read(user, model_brand)[0]
+        ):
             raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
         # Read from the nested JSONB columns save_model actually writes
@@ -1549,6 +1559,7 @@ async def get_model_fidelity(
     model_id: str,
     limit: int = Query(default=20, ge=1, le=100, description="Max records"),
     validated_only: bool = Query(default=False, description="Only show validated records"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> FidelityHistoryResponse:
     """
     Get fidelity validation history for a model.
@@ -1564,6 +1575,17 @@ async def get_model_fidelity(
 
     try:
         repo = await _get_twin_repo()
+
+        # Resolve the model first so the read is fail-closed brand-scoped (H11)
+        # and 404s honestly on an unknown model id.
+        model = await repo.get_model(UUID(model_id))
+        if not model:
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+        model_brand = model.get("brand")
+        if not is_cross_brand_admin(user) and (
+            model_brand is None or not resolve_brand_for_read(user, model_brand)[0]
+        ):
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
 
         # Get fidelity records for model from repository
         records = await repo.get_model_fidelity_records(  # type: ignore[attr-defined]
@@ -1626,6 +1648,8 @@ async def get_model_fidelity(
             records=record_responses,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get fidelity history: {e}")
         raise HTTPException(status_code=500, detail="Failed to get fidelity history")
@@ -1635,6 +1659,7 @@ async def get_model_fidelity(
 async def get_fidelity_report(
     model_id: str,
     lookback_days: int = Query(default=90, ge=7, le=365, description="Days to analyze"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> FidelityReportResponse:
     """
     Get aggregated fidelity report for a model.
@@ -1652,6 +1677,18 @@ async def get_fidelity_report(
 
     try:
         repo = await _get_twin_repo()
+
+        # Resolve the model first so the read is fail-closed brand-scoped (H11)
+        # and 404s honestly on an unknown model id.
+        model = await repo.get_model(UUID(model_id))
+        if not model:
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+        model_brand = model.get("brand")
+        if not is_cross_brand_admin(user) and (
+            model_brand is None or not resolve_brand_for_read(user, model_brand)[0]
+        ):
+            raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+
         tracker = FidelityTracker(repo)
 
         # get_model_fidelity_report returns a dict, not an object
@@ -1694,6 +1731,8 @@ async def get_fidelity_report(
             generated_at=report.get("computed_at", datetime.now(timezone.utc)),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to generate fidelity report: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate fidelity report")
