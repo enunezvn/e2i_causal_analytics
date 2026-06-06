@@ -480,18 +480,24 @@ class SequentialPipelineResponse(BaseModel):
     robustness_validation_performed: bool = Field(
         default=False,
         description=(
-            "True only if refutation/sensitivity validation was actually run for "
-            "this ATE. The sequential/parallel pipeline does NOT run refutation "
-            "today (the DoWhy executor returns refutation_results={}), so this is "
-            "False: the reported effect is UNVALIDATED for robustness."
+            "True only if the DoWhy refutation/sensitivity suite was actually run "
+            "for this ATE AND returned PROCEED. Defaults to False on the fast path "
+            "(request.run_refutation=False, the default — the DoWhy executor returns "
+            "refutation_results={}). When a caller opts in via run_refutation=True, "
+            "this becomes True only if the suite PROCEEDed on a DAG; a REVIEW/BLOCK "
+            "gate, an errored or skipped (non-linear, no SE) refutation, or a cyclic "
+            "(non-DAG) graph keep it False with a caveat in robustness_warning. "
+            "Robustness is validated on the DoWhy estimate only (Owner-decision 1)."
         ),
     )
     robustness_warning: Optional[str] = Field(
         default=None,
         description=(
             "Human-readable caveat populated when robustness_validation_performed "
-            "is False, so consumers cannot mistake an unrefuted ATE for a "
-            "validated one."
+            "is False, so consumers cannot mistake an unrefuted/unvalidated ATE for "
+            "a validated one. Names the reason: not opted-in (default fast path), "
+            "REVIEW/BLOCK gate band, skipped (non-linear method, no SE), or a "
+            "non-DAG structural warning. None when validation PROCEEDed."
         ),
     )
     graph_is_dag: Optional[bool] = Field(
@@ -612,18 +618,24 @@ class ParallelPipelineResponse(BaseModel):
     robustness_validation_performed: bool = Field(
         default=False,
         description=(
-            "True only if refutation/sensitivity validation was actually run for "
-            "this ATE. The parallel pipeline does NOT run refutation today (the "
-            "DoWhy executor returns refutation_results={}), so this is False: the "
-            "reported effect is UNVALIDATED for robustness."
+            "True only if the DoWhy refutation/sensitivity suite was actually run "
+            "for this ATE AND returned PROCEED. Defaults to False on the fast path "
+            "(request.run_refutation=False, the default — the DoWhy executor returns "
+            "refutation_results={}). When a caller opts in via run_refutation=True, "
+            "this becomes True only if the suite PROCEEDed on a DAG; a REVIEW/BLOCK "
+            "gate, an errored or skipped (non-linear, no SE) refutation, or a cyclic "
+            "(non-DAG) graph keep it False with a caveat in robustness_warning. "
+            "Robustness is validated on the DoWhy estimate only (Owner-decision 1)."
         ),
     )
     robustness_warning: Optional[str] = Field(
         default=None,
         description=(
             "Human-readable caveat populated when robustness_validation_performed "
-            "is False, so consumers cannot mistake an unrefuted ATE for a "
-            "validated one."
+            "is False, so consumers cannot mistake an unrefuted/unvalidated ATE for "
+            "a validated one. Names the reason: not opted-in (default fast path), "
+            "REVIEW/BLOCK gate band, skipped (non-linear method, no SE), or a "
+            "non-DAG structural warning. None when validation PROCEEDed."
         ),
     )
     graph_is_dag: Optional[bool] = Field(
