@@ -71,6 +71,13 @@ class FidelityCheckerNode:
             for exp in experiments:
                 exp_id = exp["experiment_id"]
                 issue = await self._check_fidelity(exp_id, client, fidelity_threshold)
+                if issue is None:
+                    # Fallback to the v_simulation_summary view when the primary
+                    # twin_fidelity_tracking table has no row for this experiment
+                    # (#705 H17 — keyed on experiment_design_id, a genuine fallback).
+                    issue = await self._get_fidelity_from_simulation_summary(
+                        exp_id, client, fidelity_threshold
+                    )
                 if issue:
                     fidelity_issues.append(issue)
 
@@ -173,12 +180,14 @@ class FidelityCheckerNode:
             FidelityIssue if fidelity exceeds threshold, None otherwise
         """
         try:
-            # Query v_simulation_summary view
+            # Query v_simulation_summary view. The view DOES expose actual_ate via
+            # its LEFT JOIN to twin_fidelity_tracking (database/ml/012:338) — read it
+            # instead of the old hardcoded 0.0 (#705 H17).
             result = await (
                 client.table("v_simulation_summary")
                 .select(
                     "simulation_id, experiment_design_id, simulated_ate, "
-                    "prediction_error, fidelity_grade"
+                    "actual_ate, prediction_error, fidelity_grade"
                 )
                 .eq("experiment_design_id", experiment_id)
                 .order("simulation_end", desc=True)
@@ -191,8 +200,11 @@ class FidelityCheckerNode:
 
             summary = result.data[0]
             prediction_error = summary.get("prediction_error")
+            actual_ate = summary.get("actual_ate")
 
-            if prediction_error is None:
+            # An unvalidated simulation (no actual outcome yet) has no fidelity to
+            # assess — do not raise a spurious issue off a null/zero actual.
+            if prediction_error is None or actual_ate is None:
                 return None
 
             if abs(prediction_error) > threshold:
@@ -200,7 +212,7 @@ class FidelityCheckerNode:
                     experiment_id=experiment_id,
                     twin_simulation_id=str(summary.get("simulation_id", "")),
                     predicted_effect=float(summary.get("simulated_ate", 0)),
-                    actual_effect=0.0,  # Not available in summary
+                    actual_effect=float(actual_ate),
                     prediction_error=float(prediction_error),
                     calibration_needed=abs(prediction_error) > threshold * 2,
                     severity="warning" if abs(prediction_error) > threshold * 2 else "info",
