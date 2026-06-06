@@ -377,7 +377,32 @@ class TestThroughput:
     """Tests for simulation throughput."""
 
     def test_multiple_simulations_throughput(self, email_campaign_config):
-        """Test throughput of multiple sequential simulations."""
+        """Test throughput of multiple sequential simulations.
+
+        Each ``simulate()`` now fits a REAL CausalML ``UpliftRandomForest``
+        (100 trees) on a 2000-row labeled frame and scores the population —
+        the honest cost of the real causal-effect engine wired in by the H5
+        rewire (commit 26b14215) and hardened by the twin R1-R5 series. The
+        old ``> 0.5/s`` ("at least 1/s") threshold was written 2026-01-24
+        against the prior fabricated INTERVENTION_EFFECTS fast path and is
+        stale: the per-fit cost alone is ~5s on the lane-C ubuntu-latest
+        runner, so 10 sequential fits cannot approach 1/s by design.
+
+        Production never reuses one engine across simulations — both
+        ``/simulate`` and ``/simulations/compare`` construct a FRESH
+        ``SimulationEngine`` per request/scenario (src/api/routes/
+        digital_twin.py) — so the per-call refit in this loop is a
+        benchmark artifact, not a user-facing inefficiency to optimize away.
+
+        This assertion is therefore a regression FLOOR, not a "1/s" target:
+        lane C ("Memory & Perf Tests (serialized)", -n 1) measured a
+        deterministic 0.21/s across the 06-05 and 06-06 nightly runs (stable
+        across 3 runs). The 0.10/s floor is ~2x headroom below that
+        deterministic measurement: it tolerates shared-runner variance yet
+        catches a >2x regression (e.g. an accidental double-fit per call, an
+        O(n^2) blow-up, or losing the -n 1 serialization). Sanity: 0.21 PASS,
+        0.09 FAIL.
+        """
         population = create_large_population(5_000)
         engine = SimulationEngine(population)
 
@@ -393,8 +418,12 @@ class TestThroughput:
         print(f"\nThroughput: {throughput:.2f} simulations/second")
         print(f"  Total time for {n_simulations} simulations: {elapsed:.2f}s")
 
-        # Should complete at least 1 simulation per second
-        assert throughput > 0.5, f"Low throughput: {throughput:.2f}/s"
+        # Regression floor for the real uplift engine (lane C measured ~0.21/s,
+        # deterministic across 3 runs). NOT a "1/s" target — see docstring.
+        # 0.10 = ~2x headroom below 0.21, catching a >2x regression while
+        # tolerating shared-runner variance. The prior > 0.5 bound predated the
+        # H5 real-engine rewire and is no longer defensible.
+        assert throughput > 0.10, f"Low throughput: {throughput:.2f}/s"
 
     def test_different_intervention_types_performance(self):
         """Test performance across different intervention types."""
