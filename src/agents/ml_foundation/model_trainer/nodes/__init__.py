@@ -5,6 +5,7 @@ from .augment_training_data import augment_training_data
 from .checkpointer import list_checkpoints, load_checkpoint, save_checkpoint
 from .detect_class_imbalance import detect_class_imbalance
 from .evaluator import evaluate_model
+from .feature_ceiling_diagnostic import feature_ceiling_diagnostic
 from .hyperparameter_tuner import tune_hyperparameters
 from .learning_curve import learning_curve
 from .mlflow_logger import log_to_mlflow
@@ -31,6 +32,7 @@ __all__ = [
     "diagnose_and_remediate_quality",
     "enforce_splits",
     "evaluate_model",
+    "feature_ceiling_diagnostic",
     "fit_cox",
     "fit_preprocessing",
     "fit_rsf",
