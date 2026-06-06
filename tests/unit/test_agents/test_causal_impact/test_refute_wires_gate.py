@@ -33,6 +33,7 @@ from src.agents.causal_impact.nodes.refutation import (
 )
 from src.causal_engine.expert_review_gate import ExpertReviewGate
 from src.causal_engine.refutation_runner import GateDecision, RefutationSuite
+from src.memory.services.factories import ServiceConnectionError
 
 
 def _review_suite(confidence: float = 0.6) -> RefutationSuite:
@@ -110,17 +111,49 @@ class TestRefuteBuildsRepoBackedGate:
         assert fields["expert_review_decision"] == "pending_review"
 
     @pytest.mark.asyncio
-    async def test_build_gate_degrades_to_none_when_supabase_absent(self, monkeypatch):
-        """Factory raising -> _build_expert_review_gate returns None (no crash)."""
+    async def test_build_gate_degrades_to_none_on_service_connection_error(self, monkeypatch):
+        """Missing-config (ServiceConnectionError) -> returns None (graceful degrade).
+
+        This is the ONLY error class the helper is allowed to swallow: it is what
+        ``get_async_supabase_client`` raises when the Supabase env is absent
+        (dev/test) or the connection cannot be established. Any OTHER error must
+        propagate (see test_unexpected_error_propagates_not_bypass) so a real prod
+        failure on a REVIEW-band estimate is never silently bypassed as approved.
+        """
 
         async def _raise(*args, **kwargs):
-            raise RuntimeError("Supabase env missing")
+            raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
 
         # Patch the factory at its source so the helper's lazy import picks it up.
         monkeypatch.setattr("src.memory.services.factories.get_async_supabase_client", _raise)
 
         gate = await _build_expert_review_gate()
         assert gate is None
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_propagates_not_bypass(self, monkeypatch):
+        """An UNEXPECTED factory error must PROPAGATE (fail-loud), not degrade.
+
+        FIX A (codex HIGH): the old broad ``except Exception`` collapsed any error
+        — including a transient/unexpected PROD Supabase failure — into the same
+        ``return None`` -> bare-gate bypass (is_approved=True) as a dev/test
+        missing-config. That silently self-bypasses the review gate in prod on an
+        unexpected error. A non-ServiceConnectionError must surface.
+        """
+
+        async def _raise(*args, **kwargs):
+            raise ValueError("boom — unexpected, not a missing-config signal")
+
+        monkeypatch.setattr("src.memory.services.factories.get_async_supabase_client", _raise)
+
+        # Direct helper call: the unexpected error must escape (not return None).
+        with pytest.raises(ValueError, match="boom"):
+            await _build_expert_review_gate()
+
+        # And it must propagate all the way out of refute_causal_estimate, NOT be
+        # swallowed into a silent bypass that proceeds as approved.
+        with pytest.raises(ValueError, match="boom"):
+            await refute_causal_estimate({"query_id": "q1"})
 
     @pytest.mark.asyncio
     async def test_supabase_absent_still_flags_needs_review(self, monkeypatch):

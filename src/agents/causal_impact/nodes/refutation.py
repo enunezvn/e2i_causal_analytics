@@ -821,26 +821,39 @@ async def _build_expert_review_gate() -> Optional[Any]:
     before a consumer existed); we re-enable it EXPLICITLY here now that the
     consumer is in place.
 
-    Best-effort / graceful-degrade: in dev/test (or any environment without a
-    Supabase service-role key) ``get_async_supabase_client`` raises
-    ``ServiceConnectionError`` — we catch it and return None so
-    ``_consult_review_gate`` falls back to a bare ``ExpertReviewGate()`` (bypass
-    to PROCEED-with-warning) and still flags ``needs_review`` via the H2 caveat.
-    A missing Supabase must NEVER crash the refutation node.
-    """
-    try:
-        from src.causal_engine.expert_review_gate import ExpertReviewGate
-        from src.memory.services.factories import get_async_supabase_client
-        from src.repositories.expert_review import ExpertReviewRepository
+    Best-effort / graceful-degrade — but ONLY for the missing-config signal: in
+    dev/test (or any environment without a Supabase service-role key)
+    ``get_async_supabase_client`` raises ``ServiceConnectionError`` — we catch
+    THAT specific class and return None so ``_consult_review_gate`` falls back to
+    a bare ``ExpertReviewGate()`` (bypass to PROCEED-with-warning) and still flags
+    ``needs_review`` via the H2 caveat. A missing Supabase must NEVER crash the
+    node.
 
+    FIX A (codex HIGH): any OTHER exception (a transient/unexpected prod Supabase
+    failure, a bug) PROPAGATES (fail-loud / fail-closed). Collapsing every error
+    into the same ``return None`` -> bare-gate bypass would silently self-bypass
+    the review gate in prod on an unexpected error and surface a REVIEW-band
+    estimate as approved. A real error must surface, not proceed as approved.
+    """
+    from src.memory.services.factories import (
+        ServiceConnectionError,
+        get_async_supabase_client,
+    )
+
+    try:
         client = await get_async_supabase_client()
-        return ExpertReviewGate(
-            repository=ExpertReviewRepository(supabase_client=client),
-            auto_create_review=True,  # R5 default is False; re-enable here explicitly
-        )
-    except Exception as exc:  # noqa: BLE001 - ServiceConnectionError in dev/test -> degrade
+    except ServiceConnectionError as exc:
+        # ONLY the missing-config / connection-unavailable signal degrades.
         logger.warning("Expert review gate unavailable (degrading to needs_review only): %s", exc)
         return None
+
+    from src.causal_engine.expert_review_gate import ExpertReviewGate
+    from src.repositories.expert_review import ExpertReviewRepository
+
+    return ExpertReviewGate(
+        repository=ExpertReviewRepository(supabase_client=client),
+        auto_create_review=True,  # R5 default is False; re-enable here explicitly
+    )
 
 
 # Standalone function for LangGraph integration
