@@ -811,6 +811,51 @@ class RefutationNode:
             )
 
 
+async def _build_expert_review_gate() -> Optional[Any]:
+    """Build a repo-backed ExpertReviewGate (auto_create_review=True), or None.
+
+    R6-F2 C2: the REVIEW band on the agent path creates a ``pending``
+    ``expert_reviews`` row keyed by ``dag_version_hash`` so a human can resolve
+    it (the consumer endpoints + admin UI were built first, Phases A/B). R5
+    flipped ``auto_create_review`` to default False (fail-closed, no orphan rows
+    before a consumer existed); we re-enable it EXPLICITLY here now that the
+    consumer is in place.
+
+    Best-effort / graceful-degrade — but ONLY for the missing-config signal: in
+    dev/test (or any environment without a Supabase service-role key)
+    ``get_async_supabase_client`` raises ``ServiceConnectionError`` — we catch
+    THAT specific class and return None so ``_consult_review_gate`` falls back to
+    a bare ``ExpertReviewGate()`` (bypass to PROCEED-with-warning) and still flags
+    ``needs_review`` via the H2 caveat. A missing Supabase must NEVER crash the
+    node.
+
+    FIX A (codex HIGH): any OTHER exception (a transient/unexpected prod Supabase
+    failure, a bug) PROPAGATES (fail-loud / fail-closed). Collapsing every error
+    into the same ``return None`` -> bare-gate bypass would silently self-bypass
+    the review gate in prod on an unexpected error and surface a REVIEW-band
+    estimate as approved. A real error must surface, not proceed as approved.
+    """
+    from src.memory.services.factories import (
+        ServiceConnectionError,
+        get_async_supabase_client,
+    )
+
+    try:
+        client = await get_async_supabase_client()
+    except ServiceConnectionError as exc:
+        # ONLY the missing-config / connection-unavailable signal degrades.
+        logger.warning("Expert review gate unavailable (degrading to needs_review only): %s", exc)
+        return None
+
+    from src.causal_engine.expert_review_gate import ExpertReviewGate
+    from src.repositories.expert_review import ExpertReviewRepository
+
+    return ExpertReviewGate(
+        repository=ExpertReviewRepository(supabase_client=client),
+        auto_create_review=True,  # R5 default is False; re-enable here explicitly
+    )
+
+
 # Standalone function for LangGraph integration
 async def refute_causal_estimate(
     state: CausalImpactState,
@@ -832,5 +877,14 @@ async def refute_causal_estimate(
     # 10), i.e. ~10-60 min depending on estimator, which no per-agent CI budget
     # can hold. Omitted in prod -> None -> full DEFAULT_CONFIG (unchanged). (#606)
     refutation_config = (state.get("parameters") or {}).get("refutation_config")
-    node = RefutationNode(config=refutation_config, validation_repo=validation_repo)
+    # R6-F2 C2: wire a repo-backed ExpertReviewGate so a REVIEW band creates a
+    # `pending` expert_reviews row a human can resolve. Best-effort: None in
+    # dev/test (no Supabase) -> the node bypasses to PROCEED-with-warning and
+    # still flags needs_review. REVIEW never hard-blocks the agent run.
+    expert_review_gate = await _build_expert_review_gate()
+    node = RefutationNode(
+        config=refutation_config,
+        validation_repo=validation_repo,
+        expert_review_gate=expert_review_gate,
+    )
     return await node.execute(state)

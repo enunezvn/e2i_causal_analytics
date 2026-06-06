@@ -164,6 +164,68 @@ class TestExpertReviewGate:
         assert kwargs.get("brand") == "BrandX"
 
 
+class _CapturingRepo:
+    """Fake repo capturing create_review kwargs (NO live PostgREST insert).
+
+    The async repo speaks PostgREST (HTTP) so BEGIN..ROLLBACK is unavailable and
+    a real insert would pollute the live ``expert_reviews`` table. This fake
+    records the exact kwargs the gate passes to ``create_review`` so we can assert
+    the review_type WITHOUT touching the DB. The DB cast-disproof (a read-only
+    ``SELECT 'initial_dag'::expert_review_type`` ERRORs against the live enum,
+    confirmed faithfully against the droplet) covers the other half: with
+    ``initial_dag`` the real INSERT would fail the enum cast.
+    """
+
+    def __init__(self) -> None:
+        self.create_kwargs: dict | None = None
+
+    async def get_dag_approval(self, dag_hash, brand=None):
+        return None
+
+    async def get_reviews_for_dag(self, dag_hash, include_expired=False, brand=None):
+        return []
+
+    async def create_review(self, **kwargs):
+        self.create_kwargs = kwargs
+        return "rev-captured"
+
+
+class TestAutoCreateReviewTypeEnum:
+    """C1: the auto-created review MUST use a VALID expert_review_type member.
+
+    The live ``expert_review_type`` ENUM (010 :53-58) is
+    {dag_approval, methodology_review, quarterly_audit, ad_hoc_validation} —
+    there is NO ``initial_dag`` member. While ``auto_create_review`` defaulted
+    False (R5) the call site never ran, so passing ``review_type="initial_dag"``
+    was a LATENT bug. F2 wiring sets ``auto_create_review=True``, which ACTIVATES
+    it: the INSERT would fail the enum cast -> create_review returns None -> the
+    gate falls through to BLOCKED instead of PENDING_REVIEW (a silent hard-block,
+    zero rows). The fix is ``review_type="dag_approval"``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_create_uses_valid_dag_approval_enum(self):
+        repo = _CapturingRepo()
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+        result = await gate.check_approval(
+            "deadbeef",
+            requester_id="causal_impact_agent",
+            treatment="email_frequency",
+            outcome="trx",
+            analysis_context="confidence=0.60, gate=review",
+        )
+
+        assert repo.create_kwargs is not None, "create_review was not called"
+        # The load-bearing assertion: a VALID enum member, NOT the latent
+        # 'initial_dag' that would fail the Postgres enum cast.
+        assert repo.create_kwargs["review_type"] == "dag_approval"
+        assert repo.create_kwargs["review_type"] != "initial_dag"
+        # And the gate returns PENDING_REVIEW (not BLOCKED) on a successful create.
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert result.review_id == "rev-captured"
+
+
 class TestExpertReviewGateCanProceed:
     """Test can_proceed convenience method."""
 

@@ -101,6 +101,7 @@ def _build_full_app() -> FastAPI:
     from src.api.routes.digital_twin import router as digital_twin_router
     from src.api.routes.executive_insights import router as executive_insights_router
     from src.api.routes.experiments import router as experiments_router
+    from src.api.routes.expert_review import router as expert_review_router
     from src.api.routes.explain import router as explain_router
     from src.api.routes.feedback import router as feedback_router
     from src.api.routes.gaps import router as gaps_router
@@ -133,6 +134,7 @@ def _build_full_app() -> FastAPI:
         health_score_router,
         digital_twin_router,
         causal_router,
+        expert_review_router,
         audit_router,
         analytics_router,
         copilotkit_router,
@@ -347,6 +349,7 @@ def test_slim_app_includes_all_routers_from_src_api_main() -> None:
         "copilotkit": "/copilotkit",
         "digital_twin": "/digital-twin",
         "experiments": "/experiments",
+        "expert_review": "/expert-reviews",
         "explain": "/explain",
         "feedback": "/feedback",
         "gaps": "/gaps",
@@ -501,6 +504,7 @@ def test_include_router_prefixes_match_expected_drift_table() -> None:
         "rag_router": None,
         "monitoring_router": "/api",
         "experiments_router": "/api",
+        "expert_review_router": "/api",
         "gaps_router": "/api",
         "segments_router": "/api",
         "resource_optimizer_router": "/api",

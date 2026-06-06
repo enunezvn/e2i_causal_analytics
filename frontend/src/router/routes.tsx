@@ -21,6 +21,7 @@ const AgentOrchestration = lazy(() => import('@/pages/AgentOrchestration'));
 const KPIDictionary = lazy(() => import('@/pages/KPIDictionary'));
 const MemoryArchitecture = lazy(() => import('@/pages/MemoryArchitecture'));
 const DigitalTwin = lazy(() => import('@/pages/DigitalTwin'));
+const ExpertReviews = lazy(() => import('@/pages/ExpertReviews'));
 const AIAgentInsights = lazy(() => import('@/pages/AIAgentInsights'));
 const GapAnalysis = lazy(() => import('@/pages/GapAnalysis'));
 const Experiments = lazy(() => import('@/pages/Experiments'));
@@ -158,6 +159,13 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Digital Twin',
     description: 'Intervention simulation & pre-screening',
     icon: 'flask-conical',
+    showInNav: true,
+  },
+  {
+    path: '/expert-reviews',
+    title: 'Expert Reviews',
+    description: 'Human-in-the-loop review queue for causal DAGs',
+    icon: 'clipboard-check',
     showInNav: true,
   },
   {
@@ -391,6 +399,16 @@ export const routes: RouteObject[] = [
       <ProtectedRoute>
         <LazyPage>
           <DigitalTwin />
+        </LazyPage>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/expert-reviews',
+    element: (
+      <ProtectedRoute>
+        <LazyPage>
+          <ExpertReviews />
         </LazyPage>
       </ProtectedRoute>
     ),

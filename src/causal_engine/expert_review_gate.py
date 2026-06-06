@@ -193,10 +193,24 @@ class ExpertReviewGate:
 
         # No approval and no pending review
         if self.auto_create_review and requester_id:
-            # Auto-create review request
+            # Auto-create review request.
+            # KNOWN FOLLOW-UP (R6-F2, DEFERRED): the get_dag_approval +
+            # get_reviews_for_dag pre-checks above guard against duplicate rows
+            # within a single run, but two concurrent runs on the SAME dag_hash
+            # can both pass the check and both INSERT, creating duplicate pending
+            # rows. The robust fix is a DB UNIQUE constraint on
+            # (dag_version_hash, approval_status='pending') — out of scope here
+            # (needs a migration); tracked separately. No behavior change.
             review_id = await self.repository.create_review(
                 reviewer_id=requester_id,
-                review_type="initial_dag",
+                # C1 (R6-F2): MUST be a valid ``expert_review_type`` ENUM member.
+                # 'initial_dag' is NOT a member (valid: dag_approval,
+                # methodology_review, quarterly_audit, ad_hoc_validation); with
+                # auto_create_review=True the bad value fails the Postgres enum
+                # cast -> create_review returns None -> gate falls to BLOCKED
+                # (silent hard-block, zero rows). 'dag_approval' is the new-DAG
+                # sign-off type (010 :53-58).
+                review_type="dag_approval",
                 dag_version_hash=dag_hash,
                 brand=brand,
                 treatment_variable=treatment,

@@ -176,12 +176,23 @@ class ExpertReviewRepository(BaseRepository):
         update_data = {k: v for k, v in update_data.items() if v is not None}
 
         try:
-            await (
+            result = await (
                 self.client.table(self.table_name)
                 .update(update_data)
                 .eq("review_id", review_id)
                 .execute()
             )
+            # FIX B (codex HIGH): a zero-row update (nonexistent or already-resolved
+            # review_id) matches nothing — supabase-py returns the updated rows in
+            # ``result.data`` (same convention as base.py:131), so empty data means
+            # nothing was touched. Returning True there is a fabricated success that
+            # would make the route 200 a record it never changed.
+            if not result.data:
+                logger.warning(
+                    f"submit_review matched no rows for {review_id} "
+                    "(nonexistent or already-resolved); returning False"
+                )
+                return False
             logger.info(f"Submitted review {review_id} with status {approval_status}")
             return True
         except Exception as e:
