@@ -157,7 +157,11 @@ def create_experiment_designer_graph(
     Args:
         knowledge_store: Optional knowledge store for context loading
         max_redesign_iterations: Maximum number of redesign iterations (default: 2)
-        enable_twin_simulation: Whether to run twin simulation pre-screening (default: True)
+        enable_twin_simulation: Whether to WIRE the twin pre-screen node into the
+            graph (default: True). When True the node is present but stays dark at
+            runtime unless state["enable_twin_simulation"] is also set (default
+            False, seeded from ExperimentDesignerInput). When False the node is
+            excised entirely and context_loader flows straight to design_reasoning.
         auto_skip_on_low_effect: If True, skip workflow when twin recommends SKIP (default: True)
 
     Returns:
@@ -181,7 +185,12 @@ def create_experiment_designer_graph(
     # Add nodes to graph (wrapped for sync compatibility)
     workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("context_loader", wrap_async_node(context_node.execute))  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    if enable_twin_simulation:
+        # H8: wire the twin pre-screen node only when enabled at graph-build time.
+        # The node ALSO self-guards at runtime on state["enable_twin_simulation"]
+        # (default False), so even when wired it stays dark unless the caller opts
+        # in. This flag controls whether the node is part of the graph AT ALL.
+        workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("design_reasoning", wrap_async_node(design_node.execute))  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("power_analysis", wrap_async_node(power_node.execute))  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("validity_audit", wrap_async_node(validity_node.execute))  # type: ignore[type-var,arg-type,call-overload]
@@ -196,33 +205,37 @@ def create_experiment_designer_graph(
     # audit_init → context_loader
     workflow.add_edge("audit_init", "context_loader")
 
-    # context_loader → twin_simulation (always)
-    workflow.add_edge("context_loader", "twin_simulation")
+    if enable_twin_simulation:
+        # context_loader → twin_simulation (when the node is wired)
+        workflow.add_edge("context_loader", "twin_simulation")
 
-    # twin_simulation → design_reasoning, error_handler, or END (if skipped)
-    def twin_to_next(state: ExperimentDesignState) -> str:
-        """Determine next step after twin simulation.
+        # twin_simulation → design_reasoning, error_handler, or END (if skipped)
+        def twin_to_next(state: ExperimentDesignState) -> str:
+            """Determine next step after twin simulation.
 
-        Returns:
-            - "design_reasoning" if proceeding with experiment design
-            - "end" if twin recommends skip (early exit)
-            - "error_handler" if workflow failed
-        """
-        if state.get("status") == "failed":
-            return "error_handler"
-        if state.get("status") == "skipped":
-            return "end"
-        return "design_reasoning"
+            Returns:
+                - "design_reasoning" if proceeding with experiment design
+                - "end" if twin recommends skip (early exit)
+                - "error_handler" if workflow failed
+            """
+            if state.get("status") == "failed":
+                return "error_handler"
+            if state.get("status") == "skipped":
+                return "end"
+            return "design_reasoning"
 
-    workflow.add_conditional_edges(
-        "twin_simulation",
-        twin_to_next,
-        {
-            "design_reasoning": "design_reasoning",
-            "end": END,
-            "error_handler": "error_handler",
-        },
-    )
+        workflow.add_conditional_edges(
+            "twin_simulation",
+            twin_to_next,
+            {
+                "design_reasoning": "design_reasoning",
+                "end": END,
+                "error_handler": "error_handler",
+            },
+        )
+    else:
+        # Twin pre-screen excised at build time (#705 H8) — go straight to design.
+        workflow.add_edge("context_loader", "design_reasoning")
 
     # design_reasoning → power_analysis or error_handler
     def design_to_next(state: ExperimentDesignState) -> str:
@@ -298,8 +311,10 @@ def create_initial_state(
     preregistration_formality: str = "medium",
     max_redesign_iterations: int = 2,
     enable_validity_audit: bool = True,
-    # Phase 15: Twin simulation parameters
-    enable_twin_simulation: bool = True,
+    # Phase 15: Twin simulation parameters. Default OFF to match
+    # ExperimentDesignerInput (the v1 synthetic DGP is not decision-useful for an
+    # auto pre-screen) — opt in explicitly (#705 H8).
+    enable_twin_simulation: bool = False,
     intervention_type: str | None = None,
     brand: str | None = None,
 ) -> ExperimentDesignState:

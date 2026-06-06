@@ -276,6 +276,16 @@ class TestGraphIntegration:
 
         assert "twin_simulation" in graph.nodes
 
+    def test_graph_excludes_twin_simulation_node_when_disabled(self):
+        """H8: enable_twin_simulation=False excises the node entirely (the factory
+        param is now functional, not a no-op); context_loader flows straight to
+        design_reasoning with no orphan edge."""
+        graph = create_experiment_designer_graph(enable_twin_simulation=False)
+
+        assert "twin_simulation" not in graph.nodes
+        assert "context_loader" in graph.nodes
+        assert "design_reasoning" in graph.nodes
+
     def test_graph_workflow_order(self):
         """Test that nodes are in correct order."""
         graph = create_experiment_designer_graph()
