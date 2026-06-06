@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # stratified subsample is plenty.
 _DIAGNOSTIC_ROW_CAP = 20_000
 _DIAGNOSTIC_MAX_FOLDS = 3
-_DIAGNOSTIC_RANDOM_STATE = 42  # noqa: fixed seed — deterministic diagnostic
+_DIAGNOSTIC_RANDOM_STATE = 42  # fixed seed: deterministic diagnostic
 
 # Label thresholds (heuristics calibrated to the Optum-mart disproof, where a
 # feature-bound ceiling sat at AUC~0.68 / PR-AUC lift~2, and the separable
@@ -69,9 +69,7 @@ def _ensure_numpy(data: Any) -> Optional[np.ndarray]:
     return np.asarray(data)
 
 
-def _stratified_subsample(
-    X: np.ndarray, y: np.ndarray, cap: int
-) -> tuple[np.ndarray, np.ndarray]:
+def _stratified_subsample(X: np.ndarray, y: np.ndarray, cap: int) -> tuple[np.ndarray, np.ndarray]:
     """Stratified subsample to ``cap`` rows (preserves prevalence)."""
     if len(y) <= cap:
         return X, y
@@ -121,12 +119,8 @@ def _compute_ceiling(X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
     # separability of the feature set, which is exactly the ceiling that
     # imbalance handling cannot raise.
     clf = LogisticRegression(max_iter=200, solver="lbfgs")
-    auc = float(
-        np.mean(cross_val_score(clf, X_sub, y_sub, cv=cv, scoring="roc_auc"))
-    )
-    pr_auc = float(
-        np.mean(cross_val_score(clf, X_sub, y_sub, cv=cv, scoring="average_precision"))
-    )
+    auc = float(np.mean(cross_val_score(clf, X_sub, y_sub, cv=cv, scoring="roc_auc")))
+    pr_auc = float(np.mean(cross_val_score(clf, X_sub, y_sub, cv=cv, scoring="average_precision")))
     prevalence = float(y_sub.mean())
     lift = pr_auc / prevalence if prevalence > 0 else float("nan")
     label, note = _classify(auc, lift)
@@ -169,12 +163,16 @@ async def feature_ceiling_diagnostic(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     problem_type = state.get("problem_type", "binary_classification")
     if problem_type not in ("binary_classification",):
-        return _skip(f"Separability diagnostic only runs for binary_classification (got {problem_type!r}).")
+        return _skip(
+            f"Separability diagnostic only runs for binary_classification (got {problem_type!r})."
+        )
 
     X = _ensure_numpy(state.get("X_train_preprocessed"))
     y = _ensure_numpy((state.get("train_data") or {}).get("y"))
     if X is None or y is None:
-        return _skip("No preprocessed training features/labels available for the separability diagnostic.")
+        return _skip(
+            "No preprocessed training features/labels available for the separability diagnostic."
+        )
     y = y.flatten()
 
     classes = np.unique(y)

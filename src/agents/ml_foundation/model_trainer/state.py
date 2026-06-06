@@ -243,7 +243,9 @@ class ModelTrainerState(BaseAgentSchema):
     feature_ceiling_pr_auc: Optional[float] = None  # native CV average-precision
     feature_ceiling_prevalence: Optional[float] = None
     feature_ceiling_pr_auc_lift: Optional[float] = None  # pr_auc / prevalence (1.0 == no skill)
-    feature_ceiling_label: Optional[str] = None  # feature_bound | intermediate | separable | not_computed
+    feature_ceiling_label: Optional[str] = (
+        None  # feature_bound | intermediate | separable | not_computed
+    )
     feature_ceiling_note: Optional[str] = None  # plain-language recommendation
     feature_ceiling_n_eval: Optional[int] = None
     feature_ceiling_cv_folds: Optional[int] = None
