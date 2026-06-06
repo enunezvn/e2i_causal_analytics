@@ -75,6 +75,7 @@ from src.api.routes.copilotkit import router as copilotkit_router
 from src.api.routes.digital_twin import router as digital_twin_router
 from src.api.routes.executive_insights import router as executive_insights_router
 from src.api.routes.experiments import router as experiments_router
+from src.api.routes.expert_review import router as expert_review_router
 from src.api.routes.explain import router as explain_router
 from src.api.routes.feedback import router as feedback_router
 from src.api.routes.gaps import router as gaps_router
@@ -1040,6 +1041,9 @@ app.include_router(kpi_router)
 
 # Causal inference endpoints (/api/causal/*)
 app.include_router(causal_router, prefix="/api")
+
+# Expert review queue endpoints (/api/expert-reviews/*) — R6-F2 human-in-the-loop
+app.include_router(expert_review_router, prefix="/api")
 
 # Audit chain endpoints (/api/audit/*)
 app.include_router(audit_router, prefix="/api")
