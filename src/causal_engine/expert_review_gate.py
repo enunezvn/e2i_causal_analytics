@@ -196,7 +196,14 @@ class ExpertReviewGate:
             # Auto-create review request
             review_id = await self.repository.create_review(
                 reviewer_id=requester_id,
-                review_type="initial_dag",
+                # C1 (R6-F2): MUST be a valid ``expert_review_type`` ENUM member.
+                # 'initial_dag' is NOT a member (valid: dag_approval,
+                # methodology_review, quarterly_audit, ad_hoc_validation); with
+                # auto_create_review=True the bad value fails the Postgres enum
+                # cast -> create_review returns None -> gate falls to BLOCKED
+                # (silent hard-block, zero rows). 'dag_approval' is the new-DAG
+                # sign-off type (010 :53-58).
+                review_type="dag_approval",
                 dag_version_hash=dag_hash,
                 brand=brand,
                 treatment_variable=treatment,
