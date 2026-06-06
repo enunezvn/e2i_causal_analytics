@@ -28,7 +28,6 @@ def _import_tool_module():
 
 
 # Import schemas and models that don't trigger LLM init
-from src.digital_twin.models.simulation_models import InterventionConfig
 
 
 # Lazy import the actual tool module
@@ -410,80 +409,10 @@ class TestDigitalTwinWorkflow:
         assert result["top_segments"] == segments
 
 
-@pytest.mark.xdist_group(name="experiment_designer_tools")
-class TestMockResultGeneration:
-    """Test _create_mock_result function."""
-
-    def test_mock_result_structure(self, tool_module):
-        """Test mock result has required structure."""
-        _create_mock_result = tool_module._create_mock_result
-        config = InterventionConfig(
-            intervention_type="email_campaign",
-            duration_weeks=8,
-        )
-
-        result = _create_mock_result(config, 10000, "email_campaign")
-
-        assert "simulation_id" in result
-        assert "recommendation" in result
-        assert "recommendation_rationale" in result
-        assert "simulated_ate" in result
-        assert "confidence_interval" in result
-        assert "recommended_sample_size" in result
-        assert "recommended_duration_weeks" in result
-        assert "simulation_confidence" in result
-        assert "fidelity_warning" in result
-        assert "top_segments" in result
-
-    def test_mock_result_intervention_types(self, tool_module):
-        """Test mock result varies by intervention type."""
-        _create_mock_result = tool_module._create_mock_result
-        config = InterventionConfig(
-            intervention_type="speaker_program_invitation",  # High base effect
-            duration_weeks=8,
-        )
-
-        result = _create_mock_result(config, 10000, "speaker_program_invitation")
-
-        # Speaker programs have higher base effect (0.14)
-        # Result may vary due to noise but should generally be higher
-        assert result["simulated_ate"] is not None
-        assert isinstance(result["simulated_ate"], float)
-
-    def test_mock_result_confidence_bounds(self, tool_module):
-        """Test mock result has valid confidence bounds."""
-        _create_mock_result = tool_module._create_mock_result
-        config = InterventionConfig(
-            intervention_type="call_frequency_increase",
-            duration_weeks=8,
-        )
-
-        result = _create_mock_result(config, 10000, "call_frequency_increase")
-
-        ci = result["confidence_interval"]
-        assert ci[0] < ci[1]  # Lower < Upper
-        # CI should contain the ATE
-        ate = result["simulated_ate"]
-        # Allow for floating point precision
-        assert ci[0] <= ate <= ci[1] or abs(ate - (ci[0] + ci[1]) / 2) < 0.05
-
-    def test_mock_result_recommendation_logic(self, tool_module):
-        """Test mock result recommendation follows logic."""
-        _create_mock_result = tool_module._create_mock_result
-        config = InterventionConfig(
-            intervention_type="sample_distribution",  # Low base effect (0.04)
-            duration_weeks=8,
-        )
-
-        # Run multiple times to test logic (due to randomness)
-        results = []
-        for _ in range(10):
-            result = _create_mock_result(config, 10000, "sample_distribution")
-            results.append(result)
-
-        # All results should have valid recommendations
-        for result in results:
-            assert result["recommendation"] in ["deploy", "skip", "refine"]
+# NOTE: the old TestMockResultGeneration class was removed with the fabricator it
+# tested (_create_mock_result) — it asserted the fabricated-effect contract that
+# H3 eliminates. Fail-closed behaviour is covered by
+# TestSimulateInterventionFailsClosed above.
 
 
 @pytest.mark.xdist_group(name="experiment_designer_tools")

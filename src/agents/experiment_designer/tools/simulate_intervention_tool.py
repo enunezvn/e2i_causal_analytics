@@ -123,25 +123,44 @@ def _get_or_create_twins(
     brand: Brand,
     n: int,
 ) -> Any:
-    """Get cached twin population or generate new one."""
-    cache_key = f"{twin_type.value}_{brand.value}_{n}"
+    """Load + hydrate the active trained twin model and generate a population.
 
+    Fails closed: if no trained model can be loaded, raises so the caller emits an
+    honest 'twin pre-screen unavailable' result rather than fabricating an effect
+    (#705 H3). No silent mock population. This is the same resolve→hydrate→generate
+    path the /simulate route uses, run synchronously (the tool is a sync @tool).
+    """
+    cache_key = f"{twin_type.value}_{brand.value}_{n}"
     if cache_key in _twin_cache:
         logger.info(f"Using cached twin population: {cache_key}")
         return _twin_cache[cache_key]
 
-    # In production, this would load a pre-trained model
-    # For now, we'll create a mock population
-    logger.info(f"Generating new twin population: {cache_key}")
+    from src.digital_twin import twin_persistence
+    from src.memory.services.factories import get_async_supabase_client
 
-    # This would be replaced with actual model loading
-    TwinGenerator(twin_type=twin_type, brand=brand)
+    async def _resolve_and_hydrate() -> Any:
+        client = await get_async_supabase_client()
+        repo = TwinRepository(supabase_client=client)
+        actives = await repo.list_active_models(twin_type=twin_type, brand=brand.value)
+        if not actives:
+            raise RuntimeError(
+                f"No trained twin model for {brand.value}/{twin_type.value}; "
+                "cannot pre-screen. Train a model first."
+            )
+        row = actives[0]
+        generator = TwinGenerator(twin_type=twin_type, brand=brand)
+        loaded = twin_persistence.hydrate_generator(
+            generator, row.get("mlflow_model_uri"), row.get("mlflow_run_id")
+        )
+        if not loaded:
+            raise RuntimeError(
+                f"Trained twin model for {brand.value}/{twin_type.value} could not be loaded."
+            )
+        return generator.generate(n=n)
 
-    # In production: generator would load pre-trained model
-    # twins = generator.generate(n=n)
-
-    # For now, return None - actual implementation would return population
-    return None
+    population = asyncio.run(_resolve_and_hydrate())
+    _twin_cache[cache_key] = population
+    return population
 
 
 @tool
@@ -241,17 +260,10 @@ def simulate_intervention(
             regions=target_regions or [],
         )
 
-        # Get or create twin population
+        # Load + hydrate the active trained model and generate a population.
+        # Fails closed (raises) if no model is loadable — the broad except below
+        # then returns an honest 'refine' error result (no fabricated effect, #705 H3).
         twins = _get_or_create_twins(twin_type, brand_enum, twin_count)
-
-        if twins is None:
-            # Return mock result for demonstration
-            # In production, this would use real simulation
-            return _create_mock_result(
-                intervention_config,
-                twin_count,
-                intervention_type,
-            )
 
         # Run simulation
         engine = SimulationEngine(
@@ -313,77 +325,6 @@ def _format_output(result: SimulationResult) -> Dict[str, Any]:
         "fidelity_warning": result.fidelity_warning,
         "fidelity_warning_reason": result.fidelity_warning_reason,
         "top_segments": result.effect_heterogeneity.get_top_segments(5),
-    }
-
-
-def _create_mock_result(
-    config: InterventionConfig,
-    twin_count: int,
-    intervention_type: str,
-) -> Dict[str, Any]:
-    """Create mock result for demonstration when model not available."""
-    import random
-    from uuid import uuid4
-
-    # Simulate different effects based on intervention type
-    base_effects = {
-        "email_campaign": 0.06,
-        "call_frequency_increase": 0.09,
-        "speaker_program_invitation": 0.14,
-        "sample_distribution": 0.04,
-        "peer_influence_activation": 0.11,
-        "digital_engagement": 0.07,
-    }
-
-    base = base_effects.get(intervention_type, 0.05)
-    noise = random.gauss(0, 0.02)
-    ate = base + noise
-
-    std_error = 0.015
-    ci_lower = ate - 1.96 * std_error
-    ci_upper = ate + 1.96 * std_error
-
-    # Determine recommendation
-    if ate < 0.05:
-        recommendation = "skip"
-        rationale = (
-            f"Simulated ATE ({ate:.4f}) below minimum threshold (0.05). "
-            "Predicted impact insufficient to justify experiment costs."
-        )
-    elif ci_lower <= 0:
-        recommendation = "refine"
-        rationale = (
-            "Effect not statistically significant (CI includes zero). "
-            "Consider refining intervention design or increasing duration."
-        )
-    else:
-        recommendation = "deploy"
-        rationale = (
-            f"Simulation predicts positive effect (ATE={ate:.4f}). "
-            "Effect exceeds threshold and is significant. Proceed with A/B test."
-        )
-
-    return {
-        "simulation_id": str(uuid4()),
-        "recommendation": recommendation,
-        "recommendation_rationale": rationale,
-        "simulated_ate": round(ate, 4),
-        "confidence_interval": (round(ci_lower, 4), round(ci_upper, 4)),
-        "recommended_sample_size": int(2000 / (ate**2)) if ate > 0.01 else 10000,
-        "recommended_duration_weeks": config.duration_weeks,
-        "simulation_confidence": 0.75,
-        "fidelity_warning": False,
-        "fidelity_warning_reason": None,
-        "top_segments": [
-            {"dimension": "decile", "segment": "1-2", "ate": ate * 1.3, "n": 2000},
-            {"dimension": "specialty", "segment": "oncology", "ate": ate * 1.2, "n": 3000},
-            {
-                "dimension": "adoption_stage",
-                "segment": "late_majority",
-                "ate": ate * 1.15,
-                "n": 2500,
-            },
-        ],
     }
 
 
