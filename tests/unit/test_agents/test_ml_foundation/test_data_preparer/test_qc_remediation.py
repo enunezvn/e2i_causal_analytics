@@ -479,3 +479,206 @@ class TestReviewAndRemediateQcStatePropagation:
 
         assert result["remediation_status"] == "failed"
         assert "train_df" not in result
+
+
+class TestNoProgressStop:
+    """A remediation round that applies ZERO effective actions (every action
+    skipped — e.g. malformed LLM params) must NOT request revalidation.
+
+    Pre-fix the node returned ``status="applied"`` + ``requires_revalidation=True``
+    even when nothing changed, so the QC loop re-flagged the identical column,
+    re-emitted the same un-appliable drop, and spun until LangGraph's
+    recursion_limit (the discontinuation_mart GraphRecursionError, 2026-06-06:
+    ``cci_severe_liver`` perfect-separation drop perpetually skipped).
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_skipped_round_reports_zero_effective(self) -> None:
+        # impute READS params (strategy), so a malformed params field is still
+        # skipped -> 0 effective. (drop_column no longer skips on malformed
+        # params — it is param-less; see TestParamlessActions...)
+        train_df = pd.DataFrame({"x": [1.0, None, 3.0], "y": [0, 1, 0]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [
+            {
+                "type": "impute",
+                "column": "x",
+                "params": {},
+                "params_parse_failed": True,
+                "params_raw": "strategy=garbage",
+            }
+        ]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["success"] is True
+        assert result["effective_action_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_real_drop_reports_one_effective(self) -> None:
+        train_df = pd.DataFrame({"x": [1, 2, 3], "y": [0, 1, 0]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [{"type": "drop_column", "column": "x", "params": {}}]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["effective_action_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_round_counts_only_effective(self) -> None:
+        train_df = pd.DataFrame({"x": [1, 2, 3], "keep": [4.0, None, 6.0]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [
+            {"type": "drop_column", "column": "x", "params": {}},  # effective
+            {
+                "type": "impute",  # params-reading -> skipped on malformed
+                "column": "keep",
+                "params": {},
+                "params_parse_failed": True,
+                "params_raw": "garbage",
+            },  # skipped
+        ]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["effective_action_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_dedup_removing_zero_rows_is_not_effective(self) -> None:
+        train_df = pd.DataFrame({"a": [1, 2, 3]})  # already unique
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [{"type": "deduplicate", "column": None, "params": {}}]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["effective_action_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_node_no_progress_does_not_request_revalidation(self) -> None:
+        """The whole point: an all-skipped round must stop the loop."""
+        train_df = pd.DataFrame({"x": [1.0, None, 3.0], "y": [0, 1, 0]})
+        state = _failing_qc_state(train_df)
+        analysis = _auto_remediation_analysis(
+            [
+                {
+                    "type": "impute",  # params-reading -> skipped on malformed
+                    "column": "x",
+                    "params": {},
+                    "params_parse_failed": True,
+                    "params_raw": "strategy=garbage",
+                }
+            ]
+        )
+        with patch(_ANALYZE_LLM, new=AsyncMock(return_value=analysis)):
+            result = await review_and_remediate_qc(state)
+
+        assert result["remediation_status"] == "manual_required"
+        assert not result.get("requires_revalidation")
+        # attempt counter still advances + the skipped actions are surfaced
+        assert result["remediation_attempts"] == 1
+
+    @pytest.mark.asyncio
+    async def test_node_real_progress_still_requests_revalidation(self) -> None:
+        """Regression guard: a round that DOES change data must still retry."""
+        train_df = pd.DataFrame({"keep": [1, 2, 3], "drop_me": [4, 5, 6]})
+        state = _failing_qc_state(train_df)
+        analysis = _auto_remediation_analysis(
+            [{"type": "drop_column", "column": "drop_me", "params": {}}]
+        )
+        with patch(_ANALYZE_LLM, new=AsyncMock(return_value=analysis)):
+            result = await review_and_remediate_qc(state)
+
+        assert result["remediation_status"] == "applied"
+        assert result["requires_revalidation"] is True
+
+
+class TestParamlessActionsAppliedDespiteMalformedParams:
+    """drop_column / deduplicate are fully determined by the parsed column name /
+    row identity — their behavior does NOT read ``params``. So a malformed
+    ``params:`` field cannot change what they do, and the Codex MEDIUM-C skip
+    (which exists to stop a destructive default-strategy ``impute``) must NOT
+    block them. Pre-fix the skip applied to ALL action types, so a
+    perfect-separation drop with a malformed ``reason="..."`` params string was
+    perpetually skipped and the cohort stayed unmodelable (discontinuation_mart,
+    2026-06-06)."""
+
+    @pytest.mark.asyncio
+    async def test_drop_column_applied_despite_malformed_params(self) -> None:
+        train_df = pd.DataFrame({"cci_severe_liver": [0, 0, 0], "keep": [1, 2, 3]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [
+            {
+                "type": "drop_column",
+                "column": "cci_severe_liver",
+                "params": {},
+                "params_parse_failed": True,
+                "params_raw": 'reason="perfect_class_separation_data_leakage"',
+            }
+        ]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["success"] is True
+        assert result["effective_action_count"] == 1
+        assert "cci_severe_liver" not in result["train_df"].columns
+        actions_taken = result.get("actions_taken", [])
+        assert any("Dropped column: cci_severe_liver" in a for a in actions_taken)
+        assert not any("SKIPPED" in a for a in actions_taken)
+
+    @pytest.mark.asyncio
+    async def test_deduplicate_applied_despite_malformed_params(self) -> None:
+        train_df = pd.DataFrame({"a": [1, 1, 2], "b": [9, 9, 8]})  # one dup pair
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [
+            {
+                "type": "deduplicate",
+                "column": None,
+                "params": {},
+                "params_parse_failed": True,
+                "params_raw": "garbage",
+            }
+        ]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["success"] is True
+        assert result["effective_action_count"] == 1
+        assert len(result["train_df"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_impute_still_skipped_on_malformed_params(self) -> None:
+        """Regression guard: impute READS params (strategy), so a malformed
+        params field MUST still skip — defaulting the strategy could be
+        destructive (the original Codex MEDIUM-C intent)."""
+        train_df = pd.DataFrame({"x": [1.0, 2.0, None, 4.0]})
+        state = {"train_df": train_df, "validation_df": None, "test_df": None}
+        actions = [
+            {
+                "type": "impute",
+                "column": "x",
+                "params": {},
+                "params_parse_failed": True,
+                "params_raw": "strategy=garbage",
+            }
+        ]
+        result = await _apply_automatic_remediation(state, actions)
+        assert result["effective_action_count"] == 0
+        actions_taken = result.get("actions_taken", [])
+        assert any("SKIPPED" in a and "malformed params" in a for a in actions_taken)
+
+
+class TestRouteAfterRemediationNoProgress:
+    """``_route_after_remediation`` stops on a no-progress round, retries on real
+    progress (within the attempt cap)."""
+
+    def test_router_stops_when_no_revalidation_requested(self) -> None:
+        from src.agents.ml_foundation.data_preparer.graph import (
+            _route_after_remediation,
+        )
+
+        state = {
+            "remediation_status": "manual_required",
+            "requires_revalidation": False,
+            "remediation_attempts": 1,
+        }
+        assert _route_after_remediation(state) == "end"
+
+    def test_router_retries_on_real_progress(self) -> None:
+        from src.agents.ml_foundation.data_preparer.graph import (
+            _route_after_remediation,
+        )
+
+        state = {
+            "remediation_status": "applied",
+            "requires_revalidation": True,
+            "remediation_attempts": 1,
+        }
+        assert _route_after_remediation(state) == "retry"

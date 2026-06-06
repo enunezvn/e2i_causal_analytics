@@ -15,6 +15,19 @@ from .state import DataPreparerState
 
 logger = logging.getLogger(__name__)
 
+# LangGraph's default recursion_limit (25) counts total node executions
+# (super-steps), and the data_preparer graph re-traverses its full ~14-node
+# pipeline on each QC retry (MAX_REMEDIATION_ATTEMPTS=2) and re-runs a 3-node
+# cycle on each leakage recheck (MAX_LEAKAGE_REMEDIATION_ATTEMPTS=5). A
+# legitimate deep-remediation run can therefore exceed 25 super-steps even
+# though both loops respect their attempt caps — tripping a GraphRecursionError
+# before the caps cleanly terminate. Size the limit to the configured
+# remediation depth: ~14 (linear) + 5*3 (leakage rechecks) + 2*14 (QC retries)
+# + headroom. The no-progress stop in qc_remediation is the real fix for the
+# pathological perpetual-skip loop; this just keeps a *legitimate* progressing
+# run from false-crashing. (discontinuation_mart GraphRecursionError, 2026-06-06)
+DATA_PREPARER_RECURSION_LIMIT = 80
+
 
 def _get_dq_repository():
     """Get DataQualityReportRepository (lazy import to avoid circular deps)."""
@@ -175,7 +188,10 @@ class DataPreparerAgent:
                     tags=[self.agent_name, "tier_0", "qc_gate"],
                     input_data={"scope_spec": scope_spec},
                 ) as span:
-                    final_state = await self.graph.ainvoke(initial_state)
+                    final_state = await self.graph.ainvoke(
+                        initial_state,
+                        config={"recursion_limit": DATA_PREPARER_RECURSION_LIMIT},
+                    )
                     # Set output on span
                     span.set_output(
                         {
@@ -185,7 +201,10 @@ class DataPreparerAgent:
                         }
                     )
             else:
-                final_state = await self.graph.ainvoke(initial_state)
+                final_state = await self.graph.ainvoke(
+                    initial_state,
+                    config={"recursion_limit": DATA_PREPARER_RECURSION_LIMIT},
+                )
 
             # Check for errors
             if final_state.get("error"):

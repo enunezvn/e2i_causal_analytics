@@ -18,6 +18,15 @@ logger = logging.getLogger(__name__)
 # Maximum number of remediation attempts before giving up
 MAX_REMEDIATION_ATTEMPTS = 2
 
+# Action types whose effect is FULLY determined by the parsed column name / row
+# identity and that do NOT read ``params``. A malformed ``params:`` field cannot
+# change what they do, so the Codex MEDIUM-C skip-on-malformed-params guard does
+# not apply to them — it exists to stop a destructive default-strategy ``impute``
+# (a params-READING action). Skipping a param-less action over an irrelevant
+# malformed ``reason="..."`` string left perfect-separation drops perpetually
+# un-applied (discontinuation_mart, 2026-06-06).
+_PARAMLESS_ACTIONS = frozenset({"drop_column", "deduplicate"})
+
 
 async def review_and_remediate_qc(state: DataPreparerState) -> Dict[str, Any]:
     """Review QC failures and attempt remediation using LLM analysis.
@@ -73,6 +82,31 @@ async def review_and_remediate_qc(state: DataPreparerState) -> Dict[str, Any]:
             )
 
             if remediation_result.get("success"):
+                # No-progress stop: a round that applied ZERO effective actions
+                # (every recommended action skipped — e.g. malformed LLM params
+                # on a perfect-separation drop) changed nothing, so re-validating
+                # would re-flag the identical issues and the loop would spin
+                # until LangGraph's recursion limit (the discontinuation_mart
+                # ``cci_severe_liver`` GraphRecursionError, 2026-06-06). Surface
+                # for MANUAL review and do NOT request revalidation, so
+                # ``_route_after_remediation`` ends instead of retrying. The QC
+                # gate still blocks downstream training on the unresolved issue —
+                # this makes the failure honest, not silently bypassed.
+                if remediation_result.get("effective_action_count", 0) == 0:
+                    logger.warning(
+                        "QC remediation applied 0 effective actions "
+                        "(all recommended actions skipped/no-op): %s. Halting the "
+                        "remediation loop and surfacing for manual review.",
+                        remediation_result.get("actions_taken", []),
+                    )
+                    return {
+                        "remediation_status": "manual_required",
+                        "remediation_attempts": remediation_attempts + 1,
+                        "remediation_actions_taken": remediation_result.get("actions_taken", []),
+                        "requires_revalidation": False,
+                        "llm_analysis": analysis.get("root_cause_summary"),
+                        "recommended_actions": analysis.get("manual_remediation_steps", []),
+                    }
                 # #632: explicitly forward the remediated frames into the
                 # state LangGraph receives. ``_apply_automatic_remediation``
                 # rebinds ``train_df`` to a NEW object for ``drop_column``
@@ -556,6 +590,13 @@ async def _apply_automatic_remediation(
         Result of remediation attempt
     """
     actions_taken = []
+    # Count of actions that ACTUALLY changed the data (an applied impute /
+    # drop / row-reducing dedup). Skipped (malformed-params, all-null) and
+    # no-op (0-row dedup, drop of an absent column) actions do NOT count. The
+    # caller uses a 0 count to stop the remediation loop: a round that changed
+    # nothing will re-flag the identical issues on re-check and spin until the
+    # graph recursion limit (the discontinuation_mart loop, 2026-06-06).
+    effective_count = 0
 
     train_df = state.get("train_df")
     validation_df = state.get("validation_df")
@@ -570,13 +611,17 @@ async def _apply_automatic_remediation(
             column = action.get("column")
             params = action.get("params", {})
 
-            # Codex MEDIUM-C: skip actions whose ``params`` was set but
-            # couldn't be parsed. Falling back to default params would
-            # apply potentially destructive operations (wrong impute
-            # strategy, wrong drop scope) under a different intent than
-            # the LLM specified. Surface as "skipped — malformed" so
-            # the orchestrator can re-prompt or escalate.
-            if action.get("params_parse_failed"):
+            # Codex MEDIUM-C: skip params-READING actions whose ``params`` was
+            # set but couldn't be parsed. Falling back to default params would
+            # apply a potentially destructive operation (wrong impute strategy)
+            # under a different intent than the LLM specified. Param-less actions
+            # (``drop_column``/``deduplicate``, see ``_PARAMLESS_ACTIONS``) are
+            # exempt: their effect is fully determined by the parsed column
+            # name / row identity, so a malformed ``params:`` field cannot change
+            # what they do — skipping them just leaves a flagged column un-dropped
+            # and re-flagged every round. Surface a true skip as "skipped —
+            # malformed" so the orchestrator can re-prompt or escalate.
+            if action.get("params_parse_failed") and action_type not in _PARAMLESS_ACTIONS:
                 logger.warning(
                     "Skipping remediation action %r on column %r: "
                     "params unparseable (%r). Defaulting params would "
@@ -632,6 +677,7 @@ async def _apply_automatic_remediation(
                 if test_df is not None and column in test_df.columns:
                     test_df, _ = _impute_column(test_df, column, strategy)
                 actions_taken.append(msg)
+                effective_count += 1
 
             elif action_type == "drop_column" and column and column in train_df.columns:
                 train_df = train_df.drop(columns=[column])
@@ -640,16 +686,20 @@ async def _apply_automatic_remediation(
                 if test_df is not None and column in test_df.columns:
                     test_df = test_df.drop(columns=[column])
                 actions_taken.append(f"Dropped column: {column}")
+                effective_count += 1
 
             elif action_type == "deduplicate":
                 before_count = len(train_df)
                 train_df = train_df.drop_duplicates()
                 after_count = len(train_df)
                 actions_taken.append(f"Removed {before_count - after_count} duplicate rows")
+                if after_count < before_count:
+                    effective_count += 1
 
         return {
             "success": True,
             "actions_taken": actions_taken,
+            "effective_action_count": effective_count,
             "train_df": train_df,
             "validation_df": validation_df,
             "test_df": test_df,
