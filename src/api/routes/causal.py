@@ -29,7 +29,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
@@ -86,6 +86,35 @@ _ROBUSTNESS_UNVALIDATED_WARNING = (
     "refutation-tested (the sequential/parallel pipeline does not run "
     "refutation/sensitivity checks). Treat the effect as UNVALIDATED for "
     "robustness; do not present it as a validated causal claim."
+)
+
+# R6-F1 (#740): caveats for the opt-in refutation path. The refutation runs only
+# on the DoWhy estimate (Owner-decision 1: a labeled proxy for the consensus),
+# and on REVIEW/BLOCK the pipeline DOWNGRADES (still 200, flag=False) rather than
+# 503-blocking the whole multi-library answer (Owner-decision 2).
+_ROBUSTNESS_REVIEW_WARNING = (
+    "robustness_validation_performed=false (gate=REVIEW): the DoWhy refutation "
+    "suite returned a REVIEW band (borderline-robust) for this estimate — it is "
+    "usable only with expert review and MUST NOT be presented as validated. "
+    "Robustness was validated on the DoWhy estimate only; EconML/CausalML "
+    "estimates in the consensus are unrefuted."
+)
+_ROBUSTNESS_BLOCK_WARNING = (
+    "robustness_validation_performed=false (gate=BLOCK): the DoWhy refutation "
+    "suite BLOCKED this estimate (a critical refutation test failed or confidence "
+    "was below threshold). Treat the effect as NOT robust. Robustness was "
+    "validated on the DoWhy estimate only; EconML/CausalML estimates in the "
+    "consensus are unrefuted."
+)
+
+# M-fo2: a cyclic (non-DAG) discovered graph is NOT a valid causal DAG, so
+# backdoor identification is unsound. This caveat is un-ignorable and is appended
+# to BOTH the warnings list and robustness_warning; it FORCES
+# robustness_validation_performed=False regardless of any refutation gate band.
+_NON_DAG_STRUCTURAL_WARNING = (
+    "Discovered causal graph contains cycles; the estimate is NOT "
+    "identification-valid (backdoor adjustment assumes a DAG) — treat as "
+    "exploratory."
 )
 
 router = APIRouter(
@@ -892,6 +921,8 @@ def _build_pipeline_input_sequential(
         mode="sequential",
         libraries_enabled=libraries_enabled,
         cross_validate=None,
+        # R6-F1 (#740): opt-in real-refutation flag → state["config"]["run_refutation"].
+        run_refutation=request.run_refutation,
     )
 
 
@@ -916,6 +947,8 @@ def _build_pipeline_input_parallel(
         mode="parallel",
         libraries_enabled=[lib.value for lib in request.libraries],
         cross_validate=None,
+        # R6-F1 (#740): opt-in real-refutation flag → state["config"]["run_refutation"].
+        run_refutation=request.run_refutation,
     )
 
 
@@ -1012,6 +1045,93 @@ async def _run_real_parallel_pipeline(
     return _parallel_output_to_response(pipeline_id, request, output, state=pipeline.last_state)
 
 
+def _resolve_graph_quality(
+    output: Optional[Mapping[str, Any]],
+    state: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Resolve the structural graph-quality dict from state (preferred) or output.
+
+    The real pipeline carries graph_quality on ``state`` (orchestrator
+    ``_extract_graph_quality``); ``PipelineOutput`` does NOT copy it. The existing
+    M-fo2 surface test injects it via ``output``. Prefer ``state`` when present
+    (the real path) and fall back to ``output`` (synthetic/test path). Returns an
+    empty dict (not None) so callers can ``.get(...)`` safely.
+    """
+    for source in (state, output):
+        if source is None:
+            continue
+        gq = source.get("graph_quality")
+        if isinstance(gq, dict):
+            return gq
+    return {}
+
+
+def _robustness_from_state(
+    state: Optional[Mapping[str, Any]],
+) -> tuple[bool, Optional[str]]:
+    """Gate ``robustness_validation_performed`` on the REAL refutation gate band.
+
+    Mirrors the agent path's ``is_estimate_valid`` (PROCEED is usable-as-robust;
+    REVIEW/BLOCK are not) and its caveat semantics (nodes/refutation.py):
+
+    - refutation_results falsy / empty / ``skipped`` / no gate → ``(False,
+      _ROBUSTNESS_UNVALIDATED_WARNING)`` (today's default-path behaviour; an
+      honest skip is NOT a validation).
+    - ``gate_decision == "proceed"`` → ``(True, None)`` (validated, no caveat).
+    - ``gate_decision == "review"`` → ``(False, _ROBUSTNESS_REVIEW_WARNING)``.
+    - ``gate_decision in {"block", "error"}`` or an ``error`` key → ``(False,
+      _ROBUSTNESS_BLOCK_WARNING)`` (fail-closed: an errored/blocked refutation
+      must NEVER flip robustness True).
+
+    NOTE: the M-fo2 non-DAG structural override is applied by the response
+    builders AFTER this helper (a cyclic graph forces False regardless of band).
+    """
+    rr = (state or {}).get("refutation_results")
+    if not isinstance(rr, dict) or not rr or rr.get("skipped") is True:
+        return False, _ROBUSTNESS_UNVALIDATED_WARNING
+    if rr.get("error") is not None:
+        return False, _ROBUSTNESS_BLOCK_WARNING
+    gate = rr.get("gate_decision")
+    if gate == "proceed":
+        return True, None
+    if gate == "review":
+        return False, _ROBUSTNESS_REVIEW_WARNING
+    if gate == "block":
+        return False, _ROBUSTNESS_BLOCK_WARNING
+    # Unknown / missing gate on a populated dict → fail-closed unvalidated.
+    return False, _ROBUSTNESS_UNVALIDATED_WARNING
+
+
+def _apply_non_dag_structural_gate(
+    *,
+    graph_quality: Mapping[str, Any],
+    robustness_performed: bool,
+    robustness_warning: Optional[str],
+    warnings: List[str],
+) -> tuple[bool, Optional[str], List[str]]:
+    """M-fo2: a non-DAG graph FORCES robustness False + an un-ignorable caveat.
+
+    A cyclic discovered graph is not a valid causal DAG, so backdoor
+    identification is unsound — this overrides any PROCEED refutation result
+    (downgrade, NOT a 503, consistent with F1 Owner-decision 2). The structural
+    caveat is appended to BOTH the warnings list and robustness_warning so the
+    signal cannot be lost. ``is_dag`` is read explicitly (None/missing means the
+    structural check did not run → no override; only an explicit ``False`` gates).
+    """
+    if graph_quality.get("is_dag") is not False:
+        return robustness_performed, robustness_warning, warnings
+
+    new_warnings = list(warnings)
+    if _NON_DAG_STRUCTURAL_WARNING not in new_warnings:
+        new_warnings.append(_NON_DAG_STRUCTURAL_WARNING)
+
+    if robustness_warning and _NON_DAG_STRUCTURAL_WARNING not in robustness_warning:
+        combined_warning: Optional[str] = f"{robustness_warning} {_NON_DAG_STRUCTURAL_WARNING}"
+    else:
+        combined_warning = _NON_DAG_STRUCTURAL_WARNING
+    return False, combined_warning, new_warnings
+
+
 def _sequential_output_to_response(
     pipeline_id: str,
     request: SequentialPipelineRequest,
@@ -1073,9 +1193,26 @@ def _sequential_output_to_response(
 
     # M-fo2: read structural graph-quality from the (optional) mapping, guarding
     # the non-dict case so mypy narrows the type and a malformed value yields None.
-    graph_quality = output.get("graph_quality")
-    if not isinstance(graph_quality, dict):
-        graph_quality = {}
+    graph_quality = _resolve_graph_quality(output, state)
+
+    # R6-F1: gate robustness on the REAL refutation suite (PROCEED → validated;
+    # REVIEW/BLOCK/error/skipped/empty → False + a band-naming caveat). Only
+    # append the caveat to ``warnings`` when one is set (a validated PROCEED has
+    # no caveat — drop the "unvalidated" line entirely).
+    robustness_performed, robustness_warning = _robustness_from_state(state)
+    warnings = list(output.get("warnings") or [])
+    if robustness_warning:
+        warnings.append(robustness_warning)
+
+    # M-fo2: a non-DAG graph FORCES robustness False + an un-ignorable caveat,
+    # overriding any PROCEED (downgrade, not a 503; the haircut already applied
+    # in the engine stays).
+    robustness_performed, robustness_warning, warnings = _apply_non_dag_structural_gate(
+        graph_quality=graph_quality,
+        robustness_performed=robustness_performed,
+        robustness_warning=robustness_warning,
+        warnings=warnings,
+    )
 
     return SequentialPipelineResponse(
         pipeline_id=pipeline_id,
@@ -1093,9 +1230,9 @@ def _sequential_output_to_response(
         effect_estimate_variance=None,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
-        warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
-        robustness_validation_performed=False,
-        robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
+        warnings=warnings,
+        robustness_validation_performed=robustness_performed,
+        robustness_warning=robustness_warning,
         graph_is_dag=graph_quality.get("is_dag"),
         structural_quality=graph_quality.get("structural_quality"),
     )
@@ -1144,11 +1281,23 @@ def _parallel_output_to_response(
             failed.append(lib_value)
             library_results[lib_value] = {"error": "library skipped during execution"}
 
-    # M-fo2: read structural graph-quality from the (optional) mapping, guarding
-    # the non-dict case so mypy narrows the type and a malformed value yields None.
-    graph_quality = output.get("graph_quality")
-    if not isinstance(graph_quality, dict):
-        graph_quality = {}
+    # M-fo2: read structural graph-quality from state (real path) or output
+    # (synthetic/test path); empty dict when absent so .get(...) is safe.
+    graph_quality = _resolve_graph_quality(output, state)
+
+    # R6-F1: gate robustness on the REAL refutation suite (see sequential builder).
+    robustness_performed, robustness_warning = _robustness_from_state(state)
+    warnings = list(output.get("warnings") or [])
+    if robustness_warning:
+        warnings.append(robustness_warning)
+
+    # M-fo2: a non-DAG graph FORCES robustness False + an un-ignorable caveat.
+    robustness_performed, robustness_warning, warnings = _apply_non_dag_structural_gate(
+        graph_quality=graph_quality,
+        robustness_performed=robustness_performed,
+        robustness_warning=robustness_warning,
+        warnings=warnings,
+    )
 
     return ParallelPipelineResponse(
         pipeline_id=pipeline_id,
@@ -1168,9 +1317,9 @@ def _parallel_output_to_response(
         consensus_method=request.consensus_method,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
-        warnings=[*list(output.get("warnings") or []), _ROBUSTNESS_UNVALIDATED_WARNING],
-        robustness_validation_performed=False,
-        robustness_warning=_ROBUSTNESS_UNVALIDATED_WARNING,
+        warnings=warnings,
+        robustness_validation_performed=robustness_performed,
+        robustness_warning=robustness_warning,
         graph_is_dag=graph_quality.get("is_dag"),
         structural_quality=graph_quality.get("structural_quality"),
     )

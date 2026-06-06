@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from ...refutation_runner import RefutationRunner
 from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
 from ..state import LibraryExecutionResult, PipelineConfig, PipelineState
@@ -329,6 +330,33 @@ class DoWhyExecutor(LibraryExecutor):
             except Exception:  # noqa: BLE001 - SE is method-dependent; absence is fine
                 dowhy_se = None
 
+        # === Step 10b: opt-in real refutation (R6-F1 / #740) ===
+        # The RefutationRunner needs the LIVE DoWhy model/estimand/estimate
+        # objects (it gates ``use_dowhy`` on all three being non-None — see
+        # refutation_runner.py:514-519). Those objects are in scope HERE but are
+        # NOT serializable into ``LibraryExecutionResult.result`` (a plain
+        # Dict[str, Any]) and cannot survive the orchestrator boundary. So when
+        # the caller opts in (``state["config"]["run_refutation"]``), we run the
+        # real suite NOW and serialize only its ``RefutationSuite`` output. This
+        # is gated default-off so the fast path is byte-identical when absent.
+        refutation_results: Dict[str, Any] = {}
+        config_obj = state.get("config") or {}
+        run_refutation = bool(
+            config_obj.get("run_refutation") if isinstance(config_obj, dict) else False
+        )
+        if run_refutation:
+            refutation_results = self._run_refutation_suite(
+                model=model,
+                identified_estimand=identified_estimand,
+                estimate=estimate,
+                data=data,
+                treatment=treatment_var,
+                outcome=outcome_var,
+                causal_effect=causal_effect,
+                dowhy_se=dowhy_se,
+                dowhy_method=dowhy_method,
+            )
+
         # === Step 11: build success result ===
         latency_ms = int((time.time() - start_time) * 1000)
         result_payload: Dict[str, Any] = {
@@ -341,11 +369,12 @@ class DoWhyExecutor(LibraryExecutor):
             "outcome_var": outcome_var,
             "common_causes": confounders,
             "graph_source": graph_source,
-            # Empty until C-2/C-6 wires refutation as a pipeline stage;
-            # the placeholder shape (empty dict) is intentional and
-            # documented — see refutation_runner for the real refutation
-            # path that C-6+ may invoke.
-            "refutation_results": {},
+            # Empty {} on the default fast path (run_refutation absent/False).
+            # When the caller opts in via ``state["config"]["run_refutation"]``,
+            # this carries the REAL RefutationSuite legacy-format payload (with a
+            # ``gate_decision``), an honest skip dict for non-linear methods
+            # (no SE → no CI → cannot refute), or a fail-closed error dict.
+            "refutation_results": refutation_results,
         }
 
         # Confidence policy: this executor reports a confidence of 1.0 for
@@ -379,6 +408,96 @@ class DoWhyExecutor(LibraryExecutor):
         if estimand_type is not None:
             return str(estimand_type)
         return type(identified_estimand).__name__
+
+    def _run_refutation_suite(
+        self,
+        *,
+        model: Any,
+        identified_estimand: Any,
+        estimate: Any,
+        data: Any,
+        treatment: str,
+        outcome: str,
+        causal_effect: float,
+        dowhy_se: Optional[float],
+        dowhy_method: str,
+    ) -> Dict[str, Any]:
+        """Run the real DoWhy refutation suite on the LIVE objects (R6-F1 / #740).
+
+        The runner requires a real ``original_ci`` (a required positional that
+        three of the five tests materially consume — notably the E-value
+        sensitivity gate). The DoWhy pipeline executor only has a native standard
+        error for the linear-regression estimator, so:
+
+        - SE available (linear_regression) → CI = ``(effect ± 1.96·SE)`` and run
+          the full suite. Return ``RefutationSuite.to_legacy_format()`` (which
+          already includes ``gate_decision``/``needs_review``/``overall_robust``).
+        - SE absent (any non-linear method) → return an HONEST skip dict. We do
+          NOT fabricate a CI: a made-up interval would feed a meaningless E-value
+          that can hard-BLOCK or wave through depending only on units — the exact
+          silent-wrong-evidence class this remediation exists to kill (the agent
+          path refuses the same at nodes/refutation.py:526).
+        - Any exception → fail-closed error dict (``gate_decision="block"``) so an
+          errored refutation can NEVER flip ``robustness_validation_performed`` to
+          True downstream.
+        """
+        if dowhy_se is None:
+            return {
+                "skipped": True,
+                "reason": (
+                    f"no standard error available for method {dowhy_method!r}; "
+                    "refutation needs a confidence interval and v1 derives it from "
+                    "the linear-regression SE only — refusing to fabricate a CI."
+                ),
+            }
+
+        try:
+            ci_lower = causal_effect - 1.96 * dowhy_se
+            ci_upper = causal_effect + 1.96 * dowhy_se
+            runner = RefutationRunner()
+            suite = runner.run_all_tests(
+                original_effect=causal_effect,
+                original_ci=(ci_lower, ci_upper),
+                data=data,
+                causal_model=model,
+                identified_estimand=identified_estimand,
+                estimate=estimate,
+                treatment=treatment,
+                outcome=outcome,
+            )
+            # to_legacy_format() already carries gate_decision / needs_review /
+            # overall_robust / individual_tests / confidence_adjustment. Avoid
+            # packing duplicate keys that could disagree; only the legacy shape.
+            legacy = suite.to_legacy_format()
+            # FIX 1 (honest p-values): to_legacy_format() coerces every
+            # non-applicable p_value via ``t.p_value or 0.0`` — so the E-value /
+            # sensitivity test (and any SKIPPED test) would carry a FABRICATED
+            # p_value=0.0 ("infinitely significant"), exactly the fake-value class
+            # this remediation kills. We restore honest None F1-locally instead of
+            # editing the shared to_legacy_format(), which the agent path's GEPA
+            # metric (formats p_value with :.4f → crashes on None) and DB writers
+            # depend on. Mirror the same test-name → contract-key mapping the
+            # legacy format uses (sensitivity_e_value → unobserved_common_cause;
+            # all other names pass through).
+            individual = legacy.get("individual_tests")
+            if isinstance(individual, dict):
+                for t in suite.tests:
+                    if t.p_value is not None:
+                        continue
+                    key = t.test_name.value
+                    if key == "sensitivity_e_value":
+                        key = "unobserved_common_cause"
+                    entry = individual.get(key)
+                    if isinstance(entry, dict):
+                        entry["p_value"] = None
+            return legacy
+        except Exception as exc:  # noqa: BLE001 - refutation/DoWhy raise broad-typed errors
+            logger.warning(
+                "DoWhy pipeline refutation failed (method=%s): %s",
+                dowhy_method,
+                exc,
+            )
+            return {"error": str(exc), "gate_decision": "block"}
 
     def validate_input(self, state: PipelineState) -> tuple[bool, str]:
         """Validate input for DoWhy analysis.
