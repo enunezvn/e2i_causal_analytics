@@ -394,7 +394,6 @@ performance:
     enabled: true
     embedding_cache_size: 10000
     procedure_cache_size: 1000
-    semantic_cache_ttl_minutes: 5
     
   # Concurrency
   concurrency:

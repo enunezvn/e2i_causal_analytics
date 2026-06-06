@@ -132,24 +132,30 @@ Reusable skill storage — tool sequences, analysis recipes, and response templa
 > RPC (`sync_hcp_patient_relationships_to_cache`) are real, but there is **no live
 > producer or reader**. The dormant `sync_data_layer_to_semantic_cache` /
 > `sync_treatment_relationships_to_cache` Python wrappers and the inert
-> `semantic_cache_ttl_minutes` / `falkordb_synced` controls were retired in commit
-> `9cb0dc19`. Kept as scaffolding for a future FalkorDB→Supabase hot-cache mirror;
-> activation would require a sync job + a reader + TTL eviction.
+> `semantic_cache_ttl_minutes` config control were retired in commit `9cb0dc19`;
+> the inert `falkordb_synced` / `falkordb_sync_at` columns (no sync-back job ever
+> read them) were dropped by migration `034_drop_inert_falkordb_sync_columns.sql`.
+> The table + RPC are kept as scaffolding for a future FalkorDB→Supabase hot-cache
+> mirror; activation would require a sync job + a reader + TTL eviction (+ a
+> re-added sync-state column).
 
-Hot cache of FalkorDB graph triplets for fast in-process retrieval.
+Hot cache of FalkorDB graph triplets — a triplet store
+(Subject –[Predicate]→ Object) with optional entity-id references into the data
+layer (schema per `database/memory/001_agentic_memory_schema_v1.3.sql`).
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `cache_id` | UUID (PK) | |
-| `subject` | VARCHAR(200) | Triplet subject |
-| `predicate` | VARCHAR(100) | Triplet predicate (relationship) |
-| `object` | VARCHAR(200) | Triplet object |
+| `subject_type` / `subject_id` | VARCHAR(50) / VARCHAR(100) | Triplet subject |
+| `predicate` | VARCHAR(50) | Triplet predicate (relationship) |
+| `object_type` / `object_id` | VARCHAR(50) / VARCHAR(100) | Triplet object |
+| `subject_*_id` / `object_*_id` | VARCHAR(50) | Optional entity-id refs (patient / hcp / trigger / causal_path) for joining to the data layer — no FKs |
 | `confidence` | FLOAT (0–1) | Confidence in this fact |
-| `source_agent` | e2i_agent_name | Which agent discovered this |
-| `falkordb_synced` | BOOLEAN | Has been synced to FalkorDB |
-| `last_accessed` | TIMESTAMPTZ | For LRU eviction |
+| `source` | VARCHAR(50) | Provenance (`graphity_extraction`, `user_stated`, `causal_discovery`, `data_layer_sync`) |
+| `properties` | JSONB | Free-form triplet metadata |
+| `created_at` / `updated_at` | TIMESTAMPTZ | |
 
-**Indexes**: Unique on `(subject, predicate, object)`, B-tree on `falkordb_synced`, `last_accessed`
+**Indexes**: Unique on `(subject_type, subject_id, predicate, object_type, object_id)`; B-tree on `(subject_type, subject_id)`, `(object_type, object_id)`, `predicate`, `confidence DESC`; partial on `subject_patient_id` and `subject_hcp_id` (WHERE NOT NULL).
 
 ### cognitive_cycles
 
