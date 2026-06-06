@@ -65,10 +65,6 @@ cognitive_workflow:
   reflector:
     graphity_batch_size: 10
     min_confidence_for_learning: 0.7
-
-performance:
-  cache:
-    semantic_cache_ttl_minutes: 10
 """
 
 

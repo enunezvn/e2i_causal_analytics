@@ -56,9 +56,13 @@ in `07-SUPPORTING-SCHEMAS.md`).
 
 **Decision:** Remove the two never-called sync wrappers
 (`sync_data_layer_to_semantic_cache`, `sync_treatment_relationships_to_cache`)
-and the inert `semantic_cache_ttl_minutes` / `falkordb_synced` controls
-(commit `9cb0dc19`). **Keep** the `semantic_memory_cache` table and its
-populating RPC (`sync_hcp_patient_relationships_to_cache`).
+and the inert `semantic_cache_ttl_minutes` config control (commit `9cb0dc19`).
+The inert `falkordb_synced` / `falkordb_sync_at` columns were **deferred** by
+`9cb0dc19` and dropped later by migration `034_drop_inert_falkordb_sync_columns.sql`
+(audit-followup 2026-06-06); the stray `semantic_cache_ttl_minutes` key was also
+removed from `config/005_memory_config.yaml` then. **Keep** the
+`semantic_memory_cache` table and its populating RPC
+(`sync_hcp_patient_relationships_to_cache`).
 
 **Evidence:**
 - `grep "sync_data_layer_to_semantic_cache\|sync_treatment_relationships_to_cache" src/`

@@ -128,3 +128,31 @@ def test_s3_inert_cache_ttl_control_removed() -> None:
     assert "cache_ttl_minutes=raw_config" not in cfg, (
         "inert cache_ttl_minutes loader must stay removed (audit F4/S3)"
     )
+
+
+def test_s3_inert_ttl_config_key_removed_from_yaml() -> None:
+    """The inert ``semantic_cache_ttl_minutes`` key must stay removed from the
+    memory config YAML. Its loader + dataclass field were dropped in commit
+    9cb0dc19 (audit F4/S3 — no eviction job ever read it); a leftover key would
+    be dead, misleading config surface that invites accidental re-wiring."""
+    cfg = (_ROOT / "config" / "005_memory_config.yaml").read_text(encoding="utf-8")
+    assert "semantic_cache_ttl_minutes" not in cfg, (
+        "inert semantic_cache_ttl_minutes key must stay removed from "
+        "config/005_memory_config.yaml (audit F4/S3 — no loader reads it)"
+    )
+
+
+def test_f4_inert_falkordb_sync_columns_dropped() -> None:
+    """The inert ``falkordb_synced`` / ``falkordb_sync_at`` columns on
+    semantic_memory_cache (audit F4 — never written or read; no Supabase->FalkorDB
+    sync-back job exists) are dropped by migration 034. The seed-only substrate
+    (table + populating RPC) is preserved; only the dead sync-state columns go."""
+    mig = _DB / "memory" / "034_drop_inert_falkordb_sync_columns.sql"
+    assert mig.exists(), (
+        "migration 034 dropping the inert falkordb sync columns must exist (audit F4)"
+    )
+    text = mig.read_text(encoding="utf-8").lower()
+    assert "drop column" in text, "migration 034 must use DROP COLUMN (audit F4)"
+    assert "falkordb_synced" in text and "falkordb_sync_at" in text, (
+        "migration 034 must drop BOTH falkordb_synced and falkordb_sync_at (audit F4)"
+    )
