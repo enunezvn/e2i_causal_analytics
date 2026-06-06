@@ -4,10 +4,19 @@
 # `src/agents/ml_foundation/model_trainer/nodes/detect_class_imbalance.py`
 # with a deterministic, configurable lookup table.
 #
-# Defaults below were calibrated to reproduce the exact behavior of the
-# pre-Block-6A `_heuristic_strategy` fallback for every (severity x
-# tree/non-tree x minority_count band) combination, so the existing test
-# set continues to pass without changes.
+# Defaults below were originally calibrated to reproduce the exact behavior of
+# the pre-Block-6A `_heuristic_strategy` fallback for every (severity x
+# tree/non-tree x minority_count band) combination.
+#
+# Re-tune 2026-06-06 (imbalance-methodology review): the severe.non_tree and
+# extreme.non_tree branches were changed from SMOTE/oversampling/"combined" to
+# `class_weight`. Rationale: the HPO objective already optimizes PR-AUC
+# (average_precision) at severe+extreme, and synthetic oversampling is
+# empirically detrimental to PR-AUC for linear models while unable to raise a
+# feature-bound (separability) ceiling. Evidence: ULB fraud-detection-handbook
+# Ch.6; docs/reports/tier0_imbalance_methodology_review_20260606.md (and the
+# local docs/results/tier0_optum_mart_initiation_events_disproof_20260606.md).
+# Tree branches and moderate.non_tree (mild imbalance, AUC objective) unchanged.
 #
 # To change behavior, override severity bands or any matrix entry; the
 # loader (`_load_imbalance_config`) accepts an explicit path argument so
@@ -71,13 +80,20 @@ strategy_matrix:
       rationale: >-
         Severe imbalance - tree models handle class weights natively,
         avoiding SMOTE synthetic sample memorization
+    # Re-tune 2026-06-06: non-tree (linear) models now use cost-sensitive
+    # class_weight instead of SMOTE/oversampling at severe imbalance. The HPO
+    # objective already switches to average_precision (PR-AUC) at severe+extreme
+    # (hyperparameter_tuner._get_default_metric), and synthetic oversampling is
+    # empirically detrimental to PR-AUC for linear models (ULB fraud-handbook
+    # Ch.6; tier0_optum_mart..._disproof_20260606.md). class_weight shifts the
+    # boundary without fabricating points or adding SMOTE compute; pair with
+    # decision-threshold tuning downstream.
     non_tree:
-      - min_minority_count: 10
-        strategy: smote
-        rationale: "Severe imbalance with sufficient minority samples for SMOTE"
-      - min_minority_count: 0
-        strategy: random_oversample
-        rationale: "Severe imbalance but too few minority samples for SMOTE"
+      strategy: class_weight
+      rationale: >-
+        Severe imbalance (non-tree) - cost-sensitive class_weight preferred
+        over SMOTE: resampling degrades PR-AUC (the severe/extreme HPO objective)
+        for linear models. Pair with decision-threshold tuning.
 
   extreme:
     tree:
@@ -85,13 +101,13 @@ strategy_matrix:
       rationale: >-
         Extreme imbalance - tree models handle class weights natively,
         avoiding SMOTE synthetic sample memorization
+    # Re-tune 2026-06-06: see the severe.non_tree note. At extreme imbalance the
+    # prior "combined" (SMOTE->0.5 + class_weight) measured at/below the
+    # no-resampling PR-AUC baseline on the feature-bound Optum mart, so the SMOTE
+    # step is dropped — class_weight alone, no synthetic minority generation.
     non_tree:
-      - min_minority_count: 10
-        strategy: combined
-        rationale: "Extreme imbalance - combining SMOTE with class weights"
-      - min_minority_count: 5
-        strategy: random_oversample
-        rationale: "Extreme imbalance with minimal minority samples"
-      - min_minority_count: 0
-        strategy: class_weight
-        rationale: "Extreme imbalance with too few samples for resampling"
+      strategy: class_weight
+      rationale: >-
+        Extreme imbalance (non-tree) - cost-sensitive class_weight only;
+        synthetic oversampling does not raise PR-AUC when the ceiling is
+        feature-bound (separability), and degrades it for linear models.

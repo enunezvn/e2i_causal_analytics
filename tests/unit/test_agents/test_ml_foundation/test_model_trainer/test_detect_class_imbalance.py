@@ -161,29 +161,28 @@ class TestLookupStrategy:
         strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
         assert strategy == "random_oversample"
 
-    def test_severe_enough_minority_returns_smote(self):
-        """Should return 'smote' for severe imbalance with enough minority samples."""
-        metrics = {"severity": "severe", "minority_count": 10, "total_samples": 100}
-        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
-        assert strategy == "smote"
+    def test_severe_non_tree_returns_class_weight(self):
+        """Re-tune 2026-06-06: severe non-tree now uses class_weight (not SMOTE).
 
-    def test_severe_few_minority_returns_oversample(self):
-        """Should return 'random_oversample' for severe imbalance with few minority samples."""
-        metrics = {"severity": "severe", "minority_count": 5, "total_samples": 100}
-        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
-        assert strategy == "random_oversample"
+        At severe imbalance the HPO objective is average_precision (PR-AUC), and
+        synthetic oversampling degrades PR-AUC for linear models; class_weight is
+        the cost-sensitive alternative regardless of minority count.
+        """
+        for mc in (10, 5):
+            metrics = {"severity": "severe", "minority_count": mc, "total_samples": 100}
+            strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
+            assert strategy == "class_weight"
 
-    def test_extreme_large_minority_returns_combined(self):
-        """Should return 'combined' for extreme imbalance with enough samples."""
-        metrics = {"severity": "extreme", "minority_count": 15, "total_samples": 100}
-        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
-        assert strategy == "combined"
+    def test_extreme_non_tree_returns_class_weight(self):
+        """Re-tune 2026-06-06: extreme non-tree now uses class_weight (not 'combined').
 
-    def test_extreme_medium_minority_returns_oversample(self):
-        """Should return 'random_oversample' for extreme imbalance with medium minority."""
-        metrics = {"severity": "extreme", "minority_count": 7, "total_samples": 100}
-        strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
-        assert strategy == "random_oversample"
+        The prior SMOTE-based 'combined' measured at/below the no-resampling
+        PR-AUC baseline on the feature-bound Optum mart; class_weight only.
+        """
+        for mc in (15, 7, 3):
+            metrics = {"severity": "extreme", "minority_count": mc, "total_samples": 100}
+            strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
+            assert strategy == "class_weight"
 
     def test_extreme_tiny_minority_returns_class_weight(self):
         """Should return 'class_weight' for extreme imbalance with very few samples."""
@@ -241,17 +240,19 @@ class TestLookupStrategy:
         assert strategy == "class_weight"
         assert "memorization" in rationale.lower() or "synthetic" in rationale.lower()
 
-    def test_severe_non_tree_still_returns_smote(self):
-        """Non-tree models should still get SMOTE at severe imbalance."""
+    def test_severe_non_tree_returns_class_weight_high_count(self):
+        """Re-tune 2026-06-06: severe non-tree uses class_weight even at high
+        minority counts (was SMOTE) — cost-sensitive over synthetic oversampling."""
         metrics = {"severity": "severe", "minority_count": 15, "total_samples": 100}
         strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
-        assert strategy == "smote"
+        assert strategy == "class_weight"
 
-    def test_extreme_non_tree_still_returns_combined(self):
-        """Non-tree models should still get combined at extreme imbalance."""
+    def test_extreme_non_tree_returns_class_weight_high_count(self):
+        """Re-tune 2026-06-06: extreme non-tree uses class_weight even at high
+        minority counts (was 'combined') — no synthetic minority generation."""
         metrics = {"severity": "extreme", "minority_count": 15, "total_samples": 100}
         strategy, _ = _lookup_strategy(metrics, "LogisticRegression", "binary_classification")
-        assert strategy == "combined"
+        assert strategy == "class_weight"
 
     def test_strategy_in_valid_strategies(self):
         """Every matrix branch must yield a strategy in VALID_STRATEGIES."""
@@ -408,12 +409,12 @@ class TestDetectClassImbalance:
     async def test_detects_severe_imbalance(self, severe_imbalance_state):
         """Should detect severe imbalance and pick the matrix-default strategy.
 
-        Non-tree algorithm (LogisticRegression) with minority_count=10 →
-        smote per the default matrix.
+        Re-tune 2026-06-06: non-tree algorithm (LogisticRegression) at severe
+        imbalance → class_weight (was smote) — cost-sensitive over resampling.
         """
         result = await detect_class_imbalance(severe_imbalance_state)
         assert result["imbalance_severity"] == "severe"
-        assert result["recommended_strategy"] == "smote"
+        assert result["recommended_strategy"] == "class_weight"
 
     async def test_detects_extreme_imbalance(self, extreme_imbalance_state):
         """Should detect extreme imbalance and pick the matrix-default strategy.
