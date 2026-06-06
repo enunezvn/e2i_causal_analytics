@@ -132,6 +132,11 @@ FROM python:3.12-slim-bookworm AS production
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas0 \
     liblapack3 \
+    # OpenMP runtime: lightgbm (pulled by causalml's UpliftRandomForest, the twin
+    # effect estimator) dlopens the SYSTEM libgomp.so.1. The slim base does not
+    # ship it and the wheels' bundled copies are not on the loader path, so without
+    # this every real /simulate call 422'd "Effect estimation failed: libgomp.so.1".
+    libgomp1 \
     graphviz \
     libpq5 \
     curl \
