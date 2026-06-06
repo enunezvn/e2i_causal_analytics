@@ -1,0 +1,49 @@
+################################################################################
+# PART A — calibrate signal to the disproof's feature-bound ceiling
+#  target: baseline AUC ~= 0.68, PR-AUC lift ~= 2x the 0.0141 baseline
+################################################################################
+signal=0.1    baseline LR  AUC=0.5795  PR-AUC=0.0185  lift=1.33
+signal=0.15   baseline LR  AUC=0.6323  PR-AUC=0.0252  lift=1.80
+signal=0.2    baseline LR  AUC=0.6894  PR-AUC=0.0333  lift=2.36
+signal=0.25   baseline LR  AUC=0.7263  PR-AUC=0.0540  lift=3.80
+signal=0.3    baseline LR  AUC=0.7665  PR-AUC=0.0634  lift=4.43
+signal=0.4    baseline LR  AUC=0.8419  PR-AUC=0.1090  lift=7.50
+
+-> locked LOW signal=0.2 (baseline AUC=0.6894, closest to 0.68)
+
+################################################################################
+# PART B — INSEPARABLE (signal=0.2): does imbalance handling move PR-AUC?
+#  hypothesis (handbook+disproof): treatments shift bal_acc, NOT PR-AUC
+################################################################################
+
+=== INSEPARABLE signal=0.2  (test prevalence=0.0141, train minority n=1016) ===
+treatment                         AUC-ROC   PR-AUC   lift  bal_acc
+LR baseline                        0.6894   0.0333   2.36   0.5000
+LR class_weight=balanced           0.6860   0.0320   2.27   0.6368
+LR + SMOTE 1:1                     0.6875   0.0315   2.23   0.6337
+LR + SMOTE 0.5 + cw (combined)     0.6877   0.0315   2.23   0.6333
+LR + RandomUnderSample             0.6716   0.0292   2.06   0.6240
+XGB baseline                       0.6526   0.0255   1.81   0.5000
+XGB scale_pos_weight=IR            0.6274   0.0233   1.65   0.5550
+XGB + SMOTE 1:1                    0.5986   0.0203   1.44   0.5463
+
+################################################################################
+# PART C — codebase's OWN nodes on the inseparable data (faithful, not mocked)
+################################################################################
+LogisticRegression   severity=extreme  strategy=class_weight resampled=False -> AUC=0.6860  PR-AUC=0.0320  lift=2.27
+XGBoost              severity=extreme  strategy=class_weight resampled=False -> AUC=0.6274  PR-AUC=0.0233  lift=1.65
+
+################################################################################
+# PART D — SEPARABLE contrast (high signal=0.90, SAME 1.41% prevalence)
+#  separability thesis: same imbalance, separable -> strong PR-AUC, NO handling
+################################################################################
+SEPARABLE baseline LR (NO imbalance handling): AUC=0.9693  PR-AUC=0.4862  lift=34.3  bal_acc=0.6341
+
+################################################################################
+# PART E — 'more events doesn't raise the ceiling' (disproof's 50k vs 300k)
+#  faithful: ONE population, stratified-subsampled, only event COUNT varies
+################################################################################
+n=  50000  events=   731  EPV~  6  baseline LR  AUC=0.6544  PR-AUC=0.0299  lift=2.05
+n= 300000  events=  4384  EPV~ 41  baseline LR  AUC=0.6802  PR-AUC=0.0340  lift=2.33
+
+DONE.
