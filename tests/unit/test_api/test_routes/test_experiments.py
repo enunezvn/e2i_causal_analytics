@@ -749,6 +749,13 @@ async def test_update_fidelity_comparison(mock_results_analysis_service):
     assert result.experiment_id == experiment_id
     assert result.twin_simulation_id == twin_simulation_id
     assert result.fidelity_score > 0.9
+    # comparison_id must be the real composite key (service dataclass has no .id);
+    # a regression to str(result.id) would not contain ":" (#705 N2).
+    assert ":" in result.comparison_id
+    # confidence_interval_coverage must come from the real ci_coverage field; the
+    # mock no longer carries the old confidence_interval_coverage attr, so a
+    # regression to that attr would raise (MagicMock -> bool) and fail here.
+    assert result.confidence_interval_coverage is True
 
 
 # =============================================================================

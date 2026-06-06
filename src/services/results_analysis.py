@@ -611,8 +611,14 @@ class ResultsAnalysisService:
         callers — the experiments fidelity route and the fidelity_tracking_update
         task — passed only the two ids with a ``# type: ignore[call-arg]`` and
         500'd (#705 N2/H9). Reads the REAL persisted twin columns
-        (simulated_ate / _ci_*); fabricates nothing. When ``twin_simulation_id``
-        is None the most-recent simulation in scope is used (the task's intent).
+        (simulated_ate / _ci_*); fabricates nothing.
+
+        The fidelity route always supplies an explicit ``twin_simulation_id``. The
+        ``None`` branch falls back to the most-recent simulation **globally** —
+        ``twin_simulations`` has no ``experiment_id`` column, so it cannot yet be
+        scoped to the experiment. That branch is only reachable by the (currently
+        un-wired) fidelity task; R4-H9 tightens the twin<->experiment resolution
+        when it wires that task. Documented limitation, not a silent fabrication.
         """
         from src.digital_twin.twin_repository import TwinRepository
         from src.memory.services.factories import get_async_supabase_client
@@ -628,7 +634,8 @@ class ResultsAnalysisService:
         if twin_simulation_id is not None:
             sim = await repo.get_simulation(twin_simulation_id)
         else:
-            sims = await repo.simulations.list_simulations(limit=1)  # newest in scope
+            # Newest simulation GLOBALLY (not experiment-scoped — see docstring).
+            sims = await repo.simulations.list_simulations(limit=1)
             sim = sims[0] if sims else None
         if not sim:
             raise ValueError(f"No twin simulation found ({twin_simulation_id})")
