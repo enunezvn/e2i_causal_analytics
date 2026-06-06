@@ -65,6 +65,7 @@ def mock_simulation_engine():
         mock_result.fidelity_warning_reason = None
         mock_result.model_fidelity_score = 0.88
         mock_result.status = MagicMock(value="completed")
+        mock_result.data_provenance = "synthetic_uplift_v1"
         mock_result.error_message = None
         mock_result.execution_time_ms = 250
         mock_result.created_at = datetime.now(timezone.utc)
@@ -152,6 +153,7 @@ def mock_twin_repository():
         mock_result.fidelity_warning_reason = None
         mock_result.model_fidelity_score = 0.88
         mock_result.status = MagicMock(value="completed")
+        mock_result.data_provenance = "synthetic_uplift_v1"
         mock_result.error_message = None
         mock_result.execution_time_ms = 250
         mock_result.created_at = datetime.now(timezone.utc)

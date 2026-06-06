@@ -93,10 +93,9 @@ def run_simulation_compute(
     model_id = UUID(model_id_value) if model_id_value else (generator.model_id or UUID(int=0))
 
     population = generator.generate(n=twin_count)
-    engine = SimulationEngine(
-        population=population,
-        model_id=model_id,  # type: ignore[call-arg]
-    )
+    engine = SimulationEngine(population=population)
+    # Pin the resolved DB model id so twin_simulations.model_id FK holds (#705 H4).
+    engine.model_id = model_id
     return engine.simulate(
         intervention_config=intervention,
         population_filter=pop_filter,
