@@ -151,7 +151,8 @@ celery_app.conf.task_routes = {
     # name doesn't match the train_*/fit_* globs, so route it explicitly.
     "src.tasks.execute_model_retraining": {"queue": "ml"},
     # Digital twin generation
-    "src.tasks.generate_twins": {"queue": "twins"},
+    # (src.tasks.generate_twins removed — H15: dead route stub with no task body and
+    # no producer; real population work is simulate_population / twin.* / train_twin_model.)
     "src.tasks.twin.*": {"queue": "twins"},
     "src.tasks.train_twin_model": {"queue": "ml"},
     "src.tasks.simulate_population": {"queue": "twins"},

@@ -783,6 +783,9 @@ class TestAlternativeFidelitySource:
                 "simulation_id": "sim-001",
                 "experiment_design_id": "exp-001",
                 "simulated_ate": 0.15,
+                # H17: actual_ate IS exposed by the view; the fallback now reads it
+                # instead of hardcoding 0.0.
+                "actual_ate": 0.50,
                 "prediction_error": 0.35,
                 "fidelity_grade": "C",
             }
@@ -800,7 +803,7 @@ class TestAlternativeFidelitySource:
 
         assert result is not None
         assert result["experiment_id"] == "exp-001"
-        assert result["actual_effect"] == 0.0  # Not available in summary
+        assert result["actual_effect"] == 0.50  # real value from the view (H17)
 
     @pytest.mark.asyncio
     async def test_summary_uses_correct_table(self, node):

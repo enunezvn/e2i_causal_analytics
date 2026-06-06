@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TwinType(str, Enum):
@@ -174,11 +174,18 @@ class TwinPopulation(BaseModel):
     generation_config: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    @field_validator("size")
-    @classmethod
-    def validate_size(cls, v: int, info) -> int:
-        """Ensure size matches twins list."""
-        return v
+    @model_validator(mode="after")
+    def validate_size(self) -> "TwinPopulation":
+        """Ensure declared size matches the actual twins list length (#705 H16).
+
+        The previous @field_validator("size") was a no-op `return v` despite this
+        docstring; every real construction site already passes size=len(twins)
+        (twin_generator, simulation_engine filter, .filter()), so enforcing this
+        only catches genuine mismatches.
+        """
+        if self.size != len(self.twins):
+            raise ValueError(f"TwinPopulation.size ({self.size}) != len(twins) ({len(self.twins)})")
+        return self
 
     def __len__(self) -> int:
         return len(self.twins)
