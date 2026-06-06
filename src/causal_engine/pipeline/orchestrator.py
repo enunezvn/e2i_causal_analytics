@@ -101,6 +101,11 @@ class PipelineOrchestrator(ABC):
             "fail_fast": False,
             "segment_by_uplift": False,
             "nested_ci_level": 0.95,
+            # R6-F1 (#740): thread the opt-in refutation flag into config so the
+            # DoWhy executor can run the real refutation suite while the live
+            # model/estimand/estimate objects are in scope. Explicit False default
+            # keeps the fast path when the request omits the flag.
+            "run_refutation": bool(input_data.get("run_refutation") or False),
         }
 
         return PipelineState(

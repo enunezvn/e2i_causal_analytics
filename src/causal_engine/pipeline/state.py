@@ -74,6 +74,17 @@ class PipelineConfig(TypedDict):
     segment_by_uplift: bool  # Use CausalML segments for EconML CATE
     nested_ci_level: float  # Confidence level for nested CIs (default: 0.95)
 
+    # R6-F1 (#740): opt-in flag to run the real DoWhy refutation suite on the
+    # DoWhy estimate inside ``DoWhyExecutor.execute`` (while the live
+    # model/estimand/estimate objects are in scope) and gate the response on its
+    # GateDecision. ``NotRequired`` (mirrors the C-6 channels below in
+    # PipelineState) so the many existing PipelineConfig literals stay type-valid;
+    # the orchestrator always writes an explicit ``False`` when building config
+    # from PipelineInput, so ``state["config"]["run_refutation"]`` is populated on
+    # every real pipeline run. Default behaviour (key absent / False) is the fast
+    # path with no refutation.
+    run_refutation: NotRequired[bool]
+
 
 class PipelineState(TypedDict):
     """Complete state for multi-library causal pipeline.
@@ -224,6 +235,9 @@ class PipelineInput(TypedDict):
     mode: Optional[Literal["sequential", "parallel", "validation_loop", "hierarchical"]]
     libraries_enabled: Optional[List[str]]
     cross_validate: Optional[bool]
+    # R6-F1 (#740): opt-in refutation flag carried from the API request through to
+    # ``state["config"]["run_refutation"]`` (see PipelineConfig.run_refutation).
+    run_refutation: NotRequired[Optional[bool]]
 
 
 class PipelineOutput(TypedDict):

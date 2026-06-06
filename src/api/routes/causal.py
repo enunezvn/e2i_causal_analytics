@@ -892,6 +892,8 @@ def _build_pipeline_input_sequential(
         mode="sequential",
         libraries_enabled=libraries_enabled,
         cross_validate=None,
+        # R6-F1 (#740): opt-in real-refutation flag → state["config"]["run_refutation"].
+        run_refutation=request.run_refutation,
     )
 
 
@@ -916,6 +918,8 @@ def _build_pipeline_input_parallel(
         mode="parallel",
         libraries_enabled=[lib.value for lib in request.libraries],
         cross_validate=None,
+        # R6-F1 (#740): opt-in real-refutation flag → state["config"]["run_refutation"].
+        run_refutation=request.run_refutation,
     )
 
 
