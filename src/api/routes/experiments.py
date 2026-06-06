@@ -1129,24 +1129,33 @@ async def update_fidelity_comparison(
 
     try:
         service = ResultsAnalysisService()
-        result = await service.compare_with_twin_prediction(  # type: ignore[call-arg]
+        result = await service.compare_experiment_to_twin(
             UUID(experiment_id),
             UUID(twin_simulation_id),
         )
 
+        # comparison_id is a real composite key — the service FidelityComparison
+        # dataclass has no `id`; ci_coverage (not confidence_interval_coverage) is
+        # its CI-coverage field (#705 N2).
         return FidelityComparison(
-            comparison_id=str(result.id),  # type: ignore[attr-defined]
+            comparison_id=f"{result.experiment_id}:{result.twin_simulation_id}",
             experiment_id=experiment_id,
             twin_simulation_id=twin_simulation_id,
             comparison_timestamp=result.comparison_timestamp,
             predicted_effect=result.predicted_effect,
             actual_effect=result.actual_effect,
             prediction_error=result.prediction_error,
-            confidence_interval_coverage=result.confidence_interval_coverage,  # type: ignore[attr-defined]
+            confidence_interval_coverage=result.ci_coverage,
             fidelity_score=result.fidelity_score,
             calibration_adjustment=result.calibration_adjustment,
         )
 
+    except HTTPException:
+        raise
+    except ValueError as e:
+        # Honest 404 when no computed results / no twin simulation exist yet —
+        # never a TypeError-500 (the pre-N2 bug).
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Fidelity comparison failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e

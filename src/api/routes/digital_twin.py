@@ -35,7 +35,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.api.dependencies.auth import require_operator
+from src.api.dependencies.auth import (
+    is_cross_brand_admin,
+    require_operator,
+    require_viewer,
+    resolve_brand_for_read,
+)
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 if TYPE_CHECKING:
@@ -361,6 +366,14 @@ class SimulationResponse(BaseModel):
     is_significant: bool
     effect_direction: str
     created_at: datetime
+    data_provenance: Optional[str] = Field(
+        default=None,
+        description=(
+            "Origin of the ATE estimate: 'synthetic_uplift_v1' (synthetic-DGP-trained "
+            "uplift, ~constant per brand/intervention in v1) or 'rwd_uplift' (real-world). "
+            "None for legacy/error results."
+        ),
+    )
 
 
 class SimulationDetailResponse(SimulationResponse):
@@ -384,6 +397,7 @@ class SimulationListItem(BaseModel):
     recommendation: RecommendationEnum
     status: SimulationStatusEnum
     created_at: datetime
+    data_provenance: Optional[str] = None
 
 
 class SimulationListResponse(BaseModel):
@@ -409,6 +423,7 @@ class SimulationHistoryItem(BaseModel):
     brand: str
     ate_estimate: float
     recommendation_type: str
+    data_provenance: Optional[str] = None
 
 
 class SimulationHistoryResponse(BaseModel):
@@ -667,6 +682,7 @@ async def run_simulation(
     from src.digital_twin.models.simulation_models import (
         InterventionConfig,
         PopulationFilter,
+        SimulationStatus,
     )
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
@@ -775,10 +791,10 @@ async def run_simulation(
 
             def _do_sim():
                 population = generator.generate(n=request.twin_count)
-                engine = SimulationEngine(
-                    population=population,
-                    model_id=model_id,  # type: ignore[call-arg]
-                )
+                engine = SimulationEngine(population=population)
+                # Pin the resolved DB model id so twin_simulations.model_id FK holds
+                # (engine derives self.model_id from population otherwise) (#705 H4).
+                engine.model_id = model_id
                 return engine.simulate(
                     intervention_config=intervention,
                     population_filter=pop_filter,
@@ -787,6 +803,15 @@ async def run_simulation(
 
             async with heavy_compute_slot():
                 result = await run_in_bounded_executor(_do_sim)
+
+        # A FAILED engine result (sub-threshold population / estimation failure)
+        # carries ate=0.0 / REFINE and must NOT be surfaced as a 200 success or
+        # persisted as a real history row (N1). Fail honestly.
+        if result.status == SimulationStatus.FAILED:
+            raise HTTPException(
+                status_code=422,
+                detail=result.error_message or "Simulation could not be completed.",
+            )
 
         # Save simulation result (reuse the repo resolved above).
         await repo.save_simulation(result, request.brand.value)
@@ -818,6 +843,7 @@ async def run_simulation(
             is_significant=result.is_significant(),
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
+            data_provenance=result.data_provenance,
         )
 
     except HTTPException:
@@ -848,6 +874,7 @@ async def list_simulations(
     status: Optional[SimulationStatusEnum] = Query(None, description="Filter by status"),
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=20, ge=1, le=100, description="Page size"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> SimulationListResponse:
     """
     List simulation results with filtering and pagination.
@@ -864,6 +891,12 @@ async def list_simulations(
     """
     from src.digital_twin.models.simulation_models import SimulationStatus
 
+    # Fail-closed brand scoping (H11): a non-admin caller may only read brands in
+    # their grant; admin / ['all'] is unaffected. Never leave the read unscoped.
+    allowed, effective_brand = resolve_brand_for_read(user, brand.value if brand else None)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Brand not permitted for this user.")
+
     try:
         repo = await _get_twin_repo()
 
@@ -872,7 +905,7 @@ async def list_simulations(
 
         simulations = await repo.simulations.list_simulations(
             model_id=UUID(model_id) if model_id else None,
-            brand=brand.value if brand else None,
+            brand=effective_brand,
             status=status_enum,
             limit=page_size * page,  # Get enough for pagination
         )
@@ -892,6 +925,7 @@ async def list_simulations(
                 recommendation=RecommendationEnum(sim.get("recommendation", "refine")),
                 status=SimulationStatusEnum(sim.get("simulation_status", "completed")),
                 created_at=sim.get("created_at", datetime.now(timezone.utc)),
+                data_provenance=sim.get("data_provenance"),
             )
             for sim in paginated
         ]
@@ -921,6 +955,7 @@ async def list_simulations(
 async def get_simulation_history(
     limit: int = Query(default=20, ge=1, le=100, description="Max records to return"),
     offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> SimulationHistoryResponse:
     """
     Return recent simulation history for the dashboard.
@@ -937,11 +972,17 @@ async def get_simulation_history(
         Simulation history rows with total count and pagination echo.
     """
 
+    # Fail-closed brand scoping (H11): no brand filter param here, so a non-admin
+    # is pinned to their first granted brand; admin / ['all'] sees all.
+    allowed, effective_brand = resolve_brand_for_read(user, None)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="No brand grant for this user.")
+
     try:
         repo = await _get_twin_repo()
         # Fetch enough rows to cover the requested window (repo returns newest
         # first), then apply the offset/limit slice.
-        rows = await repo.simulations.list_simulations(limit=offset + limit)
+        rows = await repo.simulations.list_simulations(brand=effective_brand, limit=offset + limit)
         window = rows[offset : offset + limit]
 
         items = [
@@ -952,6 +993,7 @@ async def get_simulation_history(
                 brand=sim.get("brand", "unknown"),
                 ate_estimate=round(sim.get("simulated_ate", 0.0), 4),
                 recommendation_type=sim.get("recommendation", "refine"),
+                data_provenance=sim.get("data_provenance"),
             )
             for sim in window
         ]
@@ -1042,11 +1084,18 @@ async def compare_scenarios(
         # Use the resolved DB model_id — never a UUID(int=0) sentinel (#705 H4).
         model_id = UUID(str(model_row["model_id"]))
         population = generator.generate(n=scenario.twin_count)
-        engine = SimulationEngine(
-            population=population,
-            model_id=model_id,  # type: ignore[call-arg]
-        )
+        engine = SimulationEngine(population=population)
+        engine.model_id = model_id
         result = engine.simulate(intervention_config=intervention)
+        # A failed scenario carries ate=0.0 / REFINE — fail the comparison closed
+        # rather than reporting a fake zero-effect scenario (N1). result.status is
+        # the domain SimulationStatus enum; compare on its value (SimulationStatus
+        # is not imported in compare_scenarios).
+        if result.status.value == "failed":
+            raise HTTPException(
+                status_code=422,
+                detail=result.error_message or "A scenario simulation could not be completed.",
+            )
 
         return SimulationResponse(
             simulation_id=str(result.simulation_id),
@@ -1075,6 +1124,7 @@ async def compare_scenarios(
             is_significant=result.is_significant(),
             effect_direction=result.effect_direction(),
             created_at=result.created_at,
+            data_provenance=result.data_provenance,
         )
 
     try:
@@ -1134,6 +1184,7 @@ async def compare_scenarios(
 )
 async def get_simulation(
     simulation_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> SimulationDetailResponse:
     """
     Get detailed information about a simulation.
@@ -1152,47 +1203,69 @@ async def get_simulation(
         if not result:
             raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
 
+        # repo.get_simulation returns the RAW twin_simulations row (a dict), not a
+        # SimulationResult object. The prior handler accessed it as an object
+        # (result.simulation_id / .is_significant()) under # type: ignore[attr-defined],
+        # which 500'd on every real row — masked only because twin_simulations was
+        # 0 rows. R1 makes rows persist, so this is now a live bug (#705 H5b/H11).
+        # Map from the dict; derive the fields the row does not persist.
+        ci_lower = float(result.get("simulated_ci_lower", 0.0) or 0.0)
+        ci_upper = float(result.get("simulated_ci_upper", 0.0) or 0.0)
+        ate = float(result.get("simulated_ate", 0.0) or 0.0)
+        is_significant = not (ci_lower <= 0.0 <= ci_upper)
+        effect_direction = "positive" if ate > 0 else "negative" if ate < 0 else "neutral"
+
+        # Fail-closed ownership check (H11): a non-admin may only read a simulation
+        # whose brand is in their grant. 404 (not 403) so we don't leak existence;
+        # deny non-admins when the brand can't be determined (fail-closed).
+        sim_brand = result.get("brand")
+        if not is_cross_brand_admin(user) and (
+            sim_brand is None or not resolve_brand_for_read(user, sim_brand)[0]
+        ):
+            raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
+
+        eh = result.get("effect_heterogeneity") or {}
         heterogeneity = EffectHeterogeneityResponse(
-            by_specialty=result.effect_heterogeneity.by_specialty,  # type: ignore[attr-defined]
-            by_decile=result.effect_heterogeneity.by_decile,  # type: ignore[attr-defined]
-            by_region=result.effect_heterogeneity.by_region,  # type: ignore[attr-defined]
-            by_adoption_stage=result.effect_heterogeneity.by_adoption_stage,  # type: ignore[attr-defined]
-            top_segments=result.effect_heterogeneity.get_top_segments(5),  # type: ignore[attr-defined]
+            by_specialty=eh.get("by_specialty", {}),
+            by_decile=eh.get("by_decile", {}),
+            by_region=eh.get("by_region", {}),
+            by_adoption_stage=eh.get("by_adoption_stage", {}),
+            top_segments=(eh.get("top_segments") or [])[:5],
         )
 
         return SimulationDetailResponse(
-            simulation_id=str(result.simulation_id),  # type: ignore[attr-defined]
-            model_id=str(result.model_id),  # type: ignore[attr-defined]
-            intervention_type=result.intervention_config.intervention_type,  # type: ignore[attr-defined]
-            brand=result.intervention_config.extra_params.get("brand", "unknown"),  # type: ignore[attr-defined]
-            twin_type=result.intervention_config.extra_params.get("twin_type", "unknown"),  # type: ignore[attr-defined]
-            twin_count=result.twin_count,  # type: ignore[attr-defined]
-            simulated_ate=round(result.simulated_ate, 4),  # type: ignore[attr-defined]
-            simulated_ci_lower=round(result.simulated_ci_lower, 4),  # type: ignore[attr-defined]
-            simulated_ci_upper=round(result.simulated_ci_upper, 4),  # type: ignore[attr-defined]
-            simulated_std_error=round(result.simulated_std_error, 4),  # type: ignore[attr-defined]
-            effect_size_cohens_d=result.effect_size_cohens_d,  # type: ignore[attr-defined]
-            statistical_power=result.statistical_power,  # type: ignore[attr-defined]
-            recommendation=RecommendationEnum(result.recommendation.value),  # type: ignore[attr-defined]
-            recommendation_rationale=result.recommendation_rationale,  # type: ignore[attr-defined]
-            recommended_sample_size=result.recommended_sample_size,  # type: ignore[attr-defined]
-            recommended_duration_weeks=result.recommended_duration_weeks,  # type: ignore[attr-defined]
-            simulation_confidence=round(result.simulation_confidence, 3),  # type: ignore[attr-defined]
-            fidelity_warning=result.fidelity_warning,  # type: ignore[attr-defined]
-            fidelity_warning_reason=result.fidelity_warning_reason,  # type: ignore[attr-defined]
-            model_fidelity_score=result.model_fidelity_score,  # type: ignore[attr-defined]
-            status=SimulationStatusEnum(result.status.value),  # type: ignore[attr-defined]
-            error_message=result.error_message,  # type: ignore[attr-defined]
-            execution_time_ms=result.execution_time_ms,  # type: ignore[attr-defined]
-            is_significant=result.is_significant(),  # type: ignore[attr-defined]
-            effect_direction=result.effect_direction(),  # type: ignore[attr-defined]
-            created_at=result.created_at,  # type: ignore[attr-defined]
-            completed_at=result.completed_at,  # type: ignore[attr-defined]
-            population_filters=result.population_filters.to_dict()  # type: ignore[attr-defined]
-            if result.population_filters  # type: ignore[attr-defined]
-            else {},
+            simulation_id=str(result.get("simulation_id", "")),
+            model_id=str(result.get("model_id", "")),
+            intervention_type=result.get("intervention_type", "unknown"),
+            brand=result.get("brand", "unknown"),
+            # twin_type is not persisted on the row — mirror list_simulations' default.
+            twin_type=result.get("twin_type", "unknown"),
+            twin_count=result.get("twin_count", 0),
+            simulated_ate=round(ate, 4),
+            simulated_ci_lower=round(ci_lower, 4),
+            simulated_ci_upper=round(ci_upper, 4),
+            simulated_std_error=round(float(result.get("simulated_std_error", 0.0) or 0.0), 4),
+            effect_size_cohens_d=result.get("effect_size_cohens_d"),
+            statistical_power=result.get("statistical_power"),
+            recommendation=RecommendationEnum(result.get("recommendation", "refine")),
+            recommendation_rationale=result.get("recommendation_rationale", ""),
+            recommended_sample_size=result.get("recommended_sample_size"),
+            recommended_duration_weeks=result.get("recommended_duration_weeks"),
+            simulation_confidence=round(float(result.get("simulation_confidence", 0.0) or 0.0), 3),
+            fidelity_warning=bool(result.get("fidelity_warning", False)),
+            fidelity_warning_reason=result.get("fidelity_warning_reason"),
+            model_fidelity_score=result.get("model_fidelity_score"),
+            status=SimulationStatusEnum(result.get("simulation_status", "completed")),
+            error_message=result.get("error_message"),
+            execution_time_ms=result.get("execution_time_ms", 0),
+            is_significant=is_significant,
+            effect_direction=effect_direction,
+            created_at=result.get("created_at", datetime.now(timezone.utc)),
+            completed_at=result.get("completed_at"),
+            population_filters=result.get("population_filters") or {},
             effect_heterogeneity=heterogeneity,
-            intervention_config=result.intervention_config.model_dump(),  # type: ignore[attr-defined]
+            intervention_config=result.get("intervention_config") or {},
+            data_provenance=result.get("data_provenance"),  # #705 H5b
         )
 
     except HTTPException:
@@ -1340,6 +1413,7 @@ async def validate_simulation(
 async def list_models(
     brand: Optional[BrandEnum] = Query(None, description="Filter by brand"),
     twin_type: Optional[TwinTypeEnum] = Query(None, description="Filter by twin type"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> ModelListResponse:
     """
     List trained twin generator models.
@@ -1353,6 +1427,12 @@ async def list_models(
     """
     from src.digital_twin.models.twin_models import TwinType
 
+    # Fail-closed brand scoping (H11): a non-admin only sees their granted
+    # brand's models; admin / ['all'] sees all.
+    allowed, effective_brand = resolve_brand_for_read(user, brand.value if brand else None)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Brand not permitted for this user.")
+
     try:
         repo = await _get_twin_repo()
 
@@ -1361,7 +1441,7 @@ async def list_models(
 
         models = await repo.list_active_models(
             twin_type=twin_type_enum,
-            brand=brand.value if brand else None,
+            brand=effective_brand,
         )
 
         # save_model stores metrics nested under performance_metrics (JSONB) and

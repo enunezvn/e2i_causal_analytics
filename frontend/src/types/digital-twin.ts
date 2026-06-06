@@ -271,6 +271,8 @@ export interface SimulationResponse {
   status: SimulationStatus;
   /** Error message if failed */
   error_message?: string;
+  /** Origin of the ATE estimate (e.g. "synthetic_uplift_v1"); null for legacy/error. */
+  data_provenance?: string | null;
   /** Execution time in ms */
   execution_time_ms: number;
   /** Whether effect is statistically significant */

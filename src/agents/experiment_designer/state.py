@@ -212,8 +212,9 @@ class ExperimentDesignState(TypedDict):
     # ===== Digital Twin Pre-Screening =====
     # Added in Phase 15 for twin simulation integration
     enable_twin_simulation: NotRequired[bool]
-    intervention_type: NotRequired[str]
-    brand: NotRequired[str]
+    # Optional: seeded from ExperimentDesignerInput, which allows None (#705 H8).
+    intervention_type: NotRequired[Optional[str]]
+    brand: NotRequired[Optional[str]]
     treatment_variable: NotRequired[str]
     outcome_variable: NotRequired[str]
 

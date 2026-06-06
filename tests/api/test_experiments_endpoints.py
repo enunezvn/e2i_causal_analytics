@@ -148,7 +148,10 @@ def sample_fidelity_comparison():
     comparison.predicted_effect = 0.045
     comparison.actual_effect = 0.050
     comparison.prediction_error = 0.005
+    # Real FidelityComparison dataclass field is ci_coverage (the route reads it);
+    # confidence_interval_coverage is kept for the GET-summary test that uses it.
     comparison.confidence_interval_coverage = True
+    comparison.ci_coverage = True
     comparison.fidelity_score = 0.89
     comparison.calibration_adjustment = None
     return comparison
@@ -806,9 +809,8 @@ class TestUpdateFidelityComparison:
     def test_update_fidelity_comparison_success(self, sample_fidelity_comparison):
         """Should update fidelity comparison with latest results."""
         mock_service = MagicMock()
-        mock_service.compare_with_twin_prediction = AsyncMock(
-            return_value=sample_fidelity_comparison
-        )
+        # Route calls the 2-arg convenience method (#705 N2), not the primitive.
+        mock_service.compare_experiment_to_twin = AsyncMock(return_value=sample_fidelity_comparison)
 
         with patch(
             "src.services.results_analysis.ResultsAnalysisService",

@@ -693,3 +693,29 @@ class TestAsyncExecution:
 
         assert isinstance(result, ExperimentDesignerOutput)
         assert result.power_analysis is not None
+
+
+class TestTwinPreScreenPlumbing:
+    """R3/H8: enable_twin_simulation + intervention_type must thread from input
+    into initial state (default OFF), so the dark twin pre-screen node is reachable
+    on explicit opt-in but never auto-runs the non-differentiated v1 DGP."""
+
+    def test_enable_twin_simulation_threads_into_initial_state(self):
+        agent = ExperimentDesignerAgent.__new__(ExperimentDesignerAgent)  # no full init needed
+        inp = ExperimentDesignerInput(
+            business_question="Will a weekly email campaign lift Kisqali NRx among decile 1-3 HCPs?",
+            brand="Kisqali",
+            enable_twin_simulation=True,
+            intervention_type="email_campaign",
+        )
+        state = agent._create_initial_state(inp)
+        assert state["enable_twin_simulation"] is True
+        assert state["intervention_type"] == "email_campaign"
+        assert state["brand"] == "Kisqali"
+
+    def test_enable_twin_simulation_defaults_off(self):
+        inp = ExperimentDesignerInput(
+            business_question="A sufficiently long question about design."
+        )
+        assert inp.enable_twin_simulation is False
+        assert inp.intervention_type is None

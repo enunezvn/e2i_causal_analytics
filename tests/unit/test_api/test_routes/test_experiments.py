@@ -167,17 +167,22 @@ def mock_results_analysis_service():
 
         instance.check_sample_ratio_mismatch.return_value = mock_srm
 
+        # Mirror the REAL FidelityComparison dataclass the service returns: it has
+        # experiment_id / twin_simulation_id / ci_coverage (NOT .id /
+        # .confidence_interval_coverage — those were the #705 N2 wrong-attr bug).
         mock_fidelity = MagicMock()
-        mock_fidelity.id = uuid4()
+        mock_fidelity.experiment_id = uuid4()
+        mock_fidelity.twin_simulation_id = uuid4()
         mock_fidelity.comparison_timestamp = datetime.now(timezone.utc)
         mock_fidelity.predicted_effect = 2.2
         mock_fidelity.actual_effect = 2.3
         mock_fidelity.prediction_error = 0.1
-        mock_fidelity.confidence_interval_coverage = True
+        mock_fidelity.ci_coverage = True
         mock_fidelity.fidelity_score = 0.95
         mock_fidelity.calibration_adjustment = None
 
-        instance.compare_with_twin_prediction.return_value = mock_fidelity
+        # The route calls the 2-arg convenience method (#705 N2), not the primitive.
+        instance.compare_experiment_to_twin.return_value = mock_fidelity
 
         yield instance
 
@@ -744,6 +749,13 @@ async def test_update_fidelity_comparison(mock_results_analysis_service):
     assert result.experiment_id == experiment_id
     assert result.twin_simulation_id == twin_simulation_id
     assert result.fidelity_score > 0.9
+    # comparison_id must be the real composite key (service dataclass has no .id);
+    # a regression to str(result.id) would not contain ":" (#705 N2).
+    assert ":" in result.comparison_id
+    # confidence_interval_coverage must come from the real ci_coverage field; the
+    # mock no longer carries the old confidence_interval_coverage attr, so a
+    # regression to that attr would raise (MagicMock -> bool) and fail here.
+    assert result.confidence_interval_coverage is True
 
 
 # =============================================================================

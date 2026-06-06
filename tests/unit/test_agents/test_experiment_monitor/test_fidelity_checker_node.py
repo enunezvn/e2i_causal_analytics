@@ -783,6 +783,9 @@ class TestAlternativeFidelitySource:
                 "simulation_id": "sim-001",
                 "experiment_design_id": "exp-001",
                 "simulated_ate": 0.15,
+                # H17: actual_ate IS exposed by the view; the fallback now reads it
+                # instead of hardcoding 0.0.
+                "actual_ate": 0.50,
                 "prediction_error": 0.35,
                 "fidelity_grade": "C",
             }
@@ -800,7 +803,7 @@ class TestAlternativeFidelitySource:
 
         assert result is not None
         assert result["experiment_id"] == "exp-001"
-        assert result["actual_effect"] == 0.0  # Not available in summary
+        assert result["actual_effect"] == 0.50  # real value from the view (H17)
 
     @pytest.mark.asyncio
     async def test_summary_uses_correct_table(self, node):
@@ -926,3 +929,66 @@ class TestStateUpdates:
         # fidelity_issues should be overwritten, not appended
         assert result["fidelity_issues"] == []
         assert {"old": "issue"} not in result["fidelity_issues"]
+
+
+class _FakeQuery:
+    def __init__(self, data):
+        self._data = data
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    async def execute(self):
+        return MagicMock(data=self._data)
+
+
+class _FakeClient:
+    def __init__(self, by_table):
+        self._by_table = by_table
+
+    def table(self, name):
+        return _FakeQuery(self._by_table.get(name, []))
+
+
+class TestFidelitySimulationSummaryFallback:
+    """H17: when twin_fidelity_tracking has no row, execute() must fall back to
+    v_simulation_summary and read the REAL actual_ate (not hardcoded 0.0)."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_uses_real_actual_ate(self):
+        node = FidelityCheckerNode()
+        node._client = _FakeClient(
+            {
+                "twin_fidelity_tracking": [],  # primary check finds nothing
+                "v_simulation_summary": [
+                    {
+                        "simulation_id": "11111111-1111-1111-1111-111111111111",
+                        "experiment_design_id": "exp1",
+                        "simulated_ate": 0.15,
+                        "actual_ate": 0.09,
+                        "prediction_error": 0.06,
+                        "fidelity_grade": "C",
+                    }
+                ],
+            }
+        )
+        state = {
+            "experiments": [{"experiment_id": "exp1"}],
+            "fidelity_threshold": 0.05,
+            "warnings": [],
+        }
+        out = await node.execute(state)
+        issues = out["fidelity_issues"]
+        assert len(issues) == 1
+        # The hardcoded 0.0 bug would make this 0.0; the real view value is 0.09.
+        assert issues[0]["actual_effect"] == 0.09
+        assert issues[0]["prediction_error"] == 0.06
