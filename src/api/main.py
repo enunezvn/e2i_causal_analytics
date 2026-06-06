@@ -463,6 +463,10 @@ openapi_tags = [
         "description": "Multi-library causal analysis: hierarchical CATE, cross-validation, and pipelines across DoWhy, EconML, CausalML, and NetworkX.",
     },
     {
+        "name": "Expert Review",
+        "description": "Human-in-the-loop expert-review queue for causal estimates flagged REVIEW by the validation gate (pending/resolve/summary).",
+    },
+    {
         "name": "Cognitive Workflow",
         "description": "Multi-step cognitive workflows combining causal reasoning with domain knowledge.",
     },
@@ -607,6 +611,7 @@ def custom_openapi():
             "name": "Core Analytics",
             "tags": [
                 "Causal Inference",
+                "Expert Review",
                 "KPIs",
                 "Model Predictions",
                 "Model Interpretability",
