@@ -18,6 +18,15 @@ Paired with the domain-agnostic file-ingestion capability added to
 
 For CSU Excel data, use `scripts/convert_csu_rwd.py` instead.
 
+> **Different input?** This doc is the **raw-claims** converter
+> (`convert_optum_rwd.py`, 6 files: demographics/medication/procedure/lab/
+> inpatientdata/provider). If your Optum drop is the single **entity-stacked
+> pre-engineered mart** (`Optum.parquet`, one `entity_type` column, every feature
+> pre-aggregated), use the **mart adapter** instead —
+> [`OPTUM_MART_CONVERSION.md`](OPTUM_MART_CONVERSION.md). The two are NOT
+> interchangeable: this one recomputes features from raw claims in a lookback
+> window; the mart adapter is a split-and-map over precomputed columns.
+
 ## Inputs
 
 Expected files under `data/rwd/Optum_Parquet/`:
