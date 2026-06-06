@@ -31,7 +31,16 @@ def test_list_simulations_admin_allowed():
 
     repo = SimpleNamespace(simulations=SimpleNamespace(list_simulations=AsyncMock(return_value=[])))
     with patch.object(dt, "_get_twin_repo", AsyncMock(return_value=repo)):
-        resp = asyncio.run(list_simulations(brand=BrandEnum.REMIBRUTINIB, user=ADMIN))
+        resp = asyncio.run(
+            list_simulations(
+                brand=BrandEnum.REMIBRUTINIB,
+                model_id=None,
+                status=None,
+                page=1,
+                page_size=20,
+                user=ADMIN,
+            )
+        )
     assert resp.total_count == 0
 
 

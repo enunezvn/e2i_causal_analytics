@@ -10,8 +10,6 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import pytest
-
 
 def _real_fidelity_comparison(exp_id, sim_id):
     from src.services.results_analysis import FidelityComparison

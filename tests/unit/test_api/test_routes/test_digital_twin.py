@@ -16,6 +16,11 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+# Admin user for direct handler calls — the read GETs now require a viewer-tier
+# user (#705 H11) and direct calls bypass the Depends injection, so pass one.
+# Admin / cross-brand so brand scoping is a no-op for these repo-mocked tests.
+_ADMIN_USER = {"app_metadata": {"role": "admin"}}
+
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -367,7 +372,7 @@ async def test_get_simulation_history_returns_rows(mock_twin_repository):
     (ate_estimate, recommendation_type, total/offset/limit)."""
     from src.api.routes.digital_twin import get_simulation_history
 
-    result = await get_simulation_history(limit=10, offset=0)
+    result = await get_simulation_history(limit=10, offset=0, user=_ADMIN_USER)
 
     assert result.total >= 1
     assert result.limit == 10
@@ -402,7 +407,7 @@ async def test_get_simulation_history_repo_error_is_generic(mock_twin_repository
     mock_twin_repository.simulations.list_simulations.side_effect = Exception("SECRET-DSN-LEAK")
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_simulation_history(limit=10, offset=0)
+        await get_simulation_history(limit=10, offset=0, user=_ADMIN_USER)
 
     assert exc_info.value.status_code == 500
     assert "SECRET-DSN-LEAK" not in str(exc_info.value.detail)
@@ -756,7 +761,9 @@ async def test_list_simulations_all(mock_twin_repository):
     """Test listing all simulations."""
     from src.api.routes.digital_twin import list_simulations
 
-    result = await list_simulations(brand=None, model_id=None, status=None, page=1, page_size=20)
+    result = await list_simulations(
+        brand=None, model_id=None, status=None, page=1, page_size=20, user=_ADMIN_USER
+    )
 
     assert result.total_count == 1
     assert len(result.simulations) == 1
@@ -770,7 +777,12 @@ async def test_list_simulations_filtered_by_brand(mock_twin_repository):
     from src.api.routes.digital_twin import BrandEnum, list_simulations
 
     result = await list_simulations(
-        brand=BrandEnum.REMIBRUTINIB, model_id=None, status=None, page=1, page_size=20
+        brand=BrandEnum.REMIBRUTINIB,
+        model_id=None,
+        status=None,
+        page=1,
+        page_size=20,
+        user=_ADMIN_USER,
     )
 
     assert result.total_count >= 0
@@ -783,7 +795,7 @@ async def test_list_simulations_filtered_by_model(mock_twin_repository):
 
     model_id = str(uuid4())
     result = await list_simulations(
-        brand=None, model_id=model_id, status=None, page=1, page_size=20
+        brand=None, model_id=model_id, status=None, page=1, page_size=20, user=_ADMIN_USER
     )
 
     assert result.total_count >= 0
@@ -795,7 +807,12 @@ async def test_list_simulations_filtered_by_status(mock_twin_repository):
     from src.api.routes.digital_twin import SimulationStatusEnum, list_simulations
 
     result = await list_simulations(
-        brand=None, model_id=None, status=SimulationStatusEnum.COMPLETED, page=1, page_size=20
+        brand=None,
+        model_id=None,
+        status=SimulationStatusEnum.COMPLETED,
+        page=1,
+        page_size=20,
+        user=_ADMIN_USER,
     )
 
     assert result.total_count >= 0
@@ -824,7 +841,9 @@ async def test_list_simulations_pagination(mock_twin_repository):
         )
     mock_twin_repository.simulations.list_simulations.return_value = sims
 
-    result = await list_simulations(brand=None, model_id=None, status=None, page=2, page_size=2)
+    result = await list_simulations(
+        brand=None, model_id=None, status=None, page=2, page_size=2, user=_ADMIN_USER
+    )
 
     assert result.page == 2
     assert result.page_size == 2
@@ -842,7 +861,7 @@ async def test_get_simulation_success(mock_twin_repository):
 
     simulation_id = str(uuid4())
 
-    result = await get_simulation(simulation_id)
+    result = await get_simulation(simulation_id, user=_ADMIN_USER)
 
     assert result.intervention_type == "email_campaign"
     assert result.twin_count == 1000
@@ -859,7 +878,7 @@ async def test_get_simulation_not_found(mock_twin_repository):
     simulation_id = str(uuid4())
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_simulation(simulation_id)
+        await get_simulation(simulation_id, user=_ADMIN_USER)
 
     assert exc_info.value.status_code == 404
 
@@ -874,7 +893,7 @@ async def test_get_simulation_error(mock_twin_repository):
     simulation_id = str(uuid4())
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_simulation(simulation_id)
+        await get_simulation(simulation_id, user=_ADMIN_USER)
 
     assert exc_info.value.status_code == 500
     # Info-disclosure fix: raw exception text must NOT reach the client.
@@ -990,7 +1009,7 @@ async def test_list_models_all(mock_twin_repository):
     """Test listing all active models."""
     from src.api.routes.digital_twin import list_models
 
-    result = await list_models(brand=None, twin_type=None)
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN_USER)
 
     assert result.total_count == 1
     assert len(result.models) == 1
@@ -1001,7 +1020,7 @@ async def test_list_models_filtered_by_brand(mock_twin_repository):
     """Test listing models filtered by brand."""
     from src.api.routes.digital_twin import BrandEnum, list_models
 
-    result = await list_models(brand=BrandEnum.REMIBRUTINIB, twin_type=None)
+    result = await list_models(brand=BrandEnum.REMIBRUTINIB, twin_type=None, user=_ADMIN_USER)
 
     assert result.total_count >= 0
 
@@ -1011,7 +1030,7 @@ async def test_list_models_filtered_by_type(mock_twin_repository):
     """Test listing models filtered by twin type."""
     from src.api.routes.digital_twin import TwinTypeEnum, list_models
 
-    result = await list_models(brand=None, twin_type=TwinTypeEnum.HCP)
+    result = await list_models(brand=None, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER)
 
     assert result.total_count >= 0
 
@@ -1234,7 +1253,9 @@ async def test_list_simulations_empty(mock_twin_repository):
 
     mock_twin_repository.simulations.list_simulations.return_value = []
 
-    result = await list_simulations(brand=None, model_id=None, status=None, page=1, page_size=20)
+    result = await list_simulations(
+        brand=None, model_id=None, status=None, page=1, page_size=20, user=_ADMIN_USER
+    )
 
     assert result.total_count == 0
     assert len(result.simulations) == 0
@@ -1247,7 +1268,7 @@ async def test_list_models_empty(mock_twin_repository):
 
     mock_twin_repository.list_active_models.return_value = []
 
-    result = await list_models(brand=None, twin_type=None)
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN_USER)
 
     assert result.total_count == 0
     assert len(result.models) == 0

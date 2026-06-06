@@ -35,7 +35,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.api.dependencies.auth import require_operator
+from src.api.dependencies.auth import (
+    is_cross_brand_admin,
+    require_operator,
+    require_viewer,
+    resolve_brand_for_read,
+)
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 if TYPE_CHECKING:
@@ -867,6 +872,7 @@ async def list_simulations(
     status: Optional[SimulationStatusEnum] = Query(None, description="Filter by status"),
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=20, ge=1, le=100, description="Page size"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> SimulationListResponse:
     """
     List simulation results with filtering and pagination.
@@ -883,6 +889,12 @@ async def list_simulations(
     """
     from src.digital_twin.models.simulation_models import SimulationStatus
 
+    # Fail-closed brand scoping (H11): a non-admin caller may only read brands in
+    # their grant; admin / ['all'] is unaffected. Never leave the read unscoped.
+    allowed, effective_brand = resolve_brand_for_read(user, brand.value if brand else None)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Brand not permitted for this user.")
+
     try:
         repo = await _get_twin_repo()
 
@@ -891,7 +903,7 @@ async def list_simulations(
 
         simulations = await repo.simulations.list_simulations(
             model_id=UUID(model_id) if model_id else None,
-            brand=brand.value if brand else None,
+            brand=effective_brand,
             status=status_enum,
             limit=page_size * page,  # Get enough for pagination
         )
@@ -940,6 +952,7 @@ async def list_simulations(
 async def get_simulation_history(
     limit: int = Query(default=20, ge=1, le=100, description="Max records to return"),
     offset: int = Query(default=0, ge=0, description="Pagination offset"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> SimulationHistoryResponse:
     """
     Return recent simulation history for the dashboard.
@@ -956,11 +969,17 @@ async def get_simulation_history(
         Simulation history rows with total count and pagination echo.
     """
 
+    # Fail-closed brand scoping (H11): no brand filter param here, so a non-admin
+    # is pinned to their first granted brand; admin / ['all'] sees all.
+    allowed, effective_brand = resolve_brand_for_read(user, None)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="No brand grant for this user.")
+
     try:
         repo = await _get_twin_repo()
         # Fetch enough rows to cover the requested window (repo returns newest
         # first), then apply the offset/limit slice.
-        rows = await repo.simulations.list_simulations(limit=offset + limit)
+        rows = await repo.simulations.list_simulations(brand=effective_brand, limit=offset + limit)
         window = rows[offset : offset + limit]
 
         items = [
@@ -1161,6 +1180,7 @@ async def compare_scenarios(
 )
 async def get_simulation(
     simulation_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> SimulationDetailResponse:
     """
     Get detailed information about a simulation.
@@ -1177,6 +1197,18 @@ async def get_simulation(
         result = await repo.get_simulation(UUID(simulation_id))
 
         if not result:
+            raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
+
+        # Fail-closed ownership check (H11): a non-admin may only read a simulation
+        # whose brand is in their grant. Return 404 (not 403) so we don't leak the
+        # existence of another tenant's simulation. If the brand can't be
+        # determined, deny for non-admins (fail-closed).
+        _ic = getattr(result, "intervention_config", None)
+        _extra = getattr(_ic, "extra_params", None) if _ic is not None else None
+        _sim_brand = _extra.get("brand") if isinstance(_extra, dict) else None
+        if not is_cross_brand_admin(user) and (
+            _sim_brand is None or not resolve_brand_for_read(user, _sim_brand)[0]
+        ):
             raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
 
         heterogeneity = EffectHeterogeneityResponse(
@@ -1367,6 +1399,7 @@ async def validate_simulation(
 async def list_models(
     brand: Optional[BrandEnum] = Query(None, description="Filter by brand"),
     twin_type: Optional[TwinTypeEnum] = Query(None, description="Filter by twin type"),
+    user: Dict[str, Any] = Depends(require_viewer),
 ) -> ModelListResponse:
     """
     List trained twin generator models.
@@ -1380,6 +1413,12 @@ async def list_models(
     """
     from src.digital_twin.models.twin_models import TwinType
 
+    # Fail-closed brand scoping (H11): a non-admin only sees their granted
+    # brand's models; admin / ['all'] sees all.
+    allowed, effective_brand = resolve_brand_for_read(user, brand.value if brand else None)
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Brand not permitted for this user.")
+
     try:
         repo = await _get_twin_repo()
 
@@ -1388,7 +1427,7 @@ async def list_models(
 
         models = await repo.list_active_models(
             twin_type=twin_type_enum,
-            brand=brand.value if brand else None,
+            brand=effective_brand,
         )
 
         # save_model stores metrics nested under performance_metrics (JSONB) and
