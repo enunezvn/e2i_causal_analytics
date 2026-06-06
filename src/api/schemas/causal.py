@@ -400,6 +400,20 @@ class SequentialPipelineRequest(BaseModel):
         le=1.0,
         description="Minimum agreement threshold for validation",
     )
+    run_refutation: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: run the real DoWhy refutation suite on the DoWhy estimate and "
+            "gate the result (PROCEED/REVIEW/BLOCK). Default False keeps the fast path "
+            "(no refutation; robustness_validation_performed=False). True adds ~33s for "
+            "OLS and up to 35-60 min for forest estimators (#622) — runs synchronously "
+            "inside the heavy_compute_slot. NOTE (Owner-decision 5): refutation needs a "
+            "real confidence interval, so v1 validates ONLY the linear-regression DoWhy "
+            "estimate (the one method with a native standard error); non-linear methods "
+            "are honestly skipped, not fabricated. Robustness is validated on the DoWhy "
+            "estimate only; EconML/CausalML estimates in the consensus are unrefuted."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -541,6 +555,20 @@ class ParallelPipelineRequest(BaseModel):
         ge=30,
         le=300,
         description="Overall timeout",
+    )
+    run_refutation: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: run the real DoWhy refutation suite on the DoWhy estimate and "
+            "gate the result (PROCEED/REVIEW/BLOCK). Default False keeps the fast path "
+            "(no refutation; robustness_validation_performed=False). True adds ~33s for "
+            "OLS and up to 35-60 min for forest estimators (#622) — runs synchronously "
+            "inside the heavy_compute_slot. NOTE (Owner-decision 5): refutation needs a "
+            "real confidence interval, so v1 validates ONLY the linear-regression DoWhy "
+            "estimate (the one method with a native standard error); non-linear methods "
+            "are honestly skipped, not fabricated. Robustness is validated on the DoWhy "
+            "estimate only; EconML/CausalML estimates in the consensus are unrefuted."
+        ),
     )
 
     model_config = ConfigDict(
