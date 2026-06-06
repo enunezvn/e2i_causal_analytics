@@ -90,6 +90,26 @@ class TestExpertReviewRepository:
         assert result is True
 
     @pytest.mark.asyncio
+    async def test_submit_review_zero_rows_returns_false(self, repo, mock_client):
+        """FIX B (codex HIGH): a ZERO-ROW update must return False, not True.
+
+        Resolving a NONEXISTENT or already-resolved review_id does an update that
+        matches no rows; supabase-py returns the updated rows in ``result.data``,
+        so an empty ``data`` means nothing was touched. Returning True there is a
+        fabricated success (the route would 200 a record it never changed).
+        """
+        mock_execute = AsyncMock(return_value=MagicMock(data=[]))
+        mock_client.table.return_value.update.return_value.eq.return_value.execute = mock_execute
+
+        result = await repo.submit_review(
+            review_id="does-not-exist",
+            approval_status="approved",
+            checklist={"confounder_check": True},
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
     async def test_submit_review_invalid_status(self, repo):
         """Test submit_review rejects invalid status."""
         result = await repo.submit_review(

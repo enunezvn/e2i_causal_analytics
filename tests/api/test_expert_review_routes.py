@@ -176,14 +176,20 @@ class TestResolveReview:
         # repo must NOT have been called when validation fails
         assert fake_repo.submit_calls == []
 
-    def test_submit_failure_is_not_200(self, client, fake_repo):
+    def test_zero_row_resolve_is_404_not_200(self, client, fake_repo):
+        """FIX B (codex HIGH): a zero-row resolve must be 404, never a fake 200.
+
+        submit_review returns False for a nonexistent / already-resolved
+        review_id (zero-row update). The route must surface that as 404 (the
+        honest 'not found / not resolvable' code), NOT a fabricated 200 — and not
+        the old generic 502 either.
+        """
         fake_repo.submit_return = False
         resp = client.post(
             "/api/expert-reviews/55555555-5555-5555-5555-555555555555/resolve",
             json={"approval_status": "approved", "checklist": {}},
         )
-        # fail-closed: a repo False is an honest non-2xx, never a fake success
-        assert resp.status_code >= 400
+        assert resp.status_code == 404, resp.text
 
 
 class TestReviewSummary:

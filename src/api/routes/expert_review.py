@@ -108,9 +108,13 @@ async def resolve_review(
     """Approve or reject a pending review; the resolution persists.
 
     An ``approved`` resolution sets ``valid_from``/``valid_until``/``approved_at``
-    inside ``submit_review`` (repo :169-173). A repo ``False`` is a fail-closed
-    error (502) — never a fabricated success — mirroring the digital-twin
-    fail-closed contract.
+    inside ``submit_review`` (repo :169-173). A repo ``False`` is fail-closed —
+    never a fabricated success. FIX B (codex HIGH): ``submit_review`` now returns
+    False on a ZERO-ROW update (nonexistent / already-resolved review_id), so we
+    surface that as 404 (the honest 'not found / not resolvable' code), not a
+    fabricated 200. A genuine persistence error also returns False -> 404, which
+    is still a correct non-200 (never a fake success); the repo logs the
+    distinction (zero-row WARNING vs exception ERROR).
     """
     repo = await _get_expert_review_repo()
     success = await repo.submit_review(
@@ -124,10 +128,10 @@ async def resolve_review(
     )
     if not success:
         raise HTTPException(
-            status_code=502,
+            status_code=404,
             detail=(
-                f"Failed to persist resolution for review {review_id}. "
-                "The review may not exist or the persistence layer is unavailable."
+                f"Review {review_id} was not found or is not resolvable "
+                "(it may not exist or has already been resolved)."
             ),
         )
     return ResolveReviewResponse(
