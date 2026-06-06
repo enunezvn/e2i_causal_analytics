@@ -307,6 +307,81 @@ _check_preexisting_pollution()
 # inside the test body itself.
 _install_nest_asyncio_apply_trace()
 
+
+# =============================================================================
+# ASYNCIO POLLUTION CONTAINMENT (issue #218 follow-up — autouse finalizer)
+# =============================================================================
+# The probe above only *observes* pollution; it does not undo it. Issues
+# #218/#220 mitigated KNOWN victim sites in ``tests/integration/`` by
+# migrating their bare ``asyncio.run(coro)`` calls to the explicit-loop
+# ``run_sync`` helper. But that migration is scoped to one tree: victims
+# OUTSIDE ``tests/integration/`` (e.g.
+# ``tests/ml/synthetic_v2/test_integration_diagnostic_runner.py``) still
+# call bare ``asyncio.run`` and crash with ``RuntimeError: Event loop is
+# closed`` whenever they land on the SAME xdist worker, AFTER, the RAGAS
+# polluter (``ragas/async_utils.py:49`` -> ``nest_asyncio.apply()``).
+#
+# Under the slow lane's ``--dist=loadscope`` mode (see
+# ``.github/workflows/slow-tests.yml`` job A: ``-n 2 --dist=loadscope``),
+# ``xdist_group`` markers are NOT honoured, so we cannot reliably pin the
+# polluter and the victims onto separate workers — co-location is left to
+# loadscope's scheduling, which is why the failure is INTERMITTENT (green
+# only when the victims happen to land on a different worker than the
+# polluter).
+#
+# This autouse, function-scoped finalizer is the robust, co-scheduling-
+# INDEPENDENT containment: before every test it snapshots ``asyncio.run``
+# and the event-loop policy; after every test it RESTORES the pristine
+# ``_ORIG_ASYNCIO_RUN`` (captured at conftest import, before any apply())
+# and the original loop policy if either was monkey-patched during the
+# test. Any test that triggers ``nest_asyncio.apply()`` is therefore
+# cleaned up at its own boundary, so the NEXT test on that worker always
+# gets a working ``asyncio.run`` — regardless of which tree it lives in or
+# which worker it landed on.
+#
+# Why this does NOT weaken the existing guards:
+#   - The probe's ``_traced_apply`` still increments ``apply_count`` and
+#     captures the polluter stack at apply()-time; restoring ``asyncio.run``
+#     AFTERWARDS does not erase that observation. The ``[issue-218]``
+#     warning + ``E2I_ASSERT_NO_ASYNCIO_POLLUTION`` strict-mode exit on a
+#     NON-allowlisted polluter still fire exactly as before.
+#   - The AST lints (``test_no_unconditional_nest_asyncio_apply.py`` over
+#     src/, ``test_no_bare_asyncio_run_in_integration_tests.py`` over
+#     tests/integration/) are untouched — this is a runtime safety net, not
+#     a replacement for keeping src/ apply() calls gated.
+#   - We restore to ``_ORIG_ASYNCIO_RUN`` (the genuine stdlib runner), not
+#     to a possibly-already-polluted snapshot, so a polluter that fires
+#     during fixture setup of the SAME test is also healed for the next one.
+@pytest.fixture(autouse=True)
+def _restore_asyncio_run_after_pollution():
+    """Restore ``asyncio.run`` + the event-loop policy after each test.
+
+    Function-scoped autouse finalizer. Snapshots the live ``asyncio.run``
+    and the current event-loop policy before the test runs, then on
+    teardown restores the pristine ``_ORIG_ASYNCIO_RUN`` (and the original
+    policy) whenever a ``nest_asyncio.apply()`` (or any other monkey-patch)
+    swapped them out during the test. This neutralises the cross-test
+    ``RuntimeError: Event loop is closed`` pollution (issue #218) without
+    relying on xdist worker co-scheduling.
+    """
+
+    policy_before = asyncio.get_event_loop_policy()
+    try:
+        yield
+    finally:
+        # Heal ``asyncio.run`` if a polluter (RAGAS / DSPy / mlflow.genai)
+        # swapped it for nest_asyncio's runner during this test. Comparing
+        # against ``_ORIG_ASYNCIO_RUN`` keeps the no-op fast path cheap for
+        # the overwhelming majority of tests that never pollute.
+        if asyncio.run is not _ORIG_ASYNCIO_RUN:
+            asyncio.run = _ORIG_ASYNCIO_RUN  # type: ignore[assignment]
+        # nest_asyncio.apply() can also patch the loop policy / loop class;
+        # restore the policy object if it changed so the next test starts
+        # from a clean loop factory.
+        if asyncio.get_event_loop_policy() is not policy_before:
+            asyncio.set_event_loop_policy(policy_before)
+
+
 # =============================================================================
 # TESTING MODE - Set before any src imports to bypass JWT auth
 # =============================================================================
