@@ -82,6 +82,19 @@ class ExperimentDesignerInput(BaseModel):
         description="Brand filter for domain-specific context",
     )
 
+    # Twin pre-screening (Phase 15). Default OFF: the v1 synthetic DGP is not
+    # brand/intervention-differentiated (provider.py), so auto-pre-screening is
+    # not decision-useful yet. Opt in explicitly; flip the default once a real
+    # RWD effect model lands (#705 H8).
+    enable_twin_simulation: bool = Field(
+        False,
+        description="Run the digital-twin pre-screen before design (requires intervention_type).",
+    )
+    intervention_type: Optional[str] = Field(
+        None,
+        description="Intervention to pre-screen (e.g. 'email_campaign'); required if enable_twin_simulation.",
+    )
+
     @field_validator("constraints")
     @classmethod
     def validate_constraints(cls, v: dict[str, Any]) -> dict[str, Any]:
@@ -430,6 +443,12 @@ class ExperimentDesignerAgent(SkillsMixin):
             "preregistration_formality": input_data.preregistration_formality,
             "max_redesign_iterations": input_data.max_redesign_iterations,
             "enable_validity_audit": input_data.enable_validity_audit,
+            # Twin pre-screen plumbing (#705 H8): thread the opt-in flag + the two
+            # inputs the twin_simulation node needs. brand was previously never
+            # seeded into state from the input; the node reads it (twin_simulation.py).
+            "enable_twin_simulation": input_data.enable_twin_simulation,
+            "intervention_type": input_data.intervention_type,
+            "brand": input_data.brand,
             # Required output fields (initialized with defaults)
             "design_type": "RCT",
             "design_rationale": "",
