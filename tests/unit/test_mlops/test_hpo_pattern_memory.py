@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.mlops import hpo_pattern_memory as hpo_mem
 from src.mlops.hpo_pattern_memory import (
     HPOPatternInput,
     HPOPatternMatch,
@@ -567,3 +568,224 @@ class TestCleanupOldPatterns:
 
             assert result["cleaned"] == 1
             assert result["dry_run"] is False
+
+
+# ============================================================================
+# SEARCH-SPACE SERIALIZATION TESTS (issue #758)
+# ============================================================================
+#
+# Regression: `search_space` may hold real Optuna distribution objects
+# (FloatDistribution / IntDistribution / CategoricalDistribution), which the
+# stdlib ``json`` encoder cannot serialize. Previously ``store_hpo_pattern``
+# did ``json.dumps(pattern.search_space)`` → ``TypeError`` → silently caught →
+# the procedural-memory write was skipped (warm-start cache miss). The fix
+# serializes distributions with Optuna's own serializer and deserializes
+# symmetrically on read-back.
+
+
+class TestSearchSpaceSerialization:
+    """Round-trip Optuna distributions through the search-space (de)serializers."""
+
+    def _optuna_search_space(self):
+        from optuna.distributions import (
+            CategoricalDistribution,
+            FloatDistribution,
+            IntDistribution,
+        )
+
+        return {
+            "learning_rate": FloatDistribution(1e-4, 0.1, log=True),
+            "n_estimators": IntDistribution(50, 500),
+            "booster": CategoricalDistribution(["gbtree", "dart"]),
+        }
+
+    def test_roundtrips_optuna_distributions(self):
+        """Optuna distribution objects survive serialize → JSON string → deserialize."""
+        search_space = self._optuna_search_space()
+
+        raw = hpo_mem._serialize_search_space(search_space)
+
+        # Must be a real JSON string (DB column is text/jsonb).
+        assert isinstance(raw, str)
+        json.loads(raw)  # parses as JSON, i.e. no un-encodable objects leaked
+
+        restored = hpo_mem._deserialize_search_space(raw)
+        assert restored == search_space  # Optuna distributions compare by value
+
+    def test_roundtrips_plain_e2i_dicts_unchanged(self):
+        """Plain E2I-format dicts (already JSON-safe) pass through untouched."""
+        search_space = {
+            "n_estimators": {"type": "int", "low": 50, "high": 200},
+            "learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": True},
+        }
+
+        restored = hpo_mem._deserialize_search_space(hpo_mem._serialize_search_space(search_space))
+        assert restored == search_space
+
+    def test_deserialize_handles_empty_and_none(self):
+        """Empty / None inputs deserialize to an empty dict (no crash)."""
+        assert hpo_mem._deserialize_search_space(None) == {}
+        assert hpo_mem._deserialize_search_space(hpo_mem._serialize_search_space({})) == {}
+
+    @pytest.mark.asyncio
+    async def test_store_pattern_with_optuna_distributions_persists(self):
+        """A search_space of real Optuna distributions stores without silent failure."""
+        search_space = self._optuna_search_space()
+        mock_client = MagicMock()
+        mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock()
+
+        with patch(
+            "src.mlops.hpo_pattern_memory._get_supabase_client",
+            return_value=mock_client,
+        ):
+            pattern = HPOPatternInput(
+                algorithm_name="XGBoost",
+                problem_type="binary_classification",
+                search_space=search_space,
+                best_hyperparameters={"n_estimators": 150},
+                best_value=0.92,
+                optimization_metric="roc_auc",
+                n_trials=50,
+                n_completed=48,
+            )
+
+            result = await store_hpo_pattern(pattern)
+
+        # Before the fix this is None (json.dumps raised, caught at the warning).
+        assert result is not None
+        assert len(result) == 36  # UUID
+
+        # The ml_hpo_patterns insert is the 2nd insert call; its search_space
+        # payload must round-trip back to the original Optuna distributions.
+        insert_calls = mock_client.table.return_value.insert.call_args_list
+        hpo_record = insert_calls[1].args[0]
+        assert hpo_record["pattern_id"] == result
+        restored = hpo_mem._deserialize_search_space(hpo_record["search_space"])
+        assert restored == search_space
+
+    @pytest.mark.asyncio
+    async def test_find_similar_patterns_deserializes_search_space(self):
+        """find_similar_patterns exposes search_space deserialized to Optuna objects."""
+        search_space = self._optuna_search_space()
+        serialized = hpo_mem._serialize_search_space(search_space)
+
+        mock_client = MagicMock()
+        mock_client.rpc.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "pattern_id": "abc-123",
+                    "algorithm_name": "XGBoost",
+                    "problem_type": "binary_classification",
+                    "best_hyperparameters": json.dumps({"n_estimators": 150}),
+                    "search_space": serialized,
+                    "best_value": 0.92,
+                    "optimization_metric": "roc_auc",
+                    "n_samples": 10000,
+                    "n_features": 50,
+                    "similarity_score": 0.85,
+                    "times_used": 2,
+                }
+            ]
+        )
+
+        with patch(
+            "src.mlops.hpo_pattern_memory._get_supabase_client",
+            return_value=mock_client,
+        ):
+            result = await find_similar_patterns(
+                algorithm_name="XGBoost",
+                problem_type="binary_classification",
+            )
+
+        assert len(result) == 1
+        assert result[0].search_space == search_space
+
+    @pytest.mark.asyncio
+    async def test_find_similar_patterns_search_space_defaults_empty(self):
+        """A row without search_space yields an empty dict, not an error."""
+        mock_client = MagicMock()
+        mock_client.rpc.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "pattern_id": "abc-123",
+                    "algorithm_name": "XGBoost",
+                    "problem_type": "binary_classification",
+                    "best_hyperparameters": {"n_estimators": 150},
+                    "best_value": 0.92,
+                    "optimization_metric": "roc_auc",
+                    "n_samples": None,
+                    "n_features": None,
+                    "similarity_score": 0.8,
+                    "times_used": 0,
+                }
+            ]
+        )
+
+        with patch(
+            "src.mlops.hpo_pattern_memory._get_supabase_client",
+            return_value=mock_client,
+        ):
+            result = await find_similar_patterns(
+                algorithm_name="XGBoost",
+                problem_type="binary_classification",
+            )
+
+        assert len(result) == 1
+        assert result[0].search_space == {}
+
+    def test_roundtrips_mixed_distributions_and_primitives(self):
+        """A search space mixing Optuna distributions with plain values round-trips."""
+        from optuna.distributions import FloatDistribution
+
+        search_space = {
+            "learning_rate": FloatDistribution(1e-4, 0.1, log=True),
+            "fixed_param": 0.01,  # plain JSON-native value, must pass through
+            "objective": "binary:logistic",
+        }
+
+        restored = hpo_mem._deserialize_search_space(hpo_mem._serialize_search_space(search_space))
+        assert restored == search_space
+
+    @pytest.mark.asyncio
+    async def test_find_similar_patterns_tolerates_malformed_search_space(self):
+        """A malformed tagged distribution must not discard the whole result set.
+
+        The deserializer adds a new raise-site (json_to_distribution) into the
+        find_similar_patterns row loop, whose outer except would otherwise drop
+        ALL patterns if one row's search_space is corrupt. search_space is not
+        consumed by warm-start, so a bad entry should degrade, not nuke results.
+        """
+        # Valid outer JSON, but the tagged payload is not valid Optuna JSON.
+        malformed = json.dumps({"lr": {"__optuna_distribution__": "not-valid-optuna"}})
+        mock_client = MagicMock()
+        mock_client.rpc.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "pattern_id": "abc-123",
+                    "algorithm_name": "XGBoost",
+                    "problem_type": "binary_classification",
+                    "best_hyperparameters": json.dumps({"n_estimators": 150}),
+                    "search_space": malformed,
+                    "best_value": 0.92,
+                    "optimization_metric": "roc_auc",
+                    "n_samples": 10000,
+                    "n_features": 50,
+                    "similarity_score": 0.85,
+                    "times_used": 2,
+                }
+            ]
+        )
+
+        with patch(
+            "src.mlops.hpo_pattern_memory._get_supabase_client",
+            return_value=mock_client,
+        ):
+            result = await find_similar_patterns(
+                algorithm_name="XGBoost",
+                problem_type="binary_classification",
+            )
+
+        # The pattern is still returned; the un-decodable entry is left as-is.
+        assert len(result) == 1
+        assert result[0].pattern_id == "abc-123"
+        assert result[0].search_space == {"lr": {"__optuna_distribution__": "not-valid-optuna"}}
