@@ -397,6 +397,7 @@ class SimulationListItem(BaseModel):
     recommendation: RecommendationEnum
     status: SimulationStatusEnum
     created_at: datetime
+    data_provenance: Optional[str] = None
 
 
 class SimulationListResponse(BaseModel):
@@ -422,6 +423,7 @@ class SimulationHistoryItem(BaseModel):
     brand: str
     ate_estimate: float
     recommendation_type: str
+    data_provenance: Optional[str] = None
 
 
 class SimulationHistoryResponse(BaseModel):
@@ -923,6 +925,7 @@ async def list_simulations(
                 recommendation=RecommendationEnum(sim.get("recommendation", "refine")),
                 status=SimulationStatusEnum(sim.get("simulation_status", "completed")),
                 created_at=sim.get("created_at", datetime.now(timezone.utc)),
+                data_provenance=sim.get("data_provenance"),
             )
             for sim in paginated
         ]
@@ -990,6 +993,7 @@ async def get_simulation_history(
                 brand=sim.get("brand", "unknown"),
                 ate_estimate=round(sim.get("simulated_ate", 0.0), 4),
                 recommendation_type=sim.get("recommendation", "refine"),
+                data_provenance=sim.get("data_provenance"),
             )
             for sim in window
         ]
@@ -1252,6 +1256,7 @@ async def get_simulation(
             else {},
             effect_heterogeneity=heterogeneity,
             intervention_config=result.intervention_config.model_dump(),  # type: ignore[attr-defined]
+            data_provenance=getattr(result, "data_provenance", None),  # #705 H5b
         )
 
     except HTTPException:
