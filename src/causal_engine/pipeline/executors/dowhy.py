@@ -468,7 +468,29 @@ class DoWhyExecutor(LibraryExecutor):
             # to_legacy_format() already carries gate_decision / needs_review /
             # overall_robust / individual_tests / confidence_adjustment. Avoid
             # packing duplicate keys that could disagree; only the legacy shape.
-            return suite.to_legacy_format()
+            legacy = suite.to_legacy_format()
+            # FIX 1 (honest p-values): to_legacy_format() coerces every
+            # non-applicable p_value via ``t.p_value or 0.0`` — so the E-value /
+            # sensitivity test (and any SKIPPED test) would carry a FABRICATED
+            # p_value=0.0 ("infinitely significant"), exactly the fake-value class
+            # this remediation kills. We restore honest None F1-locally instead of
+            # editing the shared to_legacy_format(), which the agent path's GEPA
+            # metric (formats p_value with :.4f → crashes on None) and DB writers
+            # depend on. Mirror the same test-name → contract-key mapping the
+            # legacy format uses (sensitivity_e_value → unobserved_common_cause;
+            # all other names pass through).
+            individual = legacy.get("individual_tests")
+            if isinstance(individual, dict):
+                for t in suite.tests:
+                    if t.p_value is not None:
+                        continue
+                    key = t.test_name.value
+                    if key == "sensitivity_e_value":
+                        key = "unobserved_common_cause"
+                    entry = individual.get(key)
+                    if isinstance(entry, dict):
+                        entry["p_value"] = None
+            return legacy
         except Exception as exc:  # noqa: BLE001 - refutation/DoWhy raise broad-typed errors
             logger.warning(
                 "DoWhy pipeline refutation failed (method=%s): %s",

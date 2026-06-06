@@ -176,6 +176,43 @@ class TestDoWhyExecutorRefutationOptIn:
         assert "needs_review" in rr
 
     @pytest.mark.asyncio
+    async def test_dowhy_executor_refutation_preserves_honest_none_p_values(self) -> None:
+        """FIX 1: a non-applicable p_value must stay None, NOT a fabricated 0.0.
+
+        ``to_legacy_format()`` coerces ``t.p_value or 0.0`` — so the E-value /
+        sensitivity test (p_value genuinely None, "Not applicable for E-value")
+        would otherwise read as a fabricated ``p_value=0.0`` ("infinitely
+        significant") in this pharma validation payload — the exact fake-value
+        class this remediation kills. The executor restores honest None F1-locally
+        (without touching the shared to_legacy_format, which other consumers and
+        the GEPA metric depend on). Tests with REAL p-values keep their floats.
+        """
+        df = _build_real_dataframe()
+        state = _build_state(df=df, confounders=["confounder_a"], run_refutation=True)
+        result = await DoWhyExecutor().execute(state, state["config"])
+        assert result["success"] is True, f"error={result['error']!r}"
+        payload = result["result"]
+        assert payload is not None
+        individual = payload["refutation_results"]["individual_tests"]
+        # The E-value/sensitivity test maps to "unobserved_common_cause" and has a
+        # genuinely-None p_value — it must NOT be fabricated to 0.0.
+        assert "unobserved_common_cause" in individual, (
+            f"sensitivity test missing from individual_tests: {individual.keys()}"
+        )
+        assert individual["unobserved_common_cause"]["p_value"] is None, (
+            "non-applicable E-value p_value must be honest None, not a fabricated "
+            f"0.0; got {individual['unobserved_common_cause']['p_value']!r}"
+        )
+        # Tests that DO have a real permutation p-value keep their real float
+        # (the fix must not blanket-null every p_value).
+        for real_p_test in ("placebo_treatment", "random_common_cause"):
+            entry = individual.get(real_p_test)
+            assert entry is not None, f"{real_p_test} missing from individual_tests"
+            assert isinstance(entry["p_value"], float), (
+                f"{real_p_test} must keep its REAL float p_value; got {entry['p_value']!r}"
+            )
+
+    @pytest.mark.asyncio
     async def test_dowhy_executor_refutation_skips_without_se(self) -> None:
         """Non-linear method (no native SE) → honest skip dict, NO fabricated CI."""
         df = _build_binary_treatment_dataframe()
