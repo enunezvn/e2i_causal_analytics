@@ -40,18 +40,100 @@ COHORT_TARGETS: dict[str, str] = {
     "initiation": "initiated_biologic_180d",
     "discontinuation": "discontinued_180d",
     "persistence": "persistent_at_180d",
-    # Mart-sourced initiation cohort (entity-stacked Optum drop -> convert_optum_mart.py).
+    # Mart-sourced cohorts (entity-stacked Optum drop -> convert_optum_mart.py).
+    # disc/persistence derive TRUE 180d targets from the mart's coverage/gap cols
+    # (Option B); apply_overrides pushes the right label into tier0.CONFIG so the
+    # pipeline trains/evaluates on the per-cohort outcome (the runner-target footgun).
     "initiation_mart": "initiated_biologic_180d",
+    "discontinuation_mart": "discontinued_180d",
+    "persistence_mart": "persistent_at_180d",
 }
 
 COHORT_DIR: dict[str, str] = {
     "initiation": "data/rwd/optum/initiation",
     "discontinuation": "data/rwd/optum/discontinuation",
     "persistence": "data/rwd/optum/persistence",
-    # Non-``optum`` path so the ``optum_mart`` feature-manifest override resolves
+    # Non-``optum`` paths so the ``optum_mart`` feature-manifest override resolves
     # without an autodetect (M2) conflict against the ``optum`` source.
     "initiation_mart": "data/rwd/mart/initiation",
+    "discontinuation_mart": "data/rwd/mart/discontinuation",
+    "persistence_mart": "data/rwd/mart/persistence",
 }
+
+_MART_SUFFIX = "_mart"
+
+
+def _convert_hint(cohort: str) -> str:
+    """Suggested converter command when a cohort's data dir is missing.
+
+    Mart cohorts (``*_mart``) are built by the entity-stacked-mart adapter
+    (``convert_optum_mart.py``), whose ``--cohort`` takes the BASE name and whose
+    ``--output`` is the exact dir. Legacy optum cohorts use the raw-claims
+    converter (``convert_optum_rwd.py``). The previous hint always named
+    ``convert_optum_rwd.py --cohort <cohort>`` — wrong for every mart cohort
+    (that converter has no ``*_mart`` cohort), a footgun for whoever hits a
+    missing dir.
+    """
+    if cohort.endswith(_MART_SUFFIX):
+        base = cohort[: -len(_MART_SUFFIX)]
+        return (
+            f"python scripts/convert_optum_mart.py --cohort {base} "
+            f"--output {COHORT_DIR[cohort]}"
+        )
+    return f"python scripts/convert_optum_rwd.py --cohort {cohort}"
+
+
+def _mart_manifest_warning(cohort: str, feature_manifest_source: str | None) -> str | None:
+    """Warn when a ``*_mart`` cohort runs without a resolved feature manifest.
+
+    Mart dirs deliberately autodetect to ``None`` (so an explicit ``optum_mart``
+    override never M2-conflicts), which means forgetting
+    ``--feature-manifest-source optum_mart`` silently drops the Layer-5 leakage
+    verdicts. The converter's positive-enumeration allow-list is the PRIMARY
+    leakage defense (forbidden columns are never even emitted), so this is a loud
+    WARNING, not a fail-close. Returns ``None`` for non-mart cohorts (they
+    autodetect their own manifest) and when a source is resolved.
+    """
+    if not cohort.endswith(_MART_SUFFIX) or feature_manifest_source is not None:
+        return None
+    return (
+        f"cohort '{cohort}' is running WITHOUT a feature manifest — Layer 5 "
+        f"leakage verdicts will NOT fire (defense-in-depth disabled). The "
+        f"converter's allow-list is still active, but pass "
+        f"'--feature-manifest-source optum_mart' to restore the full guard."
+    )
+
+
+def _single_class_error(data_dir: Path, cohort: str, target: str) -> str | None:
+    """Pre-flight fail-closed guard: return an actionable message if the cohort's
+    target column has < 2 classes.
+
+    A single-class target crashes tier0's stratified split deep in the pipeline
+    with a cryptic sklearn error; this surfaces it up front instead. Reads ONLY
+    the target column. Returns ``None`` — deferring to the downstream gates — when
+    the journeys file or target column is absent/unreadable: the converter is
+    contractually allowed to emit an empty / zero-positive cohort (see
+    test_convert_zero_positive_cohort_no_error), and the deployer fail-closes a
+    weak model. This guard only catches the unmodelable single-class case.
+    """
+    journeys = data_dir / "e2i_ml_v3_patient_journeys.parquet"
+    if not journeys.exists():
+        return None
+    try:
+        import pandas as pd
+
+        col = pd.read_parquet(journeys, columns=[target])[target]
+    except Exception:
+        return None  # column absent / unreadable -> defer to downstream gates
+    n_classes = int(col.nunique(dropna=True))
+    if n_classes >= 2:
+        return None
+    return (
+        f"Cohort '{cohort}' target '{target}' has {n_classes} class(es) over "
+        f"{len(col)} rows — classification needs >=2 classes, so this cohort is "
+        f"unusable for tier-0 modeling (stratified split would fail). Rebuild with "
+        f"more data or a different window. Hint: {_convert_hint(cohort)}"
+    )
 
 
 @dataclass
@@ -233,10 +315,23 @@ def main() -> int:
     if not data_dir.exists() and not args.dry_run:
         print(
             f"ERROR: Optum cohort directory not found: {data_dir}\n"
-            f"Run: python scripts/convert_optum_rwd.py --cohort {args.cohort}",
+            f"Run: {_convert_hint(args.cohort)}",
             file=sys.stderr,
         )
         return 2
+
+    # Pre-flight fail-closed guard: a single-class target would crash tier0's
+    # stratified split with a cryptic error deep in the pipeline. Surface it here
+    # with an actionable message. Defers (no-op) when the cohort file/column is
+    # absent — the converter may emit an empty/zero-positive cohort by contract and
+    # the deployer fail-closes a weak model; this only catches the unmodelable case.
+    if not args.dry_run:
+        single_class = _single_class_error(
+            data_dir, args.cohort, tier0.CONFIG.target_outcome
+        )
+        if single_class is not None:
+            print(f"ERROR: {single_class}", file=sys.stderr)
+            return 2
 
     # Resolve which feature manifest Layer 5 should consult. Optum cohorts live
     # under 'data/rwd/optum/<cohort>', so auto-detection yields 'optum'; an
@@ -256,6 +351,10 @@ def main() -> int:
     print(f"  Feature manifest: {feature_manifest_source}")
     print(f"  AUC threshold: {tier0.CONFIG.min_auc_threshold}")
     print(f"  MLflow: {tier0.CONFIG.enable_mlflow}, Opik: {tier0.CONFIG.enable_opik}")
+
+    manifest_warning = _mart_manifest_warning(args.cohort, feature_manifest_source)
+    if manifest_warning is not None:
+        print(f"  ⚠️  WARNING: {manifest_warning}", file=sys.stderr)
 
     # Tier-2 SMOKE_TEST_ONLY (per tier0_quality_remediation_arc Shard C, 2026-05-06):
     # n=47 disc/pers cohorts are documented as converter smoke tests, NOT methodology

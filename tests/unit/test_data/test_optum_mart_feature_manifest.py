@@ -177,3 +177,56 @@ def test_manifest_registered_as_resolvable_source():
     assert resolved.knowable_at.is_pre_or_at_index()
     # A converter-output-only column is absent from the mart registry.
     assert lookup_feature_contract("dx_l50_x_count", "optum_mart") is None
+
+
+# --- Multi-cohort extension (discontinuation / persistence; frame-shift) ---
+
+
+def test_multicohort_targets_declared_post_index():
+    """discontinued_180d / persistent_at_180d are post-index targets (forbidden-but-preserved)."""
+    for t in ("discontinued_180d", "persistent_at_180d"):
+        assert t in MART_TARGETS, f"{t} must be a declared target"
+        c = optum_mart_contract_for(t)
+        assert c is not None, f"{t} must be declared"
+        assert not c.knowable_at.is_pre_or_at_index(), f"{t} must be post-index"
+        assert t in MART_FORBIDDEN_AS_FEATURES
+        assert t not in MART_SAFE_FEATURES
+
+
+def test_disc_persist_derivation_aliases_are_forbidden():
+    """The coverage/gap derivation inputs + precomputed outcome flags that
+    (near-)deterministically reproduce the disc/persistence targets must be
+    post-index forbidden aliases (defense-in-depth; never emitted by the adapter)."""
+    for name in (
+        "last_coverage_end",
+        "last_observed_date",
+        "max_internal_gap_days",
+        "terminal_gap_days",
+        "covered_days",
+        "pdc",
+        "discontinued_flag",
+        "discontinued_90d_flag",
+        "persistence_60d_flag",
+        "maintained_flag",
+        "adherent_flag",
+    ):
+        c = optum_mart_contract_for(name)
+        assert c is not None, f"{name} must be declared as a forbidden alias"
+        assert not c.knowable_at.is_pre_or_at_index(), f"{name} must be post-index"
+        assert name in MART_FORBIDDEN_AS_FEATURES
+        assert name not in MART_SAFE_FEATURES
+
+
+def test_safe_allowlist_unchanged_at_64_across_cohorts():
+    """Adding disc/persistence targets + aliases must NOT change the 64-feature
+    safe set — the same baseline features are valid pre-index for all 3 cohorts."""
+    assert len(MART_SAFE_FEATURES) == 64
+
+
+def test_multicohort_targets_resolve_via_manifest_source():
+    """Layer-5 resolution sees the new targets under the optum_mart source (lockstep)."""
+    from src.data.manifests import lookup_feature_contract
+
+    for t in ("discontinued_180d", "persistent_at_180d"):
+        c = lookup_feature_contract(t, "optum_mart")
+        assert c is not None and not c.knowable_at.is_pre_or_at_index()

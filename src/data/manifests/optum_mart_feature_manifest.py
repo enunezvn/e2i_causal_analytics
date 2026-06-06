@@ -5,17 +5,20 @@ entity-stacked mart (252 cols x 3.76M rows) that shares only 4 of the 110
 ``optum_feature_manifest`` SAFE column names. It bypasses
 ``scripts/convert_optum_rwd.py``'s structural leakage gate entirely, so THIS
 manifest is the authority for which mart columns are pre-index-admissible vs
-post-index leakage for the mart-sourced INITIATION cohort.
+post-index leakage for the mart-sourced tier-0 cohorts (INITIATION plus the
+treatment-anchored DISCONTINUATION / PERSISTENCE cohorts).
 
-Scope: this manifest declares exactly the columns the mart adapter
+Scope: this manifest declares the columns the mart adapter
 (``scripts/convert_optum_mart.py``) emits into ``patient_journeys`` — the
-owner-approved 64-column pre-index allow-list plus the supervised target plus
-two proven target-aliases (declared forbidden for defense-in-depth). The
-post-index leakage columns are NOT emitted by the adapter, so they need no
-contract here; the adapter's positive-enumeration allow-list is the structural
-barrier and this manifest is the runtime cross-check that also grants
-declared-safe immunity to the sparse rare-event comorbidity flags (preventing
-the Tier-0 over-drop failure mode).
+owner-approved 64-column pre-index allow-list (SAME across all three cohorts:
+baseline features measured at the dx index are knowable at the later
+treatment-start anchor too) plus the supervised target of each cohort plus their
+proven target-aliases (declared forbidden for defense-in-depth). The post-index
+leakage columns are NOT emitted by the adapter, so they need no contract here;
+the adapter's positive-enumeration allow-list is the structural barrier and this
+manifest is the runtime cross-check that also grants declared-safe immunity to
+the sparse rare-event comorbidity flags (preventing the Tier-0 over-drop failure
+mode).
 
 Authoring rules (mirror ``optum_feature_manifest.py``):
 - ``OPTUM_MART_FEATURES`` is a statically-declared literal list of
@@ -153,6 +156,28 @@ OPTUM_MART_FEATURES: list[FeatureContract] = [
     # ===== POST-INDEX proven target-aliases (declared forbidden for defense-in-depth) =====
     FeatureContract(name="index_biologic_brand", knowable_at=_POST, source="mart_treatment"),
     FeatureContract(name="treatment_start_date", knowable_at=_POST, source="mart_treatment"),
+    # ===== POST-INDEX disc/persistence supervised targets (treatment-anchored) =====
+    # Derived (Option B) from the coverage/gap columns below; forbidden-as-feature
+    # but preserved at build (extracted per-run via prediction_target).
+    FeatureContract(name="discontinued_180d", knowable_at=_POST, source="mart_target"),
+    FeatureContract(name="persistent_at_180d", knowable_at=_POST, source="mart_target"),
+    # ===== POST-INDEX disc/persistence proven aliases (defense-in-depth) =====
+    # The coverage/gap derivation inputs + precomputed outcome flags that
+    # (near-)deterministically reproduce discontinued_180d / persistent_at_180d
+    # (discontinued_90d_flag agrees 98.2% with the derived target). The adapter
+    # never emits these (positive enumeration), so they are declared forbidden
+    # only as the runtime cross-check / leakage backstop for the treatment frame.
+    FeatureContract(name="last_coverage_end", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="last_observed_date", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="max_internal_gap_days", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="terminal_gap_days", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="covered_days", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="pdc", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="discontinued_flag", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="discontinued_90d_flag", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="persistence_60d_flag", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="maintained_flag", knowable_at=_POST, source="mart_outcome"),
+    FeatureContract(name="adherent_flag", knowable_at=_POST, source="mart_outcome"),
 ]
 
 
@@ -174,7 +199,10 @@ MART_FORBIDDEN_AS_FEATURES: list[str] = [
 
 # Supervised labels: forbidden-as-feature (post-index) but MUST be preserved at
 # cohort-build so the pipeline can extract the target via prediction_target.
-MART_TARGETS: frozenset[str] = frozenset({"initiated_biologic_180d"})
+# One per tier-0 cohort: initiation + treatment-anchored discontinuation/persistence.
+MART_TARGETS: frozenset[str] = frozenset(
+    {"initiated_biologic_180d", "discontinued_180d", "persistent_at_180d"}
+)
 
 MART_FORBIDDEN_NON_TARGET: list[str] = [
     f for f in MART_FORBIDDEN_AS_FEATURES if f not in MART_TARGETS
