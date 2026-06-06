@@ -335,7 +335,7 @@ Each agent is a **LangGraph state machine** with:
 - **80+ tables** across PostgreSQL (Supabase) with pgvector extension
 - **Core Data** (19): patient_journeys, hcp_profiles, treatment_events, triggers, business_metrics, etc.
 - **ML Pipeline** (60+): experiments, model registry, digital twins, causal validation, A/B testing, GEPA, etc.
-- **Memory** (7): episodic_memories, procedural_memories, semantic_cache, cognitive_cycles, etc.
+- **Memory** (5+): episodic_memories, procedural_memories, semantic_memory_cache, learning_signals, memory_statistics, etc.
 - **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
 - **Chat** (6+): chat_threads, chat_messages, user_preferences (RLS)
 - **Audit** (2): audit_chain_entries (SHA-256 hash chain), verification_log

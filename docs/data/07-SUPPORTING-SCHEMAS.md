@@ -1,6 +1,6 @@
 # 07 — Supporting Schemas (Memory, RAG, Chat, Audit)
 
-> **E2I Causal Analytics** | Last Updated: 2026-02
+> **E2I Causal Analytics** | Last Updated: 2026-06-05
 
 | Navigation | |
 |---|---|
@@ -20,9 +20,7 @@ graph TD
     subgraph "Memory System"
         EM[episodic_memories<br/>Long-term experience]
         PM[procedural_memories<br/>Skill storage]
-        SM[semantic_memory_cache<br/>FalkorDB triplet cache]
-        CC[cognitive_cycles<br/>4-phase workflow]
-        IH[investigation_hops<br/>Hop-by-hop detail]
+        SM[semantic_memory_cache<br/>FalkorDB triplet cache<br/>seed-only · no live sync]
         LS[learning_signals<br/>DSPy feedback]
         MS[memory_statistics<br/>Hourly aggregates]
     end
@@ -46,14 +44,19 @@ graph TD
         AV[audit_chain_verification_log<br/>Integrity checks]
     end
 
-    CC --> EM
-    CC --> IH
-    EM --> SM
     LS --> PM
     CT --> CM
     CM --> EM
     AC --> AV
 ```
+
+> **Retired 2026-06-05** (memory-audit remediation, migrations `031`/`032`/`033`):
+> `cognitive_cycles`, `investigation_hops`, and the three orphan MIPROv2-era
+> `dspy_*` optimization tables (`dspy_optimization_runs`, `dspy_prompt_versions`,
+> `dspy_cognitive_context_history`) were **dropped**. The live DSPy optimization
+> substrate is `dspy_agent_training_signals` + the GEPA `023` tables; live
+> conversation history is `chatbot_conversations`. The retired entries below are
+> kept for historical reference and flagged inline.
 
 ---
 
@@ -81,7 +84,7 @@ Long-term experience storage with vector embeddings for semantic retrieval.
 | Column | Type | Description |
 |--------|------|-------------|
 | `memory_id` | UUID (PK) | Auto-generated |
-| `cycle_id` | UUID (FK → cognitive_cycles) | Originating cognitive cycle |
+| `cycle_id` | UUID (legacy; `cognitive_cycles` retired mig 032 — FK removed by CASCADE, column kept) | Originating cognitive cycle |
 | `agent_name` | e2i_agent_name | Which agent created this memory |
 | `event_type` | memory_event_type | Type of event |
 | `summary` | TEXT | Natural language summary |
@@ -125,6 +128,14 @@ Reusable skill storage — tool sequences, analysis recipes, and response templa
 
 ### semantic_memory_cache
 
+> **ℹ️ Deploy-seed-only (audit 2026-06-05, F2/F4).** The table and its populating
+> RPC (`sync_hcp_patient_relationships_to_cache`) are real, but there is **no live
+> producer or reader**. The dormant `sync_data_layer_to_semantic_cache` /
+> `sync_treatment_relationships_to_cache` Python wrappers and the inert
+> `semantic_cache_ttl_minutes` / `falkordb_synced` controls were retired in commit
+> `9cb0dc19`. Kept as scaffolding for a future FalkorDB→Supabase hot-cache mirror;
+> activation would require a sync job + a reader + TTL eviction.
+
 Hot cache of FalkorDB graph triplets for fast in-process retrieval.
 
 | Column | Type | Description |
@@ -141,6 +152,14 @@ Hot cache of FalkorDB graph triplets for fast in-process retrieval.
 **Indexes**: Unique on `(subject, predicate, object)`, B-tree on `falkordb_synced`, `last_accessed`
 
 ### cognitive_cycles
+
+> **🗑️ RETIRED 2026-06-05** — dropped by migration
+> `032_drop_cognitive_cycles_trio.sql` (the dependent `016` similarity RPCs were
+> retired first by migration `031`). This was a **superseded** conversation/
+> query-history store with **no writer anywhere in `src/`**: live conversation
+> history is served by `chatbot_conversations`, and the live 4-phase cognitive
+> workflow persists to `episodic_memories` + `learning_signals` + FalkorDB. The
+> schema below is retained for historical reference only.
 
 Tracks the 4-phase cognitive workflow: Summarizer → Investigator → Agent → Reflector.
 
@@ -160,12 +179,17 @@ Tracks the 4-phase cognitive workflow: Summarizer → Investigator → Agent →
 
 ### investigation_hops
 
+> **🗑️ RETIRED 2026-06-05** — dropped by migration
+> `032_drop_cognitive_cycles_trio.sql`. It was the FK child of the retired
+> `cognitive_cycles` with no writer/reader in `src/` (audit F1/F3). The schema
+> below is retained for historical reference only.
+
 Detailed hop-by-hop tracking for the investigator phase.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `hop_id` | UUID (PK) | |
-| `cycle_id` | UUID (FK → cognitive_cycles) | Parent cycle |
+| `cycle_id` | UUID (legacy; `cognitive_cycles` retired mig 032 — FK removed by CASCADE, column kept) | Parent cycle |
 | `hop_number` | INTEGER | Sequence (1, 2, 3...) |
 | `source_type` | VARCHAR(50) | `vector_search`, `graph_query`, `sql_query`, `memory_recall` |
 | `source_query` | TEXT | The query executed |
@@ -180,7 +204,7 @@ Feedback data used for DSPy optimization and self-improvement.
 | Column | Type | Description |
 |--------|------|-------------|
 | `signal_id` | UUID (PK) | |
-| `cycle_id` | UUID (FK → cognitive_cycles) | Related cycle |
+| `cycle_id` | UUID (legacy; `cognitive_cycles` retired mig 032 — FK removed by CASCADE, column kept) | Related cycle |
 | `signal_type` | learning_signal_type | Type of feedback |
 | `signal_value` | FLOAT | Numeric signal (-1 to 1 or 1–5 rating) |
 | `correction_text` | TEXT | User's correction (if any) |
