@@ -95,7 +95,17 @@ class TestConfig:
     indication: str = "HR+/HER2- breast cancer"
     hpo_trials: int = 10
     min_eligible_patients: int = 30
+    # Harness cohort QC gate threshold on ``data_quality_score`` (CONFIG-driven,
+    # not a hardcoded constant). Field-adaptive: a NO-OP when the frame carries
+    # no ``data_quality_score`` (the adapter already did the real cohorting).
+    cohort_min_data_quality: float = 0.5
     min_auc_threshold: float = 0.55
+    # Dynamic AUC gate (Tier C): when True the AUC check additionally requires
+    # the bootstrap CI lower bound to exceed the 0.5 no-skill floor (model is
+    # SIGNIFICANTLY better than chance), not just the point estimate. Default
+    # False preserves the point-floor behavior; the bootstrap CI is surfaced
+    # either way. Toggle via ``--auc-significance-gate``.
+    auc_gate_require_significance: bool = False
     # Minimum recall for minority class - a model that predicts all 0s is useless
     min_minority_recall: float = 0.10  # At least 10% of actual positives must be found
     min_minority_precision: float = 0.05  # At least 5% of predicted positives should be correct
@@ -105,6 +115,12 @@ class TestConfig:
     # Default 10 matches split_enforcer's internal default; override via
     # --min-samples-per-split for small-cohort RWD runs (e.g., Optum n=47).
     min_samples_per_split: int = 10
+    # Tier D — config-exposed discovery / champion knobs (were hardcoded magic
+    # numbers). Defaults preserve historical behavior.
+    feature_min_non_null_frac: float = 0.5  # drop columns more than this fraction null
+    feature_max_cardinality: int = 50  # categorical high-cardinality cap
+    auc_tie_band: float = 0.01  # champion discrimination-tie band (mirrors _AUC_TIE_BAND)
+    train_alternatives: bool = True  # False (--single-model) skips Step 5b alt training
     # Sampling-frame drift gate (Phase-1 Task 1.3): when the worst per-column
     # drift in ``sampling_frame_audit_report["max_drift_score"]`` exceeds this
     # threshold, the runner records a failed ``SAMPLING FRAME AUDIT`` step
@@ -191,8 +207,9 @@ def _select_champion(comparison_history: list[dict]) -> dict:
     if not comparison_history:
         raise ValueError("comparison_history is empty; no champion to select")
     best_auc = max((h.get("auc_roc", 0) or 0) for h in comparison_history)
+    tie_band = CONFIG.auc_tie_band  # Tier D: config-exposed (default mirrors _AUC_TIE_BAND)
     tied = [
-        h for h in comparison_history if (best_auc - (h.get("auc_roc", 0) or 0)) <= _AUC_TIE_BAND
+        h for h in comparison_history if (best_auc - (h.get("auc_roc", 0) or 0)) <= tie_band
     ]
     # Lowest slope deviation wins; ties on calibration fall back to highest AUC
     # (then stable order) so selection stays deterministic.
@@ -202,6 +219,61 @@ def _select_champion(comparison_history: list[dict]) -> dict:
             h.get("calibration_slope_deviation", float("inf")),
             -(h.get("auc_roc", 0) or 0),
         ),
+    )
+
+
+def _auc_ci_from_result(result: dict) -> "tuple[float, float] | None":
+    """Pull the bootstrap AUC confidence interval ``(lower, upper)`` the
+    evaluator computed (``evaluator.py::_compute_bootstrap_ci`` → result
+    ``confidence_interval['auc']``), or ``None`` when unavailable/malformed.
+
+    This is the measured uncertainty the user actually wants to SEE — surfaced
+    instead of trusting a single point AUC against a hardcoded constant.
+    """
+    ci = (result or {}).get("confidence_interval") or {}
+    auc_ci = ci.get("auc")
+    if (
+        isinstance(auc_ci, (list, tuple))
+        and len(auc_ci) == 2
+        and all(isinstance(x, (int, float)) for x in auc_ci)
+    ):
+        return float(auc_ci[0]), float(auc_ci[1])
+    return None
+
+
+def _auc_gate_verdict(
+    auc: "float | None",
+    auc_ci: "tuple[float, float] | None",
+    min_auc: float,
+    *,
+    require_significance: bool,
+) -> "tuple[bool, str]":
+    """Decide the AUC acceptance verdict — dynamic and CI-aware.
+
+    Baseline: the point AUC must meet the configured floor ``min_auc``.
+    When ``require_significance`` (the CI-mode gate, Tier C), the model must
+    ALSO be SIGNIFICANTLY better than the 0.5 no-skill floor — the bootstrap CI
+    LOWER bound must exceed 0.5. This ties the gate to the measured uncertainty
+    rather than a point estimate alone, which is exactly the confidence-interval
+    question for a rare-event cohort. Returns ``(passed, human_detail)``.
+    """
+    if not auc:
+        return False, "no AUC"
+    point_ok = auc >= min_auc
+    ci_str = f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else ""
+    if not require_significance:
+        return point_ok, (
+            f"AUC {auc:.3f}{ci_str} {'>=' if point_ok else '<'} floor {min_auc}"
+        )
+    if auc_ci is None:
+        return False, (
+            f"AUC {auc:.3f}: significance gate ON but no bootstrap CI available"
+        )
+    sig_ok = auc_ci[0] > 0.5
+    return (point_ok and sig_ok), (
+        f"AUC {auc:.3f}{ci_str}: "
+        f"{'significant (CI>0.5)' if sig_ok else 'NOT significant (CI<=0.5)'}, "
+        f"floor {min_auc} {'met' if point_ok else 'unmet'}"
     )
 
 
@@ -2677,6 +2749,56 @@ async def step_2c_feast_freshness_check(state: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _build_cohort_config(patient_df: pd.DataFrame, min_data_quality: float) -> Any:
+    """Build the harness cohort config, ADAPTING to the available quality signal.
+
+    The mart/RWD adapters already perform the real cohorting (naive-at-index +
+    transparent claim-count filter) upstream, so this harness step is a light QC
+    gate, not the primary selection. The quality threshold is CONFIG-driven
+    (``--cohort-min-quality`` / ``CONFIG.cohort_min_data_quality``) rather than a
+    hardcoded constant, and it is FIELD-ADAPTIVE: when the frame carries
+    ``data_quality_score`` the gate keeps rows at/above the threshold, but when
+    the column is absent (a cohort that filtered upstream and emits no quality
+    metadata) the quality criterion is a NO-OP so the step cannot erroneously
+    zero out an already-constructed cohort.
+    """
+    from src.agents.cohort_constructor.types import (
+        CohortConfig,
+        Criterion,
+        CriterionType,
+        Operator,
+    )
+
+    has_quality = "data_quality_score" in patient_df.columns
+    inclusion_criteria: list[Any] = []
+    required_fields = ["patient_journey_id", "brand"]
+    if has_quality:
+        inclusion_criteria.append(
+            Criterion(
+                field="data_quality_score",
+                operator=Operator.GREATER_EQUAL,
+                value=min_data_quality,
+                criterion_type=CriterionType.INCLUSION,
+                description="Minimum data quality score",
+                clinical_rationale="Ensure data quality for reliable ML predictions",
+            )
+        )
+        required_fields.append("data_quality_score")
+    return CohortConfig(
+        cohort_name=f"{CONFIG.brand} Test Cohort",
+        brand=CONFIG.brand.lower(),
+        indication="test",
+        inclusion_criteria=inclusion_criteria,
+        exclusion_criteria=[],
+        temporal_requirements=None,
+        required_fields=required_fields,
+        version="1.0.0-test",
+        status="active",
+        clinical_rationale="Test cohort using sample data fields - relaxed criteria for testing",
+        regulatory_justification="Test configuration for MLOps workflow validation",
+    )
+
+
 async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFrame, Any]:
     """Step 3: Build patient cohort."""
     import time as time_mod
@@ -2686,19 +2808,17 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
     print_header(3, "COHORT CONSTRUCTOR")
 
     from src.agents.cohort_constructor import CohortConstructorAgent
-    from src.agents.cohort_constructor.types import (
-        CohortConfig,
-        Criterion,
-        CriterionType,
-        Operator,
-        TemporalRequirements,
-    )
 
+    quality_gate = (
+        f"data_quality_score >= {CONFIG.cohort_min_data_quality}"
+        if "data_quality_score" in patient_df.columns
+        else "none (data_quality_score absent — cohort constructed upstream)"
+    )
     print_input_section(
         {
             "input_patients": len(patient_df),
             "brand": CONFIG.brand,
-            "inclusion_criteria": "data_quality_score >= 0.5",
+            "inclusion_criteria": quality_gate,
             "exclusion_criteria": "None (maximize sample size)",
         }
     )
@@ -2710,31 +2830,10 @@ async def step_3_cohort_constructor(patient_df: pd.DataFrame) -> tuple[pd.DataFr
     agent = CohortConstructorAgent(enable_observability=CONFIG.enable_opik)
     processing_steps.append(("Agent initialized", True, None))
 
-    # Create test config
-    test_config = CohortConfig(
-        cohort_name=f"{CONFIG.brand} Test Cohort",
-        brand=CONFIG.brand.lower(),
-        indication="test",
-        inclusion_criteria=[
-            Criterion(
-                field="data_quality_score",
-                operator=Operator.GREATER_EQUAL,
-                value=0.5,
-                criterion_type=CriterionType.INCLUSION,
-                description="Minimum data quality score",
-                clinical_rationale="Ensure data quality for reliable ML predictions",
-            ),
-        ],
-        exclusion_criteria=[],
-        temporal_requirements=None,
-        required_fields=["patient_journey_id", "brand", "data_quality_score"],
-        version="1.0.0-test",
-        status="active",
-        clinical_rationale="Test cohort using sample data fields - relaxed criteria for testing",
-        regulatory_justification="Test configuration for MLOps workflow validation",
-    )
+    # Create test config — CONFIG-driven threshold + field-adaptive quality gate.
+    test_config = _build_cohort_config(patient_df, CONFIG.cohort_min_data_quality)
 
-    processing_steps.append(("Cohort config created", True, "data_quality_score >= 0.5"))
+    processing_steps.append(("Cohort config created", True, quality_gate))
 
     eligible_df, result = await agent.run(
         patient_df=patient_df,
@@ -3602,6 +3701,19 @@ async def step_5_model_trainer(
     minority_recall = result.get("minority_recall") or test_metrics.get("recall", 0)
     minority_precision = result.get("minority_precision") or test_metrics.get("precision", 0)
 
+    # Tier C: surface the bootstrap AUC confidence interval (the measured
+    # uncertainty) and run the dynamic, CI-aware AUC gate.
+    auc_ci = _auc_ci_from_result(result)
+    auc_passed, auc_detail = _auc_gate_verdict(
+        auc, auc_ci, CONFIG.min_auc_threshold,
+        require_significance=CONFIG.auc_gate_require_significance,
+    )
+    if auc:
+        ci_msg = (
+            f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else " (CI unavailable)"
+        )
+        print(f"\n  AUC-ROC: {auc:.3f}{ci_msg}  →  {auc_detail}")
+
     checks = [
         (
             "Model trained successfully",
@@ -3610,10 +3722,13 @@ async def step_5_model_trainer(
             "present" if trained_model is not None else "missing",
         ),
         (
-            "AUC-ROC threshold",
-            auc >= CONFIG.min_auc_threshold if auc else False,
-            f">= {CONFIG.min_auc_threshold}",
-            f"{auc:.3f}" if auc else "N/A",
+            "AUC-ROC significance gate" if CONFIG.auc_gate_require_significance
+            else "AUC-ROC threshold",
+            auc_passed,
+            "CI lower > 0.5" if CONFIG.auc_gate_require_significance
+            else f">= {CONFIG.min_auc_threshold}",
+            f"{auc:.3f}{(' [' + format(auc_ci[0], '.3f') + '-' + format(auc_ci[1], '.3f') + ']') if auc_ci else ''}"
+            if auc else "N/A",
         ),
         (
             "Minority recall threshold",
@@ -3643,9 +3758,11 @@ async def step_5_model_trainer(
     metrics_list = [
         (
             "auc_roc",
-            auc,
-            f">= {CONFIG.min_auc_threshold}",
-            auc >= CONFIG.min_auc_threshold if auc else None,
+            f"{auc:.3f} [{auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if (auc and auc_ci) else auc,
+            "CI lower > 0.5"
+            if CONFIG.auc_gate_require_significance
+            else f">= {CONFIG.min_auc_threshold}",
+            auc_passed if auc else None,
         ),
         ("accuracy", val_metrics.get("accuracy"), None, None),
         (
@@ -4886,27 +5003,39 @@ def _runner_exclude_set(state: "dict") -> "set[str]":
     return exclude
 
 
-def _discover_model_feature_cols(eligible_df: "pd.DataFrame", exclude: "set[str]") -> "list[str]":
+def _discover_model_feature_cols(
+    eligible_df: "pd.DataFrame",
+    exclude: "set[str]",
+    min_non_null_frac: float = 0.5,
+    max_categorical_cardinality: int = 50,
+) -> "list[str]":
     """Stage-1 leakage-INDEPENDENT discovery: keep well-formed predictors and
     drop constants / too-sparse columns. The leakage layer may only SUBTRACT
     genuine leaks (via ``exclude``); it must never shrink the matrix to a curated
     sub-list. Sparse cardinality-2 pre-index flags (100%-non-null) are retained —
-    they pass nunique>1 and notna>0.5."""
+    they pass nunique>1 and the non-null cap.
+
+    Tier D: the null-rate floor (``min_non_null_frac``) and the categorical
+    high-cardinality cap (``max_categorical_cardinality``) are configurable
+    (CONFIG.feature_min_non_null_frac / CONFIG.feature_max_cardinality) rather
+    than hardcoded magic numbers. The ``nunique > 1`` constant-drop is NOT a
+    tunable — a zero-variance column carries no signal, so it always drops.
+    """
     numeric_cols = [
         c
         for c in eligible_df.columns
         if c not in exclude
         and eligible_df[c].dtype.kind in "iufb"
         and eligible_df[c].nunique() > 1
-        and eligible_df[c].notna().mean() > 0.5
+        and eligible_df[c].notna().mean() > min_non_null_frac
     ]
     categorical_cols = [
         c
         for c in eligible_df.columns
         if c not in exclude
         and eligible_df[c].dtype == object
-        and 2 <= eligible_df[c].nunique() <= 50
-        and eligible_df[c].notna().mean() > 0.5
+        and 2 <= eligible_df[c].nunique() <= max_categorical_cardinality
+        and eligible_df[c].notna().mean() > min_non_null_frac
     ]
     return numeric_cols + categorical_cols
 
@@ -5913,7 +6042,10 @@ async def run_pipeline(
                 state.get("leaked_features") or []
             )
             feature_cols = _discover_model_feature_cols(
-                eligible_df, _exclude | _genuine_leaks
+                eligible_df,
+                _exclude | _genuine_leaks,
+                min_non_null_frac=CONFIG.feature_min_non_null_frac,
+                max_categorical_cardinality=CONFIG.feature_max_cardinality,
             )
             if not feature_cols:
                 # Absolute fallback to historical defaults
@@ -6129,7 +6261,10 @@ async def run_pipeline(
                             state.get("leakage_dropped_features") or []
                         ) | set(state.get("leaked_features") or [])
                         feature_cols = _discover_model_feature_cols(
-                            eligible_df, _exclude | _step5a_leaks
+                            eligible_df,
+                            _exclude | _step5a_leaks,
+                            min_non_null_frac=CONFIG.feature_min_non_null_frac,
+                            max_categorical_cardinality=CONFIG.feature_max_cardinality,
                         )
                         X = eligible_df[feature_cols].copy()
                         y = eligible_df[CONFIG.target_outcome].copy()
@@ -6532,6 +6667,16 @@ async def run_pipeline(
                 )
 
                 alternatives = list(state.get("alternative_candidates", []))
+                # Tier D memory lever (--single-model): skip the champion-comparison
+                # alternative training. The champion is then the primary model. This
+                # avoids holding multiple trained models + their bootstrap arrays at
+                # once — the peak that OOMs on a memory-constrained host.
+                if not CONFIG.train_alternatives and alternatives:
+                    print(
+                        f"  Step 5b: single-model mode — skipping {len(alternatives)} "
+                        f"alternative candidate(s); champion = primary ({primary_algo})"
+                    )
+                    alternatives = []
                 if alternatives and not state.get("pipeline_halted"):
                     from src.agents.ml_foundation.model_selector.nodes.algorithm_registry import (
                         REGULARIZATION_SEARCH_SPACE,

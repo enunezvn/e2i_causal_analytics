@@ -107,8 +107,10 @@ from src.data.feature_contract import FeatureContract
 from src.data.manifests import (
     CSU_FEATURES,
     CSU_FORBIDDEN_AS_FEATURES,
+    MART_FORBIDDEN_AS_FEATURES,
     OPTUM_FEATURES,
     OPTUM_FORBIDDEN_AS_FEATURES,
+    OPTUM_MART_FEATURES,
     SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
@@ -2360,13 +2362,15 @@ def _load_kg_cache(scope_spec: dict[str, Any]) -> Optional[dict[str, list["KGEdg
             # ("cs" instead of "csu") would silently bypass validation
             # without this warning. Surfacing the unknown source name
             # gives the operator one log line to grep for.
+            from src.data.manifests import MANIFEST_SOURCES
+
             logger.warning(
                 "kg_cache validation: feature_manifest_source=%r is not in "
                 "the registered manifests (%s) — fingerprint validation "
                 "skipped for this run, cache treated as 'trusted upstream'. "
                 "Verify the manifest source string if this was unexpected.",
                 manifest_source,
-                ("csu", "optum", "synthetic"),
+                tuple(sorted(MANIFEST_SOURCES)),
             )
         else:
             # Critical writer/reader symmetry: the cache builder at
@@ -2467,6 +2471,7 @@ def _resolve_manifest_features(
     registries: dict[str, list[FeatureContract]] = {
         "csu": list(CSU_FEATURES),
         "optum": list(OPTUM_FEATURES),
+        "optum_mart": list(OPTUM_MART_FEATURES),
         "synthetic": list(SYNTHETIC_FEATURES.values()),
     }
     return registries.get(manifest_source)
@@ -3045,6 +3050,10 @@ def _run_ablation_pass(
 _MANIFEST_FORBIDDEN_BY_SOURCE: dict[str, list[str]] = {
     "csu": CSU_FORBIDDEN_AS_FEATURES,
     "optum": OPTUM_FORBIDDEN_AS_FEATURES,
+    # optum_mart: the entity-stacked Optum mart. Its post-index leakers
+    # (index_biologic_brand / treatment_start_date / the target) must never
+    # reach Layer 3 — the proactive counterpart to the Layer 1 contract audit.
+    "optum_mart": MART_FORBIDDEN_AS_FEATURES,
     # v5 Gate C2: synthetic manifest has no forbidden columns by design.
     # Registered explicitly so ``_select_features`` does NOT log the
     # "unknown manifest_source" warning when synthetic runs opt in.

@@ -34,17 +34,23 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Import and reuse the canonical tier-0 runner. We override its CONFIG before
 # calling into run_pipeline.
 import scripts.run_tier0_test as tier0  # noqa: E402
+from src.data.manifests import MANIFEST_SOURCES  # noqa: E402
 
 COHORT_TARGETS: dict[str, str] = {
     "initiation": "initiated_biologic_180d",
     "discontinuation": "discontinued_180d",
     "persistence": "persistent_at_180d",
+    # Mart-sourced initiation cohort (entity-stacked Optum drop -> convert_optum_mart.py).
+    "initiation_mart": "initiated_biologic_180d",
 }
 
 COHORT_DIR: dict[str, str] = {
     "initiation": "data/rwd/optum/initiation",
     "discontinuation": "data/rwd/optum/discontinuation",
     "persistence": "data/rwd/optum/persistence",
+    # Non-``optum`` path so the ``optum_mart`` feature-manifest override resolves
+    # without an autodetect (M2) conflict against the ``optum`` source.
+    "initiation_mart": "data/rwd/mart/initiation",
 }
 
 
@@ -69,6 +75,15 @@ class OptumTestConfig:
     enable_mlflow: bool = True
     enable_opik: bool = False
     min_samples_per_split: int = 10
+    # Harness cohort QC gate threshold (field-adaptive; see tier0._build_cohort_config).
+    cohort_min_data_quality: float = 0.5
+    # Tier C: require the bootstrap AUC CI lower bound > 0.5 (significantly
+    # better than chance), not just the point estimate. Surfaced either way.
+    auc_gate_require_significance: bool = False
+    # Tier D memory lever: False (--single-model) skips Step 5b alternative
+    # training (champion = primary) so the run avoids the multi-model peak that
+    # OOMs on a memory-constrained host.
+    train_alternatives: bool = True
 
 
 def apply_overrides(cohort: str, overrides: OptumTestConfig) -> None:
@@ -84,6 +99,9 @@ def apply_overrides(cohort: str, overrides: OptumTestConfig) -> None:
     tier0.CONFIG.enable_mlflow = overrides.enable_mlflow
     tier0.CONFIG.enable_opik = overrides.enable_opik
     tier0.CONFIG.min_samples_per_split = overrides.min_samples_per_split
+    tier0.CONFIG.cohort_min_data_quality = overrides.cohort_min_data_quality
+    tier0.CONFIG.auc_gate_require_significance = overrides.auc_gate_require_significance
+    tier0.CONFIG.train_alternatives = overrides.train_alternatives
     tier0.CONFIG.target_outcome = COHORT_TARGETS[cohort]
 
 
@@ -139,9 +157,37 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--cohort-min-quality",
+        type=float,
+        default=0.5,
+        help=(
+            "Harness cohort QC gate threshold on data_quality_score (default 0.5). "
+            "Field-adaptive: a no-op when the cohort frame carries no "
+            "data_quality_score (the adapter already did the real cohorting)."
+        ),
+    )
+    parser.add_argument(
+        "--auc-significance-gate",
+        action="store_true",
+        help=(
+            "Make the AUC gate CI-aware: require the bootstrap AUC CI lower bound "
+            "to exceed the 0.5 no-skill floor (significantly better than chance), "
+            "not just the point estimate. The bootstrap CI is surfaced either way."
+        ),
+    )
+    parser.add_argument(
+        "--single-model",
+        action="store_true",
+        help=(
+            "Train only the selected primary model (skip the Step 5b champion "
+            "comparison of alternatives). Memory lever for constrained hosts: "
+            "avoids holding multiple trained models + bootstrap arrays at once."
+        ),
+    )
+    parser.add_argument(
         "--feature-manifest-source",
         type=str,
-        choices=("csu", "optum", "synthetic"),
+        choices=tuple(sorted(MANIFEST_SOURCES)),
         default=None,
         help=(
             "Opt this run into a cohort-specific feature manifest so Layer 5 "
@@ -174,6 +220,9 @@ def main() -> int:
         enable_opik=args.enable_opik,
         hpo_trials=args.hpo_trials,
         min_samples_per_split=args.min_samples_per_split,
+        cohort_min_data_quality=args.cohort_min_quality,
+        auc_gate_require_significance=args.auc_significance_gate,
+        train_alternatives=not args.single_model,
     )
     if args.enable_opik:
         os.environ["OPIK_ENABLED"] = "true"
