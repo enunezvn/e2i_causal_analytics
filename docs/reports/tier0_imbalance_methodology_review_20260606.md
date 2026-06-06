@@ -83,6 +83,14 @@ left PR-AUC flat or **degraded** it while raising balanced accuracy. Flip to a
 - The wart (now fixed, below): non-tree extreme imbalance picked `combined`
   (SMOTE→0.5 + class_weight), which measured at/below the no-resampling PR-AUC baseline.
 
+**No CV-resampling leakage (audited).** A natural worry with SMOTE is that
+synthetic points leak across CV folds. Traced and cleared: `apply_resampling`
+writes a *separate* `X_train_resampled` key (used only for the final fit) and
+never overwrites `X_train_preprocessed`; the evaluator's stratified CV
+(`evaluator.py:610`, `advanced_validation.compute_stratified_cv`) runs on the
+ORIGINAL preprocessed data and `clone()`s + refits the estimator per fold with
+no sampler inside the loop. SMOTE never enters a CV fold.
+
 **Diagnosis/framing — not sound.** "Failed because of class imbalance"
 misattributes the cause. The gate fail-closing these models is working
 *correctly* — it is refusing a feature-bound model (exactly the disproof's
