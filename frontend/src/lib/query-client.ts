@@ -370,6 +370,23 @@ export const queryKeys = {
   /**
    * Digital Twin simulation queries
    */
+  /**
+   * Expert-review queue queries (R6-F2 human-in-the-loop)
+   */
+  expertReviews: {
+    all: () => [...queryKeys.all, 'expert-reviews'] as const,
+    pending: (params?: { brand?: string; reviewer_id?: string; limit?: number }) =>
+      [
+        ...queryKeys.expertReviews.all(),
+        'pending',
+        params?.brand ?? null,
+        params?.reviewer_id ?? null,
+        params?.limit ?? 50,
+      ] as const,
+    summary: (params?: { brand?: string }) =>
+      [...queryKeys.expertReviews.all(), 'summary', params?.brand ?? null] as const,
+  },
+
   digitalTwin: {
     all: () => [...queryKeys.all, 'digital-twin'] as const,
     simulation: (simulationId: string) =>
