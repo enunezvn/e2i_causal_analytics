@@ -854,3 +854,32 @@ class TestSimulationRequest:
                 brand="Remibrutinib",
                 confidence_level=0.5,  # Below minimum 0.8
             )
+
+
+class TestTwinPopulationSizeEnforcement:
+    """H16: TwinPopulation.size must equal len(twins) — the validator previously
+    no-op'd despite advertising enforcement."""
+
+    @staticmethod
+    def _twin(x: float):
+        from src.digital_twin.models.twin_models import DigitalTwin
+
+        return DigitalTwin(
+            twin_type=TwinType.HCP,
+            brand=Brand.KISQALI,
+            features={"x": x},
+            baseline_outcome=0.5,
+            baseline_propensity=0.5,
+        )
+
+    def test_size_mismatch_raises(self):
+        t1, t2 = self._twin(1.0), self._twin(2.0)
+        with pytest.raises(ValidationError):
+            TwinPopulation(twin_type=TwinType.HCP, brand=Brand.KISQALI, twins=[t1, t2], size=5)
+
+    def test_size_match_ok(self):
+        pop = TwinPopulation(
+            twin_type=TwinType.HCP, brand=Brand.KISQALI, twins=[self._twin(1.0)], size=1
+        )
+        assert pop.size == 1
+        assert len(pop) == 1

@@ -232,7 +232,10 @@ class TestTaskRouting:
         """Test digital twin tasks route to twins queue."""
         from src.workers.celery_app import celery_app
 
-        assert celery_app.conf.task_routes.get("src.tasks.generate_twins") == {"queue": "twins"}
+        # H15: src.tasks.generate_twins was a dead route stub (no task body, no
+        # producer) — deleted. Real twin work routes via twin.*/train_twin_model/
+        # simulate_population.
+        assert "src.tasks.generate_twins" not in celery_app.conf.task_routes
         assert celery_app.conf.task_routes.get("src.tasks.simulate_population") == {
             "queue": "twins"
         }
