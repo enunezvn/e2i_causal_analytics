@@ -104,6 +104,28 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     gate halted the pipeline before the evaluator (KeyError 'roc_auc') until
     PR #625 added ALLOW_STALE_FEAST here. Doc + assertions updated atomically.
 
+    Rebaselined 2026-06-06: the Tier-0 leakage over-drop remediation
+    (RC1 732059a2 + Fix4 5f7c589e in leakage_detector.py; RC3a 8f0eb68b in
+    leakage_remediation.py — PRs #729/#731/#733) stops the leakage detector
+    from FALSE-dropping legitimate sparse pre-index clinical predictors on
+    the rare-event synthetic cohort. RC1 adds a rare-event guard to
+    check_zero_variance_within_class (skip binary/near-binary features that
+    are constant in the tiny positive class); Fix4 demotes the cardinality>2
+    rare-event branch HIGH→MODERATE (review, not auto-drop); RC3a honors
+    declared-safe manifest immunity in the remediation re-check. Net effect
+    on the flag-OFF default regime: days_on_therapy / prior_treatments /
+    hcp_visits are now RETAINED (they are the top-3 importance features) →
+    val roc_auc 0.6467 → 0.65325 (deterministic at seed=42, BIT-IDENTICAL
+    across two seeded runs verified locally). These commits were ABSENT at
+    the last GREEN nightly (0377c208, 2026-06-04) and PRESENT at the first
+    RED nightly (faf3c346, 2026-06-06); the green baseline encoded the
+    over-drop bug. This is NOT a flag-off-inertness violation: leakage
+    remediation applies to ALL runs; the ADAPTIVE_CRITERIA flag governs
+    SUCCESS-CRITERIA selection (the gates), not leakage detection. Doc +
+    assertions updated atomically per the contract below; the secondary
+    metrics (pr_auc/accuracy/recall/test_*) shifted in lockstep and are
+    re-pinned to the same two-run measured values.
+
     Tolerances (S3 fix):
       - AUC and PR-AUC: ±0.005 (deterministic at seed=42 modulo
         sklearn-version drift).
@@ -121,24 +143,27 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     assert out["regime"] == "default"
     assert out["criteria_source"] == "fixed"
 
-    # Validation metrics — rebaselined 2026-06-02 (#617): #594/#604 feature
-    # retention shifted the default-regime model (see "2026-06-02 rebaseline"
-    # in docs/results/tier0_remediation_baseline_20260426.md).
+    # Validation metrics — rebaselined 2026-06-06: Tier-0 leakage over-drop
+    # remediation (RC1 732059a2 / Fix4 5f7c589e / RC3a 8f0eb68b, PRs
+    # #729/#731/#733) now RETAINS the genuine sparse pre-index predictors
+    # (days_on_therapy / prior_treatments / hcp_visits) on the rare-event
+    # synthetic cohort. See the "Rebaselined 2026-06-06" docstring section.
+    # Values are the bit-identical two-seeded-run measurement (seed=42).
     val = out["validation_metrics"]
-    assert val["roc_auc"] == pytest.approx(0.6467, abs=0.005)
-    assert val["pr_auc"] == pytest.approx(0.2428, abs=0.005)
-    assert val["accuracy"] == pytest.approx(0.5933, abs=0.02)
-    assert val["precision"] == pytest.approx(0.2230, abs=0.02)
-    assert val["recall"] == pytest.approx(0.6889, abs=0.02)
-    assert val["f1_score"] == pytest.approx(0.3370, abs=0.02)
+    assert val["roc_auc"] == pytest.approx(0.6532, abs=0.005)
+    assert val["pr_auc"] == pytest.approx(0.2829, abs=0.005)
+    assert val["accuracy"] == pytest.approx(0.5400, abs=0.02)
+    assert val["precision"] == pytest.approx(0.2182, abs=0.02)
+    assert val["recall"] == pytest.approx(0.8000, abs=0.02)
+    assert val["f1_score"] == pytest.approx(0.3429, abs=0.02)
 
-    # Test metrics — rebaselined 2026-06-02 (#617).
+    # Test metrics — rebaselined 2026-06-06 (same remediation; two-run values).
     test = out["test_metrics"]
-    assert test["roc_auc"] == pytest.approx(0.7154, abs=0.005)
-    assert test["accuracy"] == pytest.approx(0.5867, abs=0.02)
-    assert test["precision"] == pytest.approx(0.2321, abs=0.02)
-    assert test["recall"] == pytest.approx(0.7879, abs=0.02)
-    assert test["f1_score"] == pytest.approx(0.3586, abs=0.02)
+    assert test["roc_auc"] == pytest.approx(0.7148, abs=0.005)
+    assert test["accuracy"] == pytest.approx(0.5422, abs=0.02)
+    assert test["precision"] == pytest.approx(0.2177, abs=0.02)
+    assert test["recall"] == pytest.approx(0.8182, abs=0.02)
+    assert test["f1_score"] == pytest.approx(0.3439, abs=0.02)
 
     # Apr-26 verdict line 18: Step 7 BLOCKED, success_criteria_met False.
     assert out["success_criteria_met"] is False
