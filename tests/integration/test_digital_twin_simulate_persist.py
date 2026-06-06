@@ -12,7 +12,6 @@ feed, which does not exist. That path is covered by POST /validate tests that
 supply an explicit actual_ate; we do NOT hand-derive an "actual" here.
 """
 
-import asyncio
 import math
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -24,9 +23,12 @@ from fastapi import HTTPException
 
 from src.digital_twin.models.twin_models import Brand, DigitalTwin, TwinPopulation, TwinType
 
+# async def + await (NOT bare asyncio.run, which a meta-test bans in
+# tests/integration/ as a RAGAS-pollution victim — #220/#218/#215); asyncio_mode=auto.
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.heavy_ml,
+    pytest.mark.asyncio,
     pytest.mark.xdist_group(name="digital_twin_e2e"),
 ]
 
@@ -103,7 +105,7 @@ def _request(twin_count: int):
     )
 
 
-def test_simulate_persists_one_real_completed_result():
+async def test_simulate_persists_one_real_completed_result():
     from src.api.routes import digital_twin as dt
     from src.api.routes.digital_twin import run_simulation
     from src.digital_twin.twin_repository import TwinRepository
@@ -122,7 +124,7 @@ def test_simulate_persists_one_real_completed_result():
         patch.object(dt, "_resolve_active_model_row", AsyncMock(return_value=model_row)),
         patch.object(dt, "_load_trained_generator", AsyncMock(return_value=generator)),
     ):
-        resp = asyncio.run(run_simulation(_request(twin_count=200), user=_OPERATOR))
+        resp = await run_simulation(_request(twin_count=200), user=_OPERATOR)
 
     # Real engine produced a real, finite, non-zero ATE labelled synthetic-uplift.
     assert resp.status.value == "completed"
@@ -136,7 +138,7 @@ def test_simulate_persists_one_real_completed_result():
     assert fake.inserts[0]["simulation_status"] == "completed"
 
 
-def test_simulate_failed_result_is_422_and_not_persisted():
+async def test_simulate_failed_result_is_422_and_not_persisted():
     from src.api.routes import digital_twin as dt
     from src.api.routes.digital_twin import run_simulation
     from src.digital_twin.twin_repository import TwinRepository
@@ -170,7 +172,7 @@ def test_simulate_failed_result_is_422_and_not_persisted():
         patch.object(dt, "_load_trained_generator", AsyncMock(return_value=small_gen)),
     ):
         with pytest.raises(HTTPException) as ei:
-            asyncio.run(run_simulation(_request(twin_count=200), user=_OPERATOR))
+            await run_simulation(_request(twin_count=200), user=_OPERATOR)
         assert ei.value.status_code == 422
 
     # N1: a FAILED result must NOT be persisted.
