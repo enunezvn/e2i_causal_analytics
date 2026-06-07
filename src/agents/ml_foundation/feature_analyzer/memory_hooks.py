@@ -203,8 +203,9 @@ class FeatureAnalyzerMemoryHooks:
             if feature_names:
                 for feature in feature_names[:5]:
                     history = self.semantic_memory.query(
-                        f"MATCH (f:Feature {{name: '{feature}'}})-[r:HAS_IMPORTANCE]->(e:Experiment) "
-                        f"RETURN f, r, e LIMIT 5"
+                        "MATCH (f:Feature {name: $feature})-[r:HAS_IMPORTANCE]->(e:Experiment) "
+                        "RETURN f, r, e LIMIT 5",
+                        {"feature": feature},
                     )
                     context["importance_history"].extend(history)
 

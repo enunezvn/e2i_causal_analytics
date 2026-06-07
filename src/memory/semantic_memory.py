@@ -501,6 +501,17 @@ class FalkorDBSemanticMemory:
         _validate_cypher_identifier(relationship_type, "relationship type")
         _validate_property_keys(properties)
 
+        # Defense-in-depth: property keys must not shadow the reserved endpoint
+        # params, or ``**props`` below would silently overwrite the MATCH ids and
+        # connect the wrong (or no) nodes.
+        if properties:
+            reserved = {"from_id", "to_id"} & properties.keys()
+            if reserved:
+                raise ValueError(
+                    f"Relationship property keys {sorted(reserved)} conflict with reserved "
+                    "endpoint parameter names (from_id/to_id)."
+                )
+
         props = properties.copy() if properties else {}
         # ``updated_at`` is a hardcoded identifier literal (not caller-controlled).
         props["updated_at"] = datetime.now(timezone.utc).isoformat()

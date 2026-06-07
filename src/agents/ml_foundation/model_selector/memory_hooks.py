@@ -201,8 +201,9 @@ class ModelSelectorMemoryHooks:
 
             # Query algorithms suited for this problem type
             algorithms = self.semantic_memory.query(
-                f"MATCH (a:Algorithm)-[:SUITED_FOR]->(p:ProblemType {{name: '{problem_type}'}}) "
-                f"RETURN a ORDER BY a.success_rate DESC LIMIT 10"
+                "MATCH (a:Algorithm)-[:SUITED_FOR]->(p:ProblemType {name: $problem_type}) "
+                "RETURN a ORDER BY a.success_rate DESC LIMIT 10",
+                {"problem_type": problem_type},
             )
             context["problem_type_algorithms"] = algorithms
 

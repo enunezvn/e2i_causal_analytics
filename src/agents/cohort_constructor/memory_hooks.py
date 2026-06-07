@@ -233,17 +233,19 @@ class CohortConstructorMemoryHooks:
             # Query eligibility rules for brand
             if brand:
                 rules = self.semantic_memory.query(
-                    f"MATCH (r:EligibilityRule)-[:APPLIES_TO]->(b:Brand {{name: '{brand}'}}) "
-                    f"RETURN r LIMIT 20"
+                    "MATCH (r:EligibilityRule)-[:APPLIES_TO]->(b:Brand {name: $brand}) "
+                    "RETURN r LIMIT 20",
+                    {"brand": brand},
                 )
                 context["eligibility_rules"] = rules
 
             # Query prior cohorts for same brand/indication
             if brand and indication:
                 cohorts = self.semantic_memory.query(
-                    f"MATCH (c:CohortConfig)-[:FOR_BRAND]->(b:Brand {{name: '{brand}'}}) "
-                    f"WHERE c.indication = '{indication}' "
-                    f"RETURN c LIMIT 10"
+                    "MATCH (c:CohortConfig)-[:FOR_BRAND]->(b:Brand {name: $brand}) "
+                    "WHERE c.indication = $indication "
+                    "RETURN c LIMIT 10",
+                    {"brand": brand, "indication": indication},
                 )
                 context["prior_cohorts"] = cohorts
 
@@ -628,9 +630,11 @@ class CohortConstructorMemoryHooks:
 
         try:
             rules = self.semantic_memory.query(
-                f"MATCH (r:EligibilityRule)-[:APPLIES_TO]->(b:Brand {{name: '{brand}'}}) "
-                f"WHERE r.effectiveness_score >= {min_effectiveness} "
-                f"RETURN r ORDER BY r.effectiveness_score DESC LIMIT {limit}"
+                "MATCH (r:EligibilityRule)-[:APPLIES_TO]->(b:Brand {name: $brand}) "
+                "WHERE r.effectiveness_score >= $min_effectiveness "
+                # LIMIT cannot be a bound param in FalkorDB; int-coerce to stay injection-safe.
+                f"RETURN r ORDER BY r.effectiveness_score DESC LIMIT {int(limit)}",
+                {"brand": brand, "min_effectiveness": min_effectiveness},
             )
             return cast(List[Dict[str, Any]], rules)
         except Exception as e:

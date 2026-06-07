@@ -1097,3 +1097,12 @@ class TestAddRelationshipCompat:
     def test_add_relationship_degrades_gracefully_on_error(self, semantic_memory, mock_graph):
         mock_graph.query.side_effect = RuntimeError("down")
         assert semantic_memory.add_relationship("a", "b", "REL") is False
+
+    def test_add_relationship_rejects_reserved_property_keys(self, semantic_memory):
+        # property keys must not shadow the reserved endpoint params, or **props
+        # would silently overwrite the MATCH ids (LOW-2 defense-in-depth).
+        for reserved in ("from_id", "to_id"):
+            with pytest.raises(ValueError):
+                semantic_memory.add_relationship(
+                    "model:a", "exp:b", "BELONGS_TO", properties={reserved: "evil"}
+                )

@@ -490,7 +490,7 @@ class ModelDeployerAgent:
                 model_version=int(state.get("model_version") or 0),
                 target_environment=state.get("target_environment") or "unknown",
                 deployment_status=output.get("status") or "deployed",
-                deployment_strategy=state.get("deployment_action") or "unknown",
+                deployment_strategy=state.get("deployment_strategy") or "unknown",
                 rollback_occurred=bool(output.get("rollback_occurred", False)),
             )
             logger.info(f"Updated semantic graph (e2i_causal) for deployment: {deployment_id}")

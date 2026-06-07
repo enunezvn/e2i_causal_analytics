@@ -201,16 +201,19 @@ class ModelTrainerMemoryHooks:
 
             # Query past training runs for this algorithm
             runs = self.semantic_memory.query(
-                f"MATCH (m:Model)-[:TRAINED_WITH]->(a:Algorithm {{name: '{algorithm_name}'}}) "
-                f"RETURN m ORDER BY m.test_auc DESC LIMIT 10"
+                "MATCH (m:Model)-[:TRAINED_WITH]->(a:Algorithm {name: $algorithm_name}) "
+                "RETURN m ORDER BY m.test_auc DESC LIMIT 10",
+                {"algorithm_name": algorithm_name},
             )
             context["training_runs"] = runs
 
             # Query best hyperparameters
             hyperparams = self.semantic_memory.query(
-                f"MATCH (h:Hyperparameters)-[:USED_BY]->(m:Model)-[:TRAINED_WITH]->(a:Algorithm {{name: '{algorithm_name}'}}) "
-                f"WHERE m.success_criteria_met = true "
-                f"RETURN h LIMIT 5"
+                "MATCH (h:Hyperparameters)-[:USED_BY]->(m:Model)-[:TRAINED_WITH]->"
+                "(a:Algorithm {name: $algorithm_name}) "
+                "WHERE m.success_criteria_met = true "
+                "RETURN h LIMIT 5",
+                {"algorithm_name": algorithm_name},
             )
             context["best_hyperparameters"] = hyperparams
 

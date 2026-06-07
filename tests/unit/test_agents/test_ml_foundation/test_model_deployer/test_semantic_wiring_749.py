@@ -21,7 +21,12 @@ _STATE = {
     "deployment_name": "deploy-749",
     "model_version": 3,
     "target_environment": "staging",
-    "deployment_action": "blue_green",
+    # deployment_action (register/promote/deploy/rollback) and deployment_strategy
+    # (direct/blue_green/canary/shadow) are DISTINCT state fields — the semantic node
+    # must record the *strategy*, not the action (MED-1). A realistic action value
+    # ("deploy") would expose a wrong-key mapping; the strategy is the blue_green here.
+    "deployment_action": "deploy",
+    "deployment_strategy": "blue_green",
 }
 
 

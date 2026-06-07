@@ -214,8 +214,9 @@ class ObservabilityConnectorMemoryHooks:
             # Query agent-specific patterns
             if agent_name_filter:
                 patterns = self.semantic_memory.query(
-                    f"MATCH (p:AgentPattern {{agent_name: '{agent_name_filter}'}}) "
-                    f"RETURN p ORDER BY p.timestamp DESC LIMIT 5"
+                    "MATCH (p:AgentPattern {agent_name: $agent_name}) "
+                    "RETURN p ORDER BY p.timestamp DESC LIMIT 5",
+                    {"agent_name": agent_name_filter},
                 )
                 context["agent_patterns"] = patterns
 
