@@ -662,3 +662,27 @@ class TestRelationshipConfidence:
         # This is a soft test since we can't guarantee extraction
         assert isinstance(close_rels, list)
         assert isinstance(far_rels, list)
+
+
+def test_extract_relationships_finds_all_trigger_occurrences():
+    """L18 (#694): a trigger appearing multiple times must yield one relationship
+    per occurrence (was: only the first, via ``str.find``).
+
+    Deterministic: explicit entity positions + min_confidence=0 isolate the
+    find-all-occurrences behavior from entity recognition / confidence.
+    """
+    #       0    5    10   15   20   25   30
+    text = "AAA causes BBB and CCC causes DDD"
+    entities = [
+        ExtractedMention(entity_type=E2IEntityType.KPI, text="AAA", start=0, end=3),
+        ExtractedMention(entity_type=E2IEntityType.KPI, text="BBB", start=11, end=14),
+        ExtractedMention(entity_type=E2IEntityType.KPI, text="CCC", start=19, end=22),
+        ExtractedMention(entity_type=E2IEntityType.KPI, text="DDD", start=30, end=33),
+    ]
+    extractor = E2IEntityExtractor(min_confidence=0.0)
+    rels = extractor.extract_relationships(text, entities=entities)
+    causes = [r for r in rels if r.relationship_type == E2IRelationshipType.CAUSES]
+
+    assert len(causes) == 2, f"expected one CAUSES per 'causes' occurrence, got {len(causes)}"
+    pairs = {(r.source_mention.text, r.target_mention.text) for r in causes}
+    assert pairs == {("AAA", "BBB"), ("CCC", "DDD")}, pairs

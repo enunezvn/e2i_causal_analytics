@@ -77,6 +77,13 @@ class _UniqueViolationQuery:
         self.in_filters[c] = vs
         return self
 
+    def order(self, *_a: Any, **_kw: Any) -> "_UniqueViolationQuery":
+        # L7 (#694): crystallizer candidate SELECT now orders + pages; no-op here.
+        return self
+
+    def range(self, *_a: Any, **_kw: Any) -> "_UniqueViolationQuery":
+        return self
+
     def execute(self) -> Any:
         if self.mode == "insert":
             rows = self.payload if isinstance(self.payload, list) else [self.payload]

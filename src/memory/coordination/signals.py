@@ -123,6 +123,10 @@ class InsightSignalBus:
 
         Returns a list of {entry_id, brand, topic, payload}.
         Caller must call ``ack()`` for each consumed entry.
+
+        A single ``consume`` call MAY use ``block_ms=0`` (a one-shot
+        non-blocking read); the busy-spin guard lives in ``iter_messages``,
+        whose unbounded loop is the path that would actually spin.
         """
         stream = SignalStream(topic=topic, brand=brand)
         redis = get_redis_client()
@@ -176,6 +180,11 @@ class InsightSignalBus:
 
         Caller is responsible for ack()'ing each message after processing.
         """
+        # L3 (#694): the unbounded loop below busy-spins if block_ms<=0 (a
+        # non-blocking xreadgroup returns immediately on an empty stream).
+        # Require a positive block timeout so each empty poll actually blocks.
+        if block_ms <= 0:
+            raise ValueError(f"block_ms must be > 0 for iter_messages, got {block_ms}")
         await self.ensure_group(topic, brand, group)
         while True:
             batch = await self.consume(topic, brand, group, consumer, block_ms, count)

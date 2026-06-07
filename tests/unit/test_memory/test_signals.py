@@ -136,3 +136,16 @@ async def test_brand_isolation_separates_consumer_streams(fake_redis: FakeStream
 
     assert len(k) == 1 and k[0]["brand"] == "Kisqali"
     assert f == []  # cross-brand subscriber sees nothing
+
+
+@pytest.mark.asyncio
+async def test_iter_messages_rejects_nonpositive_block_ms(fake_redis: FakeStreamsRedis):
+    """L3 (#694): iter_messages' unbounded loop must reject block_ms<=0 to avoid
+    a busy-spin. A one-shot consume(block_ms=0) is still allowed (see above)."""
+    bus = InsightSignalBus()
+    agen = bus.iter_messages(topic="t", brand="Kisqali", group="g", consumer="c", block_ms=0)
+    with pytest.raises(ValueError, match="block_ms must be > 0"):
+        await agen.__anext__()
+    # A single non-blocking consume is unaffected by the iter_messages guard.
+    msgs = await bus.consume(topic="t", brand="Kisqali", group="g", consumer="c", block_ms=0)
+    assert msgs == []

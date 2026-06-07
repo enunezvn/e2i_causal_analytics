@@ -124,10 +124,15 @@ class Crystallizer:
         window_days: int = DEFAULT_WINDOW_DAYS,
         min_agents: int = DEFAULT_MIN_AGENTS,
         anthropic_client_factory: Optional[_AnthropicClientFactory] = None,
+        candidate_page_size: int = 1000,
     ):
         self.window_days = window_days
         self.min_agents = min_agents
         self._anthropic_client_factory = anthropic_client_factory
+        # L7 (#694): page size for the candidate SELECT. PostgREST silently caps
+        # a single response at 1000 rows, so we page through ``.range()`` windows
+        # of this size until exhausted (overridable for tests).
+        self.candidate_page_size = candidate_page_size
 
     async def run_for_brand(
         self,
@@ -157,23 +162,40 @@ class Crystallizer:
         # every crystal to 'episodic' regardless of whether sources had been
         # promoted to semantic/procedural by the consolidator. Codex iter-1
         # M1 silent-bug repair.
-        query = (
-            client.table("episodic_memories")
-            .select(
-                "memory_id, agent_name, brand, region, causal_path_id, "
-                "event_type, description, outcome_type, occurred_at, "
-                "raw_content, consolidation_tier"
-            )
-            .eq("brand", brand)
-            .gte("occurred_at", cutoff)
-            .in_("event_type", ["agent_action", "causal_discovery", "experiment_completed"])
-        )
-        if region:
-            query = query.eq("region", region)
-        # Off-load the blocking Supabase HTTP call to a worker thread so the
-        # synchronous ``.execute()`` does not stall the FastAPI event loop on
+        # L7 (#694): paginate the candidate SELECT. Without ``.range()`` PostgREST
+        # silently caps the response at 1000 rows, truncating the candidate set
+        # at scale and making the grouping + provenance sha256 non-deterministic.
+        # Page through ``.range()`` windows until a short page signals the end.
+        # Each blocking Supabase HTTP call is off-loaded to a worker thread so
+        # the synchronous ``.execute()`` does not stall the FastAPI event loop on
         # the operator ``/crystallize`` path (M2-supabase, #694).
-        memories = ((await asyncio.to_thread(query.execute)).data) or []
+        page_size = self.candidate_page_size
+        offset = 0
+        memories: List[Dict[str, Any]] = []
+        while True:
+            page_query = (
+                client.table("episodic_memories")
+                .select(
+                    "memory_id, agent_name, brand, region, causal_path_id, "
+                    "event_type, description, outcome_type, occurred_at, "
+                    "raw_content, consolidation_tier"
+                )
+                .eq("brand", brand)
+                .gte("occurred_at", cutoff)
+                .in_("event_type", ["agent_action", "causal_discovery", "experiment_completed"])
+            )
+            if region:
+                page_query = page_query.eq("region", region)
+            # L7 (codex MED): order by the unique PK before paging. Offset
+            # pagination without a stable sort can skip or duplicate rows across
+            # pages if the query plan reorders — defeating the determinism this
+            # pagination is meant to give. memory_id is the unique PK.
+            page_query = page_query.order("memory_id").range(offset, offset + page_size - 1)
+            page = ((await asyncio.to_thread(page_query.execute)).data) or []
+            memories.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
 
         # Group by (causal_path_id OR fallback grouping key). For v1 we use
         # causal_path_id as the strongest signal of "these are talking about

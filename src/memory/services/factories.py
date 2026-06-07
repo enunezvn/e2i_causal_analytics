@@ -29,6 +29,7 @@ Usage:
     graphiti = await get_graphiti_service()
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -639,6 +640,12 @@ def get_redis_client():
 _supabase_client = None
 _async_supabase_client = None
 _async_supabase_service_client = None
+# L14 (#694): serialize async-client initialization. Without this, two coroutines
+# starting concurrently can both pass the ``is None`` check across the
+# ``await acreate_client`` and create duplicate clients — one is orphaned and
+# leaks its httpx connection pool. A single lock guards both async getters
+# (init is rare, so contention is negligible).
+_async_client_init_lock = asyncio.Lock()
 
 
 def _resolve_supabase_key() -> str | None:
@@ -786,15 +793,20 @@ async def get_async_supabase_client():
             "or SUPABASE_ANON_KEY)",
         )
 
-    logger.info(f"Creating async Supabase client for: {url} (using {_supabase_key_type()} key)")
-
-    try:
-        _async_supabase_client = await acreate_client(
-            url, key, options=_build_async_supabase_options()
-        )
-        return _async_supabase_client
-    except Exception as e:
-        raise ServiceConnectionError("Supabase", f"Failed to create async client: {e}", e) from e
+    async with _async_client_init_lock:
+        # Double-check: a concurrent caller may have created it while we waited.
+        if _async_supabase_client is not None:
+            return _async_supabase_client
+        logger.info(f"Creating async Supabase client for: {url} (using {_supabase_key_type()} key)")
+        try:
+            _async_supabase_client = await acreate_client(
+                url, key, options=_build_async_supabase_options()
+            )
+            return _async_supabase_client
+        except Exception as e:
+            raise ServiceConnectionError(
+                "Supabase", f"Failed to create async client: {e}", e
+            ) from e
 
 
 async def get_async_supabase_service_client():
@@ -851,17 +863,20 @@ async def get_async_supabase_service_client():
         key_type = "service_role"
     else:
         key_type = "anon"
-    logger.info(f"Creating async Supabase service client for: {url} (using {key_type} key)")
-
-    try:
-        _async_supabase_service_client = await acreate_client(
-            url, key, options=_build_async_supabase_options()
-        )
-        return _async_supabase_service_client
-    except Exception as e:
-        raise ServiceConnectionError(
-            "Supabase", f"Failed to create async service client: {e}", e
-        ) from e
+    async with _async_client_init_lock:
+        # Double-check: a concurrent caller may have created it while we waited.
+        if _async_supabase_service_client is not None:
+            return _async_supabase_service_client
+        logger.info(f"Creating async Supabase service client for: {url} (using {key_type} key)")
+        try:
+            _async_supabase_service_client = await acreate_client(
+                url, key, options=_build_async_supabase_options()
+            )
+            return _async_supabase_service_client
+        except Exception as e:
+            raise ServiceConnectionError(
+                "Supabase", f"Failed to create async service client: {e}", e
+            ) from e
 
 
 _falkordb_client = None
@@ -1259,7 +1274,8 @@ def reset_all_clients() -> None:
         _async_supabase_client, \
         _async_supabase_service_client, \
         _falkordb_client, \
-        _embedding_service
+        _embedding_service, \
+        _async_client_init_lock
 
     _redis_client = None
     _supabase_client = None
@@ -1267,6 +1283,9 @@ def reset_all_clients() -> None:
     _async_supabase_service_client = None
     _falkordb_client = None
     _embedding_service = None
+    # Recreate the async init lock so a fresh (per-test) event loop doesn't reuse
+    # a Lock bound to a closed loop. No-op risk in prod (reset is test-only).
+    _async_client_init_lock = asyncio.Lock()
 
     # Clear LRU caches
     _get_llm_service_cached.cache_clear()
