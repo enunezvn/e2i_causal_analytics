@@ -189,28 +189,55 @@ def _calibration_slope_deviation_of(result: dict | None) -> float:
     return abs(dev_f)
 
 
+# Deployability-aware champion selection (owner-ratified 2026-06-07): a model
+# that PASSES the genuine deployment quality gates (good calibration AND not
+# overfit) is preferred over a raw-AUC winner that would be BLOCKED by those
+# gates. The raw-AUC winner is often an overfit gradient booster whose train-
+# inflated AUC edges out a cleaner linear model that actually deploys — picking
+# it strands the cohort. ``calibration_slope_deviation`` mirrors the v3
+# ``maximum_calibration_slope_deviation`` gate; ``overfitting_severity=="none"``
+# (train-val AUC delta <= ~0.03) mirrors ``maximum_train_val_delta``.
+_DEPLOY_MAX_SLOPE_DEV: float = 0.15
+
+
 def _select_champion(comparison_history: list[dict]) -> dict:
     """Pick the champion from Step 5b candidates.
 
-    Two-stage, calibration-aware selection:
+    Deployability-aware, then calibration-aware:
 
-    1. Find the maximum test AUC across all trained candidates.
-    2. Among candidates whose AUC is within ``_AUC_TIE_BAND`` of that maximum
-       (a genuine discrimination tie), pick the one with the lowest
-       deploy-calibrated ``calibration_slope_deviation`` (best calibration).
+    0. Partition candidates into DEPLOYABLE (calibration_slope_deviation
+       <= ``_DEPLOY_MAX_SLOPE_DEV`` AND overfitting_severity == "none") vs not.
+       If ANY candidate is deployable, restrict the pool to deployable ones —
+       so a deployable model that clears discrimination beats an overfit /
+       miscalibrated higher-AUC one (owner-ratified 2026-06-07). If NONE are
+       deployable (or candidates carry no quality fields, e.g. legacy callers),
+       the pool is all candidates → legacy behaviour is preserved.
+    1. Within the pool, find the maximum test AUC.
+    2. Among candidates whose AUC is within ``auc_tie_band`` of that maximum
+       (a genuine discrimination tie), pick the lowest deploy-calibrated
+       ``calibration_slope_deviation`` (best calibration).
 
-    Stage 1 guarantees we never sacrifice discrimination; stage 2 only ever
-    decides AMONG discrimination-equals, always toward better calibration, so
-    the policy cannot regress accuracy/ranking. With a single candidate, or
-    when calibration is unavailable, this reduces to the legacy AUC argmax.
+    Stage 1 never sacrifices discrimination *within the deployable pool*; stage
+    2 decides among discrimination-equals toward better calibration. With a
+    single candidate, or when quality fields are unavailable, this reduces to
+    the legacy AUC argmax.
     """
     if not comparison_history:
         raise ValueError("comparison_history is empty; no champion to select")
-    best_auc = max((h.get("auc_roc", 0) or 0) for h in comparison_history)
+
+    def _is_deployable(h: dict) -> bool:
+        slope_dev = h.get("calibration_slope_deviation")
+        cal_ok = isinstance(slope_dev, (int, float)) and slope_dev <= _DEPLOY_MAX_SLOPE_DEV
+        # overfitting_severity is "none" only when train-val AUC delta is within
+        # the overfit gate band. Absent (legacy candidate dicts) → unknown →
+        # NOT deployable, which makes the pool fall back to all candidates.
+        overfit_ok = h.get("overfitting_severity") == "none"
+        return cal_ok and overfit_ok
+
+    pool = [h for h in comparison_history if _is_deployable(h)] or comparison_history
+    best_auc = max((h.get("auc_roc", 0) or 0) for h in pool)
     tie_band = CONFIG.auc_tie_band  # Tier D: config-exposed (default mirrors _AUC_TIE_BAND)
-    tied = [
-        h for h in comparison_history if (best_auc - (h.get("auc_roc", 0) or 0)) <= tie_band
-    ]
+    tied = [h for h in pool if (best_auc - (h.get("auc_roc", 0) or 0)) <= tie_band]
     # Lowest slope deviation wins; ties on calibration fall back to highest AUC
     # (then stable order) so selection stays deterministic.
     return min(
@@ -262,19 +289,82 @@ def _auc_gate_verdict(
     point_ok = auc >= min_auc
     ci_str = f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else ""
     if not require_significance:
-        return point_ok, (
-            f"AUC {auc:.3f}{ci_str} {'>=' if point_ok else '<'} floor {min_auc}"
-        )
+        return point_ok, (f"AUC {auc:.3f}{ci_str} {'>=' if point_ok else '<'} floor {min_auc}")
     if auc_ci is None:
-        return False, (
-            f"AUC {auc:.3f}: significance gate ON but no bootstrap CI available"
-        )
+        return False, (f"AUC {auc:.3f}: significance gate ON but no bootstrap CI available")
     sig_ok = auc_ci[0] > 0.5
     return (point_ok and sig_ok), (
         f"AUC {auc:.3f}{ci_str}: "
         f"{'significant (CI>0.5)' if sig_ok else 'NOT significant (CI<=0.5)'}, "
         f"floor {min_auc} {'met' if point_ok else 'unmet'}"
     )
+
+
+def _fit_categorical_onehot(X: "pd.DataFrame", cat_cols: list) -> "tuple[pd.DataFrame, dict]":
+    """One-hot encode nominal categoricals into a faithful, calibratable feature space.
+
+    Ordinal/integer codes impose a FALSE magnitude order on NOMINAL categories.
+    The downstream ``ModelTrainerPreprocessor`` only one-hots *object*-dtype
+    columns, so once the harness pre-encodes categoricals to integer codes the
+    preprocessor sees them as numeric and never fixes them — distorting the
+    LINEAR champion's probabilities so its post-Platt calibration slope
+    deviation fails the gate (disc cohort: ~0.18 ordinal vs ~0.07 one-hot, same
+    data/splits, AUC unchanged). One-hot lets the deployable linear model ship;
+    tree models consume one-hot fine.
+
+    Returns ``(X_encoded, info)``; ``info`` carries the fitted encoder + the
+    produced column names so SHAP / validation re-apply reproduce the EXACT
+    trained feature space via :func:`_apply_categorical_onehot`.
+    """
+    if not cat_cols:
+        return X, {"encoder": None, "columns": [], "onehot_columns": [], "method": "onehot"}
+    from sklearn.preprocessing import OneHotEncoder
+
+    ohe = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+    arr = ohe.fit_transform(X[cat_cols].fillna("__missing__").astype(str))
+    out_cols = list(ohe.get_feature_names_out(cat_cols))
+    X_out = X.drop(columns=list(cat_cols)).copy()
+    X_out[out_cols] = arr
+    return X_out, {
+        "encoder": ohe,
+        "columns": list(cat_cols),
+        "onehot_columns": out_cols,
+        "method": "onehot",
+    }
+
+
+def _raw_feature_cols(feature_cols: list, info: "dict | None") -> list:
+    """Map the model's (possibly one-hot-EXPANDED) ``feature_cols`` back to the
+    ORIGINAL pre-encode column names (numeric + raw categorical names).
+
+    One-hot expansion replaces ``payer`` with ``payer_HMO``/``payer_PPO``/…; the
+    raw ``eligible_df`` carries the string ``payer`` column, NOT the indicators.
+    The SHAP step must rebuild its frame from the raw columns and re-apply the
+    fitted encoder (see :func:`_apply_categorical_onehot`) to reproduce the
+    trained feature space. With no one-hot encoding this is a passthrough.
+    """
+    if not info or not info.get("columns"):
+        return list(feature_cols)
+    onehot_out = set(info.get("onehot_columns", []))
+    return [c for c in feature_cols if c not in onehot_out] + list(info["columns"])
+
+
+def _apply_categorical_onehot(X: "pd.DataFrame", info: "dict | None") -> "pd.DataFrame":
+    """Re-apply a fitted one-hot encoding (from :func:`_fit_categorical_onehot`)
+    so a downstream frame (SHAP sample, validation split) carries the IDENTICAL
+    feature columns the model trained on. ``None``/empty ``info`` (or any source
+    column absent) is a no-op passthrough."""
+    if not info or not info.get("columns"):
+        return X
+    cat_cols = info["columns"]
+    if not all(c in X.columns for c in cat_cols):
+        return X
+    ohe = info["encoder"]
+    out_cols = info["onehot_columns"]
+    arr = ohe.transform(X[cat_cols].fillna("__missing__").astype(str))
+    X_out = X.drop(columns=list(cat_cols)).copy()
+    X_out[out_cols] = arr
+    return X_out
 
 
 @dataclass
@@ -3705,13 +3795,13 @@ async def step_5_model_trainer(
     # uncertainty) and run the dynamic, CI-aware AUC gate.
     auc_ci = _auc_ci_from_result(result)
     auc_passed, auc_detail = _auc_gate_verdict(
-        auc, auc_ci, CONFIG.min_auc_threshold,
+        auc,
+        auc_ci,
+        CONFIG.min_auc_threshold,
         require_significance=CONFIG.auc_gate_require_significance,
     )
     if auc:
-        ci_msg = (
-            f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else " (CI unavailable)"
-        )
+        ci_msg = f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else " (CI unavailable)"
         print(f"\n  AUC-ROC: {auc:.3f}{ci_msg}  →  {auc_detail}")
 
     checks = [
@@ -3722,13 +3812,16 @@ async def step_5_model_trainer(
             "present" if trained_model is not None else "missing",
         ),
         (
-            "AUC-ROC significance gate" if CONFIG.auc_gate_require_significance
+            "AUC-ROC significance gate"
+            if CONFIG.auc_gate_require_significance
             else "AUC-ROC threshold",
             auc_passed,
-            "CI lower > 0.5" if CONFIG.auc_gate_require_significance
+            "CI lower > 0.5"
+            if CONFIG.auc_gate_require_significance
             else f">= {CONFIG.min_auc_threshold}",
             f"{auc:.3f}{(' [' + format(auc_ci[0], '.3f') + '-' + format(auc_ci[1], '.3f') + ']') if auc_ci else ''}"
-            if auc else "N/A",
+            if auc
+            else "N/A",
         ),
         (
             "Minority recall threshold",
@@ -4763,24 +4856,28 @@ def _compute_adaptive_state_inputs(
     feature_columns: List[str],
     target_col: str,
     regime: str,
+    deployment_intent: str = "clinical",
 ) -> Dict[str, Any]:
-    """Compute the four pre-eval inputs for the adaptive-criteria scheme.
+    """Compute the pre-eval inputs for the adaptive-criteria scheme.
 
     The fifth input (``baseline_auc``) is computed inside the evaluator
     via Section B parent branch (see
     ``model_trainer/nodes/evaluator.py::_compute_baseline_test_metrics``)
     and overlaid by ``_apply_adaptive_criteria_overlay``. This helper
-    handles the four inputs derivable from the dataframe and the regime
-    label.
+    handles the inputs derivable from the dataframe, the regime label, and
+    the deployment-intent (clinical | commercial) that selects the use-case
+    bar (clinical AUC 0.75 vs commercial AUC 0.65).
 
     See ``.claude/plans/adaptive_success_criteria/05-data-shape-introspection.md``.
     """
     valid_regimes = set(_VALID_REGIMES)
+    intent = deployment_intent if deployment_intent in ("clinical", "commercial") else "clinical"
     return {
         "n_samples": int(len(df)),
         "prevalence": float(df[target_col].mean()),
         "feature_count": len(feature_columns),
         "regime": regime if regime in valid_regimes else None,
+        "deployment_intent": intent,
     }
 
 
@@ -5113,6 +5210,7 @@ async def run_pipeline(
     data_dir: str | None = None,
     *,
     regime: str = "default",
+    deployment_intent: str = "clinical",
     split_mode: str = "auto",
     pre_assigned_splits: Dict[Any, str] | None = None,
     inject_demo_cost_matrix: bool = True,
@@ -5277,6 +5375,7 @@ async def run_pipeline(
                 feature_columns=_adaptive_feature_columns,
                 target_col=CONFIG.target_outcome,
                 regime=regime,
+                deployment_intent=deployment_intent,
             )
             result = await step_1_scope_definer(experiment_id, adaptive_inputs=adaptive_inputs)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
@@ -6055,17 +6154,24 @@ async def run_pipeline(
             y = eligible_df[CONFIG.target_outcome].copy()
 
             # === CATEGORICAL ENCODING ===
-            # OrdinalEncoder for categorical columns so sklearn/leakage checks get numeric data.
-            # Tree-based models handle ordinal encoding natively; the ModelTrainerPreprocessor
-            # will do proper encoding downstream.
+            # One-hot encode nominal categoricals so the LINEAR champion gets a
+            # calibratable feature space. Integer/ordinal codes impose a false
+            # magnitude order on nominal categories, and the downstream
+            # ModelTrainerPreprocessor one-hots only *object*-dtype columns — so
+            # pre-encoding to integers makes it skip its own encoding and the LR
+            # trains on the distorted codes (disc: post-Platt slope_dev ~0.18 vs
+            # ~0.07 one-hot → fails vs passes the calibration gate). One-hot
+            # produces numeric data for the leakage/sklearn checks too; trees
+            # consume it fine. See _fit_categorical_onehot.
             _cat_cols = [c for c in feature_cols if X[c].dtype == object]
             if _cat_cols:
-                from sklearn.preprocessing import OrdinalEncoder
-
-                _oe = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
-                X[_cat_cols] = _oe.fit_transform(X[_cat_cols].fillna("__missing__"))
-                state["categorical_encoding"] = {"encoder": _oe, "columns": _cat_cols}
-                print(f"  Encoded {len(_cat_cols)} categorical features: {_cat_cols}")
+                X, _enc_info = _fit_categorical_onehot(X, _cat_cols)
+                feature_cols = list(X.columns)
+                state["categorical_encoding"] = _enc_info
+                print(
+                    f"  One-hot encoded {len(_cat_cols)} categorical features "
+                    f"-> {len(_enc_info['onehot_columns'])} columns: {_cat_cols}"
+                )
 
             # === PRE-TRAINING LEAKAGE CHECK (on actual pipeline data) ===
             # The data_preparer's leakage detector runs on synthetic data,
@@ -6257,9 +6363,11 @@ async def run_pipeline(
                         # minus the genuine leaks remediation dropped), not the
                         # curated _rem_features survivor sub-list. The post-override
                         # re-check below (the safety net) re-fires if a leak slips in.
-                        _step5a_leaks = set(_rem_dropped) | set(
-                            state.get("leakage_dropped_features") or []
-                        ) | set(state.get("leaked_features") or [])
+                        _step5a_leaks = (
+                            set(_rem_dropped)
+                            | set(state.get("leakage_dropped_features") or [])
+                            | set(state.get("leaked_features") or [])
+                        )
                         feature_cols = _discover_model_feature_cols(
                             eligible_df,
                             _exclude | _step5a_leaks,
@@ -6270,16 +6378,17 @@ async def run_pipeline(
                         y = eligible_df[CONFIG.target_outcome].copy()
 
                         # Re-encode categoricals (the original encoding was on the
-                        # pre-remediation feature set which is now discarded)
+                        # pre-remediation feature set which is now discarded).
+                        # One-hot for the same calibration reason as the initial
+                        # encode above (see _fit_categorical_onehot).
                         _cat_cols2 = [c for c in feature_cols if X[c].dtype == object]
                         if _cat_cols2:
-                            from sklearn.preprocessing import OrdinalEncoder as _OE2
-
-                            _oe2 = _OE2(handle_unknown="use_encoded_value", unknown_value=-1)
-                            X[_cat_cols2] = _oe2.fit_transform(X[_cat_cols2].fillna("__missing__"))
-                            state["categorical_encoding"] = {"encoder": _oe2, "columns": _cat_cols2}
+                            X, _enc_info2 = _fit_categorical_onehot(X, _cat_cols2)
+                            feature_cols = list(X.columns)
+                            state["categorical_encoding"] = _enc_info2
                             print(
-                                f"     Re-encoded {len(_cat_cols2)} categorical features: {_cat_cols2}"
+                                f"     One-hot re-encoded {len(_cat_cols2)} categorical "
+                                f"features -> {len(_enc_info2['onehot_columns'])} columns: {_cat_cols2}"
                             )
 
                         # Impute numeric NaN (RWD demographics ~27% missing)
@@ -6662,6 +6771,9 @@ async def run_pipeline(
                         # tiebreak among discrimination-ties (see _select_champion).
                         "calibration_slope_deviation": _calibration_slope_deviation_of(result),
                         "model_usefulness": model_usefulness,
+                        # Deployability-aware selection (see _select_champion):
+                        # overfit severity mirrors the maximum_train_val_delta gate.
+                        "overfitting_severity": result.get("overfitting_severity"),
                         "is_primary": True,
                     }
                 )
@@ -6914,23 +7026,25 @@ async def run_pipeline(
             feature_cols = state.get(
                 "feature_names", ["days_on_therapy", "hcp_visits", "prior_treatments"]
             )
-            X = eligible_df[[c for c in feature_cols if c in eligible_df.columns]].copy()
+            # feature_names may be the one-hot-EXPANDED columns (e.g. payer_HMO),
+            # which do NOT exist in the raw eligible_df. Select the ORIGINAL
+            # pre-encode columns (numeric + raw categorical names) so the frame
+            # can be rebuilt and re-encoded to the trained feature space.
+            cat_enc = state.get("categorical_encoding")
+            _raw_cols = _raw_feature_cols(feature_cols, cat_enc)
+            X = eligible_df[[c for c in _raw_cols if c in eligible_df.columns]].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
 
             # Apply fitted preprocessor so SHAP receives the same feature space the model expects
             X_for_shap = X.iloc[:50]
 
-            # Re-apply OrdinalEncoding if it was used before Step 5
-            # (the preprocessor was fitted on encoded data, not raw strings)
-            cat_enc = state.get("categorical_encoding")
-            if cat_enc:
-                _oe = cat_enc["encoder"]
-                _cat_cols = [c for c in cat_enc["columns"] if c in X_for_shap.columns]
-                if _cat_cols:
-                    X_for_shap = X_for_shap.copy()
-                    X_for_shap[_cat_cols] = _oe.transform(
-                        X_for_shap[_cat_cols].fillna("__missing__")
-                    )
+            # Re-apply the one-hot encoding used before Step 5 so SHAP sees the
+            # exact feature space the model trained on (the preprocessor was
+            # fitted on the encoded data, not raw strings). One-hot CHANGES the
+            # column count, so this rebuilds the expanded frame via the fitted
+            # encoder (see _apply_categorical_onehot).
+            if cat_enc and cat_enc.get("columns"):
+                X_for_shap = _apply_categorical_onehot(X_for_shap.copy(), cat_enc)
 
             fitted_preprocessor = state.get("fitted_preprocessor")
             if fitted_preprocessor is not None:
@@ -6946,8 +7060,9 @@ async def run_pipeline(
                             X_transformed, columns=feature_names_out, index=X_for_shap.index
                         )
                     else:
-                        # Fallback: use original column names if shape matches
-                        # (OrdinalEncoder preserves column count unlike OneHotEncoder)
+                        # Fallback: use the (already one-hot-expanded) input column
+                        # names if the transform preserved the count (e.g. a pure
+                        # scaler over the one-hot frame).
                         original_cols = list(X_for_shap.columns)
                         if len(original_cols) == X_transformed.shape[1]:
                             X_for_shap = pd.DataFrame(
@@ -7709,6 +7824,21 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--deployment-intent",
+        type=str,
+        choices=("clinical", "commercial"),
+        default="clinical",
+        help=(
+            "Deployment use case — recalibrates the deployment AUC bar. "
+            "'clinical' (default): published / site-of-care decision model, "
+            "literature floor AUC 0.75 (Vickers 2019; Cook 2007). "
+            "'commercial': HCP targeting / propensity model (never used at site "
+            "of care), separately-cited floor AUC 0.65 + prevalence-aware "
+            "operating gates (recall 0.50, MCC 0.10, net-benefit p_t 0.10). "
+            "The default NEVER silently loosens the bar — opt in explicitly."
+        ),
+    )
+    parser.add_argument(
         "--split",
         type=str,
         choices=("auto", "random", "combined"),
@@ -7889,6 +8019,7 @@ def main():
                 include_bentoml=not args.no_bentoml,
                 data_dir=args.data_dir,
                 regime=args.regime,
+                deployment_intent=args.deployment_intent,
                 split_mode=args.split,
                 inject_demo_cost_matrix=not args.no_demo_cost_matrix,
                 feature_manifest_source=_resolve_feature_manifest_source(

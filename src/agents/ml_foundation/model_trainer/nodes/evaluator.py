@@ -1040,9 +1040,22 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             # ``model_candidate.skip_post_hoc_calibration`` which short-
             # circuits BEFORE this block. Setting calibration_method to a
             # falsey value cannot disable post-hoc calibration on its own.
-            requested_method = state.get("calibration_method", "auto")
+            requested_method = state.get("calibration_method")
             if requested_method is None:
-                requested_method = "auto"
+                # Intent-aware default. Commercial-targeting cohorts are rare-event
+                # (low prevalence); the "auto" policy selects isotonic once the
+                # validation positive count exceeds 100, which minimizes ECE but
+                # can leave the recalibration SLOPE far from 1.0 (isotonic is a
+                # non-parametric step function) and fail the deployer's
+                # calibration_slope gate. Platt/sigmoid (2 params) yields a stable
+                # slope ~1.0 at low N — the operating regime for commercial
+                # targeting — so commercial defaults to sigmoid while clinical
+                # keeps "auto". An explicit state["calibration_method"] override
+                # (operator-set) is preserved unchanged.
+                _cal_intent = (state.get("success_criteria") or {}).get(
+                    "deployment_intent"
+                ) or "clinical"
+                requested_method = "sigmoid" if _cal_intent == "commercial" else "auto"
             elif requested_method not in ("auto", "isotonic", "sigmoid"):
                 logger.warning(
                     "Unknown calibration_method=%r in state; falling back to 'auto'. "
@@ -1117,6 +1130,28 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     inner_test_metrics["calibration_intercept_magnitude"] = (
                         abs(cal_intercept) if not math.isnan(cal_intercept) else float("nan")
                     )
+
+                    # (a.2) Net-benefit gate (Vickers NB > 0 at the regime's p_t).
+                    #     The NB grid is threshold-INDEPENDENT (each p_t uses its
+                    #     OWN operating point ``proba >= p_t``), so like the
+                    #     calibration-slope gate above it must be evaluated on the
+                    #     DEPLOYED (calibrated) probabilities — NOT the raw grid
+                    #     computed in ``_compute_classification_metrics``. The raw
+                    #     grid is on the pre-calibration scale, where a balanced-
+                    #     class-weight model's inflated probabilities flag nearly
+                    #     every record at low p_t and UNDERSTATE net benefit (a
+                    #     genuinely net-beneficial deployed model then false-fails
+                    #     the gate). Recompute on the calibrated test probs so
+                    #     ``minimum_net_benefit_at_p_t`` judges the artifact we ship
+                    #     (same DEPLOYED-model-consistency contract as #633). NB is
+                    #     monotone-calibration-SENSITIVE (unlike AUC), so this is a
+                    #     genuine correction, not a no-op.
+                    inner_test_metrics["net_benefit_grid"] = {
+                        f"p_t={p_t:.2f}": _compute_net_benefit_at_p_t(
+                            np.asarray(y_test_np), cal_proba_pos, p_t
+                        )
+                        for p_t in _V3_NB_GRID_P_T_VALUES
+                    }
 
                     # (b) Threshold-dependent metrics: re-derive the operating
                     #     point on the calibrated probability scale (the raw
@@ -2054,6 +2089,59 @@ def _compute_classification_metrics(
                     y_validation, y_validation_pred, y_validation_proba
                 ),
             )
+        # Commercial-targeting operating point (owner-ratified 2026-06-07). A
+        # targeting model is used by its RANKING, so the decision threshold should
+        # catch the commercial recall floor (false positives are cheap in
+        # outreach). When deployment_intent is commercial AND the canonical
+        # operating point falls short of the recall floor, switch to the highest
+        # threshold that meets it (best precision subject to recall>=floor). This
+        # is the FINAL operating-point decision so the F1-fallback above does not
+        # revert it. deployment_intent is read off success_criteria (stamped by
+        # scope_definer.define_success_criteria); the threshold is tuned on
+        # VALIDATION and frozen onto test below — no test re-tuning.
+        if y_validation_proba is not None:
+            # success_criteria may be a plain dict OR the pydantic ScopeDefiner
+            # success-criteria model (dict-like, exposes ``.get``). Duck-type on
+            # ``.get`` rather than ``isinstance(dict)`` — the model is NOT a dict
+            # subclass, so an isinstance check would silently skip the commercial
+            # operating point even when deployment_intent IS commercial (the
+            # calibration block already uses the duck-typed ``(... or {}).get``).
+            _intent = "clinical"
+            if success_criteria is not None and hasattr(success_criteria, "get"):
+                _intent = (
+                    success_criteria.get("deployment_intent")
+                    or (success_criteria.get("_adaptive_inputs") or {}).get("deployment_intent")
+                    or "clinical"
+                )
+            if _intent == "commercial":
+                yv_pos = _positive_class_proba(y_validation_proba)
+                cur_pred = (yv_pos >= optimal_threshold).astype(int)
+                pos_mask = y_validation == 1
+                n_pos = int(pos_mask.sum())
+                cur_recall = float((cur_pred[pos_mask] == 1).sum()) / n_pos if n_pos else 0.0
+                if cur_recall < _COMMERCIAL_RECALL_TARGET:
+                    rc = _compute_recall_constrained_threshold(
+                        y_validation, y_validation_proba, _COMMERCIAL_RECALL_TARGET
+                    )
+                    if rc and rc.get("target_achieved"):
+                        optimal_threshold = float(rc["recall_constrained_threshold"])
+                        threshold_source = "validation_commercial_recall"
+                        y_val_pred_rc = (yv_pos >= optimal_threshold).astype(int)
+                        validation_metrics = cast(
+                            Dict[str, Any],
+                            _compute_split_classification_metrics(
+                                y_validation, y_val_pred_rc, y_validation_proba
+                            ),
+                        )
+                        logger.info(
+                            "Commercial recall-constrained threshold %.4f tuned on "
+                            "validation (recall=%.4f, precision=%.4f) — operating "
+                            "point tuned for targeting.",
+                            optimal_threshold,
+                            float(rc["recall_at_threshold"]),
+                            float(rc["precision_at_threshold"]),
+                        )
+
         validation_metrics["chosen_threshold"] = float(optimal_threshold)
         validation_metrics["chosen_threshold_source"] = threshold_source
 
@@ -2970,6 +3058,78 @@ def _compute_precision_constrained_threshold(
         return None
 
 
+# Commercial-targeting recall floor for the operating-point selection. Mirrors
+# the commercial ``minimum_recall`` in
+# ``scope_definer/nodes/criteria_validator.py`` (kept as a local constant to
+# avoid a cross-agent import; both reflect the owner-ratified commercial bar).
+_COMMERCIAL_RECALL_TARGET: float = 0.50
+
+
+def _compute_recall_constrained_threshold(
+    y_true: np.ndarray,
+    y_proba: Optional[np.ndarray],
+    target_recall: float = _COMMERCIAL_RECALL_TARGET,
+) -> Optional[Dict[str, Any]]:
+    """Find the HIGHEST threshold where recall >= target (recall analogue of
+    ``_compute_precision_constrained_threshold``).
+
+    A COMMERCIAL targeting model is used by its RANKING (target the top scored
+    decile), so its decision threshold should catch the commercial recall floor
+    — false positives are cheap in outreach. Selecting the highest threshold
+    whose recall >= target maximises precision SUBJECT to the recall constraint.
+
+    Args:
+        y_true: True labels.
+        y_proba: Predicted probabilities.
+        target_recall: Minimum required recall (default = commercial floor).
+
+    Returns:
+        Dict with threshold details (``target_achieved``), or None if
+        probabilities are unavailable.
+    """
+    if y_proba is None:
+        return None
+
+    y_proba_pos = _positive_class_proba(y_proba)
+
+    try:
+        precisions, recalls, thresholds = precision_recall_curve(y_true, y_proba_pos)
+        # precision_recall_curve returns len(thresholds) == len(precisions) - 1;
+        # recalls are monotonically non-increasing as the threshold rises.
+        best_idx = None
+        for i in range(len(thresholds)):
+            if recalls[i] >= target_recall:
+                # Highest threshold still meeting the recall floor → best precision.
+                if best_idx is None or thresholds[i] > thresholds[best_idx]:
+                    best_idx = i
+
+        if best_idx is not None:
+            threshold = float(thresholds[best_idx])
+            prec = float(precisions[best_idx])
+            rec = float(recalls[best_idx])
+            f1_val = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+            return {
+                "recall_constrained_threshold": threshold,
+                "precision_at_threshold": prec,
+                "recall_at_threshold": rec,
+                "f1_at_threshold": f1_val,
+                "target_recall": target_recall,
+                "target_achieved": True,
+            }
+
+        # No threshold meets the recall floor (degenerate model). Signal failure;
+        # the caller keeps the canonical operating point.
+        return {
+            "recall_constrained_threshold": 0.5,
+            "target_recall": target_recall,
+            "target_achieved": False,
+        }
+
+    except Exception as e:
+        logger.warning(f"Recall-constrained threshold computation failed: {e}")
+        return None
+
+
 def _compute_precision_at_k(
     y_true: np.ndarray,
     y_proba: Optional[np.ndarray],
@@ -3702,10 +3862,11 @@ def _apply_adaptive_criteria_overlay(
     # Local import avoids a top-level cross-agent dependency.
     from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
         _V3_DEPRECATED_FIXED_KEYS,
-        _V3_REGIME_P_T,
+        _resolve_adaptive_p_t,
         adaptive_success_criteria,
     )
 
+    deployment_intent = inputs.get("deployment_intent")
     try:
         thresholds, skipped = adaptive_success_criteria(
             n_samples=inputs["n_samples"],
@@ -3713,6 +3874,7 @@ def _apply_adaptive_criteria_overlay(
             baseline_auc=float(baseline_auc),
             feature_count=inputs["feature_count"],
             regime=inputs.get("regime"),
+            deployment_intent=deployment_intent,
         )
     except (KeyError, ValueError, TypeError) as exc:
         logger.warning(
@@ -3733,9 +3895,7 @@ def _apply_adaptive_criteria_overlay(
     overlaid.update(thresholds)
     # Audit fields.
     overlaid["_adaptive_skipped"] = sorted(skipped)
-    regime_in = inputs.get("regime")
-    effective_regime = regime_in if regime_in in _V3_REGIME_P_T else "clean"
-    overlaid["_adaptive_p_t"] = _V3_REGIME_P_T[effective_regime]
+    overlaid["_adaptive_p_t"] = _resolve_adaptive_p_t(inputs.get("regime"), deployment_intent)
     return overlaid
 
 

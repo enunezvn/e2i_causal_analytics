@@ -42,6 +42,36 @@ def test_compute_adaptive_inputs_from_dataframe() -> None:
     assert inputs["prevalence"] == pytest.approx(0.30, abs=1e-9)
     assert inputs["feature_count"] == 2
     assert inputs["regime"] == "default"
+    # Deployment intent defaults to clinical (never silently loosened).
+    assert inputs["deployment_intent"] == "clinical"
+
+
+def test_compute_adaptive_inputs_threads_commercial_intent() -> None:
+    """The runner threads --deployment-intent into the scope_definer state so
+    the commercial use-case bar (AUC 0.65) is applied end-to-end."""
+    runner = importlib.import_module("scripts.run_tier0_test")
+    df = pd.DataFrame({"feat_a": [0.0] * 100, "discontinuation_flag": [1] * 11 + [0] * 89})
+    inputs = runner._compute_adaptive_state_inputs(
+        df=df,
+        feature_columns=["feat_a"],
+        target_col="discontinuation_flag",
+        regime="default",
+        deployment_intent="commercial",
+    )
+    assert inputs["deployment_intent"] == "commercial"
+
+
+def test_compute_adaptive_inputs_invalid_intent_falls_back_to_clinical() -> None:
+    runner = importlib.import_module("scripts.run_tier0_test")
+    df = pd.DataFrame({"feat_a": [0.0] * 100, "discontinuation_flag": [1] * 11 + [0] * 89})
+    inputs = runner._compute_adaptive_state_inputs(
+        df=df,
+        feature_columns=["feat_a"],
+        target_col="discontinuation_flag",
+        regime="default",
+        deployment_intent="garbage",
+    )
+    assert inputs["deployment_intent"] == "clinical"
 
 
 def test_compute_adaptive_inputs_returns_none_regime_for_unknown_label() -> None:

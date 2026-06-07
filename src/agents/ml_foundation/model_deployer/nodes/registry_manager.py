@@ -376,6 +376,14 @@ def _evaluate_absolute_threshold_gates(
     # threshold, the gate is SKIPPED for eligibility.
     declared_provenance_map: Dict[str, Any] = state.get("threshold_provenance") or {}
 
+    # Deployment-intent recalibrates the literature anchor to the use case
+    # (clinical AUC 0.75 vs commercial AUC 0.65). Resolve it from state, falling
+    # back to the success_criteria stamp set by define_success_criteria, then to
+    # the safe default "clinical" — the intent NEVER silently loosens the bar.
+    deployment_intent = (
+        state.get("deployment_intent") or success_criteria.get("deployment_intent") or "clinical"
+    )
+
     failures: List[str] = []
     all_pass = True
 
@@ -436,14 +444,17 @@ def _evaluate_absolute_threshold_gates(
             gate_name=gate_name,
             threshold=threshold,
             declared_provenance=declared_provenance_map.get(gate_name),
+            deployment_intent=deployment_intent,
         )
         if provenance != THRESHOLD_PROVENANCE_LITERATURE_ANCHORED:
-            # Codex-rescue N1-H2 pass-2 sharpening: registry is keyed
-            # on (gate, exact-value) tuples — surface every registered
-            # value for this gate in the failure message so the operator
-            # can see which thresholds ARE signed off.
+            # Codex-rescue N1-H2 pass-2 sharpening: registry is keyed on
+            # (gate, exact-value, intent) triples — surface every registered
+            # value for this gate AT THIS INTENT in the failure message so the
+            # operator can see which thresholds ARE signed off for the use case.
             registered_values = sorted(
-                v for (g, v) in LITERATURE_ANCHORED_THRESHOLDS.keys() if g == gate_name
+                v
+                for (g, v, i) in LITERATURE_ANCHORED_THRESHOLDS.keys()
+                if g == gate_name and i == deployment_intent
             )
             audit.append_gate_evaluation(
                 timestamp=timestamp,

@@ -81,6 +81,9 @@ EXPECTED_TIER0_CLI_ARGS: FrozenSet[str] = frozenset(
         # parametric n_total override + seed threading for synthetic_v2 regimes.
         "--n-total",
         "--seed",
+        # Added by the clinical/commercial deployment-intent axis (PR #786):
+        # recalibrates the deployment bar + deployer gates to the use case.
+        "--deployment-intent",
     }
 )
 
@@ -239,6 +242,15 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
         "choices": None,
         "nargs": None,
         "type_name": "int",
+        "action": "_StoreAction",
+    },
+    # PR #786 (clinical/commercial deployment-intent axis): selects the
+    # use-case bar + the deployer's commercial-intent-aware gates.
+    "--deployment-intent": {
+        "default": "clinical",
+        "choices": ["clinical", "commercial"],
+        "nargs": None,
+        "type_name": "str",
         "action": "_StoreAction",
     },
 }

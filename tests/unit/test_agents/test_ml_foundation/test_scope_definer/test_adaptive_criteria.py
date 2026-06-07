@@ -31,6 +31,7 @@ def test_adaptive_success_criteria_function_exists_and_signature_matches() -> No
         "baseline_auc",
         "feature_count",
         "regime",
+        "deployment_intent",
     ], f"Signature drifted: got {params}"
 
 

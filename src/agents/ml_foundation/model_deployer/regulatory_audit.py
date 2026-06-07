@@ -167,61 +167,101 @@ ALLOWED_THRESHOLD_PROVENANCE: frozenset[str] = frozenset(
 #     clinical-decision models (Vickers 2019; Cook 2007). Specifically
 #     the floor below which the literature treats the model as
 #     ineligible regardless of other quality signals.
-LITERATURE_ANCHORED_THRESHOLDS: Dict[Tuple[str, float], str] = {
+# Registry is keyed on (gate, exact-value, deployment_intent). The
+# deployment-intent dimension recalibrates the anchor to the USE CASE: a
+# clinical-decision model keeps the AUC 0.75 floor (Vickers 2019; Cook 2007);
+# a COMMERCIAL targeting/propensity model (never used at site of care) uses the
+# separately-cited AUC 0.65 floor (Hosmer & Lemeshow 2013; marketing/propensity
+# convention). Keying the intent INTO the registry is the anti-laundering guard:
+# a clinical run can never borrow the commercial anchor (and vice versa) because
+# the (gate, 0.65, "clinical") pair is simply absent.
+_VALID_DEPLOYMENT_INTENTS: frozenset = frozenset({"clinical", "commercial"})
+_DEFAULT_DEPLOYMENT_INTENT: str = "clinical"
+
+LITERATURE_ANCHORED_THRESHOLDS: Dict[Tuple[str, float, str], str] = {
     (
         "minimum_auc",
         0.75,
-    ): "scope_definer/nodes/criteria_validator.py:118-120 (Vickers 2019; Cook 2007)",
+        "clinical",
+    ): "scope_definer/nodes/criteria_validator.py (Vickers 2019; Cook 2007 — clinical-decision floor)",
+    (
+        "minimum_auc",
+        0.60,
+        "commercial",
+    ): "scope_definer/nodes/criteria_validator.py (Hosmer & Lemeshow 2013; marketing/propensity minimum-useful-discrimination floor AUC>=0.60 — targeting models are used by ranking; owner-ratified 2026-06-07)",
 }
 
 
-def get_literature_anchor_doc_ref(gate_name: str, threshold: float) -> Optional[str]:
-    """Return the canonical doc-reference for a (gate, threshold) pair.
+def _normalize_intent(deployment_intent: Any) -> str:
+    """Return a valid deployment-intent literal (defaults to ``"clinical"``)."""
+    return (
+        deployment_intent
+        if deployment_intent in _VALID_DEPLOYMENT_INTENTS
+        else _DEFAULT_DEPLOYMENT_INTENT
+    )
+
+
+def get_literature_anchor_doc_ref(
+    gate_name: str, threshold: float, deployment_intent: Any = _DEFAULT_DEPLOYMENT_INTENT
+) -> Optional[str]:
+    """Return the canonical doc-reference for a (gate, threshold, intent) triple.
 
     Codex-rescue N1-H2 pass-2 sharpening: callers can recover the
     sign-off doc-ref for any registered (gate, value) pair. Returns
-    None if the pair is not registered — a missing registration is the
+    None if the triple is not registered — a missing registration is the
     expected signal that the caller is trying to relax / tighten the
-    gate without a literature anchor.
+    gate without a literature anchor (or is using the wrong intent's anchor).
     """
     try:
         threshold_f = float(threshold)
     except (TypeError, ValueError):
         return None
-    return LITERATURE_ANCHORED_THRESHOLDS.get((gate_name, threshold_f))
+    return LITERATURE_ANCHORED_THRESHOLDS.get(
+        (gate_name, threshold_f, _normalize_intent(deployment_intent))
+    )
 
 
 def classify_threshold_provenance(
     gate_name: str,
     threshold: Any,
     declared_provenance: Any = None,
+    *,
+    deployment_intent: Any = _DEFAULT_DEPLOYMENT_INTENT,
 ) -> str:
-    """Return the provenance literal for a (gate, threshold) pair.
+    """Return the provenance literal for a (gate, threshold, intent) triple.
 
     Codex-rescue N1-H2 pass-2 sharpening: the registry is now
-    ``Dict[Tuple[str, float], str]`` mapping ``(gate, exact_value)``
-    to canonical doc-ref. The classifier returns
-    ``"literature_anchored"`` ONLY when the (gate, threshold) pair is
-    EXACTLY in the registry. Any other case returns ``"unknown"``
+    ``Dict[Tuple[str, float, str], str]`` mapping ``(gate, exact_value,
+    deployment_intent)`` to canonical doc-ref. The classifier returns
+    ``"literature_anchored"`` ONLY when the (gate, threshold, intent)
+    triple is EXACTLY in the registry. Any other case returns ``"unknown"``
     unless the caller explicitly declares a non-literature provenance
     (``"cohort_fitted"`` or ``"operator_override"``).
 
+    ``deployment_intent`` is keyword-only and defaults to ``"clinical"`` so
+    every existing 2-/3-arg call is unchanged — clinical runs still resolve
+    the 0.75 anchor. A commercial run must pass ``deployment_intent="commercial"``
+    to resolve the 0.65 anchor; passing a clinical threshold (0.75) under a
+    commercial intent (or vice versa) is NOT anchored — the intent is part of
+    the registry key, which is the anti-laundering guard.
+
     Behavior matrix:
 
-    * Exact (gate, value) match in registry → ``"literature_anchored"``,
+    * Exact (gate, value, intent) match in registry → ``"literature_anchored"``,
       regardless of ``declared_provenance``.
-    * Caller declared ``"literature_anchored"`` but pair NOT in registry
+    * Caller declared ``"literature_anchored"`` but triple NOT in registry
       → ``"unknown"`` (drops the laundering attack).
     * Caller declared ``"cohort_fitted"`` or ``"operator_override"``
-      and pair NOT in registry → that declared value (passes through;
+      and triple NOT in registry → that declared value (passes through;
       counts as non-literature for eligibility).
-    * No declaration AND pair NOT in registry → ``"unknown"``.
+    * No declaration AND triple NOT in registry → ``"unknown"``.
 
     The classifier no longer returns ``None`` — every code path returns
     a string from the ``ALLOWED_THRESHOLD_PROVENANCE`` set. ``"unknown"``
     is the new default when nothing matches.
     """
-    # Try the exact (gate, value) lookup first — this is the only path
+    intent = _normalize_intent(deployment_intent)
+    # Try the exact (gate, value, intent) lookup first — this is the only path
     # that can return ``"literature_anchored"``.
     if threshold is not None:
         try:
@@ -229,7 +269,10 @@ def classify_threshold_provenance(
         except (TypeError, ValueError):
             # Non-numeric threshold cannot be in the registry.
             threshold_f = None
-        if threshold_f is not None and (gate_name, threshold_f) in LITERATURE_ANCHORED_THRESHOLDS:
+        if (
+            threshold_f is not None
+            and (gate_name, threshold_f, intent) in LITERATURE_ANCHORED_THRESHOLDS
+        ):
             return THRESHOLD_PROVENANCE_LITERATURE_ANCHORED
 
     # If caller declared "literature_anchored" but the pair is not in
