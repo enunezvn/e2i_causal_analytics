@@ -338,3 +338,29 @@ async def test_promote_to_semantic_batch_respects_dedup_error_brands(fake_supaba
         c["path_id"] for c in fake_supabase.rows["causal_paths"] if c["consolidated_at"] is not None
     }
     assert promoted == {"a0", "a1"}
+
+
+@pytest.mark.asyncio
+async def test_promote_to_procedural_skips_empty_applicable_brands_when_scoped(
+    fake_supabase: FakeSupabase,
+):
+    """L10 (#694): a procedure with EMPTY applicable_brands must NOT be promoted
+    under a brand-scoped run — it lists no brand, so it doesn't match the scope.
+    (Old skip guarded on ``and applicable``, letting an empty list fall through.)
+    """
+    from src.memory.lifecycle.consolidator import ConsolidationResult
+
+    fake_supabase.rows["procedural_memories"].append(
+        {
+            "procedure_id": "p_empty",
+            "procedure_name": "no-brand-proc",
+            "applicable_brands": [],  # lists no brand -> must not match a scoped run
+            "success_rate": 0.95,
+            "usage_count": 12,
+        }
+    )
+    result = ConsolidationResult()
+    await Consolidator()._promote_to_procedural(result, "Kisqali")
+
+    assert result.promoted_to_procedural == 0
+    assert not fake_supabase.rows["procedural_memories"][0]["procedure_name"].startswith("[PROC] ")

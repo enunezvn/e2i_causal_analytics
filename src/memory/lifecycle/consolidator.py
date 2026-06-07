@@ -1729,7 +1729,12 @@ class Consolidator:
         for proc in candidates:
             applicable = proc.get("applicable_brands") or []
             # Filter by brand if scoped: applicable_brands is a list column.
-            if brand and applicable and brand not in applicable and "all" not in applicable:
+            # L10 (#694): do NOT guard on ``applicable`` being truthy — an EMPTY
+            # applicable_brands lists no brand, so under a scoped run it must be
+            # SKIPPED (not promoted). The old ``and applicable`` clause let an
+            # empty list fall through and promote. (Write paths coerce to
+            # ['all'] today, so this is a defensive tightening.)
+            if brand and brand not in applicable and "all" not in applicable:
                 continue
             # Idempotency: only promote rows that haven't been marked yet.
             # We use a JSONB-style marker in procedure_name as a side-channel
