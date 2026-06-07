@@ -43,11 +43,83 @@ Version: 1.0.0
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# Tag used to mark an Optuna distribution that was encoded with Optuna's own
+# JSON serializer inside an otherwise plain-JSON ``search_space`` payload. The
+# stdlib ``json`` encoder cannot serialize ``FloatDistribution`` /
+# ``IntDistribution`` / ``CategoricalDistribution`` objects, so we wrap each one
+# in ``{_OPTUNA_DIST_TAG: "<optuna-json>"}`` on write and reconstruct it on read.
+_OPTUNA_DIST_TAG = "__optuna_distribution__"
+
+
+def _search_space_json_default(obj: Any) -> Any:
+    """``json.dumps`` fallback for non-JSON-native ``search_space`` values.
+
+    Optuna distribution objects are encoded with Optuna's canonical serializer
+    and tagged so they can be decoded symmetrically. Pydantic models (e.g. the
+    typed ``OptunaDistribution`` schemas) fall back to ``model_dump``. Anything
+    else raises ``TypeError`` (the standard contract for a ``default`` hook).
+    """
+    from optuna.distributions import BaseDistribution, distribution_to_json
+
+    if isinstance(obj, BaseDistribution):
+        return {_OPTUNA_DIST_TAG: distribution_to_json(obj)}
+
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(mode="json")
+
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _serialize_search_space(search_space: Dict[str, Any]) -> str:
+    """JSON-encode a search space whose values may be Optuna distributions.
+
+    Plain JSON-safe values (E2I-format dicts, primitives) pass through
+    unchanged; Optuna distribution objects are encoded via
+    ``_search_space_json_default``. Symmetric with ``_deserialize_search_space``.
+    """
+    return json.dumps(search_space, default=_search_space_json_default)
+
+
+def _decode_search_space_value(value: Any) -> Any:
+    """Reconstruct a single search-space value, reversing the Optuna tag.
+
+    ``_OPTUNA_DIST_TAG`` is a reserved single-key marker written by
+    ``_search_space_json_default``. A malformed tagged payload degrades to the
+    raw value (with a warning) rather than raising, so a single corrupt entry
+    cannot discard an entire ``find_similar_patterns`` result set.
+    """
+    if isinstance(value, dict) and set(value) == {_OPTUNA_DIST_TAG}:
+        from optuna.distributions import json_to_distribution
+
+        try:
+            return json_to_distribution(value[_OPTUNA_DIST_TAG])
+        except Exception as e:  # noqa: BLE001 - degrade gracefully on corrupt data
+            logger.warning(f"Could not decode tagged Optuna distribution: {e}")
+            return value
+    return value
+
+
+def _deserialize_search_space(raw: Any) -> Dict[str, Any]:
+    """Inverse of ``_serialize_search_space``.
+
+    Accepts the stored JSON string (or an already-parsed dict, since some
+    Supabase clients hydrate ``jsonb`` columns) and returns a dict with any
+    tagged Optuna distributions reconstructed as real distribution objects.
+    ``None`` / non-dict payloads degrade to an empty dict.
+    """
+    if raw is None:
+        return {}
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(data, dict):
+        return {}
+    return {key: _decode_search_space_value(value) for key, value in data.items()}
 
 
 # ============================================================================
@@ -92,6 +164,7 @@ class HPOPatternMatch:
     n_features: Optional[int]
     similarity_score: float
     times_used: int
+    search_space: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -171,7 +244,7 @@ async def store_hpo_pattern(pattern: HPOPatternInput) -> Optional[str]:
             "procedure_id": pattern_id,
             "algorithm_name": pattern.algorithm_name,
             "problem_type": pattern.problem_type,
-            "search_space": json.dumps(pattern.search_space),
+            "search_space": _serialize_search_space(pattern.search_space),
             "best_hyperparameters": json.dumps(pattern.best_hyperparameters),
             "best_value": pattern.best_value,
             "optimization_metric": pattern.optimization_metric,
@@ -258,6 +331,10 @@ async def find_similar_patterns(
             if isinstance(best_hp, str):
                 best_hp = json.loads(best_hp)
 
+            # Reconstruct any Optuna distributions stored in the search space
+            # (symmetric with _serialize_search_space on write).
+            search_space = _deserialize_search_space(row.get("search_space"))
+
             patterns.append(
                 HPOPatternMatch(
                     pattern_id=row["pattern_id"],
@@ -270,6 +347,7 @@ async def find_similar_patterns(
                     n_features=row.get("n_features"),
                     similarity_score=row.get("similarity_score", 0.0),
                     times_used=row.get("times_used", 0),
+                    search_space=search_space,
                 )
             )
 
