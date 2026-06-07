@@ -11,6 +11,7 @@ from typing import Any, Dict
 from uuid import uuid4
 
 from .graph import create_data_preparer_graph
+from .memory_hooks import DataPreparerMemoryHooks
 from .state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -347,6 +348,11 @@ class DataPreparerAgent:
                 leakage_detected=bool(final_state.get("leakage_detected", False)),
             )
 
+            # Populate the semantic knowledge graph (e2i_causal) with the data-quality
+            # outcome so Tier 0 runs grow it and read-hooks return real context
+            # (#749 — data_preparer persisted only to the DB, never to memory).
+            await self._update_semantic_memory(final_state)
+
             return output
 
         except Exception as e:
@@ -407,3 +413,40 @@ class DataPreparerAgent:
 
         except Exception as e:
             logger.warning(f"Failed to persist QC report: {e}")
+
+    async def _update_semantic_memory(self, final_state: Dict[str, Any]) -> None:
+        """Populate the semantic knowledge graph (FalkorDB ``e2i_causal``) with the
+        data-quality outcome (#749).
+
+        ``data_preparer``'s ``run()`` persisted only to the database — it invoked NO
+        memory hook (procedural/episodic/semantic). The ``store_data_quality_pattern``
+        hook (DataSource + QCReport + HAS_QC, LeakageIncident) was defined but never
+        called, so Tier 0 runs left ``e2i_causal`` unpopulated. Graceful degradation:
+        if semantic memory is unavailable the write is skipped, never raised.
+
+        Args:
+            final_state: Final agent state carrying experiment_id, data_source,
+                qc_status, overall_score, leakage_detected, blocking_issues.
+        """
+        try:
+            experiment_id = final_state.get("experiment_id") or (
+                final_state.get("scope_spec") or {}
+            ).get("experiment_id")
+            data_source = final_state.get("data_source")
+            if not experiment_id or not data_source:
+                logger.debug("Missing experiment_id/data_source; skipping semantic-graph update")
+                return
+
+            hooks = DataPreparerMemoryHooks()
+            await hooks.store_data_quality_pattern(
+                experiment_id=str(experiment_id),
+                data_source=str(data_source),
+                qc_status=final_state.get("qc_status") or "unknown",
+                overall_score=float(final_state.get("overall_score") or 0.0),
+                leakage_detected=bool(final_state.get("leakage_detected", False)),
+                blocking_issues=final_state.get("blocking_issues") or [],
+            )
+            logger.info(f"Updated semantic graph (e2i_causal) for data prep: {experiment_id}")
+
+        except Exception as e:
+            logger.debug(f"Failed to update semantic memory: {e}")

@@ -32,6 +32,7 @@ from .aggregation import (
     aggregate_fold_metrics,
 )
 from .graph import create_model_trainer_graph
+from .memory_hooks import ModelTrainerMemoryHooks
 from .splitting import FoldSpec, RepeatedStratifiedSplitter
 from .state import ModelTrainerState
 
@@ -616,6 +617,11 @@ class ModelTrainerAgent:
         # Update procedural memory with successful training pattern
         await self._update_procedural_memory(output)
 
+        # Populate the semantic knowledge graph (e2i_causal) with the trained model
+        # so Tier 0 runs actually grow it and the read-hooks return real context
+        # (#749 — store_model_pattern was defined but never called).
+        await self._update_semantic_memory(output)
+
         # Log completion
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.info(
@@ -759,6 +765,44 @@ class ModelTrainerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
+
+    async def _update_semantic_memory(self, output: Dict[str, Any]) -> None:
+        """Populate the semantic knowledge graph (FalkorDB ``e2i_causal``) with the
+        trained model (#749).
+
+        Mirrors ``_update_procedural_memory`` — graceful degradation: if semantic
+        memory is unavailable the write is skipped, never raised. The
+        ``store_model_pattern`` hook (Model + Hyperparameters + TRAINED_WITH /
+        BELONGS_TO / USED_BY) was defined but never invoked, so Tier 0 runs left
+        ``e2i_causal`` unpopulated.
+
+        Args:
+            output: Agent output carrying training_run_id, experiment_id,
+                algorithm_name, test_metrics, best_hyperparameters,
+                success_criteria_met.
+        """
+        try:
+            training_run_id = output.get("training_run_id")
+            experiment_id = output.get("experiment_id")
+            if not training_run_id or not experiment_id:
+                logger.debug(
+                    "Missing training_run_id/experiment_id; skipping semantic-graph update"
+                )
+                return
+
+            hooks = ModelTrainerMemoryHooks()
+            await hooks.store_model_pattern(
+                experiment_id=str(experiment_id),
+                training_run_id=str(training_run_id),
+                algorithm_name=output.get("algorithm_name") or "unknown",
+                test_metrics=output.get("test_metrics", {}) or {},
+                best_hyperparameters=output.get("best_hyperparameters", {}) or {},
+                success_criteria_met=bool(output.get("success_criteria_met")),
+            )
+            logger.info(f"Updated semantic graph (e2i_causal) for training run: {training_run_id}")
+
+        except Exception as e:
+            logger.debug(f"Failed to update semantic memory: {e}")
 
     async def _run_repeated_splits(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """W3-lite Day-5 orchestrator (shard 21 §B/§C/§D + cycle-15 I-2/I-3/I-4).

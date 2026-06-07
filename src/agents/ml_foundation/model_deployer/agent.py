@@ -28,6 +28,7 @@ from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
 from .graph import create_model_deployer_graph
+from .memory_hooks import ModelDeployerMemoryHooks
 from .state import ModelDeployerState
 
 logger = logging.getLogger(__name__)
@@ -269,6 +270,10 @@ class ModelDeployerAgent:
         # Update procedural memory with successful deployment pattern
         if output.get("deployment_successful"):
             await self._update_procedural_memory(output, final_state)
+            # Populate the semantic knowledge graph (e2i_causal) with the deployment
+            # so Tier 0 runs grow it and read-hooks return real context
+            # (#749 — store_deployment_pattern was defined but never called).
+            await self._update_semantic_memory(output, final_state)
 
         # Log execution time and SLA check
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -453,3 +458,42 @@ class ModelDeployerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
+
+    async def _update_semantic_memory(self, output: Dict[str, Any], state: Dict[str, Any]) -> None:
+        """Populate the semantic knowledge graph (FalkorDB ``e2i_causal``) with the
+        deployment (#749).
+
+        Mirrors ``_update_procedural_memory`` — graceful degradation. The
+        ``store_deployment_pattern`` hook (Deployment + DEPLOYS_FOR, Rollback +
+        ROLLED_BACK) was defined but never invoked, so Tier 0 runs left
+        ``e2i_causal`` unpopulated. Called only on a successful deployment (same
+        gate as the procedural write).
+
+        Args:
+            output: Agent output carrying status / rollback_occurred.
+            state: Final agent state carrying experiment_id, deployment_name,
+                model_version, target_environment, deployment_action.
+        """
+        try:
+            experiment_id = state.get("experiment_id")
+            deployment_id = state.get("deployment_name")
+            if not experiment_id or not deployment_id:
+                logger.debug(
+                    "Missing experiment_id/deployment_name; skipping semantic-graph update"
+                )
+                return
+
+            hooks = ModelDeployerMemoryHooks()
+            await hooks.store_deployment_pattern(
+                experiment_id=str(experiment_id),
+                deployment_id=str(deployment_id),
+                model_version=int(state.get("model_version") or 0),
+                target_environment=state.get("target_environment") or "unknown",
+                deployment_status=output.get("status") or "deployed",
+                deployment_strategy=state.get("deployment_action") or "unknown",
+                rollback_occurred=bool(output.get("rollback_occurred", False)),
+            )
+            logger.info(f"Updated semantic graph (e2i_causal) for deployment: {deployment_id}")
+
+        except Exception as e:
+            logger.debug(f"Failed to update semantic memory: {e}")

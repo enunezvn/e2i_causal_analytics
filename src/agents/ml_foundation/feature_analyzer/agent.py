@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Tuple, cast
 from uuid import uuid4
 
 from .graph import create_feature_analyzer_graph, create_shap_analysis_graph
+from .memory_hooks import FeatureAnalyzerMemoryHooks
 from .state import FeatureAnalyzerState
 
 logger = logging.getLogger(__name__)
@@ -49,17 +50,6 @@ def _get_opik_connector():
         return get_opik_connector()
     except Exception as e:
         logger.warning(f"Could not get Opik connector: {e}")
-        return None
-
-
-def _get_semantic_memory():
-    """Get semantic memory client (lazy import with graceful degradation)."""
-    try:
-        from src.memory.semantic_memory import get_semantic_memory_client
-
-        return get_semantic_memory_client()
-    except Exception as e:
-        logger.debug(f"Semantic memory not available: {e}")
         return None
 
 
@@ -394,67 +384,62 @@ class FeatureAnalyzerAgent:
         return interaction_list
 
     async def _update_semantic_memory(self, state: Dict[str, Any]) -> Tuple[bool, int]:
-        """Update semantic memory with feature relationships.
+        """Populate the semantic knowledge graph (FalkorDB ``e2i_causal``) with the
+        feature-importance findings (#749).
 
-        Graceful degradation: If semantic memory is unavailable,
-        logs a debug message and continues without error.
+        Drives the ``store_feature_importance_patterns`` hook (typed ``Feature``
+        entities + ``HAS_IMPORTANCE`` / ``INTERACTS_WITH`` edges). The previous
+        implementation called ``semantic_memory.add_relationship(source=…, target=…)``
+        — a signature that never existed on ``FalkorDBSemanticMemory`` — so it raised,
+        was swallowed, and wrote NO typed nodes; ``e2i_causal`` stayed unchanged.
+
+        Graceful degradation: returns ``(False, 0)`` if semantic memory is unavailable
+        or the write fails. Preserves the ``(updated, entries)`` contract that ``run()``
+        unpacks at the call site.
 
         Args:
-            state: Final agent state
+            state: Final agent state carrying experiment_id,
+                ``global_importance_ranked`` (List[(feature, importance)]) and
+                ``top_interactions_raw`` (List[(feat1, feat2, strength)]).
 
         Returns:
-            Tuple of (updated: bool, entries: int)
+            Tuple of (updated: bool, entries: int).
         """
         try:
-            memory = _get_semantic_memory()
-            if memory is None:
-                logger.debug("Semantic memory not available, skipping update")
+            experiment_id = state.get("experiment_id")
+            if not experiment_id:
+                logger.debug("No experiment_id; skipping semantic-graph update")
                 return False, 0
 
-            entries_added = 0
-            experiment_id = state.get("experiment_id")
+            global_importance = {
+                str(feature): float(importance)
+                for feature, importance in (state.get("global_importance_ranked", []) or [])
+            }
+            interactions = [
+                {
+                    "feature_1": feat1,
+                    "feature_2": feat2,
+                    "interaction_strength": float(strength),
+                }
+                for feat1, feat2, strength in (state.get("top_interactions_raw", []) or [])
+            ]
 
-            # Store feature importance relationships
-            global_importance_ranked = state.get("global_importance_ranked", [])
-            for rank, (feature, importance) in enumerate(global_importance_ranked[:10], 1):
-                try:
-                    await memory.add_relationship(
-                        source="experiment",
-                        source_id=experiment_id,
-                        target="feature",
-                        target_id=feature,
-                        relationship_type="has_important_feature",
-                        properties={
-                            "importance": float(importance),
-                            "rank": rank,
-                            "model_version": state.get("model_version", "unknown"),
-                        },
-                    )
-                    entries_added += 1
-                except Exception as e:
-                    logger.debug(f"Failed to add feature relationship: {e}")
+            if not global_importance and not interactions:
+                logger.debug("No feature importance/interactions; skipping semantic-graph update")
+                return False, 0
 
-            # Store feature interactions
-            top_interactions_raw = state.get("top_interactions_raw", [])
-            for feat1, feat2, strength in top_interactions_raw[:5]:
-                try:
-                    await memory.add_relationship(
-                        source="feature",
-                        source_id=feat1,
-                        target="feature",
-                        target_id=feat2,
-                        relationship_type="interacts_with",
-                        properties={
-                            "interaction_strength": float(strength),
-                            "experiment_id": experiment_id,
-                        },
-                    )
-                    entries_added += 1
-                except Exception as e:
-                    logger.debug(f"Failed to add interaction relationship: {e}")
+            hooks = FeatureAnalyzerMemoryHooks()
+            ok = await hooks.store_feature_importance_patterns(
+                experiment_id=str(experiment_id),
+                global_importance=global_importance,
+                interactions=interactions,
+            )
+            if not ok:
+                return False, 0
 
-            logger.info(f"Updated semantic memory with {entries_added} entries")
-            return True, entries_added
+            entries = min(len(global_importance), 10) + min(len(interactions), 10)
+            logger.info(f"Updated semantic graph (e2i_causal) with {entries} feature entries")
+            return True, entries
 
         except Exception as e:
             logger.warning(f"Failed to update semantic memory: {e}")
