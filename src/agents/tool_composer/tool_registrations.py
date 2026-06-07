@@ -5,6 +5,26 @@ Purpose: Demonstrate how agents expose tools to the Tool Composer
 
 This file shows the pattern for registering composable tools from each agent.
 Each agent should call its registration function during initialization.
+
+Data contracts (F7 — there are exactly TWO, do not invent variants):
+
+1. DataFrame-via-kwargs (the stats/causal tools): ``causal_effect_estimator``,
+   ``cate_analyzer``, ``risk_scorer``, ``propensity_estimator``,
+   ``cohort_statistics``, ``cohort_validator``, ``psi_calculator``,
+   ``distribution_comparator``. These read the real ``pandas.DataFrame`` from
+   ``**kwargs`` EXCLUSIVELY via ``_extract_dataframe_from_kwargs`` (which checks
+   the canonical keys ``_DATAFRAME_KWARGS_KEYS = ("data","dataframe",
+   "estimation_data")``). The executor injects the in-context frame under
+   ``estimation_data``. When no frame is present these tools FAIL CLOSED with a
+   descriptive ``RuntimeError`` — they never fabricate data.
+
+2. Dict-input (the structure/graph tools): ``discover_dag`` takes its ``data``
+   field as a plain ``Dict`` and must NOT be handed a DataFrame. Upstream-result
+   consumers (``segment_ranker``, ``roi_estimator``) likewise take a Dict
+   produced by an earlier tool.
+
+Anti-mocking invariant (CLAUDE.md): every tool either computes from real inputs
+or fail-closes cleanly. No silent placeholder values.
 """
 
 from __future__ import annotations
@@ -274,24 +294,25 @@ def cohort_builder(
     exclusion_criteria: Optional[List[str]] = None,
     **kwargs,
 ) -> CohortBuilderOutput:
-    """
-    Build a patient cohort using CohortConstructor agent.
+    """Build a patient cohort — intentional fail-close.
 
-    This is a placeholder implementation. The real implementation
-    calls the CohortConstructorAgent.
+    This composable tool cannot build a real cohort: it has no access to the
+    patient population / claims layer (that is owned by the
+    ``cohort_constructor`` agent). Per anti-mocking discipline it FAILS CLOSED
+    rather than return fabricated ``P001/P002/P003`` placeholder IDs. This is an
+    intentional fail-close, NOT a deletion — the tool stays registered so the
+    planner can route to it and receive an actionable error.
+
+    Raises:
+        RuntimeError: always — directing the caller to the cohort_constructor
+            agent which owns real cohort construction.
     """
-    # Placeholder - real implementation calls CohortConstructorAgent
-    return CohortBuilderOutput(
-        eligible_patient_ids=["P001", "P002", "P003"],
-        total_evaluated=100,
-        total_eligible=3,
-        eligibility_rate=0.03,
-        criteria_breakdown={
-            "age_criteria": 85,
-            "diagnosis_criteria": 45,
-            "exclusion_applied": 42,
-        },
-        execution_time_ms=1500.0,
+    raise RuntimeError(
+        "cohort_builder cannot construct a real cohort from this composable tool "
+        "— it has no access to the patient population. Route cohort construction "
+        "through the cohort_constructor agent (CohortConstructorAgent), which "
+        f"owns the real claims/patient layer. Requested brand={brand!r}, "
+        f"indication={indication!r}. Refusing to fabricate eligible_patient_ids."
     )
 
 
@@ -321,32 +342,69 @@ def cohort_validator(
     required_completeness: float = 0.8,
     **kwargs,
 ) -> CohortValidatorOutput:
-    """Validate a cohort against quality standards."""
-    total_eligible = cohort_result.get("total_eligible", 0)
-    is_valid = total_eligible >= min_cohort_size
+    """Validate a cohort against quality standards using REAL computed values.
+
+    ``is_valid`` is the real size check. ``data_completeness`` is the real
+    fraction of non-null cells in a caller-supplied ``pandas.DataFrame`` (via
+    ``_extract_dataframe_from_kwargs``); ``quality_score`` is derived from both.
+    No hardcoded completeness/quality.
+
+    Fail-closed (anti-mocking + F4):
+    - ``cohort_result`` is not a dict -> ``RuntimeError`` (descriptive).
+    - No DataFrame supplied -> ``RuntimeError`` (cannot measure completeness).
+    """
+    if not isinstance(cohort_result, dict):
+        raise RuntimeError(
+            "cohort_validator: `cohort_result` must be a dict (the output of "
+            f"cohort_builder); got {type(cohort_result).__name__}={cohort_result!r}. "
+            "Refusing to proceed."
+        )
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "cohort_validator requires a real cohort DataFrame supplied via one "
+            f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
+            f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate a "
+            "completeness score — missing data must surface as a structured error."
+        )
+
+    total_eligible = int(cohort_result.get("total_eligible", 0))
+    is_valid_size = total_eligible >= min_cohort_size
+
+    total_cells = int(df.shape[0] * df.shape[1])
+    completeness = float(df.notna().to_numpy().sum()) / total_cells if total_cells > 0 else 0.0
+    completeness_passed = completeness >= required_completeness
+    is_valid = is_valid_size and completeness_passed
+    quality_score = float((0.5 if is_valid_size else 0.0) + 0.5 * min(1.0, completeness))
+
+    warnings: List[str] = []
+    if not is_valid_size:
+        warnings.append(f"Cohort size {total_eligible} below minimum {min_cohort_size}")
+    if not completeness_passed:
+        warnings.append(
+            f"Data completeness {completeness:.3f} below required {required_completeness}"
+        )
 
     return CohortValidatorOutput(
         is_valid=is_valid,
         validation_checks=[
             {
                 "check": "minimum_size",
-                "passed": is_valid,
+                "passed": is_valid_size,
                 "actual": total_eligible,
                 "required": min_cohort_size,
             },
             {
                 "check": "data_completeness",
-                "passed": True,
-                "actual": 0.95,
+                "passed": completeness_passed,
+                "actual": completeness,
                 "required": required_completeness,
             },
         ],
-        quality_score=0.92 if is_valid else 0.45,
-        warnings=[]
-        if is_valid
-        else [f"Cohort size {total_eligible} below minimum {min_cohort_size}"],
+        quality_score=quality_score,
+        warnings=warnings,
         recommendations=["Consider relaxing age criteria to increase cohort size"]
-        if not is_valid
+        if not is_valid_size
         else [],
     )
 
@@ -377,26 +435,79 @@ def cohort_statistics(
     include_clinical: bool = True,
     **kwargs,
 ) -> CohortStatisticsOutput:
-    """Compute statistics for a patient cohort."""
+    """Compute REAL descriptive statistics for a cohort from a DataFrame.
+
+    Demographics/clinical summaries are computed from a caller-supplied
+    ``pandas.DataFrame`` (via ``_extract_dataframe_from_kwargs``). No hardcoded
+    means/distributions.
+
+    Fail-closed (anti-mocking + F4):
+    - ``cohort_result`` is not a dict -> ``RuntimeError`` (descriptive, not the
+      raw ``AttributeError`` a ``str`` would otherwise raise on ``.get``).
+    - No DataFrame supplied -> ``RuntimeError``.
+    """
+    if not isinstance(cohort_result, dict):
+        raise RuntimeError(
+            "cohort_statistics: `cohort_result` must be a dict (the output of "
+            f"cohort_builder); got {type(cohort_result).__name__}={cohort_result!r}. "
+            "Refusing to proceed — pass the structured cohort result, not a "
+            "string or other scalar."
+        )
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "cohort_statistics requires a real cohort DataFrame supplied via one "
+            f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
+            f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate "
+            "demographics — missing data must surface as a structured error."
+        )
+
+    cohort_size = int(cohort_result.get("total_eligible", len(df)))
+
+    demographics: Dict[str, Any] = {}
+    if include_demographics and "age" in df.columns:
+        age = df["age"].dropna()
+        demographics["age_mean"] = float(age.mean())
+        demographics["age_std"] = float(age.std(ddof=0))
+        if "gender" in df.columns:
+            gender_counts = df["gender"].value_counts(normalize=True)
+            demographics["gender_distribution"] = {
+                str(k): float(v) for k, v in gender_counts.items()
+            }
+
+    clinical: Dict[str, Any] = {}
+    if include_clinical:
+        for col in df.select_dtypes(include="number").columns:
+            if col == "age":
+                continue
+            series = df[col].dropna()
+            if len(series) == 0:
+                continue
+            clinical[str(col)] = {
+                "mean": float(series.mean()),
+                "std": float(series.std(ddof=0)),
+            }
+
+    summary_table: List[Dict[str, Any]] = []
+    for col in df.select_dtypes(include="number").columns:
+        series = df[col].dropna()
+        if len(series) == 0:
+            continue
+        summary_table.append(
+            {
+                "variable": str(col),
+                "mean": float(series.mean()),
+                "std": float(series.std(ddof=0)),
+                "min": float(series.min()),
+                "max": float(series.max()),
+            }
+        )
+
     return CohortStatisticsOutput(
-        cohort_size=cohort_result.get("total_eligible", 0),
-        demographics={
-            "age_mean": 52.3,
-            "age_std": 14.2,
-            "gender_distribution": {"male": 0.48, "female": 0.52},
-        }
-        if include_demographics
-        else {},
-        clinical_characteristics={
-            "disease_severity": {"mild": 0.2, "moderate": 0.5, "severe": 0.3},
-            "prior_treatment": {"naive": 0.35, "experienced": 0.65},
-        }
-        if include_clinical
-        else {},
-        summary_table=[
-            {"variable": "Age", "mean": 52.3, "std": 14.2, "min": 18, "max": 85},
-            {"variable": "Time to diagnosis (days)", "mean": 180, "std": 90, "min": 30, "max": 730},
-        ],
+        cohort_size=cohort_size,
+        demographics=demographics,
+        clinical_characteristics=clinical,
+        summary_table=summary_table,
     )
 
 
@@ -757,16 +868,40 @@ def _derive_p_value_from_confidence(consensus_confidence: Optional[float]) -> fl
     avg_execution_ms=5000,
 )
 def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
-    """Run refutation tests on a causal estimate."""
-    return {
-        "placebo_treatment": {"passed": True, "p_value": 0.45},
-        "random_common_cause": {"passed": True, "p_value": 0.52},
-        "data_subset": {"passed": True, "p_value": 0.03},
-        "bootstrap": {"passed": True, "ci_includes_zero": False},
-        "sensitivity_e_value": {"passed": True, "e_value": 2.3},
-        "overall_passed": True,
-        "gate_decision": "proceed",
-    }
+    """Run DoWhy refutation tests — intentional fail-close.
+
+    This composable tool receives only an ``estimate_id`` (a string), NOT the
+    live DoWhy estimate object / fitted model / source DataFrame that
+    ``run_all_tests`` requires. It therefore CANNOT run a real refutation and
+    FAILS CLOSED rather than return a fabricated all-pass suite. Intentional
+    fail-close, not a deletion.
+
+    Raises:
+        RuntimeError: always — directing the caller to causal_impact's
+            ``run_refutation`` path which holds the live estimate/data.
+    """
+    raise RuntimeError(
+        "refutation_runner cannot run real DoWhy refutation from this composable "
+        f"tool — it received only estimate_id={estimate_id!r} and lacks the live "
+        "estimate object and source data that DoWhy.run_all_tests requires. Use "
+        "causal_impact's run_refutation path (which holds the fitted estimate and "
+        "DataFrame). Refusing to fabricate refutation results."
+    )
+
+
+def _e_value_from_rr(rr: float) -> float:
+    """VanderWeele & Ding (2017) E-value for a risk-ratio ``rr``.
+
+    ``E = RR + sqrt(RR*(RR-1))`` for ``RR >= 1``; for a protective effect the
+    formula is applied to ``1/RR``. A bound whose RR crosses the null (RR == 1)
+    has E-value exactly 1.0 (no unmeasured confounding is required to explain it
+    away). Returns a value ``>= 1.0``.
+    """
+    if rr < 1.0:
+        rr = 1.0 / rr
+    if rr <= 1.0:
+        return 1.0
+    return rr + math.sqrt(rr * (rr - 1.0))
 
 
 @composable_tool(
@@ -782,12 +917,56 @@ def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
     avg_execution_ms=1500,
 )
 def sensitivity_analyzer(ate: float, ci_lower: float, **kwargs) -> Dict[str, Any]:
-    """Compute sensitivity analysis for unobserved confounding."""
+    """Compute VanderWeele & Ding (2017) E-values for unobserved confounding.
+
+    REAL closed-form computation — no data required, no hardcoded constants.
+
+    Assumption (documented): ``ate`` and ``ci_lower`` are reported on a
+    standardized-mean-difference (SMD) scale. They are converted to an
+    approximate risk-ratio via ``RR = exp(0.91 * SMD)`` (VanderWeele & Ding
+    2017, the SMD->RR approximation). The E-value is then
+    ``E = RR + sqrt(RR*(RR-1))``; for the CI bound, if the converted RR crosses
+    the null (RR <= 1) the E-value is exactly 1.0.
+
+    Args:
+        ate: Estimated average treatment effect (SMD scale).
+        ci_lower: Lower confidence bound of the effect (SMD scale).
+
+    Returns:
+        Dict with ``e_value_point``, ``e_value_ci``, ``interpretation`` and a
+        ``robustness`` label DERIVED from the computed point E-value.
+
+    Raises:
+        RuntimeError: if ``ate`` or ``ci_lower`` is non-finite. The tool
+            refuses to emit a fabricated E-value.
+    """
+    if not (math.isfinite(ate) and math.isfinite(ci_lower)):
+        raise RuntimeError(
+            "sensitivity_analyzer requires finite `ate` and `ci_lower`; got "
+            f"ate={ate!r}, ci_lower={ci_lower!r}. Refusing to fabricate an "
+            "E-value — per anti-mocking discipline non-finite inputs surface "
+            "as a structured error."
+        )
+    rr_point = math.exp(0.91 * ate)
+    rr_ci = math.exp(0.91 * ci_lower)
+    e_value_point = _e_value_from_rr(rr_point)
+    e_value_ci = _e_value_from_rr(rr_ci)
+    if e_value_point >= 3.0:
+        robustness = "strong"
+    elif e_value_point >= 1.5:
+        robustness = "moderate"
+    else:
+        robustness = "weak"
     return {
-        "e_value_point": 2.3,
-        "e_value_ci": 1.8,
-        "interpretation": "An unobserved confounder would need to be associated with both treatment and outcome by a factor of 2.3 to explain away the effect.",
-        "robustness": "moderate",
+        "e_value_point": e_value_point,
+        "e_value_ci": e_value_ci,
+        "interpretation": (
+            f"An unobserved confounder would need to be associated with both "
+            f"treatment and outcome by a risk-ratio of at least "
+            f"{e_value_point:.2f} (and the lower CI bound by {e_value_ci:.2f}) "
+            "to explain away the observed effect."
+        ),
+        "robustness": robustness,
     }
 
 
@@ -1250,6 +1429,35 @@ def counterfactual_simulator(
 # ============================================================================
 
 
+def _psi(baseline: Any, current: Any, *, bins: int = 10) -> Tuple[float, List[Dict[str, Any]]]:
+    """Population Stability Index between two 1-D numeric arrays.
+
+    Bins by ``baseline`` deciles; ``PSI = sum((c_pct - b_pct) * ln(c_pct/b_pct))``
+    with percentages floored at 1e-6 to avoid log(0). Returns ``(psi, buckets)``.
+    """
+    import numpy as np
+
+    b = np.asarray(baseline, dtype=float)
+    c = np.asarray(current, dtype=float)
+    edges = np.quantile(b, np.linspace(0, 1, bins + 1))
+    edges[0], edges[-1] = -np.inf, np.inf
+    edges = np.unique(edges)
+    b_counts = np.histogram(b, bins=edges)[0].astype(float)
+    c_counts = np.histogram(c, bins=edges)[0].astype(float)
+    b_pct = np.clip(b_counts / b_counts.sum(), 1e-6, None)
+    c_pct = np.clip(c_counts / c_counts.sum(), 1e-6, None)
+    psi = float(np.sum((c_pct - b_pct) * np.log(c_pct / b_pct)))
+    buckets = [
+        {
+            "range": f"{edges[i]:.4g}-{edges[i + 1]:.4g}",
+            "baseline_pct": float(b_pct[i]),
+            "current_pct": float(c_pct[i]),
+        }
+        for i in range(len(b_pct))
+    ]
+    return psi, buckets
+
+
 @composable_tool(
     name="psi_calculator",
     description="Calculate Population Stability Index for drift detection",
@@ -1264,17 +1472,59 @@ def counterfactual_simulator(
     avg_execution_ms=800,
 )
 def psi_calculator(
-    feature: str, baseline_period: str, current_period: str, **kwargs
+    feature: str,
+    baseline_period: str,
+    current_period: str,
+    period_column: str = "period",
+    **kwargs,
 ) -> Dict[str, Any]:
-    """Calculate PSI for drift detection."""
+    """Compute REAL Population Stability Index for one feature across two periods.
+
+    Splits a caller-supplied ``pandas.DataFrame`` (via ``_extract_dataframe_from_kwargs``)
+    into ``baseline`` and ``current`` rows by ``period_column`` and computes the
+    PSI of ``feature`` between them. No hardcoded values.
+
+    Fail-closed (anti-mocking): raises ``RuntimeError`` when no DataFrame is
+    supplied, when ``feature``/``period_column`` is absent, or when either
+    period yields no rows.
+    """
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "psi_calculator requires a real DataFrame supplied via one of the "
+            f"kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
+            f"{sorted(kwargs.keys())!r}. The tool does not fabricate a PSI — "
+            "missing data must surface as a structured error."
+        )
+    for col in (feature, period_column):
+        if col not in df.columns:
+            raise RuntimeError(
+                f"psi_calculator: column {col!r} not found in the supplied "
+                f"DataFrame (columns={list(df.columns)!r}). Refusing to "
+                "fabricate a result."
+            )
+    baseline = df.loc[df[period_column] == baseline_period, feature].dropna()
+    current = df.loc[df[period_column] == current_period, feature].dropna()
+    if len(baseline) == 0 or len(current) == 0:
+        raise RuntimeError(
+            f"psi_calculator: baseline_period={baseline_period!r} matched "
+            f"{len(baseline)} rows and current_period={current_period!r} matched "
+            f"{len(current)} rows in column {period_column!r}; both must be "
+            "non-empty to compute a PSI. Refusing to fabricate a result."
+        )
+    psi_value, buckets = _psi(baseline.to_numpy(), current.to_numpy())
+    threshold = 0.1
+    if psi_value < 0.1:
+        interpretation = "No significant drift"
+    elif psi_value < 0.25:
+        interpretation = "Moderate drift"
+    else:
+        interpretation = "Significant drift"
     return {
-        "psi": 0.08,
-        "interpretation": "No significant drift",
-        "threshold": 0.1,
-        "buckets": [
-            {"range": "0-0.1", "baseline_pct": 0.15, "current_pct": 0.14},
-            {"range": "0.1-0.2", "baseline_pct": 0.25, "current_pct": 0.27},
-        ],
+        "psi": psi_value,
+        "interpretation": interpretation,
+        "threshold": threshold,
+        "buckets": buckets,
     }
 
 
@@ -1292,16 +1542,71 @@ def psi_calculator(
     avg_execution_ms=1200,
 )
 def distribution_comparator(
-    features: List[str], period_1: str, period_2: str, **kwargs
+    features: List[str],
+    period_1: str,
+    period_2: str,
+    period_column: str = "period",
+    **kwargs,
 ) -> Dict[str, Any]:
-    """Compare distributions across time periods."""
-    return {
-        "comparisons": [
-            {"feature": f, "ks_statistic": 0.05, "p_value": 0.34, "drift_detected": False}
-            for f in features
-        ],
-        "overall_drift": False,
-    }
+    """Compare feature distributions across two periods with a REAL KS test.
+
+    For each feature, runs ``scipy.stats.ks_2samp`` on the ``period_1`` vs
+    ``period_2`` rows of a caller-supplied ``pandas.DataFrame`` (via
+    ``_extract_dataframe_from_kwargs``). ``drift_detected`` is ``p_value < 0.05``.
+    No hardcoded statistics.
+
+    Fail-closed (anti-mocking): raises ``RuntimeError`` when no DataFrame is
+    supplied, when ``period_column`` or a requested feature is absent, or when
+    either period yields no rows.
+    """
+    from scipy.stats import ks_2samp
+
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "distribution_comparator requires a real DataFrame supplied via one "
+            f"of the kwargs keys {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs "
+            f"keys={sorted(kwargs.keys())!r}. The tool does not fabricate KS "
+            "statistics — missing data must surface as a structured error."
+        )
+    if period_column not in df.columns:
+        raise RuntimeError(
+            f"distribution_comparator: period column {period_column!r} not found "
+            f"in the supplied DataFrame (columns={list(df.columns)!r})."
+        )
+    p1_mask = df[period_column] == period_1
+    p2_mask = df[period_column] == period_2
+    if int(p1_mask.sum()) == 0 or int(p2_mask.sum()) == 0:
+        raise RuntimeError(
+            f"distribution_comparator: period_1={period_1!r} matched "
+            f"{int(p1_mask.sum())} rows and period_2={period_2!r} matched "
+            f"{int(p2_mask.sum())} rows in column {period_column!r}; both must "
+            "be non-empty. Refusing to fabricate a result."
+        )
+    comparisons: List[Dict[str, Any]] = []
+    any_drift = False
+    for feature in features:
+        if feature not in df.columns:
+            raise RuntimeError(
+                f"distribution_comparator: feature {feature!r} not found in the "
+                f"supplied DataFrame (columns={list(df.columns)!r})."
+            )
+        a = df.loc[p1_mask, feature].dropna()
+        b = df.loc[p2_mask, feature].dropna()
+        result = ks_2samp(a, b)
+        ks_stat = float(result.statistic)
+        p_value = float(result.pvalue)
+        drift = p_value < 0.05
+        any_drift = any_drift or drift
+        comparisons.append(
+            {
+                "feature": feature,
+                "ks_statistic": ks_stat,
+                "p_value": p_value,
+                "drift_detected": drift,
+            }
+        )
+    return {"comparisons": comparisons, "overall_drift": any_drift}
 
 
 # ============================================================================
