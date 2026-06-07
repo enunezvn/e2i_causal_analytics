@@ -576,13 +576,20 @@ class TestResetFunctions:
 
 
 @pytest.mark.asyncio
-async def test_async_supabase_client_concurrent_init_creates_one(monkeypatch):
+@pytest.mark.parametrize(
+    "getter_name",
+    ["get_async_supabase_client", "get_async_supabase_service_client"],
+)
+async def test_async_supabase_getter_concurrent_init_creates_one(monkeypatch, getter_name):
     """L14 (#694): concurrent first-time callers must create exactly ONE async
     client. Without the init lock, every coroutine passes the ``is None`` check
     across the ``await acreate_client`` and creates a duplicate (orphaned httpx
     pool). Faithful: the real getter runs; only the SDK ``acreate_client`` is
-    replaced with a slow stub that yields, forcing the race."""
-    from src.memory.services.factories import get_async_supabase_client
+    replaced with a slow stub that yields, forcing the race. Both async getters
+    share the lock, so both are exercised (codex LOW)."""
+    import src.memory.services.factories as factories
+
+    getter = getattr(factories, getter_name)
 
     monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
@@ -599,9 +606,10 @@ async def test_async_supabase_client_concurrent_init_creates_one(monkeypatch):
 
     try:
         with patch("supabase.acreate_client", _slow_acreate):
-            clients = await asyncio.gather(*[get_async_supabase_client() for _ in range(20)])
+            clients = await asyncio.gather(*[getter() for _ in range(20)])
         assert len(create_calls) == 1, (
-            f"expected exactly 1 client creation under concurrency, got {len(create_calls)}"
+            f"{getter_name}: expected exactly 1 client creation under concurrency, "
+            f"got {len(create_calls)}"
         )
         # Every caller receives the same cached instance.
         assert len({id(c) for c in clients}) == 1

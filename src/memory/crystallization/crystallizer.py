@@ -186,7 +186,11 @@ class Crystallizer:
             )
             if region:
                 page_query = page_query.eq("region", region)
-            page_query = page_query.range(offset, offset + page_size - 1)
+            # L7 (codex MED): order by the unique PK before paging. Offset
+            # pagination without a stable sort can skip or duplicate rows across
+            # pages if the query plan reorders — defeating the determinism this
+            # pagination is meant to give. memory_id is the unique PK.
+            page_query = page_query.order("memory_id").range(offset, offset + page_size - 1)
             page = ((await asyncio.to_thread(page_query.execute)).data) or []
             memories.extend(page)
             if len(page) < page_size:
