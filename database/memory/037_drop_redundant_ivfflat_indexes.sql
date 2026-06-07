@@ -16,8 +16,11 @@
 --       (The 3rd 001 IVFFlat index, idx_cycles_embedding on cognitive_cycles,
 --       was already removed when migration 032 dropped that table.)
 --
--- Idempotent (DROP INDEX IF EXISTS).
+-- LOCKING: uses DROP INDEX CONCURRENTLY so the drop never takes an
+-- AccessExclusiveLock that blocks reads/writes on the (live) tables. CONCURRENTLY
+-- CANNOT run inside a transaction block — this migration must NOT be wrapped in
+-- BEGIN/COMMIT (it is not). Idempotent (DROP INDEX IF EXISTS).
 -- ============================================================================
 
-DROP INDEX IF EXISTS idx_episodic_embedding;
-DROP INDEX IF EXISTS idx_procedural_trigger_embedding;
+DROP INDEX CONCURRENTLY IF EXISTS idx_episodic_embedding;
+DROP INDEX CONCURRENTLY IF EXISTS idx_procedural_trigger_embedding;

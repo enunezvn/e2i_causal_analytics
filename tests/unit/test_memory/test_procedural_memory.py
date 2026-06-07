@@ -459,7 +459,8 @@ class TestUpdateProcedureOutcome:
     async def test_update_success_calls_atomic_rpc(self, mock_supabase):
         """On success, call the atomic increment RPC with p_success=True (no
         SELECT-then-UPDATE)."""
-        mock_supabase.rpc.return_value.execute.return_value.data = 1  # 1 row updated
+        # Real PostgREST wire format for the RETURNS TABLE RPC: a list of rows.
+        mock_supabase.rpc.return_value.execute.return_value.data = [{"rows_updated": 1}]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
             await update_procedure_outcome("proc_123", success=True)
@@ -474,7 +475,7 @@ class TestUpdateProcedureOutcome:
     @pytest.mark.asyncio
     async def test_update_failure_passes_success_false(self, mock_supabase):
         """On failure, pass p_success=False so only usage_count increments."""
-        mock_supabase.rpc.return_value.execute.return_value.data = 1
+        mock_supabase.rpc.return_value.execute.return_value.data = [{"rows_updated": 1}]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
             await update_procedure_outcome("proc_123", success=False)
@@ -486,8 +487,8 @@ class TestUpdateProcedureOutcome:
 
     @pytest.mark.asyncio
     async def test_procedure_not_found(self, mock_supabase):
-        """A 0-row RPC result (procedure missing) is handled gracefully (no raise)."""
-        mock_supabase.rpc.return_value.execute.return_value.data = 0  # 0 rows updated
+        """An empty RPC result (procedure missing) is handled gracefully (no raise)."""
+        mock_supabase.rpc.return_value.execute.return_value.data = []  # empty => not found
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
             await update_procedure_outcome("nonexistent", success=True)  # must not raise
