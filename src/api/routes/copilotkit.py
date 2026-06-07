@@ -243,6 +243,8 @@ from src.api.dependencies.auth import (
     TEST_USER,
     TESTING_MODE,
     AuthError,
+    get_user_brands,
+    is_cross_brand_admin,
     require_viewer,
     verify_supabase_token,
 )
@@ -3212,6 +3214,40 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
     return token_user_id
 
 
+def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:
+    """Validate a chat ``brand_context`` against the caller's brand grants (H1 / #694).
+
+    A causal analysis stamps its ``brand_context`` onto any causal finding it
+    writes to the FalkorDB graph; ``GET /memory/semantic/paths`` then surfaces
+    that finding to the brand's scoped viewers. So an un-grant-checked
+    ``brand_context`` is a cross-tenant WRITE-poisoning vector: a viewer granted
+    only Brand-A could stamp a finding ``brand=Brand-B`` and have it appear in
+    Brand-B's scoped reads. We therefore require the requested brand to be within
+    the caller's grants.
+
+    Returns the validated brand (or ``""`` when none was requested — an unbranded
+    finding stays admin-only). A cross-brand admin (or ``'all'`` grant) may use
+    any brand. Skipped under ``TESTING_MODE`` (which bypasses real auth).
+
+    Raises:
+        HTTPException: 403 if a scoped caller requests a brand outside their grants.
+    """
+    if not requested_brand or TESTING_MODE:
+        return requested_brand or ""
+    if is_cross_brand_admin(authenticated_user):
+        return requested_brand
+    if requested_brand in set(get_user_brands(authenticated_user)):
+        return requested_brand
+    logger.warning(
+        "[Chatbot] Rejected brand_context outside caller's grants "
+        "(possible cross-tenant write-poisoning attempt)."
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="brand_context is outside your brand grants.",
+    )
+
+
 async def _stream_chat_response(
     request: ChatRequest, authenticated_user_id: str
 ) -> AsyncGenerator[str, None]:
@@ -3385,6 +3421,9 @@ async def stream_chat(
     """
     # Finding 1: derive identity from the authenticated token, never the body.
     authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    # H1 (#694): a brand_context outside the caller's grants would let them poison
+    # another tenant's scoped causal-graph view via store_causal_path -> reject.
+    chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
 
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
@@ -3450,6 +3489,9 @@ async def chat(
     # (Outside the try/except so a 403 propagates instead of being swallowed
     # into a 200 error body.)
     authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    # H1 (#694): a brand_context outside the caller's grants would let them poison
+    # another tenant's scoped causal-graph view via store_causal_path -> reject.
+    chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
 
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
