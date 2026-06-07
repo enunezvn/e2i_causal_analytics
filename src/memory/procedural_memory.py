@@ -358,29 +358,18 @@ async def update_procedure_outcome(procedure_id: str, success: bool) -> None:
     """
     client = get_supabase_client()
 
-    # Get current counts
-    result = (
-        client.table("procedural_memories")
-        .select("usage_count, success_count")
-        .eq("procedure_id", procedure_id)
-        .single()
-        .execute()
-    )
+    # L2 (#694): atomic server-side increment (migration 036) instead of a
+    # read-modify-write (SELECT counts -> UPDATE counts+1), which lost updates
+    # under concurrent outcomes. The RPC returns the number of rows updated
+    # (0 => procedure not found). success_rate is a GENERATED column and
+    # recomputes from usage_count/success_count automatically.
+    result = client.rpc(
+        "increment_procedure_outcome",
+        {"p_procedure_id": procedure_id, "p_success": success},
+    ).execute()
 
     if not result.data:
         logger.warning(f"Procedure {procedure_id} not found for outcome update")
-        return
-
-    current = result.data
-    updates = {
-        "usage_count": current.get("usage_count", 0) + 1,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    if success:
-        updates["success_count"] = current.get("success_count", 0) + 1
-
-    client.table("procedural_memories").update(updates).eq("procedure_id", procedure_id).execute()
 
     logger.debug(f"Updated procedure {procedure_id} outcome (success={success})")
 

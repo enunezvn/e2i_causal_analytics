@@ -292,6 +292,20 @@ class TestSearchEpisodicMemory:
             assert filter_params["match_threshold"] == 0.7
 
     @pytest.mark.asyncio
+    async def test_search_episodic_memory_forwards_importance_and_recency(self, mock_supabase):
+        """L1 (#694): min_importance/days_back were declared on EpisodicSearchFilters
+        but never forwarded to the RPC. They must now reach filter_params (RPC
+        params added in migration 035)."""
+        filters = EpisodicSearchFilters(min_importance=0.8, days_back=7)
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):
+            mock_supabase.rpc.return_value.execute.return_value.data = []
+            await search_episodic_memory(embedding=[0.1] * 1536, filters=filters)
+
+        filter_params = mock_supabase.rpc.call_args[0][1]
+        assert filter_params["filter_min_importance"] == 0.8
+        assert filter_params["filter_days_back"] == 7
+
+    @pytest.mark.asyncio
     async def test_search_episodic_memory_empty_results(self, mock_supabase):
         """search_episodic_memory should handle empty results."""
         with patch("src.memory.episodic_memory.get_supabase_client", return_value=mock_supabase):

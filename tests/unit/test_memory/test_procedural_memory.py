@@ -452,51 +452,47 @@ class TestGetFewShotExamples:
 
 
 class TestUpdateProcedureOutcome:
-    """Tests for update_procedure_outcome function."""
+    """Tests for update_procedure_outcome (L2 #694: atomic server-side RPC,
+    replacing the lost-update-prone read-modify-write)."""
 
     @pytest.mark.asyncio
-    async def test_update_success(self, mock_supabase):
-        """update_procedure_outcome should increment both counts on success."""
-        mock_supabase.table.return_value.single.return_value.execute.return_value.data = {
-            "usage_count": 5,
-            "success_count": 4,
-        }
+    async def test_update_success_calls_atomic_rpc(self, mock_supabase):
+        """On success, call the atomic increment RPC with p_success=True (no
+        SELECT-then-UPDATE)."""
+        mock_supabase.rpc.return_value.execute.return_value.data = 1  # 1 row updated
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
             await update_procedure_outcome("proc_123", success=True)
 
-        update_call = mock_supabase.table.return_value.update
-        update_data = update_call.call_args[0][0]
-        assert update_data["usage_count"] == 6
-        assert update_data["success_count"] == 5
+        mock_supabase.rpc.assert_called_once_with(
+            "increment_procedure_outcome",
+            {"p_procedure_id": "proc_123", "p_success": True},
+        )
+        # The lost-update-prone read-modify-write must be gone.
+        assert not mock_supabase.table.return_value.update.called
 
     @pytest.mark.asyncio
-    async def test_update_failure(self, mock_supabase):
-        """update_procedure_outcome should only increment usage on failure."""
-        mock_supabase.table.return_value.single.return_value.execute.return_value.data = {
-            "usage_count": 5,
-            "success_count": 4,
-        }
+    async def test_update_failure_passes_success_false(self, mock_supabase):
+        """On failure, pass p_success=False so only usage_count increments."""
+        mock_supabase.rpc.return_value.execute.return_value.data = 1
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
             await update_procedure_outcome("proc_123", success=False)
 
-        update_call = mock_supabase.table.return_value.update
-        update_data = update_call.call_args[0][0]
-        assert update_data["usage_count"] == 6
-        assert "success_count" not in update_data
+        mock_supabase.rpc.assert_called_once_with(
+            "increment_procedure_outcome",
+            {"p_procedure_id": "proc_123", "p_success": False},
+        )
 
     @pytest.mark.asyncio
     async def test_procedure_not_found(self, mock_supabase):
-        """update_procedure_outcome should handle missing procedure gracefully."""
-        mock_supabase.table.return_value.single.return_value.execute.return_value.data = None
+        """A 0-row RPC result (procedure missing) is handled gracefully (no raise)."""
+        mock_supabase.rpc.return_value.execute.return_value.data = 0  # 0 rows updated
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            # Should not raise
-            await update_procedure_outcome("nonexistent", success=True)
+            await update_procedure_outcome("nonexistent", success=True)  # must not raise
 
-        # Update should not be called
-        # We check .eq was not called on update (because select returned None)
+        mock_supabase.rpc.assert_called_once()
 
 
 class TestGetProcedureById:
