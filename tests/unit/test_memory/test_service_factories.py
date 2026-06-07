@@ -573,3 +573,37 @@ class TestResetFunctions:
 
         # After reset, should be different instances
         assert service1 is not service2
+
+
+@pytest.mark.asyncio
+async def test_async_supabase_client_concurrent_init_creates_one(monkeypatch):
+    """L14 (#694): concurrent first-time callers must create exactly ONE async
+    client. Without the init lock, every coroutine passes the ``is None`` check
+    across the ``await acreate_client`` and creates a duplicate (orphaned httpx
+    pool). Faithful: the real getter runs; only the SDK ``acreate_client`` is
+    replaced with a slow stub that yields, forcing the race."""
+    from src.memory.services.factories import get_async_supabase_client
+
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    reset_all_clients()
+
+    create_calls: list = []
+
+    async def _slow_acreate(url, key, options=None):
+        create_calls.append((url, key))
+        await asyncio.sleep(0)  # real suspension -> concurrent callers interleave
+        return object()
+
+    try:
+        with patch("supabase.acreate_client", _slow_acreate):
+            clients = await asyncio.gather(*[get_async_supabase_client() for _ in range(20)])
+        assert len(create_calls) == 1, (
+            f"expected exactly 1 client creation under concurrency, got {len(create_calls)}"
+        )
+        # Every caller receives the same cached instance.
+        assert len({id(c) for c in clients}) == 1
+    finally:
+        reset_all_clients()
