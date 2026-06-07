@@ -143,6 +143,17 @@ Hot cache of FalkorDB graph triplets — a triplet store
 (Subject –[Predicate]→ Object) with optional entity-id references into the data
 layer (schema per `database/memory/001_agentic_memory_schema_v1.3.sql`).
 
+> **ℹ️ Semantic graph name = `e2i_causal` (not `e2i_semantic`).** The FalkorDB graph
+> backing agent semantic memory is **`e2i_causal`** — set in
+> `config/005_memory_config.yaml` (`memory_backends.semantic.<env>.graph_name`) and
+> `FALKORDB_GRAPH_NAME`, resolved at runtime by `get_config().semantic.graph_name`.
+> The `e2i_semantic` name still seen in some seed scripts (`scripts/seed_semantic_graph.py`,
+> `scripts/seed_falkordb_*`) and `config/ontology/falkordb_config.yaml` is a **legacy,
+> runtime-unused** graph. The in-code defaults in `src/memory/services/config.py` and
+> `src/memory/graphiti_config.py` were aligned from `e2i_semantic` → `e2i_causal` in
+> **#749** so a missing YAML key cannot silently route memory to the empty graph.
+> (Retiring/renaming the `e2i_semantic` seed path is tracked separately under #749.)
+
 | Column | Type | Description |
 |--------|------|-------------|
 | `cache_id` | UUID (PK) | |

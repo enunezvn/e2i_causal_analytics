@@ -57,7 +57,12 @@ class SemanticMemoryConfig:
     """Configuration for FalkorDB-backed semantic memory."""
 
     backend: str = "falkordb"
-    graph_name: str = "e2i_semantic"
+    # The deployed semantic graph is "e2i_causal" (set in config/005_memory_config.yaml
+    # and FALKORDB_GRAPH_NAME); the YAML overrides this default in every real env. The
+    # historical "e2i_semantic" graph is an unused legacy default — align the fallback
+    # to the graph the runtime readers/writers actually use so a missing YAML key does
+    # not silently route memory to an empty graph (#749).
+    graph_name: str = "e2i_causal"
     graphity_enabled: bool = True
     cache_enabled: bool = True
     cache_table: str = "semantic_memory_cache"
@@ -203,7 +208,7 @@ def _parse_semantic_config(raw: Dict[str, Any], env: str) -> SemanticMemoryConfi
     cache = backend_config.get("cache", {})
     return SemanticMemoryConfig(
         backend=backend_config.get("backend", "falkordb"),
-        graph_name=backend_config.get("graph_name", "e2i_semantic"),
+        graph_name=backend_config.get("graph_name", "e2i_causal"),  # deployed graph (#749)
         graphity_enabled=graphity.get("enabled", True),
         cache_enabled=cache.get("enabled", True),
         cache_table=cache.get("table", "semantic_memory_cache"),
