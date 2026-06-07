@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 from uuid import uuid4
 
 from .graph import create_scope_definer_graph
+from .memory_hooks import ScopeDefinerMemoryHooks
 from .state import ScopeDefinerState
 
 logger = logging.getLogger(__name__)
@@ -258,6 +259,11 @@ class ScopeDefinerAgent:
             # Update procedural memory with successful pattern
             await self._update_procedural_memory(output)
 
+            # Populate the semantic knowledge graph (e2i_causal) with the experiment
+            # scope so Tier 0 runs actually grow it and the read-hooks return real
+            # context (#749 — store_experiment_pattern was defined but never called).
+            await self._update_semantic_memory(output)
+
             # Log execution time
             duration = (datetime.now() - start_time).total_seconds()
             logger.info(f"Scope definition completed in {duration:.2f}s (SLA: {self.sla_seconds}s)")
@@ -358,3 +364,42 @@ class ScopeDefinerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
+
+    async def _update_semantic_memory(self, output: Dict[str, Any]) -> None:
+        """Populate the semantic knowledge graph (FalkorDB ``e2i_causal``) with the
+        experiment scope (#749).
+
+        Mirrors ``_update_procedural_memory`` — graceful degradation: if semantic
+        memory is unavailable the write is skipped, never raised. The
+        ``store_experiment_pattern`` hook (Experiment + ProblemType + HAS_TYPE) was
+        defined but never invoked, so Tier 0 runs left ``e2i_causal`` unpopulated.
+
+        Args:
+            output: Agent output containing scope_spec, success_criteria, experiment_id.
+        """
+        try:
+            experiment_id = output.get("experiment_id")
+            if not experiment_id:
+                logger.debug("No experiment_id; skipping semantic-graph update")
+                return
+
+            scope_spec = output.get("scope_spec", {})
+            problem_type = scope_spec.get("problem_type") or "unknown"
+            target_variable = scope_spec.get("target_variable") or ""
+
+            hooks = ScopeDefinerMemoryHooks()
+            await hooks.store_experiment_pattern(
+                experiment_id=str(experiment_id),
+                experiment_name=(
+                    scope_spec.get("experiment_name")
+                    or f"{problem_type}:{target_variable or 'target'}"
+                ),
+                problem_type=problem_type,
+                target_variable=target_variable,
+                features=scope_spec.get("features", []) or [],
+                success_criteria=output.get("success_criteria", {}) or {},
+            )
+            logger.info(f"Updated semantic graph (e2i_causal) for experiment: {experiment_id}")
+
+        except Exception as e:
+            logger.debug(f"Failed to update semantic memory: {e}")
