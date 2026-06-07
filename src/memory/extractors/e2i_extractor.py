@@ -196,40 +196,43 @@ class E2IEntityExtractor:
 
         for rel_type, triggers in RELATIONSHIP_TRIGGERS.items():
             for trigger in triggers:
-                # Find trigger in text
-                idx = text_lower.find(trigger)
-                if idx == -1:
-                    continue
+                # L18 (#694): find EVERY occurrence of the trigger, not just the
+                # first (was ``str.find``). A trigger word can relate multiple
+                # distinct entity pairs in one text. Word boundaries avoid
+                # matching the trigger inside a larger token.
+                trigger_re = re.compile(r"\b" + re.escape(trigger) + r"\b")
+                for match in trigger_re.finditer(text_lower):
+                    idx = match.start()
 
-                # Find entities before and after trigger
-                source_entity = None
-                target_entity = None
+                    # Find entities before and after trigger
+                    source_entity = None
+                    target_entity = None
 
-                for entity in entities:
-                    if entity.end <= idx:
-                        # Entity before trigger - potential source
-                        if source_entity is None or entity.end > source_entity.end:
-                            source_entity = entity
-                    elif entity.start >= idx + len(trigger):
-                        # Entity after trigger - potential target
-                        if target_entity is None or entity.start < target_entity.start:
-                            target_entity = entity
+                    for entity in entities:
+                        if entity.end <= idx:
+                            # Entity before trigger - potential source
+                            if source_entity is None or entity.end > source_entity.end:
+                                source_entity = entity
+                        elif entity.start >= idx + len(trigger):
+                            # Entity after trigger - potential target
+                            if target_entity is None or entity.start < target_entity.start:
+                                target_entity = entity
 
-                if source_entity and target_entity:
-                    confidence = self._calculate_relationship_confidence(
-                        rel_type, source_entity, target_entity, trigger, text
-                    )
-
-                    if confidence >= self.min_confidence:
-                        relationships.append(
-                            ExtractedRelationshipMention(
-                                relationship_type=rel_type,
-                                source_mention=source_entity,
-                                target_mention=target_entity,
-                                trigger_text=trigger,
-                                confidence=confidence,
-                            )
+                    if source_entity and target_entity:
+                        confidence = self._calculate_relationship_confidence(
+                            rel_type, source_entity, target_entity, trigger, text
                         )
+
+                        if confidence >= self.min_confidence:
+                            relationships.append(
+                                ExtractedRelationshipMention(
+                                    relationship_type=rel_type,
+                                    source_mention=source_entity,
+                                    target_mention=target_entity,
+                                    trigger_text=trigger,
+                                    confidence=confidence,
+                                )
+                            )
 
         return relationships
 
