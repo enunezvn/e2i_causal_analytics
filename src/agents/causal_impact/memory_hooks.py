@@ -460,7 +460,15 @@ class CausalImpactMemoryHooks:
                     "executive_summary": result.get("executive_summary", "")[:500],
                 },
                 entities=None,
-                outcome_type="causal_analysis_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — NOT a
+                # free-text descriptor. The prior literal "causal_analysis_delivered"
+                # was rejected by the enum (22P02) and swallowed, so NO causal_impact
+                # episodic ever landed (#788 / #785). A PROCEED-validated estimate is a
+                # success; a REVIEW-band one is a partial_success.
+                outcome_type=(
+                    "partial_success" if (needs_review or gate_decision == "review") else "success"
+                ),
                 agent_name="causal_impact",
                 importance_score=importance_score,  # PROCEED=0.85, REVIEW=0.5 (H2)
                 e2i_refs=E2IEntityReferences(

@@ -107,6 +107,7 @@ class CausalImpactAgent(SkillsMixin):
         enable_checkpointing: bool = False,
         config: Optional[Dict[str, Any]] = None,
         enable_mlflow: bool = True,
+        enable_memory: bool = True,
     ):
         """Initialize Causal Impact Agent.
 
@@ -114,10 +115,15 @@ class CausalImpactAgent(SkillsMixin):
             enable_checkpointing: Whether to enable state checkpointing
             config: Optional configuration overrides
             enable_mlflow: Whether to enable MLflow tracking (default: True)
+            enable_memory: Whether to contribute results to the tri-memory
+                architecture (episodic + semantic CausalPath) after a successful
+                analysis (default: True). Mirrors the other Tier-1 agents
+                (heterogeneous_optimizer, resource_optimizer, ...).
         """
         self.enable_checkpointing = enable_checkpointing
         self.config = config or {}
         self.enable_mlflow = enable_mlflow
+        self.enable_memory = enable_memory
 
         # Initialize fallback chain (Contract: AgentConfig.fallback_models)
         self._fallback_chain = FallbackChain(self.fallback_models)
@@ -197,6 +203,14 @@ class CausalImpactAgent(SkillsMixin):
                     # Build output
                     output = self._build_output(final_state, start_time)
 
+                    # Contribute to tri-memory (episodic 1536-dim + CausalPath) (#788) —
+                    # gated + guarded so a write failure never breaks the analysis.
+                    if self.enable_memory and output.get("status") != "failed":
+                        try:
+                            await self._contribute_to_memory(output, final_state)
+                        except Exception as ep_err:
+                            logger.debug(f"Memory contribution failed (non-fatal): {ep_err}")
+
                     # Log to MLflow
                     await tracker.log_analysis_result(output, final_state)
 
@@ -207,6 +221,14 @@ class CausalImpactAgent(SkillsMixin):
 
                 # Build output
                 output = self._build_output(final_state, start_time)
+
+                # Contribute to tri-memory (episodic 1536-dim + CausalPath) (#788) —
+                # gated + guarded so a write failure never breaks the analysis.
+                if self.enable_memory and output.get("status") != "failed":
+                    try:
+                        await self._contribute_to_memory(output, final_state)
+                    except Exception as ep_err:
+                        logger.debug(f"Memory contribution failed (non-fatal): {ep_err}")
 
                 return output
 
@@ -228,6 +250,14 @@ class CausalImpactAgent(SkillsMixin):
                     final_state = await self.graph.ainvoke(initial_state)
                     output = self._build_output(final_state, start_time)
                     output["fallback_model_used"] = fallback_model  # type: ignore[typeddict-unknown-key]
+
+                    # Contribute to tri-memory (episodic 1536-dim + CausalPath) (#788) —
+                    # gated + guarded so a write failure never breaks the (fallback) analysis.
+                    if self.enable_memory and output.get("status") != "failed":
+                        try:
+                            await self._contribute_to_memory(output, final_state)
+                        except Exception as ep_err:
+                            logger.debug(f"Memory contribution failed (non-fatal): {ep_err}")
 
                     # Log fallback result to MLflow
                     if tracker:
@@ -839,22 +869,76 @@ class CausalImpactAgent(SkillsMixin):
         Returns:
             Memory ID if successful, None otherwise
         """
-        from src.memory.episodic_memory import EpisodicMemoryInput, insert_episodic_memory
+        from src.memory.episodic_memory import (
+            EpisodicMemoryInput,
+            insert_episodic_memory_with_text,
+        )
 
         try:
-            memory = EpisodicMemoryInput(  # type: ignore[call-arg]
+            # Build a VALID EpisodicMemoryInput. The dataclass fields are
+            # event_type/description/event_subtype/raw_content/outcome_type/
+            # importance_score/agent_name/e2i_refs — NOT the
+            # importance/context_summary/action_taken/outcome/emotional_valence
+            # kwargs the prior code passed. Those raised TypeError that the bare
+            # ``except`` below swallowed, so no causal_impact episodic row was ever
+            # written (#788 L2). Any non-field keys are preserved into raw_content.
+            raw_content = dict(event.get("raw_content") or event.get("metadata") or {})
+            for extra_key in ("context_summary", "action_taken", "emotional_valence"):
+                extra_val = event.get(extra_key)
+                if extra_val is not None:
+                    raw_content[extra_key] = extra_val
+
+            # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+            # (success / partial_success / failure / pending / escalated), NOT a
+            # free-text status. Passing the raw "completed"/"failed" status straight
+            # in is rejected by the enum (22P02) and swallowed (#788). Map a known
+            # status to a valid value, preserve the raw text in raw_content, and fall
+            # back to None (the column is nullable) for anything unrecognized.
+            _VALID_OUTCOME_TYPES = {
+                "success",
+                "partial_success",
+                "failure",
+                "pending",
+                "escalated",
+            }
+            _STATUS_TO_OUTCOME = {
+                "completed": "success",
+                "success": "success",
+                "partial": "partial_success",
+                "partial_success": "partial_success",
+                "failed": "failure",
+                "failure": "failure",
+                "error": "failure",
+                "pending": "pending",
+                "escalated": "escalated",
+            }
+            raw_outcome = event.get("outcome")
+            outcome_type = event.get("outcome_type")
+            if outcome_type not in _VALID_OUTCOME_TYPES:
+                outcome_type = (
+                    _STATUS_TO_OUTCOME.get(str(raw_outcome).lower()) if raw_outcome else None
+                )
+            if raw_outcome is not None:
+                raw_content.setdefault("outcome", raw_outcome)
+
+            memory = EpisodicMemoryInput(
                 event_type=event.get("event_type", "causal_analysis"),
                 description=event.get("description", ""),
-                importance=event.get("importance", 0.5),
-                context_summary=event.get("context_summary"),
-                action_taken=event.get("action_taken"),
-                outcome=event.get("outcome"),
-                emotional_valence=event.get("emotional_valence", 0.0),
+                event_subtype=event.get("event_subtype"),
+                raw_content=raw_content or None,
+                outcome_type=outcome_type,
+                importance_score=event.get("importance", 0.5),
+                agent_name="causal_impact",
             )
 
-            memory_id = await insert_episodic_memory(
+            # Route through the AUTO-EMBED path so a real 1536-dim vector lands on
+            # the row. The prior insert_episodic_memory(embedding=None) call stored
+            # the row WITHOUT a vector (None filtered out by the canonical path) →
+            # semantic / vector recall over causal_impact episodics silently missed
+            # them (#788 L3; mirrors the Tier-0 #787 fix).
+            memory_id = await insert_episodic_memory_with_text(
                 memory=memory,
-                embedding=None,  # type: ignore[arg-type]  # Will be generated
+                text_to_embed=event.get("description") or memory.event_type,
                 session_id=session_id,
                 cycle_id=cycle_id,
             )
@@ -865,6 +949,43 @@ class CausalImpactAgent(SkillsMixin):
         except Exception as e:
             logger.error(f"Failed to save episodic memory: {e}")
             return None
+
+    async def _contribute_to_memory(self, output: Dict[str, Any], state: Dict[str, Any]) -> None:
+        """Contribute this analysis to the tri-memory architecture (#788).
+
+        Routes through the canonical ``contribute_to_memory`` path: ``store_causal_analysis``
+        → ``insert_episodic_memory_with_text`` auto-embeds a real 1536-dim vector (the
+        ``embedding=None`` write the lone ``save_episodic_memory`` used stored a VECTORLESS
+        row, #788); ``store_causal_path`` grows the ``e2i_causal`` CausalPath graph for a
+        PROCEED-validated estimate (advances #785). Previously NO episodic memory was
+        written from a direct ``causal_impact`` run (``save_episodic_memory`` was never
+        called from ``run()``). Mirrors heterogeneous_optimizer / resource_optimizer.
+
+        ``session_id`` is forced to a valid UUID (the ``episodic_memories.session_id``
+        column is ``uuid``): the audit workflow id when present, else a fresh UUID — never
+        the non-UUID ``query_id`` (the #787 Tier-0 trap). Graceful degradation: a write
+        failure never breaks the analysis.
+        """
+        from uuid import UUID, uuid4
+
+        from src.agents.causal_impact.memory_hooks import contribute_to_memory
+
+        try:
+            candidate = state.get("audit_workflow_id") or state.get("session_id")
+            try:
+                session_id = str(UUID(str(candidate))) if candidate else str(uuid4())
+            except (ValueError, TypeError):
+                session_id = str(uuid4())
+
+            await contribute_to_memory(
+                result=output,
+                state=state,
+                session_id=session_id,
+                brand=state.get("brand"),
+                region=state.get("region"),
+            )
+        except Exception as e:
+            logger.debug(f"Failed to contribute to memory: {e}")
 
     def reset_fallback_chain(self) -> None:
         """Reset fallback chain for new request.
