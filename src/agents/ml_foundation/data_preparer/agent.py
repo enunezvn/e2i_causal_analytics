@@ -52,6 +52,31 @@ def _get_opik_connector():
         return None
 
 
+def _resolve_data_source_name(data_source: Any) -> str:
+    """Derive a clean, stable DataSource identifier for the semantic graph (#749).
+
+    The tier-0 runner passes ``data_source`` as a config dict
+    (``{"type": "file_dir", "path": ".../mart/discontinuation"}``); naively
+    ``str()``-ing it stored the dict repr as the node id/name, which is ugly AND
+    breaks read/write parity with the read-hook (``MATCH (d:DataSource {name:
+    $data_source})``). Normalise: a plain string passes through; a dict resolves to
+    its ``name``/``table``/``path`` (path basename), so write and read agree.
+    """
+    if isinstance(data_source, dict):
+        value = (
+            data_source.get("name")
+            or data_source.get("table")
+            or data_source.get("path")
+            or ""
+        )
+    else:
+        value = data_source or ""
+    text = str(value).rstrip("/")
+    if "/" in text:
+        text = text.rsplit("/", 1)[-1]  # basename, e.g. "discontinuation"
+    return text
+
+
 class DataPreparerAgent:
     """Data Preparer: Validate data quality and establish baselines.
 
@@ -432,7 +457,7 @@ class DataPreparerAgent:
             experiment_id = final_state.get("experiment_id") or (
                 final_state.get("scope_spec") or {}
             ).get("experiment_id")
-            data_source = final_state.get("data_source")
+            data_source = _resolve_data_source_name(final_state.get("data_source"))
             if not experiment_id or not data_source:
                 logger.debug("Missing experiment_id/data_source; skipping semantic-graph update")
                 return
@@ -440,7 +465,7 @@ class DataPreparerAgent:
             hooks = DataPreparerMemoryHooks()
             await hooks.store_data_quality_pattern(
                 experiment_id=str(experiment_id),
-                data_source=str(data_source),
+                data_source=data_source,
                 qc_status=final_state.get("qc_status") or "unknown",
                 overall_score=float(final_state.get("overall_score") or 0.0),
                 leakage_detected=bool(final_state.get("leakage_detected", False)),

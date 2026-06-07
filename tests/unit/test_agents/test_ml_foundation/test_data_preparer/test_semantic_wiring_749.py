@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.agents.ml_foundation.data_preparer.agent import DataPreparerAgent
+from src.agents.ml_foundation.data_preparer.agent import (
+    DataPreparerAgent,
+    _resolve_data_source_name,
+)
 
 _STATE = {
     "experiment_id": "exp-749",
@@ -20,6 +23,21 @@ _STATE = {
     "leakage_detected": False,
     "blocking_issues": [],
 }
+
+
+@pytest.mark.unit
+def test_resolve_data_source_name_handles_runner_dict_and_string():
+    # the real tier-0 runner passes a dict config; the naive str(dict) stored an ugly id
+    # that broke read/write parity (the faithful run surfaced this).
+    assert (
+        _resolve_data_source_name(
+            {"type": "file_dir", "path": "/data/rwd/mart/discontinuation"}
+        )
+        == "discontinuation"
+    )
+    assert _resolve_data_source_name({"name": "optum_mart"}) == "optum_mart"
+    assert _resolve_data_source_name("optum_mart_discontinuation") == "optum_mart_discontinuation"
+    assert _resolve_data_source_name(None) == ""
 
 
 @pytest.mark.unit
