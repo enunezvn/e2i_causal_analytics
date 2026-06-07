@@ -31,6 +31,21 @@ from .models.composition_models import (
 
 logger = logging.getLogger(__name__)
 
+# Input-mapping keys whose VALUES are expected to be dataset column names.
+# Used by the F6 schema-binding warning to spot invented columns.
+_COLUMN_ARG_KEYS = frozenset(
+    {
+        "treatment",
+        "outcome",
+        "segment",
+        "segments",
+        "metric",
+        "covariate",
+        "covariates",
+        "dimension",
+    }
+)
+
 
 # ============================================================================
 # PLANNING PROMPT
@@ -148,12 +163,20 @@ class ToolPlanner:
         # G6: Initialize cache manager for plan similarity matching
         self._cache_manager = get_cache_manager() if enable_caching else None
 
-    async def plan(self, decomposition: DecompositionResult) -> ExecutionPlan:
+    async def plan(
+        self,
+        decomposition: DecompositionResult,
+        available_columns: Optional[List[str]] = None,
+    ) -> ExecutionPlan:
         """
         Create an execution plan from decomposed sub-questions.
 
         Args:
             decomposition: Result from Phase 1 (Decomposer)
+            available_columns: Optional list of REAL dataset column names. When
+                provided, the planner instructs the LLM to bind tool arguments
+                (treatment/outcome/segment/metric/covariates) to these exact
+                names (F6) instead of inventing column names.
 
         Returns:
             ExecutionPlan with tool mappings and execution steps
@@ -179,7 +202,12 @@ class ToolPlanner:
             similar_compositions = await self._check_episodic_memory(decomposition.original_query)
 
             # Call LLM for planning (with episodic context if available)
-            response = await self._call_llm(decomposition, tools_description, similar_compositions)
+            response = await self._call_llm(
+                decomposition,
+                tools_description,
+                similar_compositions,
+                available_columns,
+            )
 
             # Parse response
             parsed = self._parse_response(response)
@@ -187,6 +215,11 @@ class ToolPlanner:
             # Build plan components
             tool_mappings = self._build_tool_mappings(parsed)
             execution_steps = self._build_execution_steps(parsed, decomposition)
+
+            # F6 (defense-in-depth): warn -- do NOT fail -- when a column-arg
+            # literal references a name absent from the real dataset schema.
+            self._warn_unbound_columns(execution_steps, available_columns)
+
             parallel_groups = parsed.get("parallel_groups", [])
 
             # Validate plan
@@ -304,8 +337,9 @@ class ToolPlanner:
         decomposition: DecompositionResult,
         tools_description: str,
         similar_compositions: Optional[List[Dict[str, Any]]] = None,
+        available_columns: Optional[List[str]] = None,
     ) -> str:
-        """Call the LLM for planning with optional episodic context."""
+        """Call the LLM for planning with optional episodic + schema context."""
         # Format sub-questions
         sq_text = "\n".join(
             [
@@ -325,6 +359,13 @@ class ToolPlanner:
         if episodic_context:
             user_message = f"{episodic_context}\n\n{user_message}"
 
+        # F6: schema-binding -- when a real dataset is present, list its columns
+        # and instruct the LLM to bind argument values to EXACT names so the
+        # downstream tools do not fail-closed on invented column references.
+        columns_block = self._format_columns_block(available_columns)
+        if columns_block:
+            user_message = f"{user_message}\n\n{columns_block}"
+
         # Using LangChain's message format (works with ChatAnthropic/ChatOpenAI)
         messages = [
             SystemMessage(content=system_prompt),
@@ -335,6 +376,22 @@ class ToolPlanner:
 
         # LangChain returns AIMessage with .content attribute
         return cast(str, response.content)
+
+    def _format_columns_block(self, available_columns: Optional[List[str]]) -> str:
+        """Build the schema-binding prompt section for real dataset columns (F6).
+
+        Returns an empty string when no columns are supplied.
+        """
+        if not available_columns:
+            return ""
+        column_list = ", ".join(str(c) for c in available_columns)
+        return (
+            f"## Available dataset columns: {column_list}\n"
+            "A real dataset is loaded. Bind treatment/outcome/segments/metric/"
+            "covariates argument VALUES to EXACT names from this list; "
+            "do NOT invent column names. Use $step_X.field syntax only to "
+            "reference prior step outputs, not for dataset columns."
+        )
 
     def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
         """Format similar compositions as context for the LLM."""
@@ -493,6 +550,41 @@ class ToolPlanner:
 
         # Check for dependency cycles
         self._check_cycles(steps)
+
+    def _warn_unbound_columns(
+        self,
+        steps: List[ExecutionStep],
+        available_columns: Optional[List[str]],
+    ) -> None:
+        """Warn when a column-arg literal is not a real dataset column (F6).
+
+        This is intentionally non-fatal: the LLM may legitimately use
+        ``$step_X.field`` references, list-valued covariates, or dict params,
+        so we only flag plain-string literals under known column-arg keys
+        (treatment/outcome/segment(s)/metric/covariate(s)/dimension) that are
+        absent from ``available_columns``.
+        """
+        if not available_columns:
+            return
+
+        column_set = {str(c) for c in available_columns}
+        for step in steps:
+            for arg_name, value in step.input_mapping.items():
+                if arg_name not in _COLUMN_ARG_KEYS:
+                    continue
+                # Only literal strings can be a column reference; skip step
+                # refs ($step_X.field) and non-string (dict/list) values.
+                if not isinstance(value, str) or value.startswith("$"):
+                    continue
+                if value not in column_set:
+                    logger.warning(
+                        "Plan step %s binds '%s'='%s' which is not in available "
+                        "dataset columns %s — tool may fail-closed on this column.",
+                        step.step_id,
+                        arg_name,
+                        value,
+                        sorted(column_set),
+                    )
 
     def _check_cycles(self, steps: List[ExecutionStep]) -> None:
         """Check for cycles in step dependencies"""

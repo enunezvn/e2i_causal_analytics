@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 # Import tool modules to ensure tools are registered in the global registry
@@ -238,7 +238,8 @@ class ToolComposer:
             phase_start = datetime.now(timezone.utc)
             logger.info("Phase 2: Creating execution plan...")
 
-            plan = await self.planner.plan(decomposition)
+            available_columns = self._extract_available_columns(context)
+            plan = await self.planner.plan(decomposition, available_columns=available_columns)
 
             phase_durations["plan"] = self._elapsed_ms(phase_start)
             logger.info(
@@ -384,6 +385,21 @@ class ToolComposer:
     def _elapsed_ms(self, start: datetime) -> int:
         """Calculate elapsed milliseconds since start"""
         return int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+
+    def _extract_available_columns(self, context: Dict[str, Any]) -> Optional[List[str]]:
+        """Derive real dataset column names from the in-context DataFrame (F2).
+
+        The canonical carrier is ``context["estimation_data"]``. We only return
+        column names when it is an actual pandas DataFrame, so a non-frame value
+        under the key (or a missing key) cleanly yields ``None`` and the planner
+        falls back to schema-free planning.
+        """
+        import pandas as pd
+
+        frame = context.get("estimation_data")
+        if isinstance(frame, pd.DataFrame):
+            return [str(col) for col in frame.columns]
+        return None
 
     def _record_audit_entry(
         self,
