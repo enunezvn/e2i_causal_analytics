@@ -232,7 +232,7 @@ class TestGraphitiConfig:
         config = GraphitiConfig()
         assert config.enabled is True
         assert config.model == "claude-3-5-sonnet-latest"
-        assert config.graph_name == "e2i_semantic"
+        assert config.graph_name == "e2i_causal"
         assert config.falkordb_host == "localhost"
         assert config.falkordb_port == 6379
         assert config.episode_batch_size == 5
@@ -367,8 +367,8 @@ class TestLoadGraphitiConfig:
         """Test loading from nonexistent file uses defaults."""
         config = load_graphiti_config(Path("/nonexistent/config.yaml"))
 
-        # Should have default values
-        assert config.graph_name == "e2i_semantic"
+        # Should have default values (aligned to the deployed graph, #749)
+        assert config.graph_name == "e2i_causal"
         assert len(config.entity_types) == len(E2IEntityType)
 
     def test_load_with_environment_override(self, temp_config_file):

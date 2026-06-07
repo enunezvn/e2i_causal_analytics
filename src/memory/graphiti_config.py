@@ -91,7 +91,9 @@ class GraphitiConfig:
 
     enabled: bool = True
     model: str = "claude-3-5-sonnet-latest"  # Sonnet for Graphiti operations
-    graph_name: str = "e2i_semantic"
+    # Deployed semantic graph is "e2i_causal" (config/005_memory_config.yaml); the YAML
+    # overrides this in every real env. Align the default to the runtime graph (#749).
+    graph_name: str = "e2i_causal"
 
     # Entity configurations
     entity_types: List[E2IEntityType] = field(default_factory=lambda: list(E2IEntityType))
@@ -333,7 +335,7 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
     config = GraphitiConfig(
         enabled=graphity_config.get("enabled", True),
         model=graphity_config.get("model", "claude-3-5-sonnet-20241022"),
-        graph_name=semantic_config.get("graph_name", "e2i_semantic"),
+        graph_name=semantic_config.get("graph_name", "e2i_causal"),  # deployed graph (#749)
         entity_types=entity_types or list(E2IEntityType),
         entity_configs=DEFAULT_ENTITY_CONFIGS.copy(),
         relationship_types=relationship_types or list(E2IRelationshipType),
