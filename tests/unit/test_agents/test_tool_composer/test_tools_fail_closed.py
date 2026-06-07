@@ -225,3 +225,18 @@ def test_module_docstring_documents_both_data_contracts():
     assert "estimation_data" in doc
     assert "_extract_dataframe_from_kwargs" in doc
     assert "discover_dag" in doc  # the Dict-contract tool is named explicitly
+
+
+def test_sensitivity_analyzer_handles_protective_effect():
+    # Protective effect (ate < 0): RR = exp(0.91*ate) < 1.0, so _e_value_from_rr
+    # inverts it to 1/RR. By construction this is SYMMETRIC with the harmful
+    # +|ate| case — exercises the rr < 1.0 inversion branch.
+    out = tr.sensitivity_analyzer(ate=-0.5, ci_lower=-0.8)
+    rr = 1.0 / math.exp(0.91 * 0.5)  # exp(-0.455) < 1.0
+    rr = 1.0 / rr  # the inversion _e_value_from_rr applies
+    expected_point = rr + math.sqrt(rr * (rr - 1.0))
+    assert out["e_value_point"] == pytest.approx(expected_point, rel=1e-9)
+
+    # Protective -0.5 yields the SAME point E-value as harmful +0.5 (symmetry).
+    out_harmful = tr.sensitivity_analyzer(ate=0.5, ci_lower=0.1)
+    assert out["e_value_point"] == pytest.approx(out_harmful["e_value_point"], rel=1e-9)
