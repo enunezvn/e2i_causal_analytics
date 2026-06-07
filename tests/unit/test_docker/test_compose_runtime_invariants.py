@@ -200,6 +200,55 @@ def test_dockerfile_sets_matplotlib_cache_env():
 
 
 # --------------------------------------------------------------------------- #
+# N3 (#705) — OpenMP runtime for the digital-twin effect estimator
+# --------------------------------------------------------------------------- #
+def test_production_stage_installs_libgomp1_for_twin_estimator():
+    """The production image MUST apt-install ``libgomp1`` (the OpenMP runtime).
+
+    The digital-twin ``/simulate`` flagship runs the real effect estimator, which
+    imports causalml's ``UpliftRandomForest`` -> ``lightgbm``; ``lib_lightgbm.so``
+    dlopens the SYSTEM ``libgomp.so.1``. The ``python:3.12-slim-bookworm`` base
+    does not ship it, and the libgomp copies bundled inside the
+    torch/sklearn/xgboost wheels are not on the loader path. Without ``libgomp1``
+    on the production stage, every real ``/simulate`` call fails effect estimation
+    ("Effect estimation failed: ... libgomp.so.1: cannot open shared object
+    file"), is gated to HTTP 422, and the twin flagship is down end-to-end.
+
+    This regression is INVISIBLE to the host-run test suite: dev/CI hosts carry
+    the ``libgomp1`` OS package, so ``import lightgbm`` succeeds and every test
+    stays green — only a faithful in-container run on the slim image exposes it
+    (the 2026-06-06 N3 incident; the same host-vs-container blind spot that hid
+    H4). Guard the declared dependency so the one-line apt entry cannot be dropped
+    unnoticed in a future apt-list refactor.
+
+    Production does NOT derive ``FROM base`` (it is ``FROM python:...``), so the
+    package must appear in the **production-stage** apt list specifically; a
+    base-only install never reaches the shipped image (the same reason the
+    matplotlib ENV is asserted twice above).
+    """
+    text = DOCKERFILE.read_text()
+    prod_split = text.split("AS production", 1)
+    assert len(prod_split) == 2, "Dockerfile has no `AS production` stage"
+    prod_region = prod_split[1]
+
+    # Match the EXACT apt package entry (``libgomp1`` followed by whitespace, a
+    # line-continuation ``\``, or end-of-line), not a comment that merely
+    # references ``libgomp.so.1`` (different token — has a dot) nor a prefix
+    # variant such as ``libgomp1-dev`` (a build dep that does not belong on the
+    # runtime stage).
+    has_pkg = any(
+        re.match(r"libgomp1(\s|\\|$)", line.strip())
+        for line in prod_region.splitlines()
+        if not line.strip().startswith("#")
+    )
+    assert has_pkg, (
+        "production stage must apt-install libgomp1 (OpenMP runtime for "
+        "lightgbm/causalml in the twin effect estimator); without it every real "
+        "/simulate 422s on 'libgomp.so.1: cannot open shared object file' (#705 N3)"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # R-A — fd exhaustion under uvicorn --reload
 # --------------------------------------------------------------------------- #
 def test_api_has_nofile_ulimit():
