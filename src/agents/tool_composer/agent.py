@@ -380,6 +380,19 @@ class ToolComposerAgent:
         # Merge contexts
         merged_context = {**context, **extracted_entities, **user_context}
 
+        # F2-core: normalize a caller-supplied DataFrame (passed as
+        # input_data["data"]) into the canonical context key the executor's
+        # DataFrame auto-injection reads (``estimation_data``). A passed-through
+        # ``data_source`` string is also surfaced into the context for tools
+        # that load by source. Only set keys when the values are actually
+        # present so the executor's duck-typed gate is not tripped by None.
+        data_frame = input_data.get("data")
+        if data_frame is not None:
+            merged_context["estimation_data"] = data_frame
+        data_source = input_data.get("data_source")
+        if data_source is not None:
+            merged_context["data_source"] = data_source
+
         try:
             # Ensure composer is initialized
             composer = self._ensure_composer()

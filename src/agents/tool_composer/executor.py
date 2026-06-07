@@ -36,6 +36,7 @@ from .models.composition_models import (
     ToolInput,
     ToolOutput,
 )
+from .tool_registrations import _DATAFRAME_KWARGS_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -435,6 +436,9 @@ class PlanExecutor:
 
         # Store outputs for dependency resolution
         outputs: Dict[str, Any] = {}
+        # F5: track step_ids that FAILED (or were skipped) so dependents can
+        # be short-circuited instead of crashing on a missing upstream output.
+        failed_step_ids: set[str] = set()
         context = context or {}
 
         try:
@@ -449,21 +453,26 @@ class PlanExecutor:
                     # Single step, execute directly
                     step = plan.get_step(group[0])
                     if step:
-                        result = await self._execute_step(step, outputs, context)
+                        result = await self._execute_step(step, outputs, context, failed_step_ids)
                         trace.add_result(result)
                         if result.output.is_success:
                             outputs[step.step_id] = result.output.result
+                        else:
+                            failed_step_ids.add(step.step_id)
                 else:
                     # Multiple steps, execute in parallel
                     results = await self._execute_parallel(
                         [step for sid in group if (step := plan.get_step(sid)) is not None],
                         outputs,
                         context,
+                        failed_step_ids,
                     )
                     for result in results:
                         trace.add_result(result)
                         if result.output.is_success:
                             outputs[result.step_id] = result.output.result
+                        else:
+                            failed_step_ids.add(result.step_id)
                     trace.parallel_executions += 1
 
             trace.completed_at = datetime.now(timezone.utc)
@@ -483,12 +492,46 @@ class PlanExecutor:
         return trace
 
     async def _execute_step(
-        self, step: ExecutionStep, prior_outputs: Dict[str, Any], context: Dict[str, Any]
+        self,
+        step: ExecutionStep,
+        prior_outputs: Dict[str, Any],
+        context: Dict[str, Any],
+        failed_step_ids: Optional[set[str]] = None,
     ) -> StepResult:
-        """Execute a single step with circuit breaker and exponential backoff."""
+        """Execute a single step with circuit breaker and exponential backoff.
+
+        F5: if any of this step's ``depends_on_steps`` is in
+        ``failed_step_ids`` (an upstream step that already failed), the step
+        is SKIPPED — its tool is NOT invoked — and a clear dependency-unmet
+        error is recorded. This prevents dependents from crashing on a None
+        upstream output (which never lands in ``prior_outputs``).
+        """
         started_at = datetime.now(timezone.utc)
 
         logger.debug(f"Executing step {step.step_id}: {step.tool_name}")
+
+        # F5: short-circuit dependents of failed upstream steps.
+        unmet = sorted(set(step.depends_on_steps) & (failed_step_ids or set()))
+        if unmet:
+            logger.warning(
+                f"Skipping step {step.step_id} ({step.tool_name}): "
+                f"dependency unmet: {', '.join(unmet)}"
+            )
+            completed_at = datetime.now(timezone.utc)
+            return StepResult(
+                step_id=step.step_id,
+                sub_question_id=step.sub_question_id,
+                tool_name=step.tool_name,
+                input=ToolInput(tool_name=step.tool_name, parameters={}, context=context),
+                output=ToolOutput(
+                    tool_name=step.tool_name,
+                    success=False,
+                    error=f"dependency unmet: {', '.join(unmet)}",
+                ),
+                status=ExecutionStatus.SKIPPED,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
 
         # Resolve input parameters
         resolved_inputs = self._resolve_inputs(step.input_mapping, prior_outputs, context)
@@ -521,6 +564,13 @@ class PlanExecutor:
         )
         if autopop_experiment_id is not None:
             resolved_inputs = {**resolved_inputs, "experiment_id": autopop_experiment_id}
+
+        # F2-core: thread a context-carried DataFrame into tool kwargs under
+        # the canonical ``estimation_data`` key (only when the caller did not
+        # already supply one). All composable tools accept **kwargs.
+        autopop_dataframe = self._maybe_autopopulate_dataframe(step, resolved_inputs, context)
+        if autopop_dataframe is not None:
+            resolved_inputs = {**resolved_inputs, "estimation_data": autopop_dataframe}
 
         tool_input = ToolInput(
             tool_name=step.tool_name, parameters=resolved_inputs, context=context
@@ -669,7 +719,11 @@ class PlanExecutor:
         )
 
     async def _execute_parallel(
-        self, steps: List[ExecutionStep], prior_outputs: Dict[str, Any], context: Dict[str, Any]
+        self,
+        steps: List[ExecutionStep],
+        prior_outputs: Dict[str, Any],
+        context: Dict[str, Any],
+        failed_step_ids: Optional[set[str]] = None,
     ) -> List[StepResult]:
         """Execute multiple steps in parallel"""
         # Limit concurrency
@@ -677,7 +731,7 @@ class PlanExecutor:
 
         async def execute_with_semaphore(step: ExecutionStep) -> StepResult:
             async with semaphore:
-                return await self._execute_step(step, prior_outputs, context)
+                return await self._execute_step(step, prior_outputs, context, failed_step_ids)
 
         tasks = [execute_with_semaphore(step) for step in steps]
         return await asyncio.gather(*tasks, return_exceptions=False)
@@ -896,6 +950,48 @@ class PlanExecutor:
 
         logger.debug(f"Auto-populated experiment_id={experiment_id!r} for tool '{step.tool_name}'")
         return experiment_id
+
+    def _maybe_autopopulate_dataframe(
+        self,
+        step: ExecutionStep,
+        resolved_inputs: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Optional[Any]:
+        """Thread a context-carried DataFrame into tool kwargs (F2-core).
+
+        The composable tools read their working frame from ``**kwargs`` via
+        ``_extract_dataframe_from_kwargs`` — but the planner's
+        ``input_mapping`` never names ``data``/``dataframe``/``estimation_data``,
+        so until now NO production path delivered a frame. This hook mirrors
+        the ``_maybe_autopopulate_experiment_id`` pattern and fires when:
+
+        1. ``context`` carries a pandas-like DataFrame under ANY canonical
+           key in ``_DATAFRAME_KWARGS_KEYS`` (duck-typed: has ``.columns``).
+        2. The caller did NOT already supply ANY of those keys in
+           ``resolved_inputs`` (caller-explicit always wins — C1 parity).
+
+        Returns the frame to inject (under the canonical ``estimation_data``
+        key — NOT ``data``, since ``discover_dag``'s ``DiscoverDagInput.data``
+        is a Dict), or ``None`` to skip injection entirely. All composable
+        tools accept ``**kwargs`` so an unused ``estimation_data`` is harmless.
+        """
+        # Gate 1: caller-explicit wins. If resolved_inputs already names ANY
+        # canonical DataFrame key, do not override.
+        if any(key in resolved_inputs for key in _DATAFRAME_KWARGS_KEYS):
+            return None
+
+        # Gate 2: context carries a duck-typed DataFrame under a canonical key.
+        for key in _DATAFRAME_KWARGS_KEYS:
+            candidate = context.get(key)
+            if candidate is None:
+                continue
+            if hasattr(candidate, "columns") and hasattr(candidate, "__len__"):
+                logger.debug(
+                    f"Auto-injected context DataFrame (from context[{key!r}]) "
+                    f"into tool '{step.tool_name}' as 'estimation_data'."
+                )
+                return candidate
+        return None
 
     def get_tool_stats(self) -> Dict[str, Dict[str, Any]]:
         """
