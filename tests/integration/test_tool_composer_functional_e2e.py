@@ -289,6 +289,11 @@ async def test_compose_tool_threads_resolved_frame_into_context(monkeypatch):
     resolved_df = _build_cohort_df(n=120)
 
     # Stub the cohort resolver to yield a real frame for (brand, region).
+    # NOTE: this patches ct._resolve_cohort_frame (the caller-facing 3-arg
+    # wrapper), NOT the underlying cohort_resolution.resolve_cohort_frame service
+    # (whose signature is brand, region, *, data_source=...). The wrapper's name
+    # and positional 3-arg contract are preserved precisely so this gate keeps
+    # working after #779's delegation refactor.
     def _fake_resolve(brand, region, data_source):  # noqa: ANN001
         captured["resolve_args"] = (brand, region, data_source)
         return resolved_df
