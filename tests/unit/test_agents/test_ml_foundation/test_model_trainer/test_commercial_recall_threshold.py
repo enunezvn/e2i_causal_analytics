@@ -22,8 +22,7 @@ def _proba_two_col(p_pos: np.ndarray) -> np.ndarray:
 
 def test_recall_constrained_meets_floor_and_maximizes_precision() -> None:
     rng = np.random.RandomState(0)
-    n = 600
-    y = np.array([1] * 120 + [0] * 480)  # 20% prevalence
+    y = np.array([1] * 120 + [0] * 480)  # 20% prevalence (n=600)
     # Positives skew high but overlap negatives (weak-but-real signal).
     p = np.concatenate(
         [
