@@ -300,6 +300,73 @@ def _auc_gate_verdict(
     )
 
 
+def _fit_categorical_onehot(X: "pd.DataFrame", cat_cols: list) -> "tuple[pd.DataFrame, dict]":
+    """One-hot encode nominal categoricals into a faithful, calibratable feature space.
+
+    Ordinal/integer codes impose a FALSE magnitude order on NOMINAL categories.
+    The downstream ``ModelTrainerPreprocessor`` only one-hots *object*-dtype
+    columns, so once the harness pre-encodes categoricals to integer codes the
+    preprocessor sees them as numeric and never fixes them — distorting the
+    LINEAR champion's probabilities so its post-Platt calibration slope
+    deviation fails the gate (disc cohort: ~0.18 ordinal vs ~0.07 one-hot, same
+    data/splits, AUC unchanged). One-hot lets the deployable linear model ship;
+    tree models consume one-hot fine.
+
+    Returns ``(X_encoded, info)``; ``info`` carries the fitted encoder + the
+    produced column names so SHAP / validation re-apply reproduce the EXACT
+    trained feature space via :func:`_apply_categorical_onehot`.
+    """
+    if not cat_cols:
+        return X, {"encoder": None, "columns": [], "onehot_columns": [], "method": "onehot"}
+    from sklearn.preprocessing import OneHotEncoder
+
+    ohe = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+    arr = ohe.fit_transform(X[cat_cols].fillna("__missing__").astype(str))
+    out_cols = list(ohe.get_feature_names_out(cat_cols))
+    X_out = X.drop(columns=list(cat_cols)).copy()
+    X_out[out_cols] = arr
+    return X_out, {
+        "encoder": ohe,
+        "columns": list(cat_cols),
+        "onehot_columns": out_cols,
+        "method": "onehot",
+    }
+
+
+def _raw_feature_cols(feature_cols: list, info: "dict | None") -> list:
+    """Map the model's (possibly one-hot-EXPANDED) ``feature_cols`` back to the
+    ORIGINAL pre-encode column names (numeric + raw categorical names).
+
+    One-hot expansion replaces ``payer`` with ``payer_HMO``/``payer_PPO``/…; the
+    raw ``eligible_df`` carries the string ``payer`` column, NOT the indicators.
+    The SHAP step must rebuild its frame from the raw columns and re-apply the
+    fitted encoder (see :func:`_apply_categorical_onehot`) to reproduce the
+    trained feature space. With no one-hot encoding this is a passthrough.
+    """
+    if not info or not info.get("columns"):
+        return list(feature_cols)
+    onehot_out = set(info.get("onehot_columns", []))
+    return [c for c in feature_cols if c not in onehot_out] + list(info["columns"])
+
+
+def _apply_categorical_onehot(X: "pd.DataFrame", info: "dict | None") -> "pd.DataFrame":
+    """Re-apply a fitted one-hot encoding (from :func:`_fit_categorical_onehot`)
+    so a downstream frame (SHAP sample, validation split) carries the IDENTICAL
+    feature columns the model trained on. ``None``/empty ``info`` (or any source
+    column absent) is a no-op passthrough."""
+    if not info or not info.get("columns"):
+        return X
+    cat_cols = info["columns"]
+    if not all(c in X.columns for c in cat_cols):
+        return X
+    ohe = info["encoder"]
+    out_cols = info["onehot_columns"]
+    arr = ohe.transform(X[cat_cols].fillna("__missing__").astype(str))
+    X_out = X.drop(columns=list(cat_cols)).copy()
+    X_out[out_cols] = arr
+    return X_out
+
+
 @dataclass
 class StepResult:
     """Result from a pipeline step with enhanced format data."""
@@ -6087,17 +6154,24 @@ async def run_pipeline(
             y = eligible_df[CONFIG.target_outcome].copy()
 
             # === CATEGORICAL ENCODING ===
-            # OrdinalEncoder for categorical columns so sklearn/leakage checks get numeric data.
-            # Tree-based models handle ordinal encoding natively; the ModelTrainerPreprocessor
-            # will do proper encoding downstream.
+            # One-hot encode nominal categoricals so the LINEAR champion gets a
+            # calibratable feature space. Integer/ordinal codes impose a false
+            # magnitude order on nominal categories, and the downstream
+            # ModelTrainerPreprocessor one-hots only *object*-dtype columns — so
+            # pre-encoding to integers makes it skip its own encoding and the LR
+            # trains on the distorted codes (disc: post-Platt slope_dev ~0.18 vs
+            # ~0.07 one-hot → fails vs passes the calibration gate). One-hot
+            # produces numeric data for the leakage/sklearn checks too; trees
+            # consume it fine. See _fit_categorical_onehot.
             _cat_cols = [c for c in feature_cols if X[c].dtype == object]
             if _cat_cols:
-                from sklearn.preprocessing import OrdinalEncoder
-
-                _oe = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
-                X[_cat_cols] = _oe.fit_transform(X[_cat_cols].fillna("__missing__"))
-                state["categorical_encoding"] = {"encoder": _oe, "columns": _cat_cols}
-                print(f"  Encoded {len(_cat_cols)} categorical features: {_cat_cols}")
+                X, _enc_info = _fit_categorical_onehot(X, _cat_cols)
+                feature_cols = list(X.columns)
+                state["categorical_encoding"] = _enc_info
+                print(
+                    f"  One-hot encoded {len(_cat_cols)} categorical features "
+                    f"-> {len(_enc_info['onehot_columns'])} columns: {_cat_cols}"
+                )
 
             # === PRE-TRAINING LEAKAGE CHECK (on actual pipeline data) ===
             # The data_preparer's leakage detector runs on synthetic data,
@@ -6304,16 +6378,17 @@ async def run_pipeline(
                         y = eligible_df[CONFIG.target_outcome].copy()
 
                         # Re-encode categoricals (the original encoding was on the
-                        # pre-remediation feature set which is now discarded)
+                        # pre-remediation feature set which is now discarded).
+                        # One-hot for the same calibration reason as the initial
+                        # encode above (see _fit_categorical_onehot).
                         _cat_cols2 = [c for c in feature_cols if X[c].dtype == object]
                         if _cat_cols2:
-                            from sklearn.preprocessing import OrdinalEncoder as _OE2
-
-                            _oe2 = _OE2(handle_unknown="use_encoded_value", unknown_value=-1)
-                            X[_cat_cols2] = _oe2.fit_transform(X[_cat_cols2].fillna("__missing__"))
-                            state["categorical_encoding"] = {"encoder": _oe2, "columns": _cat_cols2}
+                            X, _enc_info2 = _fit_categorical_onehot(X, _cat_cols2)
+                            feature_cols = list(X.columns)
+                            state["categorical_encoding"] = _enc_info2
                             print(
-                                f"     Re-encoded {len(_cat_cols2)} categorical features: {_cat_cols2}"
+                                f"     One-hot re-encoded {len(_cat_cols2)} categorical "
+                                f"features -> {len(_enc_info2['onehot_columns'])} columns: {_cat_cols2}"
                             )
 
                         # Impute numeric NaN (RWD demographics ~27% missing)
@@ -6951,23 +7026,25 @@ async def run_pipeline(
             feature_cols = state.get(
                 "feature_names", ["days_on_therapy", "hcp_visits", "prior_treatments"]
             )
-            X = eligible_df[[c for c in feature_cols if c in eligible_df.columns]].copy()
+            # feature_names may be the one-hot-EXPANDED columns (e.g. payer_HMO),
+            # which do NOT exist in the raw eligible_df. Select the ORIGINAL
+            # pre-encode columns (numeric + raw categorical names) so the frame
+            # can be rebuilt and re-encoded to the trained feature space.
+            cat_enc = state.get("categorical_encoding")
+            _raw_cols = _raw_feature_cols(feature_cols, cat_enc)
+            X = eligible_df[[c for c in _raw_cols if c in eligible_df.columns]].copy()
             y = eligible_df[CONFIG.target_outcome].copy()
 
             # Apply fitted preprocessor so SHAP receives the same feature space the model expects
             X_for_shap = X.iloc[:50]
 
-            # Re-apply OrdinalEncoding if it was used before Step 5
-            # (the preprocessor was fitted on encoded data, not raw strings)
-            cat_enc = state.get("categorical_encoding")
-            if cat_enc:
-                _oe = cat_enc["encoder"]
-                _cat_cols = [c for c in cat_enc["columns"] if c in X_for_shap.columns]
-                if _cat_cols:
-                    X_for_shap = X_for_shap.copy()
-                    X_for_shap[_cat_cols] = _oe.transform(
-                        X_for_shap[_cat_cols].fillna("__missing__")
-                    )
+            # Re-apply the one-hot encoding used before Step 5 so SHAP sees the
+            # exact feature space the model trained on (the preprocessor was
+            # fitted on the encoded data, not raw strings). One-hot CHANGES the
+            # column count, so this rebuilds the expanded frame via the fitted
+            # encoder (see _apply_categorical_onehot).
+            if cat_enc and cat_enc.get("columns"):
+                X_for_shap = _apply_categorical_onehot(X_for_shap.copy(), cat_enc)
 
             fitted_preprocessor = state.get("fitted_preprocessor")
             if fitted_preprocessor is not None:
@@ -6983,8 +7060,9 @@ async def run_pipeline(
                             X_transformed, columns=feature_names_out, index=X_for_shap.index
                         )
                     else:
-                        # Fallback: use original column names if shape matches
-                        # (OrdinalEncoder preserves column count unlike OneHotEncoder)
+                        # Fallback: use the (already one-hot-expanded) input column
+                        # names if the transform preserved the count (e.g. a pure
+                        # scaler over the one-hot frame).
                         original_cols = list(X_for_shap.columns)
                         if len(original_cols) == X_transformed.shape[1]:
                             X_for_shap = pd.DataFrame(
