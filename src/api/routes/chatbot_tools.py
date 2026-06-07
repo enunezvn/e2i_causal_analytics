@@ -44,6 +44,7 @@ from src.repositories.chatbot_conversation import (
 from src.repositories.chatbot_message import (
     get_chatbot_message_repository,
 )
+from src.services import cohort_resolution
 from src.utils.llm_factory import get_chat_llm
 
 logger = logging.getLogger(__name__)
@@ -304,7 +305,11 @@ class ToolComposerToolInput(BaseModel):
     )
     region: Optional[str] = Field(
         default=None,
-        description="Region context for the query (US, EU, APAC)",
+        description=(
+            "Region context for the query. Resolved against the patient_journeys "
+            "geographic_region enum (US census regions: Northeast, South, "
+            "Midwest, West); case-insensitive."
+        ),
     )
     session_id: Optional[str] = Field(
         default=None,
@@ -1113,43 +1118,22 @@ def _resolve_cohort_frame(
     region: Optional[str],
     data_source: Optional[str],
 ) -> Optional["pd.DataFrame"]:
-    """Resolve a real cohort DataFrame for (brand, region) via the tier0 loader.
+    """Resolve a real cohort DataFrame for (brand, region).
 
-    Uses ``CohortConstructorAgent.run`` (src/agents/cohort_constructor/
-    tier0_integration.py) which returns ``{'eligible_patients': DataFrame,
-    'success': bool, ...}`` and reads a parquet/s3 ``patient_data_source`` via
-    ``pd.read_parquet``.
+    Delegates to the shared :func:`cohort_resolution.resolve_cohort_frame`
+    service (issue #779), which:
 
-    Returns the eligible-patients frame on success, or ``None`` when no
-    ``data_source`` is supplied or the loader yields nothing. RAISES on loader
-    failure so the caller can log-and-proceed (tools then fail-closed honestly
-    -- never substituting fabricated data).
+    * with an explicit ``data_source`` -> uses the tier0
+      ``CohortConstructorAgent`` loader (preserves the original R4 behavior);
+    * WITHOUT a ``data_source`` -> resolves the canonical ``patient_journeys``
+      table filtered by brand + ``geographic_region``.
+
+    Returns the cohort frame on success, or ``None`` when nothing resolves.
+    RAISES on genuine loader/infra failure so the caller can log-and-proceed
+    (the composable tools then fail closed honestly -- never substituting
+    fabricated data).
     """
-    if not data_source:
-        return None
-
-    from src.agents.cohort_constructor.tier0_integration import (
-        CohortConstructorAgent,
-    )
-
-    agent = CohortConstructorAgent()
-    result = agent.run(
-        {
-            "scope_spec": {
-                "brand": brand or "",
-                "indication": "",
-                "target_population": region or "",
-                "business_objective": "tool_composer_estimation",
-            },
-            "patient_data_source": data_source,
-            "use_existing_config": True,
-        }
-    )
-
-    frame = result.get("eligible_patients")
-    if frame is None or getattr(frame, "empty", True):
-        return None
-    return frame
+    return cohort_resolution.resolve_cohort_frame(brand, region, data_source=data_source)
 
 
 @tool(args_schema=ToolComposerToolInput)
