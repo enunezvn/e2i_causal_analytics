@@ -264,6 +264,10 @@ class ScopeDefinerAgent:
             # context (#749 — store_experiment_pattern was defined but never called).
             await self._update_semantic_memory(output)
 
+            # Record the scope definition to episodic memory (#749 — store_scope_definition
+            # was defined but never called from run() and used a non-existent insert API).
+            await self._update_episodic_memory(output)
+
             # Log execution time
             duration = (datetime.now() - start_time).total_seconds()
             logger.info(f"Scope definition completed in {duration:.2f}s (SLA: {self.sla_seconds}s)")
@@ -403,3 +407,22 @@ class ScopeDefinerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
+
+    async def _update_episodic_memory(self, output: Dict[str, Any]) -> None:
+        """Record the scope definition to EPISODIC memory (#749).
+
+        ``store_scope_definition`` was defined but never called from ``run()`` AND
+        called a non-existent ``insert_episodic_memory`` signature — both fixed
+        (compat shim + migration 039). Graceful degradation. ``session_id`` is the
+        ``audit_workflow_id`` (uuid column) or a fresh UUID — never the non-UUID
+        ``experiment_id``.
+        """
+        try:
+            experiment_id = output.get("experiment_id")
+            if not experiment_id:
+                return
+            session_id = str(output.get("audit_workflow_id") or uuid4())
+            hooks = ScopeDefinerMemoryHooks()
+            await hooks.store_scope_definition(session_id=session_id, result=output, state=output)
+        except Exception as e:
+            logger.debug(f"Failed to update episodic memory: {e}")

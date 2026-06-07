@@ -233,6 +233,10 @@ class FeatureAnalyzerAgent:
                     semantic_memory_entries,
                 ) = await self._update_semantic_memory(final_state)
 
+            # Record the feature analysis to episodic memory (#749 — store_feature_analysis
+            # was defined but never called from run() and used a non-existent insert API).
+            await self._update_episodic_memory(final_state)
+
             # Block 5 (#14): auto-register surviving features in Feast as a
             # FeatureView so downstream serving can read them via the same
             # store the trainer used. Best-effort — failures don't block
@@ -444,6 +448,26 @@ class FeatureAnalyzerAgent:
         except Exception as e:
             logger.warning(f"Failed to update semantic memory: {e}")
             return False, 0
+
+    async def _update_episodic_memory(self, final_state: Dict[str, Any]) -> None:
+        """Record the feature analysis to EPISODIC memory (#749).
+
+        ``store_feature_analysis`` was defined but never called from ``run()`` AND
+        called a non-existent ``insert_episodic_memory`` signature — both fixed
+        (compat shim + migration 039). Graceful degradation. ``session_id`` is the
+        ``audit_workflow_id`` (uuid column) or a fresh UUID.
+        """
+        try:
+            experiment_id = final_state.get("experiment_id")
+            if not experiment_id:
+                return
+            session_id = str(final_state.get("audit_workflow_id") or uuid4())
+            hooks = FeatureAnalyzerMemoryHooks()
+            await hooks.store_feature_analysis(
+                session_id=session_id, result=final_state, state=final_state
+            )
+        except Exception as e:
+            logger.debug(f"Failed to update episodic memory: {e}")
 
     async def _auto_register_in_feast(
         self, state: Dict[str, Any], input_data: Dict[str, Any]

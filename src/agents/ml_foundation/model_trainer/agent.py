@@ -622,6 +622,10 @@ class ModelTrainerAgent:
         # (#749 — store_model_pattern was defined but never called).
         await self._update_semantic_memory(output)
 
+        # Record this training run to episodic memory (#749 — store_training_result
+        # was defined but never called from run() and used a non-existent insert API).
+        await self._update_episodic_memory(output)
+
         # Log completion
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.info(
@@ -803,6 +807,25 @@ class ModelTrainerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
+
+    async def _update_episodic_memory(self, output: Dict[str, Any]) -> None:
+        """Record the training run to EPISODIC memory (#749).
+
+        ``store_training_result`` was defined but never called from ``run()`` AND
+        called a non-existent ``insert_episodic_memory`` signature — both fixed
+        (compat shim + migration 039). Graceful degradation. ``session_id`` is the
+        ``audit_workflow_id`` (the episodic ``session_id`` column is ``uuid``) or a
+        fresh UUID — never the non-UUID ``experiment_id``.
+        """
+        try:
+            experiment_id = output.get("experiment_id")
+            if not experiment_id:
+                return
+            session_id = str(output.get("audit_workflow_id") or uuid4())
+            hooks = ModelTrainerMemoryHooks()
+            await hooks.store_training_result(session_id=session_id, result=output, state=output)
+        except Exception as e:
+            logger.debug(f"Failed to update episodic memory: {e}")
 
     async def _run_repeated_splits(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """W3-lite Day-5 orchestrator (shard 21 §B/§C/§D + cycle-15 I-2/I-3/I-4).

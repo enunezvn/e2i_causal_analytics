@@ -929,3 +929,84 @@ class TestEdgeCases:
 
         assert memory_dict["memory_id"] == "mem_123"
         assert memory_dict["patient_context"]["id"] == "p1"
+
+
+# ============================================================================
+# #749: legacy agent-hook compat path on insert_episodic_memory
+# ----------------------------------------------------------------------------
+# Every agent episodic hook (store_training_result / store_qc_report / ...) calls
+# insert_episodic_memory(session_id=, event_type=, agent_name=, summary=,
+# raw_content=, brand=, region=) — a pre-refactor signature that never matched
+# insert_episodic_memory(memory, embedding, ...) and TypeError'd (silenced with a
+# `# type: ignore[call-arg]`), so NO agent episodic write ever persisted. Pin the
+# compat path: build an EpisodicMemoryInput and route through
+# insert_episodic_memory_with_text (auto-embed).
+# ============================================================================
+
+
+class TestInsertEpisodicMemoryLegacyCompat:
+    """#749: legacy (event_type=...) agent-hook calling convention."""
+
+    @pytest.mark.asyncio
+    async def test_legacy_kwargs_route_to_with_text_with_built_input(self):
+        with patch(
+            "src.memory.episodic_memory.insert_episodic_memory_with_text",
+            new=AsyncMock(return_value="mem-1"),
+        ) as m:
+            result = await insert_episodic_memory(
+                session_id="11111111-1111-1111-1111-111111111111",
+                event_type="model_training_completed",
+                agent_name="model_trainer",
+                summary="trained logreg AUC=0.71",
+                raw_content={"cohort": "discontinuation_mart"},
+                brand="Kisqali",
+                region="northeast",
+            )
+
+        assert result == "mem-1"
+        m.assert_awaited_once()
+        kwargs = m.await_args.kwargs
+        mem = kwargs["memory"]
+        assert mem.event_type == "model_training_completed"
+        assert mem.description == "trained logreg AUC=0.71"
+        assert mem.agent_name == "model_trainer"
+        assert mem.raw_content["cohort"] == "discontinuation_mart"
+        # brand/region preserved (no dedicated EpisodicMemoryInput field) in raw_content
+        assert mem.raw_content["brand"] == "Kisqali"
+        assert mem.raw_content["region"] == "northeast"
+        assert kwargs["session_id"] == "11111111-1111-1111-1111-111111111111"
+
+    @pytest.mark.asyncio
+    async def test_legacy_path_does_not_touch_supabase_directly(self):
+        # the compat path must NOT hit the original embedding-validation/DB path
+        with patch(
+            "src.memory.episodic_memory.insert_episodic_memory_with_text",
+            new=AsyncMock(return_value="mem-2"),
+        ):
+            with patch("src.memory.episodic_memory.get_supabase_client") as supa:
+                await insert_episodic_memory(
+                    session_id=None, event_type="qc_report_completed", summary="qc ok"
+                )
+                supa.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_legacy_extra_kwargs_folded_into_raw_content(self):
+        # different hooks pass extra fields (scope_definer passes kpi_category);
+        # they must be tolerated and preserved, not TypeError'd away.
+        with patch(
+            "src.memory.episodic_memory.insert_episodic_memory_with_text",
+            new=AsyncMock(return_value="mem-3"),
+        ) as m:
+            await insert_episodic_memory(
+                session_id="22222222-2222-2222-2222-222222222222",
+                event_type="scope_definition_completed",
+                summary="scope defined",
+                kpi_category="conversion",
+            )
+        mem = m.await_args.kwargs["memory"]
+        assert mem.raw_content["kpi_category"] == "conversion"
+
+    @pytest.mark.asyncio
+    async def test_missing_both_memory_and_event_type_raises(self):
+        with pytest.raises(TypeError):
+            await insert_episodic_memory(session_id="x")

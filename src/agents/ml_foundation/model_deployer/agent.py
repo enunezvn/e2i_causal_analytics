@@ -274,6 +274,9 @@ class ModelDeployerAgent:
             # so Tier 0 runs grow it and read-hooks return real context
             # (#749 — store_deployment_pattern was defined but never called).
             await self._update_semantic_memory(output, final_state)
+            # Record the deployment to episodic memory (#749 — store_deployment was
+            # defined but never called from run() and used a non-existent insert API).
+            await self._update_episodic_memory(output, final_state)
 
         # Log execution time and SLA check
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -497,3 +500,22 @@ class ModelDeployerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
+
+    async def _update_episodic_memory(self, output: Dict[str, Any], state: Dict[str, Any]) -> None:
+        """Record the deployment to EPISODIC memory (#749).
+
+        ``store_deployment`` was defined but never called from ``run()`` AND called a
+        non-existent ``insert_episodic_memory`` signature — both fixed (compat shim +
+        migration 039). Graceful degradation. Called only on a successful deployment
+        (same gate as procedural/semantic). ``session_id`` is the
+        ``audit_workflow_id`` (uuid column) or a fresh UUID.
+        """
+        try:
+            experiment_id = state.get("experiment_id")
+            if not experiment_id:
+                return
+            session_id = str(state.get("audit_workflow_id") or uuid4())
+            hooks = ModelDeployerMemoryHooks()
+            await hooks.store_deployment(session_id=session_id, result=output, state=state)
+        except Exception as e:
+            logger.debug(f"Failed to update episodic memory: {e}")
