@@ -462,6 +462,137 @@ class FalkorDBSemanticMemory:
         logger.debug(f"Added relationship: {source_id} -[{rel_type}]-> {target_id}")
         return True
 
+    def add_relationship(
+        self,
+        from_entity_id: str,
+        to_entity_id: str,
+        relationship_type: str,
+        properties: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Create a relationship between two EXISTING entities matched by ``id`` (#749 compat shim).
+
+        Agent write-hooks (``model_trainer``, ``model_selector``, ``model_deployer``,
+        ``feature_analyzer``, ``data_preparer``, ``causal_impact``, ``cohort_constructor``,
+        ``scope_definer`` …) call
+        ``add_relationship(from_entity_id="model:abc", to_entity_id="exp:1",
+        relationship_type="BELONGS_TO", …)``. That method never existed on this class —
+        only ``add_e2i_relationship`` did, with a different ``(source_type, source_id,
+        target_type, target_id, rel_type)`` signature — so every relationship write raised
+        ``AttributeError`` that the hooks swallowed, silently dropping ALL agent-written
+        edges (#749 root cause). The graph's entities survived only because
+        ``add_e2i_entity`` happens to be the one correctly-named method.
+
+        The agents create their endpoint nodes via ``add_e2i_entity`` first (the node ``id``
+        is the composite ``"<prefix>:<key>"``), so this shim MATCHes the existing nodes by
+        their ``id`` property (label-agnostic) and MERGEs the edge. It deliberately does NOT
+        create placeholder endpoint nodes — a missing endpoint yields no edge rather than an
+        untyped junk node.
+
+        Args:
+            from_entity_id: Source node ``id`` property (e.g. ``"model:abc"``).
+            to_entity_id: Target node ``id`` property (e.g. ``"exp:1"``).
+            relationship_type: Edge label (validated against Cypher injection).
+            properties: Optional edge properties (bound as parameters, never interpolated).
+
+        Returns:
+            True if the write executed without error, False on backend failure.
+        """
+        # Validate structural tokens BEFORE any write (mirrors add_e2i_relationship).
+        _validate_cypher_identifier(relationship_type, "relationship type")
+        _validate_property_keys(properties)
+
+        # Defense-in-depth: property keys must not shadow the reserved endpoint
+        # params, or ``**props`` below would silently overwrite the MATCH ids and
+        # connect the wrong (or no) nodes.
+        if properties:
+            reserved = {"from_id", "to_id"} & properties.keys()
+            if reserved:
+                raise ValueError(
+                    f"Relationship property keys {sorted(reserved)} conflict with reserved "
+                    "endpoint parameter names (from_id/to_id)."
+                )
+
+        props = properties.copy() if properties else {}
+        # ``updated_at`` is a hardcoded identifier literal (not caller-controlled).
+        props["updated_at"] = datetime.now(timezone.utc).isoformat()
+        prop_items = [f"{k}: ${k}" for k in props.keys()]
+        prop_string = ", ".join(prop_items)
+        set_clause = f"SET r += {{{prop_string}}}" if prop_string else ""
+
+        cypher = f"""
+        MATCH (s {{id: $from_id}})
+        MATCH (t {{id: $to_id}})
+        MERGE (s)-[r:{relationship_type}]->(t)
+        {set_clause}
+        RETURN r
+        """
+
+        params = {"from_id": from_entity_id, "to_id": to_entity_id, **props}
+        try:
+            self.graph.query(cypher, params)
+        except Exception as e:
+            logger.warning(
+                f"Failed to add relationship {from_entity_id} -[{relationship_type}]-> "
+                f"{to_entity_id}: {e}"
+            )
+            return False
+
+        logger.debug(
+            f"Added relationship: {from_entity_id} -[{relationship_type}]-> {to_entity_id}"
+        )
+        return True
+
+    def query(self, cypher: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute a raw Cypher read against the semantic graph (#749 compat shim).
+
+        Every agent memory read-hook calls ``semantic_memory.query(<cypher>)`` directly
+        (e.g. ``MATCH (m:Model)-[:TRAINED_WITH]->(a:Algorithm {name:'lr'}) RETURN m``), but
+        this method never existed on the class — only ``add_e2i_entity`` /
+        ``add_e2i_relationship`` / ``semantic_search`` did — so those reads raised
+        ``AttributeError`` that the hooks swallowed and returned empty ``semantic_context``
+        (#749 read-side root cause).
+
+        Each result row is normalised:
+
+        - a single returned node/relationship -> its property dict (via ``_node_to_dict``)
+        - a single returned scalar            -> ``{"value": <scalar>}``
+        - a multi-column row                  -> ``{"col0": …, "col1": …}``
+
+        Graceful degradation: returns ``[]`` on any backend error (mirrors the callers'
+        expectation that a memory miss never breaks the agent).
+
+        Args:
+            cypher: Cypher query string. Callers MUST parameterise untrusted values; this
+                shim runs the query body verbatim and does not sanitise it.
+            params: Optional bound parameters forwarded to FalkorDB.
+
+        Returns:
+            List of row dicts (possibly empty).
+        """
+        try:
+            result = self.graph.query(cypher, params or {})
+        except Exception as e:
+            logger.warning(f"Semantic query failed: {e}")
+            return []
+
+        rows: List[Dict[str, Any]] = []
+        for record in getattr(result, "result_set", None) or []:
+            if len(record) == 1:
+                cell = record[0]
+                if getattr(cell, "properties", None) is not None:
+                    rows.append(self._node_to_dict(cell))
+                else:
+                    rows.append({"value": cell})
+            else:
+                rows.append({f"col{i}": self._coerce_query_value(v) for i, v in enumerate(record)})
+        return rows
+
+    def _coerce_query_value(self, value: Any) -> Any:
+        """Normalise a Cypher result cell: nodes/relationships -> dicts, scalars passthrough."""
+        if getattr(value, "properties", None) is not None:
+            return self._node_to_dict(value)
+        return value
+
     def get_relationships(
         self, entity_type: E2IEntityType, entity_id: str, direction: str = "both"
     ) -> List[Dict[str, Any]]:

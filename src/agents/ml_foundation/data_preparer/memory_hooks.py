@@ -222,8 +222,9 @@ class DataPreparerMemoryHooks:
             # Query data source history
             if data_source:
                 history = self.semantic_memory.query(
-                    f"MATCH (d:DataSource {{name: '{data_source}'}})-[:HAS_QC]->(q:QCReport) "
-                    f"RETURN q ORDER BY q.timestamp DESC LIMIT 10"
+                    "MATCH (d:DataSource {name: $data_source})-[:HAS_QC]->(q:QCReport) "
+                    "RETURN q ORDER BY q.timestamp DESC LIMIT 10",
+                    {"data_source": data_source},
                 )
                 context["data_source_history"] = history
 

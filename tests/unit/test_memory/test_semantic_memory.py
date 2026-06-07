@@ -1004,3 +1004,105 @@ class TestSemanticSearch:
 
         with pytest.raises(ValueError):
             semantic_memory.semantic_search(query="x", entity_types=["HCP' OR '1'='1"])
+
+
+# ============================================================================
+# #749: API-DRIFT COMPAT SHIMS (raw-Cypher query + add_relationship)
+# ----------------------------------------------------------------------------
+# Every agent memory-hook calls `semantic_memory.query(<cypher>)` (reads) and
+# `semantic_memory.add_relationship(from_entity_id, to_entity_id, ...)` (writes).
+# Neither method ever existed on FalkorDBSemanticMemory (only add_e2i_entity /
+# add_e2i_relationship / semantic_search), so the calls raised AttributeError
+# that the hooks swallowed — relationships were silently dropped and reads
+# returned nothing. The 36 e2i_causal entities came only from add_e2i_entity.
+# These pins lock the compat shims that un-break the whole agent memory layer.
+# ============================================================================
+
+
+class TestRawCypherQueryCompat:
+    """#749: read-hooks call semantic_memory.query(<cypher>) — pin the shim."""
+
+    def test_query_method_exists(self, semantic_memory):
+        assert hasattr(semantic_memory, "query"), (
+            "FalkorDBSemanticMemory must expose query() — every agent read-hook calls it"
+        )
+
+    def test_query_executes_cypher_and_returns_node_dicts(self, semantic_memory, mock_graph):
+        node = MagicMock()
+        node.properties = {"id": "model:abc", "test_auc": 0.81}
+        node.labels = ["Model"]
+        mock_graph.query.return_value = MagicMock(result_set=[[node]])
+
+        rows = semantic_memory.query("MATCH (m:Model) RETURN m")
+
+        mock_graph.query.assert_called_once()
+        assert isinstance(rows, list)
+        assert rows and rows[0]["id"] == "model:abc"
+        assert rows[0]["test_auc"] == 0.81
+
+    def test_query_passes_params_through(self, semantic_memory, mock_graph):
+        mock_graph.query.return_value = MagicMock(result_set=[])
+        semantic_memory.query("MATCH (n {id:$x}) RETURN n", {"x": "exp:1"})
+        call = mock_graph.query.call_args
+        passed = call.args[1] if len(call.args) > 1 else call.kwargs.get("params", {})
+        assert passed == {"x": "exp:1"}
+
+    def test_query_empty_result_returns_empty_list(self, semantic_memory, mock_graph):
+        mock_graph.query.return_value = MagicMock(result_set=[])
+        assert semantic_memory.query("MATCH (n) RETURN n") == []
+
+    def test_query_degrades_gracefully_on_error(self, semantic_memory, mock_graph):
+        mock_graph.query.side_effect = RuntimeError("falkordb down")
+        # must NOT raise — hooks rely on graceful degradation
+        assert semantic_memory.query("MATCH (n) RETURN n") == []
+
+
+class TestAddRelationshipCompat:
+    """#749: write-hooks call add_relationship(from_entity_id, to_entity_id, ...) — pin the shim."""
+
+    def test_add_relationship_method_exists(self, semantic_memory):
+        assert hasattr(semantic_memory, "add_relationship"), (
+            "FalkorDBSemanticMemory must expose add_relationship() — agent write-hooks call it"
+        )
+
+    def test_add_relationship_merges_by_id_with_bound_params(self, semantic_memory, mock_graph):
+        mock_graph.query.return_value = MagicMock(result_set=[[MagicMock()]])
+
+        ok = semantic_memory.add_relationship(
+            from_entity_id="model:abc",
+            to_entity_id="exp:1",
+            relationship_type="BELONGS_TO",
+            properties={"agent": "model_trainer"},
+        )
+
+        assert ok is True
+        cypher, params = mock_graph.query.call_args.args[0], mock_graph.query.call_args.args[1]
+        assert "MERGE (s)-[r:BELONGS_TO]->(t)" in cypher
+        assert "$from_id" in cypher and "$to_id" in cypher
+        # endpoints matched by id, never interpolated
+        assert "model:abc" not in cypher and "exp:1" not in cypher
+        assert params["from_id"] == "model:abc"
+        assert params["to_id"] == "exp:1"
+        assert params["agent"] == "model_trainer"
+        assert "updated_at" in params
+
+    def test_add_relationship_rejects_injection_in_rel_type(self, semantic_memory):
+        with pytest.raises(ValueError):
+            semantic_memory.add_relationship(
+                from_entity_id="a",
+                to_entity_id="b",
+                relationship_type="REL`) DETACH DELETE n //",
+            )
+
+    def test_add_relationship_degrades_gracefully_on_error(self, semantic_memory, mock_graph):
+        mock_graph.query.side_effect = RuntimeError("down")
+        assert semantic_memory.add_relationship("a", "b", "REL") is False
+
+    def test_add_relationship_rejects_reserved_property_keys(self, semantic_memory):
+        # property keys must not shadow the reserved endpoint params, or **props
+        # would silently overwrite the MATCH ids (LOW-2 defense-in-depth).
+        for reserved in ("from_id", "to_id"):
+            with pytest.raises(ValueError):
+                semantic_memory.add_relationship(
+                    "model:a", "exp:b", "BELONGS_TO", properties={reserved: "evil"}
+                )

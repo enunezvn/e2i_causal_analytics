@@ -231,16 +231,18 @@ class ScopeDefinerMemoryHooks:
             # Query experiments related to problem type
             if problem_type:
                 experiments = self.semantic_memory.query(
-                    f"MATCH (e:Experiment)-[:HAS_TYPE]->(t:ProblemType {{name: '{problem_type}'}}) "
-                    f"RETURN e LIMIT 10"
+                    "MATCH (e:Experiment)-[:HAS_TYPE]->(t:ProblemType {name: $problem_type}) "
+                    "RETURN e LIMIT 10",
+                    {"problem_type": problem_type},
                 )
                 context["experiments"] = experiments
 
             # Query previous uses of target variable
             if target_variable:
                 history = self.semantic_memory.query(
-                    f"MATCH (s:ScopeSpec)-[:TARGETS]->(v:Variable {{name: '{target_variable}'}}) "
-                    f"RETURN s LIMIT 10"
+                    "MATCH (s:ScopeSpec)-[:TARGETS]->(v:Variable {name: $target_variable}) "
+                    "RETURN s LIMIT 10",
+                    {"target_variable": target_variable},
                 )
                 context["target_variable_history"] = history
 

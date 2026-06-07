@@ -24,6 +24,7 @@ from .graph import (
     create_model_selector_graph,
     create_simple_selector_graph,
 )
+from .memory_hooks import ModelSelectorMemoryHooks
 from .state import ModelSelectorState
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,11 @@ class ModelSelectorAgent:
             # Update procedural memory with successful selection pattern
             await self._update_procedural_memory(output)
 
+            # Populate the semantic knowledge graph (e2i_causal) with the selected
+            # algorithm so Tier 0 runs grow it and read-hooks return real context
+            # (#749 — store_algorithm_pattern was defined but never called).
+            await self._update_semantic_memory(output)
+
             # Log execution time
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(
@@ -473,3 +479,39 @@ class ModelSelectorAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
+
+    async def _update_semantic_memory(self, output: Dict[str, Any]) -> None:
+        """Populate the semantic knowledge graph (FalkorDB ``e2i_causal``) with the
+        selected algorithm (#749).
+
+        Mirrors ``_update_procedural_memory`` — graceful degradation. The
+        ``store_algorithm_pattern`` hook (Algorithm + SUITED_FOR / USED_IN) was
+        defined but never invoked, so Tier 0 runs left ``e2i_causal`` unpopulated.
+
+        Args:
+            output: Agent output carrying experiment_id, model_candidate
+                (algorithm_name / algorithm_family / selection_score),
+                selection_summary.problem_type, benchmark_results.
+        """
+        try:
+            experiment_id = output.get("experiment_id")
+            model_candidate = output.get("model_candidate", {}) or {}
+            algorithm_name = model_candidate.get("algorithm_name")
+            if not experiment_id or not algorithm_name:
+                logger.debug("Missing experiment_id/algorithm_name; skipping semantic-graph update")
+                return
+
+            hooks = ModelSelectorMemoryHooks()
+            await hooks.store_algorithm_pattern(
+                experiment_id=str(experiment_id),
+                algorithm_name=str(algorithm_name),
+                algorithm_family=model_candidate.get("algorithm_family") or "unknown",
+                problem_type=(output.get("selection_summary", {}) or {}).get("problem_type")
+                or "unknown",
+                selection_score=float(model_candidate.get("selection_score") or 0.0),
+                benchmark_results=output.get("benchmark_results", {}) or {},
+            )
+            logger.info(f"Updated semantic graph (e2i_causal) for algorithm: {algorithm_name}")
+
+        except Exception as e:
+            logger.debug(f"Failed to update semantic memory: {e}")
