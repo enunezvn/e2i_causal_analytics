@@ -383,6 +383,47 @@ def _restore_asyncio_run_after_pollution():
 
 
 # =============================================================================
+# TOOL REGISTRY POLLUTION CONTAINMENT (issue #782 — autouse finalizer)
+# =============================================================================
+# ``ToolRegistry`` (src/tool_registry/registry.py) is a process-wide singleton:
+# ``ToolRegistry()`` and ``get_registry()`` return the SAME instance, and the
+# real composable tools (``causal_effect_estimator`` etc.) are registered into it
+# at import time via the ``@composable_tool`` decorator. Several unit tests and
+# fixtures (``tests/unit/test_agents/test_tool_composer/`` +
+# ``tests/unit/test_tool_registry/``) call ``registry.clear()`` on the singleton
+# for their own isolation — which WIPES those real tools for every later test in
+# the same process. The integration functional gate
+# (``test_canonical_query_produces_real_tool_successes_stub_planner``) then fails
+# with ``Unknown tool in plan: causal_effect_estimator`` and zero tools
+# succeeding (#782). CI runs unit and integration in SEPARATE jobs so it does not
+# trigger there, but a combined local run does — and it is a latent fragility if
+# the lanes are ever merged.
+#
+# Mirrors ``_restore_asyncio_run_after_pollution`` (#218): snapshot the global
+# registry before each test, then MERGE-restore afterwards via the registry's own
+# ``snapshot()`` / ``restore_snapshot()`` API. Merge (re-add / un-shadow, never
+# remove) resets the singleton to EXACTLY its pre-test state, healing any
+# ``clear()``, same-name mock, or stray registration a test performed.
+@pytest.fixture(autouse=True)
+def _restore_tool_registry_after_pollution():
+    """Restore the global ToolRegistry singleton's tools after each test (#782)."""
+    from src.tool_registry.registry import get_registry
+
+    registry = get_registry()
+    snapshot = registry.snapshot()
+    try:
+        yield
+    finally:
+        # Fast no-op path: skip the restore unless the registry changed — a tool
+        # was removed/replaced (identity differs) OR added (count differs).
+        saved_tools = snapshot["tools"]
+        if registry.tool_count != len(saved_tools) or any(
+            registry.get(name) is not tool for name, tool in saved_tools.items()
+        ):
+            registry.restore_snapshot(snapshot)
+
+
+# =============================================================================
 # TESTING MODE - Set before any src imports to bypass JWT auth
 # =============================================================================
 os.environ["E2I_TESTING_MODE"] = "1"
