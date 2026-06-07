@@ -63,12 +63,7 @@ def _resolve_data_source_name(data_source: Any) -> str:
     its ``name``/``table``/``path`` (path basename), so write and read agree.
     """
     if isinstance(data_source, dict):
-        value = (
-            data_source.get("name")
-            or data_source.get("table")
-            or data_source.get("path")
-            or ""
-        )
+        value = data_source.get("name") or data_source.get("table") or data_source.get("path") or ""
     else:
         value = data_source or ""
     text = str(value).rstrip("/")
