@@ -1334,3 +1334,46 @@ class TestAnalyticsBoundedLimits:
             mock_repo.return_value = mock_repo_instance
             response = test_client.get("/copilotkit/analytics/errors?limit=200")
         assert response.status_code == 200
+
+
+class TestResolveChatBrand:
+    """H1 (#694): chat brand_context must be within the caller's grants, else a
+    user could poison another tenant's scoped causal-graph view via the analysis
+    write path. TESTING_MODE bypasses real auth, so these patch it off."""
+
+    @staticmethod
+    def _viewer(*brands: str) -> dict:
+        return {"id": "u1", "role": "viewer", "brands": list(brands)}
+
+    @staticmethod
+    def _admin() -> dict:
+        return {"id": "a1", "role": "admin", "brands": []}
+
+    def test_granted_brand_allowed(self) -> None:
+        from src.api.routes.copilotkit import _resolve_chat_brand
+
+        with patch("src.api.routes.copilotkit.TESTING_MODE", False):
+            assert _resolve_chat_brand(self._viewer("Kisqali"), "Kisqali") == "Kisqali"
+
+    def test_cross_grant_brand_rejected(self) -> None:
+        from fastapi import HTTPException
+
+        from src.api.routes.copilotkit import _resolve_chat_brand
+
+        with patch("src.api.routes.copilotkit.TESTING_MODE", False):
+            with pytest.raises(HTTPException) as exc:
+                _resolve_chat_brand(self._viewer("Kisqali"), "Fabhalta")
+            assert exc.value.status_code == 403
+
+    def test_admin_any_brand_allowed(self) -> None:
+        from src.api.routes.copilotkit import _resolve_chat_brand
+
+        with patch("src.api.routes.copilotkit.TESTING_MODE", False):
+            assert _resolve_chat_brand(self._admin(), "Fabhalta") == "Fabhalta"
+
+    def test_empty_brand_allowed(self) -> None:
+        from src.api.routes.copilotkit import _resolve_chat_brand
+
+        with patch("src.api.routes.copilotkit.TESTING_MODE", False):
+            assert _resolve_chat_brand(self._viewer("Kisqali"), "") == ""
+            assert _resolve_chat_brand(self._viewer("Kisqali"), None) == ""

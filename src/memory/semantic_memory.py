@@ -703,6 +703,7 @@ class FalkorDBSemanticMemory:
         start_entity_id: str,
         max_depth: int = 3,
         limit: int = 50,
+        brands: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Traverse causal relationships from a starting entity with result limit.
@@ -713,6 +714,11 @@ class FalkorDBSemanticMemory:
             start_entity_id: Starting entity ID
             max_depth: Maximum chain length (1-5, clamped for safety)
             limit: Maximum number of chains to return (default 50, max 200)
+            brands: Optional brand-access scope (H1 / #694). When provided, only
+                paths whose EVERY relationship (the causal finding) carries one
+                of these brands are returned; unbranded findings are excluded
+                (fail-closed for a scoped caller). Pass ``None`` (admin) to
+                disable filtering and traverse the whole graph.
 
         Returns:
             List of causal chains with nodes, relationships, and metadata
@@ -721,16 +727,27 @@ class FalkorDBSemanticMemory:
         safe_depth = max(1, min(5, int(max_depth)))
         safe_limit = max(1, min(200, int(limit)))
 
+        params: Dict[str, Any] = {"start_id": start_entity_id}
+        # H1 (#694): brand-scope on the FINDING (the CAUSES/IMPACTS relationship),
+        # not the shared Variable nodes (e.g. var:TRx spans brands). r.brand IS
+        # NULL (unbranded) fails `IN $brands`, so scoped callers never see
+        # unbranded or cross-brand findings.
+        brand_filter = ""
+        if brands is not None:
+            brand_filter = "WHERE ALL(r IN relationships(path) WHERE r.brand IN $brands)"
+            params["brands"] = list(brands)
+
         # FalkorDB doesn't support parameterized variable-length bounds
         query = f"""
         MATCH path = (s {{id: $start_id}})-[:CAUSES|IMPACTS*1..{safe_depth}]->(t)
+        {brand_filter}
         RETURN
             [n IN nodes(path) | {{id: n.id, type: labels(n)[0]}}] as nodes,
             [r IN relationships(path) | {{type: type(r), conf: r.confidence}}] as rels
         LIMIT {safe_limit}
         """
 
-        result = self.graph.query(query, {"start_id": start_entity_id})
+        result = self.graph.query(query, params)
 
         chains = []
         for record in result.result_set:
@@ -874,7 +891,10 @@ class FalkorDBSemanticMemory:
         return result.result_set[0][0] if result.result_set else 0
 
     def find_causal_paths_for_kpi(
-        self, kpi_name: str, min_confidence: float = 0.5
+        self,
+        kpi_name: str,
+        min_confidence: float = 0.5,
+        brands: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Find all causal paths that impact a specific KPI.
@@ -884,19 +904,32 @@ class FalkorDBSemanticMemory:
         Args:
             kpi_name: Name of the KPI (e.g., "TRx", "NRx")
             min_confidence: Minimum confidence threshold
+            brands: Optional brand-access scope (H1 / #694). When provided, only
+                CausalPath nodes carrying one of these brands are returned;
+                unbranded paths are excluded (fail-closed for a scoped caller).
+                Pass ``None`` (admin) to disable filtering.
 
         Returns:
             List of causal paths with effect sizes and confidence
         """
-        query = """
-        MATCH (cp:CausalPath)-[r:IMPACTS]->(k:KPI {name: $kpi_name})
+        params: Dict[str, Any] = {"kpi_name": kpi_name, "min_confidence": min_confidence}
+        # H1 (#694): brand-scope on the CausalPath node (cp.brand IS NULL fails
+        # `IN $brands`, so scoped callers never see unbranded/cross-brand paths).
+        brand_filter = ""
+        if brands is not None:
+            brand_filter = "AND cp.brand IN $brands"
+            params["brands"] = list(brands)
+
+        query = f"""
+        MATCH (cp:CausalPath)-[r:IMPACTS]->(k:KPI {{name: $kpi_name}})
         WHERE r.confidence >= $min_confidence
+        {brand_filter}
         RETURN cp.id as path_id, cp.effect_size as effect_size,
                r.confidence as confidence, cp.method_used as method
         ORDER BY r.confidence DESC
         """
 
-        result = self.graph.query(query, {"kpi_name": kpi_name, "min_confidence": min_confidence})
+        result = self.graph.query(query, params)
 
         return [
             {

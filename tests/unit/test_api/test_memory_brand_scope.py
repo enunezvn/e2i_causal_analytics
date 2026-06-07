@@ -7,10 +7,11 @@ Memory-review finding H1 (cross-tenant PHI reads):
   ``filters->>'brand' IS NULL`` => every brand) or naming another tenant's
   brand returned cross-tenant episodic memory content.
 * ``GET /memory/semantic/paths`` traversed the FalkorDB causal graph with no
-  tenant scope at all. The graph nodes carry no ``brand`` property (verified
-  on the live ``e2i_causal`` graph), so per-brand scoping is not possible at
-  the graph level — the fail-closed decision is to gate graph traversal to
-  cross-brand admins until ``brand`` is added to the causal-graph nodes.
+  tenant scope. Originally fail-closed to cross-brand admins; the H1 follow-up
+  (#694) brand-scopes the traversal instead: causal findings (the CAUSES
+  relationship / CausalPath node) carry a ``brand`` on write, and a scoped
+  viewer sees ONLY findings matching their grants (unbranded => excluded).
+  Cross-brand admins remain unscoped.
 
 These tests invoke the route handlers directly with patched dependencies,
 mirroring ``test_sentinels_brand_auth.py``. Imports are module-level (matching
@@ -22,9 +23,6 @@ from __future__ import annotations
 
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from fastapi import HTTPException
 
 from src.api.routes.memory import (
     MemorySearchRequest,
@@ -102,19 +100,35 @@ async def test_search_admin_passthrough_keeps_brand_and_graph() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_semantic_paths_non_admin_forbidden() -> None:
-    """The brand-unscopable causal-graph traversal is admin-only (fail-closed)."""
-    with pytest.raises(HTTPException) as exc:
-        await query_semantic_paths(kpi_name="TRx", user=_viewer("Brand-X"))
-    assert exc.value.status_code == 403
+async def test_semantic_paths_non_admin_brand_scoped() -> None:
+    """H1 (#694): a scoped viewer may now traverse (no more 403), but the KPI
+    query is brand-scoped to their grants."""
+    sem = MagicMock()
+    sem.find_causal_paths_for_kpi.return_value = []
+    with patch("src.api.routes.memory.get_semantic_memory", return_value=sem):
+        resp = await query_semantic_paths(kpi_name="TRx", user=_viewer("Brand-X"))
+
+    assert resp.total_paths == 0
+    sem.find_causal_paths_for_kpi.assert_called_once()
+    assert sem.find_causal_paths_for_kpi.call_args.kwargs["brands"] == ["Brand-X"]
 
 
-async def test_semantic_paths_admin_allowed() -> None:
-    """A cross-brand admin may traverse the causal graph."""
+async def test_semantic_paths_traverse_brand_scoped() -> None:
+    """A scoped viewer's chain traversal is brand-scoped to ALL their grants."""
+    sem = MagicMock()
+    sem.traverse_causal_chain.return_value = []
+    with patch("src.api.routes.memory.get_semantic_memory", return_value=sem):
+        await query_semantic_paths(start_entity_id="var:x", user=_viewer("Brand-X", "Brand-Y"))
+
+    assert sem.traverse_causal_chain.call_args.kwargs["brands"] == ["Brand-X", "Brand-Y"]
+
+
+async def test_semantic_paths_admin_unscoped() -> None:
+    """A cross-brand admin traverses the whole graph (brands=None => no filter)."""
     sem = MagicMock()
     sem.find_causal_paths_for_kpi.return_value = []
     with patch("src.api.routes.memory.get_semantic_memory", return_value=sem):
         resp = await query_semantic_paths(kpi_name="TRx", user=_admin())
 
     assert resp.total_paths == 0
-    sem.find_causal_paths_for_kpi.assert_called_once()
+    assert sem.find_causal_paths_for_kpi.call_args.kwargs["brands"] is None

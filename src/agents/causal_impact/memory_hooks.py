@@ -495,6 +495,7 @@ class CausalImpactMemoryHooks:
         confidence: float,
         refutation_passed: bool,
         effect_size: str,
+        brand: Optional[str] = None,
     ) -> bool:
         """
         Store discovered causal path in semantic memory.
@@ -555,6 +556,10 @@ class CausalImpactMemoryHooks:
                     "refutation_passed": refutation_passed,
                     "confounders": json.dumps(confounders),
                     "agent": "causal_impact",
+                    # H1 (#694): brand the FINDING so query_semantic_paths can
+                    # tenant-scope it. None => unbranded (admin-only for scoped
+                    # callers); the shared Variable nodes stay unbranded.
+                    "brand": brand,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -710,6 +715,7 @@ async def contribute_to_memory(
             confidence=result.get("confidence", 0),
             refutation_passed=True,
             effect_size=result.get("effect_size", "unknown"),
+            brand=brand or state.get("brand"),
         )
         if stored:
             counts["semantic_stored"] = 1

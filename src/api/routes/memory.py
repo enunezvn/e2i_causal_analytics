@@ -721,16 +721,13 @@ async def query_semantic_paths(
     - Entity relationships
     - Influence networks
     """
-    # H1 (BOLA on the causal graph): the FalkorDB causal graph carries no brand
-    # property on its nodes (verified on the live ``e2i_causal`` graph), so a
-    # traversal cannot be tenant-scoped. Until ``brand`` is added to the causal-
-    # graph nodes, restrict this endpoint to cross-brand admins (fail-closed)
-    # rather than leak another tenant's causal chains to a scoped viewer.
-    if not is_cross_brand_admin(user):
-        raise HTTPException(
-            status_code=403,
-            detail="cross-brand admin grant required for semantic path traversal",
-        )
+    # H1 (#694): brand-scope the traversal instead of fail-closing. A cross-brand
+    # admin (or 'all' grant) sees the whole graph (brands=None => no filter); a
+    # scoped viewer sees ONLY findings carrying one of their brand grants.
+    # Unbranded findings are excluded for scoped viewers (fail-closed for
+    # un-branded), so no cross-tenant causal chain can leak. (Was admin-only
+    # fail-closed before causal-graph findings carried a brand property.)
+    brands: Optional[List[str]] = None if is_cross_brand_admin(user) else get_user_brands(user)
 
     import time
 
@@ -743,12 +740,12 @@ async def query_semantic_paths(
         if kpi_name:
             # Find paths impacting the KPI
             paths = semantic.find_causal_paths_for_kpi(
-                kpi_name=kpi_name, min_confidence=min_confidence
+                kpi_name=kpi_name, min_confidence=min_confidence, brands=brands
             )
         elif start_entity_id:
             # Traverse from entity
             paths = semantic.traverse_causal_chain(
-                start_entity_id=start_entity_id, max_depth=max_depth
+                start_entity_id=start_entity_id, max_depth=max_depth, brands=brands
             )
 
         latency_ms = (time.time() - start_time) * 1000

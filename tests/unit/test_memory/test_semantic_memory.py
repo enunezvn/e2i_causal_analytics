@@ -493,6 +493,25 @@ class TestTraverseCausalChain:
 
         assert result == []
 
+    def test_traverse_brand_scope_filters_relationships(self, semantic_memory, mock_graph):
+        """H1 (#694): a brands scope adds a relationship-brand filter to the Cypher
+        and binds $brands (so unbranded/cross-brand findings can't leak)."""
+        mock_graph.query.return_value.result_set = []
+        semantic_memory.traverse_causal_chain("a", brands=["Brand-X"])
+        query = mock_graph.query.call_args[0][0]
+        params = mock_graph.query.call_args[0][1]
+        assert "r.brand IN $brands" in query
+        assert params["brands"] == ["Brand-X"]
+
+    def test_traverse_admin_no_brand_filter(self, semantic_memory, mock_graph):
+        """No brands (admin) => no brand filter in the Cypher, no $brands param."""
+        mock_graph.query.return_value.result_set = []
+        semantic_memory.traverse_causal_chain("a")
+        query = mock_graph.query.call_args[0][0]
+        params = mock_graph.query.call_args[0][1]
+        assert "$brands" not in query
+        assert "brands" not in params
+
 
 class TestFindCausalPathsForKPI:
     """Tests for find_causal_paths_for_kpi method."""
@@ -521,6 +540,24 @@ class TestFindCausalPathsForKPI:
         call_args = mock_graph.query.call_args
         params = call_args[0][1]
         assert params["min_confidence"] == 0.8
+
+    def test_find_kpi_brand_scope_filters_path(self, semantic_memory, mock_graph):
+        """H1 (#694): a brands scope filters on cp.brand and binds $brands."""
+        mock_graph.query.return_value.result_set = []
+        semantic_memory.find_causal_paths_for_kpi("TRx", brands=["Brand-X"])
+        query = mock_graph.query.call_args[0][0]
+        params = mock_graph.query.call_args[0][1]
+        assert "cp.brand IN $brands" in query
+        assert params["brands"] == ["Brand-X"]
+
+    def test_find_kpi_admin_no_brand_filter(self, semantic_memory, mock_graph):
+        """No brands (admin) => no cp.brand filter, no $brands param."""
+        mock_graph.query.return_value.result_set = []
+        semantic_memory.find_causal_paths_for_kpi("TRx")
+        query = mock_graph.query.call_args[0][0]
+        params = mock_graph.query.call_args[0][1]
+        assert "$brands" not in query
+        assert "brands" not in params
 
 
 class TestFindCommonPaths:
