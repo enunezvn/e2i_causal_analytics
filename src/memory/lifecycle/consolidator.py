@@ -1277,6 +1277,10 @@ class Consolidator:
         candidates = (query.execute().data) or []
         result.causal_paths_examined += len(candidates)
 
+        # First pass: select the promotable candidates (skip overturned paths
+        # and brands flagged with an unrevertable dedup error), then count
+        # confirmations for ALL of them in ONE batched query below.
+        promotable: List[Dict[str, Any]] = []
         for path in candidates:
             path_id = path.get("path_id")
             path_brand = path.get("brand")
@@ -1293,34 +1297,48 @@ class Consolidator:
                     logger.warning(f"consolidator: {msg}")
                     result.errors.append(msg)
                 continue
+            promotable.append(path)
 
-            # Count effective episodic confirmations of this path. After
-            # episodic deduplication (#388), a row's ``dedup_counter`` is
-            # the number of underlying events it represents — so the
-            # effective confirmation count is SUM(dedup_counter), not
-            # COUNT(*). We pull memory_id + dedup_counter and aggregate
-            # in Python because supabase-py doesn't expose a SUM() helper
-            # via the .table() builder; the row set per causal_path is
-            # small (bounded by N_confirmations after dedup), so this is
-            # cheap. episodic_memories.causal_path_id is indexed.
-            try:
-                rows_result = (
-                    client.table("episodic_memories")
-                    .select("memory_id, dedup_counter")
-                    .eq("causal_path_id", path_id)
-                    .execute()
-                )
-                confirmation_rows = rows_result.data or []
+        if not promotable:
+            return
+
+        # M3 (#694): count effective episodic confirmations for ALL promotable
+        # paths in a SINGLE batched query, not one SELECT per path (was an N+1).
+        # After episodic deduplication (#388), a row's ``dedup_counter`` is the
+        # number of underlying events it represents — so the effective
+        # confirmation count is SUM(dedup_counter) per causal_path, NOT
+        # COUNT(*). supabase-py exposes no SUM() helper via the .table()
+        # builder, so we pull (causal_path_id, dedup_counter) for the whole
+        # candidate set in one .in_() query and aggregate in Python.
+        # episodic_memories.causal_path_id is indexed, so the .in_() uses it.
+        path_ids = [p["path_id"] for p in promotable]
+        confirmations_by_path: Dict[str, int] = {}
+        try:
+            rows_result = (
+                client.table("episodic_memories")
+                .select("memory_id, dedup_counter, causal_path_id")
+                .in_("causal_path_id", path_ids)
+                .execute()
+            )
+            for r in rows_result.data or []:
+                cpid = r.get("causal_path_id")
+                if cpid is None:
+                    continue
                 # SUM(dedup_counter) — treats missing counter as 1
                 # (back-compat for rows from before migration 026).
-                confirmation_count = sum(
-                    int(r.get("dedup_counter") or 1) for r in confirmation_rows
+                confirmations_by_path[cpid] = confirmations_by_path.get(cpid, 0) + int(
+                    r.get("dedup_counter") or 1
                 )
-            except Exception as exc:
-                logger.warning(f"consolidator: count failed for {path_id}: {exc}")
-                result.errors.append(f"count {path_id}: {exc}")
-                continue
+        except Exception as exc:
+            logger.warning(f"consolidator: batched confirmation count failed: {exc}")
+            result.errors.append(f"count batch: {exc}")
+            return
 
+        # Second pass: threshold check + stamp consolidated_at per promoted path.
+        for path in promotable:
+            path_id = path["path_id"]
+            path_brand = path.get("brand")
+            confirmation_count = confirmations_by_path.get(path_id, 0)
             # Honor whichever count is higher — the running counter set by
             # the reflector OR the live episodic-memory count.
             effective = max(confirmation_count, path.get("confirmation_count") or 0)
