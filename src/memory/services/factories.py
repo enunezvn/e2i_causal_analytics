@@ -797,9 +797,7 @@ async def get_async_supabase_client():
         # Double-check: a concurrent caller may have created it while we waited.
         if _async_supabase_client is not None:
             return _async_supabase_client
-        logger.info(
-            f"Creating async Supabase client for: {url} (using {_supabase_key_type()} key)"
-        )
+        logger.info(f"Creating async Supabase client for: {url} (using {_supabase_key_type()} key)")
         try:
             _async_supabase_client = await acreate_client(
                 url, key, options=_build_async_supabase_options()
@@ -869,9 +867,7 @@ async def get_async_supabase_service_client():
         # Double-check: a concurrent caller may have created it while we waited.
         if _async_supabase_service_client is not None:
             return _async_supabase_service_client
-        logger.info(
-            f"Creating async Supabase service client for: {url} (using {key_type} key)"
-        )
+        logger.info(f"Creating async Supabase service client for: {url} (using {key_type} key)")
         try:
             _async_supabase_service_client = await acreate_client(
                 url, key, options=_build_async_supabase_options()

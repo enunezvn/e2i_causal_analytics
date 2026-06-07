@@ -683,8 +683,6 @@ def test_extract_relationships_finds_all_trigger_occurrences():
     rels = extractor.extract_relationships(text, entities=entities)
     causes = [r for r in rels if r.relationship_type == E2IRelationshipType.CAUSES]
 
-    assert len(causes) == 2, (
-        f"expected one CAUSES per 'causes' occurrence, got {len(causes)}"
-    )
+    assert len(causes) == 2, f"expected one CAUSES per 'causes' occurrence, got {len(causes)}"
     pairs = {(r.source_mention.text, r.target_mention.text) for r in causes}
     assert pairs == {("AAA", "BBB"), ("CCC", "DDD")}, pairs
