@@ -477,11 +477,11 @@ async def insert_episodic_memory(
             memory=legacy_memory, session_id=session_id, cycle_id=cycle_id
         )
 
-    if embedding is None:
-        raise TypeError(
-            "insert_episodic_memory requires a precomputed `embedding` when `memory` is "
-            "provided; use insert_episodic_memory_with_text to auto-generate one"
-        )
+    # Canonical path (memory provided). ``embedding`` may be ``None`` — that is the
+    # caller's explicit "store no vector" choice (the column is nullable); the M1
+    # guard below allows None and only rejects a present, wrong-width vector. Do NOT
+    # raise on None here — agent hooks deliberately pass embedding=None (codex HIGH-1,
+    # pinned by test_insert_episodic_allows_none_embedding).
 
     # M1: reject a dimension-mismatched embedding (e.g. a 384-dim fallback) before
     # it reaches the vector(1536) column — fail fast and diagnosably, never silently.

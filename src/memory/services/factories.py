@@ -83,7 +83,7 @@ class ServiceConnectionError(Exception):
 
 
 def validate_embedding_dimensions(
-    embedding: List[float], expected_dims: int, *, context: str = "embedding"
+    embedding: Optional[List[float]], expected_dims: int, *, context: str = "embedding"
 ) -> None:
     """Fail fast if an embedding's width does not match the target column (M1).
 
