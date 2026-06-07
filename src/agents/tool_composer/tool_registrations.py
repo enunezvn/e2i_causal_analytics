@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
@@ -40,6 +42,7 @@ from src.causal_engine.pipeline import (
     PipelineOutput,
     SequentialPipeline,
 )
+from src.services import cohort_resolution
 from src.tool_registry import (
     composable_tool,
 )
@@ -294,26 +297,178 @@ def cohort_builder(
     exclusion_criteria: Optional[List[str]] = None,
     **kwargs,
 ) -> CohortBuilderOutput:
-    """Build a patient cohort — intentional fail-close.
+    """Build a patient cohort from a REAL (brand, region) population (#778).
 
-    This composable tool cannot build a real cohort: it has no access to the
-    patient population / claims layer (that is owned by the
-    ``cohort_constructor`` agent). Per anti-mocking discipline it FAILS CLOSED
-    rather than return fabricated ``P001/P002/P003`` placeholder IDs. This is an
-    intentional fail-close, NOT a deletion — the tool stays registered so the
-    planner can route to it and receive an actionable error.
+    Data source resolution (no fabrication):
+
+    1. If the executor auto-injected a DataFrame (one of
+       ``_DATAFRAME_KWARGS_KEYS``), use it as the base population.
+    2. Otherwise route through the shared ``cohort_resolution`` service (#779) to
+       resolve the canonical ``patient_journeys`` cohort for ``(brand, region)``
+       — ``region`` is read from ``kwargs`` (planner/context-supplied).
+
+    Then apply the supplied inclusion/exclusion criteria (simple
+    ``<column> <op> <value>`` expressions) against the real frame and return the
+    REAL eligible patient IDs. Per anti-mocking discipline this FAILS CLOSED
+    (descriptive ``RuntimeError``) when no population resolves or the frame lacks
+    a patient-id column — it NEVER fabricates ``P001/P002/P003`` placeholder IDs.
 
     Raises:
-        RuntimeError: always — directing the caller to the cohort_constructor
-            agent which owns real cohort construction.
+        RuntimeError: when no real population is available or the resolved frame
+            has no recognizable patient-id column.
     """
-    raise RuntimeError(
-        "cohort_builder cannot construct a real cohort from this composable tool "
-        "— it has no access to the patient population. Route cohort construction "
-        "through the cohort_constructor agent (CohortConstructorAgent), which "
-        f"owns the real claims/patient layer. Requested brand={brand!r}, "
-        f"indication={indication!r}. Refusing to fabricate eligible_patient_ids."
+    start = time.time()
+
+    # --- 1. Locate the real population frame (injected wins, else resolve). ---
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        region = kwargs.get("region")
+        df = cohort_resolution.resolve_cohort_frame(brand, region)
+    if df is None:
+        raise RuntimeError(
+            "cohort_builder: no real patient population available for "
+            f"brand={brand!r} (region={kwargs.get('region')!r}) — the "
+            "cohort_resolution service returned no cohort and no DataFrame was "
+            "injected via context. Refusing to fabricate eligible_patient_ids."
+        )
+
+    # --- 2. Locate a real patient-id column (fail closed if absent). ---
+    id_col = _find_patient_id_column(df)
+    if id_col is None:
+        raise RuntimeError(
+            "cohort_builder: resolved cohort has no recognizable patient-id "
+            f"column (columns={list(df.columns)!r}). Refusing to fabricate "
+            "patient IDs from row positions."
+        )
+
+    total_evaluated = int(len(df))
+
+    # --- 3. Apply simple inclusion/exclusion criteria against real columns. ---
+    eligible, breakdown = _apply_cohort_criteria(
+        df, list(inclusion_criteria or []), list(exclusion_criteria or [])
     )
+
+    eligible_ids = [str(v) for v in eligible[id_col].tolist()]
+    total_eligible = len(eligible_ids)
+    rate = (total_eligible / total_evaluated) if total_evaluated else 0.0
+
+    return CohortBuilderOutput(
+        eligible_patient_ids=eligible_ids,
+        total_evaluated=total_evaluated,
+        total_eligible=total_eligible,
+        eligibility_rate=rate,
+        criteria_breakdown=breakdown,
+        execution_time_ms=(time.time() - start) * 1000.0,
+    )
+
+
+# Recognized patient-id columns, in priority order.
+_PATIENT_ID_COLUMNS: Tuple[str, ...] = (
+    "patient_id",
+    "patient_journey_id",
+    "subject_id",
+    "person_id",
+    "id",
+)
+
+# A simple criterion is ``<column> <op> <value>`` (e.g. ``age_at_diagnosis >= 50``).
+_CRITERION_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*(>=|<=|==|!=|>|<)\s*(.+?)\s*$")
+
+
+def _find_patient_id_column(df: Any) -> Optional[str]:
+    """Return the first recognized patient-id column present in ``df``, else None."""
+    try:
+        columns = set(df.columns)
+    except Exception:  # noqa: BLE001 - non-DataFrame input -> no id column
+        return None
+    for candidate in _PATIENT_ID_COLUMNS:
+        if candidate in columns:
+            return candidate
+    return None
+
+
+def _parse_criterion_value(raw: str) -> Any:
+    """Coerce a criterion RHS to int/float/bool, else a stripped string literal."""
+    token = raw.strip().strip("'\"")
+    low = token.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        return int(token)
+    except ValueError:
+        pass
+    try:
+        return float(token)
+    except ValueError:
+        return token
+
+
+def _criterion_mask(series: Any, op: str, value: Any) -> Any:
+    """Boolean mask for ``series <op> value`` (operators are a fixed safe set)."""
+    if op == ">=":
+        return series >= value
+    if op == "<=":
+        return series <= value
+    if op == ">":
+        return series > value
+    if op == "<":
+        return series < value
+    if op == "==":
+        return series == value
+    if op == "!=":
+        return series != value
+    raise ValueError(f"unsupported operator {op!r}")
+
+
+def _apply_cohort_criteria(
+    df: Any,
+    inclusion: List[str],
+    exclusion: List[str],
+) -> Tuple[Any, Dict[str, int]]:
+    """Apply simple criteria to ``df``; return ``(eligible_df, breakdown)``.
+
+    Each parseable ``<column> <op> <value>`` criterion that references a real
+    column is applied: inclusion keeps matching rows, exclusion drops matching
+    rows. ``breakdown`` maps each applied criterion to the number of patients it
+    removed. Criteria that are unparseable or reference an unknown column are NOT
+    silently treated as dropping everyone — they are recorded under
+    ``"_unapplied_criteria"`` (a count) so the caller can see they had no effect,
+    rather than fabricating an eligibility verdict.
+    """
+    eligible = df
+    breakdown: Dict[str, int] = {}
+    unapplied = 0
+
+    def _apply(expr: str, *, exclude: bool) -> None:
+        nonlocal eligible, unapplied
+        match = _CRITERION_RE.match(expr)
+        col = match.group(1) if match else None
+        # Unparseable, unknown-column, or empty-RHS criteria are recorded as
+        # unapplied (honest accounting) rather than silently filtering the wrong
+        # rows or relying on a downstream dtype-mismatch exception.
+        if match is None or col not in df.columns or not match.group(3).strip():
+            unapplied += 1
+            return
+        op = match.group(2)
+        value = _parse_criterion_value(match.group(3))
+        try:
+            mask = _criterion_mask(eligible[col], op, value)
+            keep = ~mask if exclude else mask
+            before = len(eligible)
+            eligible = eligible[keep]
+            breakdown[f"{'exclusion' if exclude else 'inclusion'}:{expr}"] = before - len(eligible)
+        except Exception:  # noqa: BLE001 - dtype mismatch etc. -> record as unapplied
+            unapplied += 1
+
+    for crit in inclusion:
+        _apply(crit, exclude=False)
+    for crit in exclusion:
+        _apply(crit, exclude=True)
+
+    if unapplied:
+        breakdown["_unapplied_criteria"] = unapplied
+
+    return eligible, breakdown
 
 
 @composable_tool(
@@ -868,25 +1023,187 @@ def _derive_p_value_from_confidence(consensus_confidence: Optional[float]) -> fl
     avg_execution_ms=5000,
 )
 def refutation_runner(estimate_id: str, **kwargs) -> Dict[str, Any]:
-    """Run DoWhy refutation tests — intentional fail-close.
+    """Run the REAL DoWhy refutation suite on the in-context data (#778).
 
-    This composable tool receives only an ``estimate_id`` (a string), NOT the
-    live DoWhy estimate object / fitted model / source DataFrame that
-    ``run_all_tests`` requires. It therefore CANNOT run a real refutation and
-    FAILS CLOSED rather than return a fabricated all-pass suite. Intentional
-    fail-close, not a deletion.
+    The live DoWhy model/estimand/estimate do not survive serialization across
+    pipeline steps (see R6-F1 / #740), so this tool cannot receive a fitted
+    estimate by ``estimate_id`` alone. Instead it REUSES the R6-F1 refutation
+    path: it locates the real source DataFrame (auto-injected under one of
+    ``_DATAFRAME_KWARGS_KEYS``) plus the planner-bound ``treatment`` / ``outcome``
+    / ``confounders``, then invokes ``DoWhyExecutor`` with ``run_refutation=True``
+    — which builds the live model in-process and runs the exact same
+    ``RefutationRunner`` suite the causal_impact agent uses (placebo, random
+    common cause, data-subset, bootstrap, E-value sensitivity).
+
+    Per anti-mocking discipline it FAILS CLOSED (descriptive ``RuntimeError``)
+    when the DataFrame, treatment/outcome, or required columns are missing, or
+    when DoWhy produces no refutation suite — it NEVER fabricates an all-pass
+    verdict.
+
+    Args:
+        estimate_id: Echoed back for provenance; not used to fetch a live
+            estimate (which is impossible across the serialization boundary).
+        **kwargs: Must carry the DataFrame (one of ``_DATAFRAME_KWARGS_KEYS``)
+            and ``treatment``/``outcome`` (plus optional ``confounders``).
+
+    Returns:
+        Dict with the real ``refutation_results`` suite, its ``gate_decision``,
+        robustness summary, and provenance.
 
     Raises:
-        RuntimeError: always — directing the caller to causal_impact's
-            ``run_refutation`` path which holds the live estimate/data.
+        RuntimeError: on any missing-data / DoWhy-failure path (fail closed).
     """
-    raise RuntimeError(
-        "refutation_runner cannot run real DoWhy refutation from this composable "
-        f"tool — it received only estimate_id={estimate_id!r} and lacks the live "
-        "estimate object and source data that DoWhy.run_all_tests requires. Use "
-        "causal_impact's run_refutation path (which holds the fitted estimate and "
-        "DataFrame). Refusing to fabricate refutation results."
+    df = _extract_dataframe_from_kwargs(kwargs)
+    if df is None:
+        raise RuntimeError(
+            "refutation_runner requires the real source DataFrame supplied via "
+            f"one of {list(_DATAFRAME_KWARGS_KEYS)!r}; got kwargs keys="
+            f"{sorted(kwargs.keys())!r} (estimate_id={estimate_id!r}). The live "
+            "DoWhy estimate cannot cross the serialization boundary, so refutation "
+            "must re-run on the source data. Refusing to fabricate refutation "
+            "results."
+        )
+
+    treatment = _first_kwarg(kwargs, ("treatment", "treatment_var"))
+    outcome = _first_kwarg(kwargs, ("outcome", "outcome_var"))
+    if not treatment or not outcome:
+        raise RuntimeError(
+            "refutation_runner requires the planner-bound treatment and outcome "
+            f"column names to run real DoWhy refutation; got treatment={treatment!r}, "
+            f"outcome={outcome!r}. Refusing to fabricate refutation results."
+        )
+
+    confounders = _as_str_list(
+        kwargs.get("confounders") or kwargs.get("covariates") or kwargs.get("common_causes")
     )
+
+    refutation = _run_dowhy_refutation(df, treatment, outcome, confounders)
+
+    return {
+        "estimate_id": estimate_id,
+        "treatment": treatment,
+        "outcome": outcome,
+        "n_samples": int(len(df)),
+        "refutation_results": refutation,
+        "gate_decision": refutation.get("gate_decision"),
+        "overall_robust": refutation.get("overall_robust"),
+        "tests_passed": refutation.get("tests_passed"),
+        "tests_failed": refutation.get("tests_failed"),
+        "total_tests": refutation.get("total_tests"),
+        "needs_review": refutation.get("needs_review"),
+    }
+
+
+def _first_kwarg(kwargs: Dict[str, Any], keys: Tuple[str, ...]) -> Optional[str]:
+    """Return the first non-empty string value among ``keys`` in ``kwargs``."""
+    for key in keys:
+        value = kwargs.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _as_str_list(value: Any) -> List[str]:
+    """Coerce a confounders kwarg (str | list | None) into a list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    try:
+        return [str(v) for v in value]
+    except TypeError:
+        return []
+
+
+def _run_coro_sync(coro: Any) -> Any:
+    """Run an awaitable synchronously, propagating exceptions.
+
+    Mirrors ``_run_pipeline_sync``'s async bridge: the tool callable runs in the
+    PlanExecutor thread pool (no running loop), so ``asyncio.run`` is the
+    canonical path; if a loop is already running on this thread we use a fresh
+    loop and restore the prior one.
+    """
+    try:
+        running_loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop is None:
+        return asyncio.run(coro)
+
+    new_loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(new_loop)
+        return new_loop.run_until_complete(coro)
+    finally:
+        asyncio.set_event_loop(running_loop)
+        new_loop.close()
+
+
+def _run_dowhy_refutation(
+    df: Any,
+    treatment: str,
+    outcome: str,
+    confounders: List[str],
+) -> Dict[str, Any]:
+    """Run the real R6-F1 DoWhy refutation suite on ``df``; return its results.
+
+    Builds the minimal ``PipelineState`` the ``DoWhyExecutor`` reads
+    (``treatment_var``/``outcome_var``/``confounders``/``estimation_data`` +
+    ``config["run_refutation"]=True``) and invokes the executor, which runs the
+    live ``identify → estimate → RefutationRunner.run_all_tests`` flow in-process.
+
+    Raises:
+        RuntimeError: if columns are missing, DoWhy fails, or no suite is
+            produced (fail closed -- never a fabricated verdict).
+    """
+    try:
+        columns = set(df.columns)
+    except Exception as exc:  # noqa: BLE001 - non-DataFrame input
+        raise RuntimeError(
+            f"refutation_runner: supplied data is not a DataFrame ({exc}). "
+            "Refusing to fabricate refutation results."
+        ) from exc
+
+    missing = [c for c in [treatment, outcome, *confounders] if c not in columns]
+    if missing:
+        raise RuntimeError(
+            f"refutation_runner: columns {missing!r} are not in the DataFrame "
+            f"(columns={sorted(columns)!r}). Refusing to fabricate refutation "
+            "results."
+        )
+
+    from src.causal_engine.pipeline.executors.dowhy import DoWhyExecutor
+
+    # PipelineState/PipelineConfig are TypedDicts (plain dicts at runtime); the
+    # executor reads treatment_var/outcome_var directly and everything else via
+    # .get(). run_refutation is read from state["config"].
+    state: Dict[str, Any] = {
+        "treatment_var": treatment,
+        "outcome_var": outcome,
+        "confounders": list(confounders),
+        "estimation_data": df,
+        "config": {"run_refutation": True},
+    }
+    config: Dict[str, Any] = {"run_refutation": True}
+
+    result = _run_coro_sync(DoWhyExecutor().execute(state, config))  # type: ignore[arg-type]
+
+    if not result.get("success"):
+        raise RuntimeError(
+            "refutation_runner: DoWhy executor failed -- "
+            f"{result.get('error')!r}. Refusing to fabricate refutation results."
+        )
+
+    payload = result.get("result") or {}
+    refutation = payload.get("refutation_results") or {}
+    if not isinstance(refutation, dict) or "gate_decision" not in refutation:
+        raise RuntimeError(
+            "refutation_runner: DoWhy produced no refutation suite (the resolved "
+            "method may not expose a standard error / CI for refutation, e.g. a "
+            "non-linear estimator). Refusing to fabricate a pass/fail verdict."
+        )
+    return refutation
 
 
 def _e_value_from_rr(rr: float) -> float:
