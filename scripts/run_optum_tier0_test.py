@@ -47,6 +47,10 @@ COHORT_TARGETS: dict[str, str] = {
     "initiation_mart": "initiated_biologic_180d",
     "discontinuation_mart": "discontinued_180d",
     "persistence_mart": "persistent_at_180d",
+    # HCP-grain commercial-targeting cohort (entity-stacked Optum drop ->
+    # convert_optum_hcp_adoption.py). Native shape of "commercial HCP targeting";
+    # the only mart grain where a strong target + admissible features co-exist.
+    "hcp_adoption": "adopted_target_brand",
 }
 
 COHORT_DIR: dict[str, str] = {
@@ -58,6 +62,7 @@ COHORT_DIR: dict[str, str] = {
     "initiation_mart": "data/rwd/mart/initiation",
     "discontinuation_mart": "data/rwd/mart/discontinuation",
     "persistence_mart": "data/rwd/mart/persistence",
+    "hcp_adoption": "data/rwd/mart/hcp_adoption",
 }
 
 _MART_SUFFIX = "_mart"
@@ -74,6 +79,9 @@ def _convert_hint(cohort: str) -> str:
     (that converter has no ``*_mart`` cohort), a footgun for whoever hits a
     missing dir.
     """
+    if cohort == "hcp_adoption":
+        # HCP-grain commercial-targeting cohort: its own entity-stacked-mart adapter.
+        return f"python scripts/convert_optum_hcp_adoption.py --output {COHORT_DIR[cohort]}"
     if cohort.endswith(_MART_SUFFIX):
         base = cohort[: -len(_MART_SUFFIX)]
         return f"python scripts/convert_optum_mart.py --cohort {base} --output {COHORT_DIR[cohort]}"

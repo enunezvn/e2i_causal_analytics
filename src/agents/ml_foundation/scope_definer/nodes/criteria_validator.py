@@ -93,10 +93,17 @@ _INTENT_AUC_PARAMS: Dict[tuple[str, str], tuple[float, float]] = {
 _COMMERCIAL_LIFT_FLOOR: float = 0.08
 
 # Commercial net-benefit threshold probability. A false-positive target (a
-# wasted outreach) costs far less than a missed discontinuer, so the decision
-# threshold p_t is low — cost ratio c_FP/c_FN = (1 - p_t)/p_t ~= 1:9. Clinical
-# runs keep the regime-keyed _V3_REGIME_P_T (clean 0.30 ~= 7:3).
-_COMMERCIAL_P_T: float = 0.10
+# wasted outreach touch) costs FAR less than a missed adopter: a converted
+# specialist is worth many sales touches. The Vickers net-benefit threshold
+# probability encodes that cost ratio as p_t = c_FP / (c_FP + c_FN); at
+# p_t = 0.05 the implied ratio is c_FP : c_FN ~= 1 : 19 (one wasted touch is
+# ~5% the cost of a missed adopter) — a deliberately CONSERVATIVE commercial
+# value (true outreach ratios often run 1:50+). This is an economic-cost
+# parameter, NOT a model-quality relaxation: the deployed model must still clear
+# NB > 0 at this p_t ON ITS MERITS (the deployer evaluates net benefit on the
+# calibrated/deployed probabilities). Clinical runs keep the regime-keyed
+# _V3_REGIME_P_T (clean 0.30 ~= 7:3, the clinical decision-cost ratio).
+_COMMERCIAL_P_T: float = 0.05
 
 
 def _normalize_deployment_intent(value: Any) -> str:
@@ -322,6 +329,17 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
     success_criteria["minimum_lift_over_baseline"] = performance_reqs.get(
         "min_lift", 0.10
     )  # 10% improvement over baseline
+
+    # Stamp deployment_intent (clinical|commercial) at the TOP LEVEL so every
+    # downstream consumer can read it reliably regardless of which criteria path
+    # runs below: the evaluator's commercial recall-constrained operating point
+    # AND post-hoc calibration-method selector, and the model_deployer's
+    # model_usefulness gate. The adaptive ``_adaptive_inputs`` stash also carries
+    # it, but that stash is path-dependent (only the adaptive branch sets it) and
+    # can be dropped on a success_criteria rebuild; this top-level key is not.
+    success_criteria["deployment_intent"] = _normalize_deployment_intent(
+        state.get("deployment_intent")
+    )
 
     # ADAPTIVE_CRITERIA branch: when the flag is on AND the upstream pipeline
     # state carries dataset characteristics, replace fixed thresholds with

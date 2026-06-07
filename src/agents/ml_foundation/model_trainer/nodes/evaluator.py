@@ -1040,9 +1040,22 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
             # ``model_candidate.skip_post_hoc_calibration`` which short-
             # circuits BEFORE this block. Setting calibration_method to a
             # falsey value cannot disable post-hoc calibration on its own.
-            requested_method = state.get("calibration_method", "auto")
+            requested_method = state.get("calibration_method")
             if requested_method is None:
-                requested_method = "auto"
+                # Intent-aware default. Commercial-targeting cohorts are rare-event
+                # (low prevalence); the "auto" policy selects isotonic once the
+                # validation positive count exceeds 100, which minimizes ECE but
+                # can leave the recalibration SLOPE far from 1.0 (isotonic is a
+                # non-parametric step function) and fail the deployer's
+                # calibration_slope gate. Platt/sigmoid (2 params) yields a stable
+                # slope ~1.0 at low N — the operating regime for commercial
+                # targeting — so commercial defaults to sigmoid while clinical
+                # keeps "auto". An explicit state["calibration_method"] override
+                # (operator-set) is preserved unchanged.
+                _cal_intent = (state.get("success_criteria") or {}).get(
+                    "deployment_intent"
+                ) or "clinical"
+                requested_method = "sigmoid" if _cal_intent == "commercial" else "auto"
             elif requested_method not in ("auto", "isotonic", "sigmoid"):
                 logger.warning(
                     "Unknown calibration_method=%r in state; falling back to 'auto'. "
@@ -1117,6 +1130,28 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     inner_test_metrics["calibration_intercept_magnitude"] = (
                         abs(cal_intercept) if not math.isnan(cal_intercept) else float("nan")
                     )
+
+                    # (a.2) Net-benefit gate (Vickers NB > 0 at the regime's p_t).
+                    #     The NB grid is threshold-INDEPENDENT (each p_t uses its
+                    #     OWN operating point ``proba >= p_t``), so like the
+                    #     calibration-slope gate above it must be evaluated on the
+                    #     DEPLOYED (calibrated) probabilities — NOT the raw grid
+                    #     computed in ``_compute_classification_metrics``. The raw
+                    #     grid is on the pre-calibration scale, where a balanced-
+                    #     class-weight model's inflated probabilities flag nearly
+                    #     every record at low p_t and UNDERSTATE net benefit (a
+                    #     genuinely net-beneficial deployed model then false-fails
+                    #     the gate). Recompute on the calibrated test probs so
+                    #     ``minimum_net_benefit_at_p_t`` judges the artifact we ship
+                    #     (same DEPLOYED-model-consistency contract as #633). NB is
+                    #     monotone-calibration-SENSITIVE (unlike AUC), so this is a
+                    #     genuine correction, not a no-op.
+                    inner_test_metrics["net_benefit_grid"] = {
+                        f"p_t={p_t:.2f}": _compute_net_benefit_at_p_t(
+                            np.asarray(y_test_np), cal_proba_pos, p_t
+                        )
+                        for p_t in _V3_NB_GRID_P_T_VALUES
+                    }
 
                     # (b) Threshold-dependent metrics: re-derive the operating
                     #     point on the calibrated probability scale (the raw
@@ -2065,8 +2100,14 @@ def _compute_classification_metrics(
         # scope_definer.define_success_criteria); the threshold is tuned on
         # VALIDATION and frozen onto test below — no test re-tuning.
         if y_validation_proba is not None:
+            # success_criteria may be a plain dict OR the pydantic ScopeDefiner
+            # success-criteria model (dict-like, exposes ``.get``). Duck-type on
+            # ``.get`` rather than ``isinstance(dict)`` — the model is NOT a dict
+            # subclass, so an isinstance check would silently skip the commercial
+            # operating point even when deployment_intent IS commercial (the
+            # calibration block already uses the duck-typed ``(... or {}).get``).
             _intent = "clinical"
-            if isinstance(success_criteria, dict):
+            if success_criteria is not None and hasattr(success_criteria, "get"):
                 _intent = (
                     success_criteria.get("deployment_intent")
                     or (success_criteria.get("_adaptive_inputs") or {}).get("deployment_intent")

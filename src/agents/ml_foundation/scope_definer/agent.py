@@ -192,6 +192,14 @@ class ScopeDefinerAgent:
             "prevalence": input_data.get("prevalence"),
             "feature_count": input_data.get("feature_count"),
             "regime": input_data.get("regime"),
+            # Deployment intent (clinical | commercial) — MUST be forwarded into
+            # the scope state so define_success_criteria can stamp it on
+            # success_criteria (top-level + _adaptive_inputs). Without this the
+            # whole intent chain silently defaults to clinical: the commercial
+            # AUC/recall/MCC bar, the evaluator's commercial recall-constrained
+            # operating point, and the commercial sigmoid-calibration default all
+            # never engage even when --deployment-intent commercial is passed.
+            "deployment_intent": input_data.get("deployment_intent"),
         }
 
         start_time = datetime.now()

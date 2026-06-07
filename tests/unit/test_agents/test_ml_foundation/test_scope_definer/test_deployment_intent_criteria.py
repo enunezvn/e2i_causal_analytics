@@ -6,7 +6,8 @@ models keep the literature floor (AUC 0.75; Vickers 2019 / Cook 2007), while
 COMMERCIAL targeting/propensity models use a lower, separately-cited floor
 (AUC 0.65; Hosmer-Lemeshow 2013; advertising-propensity distribution median
 0.76, range 0.60-0.95) plus prevalence-aware operating gates (recall 0.50,
-MCC 0.10 per Chen-2024 deflation, net-benefit p_t 0.10 for low FP cost).
+MCC 0.10 per Chen-2024 deflation, net-benefit p_t 0.05 ≈ c_FP:c_FN 1:19 for
+low FP cost — the deployed model must still clear NB>0 at that p_t on its merits).
 
 Default intent is "clinical" — the flag NEVER silently loosens the bar.
 """
@@ -19,7 +20,52 @@ import pytest
 
 from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
     adaptive_success_criteria,
+    define_success_criteria,
 )
+
+
+class TestDefineSuccessCriteriaStampsDeploymentIntent:
+    """define_success_criteria must stamp deployment_intent at the TOP LEVEL of
+    success_criteria (not only inside the path-dependent _adaptive_inputs stash),
+    so the evaluator's commercial recall-constrained operating point + sigmoid
+    calibration default + the deployer gates can read it reliably."""
+
+    @pytest.mark.parametrize("intent", ["clinical", "commercial"])
+    def test_top_level_deployment_intent_stamped(self, intent: str) -> None:
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "experiment_id": "exp_test",
+            "deployment_intent": intent,
+            "n_samples": 40000,
+            "prevalence": 0.0232,
+            "feature_count": 19,
+            "regime": "default",
+        }
+        result = asyncio.run(define_success_criteria(state))
+        sc = result["success_criteria"]
+        assert sc["deployment_intent"] == intent
+
+    def test_missing_deployment_intent_defaults_clinical(self) -> None:
+        state = {
+            "inferred_problem_type": "binary_classification",
+            "experiment_id": "exp_test",
+            "n_samples": 40000,
+            "prevalence": 0.0232,
+            "feature_count": 19,
+            "regime": "default",
+        }
+        result = asyncio.run(define_success_criteria(state))
+        assert result["success_criteria"]["deployment_intent"] == "clinical"
+
+    def test_scope_state_schema_retains_deployment_intent(self) -> None:
+        """Regression: the pydantic ScopeDefinerState MUST declare
+        deployment_intent, else the agent silently drops it and the whole intent
+        chain defaults to clinical regardless of --deployment-intent commercial."""
+        from src.agents.ml_foundation.scope_definer.state import ScopeDefinerState
+
+        # The field must be DECLARED on the schema; otherwise pydantic drops the
+        # agent's forwarded value (extra fields are not retained).
+        assert "deployment_intent" in ScopeDefinerState.model_fields
 
 
 class TestAdaptiveSuccessCriteriaDeploymentIntent:

@@ -53,6 +53,14 @@ from .optum_mart_feature_manifest import (
     OPTUM_MART_FEATURES,
     optum_mart_contract_for,
 )
+from .optum_hcp_feature_manifest import (
+    OPTUM_HCP_FEATURES,
+    OPTUM_HCP_FORBIDDEN_AS_FEATURES,
+    OPTUM_HCP_FORBIDDEN_NON_TARGET,
+    OPTUM_HCP_SAFE_FEATURES,
+    OPTUM_HCP_TARGETS,
+    optum_hcp_contract_for,
+)
 from .synthetic_feature_manifest import (
     SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
@@ -76,6 +84,12 @@ MANIFEST_SOURCES: Mapping[str, Callable[[str], FeatureContract | None]] = {
     "csu": csu_contract_for,
     "optum": optum_contract_for,
     "optum_mart": optum_mart_contract_for,
+    # ``optum_hcp`` is the entity-stacked drop's HCP grain (commercial targeting):
+    # an adoption target + claims practice-profile predictors, a different schema
+    # AND a different unit of analysis from the patient ``optum_mart`` cohort, so
+    # it registers its OWN FeatureContract list. Resolved via an explicit
+    # feature_manifest_source override on the ``hcp_adoption`` cohort path.
+    "optum_hcp": optum_hcp_contract_for,
     "synthetic": synthetic_contract_for,
 }
 
@@ -127,6 +141,12 @@ __all__ = [
     "MART_SAFE_FEATURES",
     "MART_TARGETS",
     "optum_mart_contract_for",
+    "OPTUM_HCP_FEATURES",
+    "OPTUM_HCP_FORBIDDEN_AS_FEATURES",
+    "OPTUM_HCP_FORBIDDEN_NON_TARGET",
+    "OPTUM_HCP_SAFE_FEATURES",
+    "OPTUM_HCP_TARGETS",
+    "optum_hcp_contract_for",
     "SYNTHETIC_FEATURES",
     "SYNTHETIC_FORBIDDEN_AS_FEATURES",
     "synthetic_contract_for",

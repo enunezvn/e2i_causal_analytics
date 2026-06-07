@@ -114,6 +114,12 @@ class ScopeDefinerState(BaseAgentSchema):
     prevalence: Optional[float] = None  # positive-class rate, in [0, 1]
     feature_count: Optional[int] = None  # post-preprocessing feature count
     regime: Optional[Literal["default", "clean", "adverse"]] = None
+    # Deployment intent (clinical | commercial) — selects the use-case bar
+    # (clinical AUC 0.75 vs commercial 0.60) and, downstream, the commercial
+    # recall-constrained operating point + sigmoid-calibration default. Declared
+    # here so the pydantic state does not silently drop it (extra fields are not
+    # retained), which would default the whole intent chain to clinical.
+    deployment_intent: Optional[Literal["clinical", "commercial"]] = None
 
     # === INTERMEDIATE FIELDS ===
     # Problem classification

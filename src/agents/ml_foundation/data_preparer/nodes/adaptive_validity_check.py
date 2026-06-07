@@ -110,6 +110,8 @@ from src.data.manifests import (
     MART_FORBIDDEN_AS_FEATURES,
     OPTUM_FEATURES,
     OPTUM_FORBIDDEN_AS_FEATURES,
+    OPTUM_HCP_FEATURES,
+    OPTUM_HCP_FORBIDDEN_AS_FEATURES,
     OPTUM_MART_FEATURES,
     SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
@@ -2472,6 +2474,7 @@ def _resolve_manifest_features(
         "csu": list(CSU_FEATURES),
         "optum": list(OPTUM_FEATURES),
         "optum_mart": list(OPTUM_MART_FEATURES),
+        "optum_hcp": list(OPTUM_HCP_FEATURES),
         "synthetic": list(SYNTHETIC_FEATURES.values()),
     }
     return registries.get(manifest_source)
@@ -3054,6 +3057,12 @@ _MANIFEST_FORBIDDEN_BY_SOURCE: dict[str, list[str]] = {
     # (index_biologic_brand / treatment_start_date / the target) must never
     # reach Layer 3 — the proactive counterpart to the Layer 1 contract audit.
     "optum_mart": MART_FORBIDDEN_AS_FEATURES,
+    # optum_hcp: the entity-stacked drop's HCP grain (commercial targeting). Its
+    # adoption-DERIVED leakers (adoption_status / adopter_rank / days_to_first /
+    # target_* / adoption_*) must never reach Layer 3 — kept in lockstep with
+    # MANIFEST_SOURCES so ``_select_features`` recognises the source and applies
+    # the proactive forbidden-list pass (defense-in-depth alongside Layer 1).
+    "optum_hcp": OPTUM_HCP_FORBIDDEN_AS_FEATURES,
     # v5 Gate C2: synthetic manifest has no forbidden columns by design.
     # Registered explicitly so ``_select_features`` does NOT log the
     # "unknown manifest_source" warning when synthetic runs opt in.
