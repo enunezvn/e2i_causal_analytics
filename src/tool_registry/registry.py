@@ -133,9 +133,14 @@ class ToolSchema:
         }
 
 
-@dataclass
+@dataclass(frozen=True)
 class RegisteredTool:
-    """A registered tool with its callable and schema"""
+    """A registered tool with its callable and schema.
+
+    Frozen so the registry's shared ``RegisteredTool`` objects cannot be mutated
+    in place — this is what lets :meth:`ToolRegistry.snapshot` /
+    :meth:`ToolRegistry.restore_snapshot` rely on object identity to detect and
+    heal test pollution (#782)."""
 
     schema: ToolSchema
     callable: Callable[..., Any]
@@ -280,6 +285,42 @@ class ToolRegistry:
         self._by_agent.clear()
         self._by_tier.clear()
         logger.info("ToolRegistry cleared")
+
+    def snapshot(self) -> Dict[str, Any]:
+        """Capture a shallow snapshot of the current tools and indexes.
+
+        Intended for test isolation: ``ToolRegistry`` is a process-wide singleton
+        (see ``__new__``), so a test that calls :meth:`clear` (or registers a
+        same-name mock) mutates the registry for every later test in the same
+        process — wiping the real import-time tools the integration functional
+        gate depends on (issue #782). Pair this with :meth:`restore_snapshot` to
+        make a test leave the singleton as it found it.
+
+        ``RegisteredTool`` values are shared and frozen (immutable), so only the
+        container ``dict``/``list`` structures need copying.
+        """
+        return {
+            "tools": dict(self._tools),
+            "by_agent": {agent: list(names) for agent, names in self._by_agent.items()},
+            "by_tier": {tier: list(names) for tier, names in self._by_tier.items()},
+        }
+
+    def restore_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        """Reset the registry to EXACTLY the captured ``snapshot``.
+
+        Replaces the tools and both indexes with the snapshot's copies. This
+        heals any pollution a test caused — a :meth:`clear`, a same-name mock
+        that shadowed a real tool, OR a stray tool the test registered — and
+        leaves the registry byte-consistent (every tool present is also indexed).
+        It is idempotent: restoring an already-matching snapshot is a no-op in
+        effect.
+        """
+        self._tools.clear()
+        self._tools.update(snapshot["tools"])
+        self._by_agent.clear()
+        self._by_agent.update({agent: list(names) for agent, names in snapshot["by_agent"].items()})
+        self._by_tier.clear()
+        self._by_tier.update({tier: list(names) for tier, names in snapshot["by_tier"].items()})
 
     @property
     def tool_count(self) -> int:
