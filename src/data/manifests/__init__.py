@@ -45,14 +45,6 @@ from .optum_feature_manifest import (
     OPTUM_TARGETS,
     optum_contract_for,
 )
-from .optum_mart_feature_manifest import (
-    MART_FORBIDDEN_AS_FEATURES,
-    MART_FORBIDDEN_NON_TARGET,
-    MART_SAFE_FEATURES,
-    MART_TARGETS,
-    OPTUM_MART_FEATURES,
-    optum_mart_contract_for,
-)
 from .optum_hcp_feature_manifest import (
     OPTUM_HCP_FEATURES,
     OPTUM_HCP_FORBIDDEN_AS_FEATURES,
@@ -60,6 +52,14 @@ from .optum_hcp_feature_manifest import (
     OPTUM_HCP_SAFE_FEATURES,
     OPTUM_HCP_TARGETS,
     optum_hcp_contract_for,
+)
+from .optum_mart_feature_manifest import (
+    MART_FORBIDDEN_AS_FEATURES,
+    MART_FORBIDDEN_NON_TARGET,
+    MART_SAFE_FEATURES,
+    MART_TARGETS,
+    OPTUM_MART_FEATURES,
+    optum_mart_contract_for,
 )
 from .synthetic_feature_manifest import (
     SYNTHETIC_FEATURES,

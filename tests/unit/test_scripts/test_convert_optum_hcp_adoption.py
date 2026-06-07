@@ -22,9 +22,9 @@ import pandas as pd
 import pytest
 
 from scripts.convert_optum_hcp_adoption import (
+    _LEAKY_HCP_COLS,
     HCP_SAFE_FEATURES,
     HCP_TARGET,
-    _LEAKY_HCP_COLS,
     assign_stratified_split,
     build_hcp_journey_records,
     select_hcp_cohort,
@@ -183,12 +183,11 @@ class TestGateExcludedFeatures:
         # NOT leaks — they stay declared pre-index in the manifest (honesty:
         # the converter curates them out for a conservative-gate reason, it does
         # not relabel them as leakage).
+        from scripts.convert_optum_hcp_adoption import _GATE_EXCLUDED_FEATURES
         from src.data.manifests.optum_hcp_feature_manifest import (
             OPTUM_HCP_SAFE_FEATURES,
             optum_hcp_contract_for,
         )
-
-        from scripts.convert_optum_hcp_adoption import _GATE_EXCLUDED_FEATURES
 
         for f in _GATE_EXCLUDED_FEATURES:
             assert f in OPTUM_HCP_SAFE_FEATURES
