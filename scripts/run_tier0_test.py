@@ -189,28 +189,55 @@ def _calibration_slope_deviation_of(result: dict | None) -> float:
     return abs(dev_f)
 
 
+# Deployability-aware champion selection (owner-ratified 2026-06-07): a model
+# that PASSES the genuine deployment quality gates (good calibration AND not
+# overfit) is preferred over a raw-AUC winner that would be BLOCKED by those
+# gates. The raw-AUC winner is often an overfit gradient booster whose train-
+# inflated AUC edges out a cleaner linear model that actually deploys — picking
+# it strands the cohort. ``calibration_slope_deviation`` mirrors the v3
+# ``maximum_calibration_slope_deviation`` gate; ``overfitting_severity=="none"``
+# (train-val AUC delta <= ~0.03) mirrors ``maximum_train_val_delta``.
+_DEPLOY_MAX_SLOPE_DEV: float = 0.15
+
+
 def _select_champion(comparison_history: list[dict]) -> dict:
     """Pick the champion from Step 5b candidates.
 
-    Two-stage, calibration-aware selection:
+    Deployability-aware, then calibration-aware:
 
-    1. Find the maximum test AUC across all trained candidates.
-    2. Among candidates whose AUC is within ``_AUC_TIE_BAND`` of that maximum
-       (a genuine discrimination tie), pick the one with the lowest
-       deploy-calibrated ``calibration_slope_deviation`` (best calibration).
+    0. Partition candidates into DEPLOYABLE (calibration_slope_deviation
+       <= ``_DEPLOY_MAX_SLOPE_DEV`` AND overfitting_severity == "none") vs not.
+       If ANY candidate is deployable, restrict the pool to deployable ones —
+       so a deployable model that clears discrimination beats an overfit /
+       miscalibrated higher-AUC one (owner-ratified 2026-06-07). If NONE are
+       deployable (or candidates carry no quality fields, e.g. legacy callers),
+       the pool is all candidates → legacy behaviour is preserved.
+    1. Within the pool, find the maximum test AUC.
+    2. Among candidates whose AUC is within ``auc_tie_band`` of that maximum
+       (a genuine discrimination tie), pick the lowest deploy-calibrated
+       ``calibration_slope_deviation`` (best calibration).
 
-    Stage 1 guarantees we never sacrifice discrimination; stage 2 only ever
-    decides AMONG discrimination-equals, always toward better calibration, so
-    the policy cannot regress accuracy/ranking. With a single candidate, or
-    when calibration is unavailable, this reduces to the legacy AUC argmax.
+    Stage 1 never sacrifices discrimination *within the deployable pool*; stage
+    2 decides among discrimination-equals toward better calibration. With a
+    single candidate, or when quality fields are unavailable, this reduces to
+    the legacy AUC argmax.
     """
     if not comparison_history:
         raise ValueError("comparison_history is empty; no champion to select")
-    best_auc = max((h.get("auc_roc", 0) or 0) for h in comparison_history)
+
+    def _is_deployable(h: dict) -> bool:
+        slope_dev = h.get("calibration_slope_deviation")
+        cal_ok = isinstance(slope_dev, (int, float)) and slope_dev <= _DEPLOY_MAX_SLOPE_DEV
+        # overfitting_severity is "none" only when train-val AUC delta is within
+        # the overfit gate band. Absent (legacy candidate dicts) → unknown →
+        # NOT deployable, which makes the pool fall back to all candidates.
+        overfit_ok = h.get("overfitting_severity") == "none"
+        return cal_ok and overfit_ok
+
+    pool = [h for h in comparison_history if _is_deployable(h)] or comparison_history
+    best_auc = max((h.get("auc_roc", 0) or 0) for h in pool)
     tie_band = CONFIG.auc_tie_band  # Tier D: config-exposed (default mirrors _AUC_TIE_BAND)
-    tied = [
-        h for h in comparison_history if (best_auc - (h.get("auc_roc", 0) or 0)) <= tie_band
-    ]
+    tied = [h for h in pool if (best_auc - (h.get("auc_roc", 0) or 0)) <= tie_band]
     # Lowest slope deviation wins; ties on calibration fall back to highest AUC
     # (then stable order) so selection stays deterministic.
     return min(
@@ -262,13 +289,9 @@ def _auc_gate_verdict(
     point_ok = auc >= min_auc
     ci_str = f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else ""
     if not require_significance:
-        return point_ok, (
-            f"AUC {auc:.3f}{ci_str} {'>=' if point_ok else '<'} floor {min_auc}"
-        )
+        return point_ok, (f"AUC {auc:.3f}{ci_str} {'>=' if point_ok else '<'} floor {min_auc}")
     if auc_ci is None:
-        return False, (
-            f"AUC {auc:.3f}: significance gate ON but no bootstrap CI available"
-        )
+        return False, (f"AUC {auc:.3f}: significance gate ON but no bootstrap CI available")
     sig_ok = auc_ci[0] > 0.5
     return (point_ok and sig_ok), (
         f"AUC {auc:.3f}{ci_str}: "
@@ -3705,13 +3728,13 @@ async def step_5_model_trainer(
     # uncertainty) and run the dynamic, CI-aware AUC gate.
     auc_ci = _auc_ci_from_result(result)
     auc_passed, auc_detail = _auc_gate_verdict(
-        auc, auc_ci, CONFIG.min_auc_threshold,
+        auc,
+        auc_ci,
+        CONFIG.min_auc_threshold,
         require_significance=CONFIG.auc_gate_require_significance,
     )
     if auc:
-        ci_msg = (
-            f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else " (CI unavailable)"
-        )
+        ci_msg = f" [95% CI {auc_ci[0]:.3f}-{auc_ci[1]:.3f}]" if auc_ci else " (CI unavailable)"
         print(f"\n  AUC-ROC: {auc:.3f}{ci_msg}  →  {auc_detail}")
 
     checks = [
@@ -3722,13 +3745,16 @@ async def step_5_model_trainer(
             "present" if trained_model is not None else "missing",
         ),
         (
-            "AUC-ROC significance gate" if CONFIG.auc_gate_require_significance
+            "AUC-ROC significance gate"
+            if CONFIG.auc_gate_require_significance
             else "AUC-ROC threshold",
             auc_passed,
-            "CI lower > 0.5" if CONFIG.auc_gate_require_significance
+            "CI lower > 0.5"
+            if CONFIG.auc_gate_require_significance
             else f">= {CONFIG.min_auc_threshold}",
             f"{auc:.3f}{(' [' + format(auc_ci[0], '.3f') + '-' + format(auc_ci[1], '.3f') + ']') if auc_ci else ''}"
-            if auc else "N/A",
+            if auc
+            else "N/A",
         ),
         (
             "Minority recall threshold",
@@ -4763,24 +4789,28 @@ def _compute_adaptive_state_inputs(
     feature_columns: List[str],
     target_col: str,
     regime: str,
+    deployment_intent: str = "clinical",
 ) -> Dict[str, Any]:
-    """Compute the four pre-eval inputs for the adaptive-criteria scheme.
+    """Compute the pre-eval inputs for the adaptive-criteria scheme.
 
     The fifth input (``baseline_auc``) is computed inside the evaluator
     via Section B parent branch (see
     ``model_trainer/nodes/evaluator.py::_compute_baseline_test_metrics``)
     and overlaid by ``_apply_adaptive_criteria_overlay``. This helper
-    handles the four inputs derivable from the dataframe and the regime
-    label.
+    handles the inputs derivable from the dataframe, the regime label, and
+    the deployment-intent (clinical | commercial) that selects the use-case
+    bar (clinical AUC 0.75 vs commercial AUC 0.65).
 
     See ``.claude/plans/adaptive_success_criteria/05-data-shape-introspection.md``.
     """
     valid_regimes = set(_VALID_REGIMES)
+    intent = deployment_intent if deployment_intent in ("clinical", "commercial") else "clinical"
     return {
         "n_samples": int(len(df)),
         "prevalence": float(df[target_col].mean()),
         "feature_count": len(feature_columns),
         "regime": regime if regime in valid_regimes else None,
+        "deployment_intent": intent,
     }
 
 
@@ -5113,6 +5143,7 @@ async def run_pipeline(
     data_dir: str | None = None,
     *,
     regime: str = "default",
+    deployment_intent: str = "clinical",
     split_mode: str = "auto",
     pre_assigned_splits: Dict[Any, str] | None = None,
     inject_demo_cost_matrix: bool = True,
@@ -5277,6 +5308,7 @@ async def run_pipeline(
                 feature_columns=_adaptive_feature_columns,
                 target_col=CONFIG.target_outcome,
                 regime=regime,
+                deployment_intent=deployment_intent,
             )
             result = await step_1_scope_definer(experiment_id, adaptive_inputs=adaptive_inputs)
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
@@ -6257,9 +6289,11 @@ async def run_pipeline(
                         # minus the genuine leaks remediation dropped), not the
                         # curated _rem_features survivor sub-list. The post-override
                         # re-check below (the safety net) re-fires if a leak slips in.
-                        _step5a_leaks = set(_rem_dropped) | set(
-                            state.get("leakage_dropped_features") or []
-                        ) | set(state.get("leaked_features") or [])
+                        _step5a_leaks = (
+                            set(_rem_dropped)
+                            | set(state.get("leakage_dropped_features") or [])
+                            | set(state.get("leaked_features") or [])
+                        )
                         feature_cols = _discover_model_feature_cols(
                             eligible_df,
                             _exclude | _step5a_leaks,
@@ -6662,6 +6696,9 @@ async def run_pipeline(
                         # tiebreak among discrimination-ties (see _select_champion).
                         "calibration_slope_deviation": _calibration_slope_deviation_of(result),
                         "model_usefulness": model_usefulness,
+                        # Deployability-aware selection (see _select_champion):
+                        # overfit severity mirrors the maximum_train_val_delta gate.
+                        "overfitting_severity": result.get("overfitting_severity"),
                         "is_primary": True,
                     }
                 )
@@ -7709,6 +7746,21 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--deployment-intent",
+        type=str,
+        choices=("clinical", "commercial"),
+        default="clinical",
+        help=(
+            "Deployment use case — recalibrates the deployment AUC bar. "
+            "'clinical' (default): published / site-of-care decision model, "
+            "literature floor AUC 0.75 (Vickers 2019; Cook 2007). "
+            "'commercial': HCP targeting / propensity model (never used at site "
+            "of care), separately-cited floor AUC 0.65 + prevalence-aware "
+            "operating gates (recall 0.50, MCC 0.10, net-benefit p_t 0.10). "
+            "The default NEVER silently loosens the bar — opt in explicitly."
+        ),
+    )
+    parser.add_argument(
         "--split",
         type=str,
         choices=("auto", "random", "combined"),
@@ -7889,6 +7941,7 @@ def main():
                 include_bentoml=not args.no_bentoml,
                 data_dir=args.data_dir,
                 regime=args.regime,
+                deployment_intent=args.deployment_intent,
                 split_mode=args.split,
                 inject_demo_cost_matrix=not args.no_demo_cost_matrix,
                 feature_manifest_source=_resolve_feature_manifest_source(

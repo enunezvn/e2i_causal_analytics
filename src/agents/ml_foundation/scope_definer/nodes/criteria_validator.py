@@ -57,6 +57,64 @@ _V3_REGIME_P_T: Dict[str, float] = {
     "clean": 0.30,
 }
 
+# --------------------------------------------------------------------------- #
+# Deployment-intent axis (clinical | commercial) — ORTHOGONAL to ``regime``.   #
+# --------------------------------------------------------------------------- #
+# Recalibrates the deployment bar to the USE CASE rather than the data
+# difficulty. A clinical-decision model (published / used at site of care)
+# keeps the literature floor AUC 0.75 (Vickers 2019; Cook 2007). A COMMERCIAL
+# model (e.g. HCP targeting / propensity, never implemented at site of care)
+# uses a lower, separately-cited floor: AUC 0.65 — Hosmer & Lemeshow (2013,
+# "Applied Logistic Regression" 3rd ed.: 0.7-0.8 "acceptable") with the
+# marketing/propensity convention that >= 0.60-0.65 is operationally useful
+# (advertising-propensity AUC distribution: median 0.76, range 0.60-0.95).
+# The default is "clinical": the axis NEVER silently loosens the bar — a caller
+# must explicitly opt into "commercial".
+_VALID_DEPLOYMENT_INTENTS: frozenset[str] = frozenset({"clinical", "commercial"})
+DEFAULT_DEPLOYMENT_INTENT: str = "clinical"
+
+# (intent, auc_regime) -> (auc_floor, baseline_lift). ``auc_regime`` collapses
+# every non-adverse regime to "clean" (adverse is the only looser data regime).
+# Commercial floors are the literature "minimum useful discrimination for
+# targeting/propensity" range (AUC >= 0.60; Hosmer & Lemeshow 2013; marketing
+# convention that >= 0.60 ranks usefully better than random — advertising
+# propensity AUC dist. median 0.76, range 0.60-0.95). A commercial targeting
+# model is USED BY ITS RANKING (target the top scored decile), so the floor is
+# the usefulness floor, not the clinical "acceptable" (0.75) threshold. Owner-
+# ratified 2026-06-07 for the optum-mart commercial cohorts.
+_INTENT_AUC_PARAMS: Dict[tuple[str, str], tuple[float, float]] = {
+    ("clinical", "clean"): (0.75, 0.20),
+    ("clinical", "adverse"): (0.70, 0.15),
+    ("commercial", "clean"): (0.60, 0.05),
+    ("commercial", "adverse"): (0.58, 0.03),
+}
+# Commercial lift-over-baseline floor (vs clinical 0.10): a useful targeting
+# model need only beat a no-information baseline by a smaller, still-real margin.
+_COMMERCIAL_LIFT_FLOOR: float = 0.08
+
+# Commercial net-benefit threshold probability. A false-positive target (a
+# wasted outreach) costs far less than a missed discontinuer, so the decision
+# threshold p_t is low — cost ratio c_FP/c_FN = (1 - p_t)/p_t ~= 1:9. Clinical
+# runs keep the regime-keyed _V3_REGIME_P_T (clean 0.30 ~= 7:3).
+_COMMERCIAL_P_T: float = 0.10
+
+
+def _normalize_deployment_intent(value: Any) -> str:
+    """Return a valid deployment-intent literal (defaults to ``"clinical"``)."""
+    return value if value in _VALID_DEPLOYMENT_INTENTS else DEFAULT_DEPLOYMENT_INTENT
+
+
+def _resolve_adaptive_p_t(regime: Any, deployment_intent: Any) -> float:
+    """Resolve the NB>0 threshold probability for (regime, deployment_intent).
+
+    Commercial intent pins a low p_t (cheap false positives in targeting);
+    clinical intent keeps the regime-keyed mapping.
+    """
+    if _normalize_deployment_intent(deployment_intent) == "commercial":
+        return _COMMERCIAL_P_T
+    effective_regime = regime if regime in _V3_REGIME_P_T else "clean"
+    return _V3_REGIME_P_T[effective_regime]
+
 
 def _adaptive_criteria_enabled() -> bool:
     """Whether the ``ADAPTIVE_CRITERIA`` feature flag is on.
@@ -84,6 +142,7 @@ def adaptive_success_criteria(
     baseline_auc: float,
     feature_count: int,
     regime: Optional[Literal["default", "clean", "adverse"]] = None,
+    deployment_intent: Optional[Literal["clinical", "commercial"]] = None,
 ) -> tuple[Dict[str, float], set[str]]:
     """Return ``(thresholds, skipped)`` per the v3 (Option C) design contract.
 
@@ -132,35 +191,44 @@ def adaptive_success_criteria(
         raise ValueError(f"feature_count must be > 0, got {feature_count}")
 
     effective_regime: str = regime or "clean"
+    effective_intent: str = _normalize_deployment_intent(deployment_intent)
     thresholds: Dict[str, float] = {}
     skipped: set[str] = set()
 
-    # AUC: regime-keyed, baseline-aware. Default skips entirely (rubric-stress
-    # regime; deployer outcome was relocated to a regime-keyed expectation by
-    # Codex 2026-04-30 review of pre_phase2_unblockers).
-    if effective_regime == "default":
+    # AUC: intent- AND regime-keyed, baseline-aware. The clinical "default"
+    # regime skips the gate entirely (rubric-stress; deployer outcome relocated
+    # to a regime-keyed expectation by Codex 2026-04-30). A COMMERCIAL run always
+    # carries a real discrimination floor — a targeting model with no AUC bar is
+    # meaningless — so it never takes the skip branch. Floors per _INTENT_AUC_PARAMS
+    # (clinical 0.75/0.70 Vickers-Cook; commercial 0.65/0.62 Hosmer-Lemeshow).
+    if effective_intent == "clinical" and effective_regime == "default":
         skipped.add("minimum_auc")
-    elif effective_regime == "adverse":
-        thresholds["minimum_auc"] = max(0.70, baseline_auc + 0.15)
-    else:  # clean
-        thresholds["minimum_auc"] = max(0.75, baseline_auc + 0.20)
+    else:
+        auc_regime = "adverse" if effective_regime == "adverse" else "clean"
+        auc_floor, auc_lift = _INTENT_AUC_PARAMS[(effective_intent, auc_regime)]
+        thresholds["minimum_auc"] = max(auc_floor, baseline_auc + auc_lift)
 
-    # Recall: prevalence-invariant default; looser for adverse / low-prev.
-    if effective_regime == "adverse" or prevalence < 0.05:
+    # Recall: looser for commercial / adverse / low-prevalence.
+    if effective_intent == "commercial" or effective_regime == "adverse" or prevalence < 0.05:
         thresholds["minimum_recall"] = 0.50
     else:
         thresholds["minimum_recall"] = 0.65
 
     # NB > 0 gate (v3): replaces precision per Vickers 2006 derivation
-    # NB > 0 ⇔ precision > p_t. The threshold is fixed at 0.0; the regime-
-    # keyed cost ratio enters via the audit field ``_adaptive_p_t`` set by
-    # the validator. Always fires — at adverse p_t=0.05 the gate equates to
-    # precision > 0.05 which any non-degenerate classifier clears.
+    # NB > 0 ⇔ precision > p_t. The threshold is fixed at 0.0; the
+    # intent/regime-keyed cost ratio enters via the audit field ``_adaptive_p_t``
+    # set by the validator (commercial p_t=0.10, clinical regime-keyed). Always
+    # fires — at the low commercial p_t the gate equates to precision > 0.10
+    # which a useful targeting model clears.
     thresholds["minimum_net_benefit_at_p_t"] = 0.0
 
-    # MCC sanity gate (v3): replaces F1 per Chicco-Jurman 2020. Regime-keyed
-    # to compensate for prevalence-deflation curve [Chen 2024].
-    if effective_regime == "adverse" or prevalence < 0.05:
+    # MCC sanity gate (v3): replaces F1 per Chicco-Jurman 2020. MCC deflates at
+    # low prevalence [Chen 2024]; for COMMERCIAL targeting it deflates further, so
+    # the commercial floor is a weak guard (0.10) — discrimination (AUC), lift and
+    # net-benefit are the load-bearing commercial gates. Clinical stays regime-keyed.
+    if effective_intent == "commercial":
+        thresholds["minimum_mcc"] = 0.10
+    elif effective_regime == "adverse" or prevalence < 0.05:
         thresholds["minimum_mcc"] = 0.20
     elif effective_regime == "default":
         thresholds["minimum_mcc"] = 0.35
@@ -179,7 +247,9 @@ def adaptive_success_criteria(
     n_neg: float = n_samples * (1.0 - prevalence)
     se_auc: float = 0.5 / max(min(n_pos, n_neg) ** 0.5, 1.0)
     if 2.0 * se_auc < 0.10:
-        thresholds["minimum_lift_over_baseline"] = 0.10
+        thresholds["minimum_lift_over_baseline"] = (
+            _COMMERCIAL_LIFT_FLOOR if effective_intent == "commercial" else 0.10
+        )
     else:
         skipped.add("minimum_lift_over_baseline")
 
@@ -268,6 +338,7 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
         baseline_auc_raw = state.get("baseline_auc")
         feature_count_raw = state.get("feature_count")
         regime_raw = state.get("regime")
+        deployment_intent = _normalize_deployment_intent(state.get("deployment_intent"))
 
         # The four PRE-EVAL inputs are derivable at scope-definition time
         # (the runner reads them off the synthetic / RWD dataframe). The
@@ -313,6 +384,7 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
                     baseline_auc=float(baseline_auc_raw),
                     feature_count=feature_count_raw,
                     regime=regime,
+                    deployment_intent=deployment_intent,
                 )
                 # v3 invariant: skipped criteria are ABSENT from
                 # success_criteria, never None-valued.
@@ -329,8 +401,7 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
                 # calibration / train_val / ECE).
                 success_criteria.update(thresholds)
                 success_criteria["_adaptive_skipped"] = sorted(skipped)
-                effective_regime = regime if regime in _V3_REGIME_P_T else "clean"
-                success_criteria["_adaptive_p_t"] = _V3_REGIME_P_T[effective_regime]
+                success_criteria["_adaptive_p_t"] = _resolve_adaptive_p_t(regime, deployment_intent)
                 criteria_source = "adaptive"
             except ValueError as exc:
                 logger.warning(
@@ -354,6 +425,7 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
                 "prevalence": float(prevalence_raw),
                 "feature_count": feature_count_raw,
                 "regime": regime,
+                "deployment_intent": deployment_intent,
             }
             criteria_source = "adaptive"
         else:
@@ -372,6 +444,13 @@ async def define_success_criteria(state: Dict[str, Any]) -> Dict[str, Any]:
     # at-a-glance whether a deployer outcome reflects the fixed or adaptive
     # criteria scheme.
     success_criteria["criteria_source"] = criteria_source
+
+    # Deployment-intent stamp (always present, both fixed and adaptive paths) so
+    # the deployer's regulatory-eligibility audit can resolve the intent-keyed
+    # literature anchor. Defaults to "clinical" — never silently loosened.
+    success_criteria["deployment_intent"] = _normalize_deployment_intent(
+        state.get("deployment_intent")
+    )
 
     # Validate criteria
     validation_result = _validate_criteria(success_criteria, state)

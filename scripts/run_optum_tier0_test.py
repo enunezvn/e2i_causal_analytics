@@ -76,10 +76,7 @@ def _convert_hint(cohort: str) -> str:
     """
     if cohort.endswith(_MART_SUFFIX):
         base = cohort[: -len(_MART_SUFFIX)]
-        return (
-            f"python scripts/convert_optum_mart.py --cohort {base} "
-            f"--output {COHORT_DIR[cohort]}"
-        )
+        return f"python scripts/convert_optum_mart.py --cohort {base} --output {COHORT_DIR[cohort]}"
     return f"python scripts/convert_optum_rwd.py --cohort {cohort}"
 
 
@@ -188,9 +185,7 @@ def apply_overrides(cohort: str, overrides: OptumTestConfig) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Tier-0 pipeline runner for Optum RWD cohorts."
-    )
+    parser = argparse.ArgumentParser(description="Tier-0 pipeline runner for Optum RWD cohorts.")
     parser.add_argument(
         "--cohort",
         required=True,
@@ -293,6 +288,21 @@ def main() -> int:
             "Shard C 2026-05-06."
         ),
     )
+    parser.add_argument(
+        "--deployment-intent",
+        type=str,
+        choices=("clinical", "commercial"),
+        default="clinical",
+        help=(
+            "Deployment use case — recalibrates the deployment AUC bar. "
+            "'clinical' (default): literature floor AUC 0.75 (Vickers 2019; "
+            "Cook 2007), for published / site-of-care decision models. "
+            "'commercial': HCP targeting / propensity (never used at site of "
+            "care) — separately-cited floor AUC 0.65 + prevalence-aware "
+            "operating gates (recall 0.50, MCC 0.10, net-benefit p_t 0.10). "
+            "Use for the optum-mart commercial cohorts (e.g. discontinuation)."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -326,9 +336,7 @@ def main() -> int:
     # absent — the converter may emit an empty/zero-positive cohort by contract and
     # the deployer fail-closes a weak model; this only catches the unmodelable case.
     if not args.dry_run:
-        single_class = _single_class_error(
-            data_dir, args.cohort, tier0.CONFIG.target_outcome
-        )
+        single_class = _single_class_error(data_dir, args.cohort, tier0.CONFIG.target_outcome)
         if single_class is not None:
             print(f"ERROR: {single_class}", file=sys.stderr)
             return 2
@@ -350,6 +358,10 @@ def main() -> int:
     print(f"  Data dir: {data_dir}")
     print(f"  Feature manifest: {feature_manifest_source}")
     print(f"  AUC threshold: {tier0.CONFIG.min_auc_threshold}")
+    print(
+        f"  Deployment intent: {args.deployment_intent} "
+        f"(commercial → AUC 0.65 bar; clinical → 0.75)"
+    )
     print(f"  MLflow: {tier0.CONFIG.enable_mlflow}, Opik: {tier0.CONFIG.enable_opik}")
 
     manifest_warning = _mart_manifest_warning(args.cohort, feature_manifest_source)
@@ -383,6 +395,7 @@ def main() -> int:
             imbalance_ratio=None,
             include_bentoml=not args.no_bentoml,
             data_dir=str(data_dir),
+            deployment_intent=args.deployment_intent,
             feature_manifest_source=feature_manifest_source,
         )
     )
@@ -405,9 +418,9 @@ def main() -> int:
                 cohort_size = training_samples if training_samples is not None else 0
 
             if signal_genuine is False and (cohort_size or 0) >= 200:
-                print(f"\n{'='*70}")
+                print(f"\n{'=' * 70}")
                 print("[OPTUM TASK 5.2 CARVE-OUT INVOKED]")
-                print(f"{'='*70}")
+                print(f"{'=' * 70}")
                 print(
                     "Per tier0_evaluation_vs_distilled_mlops.md:703 —\n"
                     '  "If permutation test is RANDOM at Optum scale, document and do\n'
@@ -415,7 +428,8 @@ def main() -> int:
                 )
                 pct = (
                     f"{(permutation_test.get('positive_rate') or 0) * 100:.1f}%"
-                    if permutation_test.get("positive_rate") is not None else "?"
+                    if permutation_test.get("positive_rate") is not None
+                    else "?"
                 )
                 print(
                     f"\nVerdict tag: PENDING — RANDOM at Optum scale "
@@ -426,7 +440,7 @@ def main() -> int:
                     "This run is documented but is NOT production-grade.\n"
                     "Remediation path: Task 5.2 is data-gated on cohort prevalence growth."
                 )
-                print(f"{'='*70}")
+                print(f"{'=' * 70}")
         except Exception as e:
             # Reframing print is best-effort; never fail the runner over it.
             print(f"\n[Optum Task 5.2 reframing skipped: {type(e).__name__}: {e}]", file=sys.stderr)

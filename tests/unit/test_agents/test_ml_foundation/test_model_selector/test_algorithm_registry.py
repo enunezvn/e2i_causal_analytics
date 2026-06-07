@@ -61,6 +61,23 @@ class TestAlgorithmRegistry:
                 assert "type" in hp_spec, f"{algo_name}.{hp_name} missing type"
                 assert hp_spec["type"] in ["int", "float", "categorical"]
 
+    def test_gradient_boosting_base_spaces_include_regularization(self):
+        """Gradient boosters MUST carry regularization knobs in their BASE search
+        space (not only the reactive REGULARIZATION_SEARCH_SPACE), so the FIRST
+        HPO pass can avoid overfitting on small / low-prevalence cohorts. Absent
+        these, LightGBM/XGBoost overfit (train-val AUC delta ~0.14) on the
+        optum-mart discontinuation cohort (n=9k, 11% prevalence)."""
+        lgbm = ALGORITHM_REGISTRY["LightGBM"]["hyperparameter_space"]
+        assert "min_child_samples" in lgbm, "LightGBM base space lacks min_child_samples"
+        assert "reg_lambda" in lgbm, "LightGBM base space lacks reg_lambda (L2)"
+        # num_leaves must be allowed to go shallow (overfit control); the prior
+        # floor of 20 forced bushy trees on small data.
+        assert lgbm["num_leaves"]["low"] <= 16, "LightGBM num_leaves floor too high for small data"
+
+        xgb = ALGORITHM_REGISTRY["XGBoost"]["hyperparameter_space"]
+        assert "min_child_weight" in xgb, "XGBoost base space lacks min_child_weight"
+        assert "reg_lambda" in xgb, "XGBoost base space lacks reg_lambda (L2)"
+
 
 class TestFilterByProblemType:
     """Test problem type filtering."""

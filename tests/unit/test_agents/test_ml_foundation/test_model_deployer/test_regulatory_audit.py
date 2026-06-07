@@ -677,18 +677,29 @@ class TestN1H2ThresholdProvenanceRegistry:
     """
 
     def test_minimum_auc_zero_seven_five_pair_registered(self) -> None:
-        # Anchored to scope_definer/criteria_validator.py:118-120.
-        assert ("minimum_auc", 0.75) in LITERATURE_ANCHORED_THRESHOLDS
+        # Anchored to scope_definer/criteria_validator.py (clinical intent).
+        # Registry is now keyed on (gate, value, deployment_intent).
+        assert ("minimum_auc", 0.75, "clinical") in LITERATURE_ANCHORED_THRESHOLDS
         # Doc-ref must be a non-empty citable string.
-        doc_ref = LITERATURE_ANCHORED_THRESHOLDS[("minimum_auc", 0.75)]
+        doc_ref = LITERATURE_ANCHORED_THRESHOLDS[("minimum_auc", 0.75, "clinical")]
         assert isinstance(doc_ref, str)
         assert doc_ref  # non-empty
 
+    def test_commercial_minimum_auc_pair_registered(self) -> None:
+        # The commercial use case has its own separately-cited anchor (0.65).
+        assert ("minimum_auc", 0.60, "commercial") in LITERATURE_ANCHORED_THRESHOLDS
+        doc_ref = LITERATURE_ANCHORED_THRESHOLDS[("minimum_auc", 0.60, "commercial")]
+        assert isinstance(doc_ref, str) and doc_ref
+
     def test_relaxed_minimum_auc_pair_NOT_in_registry(self) -> None:
         """A relaxed (or arbitrarily tightened) minimum_auc threshold
-        is NOT in the registry — pass-2 sharpening pins the exact value."""
-        assert ("minimum_auc", 0.50) not in LITERATURE_ANCHORED_THRESHOLDS
-        assert ("minimum_auc", 0.80) not in LITERATURE_ANCHORED_THRESHOLDS
+        is NOT in the registry — pass-2 sharpening pins the exact value.
+        Cross-intent borrowing is also absent (anti-laundering guard)."""
+        assert ("minimum_auc", 0.50, "clinical") not in LITERATURE_ANCHORED_THRESHOLDS
+        assert ("minimum_auc", 0.80, "clinical") not in LITERATURE_ANCHORED_THRESHOLDS
+        # A clinical run cannot borrow the commercial 0.60 anchor and vice versa.
+        assert ("minimum_auc", 0.60, "clinical") not in LITERATURE_ANCHORED_THRESHOLDS
+        assert ("minimum_auc", 0.75, "commercial") not in LITERATURE_ANCHORED_THRESHOLDS
 
 
 class TestN1H2GetLiteratureAnchorDocRef:

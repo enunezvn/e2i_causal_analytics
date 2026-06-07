@@ -75,6 +75,66 @@ class TestSelectChampion:
         hist = [_cand("only", 0.83, 0.5)]
         assert _select_champion(hist)["algorithm"] == "only"
 
+    # --- Deployability-aware selection (owner-ratified 2026-06-07) --------- #
+
+    def test_deployable_lower_auc_beats_overfit_higher_auc(self) -> None:
+        """An overfit/miscalibrated higher-AUC candidate is BLOCKED by the
+        quality gates; a deployable (well-calibrated, not-overfit) lower-AUC
+        candidate is preferred so the cohort actually ships. Mirrors the disc
+        case: overfit LightGBM (0.635) vs deployable LR (0.610)."""
+        hist = [
+            {
+                "algorithm": "overfit_gbm",
+                "auc_roc": 0.635,
+                "calibration_slope_deviation": 0.41,  # fails calibration gate
+                "overfitting_severity": "moderate",  # fails overfit gate
+            },
+            {
+                "algorithm": "deployable_lr",
+                "auc_roc": 0.610,
+                "calibration_slope_deviation": 0.06,  # passes
+                "overfitting_severity": "none",  # passes
+            },
+        ]
+        assert _select_champion(hist)["algorithm"] == "deployable_lr"
+
+    def test_falls_back_to_auc_when_none_deployable(self) -> None:
+        """If NO candidate passes the quality gates, the pool is all candidates
+        and the legacy max-AUC (calibration-tiebroken) policy applies."""
+        hist = [
+            {
+                "algorithm": "overfit_gbm",
+                "auc_roc": 0.635,
+                "calibration_slope_deviation": 0.41,
+                "overfitting_severity": "severe",
+            },
+            {
+                "algorithm": "miscal_lr",
+                "auc_roc": 0.610,
+                "calibration_slope_deviation": 0.40,
+                "overfitting_severity": "mild",
+            },
+        ]
+        assert _select_champion(hist)["algorithm"] == "overfit_gbm"
+
+    def test_among_deployable_highest_auc_wins(self) -> None:
+        """When several candidates are deployable, discrimination still decides."""
+        hist = [
+            {
+                "algorithm": "deployable_hi",
+                "auc_roc": 0.66,
+                "calibration_slope_deviation": 0.10,
+                "overfitting_severity": "none",
+            },
+            {
+                "algorithm": "deployable_lo",
+                "auc_roc": 0.61,
+                "calibration_slope_deviation": 0.05,
+                "overfitting_severity": "none",
+            },
+        ]
+        assert _select_champion(hist)["algorithm"] == "deployable_hi"
+
     def test_empty_raises(self) -> None:
         with pytest.raises(ValueError):
             _select_champion([])

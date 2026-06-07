@@ -74,15 +74,27 @@ ALGORITHM_REGISTRY = {
         "scalability_score": 0.8,
         "hyperparameter_space": {
             "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 50},
-            "max_depth": {"type": "int", "low": 3, "high": 10},
+            # max_depth ceiling lowered 10 -> 8 to bound tree complexity on small
+            # / low-prevalence data.
+            "max_depth": {"type": "int", "low": 3, "high": 8},
             "learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": True},
             "subsample": {"type": "float", "low": 0.6, "high": 1.0, "step": 0.1},
+            # Regularization in the BASE space (see LightGBM note): feature
+            # subsampling + min-child-weight + L2 let the FIRST HPO pass avoid the
+            # overfit seen on the optum-mart discontinuation cohort. Low bounds let
+            # well-separated data still choose minimal regularization.
+            "colsample_bytree": {"type": "float", "low": 0.6, "high": 1.0, "step": 0.1},
+            "min_child_weight": {"type": "int", "low": 1, "high": 50},
+            "reg_lambda": {"type": "float", "low": 1e-3, "high": 10.0, "log": True},
         },
         "default_hyperparameters": {
             "n_estimators": 300,
             "max_depth": 6,
             "learning_rate": 0.1,
             "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "min_child_weight": 5,
+            "reg_lambda": 1.0,
         },
     },
     "LightGBM": {
@@ -98,13 +110,26 @@ ALGORITHM_REGISTRY = {
             "n_estimators": {"type": "int", "low": 100, "high": 500, "step": 50},
             "max_depth": {"type": "int", "low": 3, "high": 10},
             "learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": True},
-            "num_leaves": {"type": "int", "low": 20, "high": 150},
+            # num_leaves floor lowered 20 -> 8 so the optimizer can pick shallow
+            # trees (the primary overfit control for LightGBM); ceiling lowered
+            # 150 -> 64 to keep complexity bounded on small / low-prevalence data.
+            "num_leaves": {"type": "int", "low": 8, "high": 64},
+            # Regularization in the BASE space (not only the reactive
+            # REGULARIZATION_SEARCH_SPACE, which only merges after a separate
+            # remediation loop fires): min_child_samples + L2 let the FIRST HPO
+            # pass avoid the train-val AUC delta ~0.14 overfit seen on the
+            # optum-mart discontinuation cohort. Low bounds let well-separated
+            # data still choose minimal regularization.
+            "min_child_samples": {"type": "int", "low": 20, "high": 300},
+            "reg_lambda": {"type": "float", "low": 1e-3, "high": 10.0, "log": True},
         },
         "default_hyperparameters": {
             "n_estimators": 300,
             "max_depth": 6,
             "learning_rate": 0.1,
             "num_leaves": 31,
+            "min_child_samples": 50,
+            "reg_lambda": 1.0,
         },
     },
     # === RANDOM FOREST ===
