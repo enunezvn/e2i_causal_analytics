@@ -360,8 +360,9 @@ async def update_procedure_outcome(procedure_id: str, success: bool) -> None:
 
     # L2 (#694): atomic server-side increment (migration 036) instead of a
     # read-modify-write (SELECT counts -> UPDATE counts+1), which lost updates
-    # under concurrent outcomes. The RPC returns the number of rows updated
-    # (0 => procedure not found). success_rate is a GENERATED column and
+    # under concurrent outcomes. The RPC (RETURNS TABLE) yields one row when a
+    # procedure was updated and an EMPTY result when none matched, so an empty
+    # result.data means "not found". success_rate is a GENERATED column and
     # recomputes from usage_count/success_count automatically.
     result = client.rpc(
         "increment_procedure_outcome",
