@@ -23,6 +23,7 @@ class _FakeQuery:
         self._in_filters: Dict[str, List[Any]] = {}
         self._gte: Dict[str, Any] = {}
         self._insert_payload: Any = None
+        self._range: Optional[tuple] = None
 
     def select(self, cols: str, count: Optional[str] = None) -> "_FakeQuery":
         self._mode = "select"
@@ -51,6 +52,11 @@ class _FakeQuery:
     def limit(self, n: int) -> "_FakeQuery":
         return self
 
+    def range(self, start: int, end: int) -> "_FakeQuery":
+        # PostgREST .range() is inclusive on both ends.
+        self._range = (start, end)
+        return self
+
     def execute(self) -> MagicMock:
         if self._mode == "insert":
             payload = self._insert_payload
@@ -76,6 +82,12 @@ class _FakeQuery:
             rows = [r for r in rows if r.get(col) in allowed]
         for col, threshold in self._gte.items():
             rows = [r for r in rows if (r.get(col) or "") >= threshold]
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start : end + 1]
+        elif self.store.no_range_cap is not None:
+            # Simulate PostgREST's silent default row cap on an un-ranged request.
+            rows = rows[: self.store.no_range_cap]
         mock = MagicMock()
         mock.data = rows
         return mock
@@ -93,6 +105,8 @@ class FakeSupabase:
             # ``input_prompt`` to audit.
             "crystal_narrative_audits": [],
         }
+        # When set, simulate PostgREST silently capping an un-ranged SELECT.
+        self.no_range_cap: Optional[int] = None
 
     def table(self, name: str) -> _FakeQuery:
         return _FakeQuery(self, name)
@@ -1151,3 +1165,38 @@ async def test_crystallize_portfolio_method_exists_and_iterates_brands(fake_supa
     # Each brand should have at least 1 insight created.
     assert result.insights_created >= 2
     assert set(result.by_brand.keys()) >= {"kisqali", "fabhalta"}
+
+
+@pytest.mark.asyncio
+async def test_run_for_brand_paginates_candidate_select(fake_supabase: FakeSupabase):
+    """L7 (#694): the candidate SELECT must page through .range() windows so a
+    candidate set larger than one PostgREST page isn't silently truncated.
+
+    Faithful: ``no_range_cap`` simulates PostgREST capping an un-ranged request;
+    the real ``run_for_brand`` runs against the fake. Without pagination only the
+    first page is seen (examined_groups < total)."""
+    fake_supabase.no_range_cap = 2  # simulate a 2-row PostgREST cap
+    for i in range(5):  # 5 candidates, each its own group (distinct causal_path_id)
+        fake_supabase.rows["episodic_memories"].append(
+            {
+                "memory_id": f"m{i}",
+                "agent_name": f"agent{i}",
+                "brand": "Kisqali",
+                "region": None,
+                "causal_path_id": f"cp{i}",
+                "event_type": "causal_discovery",
+                "description": "d",
+                "outcome_type": "o",
+                "occurred_at": "2999-01-01T00:00:00+00:00",  # always >= cutoff
+                "raw_content": "{}",
+                "consolidation_tier": "episodic",
+            }
+        )
+
+    crystallizer = Crystallizer(min_agents=2)
+    crystallizer.candidate_page_size = 2  # set post-construction so RED fails on assert
+    result = await crystallizer.run_for_brand("Kisqali")
+
+    # Pages [0,1],[2,3],[4] -> all 5 fetched and grouped. Without pagination the
+    # un-ranged request is capped at 2, so examined_groups would be 2.
+    assert result.examined_groups == 5
