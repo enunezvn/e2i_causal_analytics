@@ -118,9 +118,7 @@ async def test_semantic_paths_traverse_brand_scoped() -> None:
     sem = MagicMock()
     sem.traverse_causal_chain.return_value = []
     with patch("src.api.routes.memory.get_semantic_memory", return_value=sem):
-        await query_semantic_paths(
-            start_entity_id="var:x", user=_viewer("Brand-X", "Brand-Y")
-        )
+        await query_semantic_paths(start_entity_id="var:x", user=_viewer("Brand-X", "Brand-Y"))
 
     assert sem.traverse_causal_chain.call_args.kwargs["brands"] == ["Brand-X", "Brand-Y"]
 
