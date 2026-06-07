@@ -87,6 +87,11 @@ class _Q:
     def order(self, *a, **kw):
         return self
 
+    def range(self, *a, **kw):
+        # L7 (#694): crystallizer candidate SELECT now pages via .range(); no-op
+        # here (seeded data < one page, so a single page returns everything).
+        return self
+
     def limit(self, n):
         return self
 
