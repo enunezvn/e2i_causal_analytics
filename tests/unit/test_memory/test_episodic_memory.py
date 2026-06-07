@@ -990,6 +990,23 @@ class TestInsertEpisodicMemoryLegacyCompat:
                 supa.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_legacy_extra_kwargs_folded_into_raw_content(self):
+        # different hooks pass extra fields (scope_definer passes kpi_category);
+        # they must be tolerated and preserved, not TypeError'd away.
+        with patch(
+            "src.memory.episodic_memory.insert_episodic_memory_with_text",
+            new=AsyncMock(return_value="mem-3"),
+        ) as m:
+            await insert_episodic_memory(
+                session_id="22222222-2222-2222-2222-222222222222",
+                event_type="scope_definition_completed",
+                summary="scope defined",
+                kpi_category="conversion",
+            )
+        mem = m.await_args.kwargs["memory"]
+        assert mem.raw_content["kpi_category"] == "conversion"
+
+    @pytest.mark.asyncio
     async def test_missing_both_memory_and_event_type_raises(self):
         with pytest.raises(TypeError):
             await insert_episodic_memory(session_id="x")

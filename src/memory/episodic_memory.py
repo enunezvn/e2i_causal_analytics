@@ -418,6 +418,7 @@ async def insert_episodic_memory(
     raw_content: Optional[Dict[str, Any]] = None,
     brand: Optional[str] = None,
     region: Optional[str] = None,
+    **extra_fields: Any,
 ) -> str:
     """
     Insert new episodic memory with E2I entity references.
@@ -460,6 +461,12 @@ async def insert_episodic_memory(
             rc.setdefault("brand", brand)
         if region:
             rc.setdefault("region", region)
+        # Fold any additional legacy kwargs (e.g. scope_definer's ``kpi_category``)
+        # into raw_content so the data is preserved rather than TypeError'd away —
+        # different hooks pass slightly different extra fields.
+        for _k, _v in extra_fields.items():
+            if _v is not None:
+                rc.setdefault(_k, _v)
         legacy_memory = EpisodicMemoryInput(
             event_type=event_type,
             description=summary or event_type,
