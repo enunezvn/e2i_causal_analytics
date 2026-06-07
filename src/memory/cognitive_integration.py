@@ -20,7 +20,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Coroutine, Dict, List, Optional, Set, cast
 
 from pydantic import BaseModel, Field
@@ -331,6 +331,7 @@ class CognitiveService:
                 await working_memory.create_session(
                     user_id=input.user_id,
                     initial_context={"brand": input.brand, "region": input.region},
+                    session_id=session_id,
                 )
 
             # Add user message to session
@@ -774,7 +775,7 @@ class CognitiveService:
                     "cycle_id": cycle_id,
                     "query_type": query_type,
                     "confidence": confidence,
-                    "timestamp": str(datetime.now()),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
             )
 

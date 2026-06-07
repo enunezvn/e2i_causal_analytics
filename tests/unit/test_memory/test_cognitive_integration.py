@@ -972,3 +972,59 @@ class TestConvenienceFunctions:
             assert call_args.brand == "Kisqali"
             assert call_args.region == "Northeast"
             assert call_args.include_evidence is False
+
+
+@pytest.mark.asyncio
+async def test_process_query_session_id_consistent(cognitive_service, mock_working_memory):
+    """L5 (#694): the generated session_id must be passed to create_session so it
+    matches the session_id used for add_message (no uuid mismatch)."""
+    with (
+        patch(
+            "src.memory.cognitive_integration.hybrid_search",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch.object(cognitive_service, "_run_reflector", new_callable=AsyncMock),
+    ):
+        await cognitive_service.process_query(
+            CognitiveQueryInput(query="test", session_id=None, user_id="user-123")
+        )
+
+    create_kwargs = mock_working_memory.create_session.call_args.kwargs
+    assert create_kwargs.get("session_id"), (
+        "create_session must receive the generated session_id (L5)"
+    )
+    add_session_ids = {
+        c.kwargs.get("session_id") for c in mock_working_memory.add_message.call_args_list
+    }
+    assert add_session_ids == {create_kwargs["session_id"]}, (
+        "add_message session_id(s) must match the create_session session_id (L5)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_store_to_graphiti_timestamp_is_timezone_aware(
+    cognitive_service, mock_graphiti_service
+):
+    """L6 (#694): the graphiti episode timestamp must be timezone-aware ISO-8601,
+    not a naive local datetime."""
+    from datetime import datetime
+
+    with patch(
+        "src.memory.cognitive_integration.get_graphiti_service",
+        new_callable=AsyncMock,
+        return_value=mock_graphiti_service,
+    ):
+        await cognitive_service._store_to_graphiti(
+            session_id="s1",
+            cycle_id="c1",
+            query="q",
+            query_type="causal",
+            response="r",
+            confidence=0.9,
+            agent_used="causal_impact",
+        )
+
+    metadata = mock_graphiti_service.add_episode.call_args.kwargs["metadata"]
+    parsed = datetime.fromisoformat(metadata["timestamp"])
+    assert parsed.tzinfo is not None, f"timestamp must be tz-aware, got {metadata['timestamp']!r}"
