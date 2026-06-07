@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -308,6 +309,15 @@ class ToolComposerToolInput(BaseModel):
     session_id: Optional[str] = Field(
         default=None,
         description="Session ID for context continuity",
+    )
+    data_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional cohort data source (table name or parquet/s3 path) used "
+            "to resolve a real DataFrame for (brand, region) and supply it to "
+            "the tools as estimation_data. If omitted or unresolvable, the "
+            "composable tools fail-closed honestly."
+        ),
     )
     max_parallel: int = Field(
         default=3,
@@ -1098,6 +1108,50 @@ async def orchestrator_tool(
         }
 
 
+def _resolve_cohort_frame(
+    brand: Optional[str],
+    region: Optional[str],
+    data_source: Optional[str],
+) -> Optional["pd.DataFrame"]:
+    """Resolve a real cohort DataFrame for (brand, region) via the tier0 loader.
+
+    Uses ``CohortConstructorAgent.run`` (src/agents/cohort_constructor/
+    tier0_integration.py) which returns ``{'eligible_patients': DataFrame,
+    'success': bool, ...}`` and reads a parquet/s3 ``patient_data_source`` via
+    ``pd.read_parquet``.
+
+    Returns the eligible-patients frame on success, or ``None`` when no
+    ``data_source`` is supplied or the loader yields nothing. RAISES on loader
+    failure so the caller can log-and-proceed (tools then fail-closed honestly
+    -- never substituting fabricated data).
+    """
+    if not data_source:
+        return None
+
+    from src.agents.cohort_constructor.tier0_integration import (
+        CohortConstructorAgent,
+    )
+
+    agent = CohortConstructorAgent()
+    result = agent.run(
+        {
+            "scope_spec": {
+                "brand": brand or "",
+                "indication": "",
+                "target_population": region or "",
+                "business_objective": "tool_composer_estimation",
+            },
+            "patient_data_source": data_source,
+            "use_existing_config": True,
+        }
+    )
+
+    frame = result.get("eligible_patients")
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    return frame
+
+
 @tool(args_schema=ToolComposerToolInput)
 async def tool_composer_tool(
     query: str,
@@ -1105,6 +1159,7 @@ async def tool_composer_tool(
     region: Optional[str] = None,
     session_id: Optional[str] = None,
     max_parallel: int = 3,
+    data_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Process multi-faceted queries through the E2I Tool Composer.
@@ -1140,12 +1195,31 @@ async def tool_composer_tool(
 
     try:
         # Build context for Tool Composer
-        context = {
+        context: Dict[str, Any] = {
             "brand": brand,
             "region": region,
             "session_id": session_id or f"composer-{datetime.now().strftime('%Y%m%d%H%M%S')}",
             "max_parallel": max_parallel,
         }
+
+        # Rec#1a: resolve a REAL cohort DataFrame for (brand, region) and thread
+        # it into the composer context under the canonical "estimation_data" key.
+        # The executor auto-injects it into composable tool kwargs. Best-effort:
+        # if the loader is unavailable or raises, log and proceed -- the tools
+        # then fail-closed honestly rather than fabricating values.
+        try:
+            estimation_frame = _resolve_cohort_frame(brand, region, data_source)
+            if estimation_frame is not None:
+                context["estimation_data"] = estimation_frame
+                logger.info(
+                    "Tool composer: resolved estimation_data frame "
+                    f"({len(estimation_frame)} rows) for brand={brand} region={region}"
+                )
+        except Exception as resolve_err:
+            logger.warning(
+                f"Tool composer: cohort resolution failed, proceeding without "
+                f"estimation_data: {resolve_err}"
+            )
 
         # Get LLM client for Tool Composer (use reasoning tier for complex queries)
         llm_client = get_chat_llm(model_tier="reasoning", max_tokens=4096)
