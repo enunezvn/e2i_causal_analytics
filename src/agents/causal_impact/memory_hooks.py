@@ -676,6 +676,16 @@ async def contribute_to_memory(
     if session_id is None:
         session_id = state.get("session_id") or str(uuid.uuid4())
 
+    # ``session_id`` reaches the ``episodic_memories.session_id uuid`` column. Coerce any
+    # non-UUID value — a non-UUID ``state['session_id']`` or a caller-supplied id (e.g. a
+    # ``query_id``/``experiment_id``) — to a fresh UUID rather than letting the insert fail
+    # the enum/type check and be swallowed (the #787/#788 column trap). Validates BOTH the
+    # None-fallback path above and any explicitly-passed session_id.
+    try:
+        session_id = str(uuid.UUID(str(session_id)))
+    except (ValueError, TypeError):
+        session_id = str(uuid.uuid4())
+
     counts = {
         "episodic_stored": 0,
         "semantic_stored": 0,

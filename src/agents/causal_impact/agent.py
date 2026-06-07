@@ -209,7 +209,7 @@ class CausalImpactAgent(SkillsMixin):
                         try:
                             await self._contribute_to_memory(output, final_state)
                         except Exception as ep_err:
-                            logger.debug(f"Memory contribution failed (non-fatal): {ep_err}")
+                            logger.warning(f"Memory contribution failed (non-fatal): {ep_err}")
 
                     # Log to MLflow
                     await tracker.log_analysis_result(output, final_state)
@@ -228,7 +228,7 @@ class CausalImpactAgent(SkillsMixin):
                     try:
                         await self._contribute_to_memory(output, final_state)
                     except Exception as ep_err:
-                        logger.debug(f"Memory contribution failed (non-fatal): {ep_err}")
+                        logger.warning(f"Memory contribution failed (non-fatal): {ep_err}")
 
                 return output
 
@@ -257,7 +257,7 @@ class CausalImpactAgent(SkillsMixin):
                         try:
                             await self._contribute_to_memory(output, final_state)
                         except Exception as ep_err:
-                            logger.debug(f"Memory contribution failed (non-fatal): {ep_err}")
+                            logger.warning(f"Memory contribution failed (non-fatal): {ep_err}")
 
                     # Log fallback result to MLflow
                     if tracker:
@@ -985,7 +985,7 @@ class CausalImpactAgent(SkillsMixin):
                 region=state.get("region"),
             )
         except Exception as e:
-            logger.debug(f"Failed to contribute to memory: {e}")
+            logger.warning(f"Failed to contribute to memory: {e}")
 
     def reset_fallback_chain(self) -> None:
         """Reset fallback chain for new request.

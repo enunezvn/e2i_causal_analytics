@@ -155,6 +155,43 @@ async def test_contribute_to_memory_falls_back_to_fresh_uuid_when_no_workflow_id
 # ---------------------------------------------------------------------------
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_contribute_to_memory_coerces_non_uuid_session_to_uuid():
+    """The canonical contribute_to_memory must coerce a non-UUID session_id to a valid
+    UUID before it reaches the ``episodic_memories.session_id uuid`` column — protecting
+    every caller, not just run() (codex-rescue Q5; the #787/#788 column trap)."""
+    from src.agents.causal_impact.memory_hooks import contribute_to_memory
+
+    captured: dict = {}
+
+    class _Hooks:
+        async def cache_causal_analysis(self, *a, **k):
+            return False
+
+        async def store_causal_analysis(self, *, session_id, **k):
+            captured["session_id"] = session_id
+            return "mem-x"
+
+        async def store_causal_path(self, *a, **k):
+            return False
+
+    result = {
+        "status": "completed",
+        "ate_estimate": 0.1,
+        "confidence": 0.6,
+        "refutation_passed": False,  # → store_causal_path skipped
+    }
+    state = {"treatment_var": "t", "outcome_var": "o"}
+
+    await contribute_to_memory(
+        result=result, state=state, memory_hooks=_Hooks(), session_id="q-not-a-uuid"
+    )
+
+    uuid.UUID(captured["session_id"])  # must be a valid UUID
+    assert captured["session_id"] != "q-not-a-uuid"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_run_contributes_to_memory_on_success():
     agent = CausalImpactAgent()  # enable_memory defaults True
 
