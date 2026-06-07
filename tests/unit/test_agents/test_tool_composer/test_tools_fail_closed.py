@@ -204,16 +204,22 @@ def test_cohort_validator_fail_closes_without_frame():
 
 
 # ---------------------------------------------------------------------------
-# Task 6 — cohort_builder & refutation_runner: intentional fail-close (F3)
+# Task 6 — cohort_builder & refutation_runner: real tools, fail-closed on no data
+# (#778 makes these real; they fail closed ONLY when no real input is available,
+#  never fabricating P001/P002/P003 or an all-pass refutation suite. The real
+#  behavior is covered in test_real_tools_778.py + the integration suite.)
 # ---------------------------------------------------------------------------
-def test_cohort_builder_fail_closes_and_directs_to_agent():
-    with pytest.raises(RuntimeError, match="cohort_constructor"):
+def test_cohort_builder_fail_closes_when_no_cohort_resolves(monkeypatch):
+    # No injected frame and the #779 resolver yields nothing -> fail closed.
+    monkeypatch.setattr(tr.cohort_resolution, "resolve_cohort_frame", lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match="Refusing to fabricate"):
         tr.cohort_builder(brand="Kisqali", indication="HR+ breast cancer")
     # No fabricated P001/P002/P003 should ever appear.
 
 
-def test_refutation_runner_fail_closes_and_directs_to_run_refutation():
-    with pytest.raises(RuntimeError, match="run_refutation"):
+def test_refutation_runner_fail_closes_without_dataframe():
+    # Receiving only an estimate_id (no DataFrame) -> fail closed.
+    with pytest.raises(RuntimeError, match="Refusing to fabricate"):
         tr.refutation_runner(estimate_id="est-123")
 
 
