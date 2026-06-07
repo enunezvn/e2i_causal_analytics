@@ -457,9 +457,9 @@ async def insert_episodic_memory(
                 "legacy `event_type=...` agent-hook kwargs"
             )
         rc: Dict[str, Any] = dict(raw_content or {})
-        if brand:
+        if brand is not None:
             rc.setdefault("brand", brand)
-        if region:
+        if region is not None:
             rc.setdefault("region", region)
         # Fold any additional legacy kwargs (e.g. scope_definer's ``kpi_category``)
         # into raw_content so the data is preserved rather than TypeError'd away —

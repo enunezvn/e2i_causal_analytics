@@ -19,3 +19,8 @@ ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'model_training_completed';
 ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'feature_analysis_completed';
 ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'model_deployment_completed';
 ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'observability_metrics_collected';
+
+-- cohort_constructor (Tier-1) emits this via the SAME broken legacy-hook pattern; the
+-- compat shim now routes its calls to the DB, so the enum must accept it too
+-- (codex-rescue MED-1 — otherwise the row is silently rejected at the enum check).
+ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'cohort_construction_completed';
