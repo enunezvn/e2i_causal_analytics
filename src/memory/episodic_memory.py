@@ -286,6 +286,10 @@ async def search_episodic_memory(
         "filter_region": None,
         "filter_patient_id": None,
         "filter_hcp_id": None,
+        # L1 (#694): previously-inert filters, now forwarded to the RPC
+        # (params added in migration 035).
+        "filter_min_importance": None,
+        "filter_days_back": None,
     }
 
     if filters:
@@ -295,6 +299,8 @@ async def search_episodic_memory(
         filter_params["filter_region"] = filters.region
         filter_params["filter_patient_id"] = filters.patient_id
         filter_params["filter_hcp_id"] = filters.hcp_id
+        filter_params["filter_min_importance"] = filters.min_importance
+        filter_params["filter_days_back"] = filters.days_back
 
     result = client.rpc("search_episodic_memory", filter_params).execute()
     memories = result.data or []
