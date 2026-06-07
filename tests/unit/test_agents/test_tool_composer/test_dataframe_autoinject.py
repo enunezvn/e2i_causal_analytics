@@ -265,3 +265,32 @@ async def test_agent_run_without_data_leaves_context_frameless() -> None:
     assert "estimation_data" not in seen["context"], (
         "run() must NOT inject an estimation_data key when no data was provided"
     )
+
+
+@pytest.mark.asyncio
+async def test_caller_supplied_data_dict_blocks_dataframe_injection() -> None:
+    """Gate 1 / discover_dag protection: when a step supplies a 'data' kwarg
+    (the Dict contract, e.g. discover_dag's DiscoverDagInput.data), the context
+    DataFrame must NOT also be injected under 'estimation_data' — caller-explicit
+    wins on ANY canonical key. This proves a Dict-contract tool never receives a
+    DataFrame from the auto-injection hook.
+    """
+    df = pd.DataFrame({"rx": [0, 1, 1], "outcome": [1, 0, 1]})
+    captured: Dict[str, Any] = {}
+    registry = _make_data_consuming_registry(captured)
+    executor = PlanExecutor(tool_registry=registry, enable_caching=False)
+    # Caller supplies an explicit 'data' Dict (the discover_dag contract shape).
+    plan = _make_plan(_make_step({"treatment": "rx", "data": {"col": [1, 2, 3]}}))
+
+    with patch(
+        "src.agents.tool_composer.executor.query_active_role_attributions",
+        return_value=[],
+    ):
+        await executor.execute(plan, context={"estimation_data": df})
+
+    assert "estimation_data" not in captured["kwargs_keys"], (
+        "Gate 1 must block injection when the caller already supplied 'data' — a "
+        "Dict-contract tool (discover_dag) must never receive a DataFrame"
+    )
+    assert "data" in captured["kwargs_keys"], "the caller's explicit 'data' must reach the tool"
+    assert captured["frame"] is None, "the dict 'data' is not a DataFrame; no frame must be present"

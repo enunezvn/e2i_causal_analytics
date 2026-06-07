@@ -244,3 +244,100 @@ async def test_independent_step_still_runs_when_a_sibling_fails() -> None:
         "an independent step must still run after a sibling fails"
     )
     assert invoked.get("ok_tool", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_three_level_transitive_skip() -> None:
+    """A SKIPPED step's OWN dependents must also be SKIPPED (transitive cascade):
+    step_1 FAILS -> step_2 SKIPPED -> step_3 SKIPPED. This proves SKIPPED results
+    (output.success == False) are added to failed_step_ids, so the skip
+    propagates across more than one level. Without that, step_3 would run on a
+    None upstream and crash."""
+    invoked: Dict[str, int] = {}
+    registry = _make_two_step_registry(invoked)
+    executor = PlanExecutor(tool_registry=registry, enable_caching=False, max_retries=0)
+
+    decomposition = DecompositionResult(
+        original_query="3-level chain?",
+        sub_questions=[
+            SubQuestion(id="sq_1", question="q1", intent="CAUSAL", entities=[], depends_on=[]),
+            SubQuestion(
+                id="sq_2", question="q2", intent="CAUSAL", entities=[], depends_on=["sq_1"]
+            ),
+            SubQuestion(
+                id="sq_3", question="q3", intent="CAUSAL", entities=[], depends_on=["sq_2"]
+            ),
+        ],
+        decomposition_reasoning="t",
+        timestamp=datetime.now(timezone.utc),
+    )
+    step_1 = ExecutionStep(
+        step_id="step_1",
+        sub_question_id="sq_1",
+        tool_name="failing_tool",
+        source_agent="causal_impact",
+        input_mapping={},
+        dependency_type=DependencyType.SEQUENTIAL,
+        depends_on_steps=[],
+    )
+    step_2 = ExecutionStep(
+        step_id="step_2",
+        sub_question_id="sq_2",
+        tool_name="dependent_tool",
+        source_agent="causal_impact",
+        input_mapping={"upstream": "$step_1.value"},
+        dependency_type=DependencyType.SEQUENTIAL,
+        depends_on_steps=["step_1"],
+    )
+    step_3 = ExecutionStep(
+        step_id="step_3",
+        sub_question_id="sq_3",
+        tool_name="dependent_tool",
+        source_agent="causal_impact",
+        input_mapping={"upstream": "$step_2.value"},
+        dependency_type=DependencyType.SEQUENTIAL,
+        depends_on_steps=["step_2"],
+    )
+    plan = ExecutionPlan(
+        decomposition=decomposition,
+        steps=[step_1, step_2, step_3],
+        tool_mappings=[
+            ToolMapping(
+                sub_question_id="sq_1",
+                tool_name="failing_tool",
+                source_agent="causal_impact",
+                confidence=0.9,
+                reasoning="t",
+            ),
+            ToolMapping(
+                sub_question_id="sq_2",
+                tool_name="dependent_tool",
+                source_agent="causal_impact",
+                confidence=0.9,
+                reasoning="t",
+            ),
+            ToolMapping(
+                sub_question_id="sq_3",
+                tool_name="dependent_tool",
+                source_agent="causal_impact",
+                confidence=0.9,
+                reasoning="t",
+            ),
+        ],
+        estimated_duration_ms=100,
+        parallel_groups=[["step_1"], ["step_2"], ["step_3"]],
+        planning_reasoning="t",
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    trace = await executor.execute(plan, context={})
+
+    assert trace.get_result("step_1").status == ExecutionStatus.FAILED
+    assert trace.get_result("step_2").status == ExecutionStatus.SKIPPED
+    assert trace.get_result("step_3").status == ExecutionStatus.SKIPPED, (
+        "a dependent of a SKIPPED step must also be SKIPPED (transitive cascade)"
+    )
+    # The dependent tool must not run anywhere in a fully-failed chain.
+    assert invoked.get("dependent_tool", 0) == 0, "no dependent tool may run in a failed chain"
+    # step_3's skip reason names its direct unmet upstream (step_2).
+    assert "step_2" in (trace.get_result("step_3").output.error or "")
