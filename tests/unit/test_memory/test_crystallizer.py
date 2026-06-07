@@ -47,6 +47,11 @@ class _FakeQuery:
         return self
 
     def order(self, *args: Any, **kwargs: Any) -> "_FakeQuery":
+        # Record the order column so a test can witness a stable-sort call. A
+        # fake can't reproduce real query-plan reordering, so the .order() call
+        # IS the faithful witness that offset pagination is deterministic.
+        if args:
+            self.store.order_calls.append((self.table_name, args[0]))
         return self
 
     def limit(self, n: int) -> "_FakeQuery":
@@ -107,6 +112,8 @@ class FakeSupabase:
         }
         # When set, simulate PostgREST silently capping an un-ranged SELECT.
         self.no_range_cap: Optional[int] = None
+        # (table, column) for every .order() call — lets a test witness a sort.
+        self.order_calls: List[tuple] = []
 
     def table(self, name: str) -> _FakeQuery:
         return _FakeQuery(self, name)
@@ -1200,3 +1207,6 @@ async def test_run_for_brand_paginates_candidate_select(fake_supabase: FakeSupab
     # Pages [0,1],[2,3],[4] -> all 5 fetched and grouped. Without pagination the
     # un-ranged request is capped at 2, so examined_groups would be 2.
     assert result.examined_groups == 5
+    # Witness the stable sort: the candidate query must order by the unique PK
+    # before paging (codex). Removing the .order("memory_id") makes this fail.
+    assert ("episodic_memories", "memory_id") in fake_supabase.order_calls
