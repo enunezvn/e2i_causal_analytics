@@ -278,6 +278,10 @@ class ModelSelectorAgent:
             # (#749 — store_algorithm_pattern was defined but never called).
             await self._update_semantic_memory(output)
 
+            # Record the model selection to episodic memory (#749 — store_model_selection
+            # was defined but never called from run() and used a non-existent insert API).
+            await self._update_episodic_memory(output)
+
             # Log execution time
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             logger.info(
@@ -515,3 +519,21 @@ class ModelSelectorAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
+
+    async def _update_episodic_memory(self, output: Dict[str, Any]) -> None:
+        """Record the model selection to EPISODIC memory (#749).
+
+        ``store_model_selection`` was defined but never called from ``run()`` AND
+        called a non-existent ``insert_episodic_memory`` signature — both fixed
+        (compat shim + migration 039). Graceful degradation. ``session_id`` is the
+        ``audit_workflow_id`` (uuid column) or a fresh UUID.
+        """
+        try:
+            experiment_id = output.get("experiment_id")
+            if not experiment_id:
+                return
+            session_id = str(output.get("audit_workflow_id") or uuid4())
+            hooks = ModelSelectorMemoryHooks()
+            await hooks.store_model_selection(session_id=session_id, result=output, state=output)
+        except Exception as e:
+            logger.debug(f"Failed to update episodic memory: {e}")

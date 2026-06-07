@@ -407,23 +407,75 @@ async def search_episodic_by_e2i_entity(
 
 
 async def insert_episodic_memory(
-    memory: EpisodicMemoryInput,
-    embedding: List[float],
+    memory: Optional[EpisodicMemoryInput] = None,
+    embedding: Optional[List[float]] = None,
     session_id: Optional[str] = None,
     cycle_id: Optional[str] = None,
+    *,
+    event_type: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    summary: Optional[str] = None,
+    raw_content: Optional[Dict[str, Any]] = None,
+    brand: Optional[str] = None,
+    region: Optional[str] = None,
 ) -> str:
     """
     Insert new episodic memory with E2I entity references.
 
+    Two calling conventions:
+
+    1. **Canonical** — ``insert_episodic_memory(memory, embedding, session_id, cycle_id)``
+       with a prebuilt :class:`EpisodicMemoryInput` and a 1536-dim embedding.
+    2. **Legacy agent-hook compat (#749)** — ``insert_episodic_memory(session_id=,
+       event_type=, agent_name=, summary=, raw_content=, brand=, region=)``. Every
+       agent episodic hook (``store_training_result`` / ``store_qc_report`` / …) was
+       written against this pre-refactor signature, which never matched convention 1
+       and raised ``TypeError`` the hooks swallowed (silenced with a
+       ``# type: ignore[call-arg]``) — so NO agent episodic write ever persisted.
+       This path builds the ``EpisodicMemoryInput`` and routes through
+       :func:`insert_episodic_memory_with_text` (which auto-generates the embedding),
+       un-breaking all agent episodic hooks at once.
+
     Args:
-        memory: EpisodicMemoryInput with E2I entity references
-        embedding: Pre-computed embedding vector
-        session_id: Optional session ID
-        cycle_id: Optional cognitive cycle ID
+        memory: EpisodicMemoryInput with E2I entity references (convention 1).
+        embedding: Pre-computed embedding vector (convention 1).
+        session_id: Optional session ID.
+        cycle_id: Optional cognitive cycle ID.
+        event_type/agent_name/summary/raw_content/brand/region: legacy agent-hook
+            fields (convention 2); brand/region are preserved into ``raw_content``.
 
     Returns:
         ID of inserted memory
     """
+    # #749 compat path: the agent episodic hooks call convention 2. Build the input
+    # and route through insert_episodic_memory_with_text (auto-embeds 1536-dim).
+    if memory is None:
+        if event_type is None:
+            raise TypeError(
+                "insert_episodic_memory requires `memory` (EpisodicMemoryInput) or the "
+                "legacy `event_type=...` agent-hook kwargs"
+            )
+        rc: Dict[str, Any] = dict(raw_content or {})
+        if brand:
+            rc.setdefault("brand", brand)
+        if region:
+            rc.setdefault("region", region)
+        legacy_memory = EpisodicMemoryInput(
+            event_type=event_type,
+            description=summary or event_type,
+            agent_name=agent_name,
+            raw_content=rc or None,
+        )
+        return await insert_episodic_memory_with_text(
+            memory=legacy_memory, session_id=session_id, cycle_id=cycle_id
+        )
+
+    if embedding is None:
+        raise TypeError(
+            "insert_episodic_memory requires a precomputed `embedding` when `memory` is "
+            "provided; use insert_episodic_memory_with_text to auto-generate one"
+        )
+
     # M1: reject a dimension-mismatched embedding (e.g. a 384-dim fallback) before
     # it reaches the vector(1536) column — fail fast and diagnosably, never silently.
     validate_embedding_dimensions(

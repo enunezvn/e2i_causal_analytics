@@ -373,6 +373,10 @@ class DataPreparerAgent:
             # (#749 — data_preparer persisted only to the DB, never to memory).
             await self._update_semantic_memory(final_state)
 
+            # Record the QC outcome to episodic memory (#749 — store_qc_report was
+            # defined but never called from run() and used a non-existent insert API).
+            await self._update_episodic_memory(final_state)
+
             return output
 
         except Exception as e:
@@ -470,3 +474,25 @@ class DataPreparerAgent:
 
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
+
+    async def _update_episodic_memory(self, final_state: Dict[str, Any]) -> None:
+        """Record the QC outcome to EPISODIC memory (#749).
+
+        ``store_qc_report`` was defined but never called from ``run()`` AND called a
+        non-existent ``insert_episodic_memory`` signature — both fixed (compat shim +
+        migration 039). Graceful degradation. ``session_id`` is the
+        ``audit_workflow_id`` (uuid column) or a fresh UUID.
+        """
+        try:
+            experiment_id = final_state.get("experiment_id") or (
+                final_state.get("scope_spec") or {}
+            ).get("experiment_id")
+            if not experiment_id:
+                return
+            session_id = str(final_state.get("audit_workflow_id") or uuid4())
+            hooks = DataPreparerMemoryHooks()
+            await hooks.store_qc_report(
+                session_id=session_id, result=final_state, state=final_state
+            )
+        except Exception as e:
+            logger.debug(f"Failed to update episodic memory: {e}")
