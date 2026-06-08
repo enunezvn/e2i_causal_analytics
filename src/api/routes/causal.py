@@ -29,7 +29,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, cast
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
@@ -107,14 +107,23 @@ _ROBUSTNESS_BLOCK_WARNING = (
     "consensus are unrefuted."
 )
 
-# M-fo2: a cyclic (non-DAG) discovered graph is NOT a valid causal DAG, so
-# backdoor identification is unsound. This caveat is un-ignorable and is appended
-# to BOTH the warnings list and robustness_warning; it FORCES
-# robustness_validation_performed=False regardless of any refutation gate band.
+# M-fo2 (precise): a directed cycle only breaks identification when it lands on the
+# (treatment, outcome) ancestral subgraph (``undefined_cyclic``). That caveat is
+# un-ignorable — appended to BOTH the warnings list and robustness_warning — and it
+# FORCES robustness False, sets requires_review=True, and WITHHOLDS the consensus
+# effect (backdoor adjustment is mathematically undefined on such a graph).
 _NON_DAG_STRUCTURAL_WARNING = (
-    "Discovered causal graph contains cycles; the estimate is NOT "
-    "identification-valid (backdoor adjustment assumes a DAG) — treat as "
-    "exploratory."
+    "Discovered causal graph contains a directed cycle ON the treatment-outcome "
+    "ancestral subgraph; backdoor adjustment is undefined for this estimand. The "
+    "consensus effect is WITHHELD and the result is quarantined for review "
+    "(requires_review=true) — do NOT treat any per-library number as a causal claim."
+)
+# A cycle OFF the ancestral subgraph leaves the estimand identifiable: informational
+# only, no penalty, consensus preserved.
+_CYCLE_IRRELEVANT_WARNING = (
+    "Discovered causal graph contains a cycle OUTSIDE the treatment-outcome "
+    "ancestral subgraph; this estimand remains identifiable and no structural "
+    "penalty was applied."
 )
 
 router = APIRouter(
@@ -1102,34 +1111,96 @@ def _robustness_from_state(
     return False, _ROBUSTNESS_UNVALIDATED_WARNING
 
 
-def _apply_non_dag_structural_gate(
+def _classify_structural_identification(
+    graph_quality: Mapping[str, Any],
+) -> tuple[Optional[str], bool]:
+    """M-fo2 (precise): return ``(structural_identification, identification_blocked)``.
+
+    Reads the precise fields the orchestrator stamps onto ``graph_quality``:
+
+    - ``is_dag`` None/missing → the structural check did not run → ``(None, False)``.
+    - ``is_dag`` True → ``("acyclic", False)``.
+    - ``is_dag`` False → use ``structural_identification`` when present; otherwise
+      derive from ``cycle_affects_identification`` and FAIL CLOSED (a non-DAG that
+      lacks the precise flag is treated as ``undefined_cyclic``).
+    """
+    is_dag = graph_quality.get("is_dag")
+    if is_dag is None:
+        return None, False
+    if is_dag is True:
+        return "acyclic", False
+    # is_dag is False — read the precise label, fail-closed on absence.
+    label = graph_quality.get("structural_identification")
+    if label in ("undefined_cyclic", "cycle_irrelevant"):
+        return label, (label == "undefined_cyclic")
+    affects = graph_quality.get("cycle_affects_identification")
+    if affects is None:
+        affects = True  # conservative: a non-DAG without the precise flag
+    return ("undefined_cyclic" if affects else "cycle_irrelevant"), bool(affects)
+
+
+class _StructuralGateOutcome(NamedTuple):
+    """Result of the M-fo2 structural-identifiability gate applied by the builders."""
+
+    robustness_performed: bool
+    robustness_warning: Optional[str]
+    warnings: List[str]
+    requires_review: bool
+    structural_identification: Optional[str]
+    withhold_consensus: bool
+
+
+def _apply_structural_identification_gate(
     *,
     graph_quality: Mapping[str, Any],
     robustness_performed: bool,
     robustness_warning: Optional[str],
     warnings: List[str],
-) -> tuple[bool, Optional[str], List[str]]:
-    """M-fo2: a non-DAG graph FORCES robustness False + an un-ignorable caveat.
+) -> _StructuralGateOutcome:
+    """M-fo2 (precise): quarantine ONLY when a cycle actually breaks identification.
 
-    A cyclic discovered graph is not a valid causal DAG, so backdoor
-    identification is unsound — this overrides any PROCEED refutation result
-    (downgrade, NOT a 503, consistent with F1 Owner-decision 2). The structural
-    caveat is appended to BOTH the warnings list and robustness_warning so the
-    signal cannot be lost. ``is_dag`` is read explicitly (None/missing means the
-    structural check did not run → no override; only an explicit ``False`` gates).
+    - ``undefined_cyclic`` (a directed cycle on the (T,Y) ancestral subgraph):
+      backdoor adjustment is undefined → FORCE robustness False (overrides any
+      PROCEED, a downgrade not a 503, per F1 Owner-decision 2), set
+      ``requires_review=True``, WITHHOLD the consensus effect, and append an
+      un-ignorable caveat to BOTH the warnings list and robustness_warning.
+    - ``cycle_irrelevant`` (a cycle OFF the ancestral subgraph): the estimand is
+      still identifiable → no robustness override, consensus preserved, only an
+      informational warning.
+    - ``acyclic`` / not-run: unchanged.
     """
-    if graph_quality.get("is_dag") is not False:
-        return robustness_performed, robustness_warning, warnings
-
+    structural_identification, blocked = _classify_structural_identification(graph_quality)
     new_warnings = list(warnings)
-    if _NON_DAG_STRUCTURAL_WARNING not in new_warnings:
-        new_warnings.append(_NON_DAG_STRUCTURAL_WARNING)
 
-    if robustness_warning and _NON_DAG_STRUCTURAL_WARNING not in robustness_warning:
-        combined_warning: Optional[str] = f"{robustness_warning} {_NON_DAG_STRUCTURAL_WARNING}"
-    else:
-        combined_warning = _NON_DAG_STRUCTURAL_WARNING
-    return False, combined_warning, new_warnings
+    if blocked:
+        if _NON_DAG_STRUCTURAL_WARNING not in new_warnings:
+            new_warnings.append(_NON_DAG_STRUCTURAL_WARNING)
+        if robustness_warning and _NON_DAG_STRUCTURAL_WARNING not in robustness_warning:
+            combined: Optional[str] = f"{robustness_warning} {_NON_DAG_STRUCTURAL_WARNING}"
+        else:
+            combined = _NON_DAG_STRUCTURAL_WARNING
+        return _StructuralGateOutcome(
+            robustness_performed=False,
+            robustness_warning=combined,
+            warnings=new_warnings,
+            requires_review=True,
+            structural_identification=structural_identification,
+            withhold_consensus=True,
+        )
+
+    if structural_identification == "cycle_irrelevant" and _CYCLE_IRRELEVANT_WARNING not in (
+        new_warnings
+    ):
+        new_warnings.append(_CYCLE_IRRELEVANT_WARNING)
+
+    return _StructuralGateOutcome(
+        robustness_performed=robustness_performed,
+        robustness_warning=robustness_warning,
+        warnings=new_warnings,
+        requires_review=False,
+        structural_identification=structural_identification,
+        withhold_consensus=False,
+    )
 
 
 def _sequential_output_to_response(
@@ -1204,15 +1275,17 @@ def _sequential_output_to_response(
     if robustness_warning:
         warnings.append(robustness_warning)
 
-    # M-fo2: a non-DAG graph FORCES robustness False + an un-ignorable caveat,
-    # overriding any PROCEED (downgrade, not a 503; the haircut already applied
-    # in the engine stays).
-    robustness_performed, robustness_warning, warnings = _apply_non_dag_structural_gate(
+    # M-fo2 (precise): quarantine ONLY when a cycle breaks identification of the
+    # (T,Y) estimand (cycle on the ancestral subgraph). undefined_cyclic FORCES
+    # robustness False + requires_review + WITHHOLDS the consensus; an off-subgraph
+    # cycle (cycle_irrelevant) leaves the estimate untouched.
+    gate = _apply_structural_identification_gate(
         graph_quality=graph_quality,
         robustness_performed=robustness_performed,
         robustness_warning=robustness_warning,
         warnings=warnings,
     )
+    consensus_effect = None if gate.withhold_consensus else output.get("consensus_effect")
 
     return SequentialPipelineResponse(
         pipeline_id=pipeline_id,
@@ -1220,7 +1293,7 @@ def _sequential_output_to_response(
         stages_completed=stages_completed,
         stages_total=len(request.stages),
         stage_results=stage_results,
-        consensus_effect=output.get("consensus_effect"),
+        consensus_effect=consensus_effect,
         consensus_ci_lower=None,  # Not produced by the engine output today
         consensus_ci_upper=None,
         # H8: a REAL library-agreement metric (mean pairwise concordance), NOT
@@ -1230,11 +1303,13 @@ def _sequential_output_to_response(
         effect_estimate_variance=None,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
-        warnings=warnings,
-        robustness_validation_performed=robustness_performed,
-        robustness_warning=robustness_warning,
+        warnings=gate.warnings,
+        robustness_validation_performed=gate.robustness_performed,
+        robustness_warning=gate.robustness_warning,
         graph_is_dag=graph_quality.get("is_dag"),
         structural_quality=graph_quality.get("structural_quality"),
+        requires_review=gate.requires_review,
+        structural_identification=gate.structural_identification,
     )
 
 
@@ -1291,13 +1366,16 @@ def _parallel_output_to_response(
     if robustness_warning:
         warnings.append(robustness_warning)
 
-    # M-fo2: a non-DAG graph FORCES robustness False + an un-ignorable caveat.
-    robustness_performed, robustness_warning, warnings = _apply_non_dag_structural_gate(
+    # M-fo2 (precise): see the sequential builder. undefined_cyclic forces
+    # robustness False + requires_review + withholds the consensus; cycle_irrelevant
+    # leaves the estimate untouched.
+    gate = _apply_structural_identification_gate(
         graph_quality=graph_quality,
         robustness_performed=robustness_performed,
         robustness_warning=robustness_warning,
         warnings=warnings,
     )
+    consensus_effect = None if gate.withhold_consensus else output.get("consensus_effect")
 
     return ParallelPipelineResponse(
         pipeline_id=pipeline_id,
@@ -1309,7 +1387,7 @@ def _parallel_output_to_response(
         libraries_succeeded=succeeded,
         libraries_failed=failed,
         library_results=library_results,
-        consensus_effect=output.get("consensus_effect"),
+        consensus_effect=consensus_effect,
         consensus_ci_lower=None,
         consensus_ci_upper=None,
         # H8: real mean-pairwise-concordance agreement, not consensus_confidence.
@@ -1317,11 +1395,13 @@ def _parallel_output_to_response(
         consensus_method=request.consensus_method,
         total_latency_ms=int(output.get("total_latency_ms") or 0),
         created_at=datetime.now(timezone.utc),
-        warnings=warnings,
-        robustness_validation_performed=robustness_performed,
-        robustness_warning=robustness_warning,
+        warnings=gate.warnings,
+        robustness_validation_performed=gate.robustness_performed,
+        robustness_warning=gate.robustness_warning,
         graph_is_dag=graph_quality.get("is_dag"),
         structural_quality=graph_quality.get("structural_quality"),
+        requires_review=gate.requires_review,
+        structural_identification=gate.structural_identification,
     )
 
 

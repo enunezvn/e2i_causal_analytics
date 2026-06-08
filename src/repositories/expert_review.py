@@ -123,8 +123,56 @@ class ExpertReviewRepository(BaseRepository):
             logger.info(f"Created expert review {review_id} for DAG {dag_version_hash}")
             return review_id
         except Exception as e:
+            # M-reach1: a concurrent creator may have won the race and inserted the
+            # pending row first — the partial UNIQUE index uq_er_pending_dag_brand
+            # (mig 062) then rejects THIS duplicate with a 23505 unique violation.
+            # Recover ONLY for that case (return the winner's pending review); let
+            # any other failure (transient connection/timeout, schema error) surface
+            # via the error log rather than masking it behind a possibly-stale
+            # pending row (codex MEDIUM).
+            err = str(e).lower()
+            if "23505" in err or "unique" in err or "duplicate key" in err:
+                existing = await self._find_pending_review_id(dag_version_hash, brand)
+                if existing is not None:
+                    logger.info(
+                        "create_review: a pending review already exists for DAG "
+                        f"{dag_version_hash} (brand={brand}); returning it "
+                        "(concurrent create / unique-violation recovery)."
+                    )
+                    return existing
             logger.error(f"Failed to create expert review: {e}")
             return None
+
+    async def _find_pending_review_id(
+        self, dag_version_hash: Optional[str], brand: Optional[str]
+    ) -> Optional[str]:
+        """M-reach1: return the review_id of an existing PENDING review for this DAG
+        (+brand), if any. Brand matching mirrors the uq_er_pending_dag_brand index
+        (NULL brand normalized): a None brand matches the NULL-brand pending row, a
+        set brand matches that brand exactly.
+
+        Note (codex LOW): the index keys on ``COALESCE(brand, '')``, so it also
+        collapses an explicit empty-string brand into the NULL bucket; this lookup
+        uses ``IS NULL`` and would NOT match a ``brand=''`` winner. Callers populate
+        brand from a real brand name or None — never an explicit empty string — so
+        this boundary is not reachable in practice.
+        """
+        if not self.client or not dag_version_hash:
+            return None
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("review_id")
+                .eq("dag_version_hash", dag_version_hash)
+                .eq("approval_status", "pending")
+            )
+            query = query.eq("brand", brand) if brand else query.is_("brand", "null")
+            result = await query.limit(1).execute()
+            if result.data:
+                return str(result.data[0]["review_id"])
+        except Exception as e:
+            logger.warning(f"_find_pending_review_id lookup failed: {e}")
+        return None
 
     async def submit_review(
         self,

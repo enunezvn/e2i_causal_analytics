@@ -47,6 +47,81 @@ class TestExpertReviewRepository:
         mock_client.table.assert_called_with("expert_reviews")
 
     @pytest.mark.asyncio
+    async def test_create_review_recovers_existing_pending_on_unique_violation(
+        self, repo, mock_client
+    ):
+        """M-reach1: when a concurrent INSERT loses the uq_er_pending_dag_brand race,
+        create_review returns the EXISTING pending review_id, not None."""
+        # The INSERT raises (simulated 23505 unique-constraint violation).
+        mock_client.table.return_value.insert.return_value.execute = AsyncMock(
+            side_effect=Exception(
+                'duplicate key value violates unique constraint "uq_er_pending_dag_brand"'
+            )
+        )
+        # The recovery lookup (_find_pending_review_id, brand set) finds the winner's row:
+        # .select().eq().eq().eq().limit().execute()
+        recovery_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-winner"}]))
+        (
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+        ) = recovery_execute
+
+        review_id = await repo.create_review(
+            reviewer_id="user-1",
+            review_type="dag_approval",
+            dag_version_hash="abc123",
+            brand="Kisqali",
+        )
+
+        assert review_id == "rev-winner"
+
+    @pytest.mark.asyncio
+    async def test_create_review_does_not_recover_on_non_unique_error(self, repo, mock_client):
+        """A transient (non-unique-constraint) insert failure must NOT trigger the
+        pending-row recovery — it could mask the real error behind a stale row."""
+        mock_client.table.return_value.insert.return_value.execute = AsyncMock(
+            side_effect=Exception("connection reset by peer")
+        )
+        # If recovery were (wrongly) attempted, it would find this row and return it.
+        leak_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-stale"}]))
+        (
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+        ) = leak_execute
+
+        review_id = await repo.create_review(
+            reviewer_id="user-1",
+            review_type="dag_approval",
+            dag_version_hash="abc123",
+            brand="Kisqali",
+        )
+
+        # Non-unique error: do NOT recover; surface as None (logged), never "rev-stale".
+        assert review_id is None
+
+    @pytest.mark.asyncio
+    async def test_create_review_returns_none_on_unique_violation_when_no_pending_found(
+        self, repo, mock_client
+    ):
+        """A unique violation whose winner row is already gone/resolved → None."""
+        mock_client.table.return_value.insert.return_value.execute = AsyncMock(
+            side_effect=Exception(
+                'duplicate key value violates unique constraint "uq_er_pending_dag_brand"'
+            )
+        )
+        recovery_execute = AsyncMock(return_value=MagicMock(data=[]))
+        (
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+        ) = recovery_execute
+
+        review_id = await repo.create_review(
+            reviewer_id="user-1",
+            review_type="dag_approval",
+            dag_version_hash="abc123",
+            brand="Kisqali",
+        )
+
+        assert review_id is None
+
+    @pytest.mark.asyncio
     async def test_create_review_without_client(self):
         """Test create_review returns None without client."""
         repo = ExpertReviewRepository()

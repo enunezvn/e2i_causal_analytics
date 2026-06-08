@@ -196,6 +196,11 @@ class InterpretationNode:
 
         e_value = sensitivity_analysis.get("e_value", 1.0)
         robust_to_confounding = sensitivity_analysis.get("robust_to_confounding", False)
+        # M-fo3: the sensitivity node writes NO sensitivity_analysis when it raises
+        # (it sets state["sensitivity_error"] + status="failed"), so e_value above
+        # defaults to 1.00. The narrative must NOT present that defaulted value as a
+        # real (weak) robustness result.
+        sensitivity_failed = bool(state.get("sensitivity_error")) or not sensitivity_analysis
 
         # Construct narrative
         narrative_parts = []
@@ -217,19 +222,37 @@ class InterpretationNode:
 
         # Robustness
         if overall_robust:
-            narrative_parts.append(
+            robustness_line = (
                 f"The effect passed {tests_passed} out of {total_tests} robustness tests, "
-                f"indicating the finding is likely genuine and not spurious. "
-                f"The E-value of {e_value:.2f} suggests "
-                f"{'strong' if e_value > 3 else 'moderate' if e_value > 2 else 'weak'} "
-                f"robustness to unmeasured confounding."
+                "indicating the finding is likely genuine and not spurious. "
             )
         else:
-            narrative_parts.append(
+            robustness_line = (
                 f"However, the effect failed some robustness tests ({tests_passed}/{total_tests} passed), "
-                f"suggesting caution in interpretation. The E-value of {e_value:.2f} indicates "
-                f"{'limited' if e_value < 2 else 'moderate'} robustness to unmeasured confounding."
+                "suggesting caution in interpretation. "
             )
+
+        if sensitivity_failed:
+            # M-fo3: do NOT cite the defaulted E-value of 1.00 as a real result.
+            robustness_line += (
+                "The sensitivity analysis (E-value) could not be completed, so "
+                "robustness to unmeasured confounding is UNVERIFIED; do not rely on "
+                "any reported E-value."
+            )
+        elif overall_robust:
+            strength = "strong" if e_value > 3 else "moderate" if e_value > 2 else "weak"
+            robustness_line += (
+                f"The E-value of {e_value:.2f} suggests {strength} robustness to "
+                "unmeasured confounding."
+            )
+        else:
+            strength = "limited" if e_value < 2 else "moderate"
+            robustness_line += (
+                f"The E-value of {e_value:.2f} indicates {strength} robustness to "
+                "unmeasured confounding."
+            )
+
+        narrative_parts.append(robustness_line)
 
         # Recommendations
         if significance and overall_robust:
@@ -252,7 +275,12 @@ class InterpretationNode:
             f"Estimated causal effect: {ate:.2f} ({effect_size})",
             f"Statistical significance: {'Yes' if significance else 'No'}",
             f"Robustness tests: {tests_passed}/{total_tests} passed",
-            f"E-value: {e_value:.2f}",
+            # M-fo3: do not surface a defaulted E-value when the analysis failed.
+            (
+                "E-value: unavailable (sensitivity analysis failed)"
+                if sensitivity_failed
+                else f"E-value: {e_value:.2f}"
+            ),
         ]
 
         # Assumptions

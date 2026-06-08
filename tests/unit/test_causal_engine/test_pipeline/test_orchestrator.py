@@ -796,6 +796,67 @@ class TestPipelineOrchestrator:
         assert updated_state["graph_quality"]["is_dag"] is True
         # n_nodes<3 => structural_quality=0.5 even with DAG
         assert updated_state["graph_quality"]["structural_quality"] == 0.5
+        # M-fo2 (precise): a DAG is acyclic, never review-gated.
+        assert updated_state["graph_quality"]["structural_identification"] == "acyclic"
+        assert updated_state["graph_quality"]["requires_structural_review"] is False
+        assert updated_state["graph_quality"]["cycle_affects_identification"] is False
+
+    def _networkx_result_with_cycle(self, *, cycle_affects: bool) -> "LibraryExecutionResult":
+        """A NetworkX payload representing a non-DAG (cycle present), parameterized by
+        whether the cycle sits on the (T,Y) ancestral subgraph (M-fo2 precise gate)."""
+        return {
+            "library": "networkx",
+            "success": True,
+            "latency_ms": 100,
+            "result": {
+                "nodes": ["T", "Y", "A", "B", "C"],
+                "edges": [{"from": "T", "to": "Y"}],
+                "centrality": {},
+                "n_nodes": 5,
+                "n_edges": 5,
+                "is_dag": False,
+                "has_treatment_outcome_path": True,
+                "cycles": [["A", "B", "C"]],
+                "cycle_affects_identification": cycle_affects,
+                "cycles_on_relevant_subgraph": [["A", "B", "C"]] if cycle_affects else [],
+                "orientation_ambiguity_only": False,
+            },
+            "error": None,
+            "confidence": 0.0 if cycle_affects else 1.0,
+            "warnings": [],
+        }
+
+    def test_graph_quality_irrelevant_cycle_no_penalty(self, minimal_pipeline_state):
+        """M-fo2 (precise): a cycle OFF the (T,Y) ancestral subgraph leaves the estimand
+        identifiable -> structural_quality stays 1.0 (no haircut) and the result is NOT
+        review-gated."""
+        orchestrator = ConcreteOrchestrator()
+        result = self._networkx_result_with_cycle(cycle_affects=False)
+        updated_state = orchestrator._update_state_with_result(
+            minimal_pipeline_state, CausalLibrary.NETWORKX, result
+        )
+        gq = updated_state["graph_quality"]
+        assert gq["is_dag"] is False
+        assert gq["cycle_affects_identification"] is False
+        # has_path + n_nodes>=3 and identification not blocked => full quality.
+        assert gq["structural_quality"] == 1.0
+        assert gq["structural_identification"] == "cycle_irrelevant"
+        assert gq["requires_structural_review"] is False
+
+    def test_graph_quality_relevant_cycle_zeroes_and_flags_review(self, minimal_pipeline_state):
+        """M-fo2 (precise): a cycle ON the (T,Y) ancestral subgraph makes backdoor
+        adjustment undefined -> structural_quality 0.0 AND a review/quarantine flag."""
+        orchestrator = ConcreteOrchestrator()
+        result = self._networkx_result_with_cycle(cycle_affects=True)
+        updated_state = orchestrator._update_state_with_result(
+            minimal_pipeline_state, CausalLibrary.NETWORKX, result
+        )
+        gq = updated_state["graph_quality"]
+        assert gq["is_dag"] is False
+        assert gq["cycle_affects_identification"] is True
+        assert gq["structural_quality"] == 0.0
+        assert gq["structural_identification"] == "undefined_cyclic"
+        assert gq["requires_structural_review"] is True
 
     def test_update_state_with_dowhy_result(self, minimal_pipeline_state):
         """Test _update_state_with_result for DoWhy."""

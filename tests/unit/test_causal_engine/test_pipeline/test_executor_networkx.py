@@ -636,3 +636,108 @@ class TestNetworkXContractPreserved:
         is_valid, error = executor.validate_input(state)
         assert is_valid is False
         assert "treatment_var or confounders" in error
+
+
+class TestPreciseCyclicIdentifiabilityGate:
+    """M-fo2 (precise): a directed cycle only breaks backdoor identification of the
+    (treatment, outcome) estimand when it sits on the ancestral subgraph
+    ``An({T,Y}) ∪ {T,Y}`` (the subgraph that determines d-separation between T and
+    Y). A cycle elsewhere leaves the estimand identifiable, so the structural
+    confidence must NOT be penalized. Reciprocal 2-cycles (unoriented CPDAG/PAG
+    edges) are flagged distinctly from genuine feedback loops.
+
+    Replaces the blunt ``not is_dag => confidence 0.0`` contract: the existing
+    ``test_cyclic_upstream_graph_yields_confidence_zero...`` (cycle T->Y->Z->T) still
+    holds because that cycle is ON the relevant subgraph.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cycle_off_relevant_subgraph_keeps_full_confidence(self):
+        """T->Y is clean; a disjoint A->B->C->A cycle does not touch An({T,Y}),
+        so the estimand stays identifiable: cycle_affects_identification False,
+        confidence 1.0 (path + >=3 nodes), no relevant cycles."""
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": ["T", "Y", "A", "B", "C"],
+            "edges": [
+                {"from": "T", "to": "Y"},
+                {"from": "A", "to": "B"},
+                {"from": "B", "to": "C"},
+                {"from": "C", "to": "A"},  # disjoint 3-cycle, unrelated to T/Y
+            ],
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+        result = await executor.execute(state, _minimal_config())
+        res = result["result"]
+        assert res["is_dag"] is False
+        assert res["cycle_affects_identification"] is False
+        assert res["cycles_on_relevant_subgraph"] == []
+        assert res["orientation_ambiguity_only"] is False
+        # Estimand is identifiable -> NO structural penalty.
+        assert result["confidence"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_cycle_on_ancestral_subgraph_blocks_identification(self):
+        """A feedback loop among confounders that are ancestors of T (on a backdoor
+        path) DOES break identification: cycle_affects_identification True,
+        confidence 0.0."""
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": ["T", "Y", "A", "B", "C"],
+            "edges": [
+                {"from": "A", "to": "B"},
+                {"from": "B", "to": "C"},
+                {"from": "C", "to": "A"},  # 3-cycle...
+                {"from": "C", "to": "T"},  # ...feeding T => A,B,C are ancestors of T
+                {"from": "A", "to": "Y"},  # and Y => a backdoor path through the cycle
+                {"from": "T", "to": "Y"},
+            ],
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+        result = await executor.execute(state, _minimal_config())
+        res = result["result"]
+        assert res["is_dag"] is False
+        assert res["cycle_affects_identification"] is True
+        assert len(res["cycles_on_relevant_subgraph"]) >= 1
+        assert result["confidence"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_reciprocal_edge_off_path_flagged_orientation_ambiguity(self):
+        """A reciprocal A<->B (an unoriented edge) disjoint from {T,Y} is an
+        orientation ambiguity, not a feedback loop, and does not block this estimand."""
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": ["T", "Y", "A", "B"],
+            "edges": [
+                {"from": "T", "to": "Y"},
+                {"from": "A", "to": "B"},
+                {"from": "B", "to": "A"},  # reciprocal pair
+            ],
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+        result = await executor.execute(state, _minimal_config())
+        res = result["result"]
+        assert res["is_dag"] is False
+        assert res["orientation_ambiguity_only"] is True
+        assert res["cycle_affects_identification"] is False
+        assert result["confidence"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_reciprocal_treatment_outcome_blocks_identification(self):
+        """T<->Y (both directions) cannot be oriented, so identification is undefined:
+        cycle_affects_identification True even though it is a reciprocal pair."""
+        executor = NetworkXExecutor()
+        upstream = {
+            "nodes": ["T", "Y"],
+            "edges": [
+                {"from": "T", "to": "Y"},
+                {"from": "Y", "to": "T"},  # reciprocal T<->Y
+            ],
+        }
+        state = _state(treatment_var="T", outcome_var="Y", causal_graph=upstream)
+        result = await executor.execute(state, _minimal_config())
+        res = result["result"]
+        assert res["is_dag"] is False
+        assert res["cycle_affects_identification"] is True
+        assert res["orientation_ambiguity_only"] is True
+        assert result["confidence"] == 0.0
