@@ -1091,6 +1091,88 @@ class TestAsyncCognitiveRAGRetrieve:
             # Check that search was called
             mock_search.assert_called_once()
 
+    async def test_cognitive_retrieve_forwards_entities_kwarg_to_search(self):
+        """F1: cognitive_rag_retrieve MUST forward an entities= kwarg into
+        hybrid_search so the graph leg can fire (retriever.py runs the graph leg
+        only `if entities:`). Regression guard for the hardcoded kpi_name=None /
+        missing entities= bug.
+
+        We patch only the external boundaries: rewrite_query_dspy (so the test is
+        deterministic and does not fire a real LM) and hybrid_search (the DB/graph
+        boundary). The unit under test (cognitive_rag_retrieve wiring) runs for real.
+        """
+        with (
+            patch(
+                "src.api.routes.chatbot_dspy.rewrite_query_dspy",
+                new_callable=AsyncMock,
+            ) as mock_rewrite,
+            patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search,
+        ):
+            mock_rewrite.return_value = (
+                "rewritten query",  # rewritten_query
+                [],  # search_keywords
+                [],  # graph_entities (empty -> entities coerces to None)
+                "fallback",  # rewrite_method
+            )
+            mock_search.return_value = []  # empty -> no LLM scoring loop, isolates wiring
+
+            await cognitive_rag_retrieve(
+                query="TRx trend for Kisqali in Northeast",
+                brand_context="Kisqali",
+                collect_signal=False,
+            )
+
+            mock_search.assert_called_once()
+            _, kwargs = mock_search.call_args
+            # The hardcoded `kpi_name=None` + MISSING `entities=` is the bug under test.
+            # After the fix, entities= must be PRESENT (never silently dropped). With no
+            # entities extracted, `graph_entities or None` coerces the empty list to None
+            # so the `if entities:` guard at retriever.py skips the leg cleanly.
+            assert "entities" in kwargs, (
+                "hybrid_search called without entities= kwarg — graph leg can never "
+                "fire (F1 regression). chatbot_dspy.py must forward graph_entities."
+            )
+            assert kwargs.get("entities") is None, (
+                "empty graph_entities must coerce to None (not [] / truthy) so the "
+                "`if entities:` guard at retriever.py skips the graph leg cleanly."
+            )
+
+    async def test_cognitive_retrieve_passes_extracted_entities_through(self):
+        """F1/F4: when the rewrite yields graph_entities, those exact entities must
+        reach hybrid_search(entities=...) so RRF receives a second (graph) list and
+        no longer degenerates to single-backend dense. We patch rewrite_query_dspy
+        to return a deterministic entity list (it would otherwise hit a real LLM)
+        and the hybrid_search DB boundary; the wiring between them — the code under
+        test — runs for real.
+        """
+        with (
+            patch(
+                "src.api.routes.chatbot_dspy.rewrite_query_dspy",
+                new_callable=AsyncMock,
+            ) as mock_rewrite,
+            patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search,
+        ):
+            mock_rewrite.return_value = (
+                "TRx metrics for Kisqali Northeast region",  # rewritten_query
+                ["trx", "kisqali", "northeast"],  # search_keywords
+                ["Kisqali", "Northeast", "TRx"],  # graph_entities
+                "dspy",  # rewrite_method
+            )
+            mock_search.return_value = []
+
+            await cognitive_rag_retrieve(
+                query="TRx trend for Kisqali in Northeast",
+                brand_context="Kisqali",
+                collect_signal=False,
+            )
+
+            mock_search.assert_called_once()
+            _, kwargs = mock_search.call_args
+            assert kwargs.get("entities") == ["Kisqali", "Northeast", "TRx"], (
+                "graph_entities extracted by the rewrite were not forwarded as "
+                "entities= to hybrid_search (F1). The graph leg stays dead."
+            )
+
 
 class TestChatbotCognitiveRAGFeatureFlag:
     """Test cases for cognitive RAG feature flag."""

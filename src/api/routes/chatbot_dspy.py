@@ -1529,11 +1529,18 @@ async def cognitive_rag_retrieve(
     try:
         from src.rag.retriever import hybrid_search
 
-        # Use rewritten query for hybrid search
+        # Use rewritten query for hybrid search.
+        # F1 fix: forward the rewrite's graph_entities so the graph leg fires
+        # (HybridRetriever.search runs the graph leg `if entities:` — retriever.py).
+        # An empty list -> None so the `if entities:` guard is honored and the
+        # graph leg is simply skipped (rather than truthy-empty) when no entities
+        # were extracted. kpi_name stays None: entities= is the primary graph key
+        # and the DSPy rewrite already supplies them.
         results = await hybrid_search(
             query=rewritten_query,
             k=k,
-            kpi_name=None,  # Will be extracted from keywords if needed
+            entities=graph_entities or None,
+            kpi_name=None,
             filters={"brand": brand_context} if brand_context else None,
         )
 
