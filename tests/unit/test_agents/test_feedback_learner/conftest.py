@@ -8,6 +8,25 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_live_supabase_in_unit_tests(monkeypatch):
+    """Isolate unit tests from the live Supabase signals table.
+
+    Shard 02 made ``FeedbackLearnerAgent.learn()`` persist its finalized signal
+    by default (audit F5). In production that writes to
+    ``dspy_agent_training_signals``; in unit tests it MUST NOT hit the live DB —
+    doing so pollutes the optimizer's real training corpus with junk batches.
+    Force the default-factory client to ``None`` so the best-effort persist path
+    no-ops. Tests that pass an explicit ``persist_client`` (a recording
+    stand-in) bypass the factory and are unaffected; the dedicated real
+    round-trip lives in ``tests/integration/`` behind a live-creds skip.
+    """
+    monkeypatch.setattr(
+        "src.memory.services.factories.get_supabase_client",
+        lambda: None,
+    )
+
+
 @pytest.fixture
 def sample_feedback_items() -> List[Dict[str, Any]]:
     """Sample feedback items for testing."""

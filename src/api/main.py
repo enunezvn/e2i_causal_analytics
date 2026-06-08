@@ -353,6 +353,16 @@ async def lifespan(app: FastAPI):
         # already in the sentinels table.
         logger.warning(f"Sentinel loader: YAML load failed (non-critical): {e}")
 
+    # Install the latest optimized prompt bundles into recipient agents so this
+    # process serves optimized prompts produced by the optimization worker (F2).
+    try:
+        from src.agents.feedback_learner.prompt_bundles import install_all_prompt_bundles
+
+        installed = install_all_prompt_bundles()
+        logger.info("Prompt bundle install at startup: %s", installed)
+    except Exception as e:  # noqa: BLE001 - never block startup on this
+        logger.warning("Prompt bundle install at startup failed: %s", e)
+
     logger.info("API server ready to accept connections")
 
     # Run the application, then ALWAYS run shutdown cleanup — on normal AND on

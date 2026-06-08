@@ -637,7 +637,7 @@ class TestSignalCollectorAdapter:
         mock_client.table.return_value.select = Mock(return_value=mock_query)
 
         signals = await adapter.get_signals_for_optimization(
-            signal_type="response", min_reward=0.5, limit=100
+            source_agent="response", min_reward=0.5, limit=100
         )
 
         assert len(signals) == 1

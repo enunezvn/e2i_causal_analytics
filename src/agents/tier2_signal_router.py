@@ -195,12 +195,14 @@ class Tier2SignalRouter:
             # Feedback learner module not available
             self._feedback_learner_available = False
             logger.warning(
-                "Feedback learner not available. "
-                "Signals will be stored locally for later retrieval."
+                "Feedback learner not available; signals on this fallback path are DROPPED "
+                "(no durable local sink is wired here)."
             )
-            # Store locally for later retrieval
+            # No durable local sink exists -> drop honestly (see _store_signals_locally,
+            # which counts them under signals_dropped). Return 0: nothing was actually
+            # delivered, so the caller must NOT count these under signals_delivered.
             await self._store_signals_locally(signals)
-            return len(signals)
+            return 0
 
         except Exception as e:
             logger.error(f"Error delivering to feedback_learner: {e}")
@@ -211,43 +213,24 @@ class Tier2SignalRouter:
         signals: List[Dict[str, Any]],
     ) -> None:
         """
-        Store signals locally when feedback_learner is unavailable.
+        Fallback when the feedback_learner receiver is unavailable.
 
-        Uses the signal collector buffers as local storage.
+        There is no durable local sink wired here yet, so signals delivered on
+        this path are DROPPED. We log that explicitly rather than implying
+        retention. (A durable DB fallback can be added once the Shard 02
+        persistence helper exists.)
         """
+        dropped_by_agent: Dict[str, int] = {}
         for entry in signals:
-            agent_name = entry["agent_name"]
-            entry["signal"]
+            agent_name = entry.get("agent_name", "unknown")
+            dropped_by_agent[agent_name] = dropped_by_agent.get(agent_name, 0) + 1
 
-            try:
-                # Store in agent's local buffer
-                if agent_name == "causal_impact":
-                    from src.agents.causal_impact.dspy_integration import (
-                        get_causal_impact_signal_collector,
-                    )
-
-                    get_causal_impact_signal_collector()
-                    # Signal already in buffer from collection
-                    logger.debug(f"Signal from {agent_name} stored locally")
-
-                elif agent_name == "gap_analyzer":
-                    from src.agents.gap_analyzer.dspy_integration import (
-                        get_gap_analyzer_signal_collector,
-                    )
-
-                    get_gap_analyzer_signal_collector()
-                    logger.debug(f"Signal from {agent_name} stored locally")
-
-                elif agent_name == "heterogeneous_optimizer":
-                    from src.agents.heterogeneous_optimizer.dspy_integration import (
-                        get_heterogeneous_optimizer_signal_collector,
-                    )
-
-                    get_heterogeneous_optimizer_signal_collector()
-                    logger.debug(f"Signal from {agent_name} stored locally")
-
-            except Exception as e:
-                logger.warning(f"Failed to store signal locally for {agent_name}: {e}")
+        self._metrics["signals_dropped"] += len(signals)
+        logger.warning(
+            "feedback_learner receiver unavailable; DROPPED %d signal(s): %s",
+            len(signals),
+            dropped_by_agent,
+        )
 
     def get_metrics(self) -> Dict[str, int]:
         """Get signal routing metrics."""

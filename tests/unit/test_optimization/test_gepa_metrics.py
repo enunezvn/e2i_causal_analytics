@@ -213,23 +213,58 @@ class TestFeedbackLearnerGEPAMetric:
         assert hasattr(metric, "name")
         assert hasattr(metric, "description")
 
-    def test_metric_call_returns_score(self, metric):
-        """Test metric __call__ returns valid score."""
-        example = MagicMock()
-        example.query = "Analyze feedback patterns"
-        example.signals = [{"type": "positive", "reward": 0.9}]
-        example.expected_patterns = ["pattern1", "pattern2"]
+    def test_metric_call_returns_scorewithfeedback_prediction(self, metric):
+        """Metric must return a dspy.Prediction(score, feedback) per dspy 3.1.0 GEPA.
 
-        prediction = MagicMock()
-        prediction.response = "Identified 3 improvement patterns."
-        prediction.patterns = ["pattern1", "pattern2"]
-        # Configure attributes for FeedbackLearnerGEPAMetric
-        prediction.extracted_learnings = ["pattern1 improvement", "pattern2 enhancement"]
-        prediction.storage_format = {"compressed": True, "indexed": True}
-        prediction.application_results = {"performance_delta": 0.1}
+        A plain-dict return triggers ``int + dict`` inside GEPA's valset
+        ``dspy.Evaluate`` (the latent F1 bug). Use real dspy objects (no mocks).
+        """
+        import dspy
 
-        result = metric(example, prediction, trace=None)
-        assert isinstance(result, (float, int, dict))
+        gold = dspy.Example(
+            feedback_batch="[]",
+            agent_baselines="{}",
+            historical_patterns="[]",
+            patterns=[{"pattern_type": "accuracy_issue", "severity": "high"}],
+        ).with_inputs("feedback_batch", "agent_baselines", "historical_patterns")
+        pred = dspy.Prediction(
+            patterns=[
+                {"pattern_type": "accuracy_issue", "severity": "high", "affected_agents": ["x"]}
+            ],
+            confidence=0.8,
+            root_causes=["gap"],
+        )
+
+        result = metric(gold, pred, trace=None)
+        assert isinstance(result, dspy.Prediction)
+        assert 0.0 <= float(result.score) <= 1.0
+        assert isinstance(result.feedback, str) and result.feedback
+        # gold type matched -> overlap credit on top of non-empty + structure.
+        assert result.score >= 0.7
+
+    def test_metric_scores_empty_patterns_low(self, metric):
+        """An empty patterns output scores 0.0 (no fabrication of credit)."""
+        import dspy
+
+        gold = dspy.Example(patterns=[{"pattern_type": "accuracy_issue"}]).with_inputs()
+        pred = dspy.Prediction(patterns=[], confidence=0.0, root_causes=[])
+        result = metric(gold, pred, trace=None)
+        assert isinstance(result, dspy.Prediction)
+        assert result.score == 0.0
+
+    def test_metric_scores_summary_phase(self, metric):
+        """Summary-phase prediction is scored on its own fields."""
+        import dspy
+
+        gold = dspy.Example(patterns="[]").with_inputs()
+        pred = dspy.Prediction(
+            summary="A detailed multi-sentence executive summary of the cycle outcomes here.",
+            key_insights=["insight a", "insight b"],
+            next_steps=["do x"],
+        )
+        result = metric(gold, pred, trace=None)
+        assert isinstance(result, dspy.Prediction)
+        assert result.score >= 0.9  # length + insights + next_steps all present
 
 
 class TestStandardAgentGEPAMetric:

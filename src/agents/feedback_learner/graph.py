@@ -42,6 +42,7 @@ def build_feedback_learner_graph(
     cognitive_rag: Optional[Any] = None,
     db_client: Optional[Any] = None,
     enable_rubric_evaluation: bool = True,
+    prefer_optimized: bool = True,
 ):
     """
     Build the Feedback Learner agent graph with DSPy integration.
@@ -61,6 +62,8 @@ def build_feedback_learner_graph(
         cognitive_rag: Optional CognitiveRAG instance for context enrichment
         db_client: Optional database client for storing rubric evaluations
         enable_rubric_evaluation: Whether to include rubric evaluation node (default: True)
+        prefer_optimized: Whether the pattern analyzer should prefer the latest
+            optimized DSPy module (closes the self-improvement loop; default: True)
 
     Returns:
         Compiled LangGraph workflow
@@ -70,7 +73,7 @@ def build_feedback_learner_graph(
 
     # Initialize nodes
     collector = FeedbackCollectorNode(feedback_store, outcome_store)
-    analyzer = PatternAnalyzerNode(use_llm=use_llm, llm=llm)
+    analyzer = PatternAnalyzerNode(use_llm=use_llm, llm=llm, prefer_optimized=prefer_optimized)
     rubric_node = RubricNode(db_client=db_client) if enable_rubric_evaluation else None
     extractor = LearningExtractorNode(use_llm=use_llm, llm=llm)
     updater = KnowledgeUpdaterNode(knowledge_stores)
@@ -239,7 +242,16 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     """
     patterns = state.get("detected_patterns") or []
     recommendations = state.get("learning_recommendations") or []
+    # `applied_updates` in state is a list of applied update_id STRINGS (see
+    # KnowledgeUpdaterNode); the full update dicts live in `proposed_updates`.
     applied_updates = state.get("applied_updates") or []
+    proposed_updates = state.get("proposed_updates") or []
+    applied_update_ids = set(applied_updates)
+    applied_update_records = [
+        dict(u)
+        for u in proposed_updates
+        if isinstance(u, dict) and u.get("update_id") in applied_update_ids
+    ]
     feedback_items = state.get("feedback_items") or []
 
     # Calculate metrics for training signal.
@@ -253,8 +265,6 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     pattern_accuracy: float | None = None
     recommendation_actionability = min(len(recommendations) / 5.0, 1.0) if recommendations else 0.0
     update_effectiveness = len(applied_updates) / max(len(state.get("proposed_updates") or []), 1)
-    min(1.0, 5000 / max(state.get("total_latency_ms", 1), 1))  # Target < 5s
-    min(len(patterns) / max(len(feedback_items), 1), 1.0) if feedback_items else 0.0
 
     # Get rubric evaluation metrics if available
     rubric_weighted_score = state.get("rubric_weighted_score")
@@ -277,6 +287,12 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
         rubric_weighted_score=rubric_weighted_score,
         rubric_decision=rubric_decision,
         rubric_pattern_flags=len(rubric_pattern_flags),
+        # F6: carry bounded real content so signal->Example conversion has input.
+        feedback_batch=[dict(fb) for fb in feedback_items[:20]],
+        patterns=[dict(p) for p in patterns[:20]],
+        recommendations=[dict(r) for r in recommendations[:20]],
+        applied_updates=applied_update_records[:20],
+        learning_summary=state.get("learning_summary") or "",
         collection_latency_ms=state.get("collection_latency_ms", 0),
         analysis_latency_ms=state.get("analysis_latency_ms", 0),
         extraction_latency_ms=state.get("extraction_latency_ms", 0),

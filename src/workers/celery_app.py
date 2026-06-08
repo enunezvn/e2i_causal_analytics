@@ -180,6 +180,8 @@ celery_app.conf.task_routes = {
     "src.tasks.run_feedback_loop_*": {"queue": "analytics"},
     "src.tasks.analyze_concept_drift_*": {"queue": "analytics"},
     "src.tasks.run_full_feedback_loop": {"queue": "analytics"},
+    # DSPy prompt self-improvement loop (audit F1 keystone)
+    "src.tasks.run_dspy_prompt_optimization": {"queue": "analytics"},
     # -------------------------------------------------------------------------
     # ETL Tasks (Block 6B-infra-2*: per-HCP business_metrics, per-patient
     # adherence, territory rollup). Beat schedules already pin these to
@@ -327,6 +329,14 @@ celery_app.conf.beat_schedule = {
     # Concept drift analysis after feedback loop (daily at 3 AM)
     "feedback-loop-drift-analysis": {
         "task": "src.tasks.analyze_concept_drift_from_truth",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # DSPy prompt self-improvement loop (audit F1) — daily. Reads persisted
+    # feedback_learner signals, gates on GEPAOptimizationTrigger, optimizes the
+    # analysis prompts, and installs optimized recipient bundles.
+    "dspy-prompt-optimization-daily": {
+        "task": "src.tasks.run_dspy_prompt_optimization",
         "schedule": 86400.0,  # 24 hours
         "options": {"queue": "analytics"},
     },
