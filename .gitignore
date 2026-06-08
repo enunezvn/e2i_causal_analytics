@@ -138,6 +138,14 @@ docs/results/*
 !docs/results/optum_initiation_revalidation_*.md
 # Optum vs synthetic cohort forensics (LOINC re-mapping authority; cited by OPTUM_CONVERSION.md + convert_optum_rwd.py)
 !docs/results/tier0_cohort_comparison_*.md
+# Optum mart deployability evidence: the patient-cohort feature-bound disproof, the
+# clinical-vs-commercial deployable-cohort decision, and the HCP-adoption leakage
+# ablation. Cited as the authority by convert_optum_hcp_adoption.py,
+# optum_hcp_feature_manifest.py, optum_mart_feature_manifest.py, and
+# OPTUM_MART_CONVERSION.md — tracked so the modelability conclusion stays auditable.
+!docs/results/deployable_cohort_decision_*.md
+!docs/results/tier0_optum_mart_*.md
+!docs/results/hcp_adoption_ablation_*.py
 # Phase 5.2 dry-run scale-machinery evidence (synthetic boundaries)
 !docs/results/phase5p2_scale_machinery_*.md
 # Gate N3 methodology sign-off templates + dated artifacts (Tier 1A governance)
