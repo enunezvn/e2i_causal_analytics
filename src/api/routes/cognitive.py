@@ -961,7 +961,7 @@ class CognitiveRAGResponse(BaseModel):
                 "hop_count": 2,
                 "entities": ["Kisqali", "Northeast"],
                 "intent": "causal",
-                "latency_ms": 1250.5,
+                "latency_ms": 16500.0,
             }
         }
     )
@@ -1002,7 +1002,9 @@ async def cognitive_rag_search(
     - Fact extraction for long-term storage
     - DSPy training signal collection
 
-    **Performance**: Typical latency < 2s for simple queries.
+    **Performance**: This 4-phase path runs sequential per-hop LLM decisions and
+    per-item LLM relevance scoring; typical latency is ~15-18s for a multi-hop
+    query (NOT sub-second). See docs/reports/rag-hybrid-search-audit-20260608.md.
 
     **Requirements**: ANTHROPIC_API_KEY environment variable must be set.
 
