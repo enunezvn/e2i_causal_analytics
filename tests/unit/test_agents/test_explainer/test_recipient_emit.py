@@ -107,6 +107,36 @@ async def test_consume_getter_is_invoked_and_shape_preserved(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_executive_summary_is_content_not_directive(monkeypatch):
+    """C1 regression: the user-facing executive_summary must be CONTENT, not a
+    meta-instruction. The optimizable template renders the actual summary; it
+    must never ship an LLM directive ("Generate an executive summary ...") as the
+    user-visible content.
+    """
+    rec = _Recorder()
+    monkeypatch.setattr(EMIT_TARGET, rec)
+
+    node = NarrativeGeneratorNode(use_llm=False)
+    result = await node.execute(_reasoned_state())
+
+    summary = result["executive_summary"]
+    # No meta-directive phrasing leaks into user-facing content.
+    for forbidden in (
+        "Generate an executive summary",
+        "Focus on business impact and actionable insights",
+        "Generate a",
+    ):
+        assert forbidden not in summary, f"directive text leaked into summary: {forbidden!r}"
+
+    # The canonical content shape is preserved: the rendered summary carries the
+    # expertise-adapted body produced by _create_executive_summary (the real
+    # insight statement appears in it).
+    assert "Marketing campaign shows 23% sales uplift" in summary
+    # And the detailed explanation embeds the same content summary section.
+    assert result["detailed_explanation"]
+
+
+@pytest.mark.asyncio
 async def test_emit_contract_keys_and_reward(monkeypatch):
     """emit called with agent_name='explainer', valid template_field, exact keys, reward in [0,1]."""
     rec = _Recorder()

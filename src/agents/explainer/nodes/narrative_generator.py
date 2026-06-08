@@ -391,31 +391,36 @@ class NarrativeGeneratorNode:
     def _compose_executive_summary(
         self, insights: List[Insight], themes: List[str], expertise: str
     ) -> str:
-        """Build the executive summary, sourcing its lead directive from the
-        optimizable ``executive_summary_template`` getter.
+        """Render the executive summary via the optimizable content template.
 
-        The optimizable template (consumed via the explainer DSPy integration)
-        contributes a leading guidance line; the deterministic rendered body
-        (``_create_executive_summary``) is preserved verbatim below it so the
-        output SHAPE and substance are unchanged. If the getter fails for any
-        reason, the rendered body is returned alone (semantics preserved).
+        The optimizable ``executive_summary_template`` (consumed through the
+        explainer DSPy integration) is a CONTENT template, not an LLM directive:
+        the getter receives the canonical body (the expertise-adapted prose +
+        top-insight highlights from ``_create_executive_summary``) and the
+        getter's rendered output IS the executive summary. Optimizing the
+        template therefore changes user-visible output without ever shipping
+        instruction text as content (mirrors health_score B3).
+
+        If the getter or its ``.format()`` fails for any reason, the inline body
+        is returned alone (output semantics preserved, never corrupted).
         """
         body = self._create_executive_summary(insights, themes, expertise)
         try:
             finding_count = len([i for i in insights if i.get("category") == "finding"])
             integration = get_explainer_dspy_integration()
-            lead = integration.get_executive_summary_prompt(
+            rendered = integration.get_executive_summary_prompt(
                 user_expertise=expertise,
                 key_findings_count=finding_count,
                 avg_confidence=round(self._avg_confidence(insights), 2),
+                summary_body=body,
             )
         except Exception as e:  # noqa: BLE001 - template sourcing must never break generation
             logger.warning(f"Executive-summary template sourcing failed (non-fatal): {e}")
             return body
-        lead = (lead or "").strip()
-        if not lead:
-            return body
-        return f"_{lead}_\n\n{body}"
+        rendered = (rendered or "").strip()
+        # Use the rendered template output AS the summary; fall back to the
+        # canonical body only if rendering produced nothing usable.
+        return rendered if rendered else body
 
     async def _emit_recipient_signals(self, state: ExplainerState, result: Dict[str, Any]) -> None:
         """Emit recipient training signals for the produced explanation text.
