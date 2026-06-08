@@ -23,6 +23,7 @@ import type {
   CreateSessionResponse,
   DeleteSessionResponse,
   SessionResponse,
+  SessionSummary,
 } from '@/types/cognitive';
 
 // =============================================================================
@@ -173,8 +174,8 @@ export async function deleteSession(
  */
 export async function listSessions(
   params?: Record<string, unknown>
-): Promise<{ sessions: SessionResponse[]; total: number }> {
-  return get<{ sessions: SessionResponse[]; total: number }>(
+): Promise<{ sessions: SessionSummary[]; total: number }> {
+  return get<{ sessions: SessionSummary[]; total: number }>(
     `${COGNITIVE_BASE}/sessions`,
     params
   );

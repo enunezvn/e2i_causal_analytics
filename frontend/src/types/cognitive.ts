@@ -186,6 +186,33 @@ export interface SessionResponse {
 }
 
 /**
+ * Lightweight per-session summary row returned by `GET /api/cognitive/sessions`.
+ *
+ * NOTE: this is NOT the full-state `SessionResponse` (which has nested
+ * `context`/`messages`/`evidence_trail`/`memory_stats`, returned by
+ * `GET /api/cognitive/sessions/{id}`). The list endpoint returns the flat
+ * summary built in `src/api/routes/cognitive.py` list_sessions.
+ */
+export interface SessionSummary {
+  /** Session identifier */
+  session_id: string;
+  /** User identifier */
+  user_id?: string;
+  /** Brand context */
+  brand?: string;
+  /** Region context */
+  region?: string;
+  /** Current state (active, completed, ...) */
+  state: string;
+  /** Creation timestamp (ISO 8601) */
+  created_at?: string;
+  /** Last activity timestamp (ISO 8601) */
+  last_activity?: string;
+  /** Number of messages */
+  message_count: number;
+}
+
+/**
  * Request to create a new cognitive session
  */
 export interface CreateSessionRequest {

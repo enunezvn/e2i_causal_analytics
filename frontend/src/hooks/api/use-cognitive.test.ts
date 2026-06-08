@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as React from 'react';
 import type {
   SessionResponse,
+  SessionSummary,
   CognitiveQueryResponse,
   CreateSessionResponse,
   DeleteSessionResponse,
@@ -117,8 +118,20 @@ const mockSession: SessionResponse = {
   memory_stats: {},
 };
 
-const mockSessionsResponse: { sessions: SessionResponse[]; total: number } = {
-  sessions: [mockSession],
+// Flat summary row — mirrors src/api/routes/cognitive.py list_sessions.
+const mockSessionSummary: SessionSummary = {
+  session_id: 'sess_abc123',
+  user_id: 'user_001',
+  brand: 'Kisqali',
+  region: 'northeast',
+  state: 'active',
+  created_at: '2024-01-15T10:00:00Z',
+  last_activity: '2024-01-15T12:00:00Z',
+  message_count: 5,
+};
+
+const mockSessionsResponse: { sessions: SessionSummary[]; total: number } = {
+  sessions: [mockSessionSummary],
   total: 1,
 };
 
