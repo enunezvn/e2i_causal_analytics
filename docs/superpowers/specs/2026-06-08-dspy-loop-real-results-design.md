@@ -20,17 +20,23 @@ PR #792 closed the audit's findings F1–F8 **at the wiring level** — the loop
 
 ## 2. Goal & success criteria
 
-Make the closed-but-inert loop produce **real** self-improvement end-to-end, with **zero synthetic data in any production path**.
+Build correct, validated loop wiring that produces **real** self-improvement the moment real data flows — without ever shipping synthetic-derived outputs to production as if they were real.
 
-**Done when** a faithful run (real Anthropic LM + real Supabase) demonstrates:
+### Reconciliation (2026-06-08 update) — synthetic data vs the "no mock" line
+The premise investigation (`docs/reports/dspy-loop-disproof-20260608/`) found the loop is **starved in production**: no real user feedback and the 4 recipient agents aren't invoked (only Tier-0 ML agents run). That is an honest **operational note**, NOT a reason to avoid building. Two distinct things — only one is forbidden:
 
-- Real `feedback_learner` signals are persisted from the documented endpoint **and** an autonomous cadence.
-- The trigger fires on real accumulated signals (not forced) at a realistic threshold.
-- GEPA optimizes the learner phases **and** each of the four recipients **against real emitted data** (or honestly skips a recipient that lacks enough real data).
+- ✅ **Synthetic data to build + validate the wiring** is legitimate and expected (golden seeds, synthesized feedback/experiments). "Faithful" (cheapest-disproof) = **real code paths — real LM, real DB, real GEPA — not stubbed**; it does *not* require real production *data*. Synthetic inputs through the real pipeline is a faithful mechanism test.
+- ❌ **Shipping synthetic-derived outputs to production as if real self-improvement** is the prohibited mock. Guard: production **runs on real data and skips / serves defaults when real data is absent** — it never silently installs a synthetic-supervised prompt and presents it as "the platform learned."
+
+**Done when** the wiring is validated end-to-end through the real LM/DB/GEPA pipeline (synthetic inputs OK) and:
+
+- `feedback_learner` signals are persisted from the documented endpoint **and** an autonomous cadence (validated by synthesizing feedback rows).
+- The trigger fires on accumulated signals at a realistic threshold (validated with synthetic volume; force only as a fallback).
+- GEPA optimizes the learner phases **and** each of the four recipients; in production each recipient optimizes on **real emitted data or honestly skips** (synthetic seeds drive validation only).
 - Optimized templates are installed and **genuinely consumed** by all four recipients (`experiment_monitor` already consumes; the other three are wired).
-- **No `src/` production module imports the seed fixture** (guardrail test).
+- **No `src/` production module imports the seed fixture** (guardrail test); the seed set is a relocated test-only fixture.
 
-**Stop at:** code-complete + faithful proof + merge (no-squash). **No deploy.**
+**Stop at:** code-complete + synthetic-validated faithful proof + merge (no-squash). **No deploy.** Real *production* self-improvement awaits real usage of the target agents (documented, tracked separately).
 
 ## 3. Non-goals (YAGNI)
 
