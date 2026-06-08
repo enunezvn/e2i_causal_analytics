@@ -36,6 +36,7 @@ import type {
   CreateSessionResponse,
   DeleteSessionResponse,
   SessionResponse,
+  SessionSummary,
 } from '@/types/cognitive';
 import type { ApiError } from '@/lib/api-client';
 
@@ -90,11 +91,11 @@ export function useCognitiveStatus(
 export function useSessions(
   params?: Record<string, unknown>,
   options?: Omit<
-    UseQueryOptions<{ sessions: SessionResponse[]; total: number }, ApiError>,
+    UseQueryOptions<{ sessions: SessionSummary[]; total: number }, ApiError>,
     'queryKey' | 'queryFn'
   >
 ) {
-  return useQuery<{ sessions: SessionResponse[]; total: number }, ApiError>({
+  return useQuery<{ sessions: SessionSummary[]; total: number }, ApiError>({
     queryKey: [...queryKeys.cognitive.sessions(), params],
     queryFn: () => listSessions(params),
     ...options,

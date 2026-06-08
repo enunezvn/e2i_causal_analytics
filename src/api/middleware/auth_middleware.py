@@ -59,10 +59,6 @@ PUBLIC_PATHS: List[Tuple[str, str]] = [
     ("*", "/api/docs/oauth2-redirect"),
     ("*", "/api/redoc"),
     ("*", "/api/openapi.json"),
-    # Authentication endpoints - must be public for login/register
-    ("POST", "/api/auth/login"),
-    ("POST", "/api/auth/register"),
-    ("POST", "/api/auth/refresh"),
     # Read-only KPI endpoints - public
     ("GET", "/api/kpis"),
     ("GET", "/api/kpis/workstreams"),

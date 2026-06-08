@@ -74,18 +74,18 @@ class TestIsPublicPath:
     # Auth endpoints
     # =========================================================================
 
-    def test_login_endpoint_is_public(self):
-        """Test POST /api/auth/login is public."""
-        assert _is_public_path("POST", "/api/auth/login") is True
+    def test_dead_auth_login_path_not_public(self):
+        """POST /api/auth/login is NOT a real route; must not be allowlisted (L5)."""
+        assert _is_public_path("POST", "/api/auth/login") is False
         assert _is_public_path("GET", "/api/auth/login") is False
 
-    def test_register_endpoint_is_public(self):
-        """Test POST /api/auth/register is public."""
-        assert _is_public_path("POST", "/api/auth/register") is True
+    def test_dead_auth_register_path_not_public(self):
+        """POST /api/auth/register is NOT a real route; must not be allowlisted (L5)."""
+        assert _is_public_path("POST", "/api/auth/register") is False
 
-    def test_refresh_endpoint_is_public(self):
-        """Test POST /api/auth/refresh is public."""
-        assert _is_public_path("POST", "/api/auth/refresh") is True
+    def test_dead_auth_refresh_path_not_public(self):
+        """POST /api/auth/refresh is NOT a real route; must not be allowlisted (L5)."""
+        assert _is_public_path("POST", "/api/auth/refresh") is False
 
     # =========================================================================
     # CopilotKit endpoints — narrowed by #399:

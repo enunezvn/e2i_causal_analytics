@@ -197,8 +197,12 @@ export interface ExplainableModelInfo {
   latest_version: string;
   /** Type of SHAP explainer used */
   explainer_type: 'TreeExplainer' | 'KernelExplainer';
-  /** Average latency in milliseconds */
-  avg_latency_ms: number;
+  /**
+   * Average latency in milliseconds.
+   * Optional: the backend `/api/explain/models` handler does not emit this
+   * field (no per-model latency telemetry source) — see src/api/routes/explain.py.
+   */
+  avg_latency_ms?: number;
 }
 
 /**
