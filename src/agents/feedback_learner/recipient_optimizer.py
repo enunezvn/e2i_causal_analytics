@@ -15,6 +15,16 @@ default template. Production NEVER falls back to a golden seed set — synthetic
 seeds live only as a test fixture (``tests/.../_recipient_seed_fixtures.py``).
 A caller may still inject a custom ``example_provider`` (e.g. tests pass the seed
 fixture's provider) to exercise the compile/materialize path offline.
+
+EMIT↔PROVIDER CONTRACT (B1-B4 MUST follow): when a recipient emits a signal it
+MUST key ``signature_inputs`` by the backing SIGNATURE's ``input_fields`` names —
+NOT by the ``.format()`` template placeholder names. For 3 of the 4 recipients
+(explainer, health_score, resource_optimizer) the template placeholders DIFFER
+from the signature input-field names, so keying by placeholders would make
+:func:`signal_example_provider` silently drop every row (it requires ALL of
+``signature.input_fields`` to be present). Use :func:`recipient_required_input_keys`
+to discover, per template field, exactly which keys to populate. The provider logs
+a WARNING (not silent) when an agent has rows but none match the required keys.
 """
 
 from __future__ import annotations
@@ -31,6 +41,11 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(?::[^}]*)?\}")
 # used by the live optimizer to know which signature backs which .format() template.
 # Only fields with a backing signature are listed; fields with no signature
 # (e.g. experiment_monitor.enrollment_template) are intentionally omitted.
+#
+# CONTRACT: B1-B4 MUST emit signature_inputs keyed by the signature's input_fields
+# (NOT the template placeholders). The two name sets differ for explainer,
+# health_score, and resource_optimizer. Call recipient_required_input_keys() to
+# get the exact keys to populate per template field.
 RECIPIENT_SIGNATURE_FIELDS: Dict[str, Dict[str, str]] = {
     "experiment_monitor": {
         "srm_template": "SRMDescriptionSignature",
@@ -128,6 +143,29 @@ def _signature_for(agent_name: str, field: str) -> Optional[Any]:
     return getattr(mod, sig_name, None)
 
 
+def recipient_required_input_keys(agent_name: str) -> Dict[str, List[str]]:
+    """Map each optimizable template field -> the signature input_field names B1-B4
+    MUST populate as ``signature_inputs`` keys when emitting a signal.
+
+    This is the EXPLICIT, DISCOVERABLE contract for self-emission: a recipient must
+    key its emitted ``signature_inputs`` by the backing SIGNATURE's ``input_fields``
+    (NOT by the ``.format()`` template placeholders, which differ for explainer,
+    health_score, and resource_optimizer). :func:`signal_example_provider` requires
+    every one of these keys to be present, else it drops the row (and warns).
+
+    Returns ``{template_field: [input_field_name, ...]}`` for every field in
+    ``RECIPIENT_SIGNATURE_FIELDS[agent_name]`` whose signature resolves. B1-B4
+    import this so they cannot key the emission wrong.
+    """
+    out: Dict[str, List[str]] = {}
+    for field in RECIPIENT_SIGNATURE_FIELDS.get(agent_name, {}):
+        signature = _signature_for(agent_name, field)
+        if signature is None:
+            continue
+        out[field] = list(getattr(signature, "input_fields", {}).keys())
+    return out
+
+
 def _fetch_recipient_signals(agent_name: str, client: Any, min_reward: float, limit: int):
     """Read this recipient's emitted signals via SignalCollectorAdapter (sync wrapper)."""
     from src.rag.memory_adapters import SignalCollectorAdapter
@@ -223,13 +261,21 @@ def signal_example_provider(
         gold_field = output_fields[0]
 
         examples: List[Any] = []
+        rows_with_payload = 0  # rows that carried both signature_inputs and generated
         for row in signals:
             ctx = row.get("input_context") or {}
             sig_inputs = ctx.get("signature_inputs") or {}
             generated = (row.get("output") or {}).get("generated")
+            # ``ctx["template_field"]`` (written by emit_recipient_signal) is
+            # provenance-only here: signals are already filtered by source_agent,
+            # and a recipient may emit one field's signal without the others, so we
+            # match on the signature's input_fields rather than the template_field.
             if not sig_inputs or not generated:
                 continue
-            # Only keep examples that carry every input the signature needs.
+            rows_with_payload += 1
+            # Only keep examples that carry every input the signature needs. B1-B4
+            # MUST key signature_inputs by signature.input_fields (see
+            # recipient_required_input_keys), NOT by template placeholders.
             kwargs = {k: sig_inputs[k] for k in input_fields if k in sig_inputs}
             if len(kwargs) != len(input_fields):
                 continue
@@ -238,6 +284,20 @@ def signal_example_provider(
                 examples.append(dspy.Example(**kwargs).with_inputs(*input_fields))
             except Exception as e:  # noqa: BLE001
                 logger.debug("Skipping malformed signal for %s.%s: %s", agent_name, field, e)
+
+        # Loud (not silent) when the agent HAS emitted rows but NONE match the
+        # required input keys — the classic B1-B4 key-mismatch bug.
+        if rows_with_payload and not examples:
+            logger.warning(
+                "Recipient %s emitted %d signal(s) but NONE matched %s required "
+                "input keys %s — check that signature_inputs are keyed by the "
+                "signature's input_fields (NOT template placeholders); see "
+                "recipient_required_input_keys().",
+                agent_name,
+                rows_with_payload,
+                field,
+                input_fields,
+            )
         return examples
 
     return provider

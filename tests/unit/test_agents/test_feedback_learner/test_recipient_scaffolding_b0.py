@@ -101,7 +101,9 @@ def _signal_row(
 # 1. RECIPIENT_SIGNATURE_FIELDS covers all four recipients with real signatures.
 # --------------------------------------------------------------------------- #
 def test_recipient_signature_fields_cover_all_four_with_importable_signatures():
-    importlib = pytest.importorskip("importlib")
+    pytest.importorskip("dspy")
+    import importlib
+
     from src.agents.feedback_learner.recipient_optimizer import RECIPIENT_SIGNATURE_FIELDS
 
     expected = {"experiment_monitor", "explainer", "health_score", "resource_optimizer"}
@@ -216,6 +218,90 @@ def test_signal_example_provider_skips_below_two():
     provider = signal_example_provider("experiment_monitor", client=_SignalReturningClient(rows))
     examples = provider("srm_template")
     assert len(examples) < 2  # optimize_recipient will skip this field
+
+
+# --------------------------------------------------------------------------- #
+# 3b. Emit<->provider round-trip for explainer / health_score / resource_optimizer
+#     (the 3 recipients whose template placeholders DIFFER from signature inputs).
+#     These double as the B1-B4 contract spec: emit signature_inputs keyed by the
+#     signature's input_fields (discovered via recipient_required_input_keys).
+# --------------------------------------------------------------------------- #
+def _dummy_value(key: str) -> Any:
+    """A plausible value per input field name; numeric for *score*/*value*."""
+    if "score" in key or "value" in key or key.endswith("_count"):
+        return 72.0
+    return f"<{key}>"
+
+
+@pytest.mark.parametrize(
+    "agent,field",
+    [
+        ("explainer", "executive_summary_template"),
+        ("explainer", "insight_extraction_template"),
+        ("explainer", "narrative_section_template"),
+        ("health_score", "summary_template"),
+        ("health_score", "recommendation_template"),
+        ("resource_optimizer", "summary_template"),
+        ("resource_optimizer", "recommendation_template"),
+        ("resource_optimizer", "scenario_comparison_template"),
+    ],
+)
+def test_emit_provider_roundtrip_for_each_recipient(agent, field):
+    pytest.importorskip("dspy")
+    from src.agents.feedback_learner.recipient_optimizer import (
+        recipient_required_input_keys,
+        signal_example_provider,
+    )
+
+    required = recipient_required_input_keys(agent)[field]
+    assert required, f"{agent}.{field} must declare required input keys"
+
+    # B1-B4 contract: key signature_inputs by the SIGNATURE's input_fields.
+    sig_inputs = {k: _dummy_value(k) for k in required}
+    rows = [_signal_row(agent, sig_inputs, f"grounded output #{i} for {field}") for i in range(2)]
+
+    provider = signal_example_provider(agent, client=_SignalReturningClient(rows))
+    examples = provider(field)
+    assert len(examples) >= 2, f"{agent}.{field} round-trip produced <2 examples"
+    # Every required input is declared as an input on the built Example.
+    declared = set(examples[0].inputs().keys())
+    assert set(required).issubset(declared)
+
+
+def test_recipient_required_input_keys_contract():
+    pytest.importorskip("dspy")
+    from src.agents.feedback_learner.recipient_optimizer import (
+        RECIPIENT_SIGNATURE_FIELDS,
+        recipient_required_input_keys,
+    )
+
+    for agent, field_map in RECIPIENT_SIGNATURE_FIELDS.items():
+        keys = recipient_required_input_keys(agent)
+        assert set(keys) == set(field_map), f"{agent}: helper must cover every template field"
+        for field, required in keys.items():
+            assert required, f"{agent}.{field} has no required input keys"
+
+
+def test_provider_warns_on_key_mismatch(caplog):
+    """When rows exist but use the WRONG keys (template placeholders, say), the
+    provider must WARN loudly and return nothing — never silently 0 examples."""
+    import logging
+
+    pytest.importorskip("dspy")
+    from src.agents.feedback_learner.recipient_optimizer import signal_example_provider
+
+    # health_score.summary_template needs overall_score/grade/component_scores/
+    # critical_issues; emit with wrong (template-placeholder-ish) keys instead.
+    wrong = {"health_status": "fair", "score_value": 72}
+    rows = [_signal_row("health_score", wrong, f"out {i}") for i in range(2)]
+
+    provider = signal_example_provider("health_score", client=_SignalReturningClient(rows))
+    with caplog.at_level(logging.WARNING):
+        examples = provider("summary_template")
+    assert examples == []
+    assert any(
+        "NONE matched" in r.message and "health_score" in r.message for r in caplog.records
+    ), "key mismatch must produce a WARNING naming the agent"
 
 
 # --------------------------------------------------------------------------- #
