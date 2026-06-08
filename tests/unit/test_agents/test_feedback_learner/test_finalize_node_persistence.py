@@ -66,6 +66,19 @@ class _CountingClient:
         return len(self.inserts)
 
 
+class _ExplodingClient:
+    """Fake Supabase client whose .execute() raises — simulates a DB outage."""
+
+    def table(self, name: str) -> "_ExplodingClient":
+        return self
+
+    def insert(self, record) -> "_ExplodingClient":
+        return self
+
+    def execute(self):
+        raise RuntimeError("simulated DB outage during persist")
+
+
 # ---------------------------------------------------------------------------
 # Test A: graph with persist_signals=True persists exactly 1 row
 # ---------------------------------------------------------------------------
@@ -86,6 +99,8 @@ async def test_a_graph_persist_signals_true_inserts_once():
         f"Expected exactly 1 insert into dspy_agent_training_signals, got {fake.insert_count}"
     )
     assert fake.inserts[0]["source_agent"] == "feedback_learner"
+    # The persisted row must carry the input batch_id (like Test C asserts)
+    assert fake.inserts[0]["batch_id"] == _MINIMAL_STATE["batch_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +190,35 @@ async def test_d_api_path_persists_via_factory_client(monkeypatch):
     assert fake.insert_count == 1, (
         f"Expected 1 insert from API path (_execute_learning_cycle), got {fake.insert_count}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test E: a DB error during persist must NOT fail the node (best-effort)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_e_persist_db_error_does_not_fail_node():
+    """A DB outage during persist must not fail the run; finalize still completes.
+
+    persist_training_signal swallows the error and the finalize_node closure
+    wraps the call in try/except, so the run must complete normally and the
+    training_signal must still be present in the result.
+    """
+    exploding = _ExplodingClient()
+    graph = build_feedback_learner_graph(
+        use_llm=False,
+        enable_rubric_evaluation=False,
+        persist_signals=True,
+        persist_client=exploding,
+    )
+    result = await graph.ainvoke(dict(_MINIMAL_STATE))
+    # The DB error must NOT have flipped the run to failed.
+    assert result.get("status") != "failed", (
+        f"DB outage must not fail the node; status={result.get('status')}"
+    )
+    assert result.get("status") == "completed"
+    # The finalized signal must still be present despite the persist failure.
+    training_signal = result.get("training_signal")
+    assert training_signal is not None
+    assert hasattr(training_signal, "compute_reward")

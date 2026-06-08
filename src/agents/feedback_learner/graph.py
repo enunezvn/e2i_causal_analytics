@@ -100,13 +100,20 @@ def build_feedback_learner_graph(
         result = await _finalize_training_signal(state)
         if persist_signals:
             training_signal = result.get("training_signal")
+            # Defensive guard (mirrors the old learn() guard): the finalize node
+            # always builds a real FeedbackLearnerTrainingSignal, but guard against
+            # a non-standard type so we never call persist on something unexpected.
             if training_signal is not None and hasattr(training_signal, "compute_reward"):
                 try:
                     from .signal_store import persist_training_signal
 
                     await persist_training_signal(training_signal, client=persist_client)
                 except Exception as exc:  # noqa: BLE001 - best-effort
-                    logger.warning("finalize_node: failed to persist training signal: %s", exc)
+                    logger.warning(
+                        "finalize_node: failed to persist training signal batch=%s: %s",
+                        getattr(training_signal, "batch_id", "?"),
+                        exc,
+                    )
         return result
 
     # Add nodes
