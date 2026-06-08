@@ -269,6 +269,15 @@ export const queryKeys = {
   },
 
   /**
+   * Executive insights (crystallized cross-agent narratives)
+   */
+  executiveInsights: {
+    all: () => [...queryKeys.all, 'executive-insights'] as const,
+    list: (brand?: string) =>
+      [...queryKeys.executiveInsights.all(), 'list', brand ?? ''] as const,
+  },
+
+  /**
    * Explain-related queries (XAI)
    */
   explain: {

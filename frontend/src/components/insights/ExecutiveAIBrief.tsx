@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useCognitiveRAG } from '@/hooks/api/use-cognitive';
+import { useExecutiveInsights } from '@/hooks/api/use-executive-insights';
 
 // =============================================================================
 // TYPES
@@ -70,6 +71,24 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     data: briefResponse,
     isPending: isGenerating,
   } = useCognitiveRAG();
+
+  // Real crystallized insights for this brand (M5 REWIRE). When present,
+  // these take precedence over the SAMPLE_BRIEF / cognitive-RAG path.
+  const { data: crystallized } = useExecutiveInsights(brand);
+
+  const realSections: BriefSection[] | null =
+    crystallized && crystallized.length > 0
+      ? crystallized.slice(0, 3).map((ins) => ({
+          title: ins.title,
+          content: ins.narrative,
+          confidence:
+            ins.effect_direction === 'positive'
+              ? 0.9
+              : ins.effect_direction === 'negative'
+                ? 0.8
+                : 0.75,
+        }))
+      : null;
 
   // Generate initial brief on mount
   useEffect(() => {
@@ -147,7 +166,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
         {/* Brief Sections */}
         {!isGenerating && (
           <div className="space-y-4">
-            {sections.map((section, idx) => (
+            {(realSections ?? sections).map((section, idx) => (
               <div
                 key={idx}
                 className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]"
