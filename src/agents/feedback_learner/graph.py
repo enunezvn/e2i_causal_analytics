@@ -43,6 +43,8 @@ def build_feedback_learner_graph(
     db_client: Optional[Any] = None,
     enable_rubric_evaluation: bool = True,
     prefer_optimized: bool = True,
+    persist_signals: bool = True,
+    persist_client: Optional[Any] = None,
 ):
     """
     Build the Feedback Learner agent graph with DSPy integration.
@@ -64,6 +66,12 @@ def build_feedback_learner_graph(
         enable_rubric_evaluation: Whether to include rubric evaluation node (default: True)
         prefer_optimized: Whether the pattern analyzer should prefer the latest
             optimized DSPy module (closes the self-improvement loop; default: True)
+        persist_signals: When True (default), persist the finalized training signal
+            to ``dspy_agent_training_signals`` from the finalize node so every
+            caller of the graph (including the API route) persists exactly once.
+            Best-effort: a DB error never fails the node.
+        persist_client: Optional Supabase client for persistence. When None and
+            ``persist_signals`` is True, the default factory client is used.
 
     Returns:
         Compiled LangGraph workflow
@@ -85,6 +93,22 @@ def build_feedback_learner_graph(
     async def enrich_node(state: FeedbackLearnerState) -> FeedbackLearnerState:
         return await _cognitive_context_enricher(state, cognitive_rag)
 
+    # Create finalize node closure that optionally persists the training signal.
+    # Mirrors the enrich_node pattern — captures build-time args so every
+    # caller of the graph (including the API route) persists exactly once.
+    async def finalize_node(state: FeedbackLearnerState) -> FeedbackLearnerState:
+        result = await _finalize_training_signal(state)
+        if persist_signals:
+            training_signal = result.get("training_signal")
+            if training_signal is not None and hasattr(training_signal, "compute_reward"):
+                try:
+                    from .signal_store import persist_training_signal
+
+                    await persist_training_signal(training_signal, client=persist_client)
+                except Exception as exc:  # noqa: BLE001 - best-effort
+                    logger.warning("finalize_node: failed to persist training signal: %s", exc)
+        return result
+
     # Add nodes
     workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
     workflow.add_node("enrich", enrich_node)  # type: ignore[type-var,arg-type,call-overload]
@@ -94,7 +118,7 @@ def build_feedback_learner_graph(
         workflow.add_node("rubric", rubric_node.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("extract", extractor.execute)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("update", updater.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("finalize", _finalize_training_signal)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("finalize", finalize_node)  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("error_handler", _error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Flow - start with audit initialization

@@ -1341,8 +1341,10 @@ async def _execute_learning_cycle(
             },
         )
 
-        # Create and run graph
-        graph = build_feedback_learner_graph()
+        # Create and run graph — persist_signals=True ensures the finalize node
+        # writes the training signal to dspy_agent_training_signals so this
+        # caller is no longer a bypass of the persistence path.
+        graph = build_feedback_learner_graph(persist_signals=True)
         result = await graph.ainvoke(initial_state)
 
         # Convert agent output to API response
