@@ -17,8 +17,10 @@ import pytest
 def _repo():
     from src.repositories.experiment_outcome import ExperimentOutcomeRepository
 
-    # No client needed for the pure helpers.
-    return ExperimentOutcomeRepository(supabase_client=None)
+    # resolve_column/aggregate_to_arrays are @staticmethod — exercise them on the
+    # CLASS so no Supabase client is resolved (key-less CI would otherwise raise
+    # ServiceConnectionError at construction).
+    return ExperimentOutcomeRepository
 
 
 class TestResolveColumn:

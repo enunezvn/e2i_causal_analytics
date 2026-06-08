@@ -77,7 +77,11 @@ class ExperimentOutcomeRepository:
                 )
 
     # ------------------------------------------------------------------ pure
-    def resolve_column(self, primary_metric: str) -> Tuple[str, str]:
+    # staticmethods so unit tests exercise the real aggregation logic WITHOUT
+    # constructing a client-bearing repo (which would resolve a Supabase client
+    # and fail in key-less CI). load_arrays calls them via self.
+    @staticmethod
+    def resolve_column(primary_metric: str) -> Tuple[str, str]:
         """Map a primary_metric to its (business_metrics column, reducer).
 
         Fail closed on an unknown metric rather than silently picking a column.
@@ -92,8 +96,8 @@ class ExperimentOutcomeRepository:
         reducer = "sum" if column in _COUNT_COLUMNS else "mean"
         return column, reducer
 
+    @staticmethod
     def aggregate_to_arrays(
-        self,
         assignments: Sequence[Tuple[str, str]],
         rows: Sequence[Dict[str, Any]],
         *,
