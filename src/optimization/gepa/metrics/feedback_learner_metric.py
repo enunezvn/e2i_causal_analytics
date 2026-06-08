@@ -91,15 +91,17 @@ class FeedbackLearnerGEPAMetric:
         return Prediction(score=score, feedback=feedback)
 
     def _score(self, gold: Example, pred: Prediction) -> tuple[float, str]:
-        # Disambiguate phase by the prediction's own output fields.
-        if getattr(pred, "summary", None) is not None and (
-            hasattr(pred, "key_insights") or hasattr(pred, "next_steps")
-        ):
-            return self._score_summary(pred)
-        if getattr(pred, "recommendations", None) is not None:
-            return self._score_recommendations(gold, pred)
+        # Disambiguate phase by the prediction's own output fields. The three
+        # signatures' OUTPUT fields are disjoint (patterns / recommendations /
+        # summary), so check the most distinctive collection outputs FIRST and
+        # treat summary as the fallback — robust even if a stray `summary`
+        # attribute is ever injected onto a pattern/recommendation prediction.
         if getattr(pred, "patterns", None) is not None:
             return self._score_patterns(gold, pred)
+        if getattr(pred, "recommendations", None) is not None:
+            return self._score_recommendations(gold, pred)
+        if getattr(pred, "summary", None) is not None:
+            return self._score_summary(pred)
         return 0.0, "No recognized output fields (patterns/recommendations/summary) to score"
 
     # --- pattern phase -----------------------------------------------------

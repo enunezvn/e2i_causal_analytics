@@ -734,6 +734,25 @@ class FeedbackLearnerOptimizer:
 
         return min(1.0, score)
 
+    def summary_metric(self, example, prediction, trace=None) -> float:
+        """Metric for the learning-summary phase (MIPROv2).
+
+        The LearningSummarySignature outputs `summary`/`key_insights`/`next_steps`
+        — the recommendation_metric scores none of these (it would be signal-deaf
+        for this phase). Score the actual summary outputs instead.
+        """
+        score = 0.0
+        summary = str(getattr(prediction, "summary", "") or "").strip()
+        if len(summary) >= 40:
+            score += 0.4
+        elif summary:
+            score += 0.2
+        if getattr(prediction, "key_insights", None):
+            score += 0.3
+        if getattr(prediction, "next_steps", None):
+            score += 0.3
+        return min(1.0, score)
+
     async def optimize(
         self,
         phase: Literal["pattern", "recommendation", "update", "summary"],
@@ -886,7 +905,7 @@ class FeedbackLearnerOptimizer:
         metrics = {
             "pattern": self.pattern_metric,
             "recommendation": self.recommendation_metric,
-            "summary": self.recommendation_metric,  # reuse actionability-style metric
+            "summary": self.summary_metric,
         }
         if phase == "update" or phase not in signatures or phase not in metrics:
             logger.warning(f"Phase '{phase}' not optimizable via MIPROv2; skipping")
@@ -939,8 +958,10 @@ class FeedbackLearnerOptimizer:
             applied_updates = out.get("applied_updates", []) or []
             learning_summary = out.get("learning_summary", "") or ""
 
-            # Skip degenerate signals that carry no usable content.
-            if not feedback_batch and not patterns and not learning_summary:
+            # Skip degenerate signals that carry no usable content for any phase
+            # (recommendations included so a recs-only cycle still trains the
+            # recommendation phase).
+            if not feedback_batch and not patterns and not recommendations and not learning_summary:
                 continue
 
             try:

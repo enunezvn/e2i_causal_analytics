@@ -198,9 +198,11 @@ class Tier2SignalRouter:
                 "Feedback learner not available; signals on this fallback path are DROPPED "
                 "(no durable local sink is wired here)."
             )
-            # No durable local sink exists -> drop honestly (see _store_signals_locally).
+            # No durable local sink exists -> drop honestly (see _store_signals_locally,
+            # which counts them under signals_dropped). Return 0: nothing was actually
+            # delivered, so the caller must NOT count these under signals_delivered.
             await self._store_signals_locally(signals)
-            return len(signals)
+            return 0
 
         except Exception as e:
             logger.error(f"Error delivering to feedback_learner: {e}")

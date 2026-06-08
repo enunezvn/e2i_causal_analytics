@@ -90,6 +90,24 @@ def test_gepa_compile_receives_valset():
     assert "optimizer.compile(module, trainset=trainset, valset=valset)" in src
 
 
+@pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
+def test_summary_metric_scores_summary_outputs_not_recommendation_fields():
+    """MIPROv2 summary phase must use a summary-aware metric, not recommendation_metric."""
+    import dspy
+
+    opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
+    good = dspy.Prediction(
+        summary="A detailed multi-sentence executive summary of the cycle outcomes here.",
+        key_insights=["a", "b"],
+        next_steps=["x"],
+    )
+    empty = dspy.Prediction(summary="", key_insights=[], next_steps=[])
+    assert opt.summary_metric(None, good) >= 0.9
+    assert opt.summary_metric(None, empty) == 0.0
+    # recommendation_metric would be signal-deaf for a summary prediction.
+    assert opt.recommendation_metric(None, good) == 0.0
+
+
 @pytest.mark.asyncio
 async def test_finalize_with_applied_updates_carries_full_dicts_not_crash():
     """Regression: applied_updates in state are update_id STRINGS; finalize must

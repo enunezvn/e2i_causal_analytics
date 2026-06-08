@@ -241,12 +241,14 @@ class PatternAnalyzerNode:
     def _load_optimized_pattern_module(self) -> Optional[Any]:
         """Load the latest optimized feedback_learner_pattern module, or None.
 
-        Cached after first attempt. Uses a zero-arg factory because
+        An intentional miss (no artifact saved yet -> FileNotFoundError) is
+        cached so we don't re-probe the filesystem every cycle. A transient
+        error (import race, corrupt read) is NOT cached, so a later cycle can
+        retry once the condition clears. Uses a zero-arg factory because
         load_optimized_module calls module_cls() (versioning.py).
         """
         if self._optimized_load_attempted:
             return self._optimized_module
-        self._optimized_load_attempted = True
         try:
             import dspy
 
@@ -260,15 +262,19 @@ class PatternAnalyzerNode:
             )
             self._optimized_module = module
             self._optimized_meta = meta
+            self._optimized_load_attempted = True  # success -> cache it
             logger.info(
                 "Loaded optimized pattern module version=%s",
                 meta.get("version_id", "?"),
             )
         except FileNotFoundError:
+            # Intentional miss: no artifact yet. Cache so we don't re-probe.
             logger.debug("No optimized pattern module saved yet; using fallback")
             self._optimized_module = None
+            self._optimized_load_attempted = True
         except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to load optimized pattern module: %s", e)
+            # Transient: do NOT cache -> allow a later cycle to retry.
+            logger.warning("Failed to load optimized pattern module (will retry): %s", e)
             self._optimized_module = None
         return self._optimized_module
 
