@@ -47,7 +47,7 @@ def run_async(coro):
 def _load_trigger_state() -> Dict[str, Any]:
     try:
         if _STATE_PATH.exists():
-            return json.loads(_STATE_PATH.read_text())
+            return cast(Dict[str, Any], json.loads(_STATE_PATH.read_text()))
     except Exception:  # noqa: BLE001
         pass
     return {}

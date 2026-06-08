@@ -88,3 +88,38 @@ def test_gepa_compile_receives_valset():
     """GEPA must validate on the held-out valset, not the trainset (F6)."""
     src = _inspect.getsource(FeedbackLearnerOptimizer._optimize_with_gepa)
     assert "optimizer.compile(module, trainset=trainset, valset=valset)" in src
+
+
+@pytest.mark.asyncio
+async def test_finalize_with_applied_updates_carries_full_dicts_not_crash():
+    """Regression: applied_updates in state are update_id STRINGS; finalize must
+    carry the full applied update dicts (from proposed_updates), not dict(str)."""
+    from src.agents.feedback_learner.graph import _finalize_training_signal
+
+    state = {
+        "batch_id": "b",
+        "time_range_start": "t0",
+        "time_range_end": "t1",
+        "focus_agents": [],
+        "detected_patterns": [],
+        "learning_recommendations": [],
+        "feedback_items": [],
+        "proposed_updates": [
+            {"update_id": "U1", "key": "prompt.x", "new_value": "v"},
+            {"update_id": "U2", "key": "prompt.y", "new_value": "w"},
+        ],
+        "applied_updates": ["U1"],  # <- STRINGS, the real shape
+        "learning_summary": "did a thing",
+        "collection_latency_ms": 0,
+        "analysis_latency_ms": 0,
+        "extraction_latency_ms": 0,
+        "update_latency_ms": 0,
+        "total_latency_ms": 10,
+        "status": "updating",
+    }
+    out = await _finalize_training_signal(state)  # must not raise
+    sig = out["training_signal"]
+    assert sig.applied_updates == [{"update_id": "U1", "key": "prompt.x", "new_value": "v"}]
+    # serializes cleanly for the summary-phase example
+    d = sig.to_dict()
+    assert d["output"]["applied_updates"][0]["update_id"] == "U1"

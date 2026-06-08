@@ -312,10 +312,13 @@ class PatternAnalyzerNode:
             patterns.append(
                 DetectedPattern(
                     pattern_id=f"P{i}",
-                    pattern_type=str(p.get("type", p.get("pattern_type", "unknown"))),
+                    # LM output is free-form; the TypedDict fields are Literals.
+                    # Mirror the LLM path's `.get(...)` (Any) so the best-effort
+                    # value flows through without a false typeddict-item error.
+                    pattern_type=p.get("type") or p.get("pattern_type", "accuracy_issue"),
                     description=str(p.get("description", "")),
                     frequency=int(p.get("frequency", 0) or 0),
-                    severity=str(p.get("severity", "medium")),
+                    severity=p.get("severity") or "medium",
                     affected_agents=list(p.get("affected_agents", []) or []),
                     example_feedback_ids=[
                         fb["feedback_id"] for fb in feedback_items[:3] if "feedback_id" in fb

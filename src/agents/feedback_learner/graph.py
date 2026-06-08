@@ -242,7 +242,16 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     """
     patterns = state.get("detected_patterns") or []
     recommendations = state.get("learning_recommendations") or []
+    # `applied_updates` in state is a list of applied update_id STRINGS (see
+    # KnowledgeUpdaterNode); the full update dicts live in `proposed_updates`.
     applied_updates = state.get("applied_updates") or []
+    proposed_updates = state.get("proposed_updates") or []
+    applied_update_ids = set(applied_updates)
+    applied_update_records = [
+        dict(u)
+        for u in proposed_updates
+        if isinstance(u, dict) and u.get("update_id") in applied_update_ids
+    ]
     feedback_items = state.get("feedback_items") or []
 
     # Calculate metrics for training signal.
@@ -282,7 +291,7 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
         feedback_batch=[dict(fb) for fb in feedback_items[:20]],
         patterns=[dict(p) for p in patterns[:20]],
         recommendations=[dict(r) for r in recommendations[:20]],
-        applied_updates=[dict(u) for u in applied_updates[:20]],
+        applied_updates=applied_update_records[:20],
         learning_summary=state.get("learning_summary") or "",
         collection_latency_ms=state.get("collection_latency_ms", 0),
         analysis_latency_ms=state.get("analysis_latency_ms", 0),
