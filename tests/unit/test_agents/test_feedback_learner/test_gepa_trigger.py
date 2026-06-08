@@ -1,6 +1,6 @@
 """
 Unit tests for GEPA Optimization Trigger.
-Version: 4.3
+Version: 4.4  (A3: min_signals default changed 100→20)
 
 Tests the trigger conditions for GEPA prompt optimization.
 """
@@ -33,7 +33,7 @@ class TestGEPAOptimizationTrigger:
     # Default configuration tests
     def test_default_config(self, trigger):
         """Test default configuration values."""
-        assert trigger.min_signals == 100
+        assert trigger.min_signals == 20  # A3: lowered from 100 → reachable in normal operation
         assert trigger.min_reward_delta == 0.05
         assert trigger.cooldown_hours == 24
         assert trigger.max_hours_without_optimization == 168
@@ -87,9 +87,9 @@ class TestGEPAOptimizationTrigger:
 
     # Signal count tests
     def test_insufficient_signals_blocks_trigger(self, trigger):
-        """Trigger should be blocked without enough signals."""
+        """Trigger should be blocked without enough signals (below new default of 20)."""
         should_trigger, reason = trigger.should_trigger(
-            signal_count=50,
+            signal_count=15,  # A3: below new default min_signals=20
             current_reward=0.9,
             baseline_reward=0.5,
             last_optimization=None,
@@ -165,7 +165,7 @@ class TestGEPAOptimizationTrigger:
     def test_critical_patterns_trigger_with_half_signals(self, trigger):
         """Critical patterns should trigger with half the required signals."""
         should_trigger, reason = trigger.should_trigger(
-            signal_count=60,  # Half of 100
+            signal_count=10,  # A3: exactly half of new default min_signals=20
             current_reward=0.70,
             baseline_reward=0.70,  # No delta
             last_optimization=None,
@@ -176,9 +176,9 @@ class TestGEPAOptimizationTrigger:
         assert "Critical patterns" in reason
 
     def test_critical_patterns_need_minimum_signals(self, trigger):
-        """Critical patterns still need minimum signals."""
+        """Critical patterns still need minimum signals (half of new default=20 → need >=10)."""
         should_trigger, reason = trigger.should_trigger(
-            signal_count=30,  # Less than half of 100
+            signal_count=5,  # A3: less than half of 20 (i.e. < 10)
             current_reward=0.70,
             baseline_reward=0.70,
             last_optimization=None,
@@ -193,7 +193,7 @@ class TestGEPAOptimizationTrigger:
         trigger = GEPAOptimizationTrigger(critical_pattern_triggers=False)
 
         should_trigger, reason = trigger.should_trigger(
-            signal_count=60,
+            signal_count=15,  # A3: below new default min_signals=20, so blocked
             current_reward=0.70,
             baseline_reward=0.70,
             last_optimization=None,
@@ -228,7 +228,7 @@ class TestGEPAOptimizationTrigger:
     def test_budget_heavy_for_many_signals(self, trigger):
         """Many signals should recommend heavy budget."""
         budget = trigger.get_recommended_budget(
-            signal_count=350,  # > 100 * 3
+            signal_count=70,  # A3: > 20 * 3 = 60 → heavy
             hours_since_last=24,
             has_critical_patterns=False,
         )
@@ -238,7 +238,7 @@ class TestGEPAOptimizationTrigger:
     def test_budget_medium_for_moderate_signals(self, trigger):
         """Moderate signals should recommend medium budget."""
         budget = trigger.get_recommended_budget(
-            signal_count=250,  # > 100 * 2, < 100 * 3
+            signal_count=50,  # A3: > 20 * 2 = 40, <= 20 * 3 = 60 → medium
             hours_since_last=24,
             has_critical_patterns=False,
         )
@@ -248,7 +248,7 @@ class TestGEPAOptimizationTrigger:
     def test_budget_light_for_few_signals(self, trigger):
         """Few signals should recommend light budget."""
         budget = trigger.get_recommended_budget(
-            signal_count=120,  # Just above minimum
+            signal_count=25,  # A3: <= 20 * 2 = 40 → light
             hours_since_last=24,
             has_critical_patterns=False,
         )
@@ -315,9 +315,9 @@ class TestGEPAOptimizationTriggerEdgeCases:
 
     def test_exactly_at_thresholds(self, trigger):
         """Test behavior at exact threshold values."""
-        # Exactly at signal threshold
+        # Exactly at signal threshold (A3: new default is 20)
         should_trigger1, _ = trigger.should_trigger(
-            signal_count=100,  # Exactly at threshold
+            signal_count=20,  # Exactly at new default threshold
             current_reward=0.75,
             baseline_reward=0.65,
             last_optimization=None,
@@ -343,18 +343,18 @@ class TestGEPAOptimizationTriggerIntegration:
         trigger = GEPAOptimizationTrigger()
         now = datetime.now(timezone.utc)
 
-        # Day 1: Not enough signals
+        # Day 1: Not enough signals (A3: below new default of 20)
         should_trigger, _ = trigger.should_trigger(
-            signal_count=50,
+            signal_count=15,
             current_reward=0.65,
             baseline_reward=0.60,
             last_optimization=None,
         )
         assert should_trigger is False
 
-        # Day 2: Enough signals, improvement detected
+        # Day 2: Enough signals (A3: above new default of 20), improvement detected
         should_trigger, _ = trigger.should_trigger(
-            signal_count=120,
+            signal_count=25,
             current_reward=0.72,
             baseline_reward=0.60,
             last_optimization=None,

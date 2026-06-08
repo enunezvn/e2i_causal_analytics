@@ -76,7 +76,8 @@ def _decide_trigger(signals: List[Dict[str, Any]], state: Dict[str, Any]) -> Tup
 
     n = len(signals)
     mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / n) if n else 0.0
-    min_signals = int(os.getenv("DSPY_MIN_SIGNALS", "100"))
+    # ~1 signal/cycle; 20 ≈ reachable in normal operation
+    min_signals = int(os.getenv("DSPY_MIN_SIGNALS", "20"))
     trigger = GEPAOptimizationTrigger(min_signals=min_signals)
     return trigger.should_trigger(
         signal_count=n,
