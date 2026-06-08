@@ -29,6 +29,7 @@ Version: 4.3.0 (Opik Feedback Loop Integration)
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, cast
@@ -372,13 +373,128 @@ class FeedbackHealthResponse(BaseModel):
 
 
 # =============================================================================
-# IN-MEMORY STORAGE (replace with Supabase in production)
+# PERSISTENCE (Supabase) with an in-memory dev fallback (M2)
 # =============================================================================
+# Process-local fallback — used ONLY when Supabase is unconfigured or the dev
+# flag E2I_GAPS_FEEDBACK_INMEMORY=1 is set. In prod (gunicorn --workers 2) this
+# is bypassed: the repo is the single source of truth shared across workers.
 
 _learning_store: Dict[str, LearningResponse] = {}
 _patterns_store: Dict[str, DetectedPattern] = {}
 _updates_store: Dict[str, KnowledgeUpdate] = {}
 _feedback_store: List[FeedbackItem] = []
+
+
+def _get_repo():
+    """Return a FeedbackRepository, or None if Supabase is unavailable."""
+    try:
+        from src.api.repositories.feedback_repository import FeedbackRepository
+
+        return FeedbackRepository()
+    except Exception as exc:  # ServiceConnectionError when unconfigured
+        logger.warning("Feedback persistence unavailable, using in-memory fallback: %s", exc)
+        return None
+
+
+def _use_inmemory_fallback() -> bool:
+    """True when we should fall back to the process-local dicts (dev/offline)."""
+    if os.environ.get("E2I_GAPS_FEEDBACK_INMEMORY") == "1":
+        return True
+    try:
+        return _get_repo() is None
+    except Exception:
+        return True
+
+
+# ---- write helpers (persist to Supabase or the dict fallback) --------------
+async def _persist_batch(response: LearningResponse) -> None:
+    if _use_inmemory_fallback():
+        _learning_store[response.batch_id] = response
+        return
+    repo = _get_repo()
+    if repo is None:
+        _learning_store[response.batch_id] = response
+        return
+    await repo.upsert_batch(response)
+
+
+async def _persist_pattern(pattern: DetectedPattern) -> None:
+    if _use_inmemory_fallback():
+        _patterns_store[pattern.pattern_id] = pattern
+        return
+    repo = _get_repo()
+    if repo is None:
+        _patterns_store[pattern.pattern_id] = pattern
+        return
+    await repo.upsert_pattern(pattern)
+
+
+async def _persist_update(update: KnowledgeUpdate) -> None:
+    if _use_inmemory_fallback():
+        _updates_store[update.update_id] = update
+        return
+    repo = _get_repo()
+    if repo is None:
+        _updates_store[update.update_id] = update
+        return
+    await repo.upsert_update(update)
+
+
+async def _persist_item(item: FeedbackItem) -> None:
+    if _use_inmemory_fallback():
+        _feedback_store.append(item)
+        return
+    repo = _get_repo()
+    if repo is None:
+        _feedback_store.append(item)
+        return
+    await repo.append_item(item)
+
+
+# ---- read helpers (read from Supabase or the dict fallback) ----------------
+async def _load_batch(batch_id: str) -> Optional[LearningResponse]:
+    if _use_inmemory_fallback():
+        return _learning_store.get(batch_id)
+    repo = _get_repo()
+    if repo is None:
+        return _learning_store.get(batch_id)
+    return await repo.get_batch(batch_id)
+
+
+async def _load_update(update_id: str) -> Optional[KnowledgeUpdate]:
+    if _use_inmemory_fallback():
+        return _updates_store.get(update_id)
+    repo = _get_repo()
+    if repo is None:
+        return _updates_store.get(update_id)
+    return await repo.get_update(update_id)
+
+
+async def _all_batches() -> List[LearningResponse]:
+    if _use_inmemory_fallback():
+        return list(_learning_store.values())
+    repo = _get_repo()
+    if repo is None:
+        return list(_learning_store.values())
+    return await repo.count_recent_and_last()
+
+
+async def _all_patterns() -> List[DetectedPattern]:
+    if _use_inmemory_fallback():
+        return list(_patterns_store.values())
+    repo = _get_repo()
+    if repo is None:
+        return list(_patterns_store.values())
+    return await repo.list_patterns()
+
+
+async def _all_updates() -> List[KnowledgeUpdate]:
+    if _use_inmemory_fallback():
+        return list(_updates_store.values())
+    repo = _get_repo()
+    if repo is None:
+        return list(_updates_store.values())
+    return await repo.list_updates()
 
 
 # =============================================================================
@@ -428,7 +544,7 @@ async def run_learning_cycle(
 
     if async_mode:
         # Store pending batch
-        _learning_store[batch_id] = response
+        await _persist_batch(response)
 
         # Schedule background task
         background_tasks.add_task(
@@ -444,7 +560,7 @@ async def run_learning_cycle(
     try:
         result = await _execute_learning_cycle(request)
         result.batch_id = batch_id
-        _learning_store[batch_id] = result
+        await _persist_batch(result)
         return result
     except HTTPException:
         # F-010-backend (#429, codex iter-1 M1): preserve 503 from
@@ -454,7 +570,7 @@ async def run_learning_cycle(
         logger.error(f"Learning cycle failed: {e}")
         response.status = LearningStatus.FAILED
         response.errors.append(str(e))
-        _learning_store[batch_id] = response
+        await _persist_batch(response)
         raise HTTPException(status_code=500, detail=f"Learning cycle failed: {e}")
 
 
@@ -494,7 +610,7 @@ async def process_feedback(
                 item.feedback_id = f"fbi_{uuid4().hex[:8]}"
             if not item.timestamp:
                 item.timestamp = datetime.now(timezone.utc).isoformat()
-            _feedback_store.append(item)
+            await _persist_item(item)
 
         # Detect patterns if requested
         detected_patterns: List[DetectedPattern] = []
@@ -543,7 +659,7 @@ async def process_feedback(
             total_latency_ms=total_latency,
         )
 
-        _learning_store[batch_id] = response
+        await _persist_batch(response)
         return response
 
     except Exception as e:
@@ -576,7 +692,7 @@ async def list_patterns(
     Returns:
         List of patterns matching filters
     """
-    patterns = list(_patterns_store.values())
+    patterns = await _all_patterns()
 
     # Apply filters
     if severity:
@@ -633,7 +749,7 @@ async def list_updates(
     Returns:
         List of updates matching filters
     """
-    updates = list(_updates_store.values())
+    updates = await _all_updates()
 
     # Apply filters
     if status:
@@ -683,13 +799,12 @@ async def apply_update(
     Raises:
         HTTPException: If update not found or not in valid state
     """
-    if update_id not in _updates_store:
+    update = await _load_update(update_id)
+    if update is None:
         raise HTTPException(
             status_code=404,
             detail=f"Update {update_id} not found",
         )
-
-    update = _updates_store[update_id]
 
     if update.status not in [UpdateStatus.PROPOSED, UpdateStatus.APPROVED]:
         if not request.force:
@@ -703,7 +818,7 @@ async def apply_update(
         logger.info(f"Applying update {update_id} to {update.target_agent}")
         update.status = UpdateStatus.APPLIED
         update.applied_at = datetime.now(timezone.utc)
-        _updates_store[update_id] = update
+        await _persist_update(update)
         return update
 
     except Exception as e:
@@ -734,13 +849,12 @@ async def rollback_update(
     Raises:
         HTTPException: If update not found or not applied
     """
-    if update_id not in _updates_store:
+    update = await _load_update(update_id)
+    if update is None:
         raise HTTPException(
             status_code=404,
             detail=f"Update {update_id} not found",
         )
-
-    update = _updates_store[update_id]
 
     if update.status != UpdateStatus.APPLIED:
         raise HTTPException(
@@ -752,7 +866,7 @@ async def rollback_update(
     try:
         logger.info(f"Rolling back update {update_id}")
         update.status = UpdateStatus.ROLLED_BACK
-        _updates_store[update_id] = update
+        await _persist_update(update)
         return update
 
     except Exception as e:
@@ -785,18 +899,16 @@ async def get_feedback_health() -> FeedbackHealthResponse:
 
     # Count recent cycles
     now = datetime.now(timezone.utc)
-    cycles_24h = sum(
-        1 for lr in _learning_store.values() if (now - lr.timestamp).total_seconds() < 86400
-    )
+    learning = await _all_batches()
+    cycles_24h = sum(1 for lr in learning if (now - lr.timestamp).total_seconds() < 86400)
 
     # Get last cycle
-    last_cycle = None
-    if _learning_store:
-        last_cycle = max(lr.timestamp for lr in _learning_store.values())
+    last_cycle = max((lr.timestamp for lr in learning), default=None)
 
     # Count active items
-    patterns_active = len(_patterns_store)
-    pending_updates = sum(1 for u in _updates_store.values() if u.status == UpdateStatus.PROPOSED)
+    updates = await _all_updates()
+    patterns_active = len(await _all_patterns())
+    pending_updates = sum(1 for u in updates if u.status == UpdateStatus.PROPOSED)
 
     return FeedbackHealthResponse(
         status="healthy" if agent_available else "degraded",
@@ -828,13 +940,14 @@ async def get_learning_results(batch_id: str) -> LearningResponse:
     Raises:
         HTTPException: If batch not found
     """
-    if batch_id not in _learning_store:
+    result = await _load_batch(batch_id)
+    if result is None:
         raise HTTPException(
             status_code=404,
             detail=f"Learning batch {batch_id} not found",
         )
 
-    return _learning_store[batch_id]
+    return result
 
 
 # =============================================================================
@@ -1153,9 +1266,11 @@ async def _run_learning_task(
     try:
         logger.info(f"Starting learning cycle {batch_id}")
 
-        # Update status
-        if batch_id in _learning_store:
-            _learning_store[batch_id].status = LearningStatus.COLLECTING
+        # Update status (read-modify-persist; in-memory mutates in place)
+        existing = await _load_batch(batch_id)
+        if existing is not None:
+            existing.status = LearningStatus.COLLECTING
+            await _persist_batch(existing)
 
         # Execute learning
         result = await _execute_learning_cycle(request)
@@ -1163,20 +1278,22 @@ async def _run_learning_task(
 
         # Store patterns and updates
         for pattern in result.detected_patterns:
-            _patterns_store[pattern.pattern_id] = pattern
+            await _persist_pattern(pattern)
         for update in result.proposed_updates:
-            _updates_store[update.update_id] = update
+            await _persist_update(update)
 
         # Store result
-        _learning_store[batch_id] = result
+        await _persist_batch(result)
 
         logger.info(f"Learning cycle {batch_id} completed successfully")
 
     except Exception as e:
         logger.error(f"Learning cycle {batch_id} failed: {e}")
-        if batch_id in _learning_store:
-            _learning_store[batch_id].status = LearningStatus.FAILED
-            _learning_store[batch_id].errors.append(str(e))
+        existing = await _load_batch(batch_id)
+        if existing is not None:
+            existing.status = LearningStatus.FAILED
+            existing.errors.append(str(e))
+            await _persist_batch(existing)
 
 
 async def _execute_learning_cycle(
