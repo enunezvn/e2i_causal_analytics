@@ -180,7 +180,10 @@ celery_app.conf.task_routes = {
     "src.tasks.run_feedback_loop_*": {"queue": "analytics"},
     "src.tasks.analyze_concept_drift_*": {"queue": "analytics"},
     "src.tasks.run_full_feedback_loop": {"queue": "analytics"},
-    # DSPy prompt self-improvement loop (audit F1 keystone)
+    # DSPy self-improvement loop: signal-generation beat (every 6h) +
+    # prompt-optimization beat (daily). Generator runs first; optimizer reads
+    # the persisted signals and gates on GEPAOptimizationTrigger.
+    "src.tasks.run_feedback_learning_cycle": {"queue": "analytics"},
     "src.tasks.run_dspy_prompt_optimization": {"queue": "analytics"},
     # -------------------------------------------------------------------------
     # ETL Tasks (Block 6B-infra-2*: per-HCP business_metrics, per-patient
@@ -330,6 +333,18 @@ celery_app.conf.beat_schedule = {
     "feedback-loop-drift-analysis": {
         "task": "src.tasks.analyze_concept_drift_from_truth",
         "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
+    # DSPy signal-generation beat — every 6h. Runs FeedbackLearnerAgent.learn()
+    # to process user feedback and persist a training signal to
+    # dspy_agent_training_signals (finalize-node persistence). The daily
+    # optimize beat below READS those signals and gates on GEPAOptimizationTrigger
+    # before running MIPROv2. This entry must run BEFORE the optimize beat so
+    # there are fresh signals to evaluate; the 6h cadence satisfies that
+    # regardless of beat restart timing.
+    "feedback-learning-cycle": {
+        "task": "src.tasks.run_feedback_learning_cycle",
+        "schedule": 21600.0,  # 6 hours
         "options": {"queue": "analytics"},
     },
     # DSPy prompt self-improvement loop (audit F1) — daily. Reads persisted
