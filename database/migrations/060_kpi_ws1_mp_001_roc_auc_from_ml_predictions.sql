@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 059: WS1-MP-001 (Model Accuracy / ROC-AUC) — wire the REAL
+-- Migration 060: WS1-MP-001 (Model Accuracy / ROC-AUC) — wire the REAL
 -- ml_predictions.model_auc column via the kpi_query allowlist.
 -- ============================================================================
 -- THE GAP: config/kpi_definitions.yaml declares WS1-MP-001 ("roc_auc") with

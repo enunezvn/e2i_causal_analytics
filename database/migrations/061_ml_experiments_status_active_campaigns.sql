@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 060: Active Campaigns — add ml_experiments.status (schema-drift fix)
+-- Migration 061: Active Campaigns — add ml_experiments.status (schema-drift fix)
 -- + TRUTHFUL backfill + a read-only active-experiments count for the Home tile.
 -- ============================================================================
 -- THE GAP: the Home "Active Campaigns" tile was hardcoded to a fabricated 24.
