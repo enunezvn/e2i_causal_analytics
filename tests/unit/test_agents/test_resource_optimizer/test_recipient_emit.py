@@ -147,3 +147,77 @@ class TestImpactProjectorRecipientEmit:
 
         assert result["status"] == "failed"
         mock_emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_returned_text_comes_from_getter(self, optimized_state):
+        """M1: the optimized getter output must REACH the node output (not be discarded).
+
+        Patch the integration getters to return sentinels; assert the sentinels
+        appear in the node's optimization_summary / recommendations. This proves
+        the DSPy-optimized template flows to the user (the loop is not hollow).
+        """
+        node = ImpactProjectorNode()
+        from src.agents.resource_optimizer import dspy_integration as di
+
+        integration = di.get_resource_optimizer_dspy_integration()
+        summary_sentinel = "SENTINEL_SUMMARY_FROM_GETTER ROI"
+        rec_sentinel = "SENTINEL_REC_FROM_GETTER Increase Reduce"
+        with (
+            patch(EMIT_TARGET, new=AsyncMock(return_value=True)),
+            patch.object(integration, "get_summary_prompt", return_value=summary_sentinel),
+            patch.object(integration, "get_recommendation_prompt", return_value=rec_sentinel),
+        ):
+            result = await node.execute(optimized_state)
+
+        assert result["status"] == "completed"
+        assert result["optimization_summary"] == summary_sentinel
+        assert all(r == rec_sentinel for r in result["recommendations"])
+        assert len(result["recommendations"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_getter_failure_falls_back_to_inline(self, optimized_state):
+        """A getter that raises falls back to the inline canonical text (no break)."""
+        node = ImpactProjectorNode()
+        from src.agents.resource_optimizer import dspy_integration as di
+
+        integration = di.get_resource_optimizer_dspy_integration()
+        with (
+            patch(EMIT_TARGET, new=AsyncMock(return_value=True)),
+            patch.object(integration, "get_summary_prompt", side_effect=KeyError("boom")),
+            patch.object(integration, "get_recommendation_prompt", side_effect=KeyError("boom")),
+        ):
+            result = await node.execute(optimized_state)
+
+        assert result["status"] == "completed"
+        assert "Optimization complete" in result["optimization_summary"]
+        recs = result["recommendations"]
+        assert any("Increase allocation to" in r for r in recs)
+        assert any("Reduce allocation from" in r for r in recs)
+
+    @pytest.mark.asyncio
+    async def test_unconstrained_run_still_emits_both(self, optimized_state):
+        """I2: an unconstrained run (constraints=[]) must still emit BOTH signals.
+
+        An empty constraints string is a valid signature value, not a sentinel —
+        it must not zero out the training data for unconstrained optimizations.
+        """
+        optimized_state["constraints"] = []
+        node = ImpactProjectorNode()
+        mock_emit = AsyncMock(return_value=True)
+        with patch(EMIT_TARGET, new=mock_emit):
+            result = await node.execute(optimized_state)
+
+        assert result["status"] == "completed"
+        by_field = _emit_calls_by_field(mock_emit)
+        required = recipient_required_input_keys("resource_optimizer")
+
+        assert "summary_template" in by_field, "unconstrained run dropped the summary signal"
+        assert "recommendation_template" in by_field, (
+            "unconstrained run dropped the recommendation signal"
+        )
+        for field in ("summary_template", "recommendation_template"):
+            kwargs = by_field[field]
+            assert set(kwargs["signature_inputs"].keys()) == set(required[field])
+            # The constraints field is present (per contract) but legitimately empty.
+            constraint_key = "constraints_used" if field == "summary_template" else "constraints"
+            assert kwargs["signature_inputs"][constraint_key] == ""

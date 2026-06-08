@@ -200,48 +200,79 @@ class ImpactProjectorNode:
         roi: float,
         state: ResourceOptimizerState | None = None,
     ) -> str:
-        """Generate optimization summary.
+        """Generate optimization summary via the optimizable ``summary_template``.
 
-        Routes through the optimizable ``summary_template`` getter so the
-        feedback-learner-tuned template is actually consumed each run (it was
-        previously dead by omission). The getter render is computed for its
-        side effect of exercising the optimizable template; the node's returned
-        summary keeps its canonical human-readable shape so downstream
-        consumers and existing semantics are unchanged.
+        The getter output is the RETURNED summary (so the feedback-learner-tuned
+        template actually reaches the user — not just rendered and discarded).
+        The default template renders the canonical "Optimization complete ..."
+        sentence plus a metadata clause, so existing summary substrings hold. If
+        the getter / ``.format()`` fails for any reason, fall back to the inline
+        canonical string so the node never breaks.
         """
         increases = [a for a in allocations if a.get("change", 0) > 0]
         decreases = [a for a in allocations if a.get("change", 0) < 0]
 
-        # Consume the optimizable template (no longer dead).
+        inline_summary = (
+            "Optimization complete. "
+            f"Projected outcome: {total_outcome:.0f} (ROI: {roi:.2f}). "
+            f"Recommended changes: {len(increases)} increases, {len(decreases)} decreases."
+        )
+
+        # Consume the optimizable template (no longer dead) and USE its output.
         try:
             integration = get_resource_optimizer_dspy_integration()
             st: Mapping[str, Any] = state or {}
-            integration.get_summary_prompt(
+            return integration.get_summary_prompt(
                 resource_type=str(st.get("resource_type", "resource")),
                 objective=str(st.get("objective", "")),
                 solver_type=str(st.get("solver_type", "")),
-                objective_value=float(st.get("objective_value") or 0.0),
+                # objective_value carries the projected outcome value the node
+                # historically reported as "Projected outcome".
+                objective_value=float(total_outcome),
                 projected_roi=roi,
                 entity_count=len(allocations),
                 increase_count=len(increases),
                 decrease_count=len(decreases),
             )
-        except Exception as e:  # noqa: BLE001 - template rendering must not fail projection
-            logger.debug("Optimizable summary template render skipped: %s", e)
+        except Exception as e:  # noqa: BLE001 - fall back to inline so projection never breaks
+            logger.debug("Optimizable summary template render failed; using inline: %s", e)
+            return inline_summary
 
-        summary = "Optimization complete. "
-        summary += f"Projected outcome: {total_outcome:.0f} (ROI: {roi:.2f}). "
-        summary += f"Recommended changes: {len(increases)} increases, {len(decreases)} decreases."
+    def _recommendation_line(
+        self,
+        integration: Any,
+        alloc: Dict[str, Any],
+        inline: str,
+    ) -> str:
+        """Render one recommendation line via the optimizable template.
 
-        return summary
+        Returns the getter output (so the tuned ``recommendation_template`` flows
+        to the user); falls back to ``inline`` if the getter/format fails.
+        """
+        if integration is None:
+            return inline
+        try:
+            return str(
+                integration.get_recommendation_prompt(
+                    entity_id=str(alloc.get("entity_id", "")),
+                    entity_type=str(alloc.get("entity_type", "")),
+                    current=float(alloc.get("current_allocation", 0.0)),
+                    optimized=float(alloc.get("optimized_allocation", 0.0)),
+                    change_pct=float(alloc.get("change_percentage", 0.0)),
+                    expected_impact=float(alloc.get("expected_impact", 0.0)),
+                )
+            )
+        except Exception as e:  # noqa: BLE001 - fall back to inline so projection never breaks
+            logger.debug("Optimizable recommendation template render failed; using inline: %s", e)
+            return inline
 
     def _generate_recommendations(self, allocations: List[Dict[str, Any]]) -> List[str]:
-        """Generate actionable recommendations.
+        """Generate actionable recommendations via the optimizable template.
 
-        Routes each recommendation through the optimizable
-        ``recommendation_template`` getter (previously dead by omission) for its
-        side effect of consuming the tuned template, while keeping the canonical
-        output strings so existing semantics are preserved.
+        Each line is rendered by ``get_recommendation_prompt`` (the
+        previously-dead getter) and RETURNED, so the feedback-learner-tuned
+        ``recommendation_template`` actually reaches the user. Each line falls
+        back to its inline canonical string if the getter/format fails.
         """
         recommendations = []
 
@@ -259,22 +290,12 @@ class ImpactProjectorNode:
         )[:3]
 
         for alloc in increases:
-            if integration is not None:
-                try:
-                    integration.get_recommendation_prompt(
-                        entity_id=str(alloc.get("entity_id", "")),
-                        entity_type=str(alloc.get("entity_type", "")),
-                        current=float(alloc.get("current_allocation", 0.0)),
-                        optimized=float(alloc.get("optimized_allocation", 0.0)),
-                        change_pct=float(alloc.get("change_percentage", 0.0)),
-                        expected_impact=float(alloc.get("expected_impact", 0.0)),
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("Optimizable recommendation template render skipped: %s", e)
-            recommendations.append(
+            inline = (
                 f"Increase allocation to {alloc['entity_id']} by {alloc['change']:.1f} "
-                f"(+{alloc['change_percentage']:.0f}%) - Expected impact: {alloc['expected_impact']:.0f}"
+                f"(+{alloc['change_percentage']:.0f}%) - Expected impact: "
+                f"{alloc['expected_impact']:.0f}"
             )
+            recommendations.append(self._recommendation_line(integration, alloc, inline))
 
         # Top decreases (reallocations)
         decreases = sorted(
@@ -284,22 +305,11 @@ class ImpactProjectorNode:
         )[:2]
 
         for alloc in decreases:
-            if integration is not None:
-                try:
-                    integration.get_recommendation_prompt(
-                        entity_id=str(alloc.get("entity_id", "")),
-                        entity_type=str(alloc.get("entity_type", "")),
-                        current=float(alloc.get("current_allocation", 0.0)),
-                        optimized=float(alloc.get("optimized_allocation", 0.0)),
-                        change_pct=float(alloc.get("change_percentage", 0.0)),
-                        expected_impact=float(alloc.get("expected_impact", 0.0)),
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("Optimizable recommendation template render skipped: %s", e)
-            recommendations.append(
+            inline = (
                 f"Reduce allocation from {alloc['entity_id']} by {abs(alloc['change']):.1f} "
                 f"({alloc['change_percentage']:.0f}%) - Reallocate to higher-impact targets"
             )
+            recommendations.append(self._recommendation_line(integration, alloc, inline))
 
         return recommendations
 
@@ -318,9 +328,14 @@ class ImpactProjectorNode:
         ``.format()`` template placeholders. Best-effort: every call is wrapped
         so a persistence failure can never break the node run.
 
-        Only fully-populated fields are emitted. The ``scenario_comparison``
-        signature has no backing data in this node (scenarios are produced by
-        the scenario_analyzer node), so it is intentionally not emitted here.
+        Emission is guarded ONLY on truly-mandatory fields (the optimization
+        results and the allocation/impact descriptions). An empty constraints
+        string is a VALID signature value for an unconstrained run (a normal
+        case), NOT a missing-data sentinel — guarding on it would silently drop
+        every unconstrained run's training data, so it is excluded from the
+        guard. The ``scenario_comparison`` signature has no backing data in this
+        node (scenarios are produced by the scenario_analyzer node), so it is
+        intentionally not emitted here.
         """
         increases = [a for a in alloc_dicts if a.get("change", 0) > 0]
         decreases = [a for a in alloc_dicts if a.get("change", 0) < 0]
@@ -353,7 +368,11 @@ class ImpactProjectorNode:
                 f"(ROI: {roi:.2f}). Recommended changes: {len(increases)} increases, "
                 f"{len(decreases)} decreases."
             )
-            if all(v not in (None, "") for v in summary_inputs.values()):
+            # Guard only mandatory fields. ``constraints_used`` (empty on an
+            # unconstrained run) and ``objective_value`` (may legitimately be 0)
+            # are NOT guarded — an empty/zero value there is valid, not missing.
+            summary_required = ("optimization_results", "allocation_changes")
+            if all(summary_inputs[k] not in (None, "") for k in summary_required):
                 await emit_recipient_signal(
                     agent_name="resource_optimizer",
                     signature_inputs=summary_inputs,
@@ -391,7 +410,10 @@ class ImpactProjectorNode:
                 for a in decreases[:2]
             ]
             rec_output = "; ".join(rec_output_parts)
-            if rec_output and all(v not in (None, "") for v in rec_inputs.values()):
+            # Guard only mandatory fields. ``constraints`` (empty on an
+            # unconstrained run) is a valid value, not missing — excluded.
+            rec_required = ("entity_allocations", "impact_projections")
+            if rec_output and all(rec_inputs[k] not in (None, "") for k in rec_required):
                 await emit_recipient_signal(
                     agent_name="resource_optimizer",
                     signature_inputs=rec_inputs,
