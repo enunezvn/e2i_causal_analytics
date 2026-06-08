@@ -332,6 +332,26 @@ async def _load_analysis(analysis_id: str) -> Optional[GapAnalysisResponse]:
     return await repo.get(analysis_id)
 
 
+async def _completed_analyses(brand: Optional[str] = None) -> List[GapAnalysisResponse]:
+    """Completed analyses for list_opportunities (repo or dict fallback)."""
+    if _use_inmemory_fallback():
+        return list(_analyses_store.values())
+    repo = _get_repo()
+    if repo is None:
+        return list(_analyses_store.values())
+    return await repo.list_completed(brand=brand)
+
+
+async def _all_analyses() -> List[GapAnalysisResponse]:
+    """All analyses for get_gap_health (repo or dict fallback)."""
+    if _use_inmemory_fallback():
+        return list(_analyses_store.values())
+    repo = _get_repo()
+    if repo is None:
+        return list(_analyses_store.values())
+    return await repo.list_all()
+
+
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
@@ -444,11 +464,7 @@ async def list_opportunities(
     strategic_bets: List[PrioritizedOpportunity] = []
     total_value = 0.0
 
-    analyses = (
-        list(_analyses_store.values())
-        if _use_inmemory_fallback()
-        else await _get_repo().list_completed(brand=brand)
-    )
+    analyses = await _completed_analyses(brand=brand)
     for analysis in analyses:
         if analysis.status != AnalysisStatus.COMPLETED:
             continue
@@ -509,9 +525,7 @@ async def get_gap_health() -> GapHealthResponse:
 
     # Count recent analyses
     now = datetime.now(timezone.utc)
-    analyses = (
-        list(_analyses_store.values()) if _use_inmemory_fallback() else await _get_repo().list_all()
-    )
+    analyses = await _all_analyses()
     analyses_24h = sum(1 for a in analyses if (now - a.timestamp).total_seconds() < 86400)
 
     # Get last analysis
