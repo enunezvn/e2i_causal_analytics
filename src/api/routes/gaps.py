@@ -25,7 +25,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -33,6 +33,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_analyst
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
+if TYPE_CHECKING:
+    from src.api.repositories.gaps_repository import GapsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +292,7 @@ class GapHealthResponse(BaseModel):
 _analyses_store: Dict[str, GapAnalysisResponse] = {}
 
 
-def _get_repo():
+def _get_repo() -> "Optional[GapsRepository]":
     """Return a GapsRepository, or None if Supabase is unavailable."""
     try:
         from src.api.repositories.gaps_repository import GapsRepository
