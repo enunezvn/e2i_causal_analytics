@@ -99,6 +99,8 @@ class FeedbackLearnerAgent:
         use_llm: bool = False,
         llm: Optional[Any] = None,
         cognitive_rag: Optional[Any] = None,
+        persist_client: Optional[Any] = None,
+        persist_signals: bool = True,
     ):
         """
         Initialize Feedback Learner agent.
@@ -110,6 +112,12 @@ class FeedbackLearnerAgent:
             use_llm: Whether to use LLM for analysis
             llm: Optional LLM instance
             cognitive_rag: Optional CognitiveRAG instance for context enrichment
+            persist_client: Optional Supabase client used to persist the
+                finalized training signal (audit F5). When None, the default
+                factory client is used at persist time.
+            persist_signals: When True (default), persist the finalized signal to
+                ``dspy_agent_training_signals`` so it is durable + readable by the
+                optimizer. Best-effort: a DB error never fails a learning cycle.
         """
         self._feedback_store = feedback_store
         self._outcome_store = outcome_store
@@ -117,6 +125,8 @@ class FeedbackLearnerAgent:
         self._use_llm = use_llm
         self._llm = llm
         self._cognitive_rag = cognitive_rag
+        self._persist_client = persist_client
+        self._persist_signals = persist_signals
         self._graph = None
 
     @property
@@ -190,6 +200,17 @@ class FeedbackLearnerAgent:
         training_reward = None
         if training_signal is not None and hasattr(training_signal, "compute_reward"):
             training_reward = training_signal.compute_reward()
+
+        # Persist the finalized signal so it is durable + readable by the
+        # optimizer (audit F5). Best-effort: never fail the cycle on DB error.
+        if (
+            self._persist_signals
+            and training_signal is not None
+            and hasattr(training_signal, "compute_reward")
+        ):
+            from .signal_store import persist_training_signal
+
+            await persist_training_signal(training_signal, client=self._persist_client)
 
         return FeedbackLearnerOutput(
             batch_id=batch_id,
