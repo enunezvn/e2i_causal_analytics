@@ -458,35 +458,6 @@ async def run_learning_cycle(
         raise HTTPException(status_code=500, detail=f"Learning cycle failed: {e}")
 
 
-@router.get(
-    "/{batch_id}",
-    response_model=LearningResponse,
-    summary="Get learning results",
-    description="Retrieve results of a learning cycle by batch ID.",
-    operation_id="get_feedback_learning_results",
-)
-async def get_learning_results(batch_id: str) -> LearningResponse:
-    """
-    Get learning cycle results by batch ID.
-
-    Args:
-        batch_id: Unique batch identifier
-
-    Returns:
-        Learning results
-
-    Raises:
-        HTTPException: If batch not found
-    """
-    if batch_id not in _learning_store:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Learning batch {batch_id} not found",
-        )
-
-    return _learning_store[batch_id]
-
-
 @router.post(
     "/process",
     response_model=LearningResponse,
@@ -835,6 +806,35 @@ async def get_feedback_health() -> FeedbackHealthResponse:
         patterns_active=patterns_active,
         pending_updates=pending_updates,
     )
+
+
+@router.get(
+    "/{batch_id}",
+    response_model=LearningResponse,
+    summary="Get learning results",
+    description="Retrieve results of a learning cycle by batch ID.",
+    operation_id="get_feedback_learning_results",
+)
+async def get_learning_results(batch_id: str) -> LearningResponse:
+    """
+    Get learning cycle results by batch ID.
+
+    Args:
+        batch_id: Unique batch identifier
+
+    Returns:
+        Learning results
+
+    Raises:
+        HTTPException: If batch not found
+    """
+    if batch_id not in _learning_store:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Learning batch {batch_id} not found",
+        )
+
+    return _learning_store[batch_id]
 
 
 # =============================================================================

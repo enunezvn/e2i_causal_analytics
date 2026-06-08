@@ -366,35 +366,6 @@ async def run_gap_analysis(
 
 
 @router.get(
-    "/{analysis_id}",
-    response_model=GapAnalysisResponse,
-    summary="Get gap analysis results",
-    operation_id="get_gap_analysis",
-    description="Retrieve results of a gap analysis by ID.",
-)
-async def get_gap_analysis(analysis_id: str) -> GapAnalysisResponse:
-    """
-    Get gap analysis results by ID.
-
-    Args:
-        analysis_id: Unique analysis identifier
-
-    Returns:
-        Gap analysis results
-
-    Raises:
-        HTTPException: If analysis not found
-    """
-    if analysis_id not in _analyses_store:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Gap analysis {analysis_id} not found",
-        )
-
-    return _analyses_store[analysis_id]
-
-
-@router.get(
     "/opportunities",
     response_model=OpportunityListResponse,
     summary="List prioritized opportunities",
@@ -501,6 +472,35 @@ async def get_gap_health() -> GapHealthResponse:
         last_analysis=last_analysis,
         analyses_24h=analyses_24h,
     )
+
+
+@router.get(
+    "/{analysis_id}",
+    response_model=GapAnalysisResponse,
+    summary="Get gap analysis results",
+    operation_id="get_gap_analysis",
+    description="Retrieve results of a gap analysis by ID.",
+)
+async def get_gap_analysis(analysis_id: str) -> GapAnalysisResponse:
+    """
+    Get gap analysis results by ID.
+
+    Args:
+        analysis_id: Unique analysis identifier
+
+    Returns:
+        Gap analysis results
+
+    Raises:
+        HTTPException: If analysis not found
+    """
+    if analysis_id not in _analyses_store:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Gap analysis {analysis_id} not found",
+        )
+
+    return _analyses_store[analysis_id]
 
 
 # =============================================================================
