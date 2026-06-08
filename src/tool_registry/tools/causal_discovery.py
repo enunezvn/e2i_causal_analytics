@@ -417,7 +417,7 @@ class CausalDiscoveryTool:
                     "algorithms": params.algorithms,
                     "ensemble_threshold": params.ensemble_threshold,
                     "alpha": params.alpha,
-                    "n_columns": len(params.data),
+                    "n_columns": len(params.data) if params.data else 0,
                 },
                 metadata={"trace_id": trace_id},
             )
@@ -768,7 +768,8 @@ def _numeric_frame(df: pd.DataFrame, min_nonnull_frac: float = _MIN_NONNULL_FRAC
 
 def _frame_to_numeric_dict(df: pd.DataFrame) -> Dict[str, List[Any]]:
     """Convert a DataFrame to the ``Dict[str, List]`` shape discovery needs."""
-    return _numeric_frame(df).to_dict("list")
+    result: Dict[str, List[Any]] = _numeric_frame(df).to_dict("list")
+    return result
 
 
 def _is_valid_data_dict(value: Any) -> bool:

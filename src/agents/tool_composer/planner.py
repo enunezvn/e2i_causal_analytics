@@ -778,8 +778,7 @@ class ToolPlanner:
         # is worse than failing fast on an unbound column.
         candidates = [col for col in column_list if norm_value in self._normalize_name(col)]
         # de-dup while preserving order
-        seen: set = set()
-        uniq = [c for c in candidates if not (c in seen or seen.add(c))]
+        uniq = list(dict.fromkeys(candidates))
         if len(uniq) == 1:
             return uniq[0]
         return None
