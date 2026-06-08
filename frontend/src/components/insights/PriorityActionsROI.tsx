@@ -14,6 +14,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { useOpportunities } from '@/hooks/api';
+import { EmptyState } from '@/components/ui/EmptyState';
+import type { PrioritizedOpportunity } from '@/types/gaps';
 
 // =============================================================================
 // TYPES
@@ -33,62 +36,9 @@ interface PriorityAction {
 
 interface PriorityActionsROIProps {
   className?: string;
+  /** Brand filter forwarded to the opportunities feed. */
+  brand?: string;
 }
-
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_ACTIONS: PriorityAction[] = [
-  {
-    id: 'action-1',
-    title: 'Increase NE Region Call Frequency',
-    description:
-      'Causal analysis shows +1 call/month in NE region drives 2.3x TRx uplift for Remibrutinib.',
-    estimatedROI: 2300000,
-    effort: 'low',
-    timeframe: '4-6 weeks',
-    impactArea: 'TRx Volume',
-    confidence: 0.91,
-    icon: <Users className="h-4 w-4 text-blue-500" />,
-  },
-  {
-    id: 'action-2',
-    title: 'Optimize Formulary Access Strategy',
-    description:
-      'Gap analyzer identified 12 high-volume accounts with suboptimal formulary positioning.',
-    estimatedROI: 1800000,
-    effort: 'medium',
-    timeframe: '8-12 weeks',
-    impactArea: 'Market Access',
-    confidence: 0.87,
-    icon: <Target className="h-4 w-4 text-emerald-500" />,
-  },
-  {
-    id: 'action-3',
-    title: 'Deploy Targeted Digital Campaign',
-    description:
-      'Heterogeneous treatment effects suggest high-value segment for digital engagement.',
-    estimatedROI: 950000,
-    effort: 'low',
-    timeframe: '2-3 weeks',
-    impactArea: 'HCP Engagement',
-    confidence: 0.82,
-    icon: <TrendingUp className="h-4 w-4 text-purple-500" />,
-  },
-  {
-    id: 'action-4',
-    title: 'Address South Region Equity Gap',
-    description:
-      'DiD analysis shows 4.2pp fairness gap causing trust erosion and acceptance drop.',
-    estimatedROI: 750000,
-    effort: 'high',
-    timeframe: '12-16 weeks',
-    impactArea: 'Regional Equity',
-    confidence: 0.78,
-    icon: <DollarSign className="h-4 w-4 text-amber-500" />,
-  },
-];
 
 // =============================================================================
 // HELPERS
@@ -107,6 +57,38 @@ function getEffortConfig(effort: PriorityAction['effort']) {
     high: { label: 'High Effort', className: 'bg-rose-500/10 text-rose-600' },
   };
   return config[effort];
+}
+
+const RANK_ICONS = [
+  <Users className="h-4 w-4 text-blue-500" />,
+  <Target className="h-4 w-4 text-emerald-500" />,
+  <TrendingUp className="h-4 w-4 text-purple-500" />,
+  <DollarSign className="h-4 w-4 text-amber-500" />,
+];
+
+/**
+ * Map a live ROI-ranked opportunity into the card's PriorityAction shape.
+ * `implementation_difficulty` is the ImplementationDifficulty string enum
+ * ('low' | 'medium' | 'high'), matching the card's `effort` union; we narrow
+ * defensively so an unexpected value falls back to 'medium' rather than
+ * rendering an undefined effort badge.
+ */
+function toEffort(difficulty: string): PriorityAction['effort'] {
+  return difficulty === 'low' || difficulty === 'high' ? difficulty : 'medium';
+}
+
+function toPriorityAction(opp: PrioritizedOpportunity): PriorityAction {
+  return {
+    id: opp.gap.gap_id,
+    title: opp.recommended_action,
+    description: `${opp.gap.metric} gap in ${opp.gap.segment_value} (${opp.gap.gap_percentage.toFixed(0)}% vs target).`,
+    estimatedROI: opp.roi_estimate.estimated_revenue_impact,
+    effort: toEffort(opp.implementation_difficulty),
+    timeframe: opp.time_to_impact,
+    impactArea: opp.gap.metric,
+    confidence: opp.roi_estimate.confidence,
+    icon: RANK_ICONS[(opp.rank - 1) % RANK_ICONS.length],
+  };
 }
 
 // =============================================================================
@@ -176,8 +158,10 @@ function ActionCard({ action, rank }: { action: PriorityAction; rank: number }) 
 // MAIN COMPONENT
 // =============================================================================
 
-export function PriorityActionsROI({ className }: PriorityActionsROIProps) {
-  const totalROI = SAMPLE_ACTIONS.reduce((sum, a) => sum + a.estimatedROI, 0);
+export function PriorityActionsROI({ className, brand }: PriorityActionsROIProps) {
+  const { data, isLoading, isError, error } = useOpportunities({ brand, limit: 4 });
+  const actions = (data?.opportunities ?? []).map(toPriorityAction);
+  const totalROI = data?.total_addressable_value ?? 0;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -194,22 +178,38 @@ export function PriorityActionsROI({ className }: PriorityActionsROIProps) {
               </p>
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-xl font-bold text-emerald-600">{formatROI(totalROI)}</div>
-            <div className="text-xs text-[var(--color-muted-foreground)]">Total Opportunity</div>
-          </div>
+          {actions.length > 0 && (
+            <div className="text-right">
+              <div className="text-xl font-bold text-emerald-600">{formatROI(totalROI)}</div>
+              <div className="text-xs text-[var(--color-muted-foreground)]">Total Opportunity</div>
+            </div>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {SAMPLE_ACTIONS.map((action, idx) => (
-          <ActionCard key={action.id} action={action} rank={idx + 1} />
-        ))}
-
-        {/* View All Button */}
-        <Button variant="outline" className="w-full mt-2">
-          <span>View All Recommendations</span>
-          <ArrowUpRight className="h-4 w-4 ml-2" />
-        </Button>
+        {isLoading ? (
+          <EmptyState title="Loading opportunities…" />
+        ) : isError ? (
+          <EmptyState
+            title="Could not load opportunities"
+            description={error?.message ?? 'The opportunities feed returned an error.'}
+          />
+        ) : actions.length === 0 ? (
+          <EmptyState
+            title="No prioritized opportunities"
+            description="Run a gap analysis to surface ROI-ranked recommendations."
+          />
+        ) : (
+          <>
+            {actions.map((action, idx) => (
+              <ActionCard key={action.id} action={action} rank={idx + 1} />
+            ))}
+            <Button variant="outline" className="w-full mt-2">
+              <span>View All Recommendations</span>
+              <ArrowUpRight className="h-4 w-4 ml-2" />
+            </Button>
+          </>
+        )}
       </CardContent>
     </Card>
   );
