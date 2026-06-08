@@ -80,3 +80,28 @@ async def persist_training_signal(
     except Exception as e:  # noqa: BLE001 - persistence is best-effort
         logger.error("Failed to persist feedback_learner training signal: %s", e)
         return False
+
+
+async def get_feedback_learner_training_signals(
+    client: Optional[Any] = None,
+    min_reward: float = 0.5,
+    limit: int = 1000,
+) -> list[Dict[str, Any]]:
+    """Read back persisted feedback_learner signals for optimization (Shard 03/05).
+
+    Thin wrapper over SignalCollectorAdapter.get_signals_for_optimization filtered
+    to source_agent='feedback_learner'.
+    """
+    from src.rag.memory_adapters import SignalCollectorAdapter
+
+    if client is None:
+        from src.memory.services.factories import get_supabase_client
+
+        client = await _maybe_await(get_supabase_client())
+    if client is None:
+        logger.warning("No Supabase client; cannot read training signals")
+        return []
+    adapter = SignalCollectorAdapter(supabase_client=client)
+    return await adapter.get_signals_for_optimization(
+        source_agent="feedback_learner", min_reward=min_reward, limit=limit
+    )

@@ -791,7 +791,7 @@ class SignalCollectorAdapter:
 
     async def get_signals_for_optimization(
         self,
-        signal_type: Optional[str] = None,
+        source_agent: Optional[str] = None,
         min_reward: float = 0.0,
         limit: int = 1000,
     ) -> List[Dict[str, Any]]:
@@ -799,12 +799,15 @@ class SignalCollectorAdapter:
         Retrieve signals for DSPy optimization.
 
         Args:
-            signal_type: Filter by signal type
-            min_reward: Minimum reward threshold
-            limit: Maximum signals to retrieve
+            source_agent: Filter by emitting agent (real column; was wrongly
+                named/filtered as `signal_type` before — audit F4). The writer
+                maps the dataclass `signal_type` field onto this `source_agent`
+                column, so a filtered read must target `source_agent`.
+            min_reward: Minimum reward threshold.
+            limit: Maximum signals to retrieve.
 
         Returns:
-            List of signal dicts suitable for DSPy optimization
+            List of signal dicts suitable for DSPy optimization.
         """
         if self._client is None:
             logger.warning("No client configured, returning empty signals")
@@ -813,8 +816,8 @@ class SignalCollectorAdapter:
         try:
             query = self._client.table("dspy_agent_training_signals").select("*")
 
-            if signal_type:
-                query = query.eq("signal_type", signal_type)
+            if source_agent:
+                query = query.eq("source_agent", source_agent)
 
             query = query.gte("reward", min_reward).limit(limit)
 

@@ -528,7 +528,7 @@ class TestSignalCollectorAdapter:
         adapter = SignalCollectorAdapter(supabase_client=client)
 
         signals = await adapter.get_signals_for_optimization(
-            signal_type="response", min_reward=0.8, limit=100
+            source_agent="response", min_reward=0.8, limit=100
         )
 
         assert len(signals) == 2
