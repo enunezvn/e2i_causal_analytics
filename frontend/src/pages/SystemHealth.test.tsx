@@ -228,4 +228,29 @@ describe('SystemHealth', () => {
     // With 0 alerts, should show "0 critical" in model health section and "All clear" text
     expect(screen.getByText('All clear')).toBeInTheDocument();
   });
+
+  it('does not fabricate alerts when the API returns zero active alerts (M3)', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { alerts: [], active_count: 0, total_count: 0 },
+      isLoading: false,
+      refetch: vi.fn(),
+    });
+    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockRunsData,
+      isLoading: false,
+      refetch: vi.fn(),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    const alertsTab = screen.getByRole('tab', { name: /Alerts/i });
+    await user.click(alertsTab);
+
+    // The former fabricated fallback alert titles must NOT appear.
+    expect(screen.queryByText('Model Retraining Scheduled')).not.toBeInTheDocument();
+    expect(screen.queryByText('Data Drift Detected')).not.toBeInTheDocument();
+    // The honest empty message is shown instead.
+    expect(screen.getByText(/No active alerts - all systems operational/i)).toBeInTheDocument();
+  });
 });

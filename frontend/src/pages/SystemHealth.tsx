@@ -773,24 +773,7 @@ function SystemHealth() {
             </CardHeader>
             <CardContent>
               <AlertList
-                alerts={alerts.length > 0 ? alerts : [
-                  {
-                    severity: 'warning' as AlertSeverity,
-                    title: 'Data Drift Detected',
-                    message: 'Churn model feature distribution has shifted significantly.',
-                    timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000),
-                    source: 'Drift Monitor',
-                    isNew: true,
-                  },
-                  {
-                    severity: 'info' as AlertSeverity,
-                    title: 'Model Retraining Scheduled',
-                    message: 'Propensity model scheduled for retraining based on drift threshold.',
-                    timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000),
-                    source: 'Retraining Manager',
-                    isNew: false,
-                  },
-                ]}
+                alerts={alerts}
                 compact={false}
                 maxItems={10}
                 isLoading={isLoading}
