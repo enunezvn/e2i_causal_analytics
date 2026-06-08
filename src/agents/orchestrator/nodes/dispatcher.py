@@ -163,6 +163,103 @@ def _coerce_to_input_model(
     return input_cls(**merged)
 
 
+def _entity_value(payload: Dict[str, Any], entity_type: str) -> Optional[str]:
+    """Return the first ``parsed_query.entities`` value of ``entity_type``.
+
+    Mirrors the ``parsed_query.entities`` derivation used for ``drift_monitor``'s
+    ``features_to_monitor`` default (KPI/feature mentions): walk the structured
+    NLP entities the orchestrator already carries and return the first non-empty
+    string ``value`` whose ``type`` matches. Returns ``None`` when no such entity
+    exists (the caller then falls back to ``user_context`` or proceeds without).
+    """
+    parsed_query = payload.get("parsed_query") or {}
+    entities = (parsed_query.get("entities") if isinstance(parsed_query, dict) else None) or []
+    for ent in entities:
+        if (
+            isinstance(ent, dict)
+            and ent.get("type") == entity_type
+            and isinstance(ent.get("value"), str)
+            and ent["value"].strip()
+        ):
+            return cast(str, ent["value"])
+    return None
+
+
+def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """Derive ``(brand, region)`` for cohort resolution from the dispatch context.
+
+    Order: structured ``parsed_query.entities`` (the NLP layer's typed
+    extractions) first, then a ``user_context`` fallback (chat callers may stash
+    ``brand``/``region`` there). Returns ``(None, None)`` when neither source
+    names them — :func:`resolve_cohort_frame` then fails closed honestly.
+    """
+    brand = _entity_value(payload, "brand")
+    region = _entity_value(payload, "region")
+
+    user_context = payload.get("user_context") or {}
+    if isinstance(user_context, dict):
+        if brand is None and isinstance(user_context.get("brand"), str):
+            brand = user_context["brand"] or None
+        if region is None and isinstance(user_context.get("region"), str):
+            region = user_context["region"] or None
+
+    return brand, region
+
+
+def _resolve_tool_composer_data(payload: Dict[str, Any]) -> Optional[Any]:
+    """Best-effort resolve a real cohort frame for the ``tool_composer`` agent.
+
+    Derives ``(brand, region)`` from the dispatch context and calls
+    :func:`src.services.cohort_resolution.resolve_cohort_frame`, which returns a
+    real ``patient_journeys`` DataFrame or ``None`` (fail closed) — it NEVER
+    fabricates a cohort. Any exception (import error, infra failure, etc.) is
+    logged and swallowed so the dispatch proceeds WITHOUT data; the composable
+    tools then fail closed honestly rather than running on a wrong/fake cohort.
+
+    Returning ``None`` here means the dispatcher does NOT add a ``data`` key, so
+    ``ToolComposerAgent.run`` leaves ``estimation_data`` unset and the executor's
+    duck-typed gate is not tripped by a ``None`` value.
+    """
+    brand, region = _extract_brand_region(payload)
+    if brand is None and region is None:
+        # Nothing to resolve against; the resolver would return None anyway.
+        # Skip the import/call entirely so we don't take a DB round-trip for an
+        # unscoped query.
+        logger.info(
+            "tool_composer dispatch: no brand/region in parsed_query/user_context; "
+            "proceeding without estimation_data (tools fail closed)."
+        )
+        return None
+    try:
+        from src.services.cohort_resolution import resolve_cohort_frame
+
+        frame = resolve_cohort_frame(brand, region)
+        if frame is None:
+            logger.info(
+                "tool_composer dispatch: cohort_resolution returned no frame for "
+                "brand=%r region=%r; proceeding without estimation_data.",
+                brand,
+                region,
+            )
+            return None
+        logger.info(
+            "tool_composer dispatch: resolved cohort frame (%d rows) for brand=%r region=%r.",
+            len(frame),
+            brand,
+            region,
+        )
+        return frame
+    except Exception as exc:  # noqa: BLE001 - best-effort, never block dispatch
+        logger.warning(
+            "tool_composer dispatch: cohort resolution failed for brand=%r "
+            "region=%r, proceeding without estimation_data: %s",
+            brand,
+            region,
+            exc,
+        )
+        return None
+
+
 def _generate_dispatch_id() -> str:
     """Generate unique dispatch identifier."""
     return f"disp_{uuid.uuid4().hex[:16]}"
@@ -526,7 +623,7 @@ class DispatcherNode:
         # Generate span_id for observability
         span_id = _generate_span_id()
 
-        return {
+        agent_input: Dict[str, Any] = {
             "query": state.get("query"),
             "user_context": state.get("user_context", {}),
             "parameters": dispatch.get("parameters", {}),
@@ -538,6 +635,25 @@ class DispatcherNode:
             "span_id": span_id,
             "execution_mode": dispatch.get("execution_mode", "sequential"),
         }
+
+        # F2(a): the ``tool_composer`` agent's real causal tools need a cohort
+        # DataFrame to run on. ``ToolComposerAgent.run`` normalizes
+        # ``input_data["data"]`` -> ``context["estimation_data"]``, which the
+        # executor auto-injects into composable-tool kwargs. The orchestrator
+        # path otherwise never supplies it (parameters={} from the router), so
+        # multi_faceted queries delivered 0 data and the tools all fail-closed.
+        #
+        # Resolve a REAL cohort frame from the query's brand/region and thread it
+        # as ``data``. Scoped strictly to ``tool_composer`` so no other agent's
+        # input gains a ``data`` key it doesn't declare (which would TypeError on
+        # wrapped-model agents). Best-effort + fail-closed: a None result means
+        # we do NOT add the ``data`` key at all.
+        if dispatch["agent_name"] == "tool_composer":
+            frame = _resolve_tool_composer_data(agent_input)
+            if frame is not None:
+                agent_input["data"] = frame
+
+        return agent_input
 
     async def _dispatch_fallback(self, agent_name: str, state: OrchestratorState) -> AgentResult:
         """Dispatch to fallback agent.
