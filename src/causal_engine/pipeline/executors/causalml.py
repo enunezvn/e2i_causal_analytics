@@ -444,11 +444,23 @@ class CausalMLExecutor(LibraryExecutor):
                 warnings.append(f"Uplift metrics unavailable (auuc/qini): {metric_err}")
                 metrics = {"auuc": None, "qini": None}
 
+            # Deferred import (mirrors the module's heavy-uplift import policy).
+            from src.causal_engine.uplift.base import PROVENANCE_MODEL_PREDICTED_UPLIFT
+
             result_payload: Dict[str, Any] = {
                 "model": model_id,
                 "ate": upl_result.ate,
                 "att": upl_result.att,
                 "atc": upl_result.atc,
+                # M-stat4: carry the honesty marker forward so the next hop cannot
+                # mistake these mean-model-predicted-uplift figures for an
+                # identification-validated ATE/ATT/ATC. att==atc when treated/control
+                # feature distributions match (both are mean(predicted uplift)). The
+                # fallback is the canonical marker (definitionally true for CausalML
+                # uplift), so the signal is never silently dropped (codex LOW).
+                "data_provenance": getattr(
+                    upl_result, "data_provenance", PROVENANCE_MODEL_PREDICTED_UPLIFT
+                ),
                 "ate_std": upl_result.ate_std,
                 "ate_ci_lower": upl_result.ate_ci_lower,
                 "ate_ci_upper": upl_result.ate_ci_upper,

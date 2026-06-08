@@ -135,6 +135,27 @@ class TestInterpretationNode:
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
+    async def test_sensitivity_failure_narrative_does_not_cite_defaulted_evalue(self):
+        """M-fo3: when the sensitivity (E-value) analysis fails, the narrative must NOT
+        present the defaulted E-value of 1.00 as a real (weak) result — it must say
+        robustness to unmeasured confounding is UNVERIFIED."""
+        node = InterpretationNode()
+        state = self._create_full_state()
+        state["interpretation_depth"] = "standard"
+        # The sensitivity node writes NO sensitivity_analysis on failure + sets the
+        # error; e_value then defaults to 1.00 in the narrative.
+        state["sensitivity_error"] = "E-value computation raised: singular covariance"
+        state["sensitivity_analysis"] = {}
+
+        result = await node.execute(state)
+        narrative = result["interpretation"]["narrative"].lower()
+
+        assert "unverified" in narrative
+        assert "could not be completed" in narrative
+        # The defaulted "E-value of 1.00" sentence must be gone.
+        assert "e-value of 1.00" not in narrative
+
+    @pytest.mark.asyncio
     async def test_minimal_interpretation(self):
         """Test minimal depth interpretation."""
         node = InterpretationNode()

@@ -507,8 +507,29 @@ class SequentialPipelineResponse(BaseModel):
     )
     structural_quality: Optional[float] = Field(
         default=None,
-        description="NetworkX structural-quality score in [0,1] (M-fo2): 1.0 DAG+path, "
-        "0.5 DAG missing path, 0.0 cyclic. Drives the consensus-confidence haircut.",
+        description="NetworkX structural-quality score in [0,1] (M-fo2): 1.0 identifiable "
+        "(DAG or off-subgraph cycle) + path, 0.5 identifiable but path missing/<3 nodes, "
+        "0.0 identification blocked (cycle on the treatment-outcome ancestral subgraph). "
+        "Drives the consensus-confidence haircut.",
+    )
+    requires_review: bool = Field(
+        default=False,
+        description=(
+            "M-fo2 (precise): True when the estimate is quarantined for human review "
+            "because a directed cycle sits on the treatment-outcome ancestral subgraph, "
+            "making backdoor identification undefined. When True, consensus_effect is "
+            "WITHHELD (None) and robustness_validation_performed is forced False."
+        ),
+    )
+    structural_identification: Optional[str] = Field(
+        default=None,
+        description=(
+            "M-fo2 precise identifiability label: 'acyclic' (a DAG); 'cycle_irrelevant' "
+            "(a cycle exists but OFF the treatment-outcome ancestral subgraph, so the "
+            "estimand stays identifiable and the consensus is preserved); "
+            "'undefined_cyclic' (a cycle ON the ancestral subgraph → consensus withheld, "
+            "requires_review). None when the structural check did not run."
+        ),
     )
 
     model_config = ConfigDict(
@@ -645,8 +666,28 @@ class ParallelPipelineResponse(BaseModel):
     )
     structural_quality: Optional[float] = Field(
         default=None,
-        description="NetworkX structural-quality score in [0,1] (M-fo2): 1.0 DAG+path, "
-        "0.5 DAG missing path, 0.0 cyclic. Drives the consensus-confidence haircut.",
+        description="NetworkX structural-quality score in [0,1] (M-fo2): 1.0 identifiable "
+        "(DAG or off-subgraph cycle) + path, 0.5 identifiable but path missing/<3 nodes, "
+        "0.0 identification blocked (cycle on the treatment-outcome ancestral subgraph). "
+        "Drives the consensus-confidence haircut.",
+    )
+    requires_review: bool = Field(
+        default=False,
+        description=(
+            "M-fo2 (precise): True when the estimate is quarantined for human review "
+            "because a directed cycle sits on the treatment-outcome ancestral subgraph, "
+            "making backdoor identification undefined. When True, consensus_effect is "
+            "WITHHELD (None) and robustness_validation_performed is forced False."
+        ),
+    )
+    structural_identification: Optional[str] = Field(
+        default=None,
+        description=(
+            "M-fo2 precise identifiability label: 'acyclic' (a DAG); 'cycle_irrelevant' "
+            "(a cycle exists but OFF the treatment-outcome ancestral subgraph); "
+            "'undefined_cyclic' (a cycle ON the ancestral subgraph → consensus withheld, "
+            "requires_review). None when the structural check did not run."
+        ),
     )
 
     model_config = ConfigDict(

@@ -253,13 +253,16 @@ class PipelineOrchestrator(ABC):
         result. C-6 funnels these into a compact ``graph_quality`` dict
         that includes a derived ``structural_quality`` score:
 
-        - 1.0 when DAG + treatment->outcome path + n_nodes >= 3
-        - 0.5 when DAG but path missing OR n_nodes < 3
-        - 0.0 when not a DAG (cycles present)
+        - 1.0 when identification holds + treatment->outcome path + n_nodes >= 3
+          (a DAG, OR a non-DAG whose cycle is OFF the (T,Y) ancestral subgraph)
+        - 0.5 when identification holds but path missing OR n_nodes < 3
+        - 0.0 when identification is blocked (a cycle ON the (T,Y) ancestral
+          subgraph → ``structural_identification="undefined_cyclic"`` +
+          ``requires_structural_review=True``)
 
         Mirrors the NetworkX executor's confidence-derivation logic (see
-        ``executors/networkx.py::_compute_confidence``) so this aggregator
-        sees the same signal.
+        ``executors/networkx.py::_compute_confidence`` and
+        ``_assess_cycle_identifiability``) so this aggregator sees the same signal.
         """
         is_dag = bool(payload.get("is_dag", False))
         has_path = bool(payload.get("has_treatment_outcome_path", False))
@@ -268,12 +271,25 @@ class PipelineOrchestrator(ABC):
         cycles = payload.get("cycles") or []
         n_cycles = len(cycles) if isinstance(cycles, list) else 0
 
-        if not is_dag:
-            structural_quality = 0.0
-        elif has_path and n_nodes >= 3:
-            structural_quality = 1.0
+        # M-fo2 (precise): a non-DAG only blocks backdoor identification when a cycle
+        # lands on the (treatment, outcome) ancestral subgraph. The NetworkX executor
+        # computes ``cycle_affects_identification``; a non-DAG payload that LACKS the
+        # field (older executor / synthetic) is treated as affecting (fail-closed).
+        if is_dag:
+            cycle_affects_identification = False
         else:
-            structural_quality = 0.5
+            cycle_affects_identification = bool(payload.get("cycle_affects_identification", True))
+        identification_blocked = (not is_dag) and cycle_affects_identification
+
+        if identification_blocked:
+            structural_quality = 0.0
+            structural_identification = "undefined_cyclic"
+        elif not is_dag:
+            structural_identification = "cycle_irrelevant"
+            structural_quality = 1.0 if (has_path and n_nodes >= 3) else 0.5
+        else:
+            structural_identification = "acyclic"
+            structural_quality = 1.0 if (has_path and n_nodes >= 3) else 0.5
 
         state["graph_quality"] = {
             "n_nodes": n_nodes,
@@ -282,6 +298,11 @@ class PipelineOrchestrator(ABC):
             "has_treatment_outcome_path": has_path,
             "structural_quality": structural_quality,
             "n_cycles": n_cycles,
+            # M-fo2 precise identifiability signals
+            "cycle_affects_identification": cycle_affects_identification,
+            "structural_identification": structural_identification,
+            "requires_structural_review": identification_blocked,
+            "orientation_ambiguity_only": bool(payload.get("orientation_ambiguity_only", False)),
         }
 
     @staticmethod

@@ -605,6 +605,13 @@ class TestCausalMLExecutorRealLibraryWiring:
         assert "qini" in result["result"]
         # NEW real-wired fields: ATE / ATT / ATC from UpliftResult
         assert "ate" in result["result"]
+        # M-stat4: the honesty marker must survive the executor flattening so a
+        # downstream consumer of the flat payload cannot mistake the mean
+        # model-predicted uplift for an identification-validated ATE/ATT/ATC.
+        assert (
+            result["result"]["data_provenance"]
+            == "model_predicted_uplift_not_identification_validated"
+        )
         # Per-sample uplift scores (or aggregate summary) — must be present, NOT empty
         assert "uplift_scores_summary" in result["result"]
         # Real-wired confidence is computed from sample size / agreement, not the

@@ -128,18 +128,39 @@ class NetworkXExecutor(LibraryExecutor):
                 graph_source=graph_source,
             )
 
+            # M-fo2 (precise): a cycle only blocks identification when it lands on
+            # the (T,Y) ancestral subgraph. Off-subgraph cycles leave the estimand
+            # identifiable, so they incur no structural penalty.
+            identification_blocked = (not analysis["is_dag"]) and analysis[
+                "cycle_affects_identification"
+            ]
             confidence = self._compute_confidence(
                 n_nodes=analysis["n_nodes"],
-                is_dag=analysis["is_dag"],
                 has_path=analysis["has_treatment_outcome_path"],
+                identification_blocked=identification_blocked,
             )
 
             warnings: List[str] = []
             if not analysis["is_dag"]:
-                warnings.append(
-                    "NetworkX graph contains cycles; downstream causal-effect "
-                    "estimators may misidentify backdoor paths"
-                )
+                if analysis["cycle_affects_identification"]:
+                    # Keep the historical wording (downstream "cycle" matchers rely
+                    # on it) — this is the identification-breaking case.
+                    warnings.append(
+                        "NetworkX graph contains cycles; downstream causal-effect "
+                        "estimators may misidentify backdoor paths"
+                    )
+                    if analysis["orientation_ambiguity_only"]:
+                        warnings.append(
+                            "The cycle(s) are reciprocal 2-cycles (unoriented edges) "
+                            "on the treatment-outcome ancestral subgraph; orient them "
+                            "before estimating."
+                        )
+                else:
+                    warnings.append(
+                        "NetworkX graph contains a cycle OUTSIDE the "
+                        "treatment-outcome ancestral subgraph; this estimand remains "
+                        "identifiable (no structural penalty applied)."
+                    )
 
             latency_ms = int((time.time() - start_time) * 1000)
             return LibraryExecutionResult(
@@ -377,12 +398,24 @@ class NetworkXExecutor(LibraryExecutor):
         is_dag = nx.is_directed_acyclic_graph(graph)
         has_path = paths["shortest_path_length"] is not None
         cycles: List[List[str]] = []
+        cycle_affects_identification = False
+        cycles_on_relevant_subgraph: List[List[str]] = []
+        orientation_ambiguity_only = False
         if not is_dag:
             try:
                 cycles = [list(c) for c in nx.simple_cycles(graph)]
             except Exception as e:
                 logger.warning(f"nx.simple_cycles failed: {e}")
                 cycles = []
+            assessment = self._assess_cycle_identifiability(
+                graph,
+                cycles=cycles,
+                treatment=treatment,
+                outcome=outcome,
+            )
+            cycle_affects_identification = assessment["cycle_affects_identification"]
+            cycles_on_relevant_subgraph = assessment["cycles_on_relevant_subgraph"]
+            orientation_ambiguity_only = assessment["orientation_ambiguity_only"]
 
         return {
             # Backward-compatible placeholder keys
@@ -396,10 +429,77 @@ class NetworkXExecutor(LibraryExecutor):
             "is_dag": is_dag,
             "has_treatment_outcome_path": has_path,
             "cycles": cycles,
+            # M-fo2 (precise): whether a detected cycle actually breaks backdoor
+            # identification of the (treatment, outcome) estimand.
+            "cycle_affects_identification": cycle_affects_identification,
+            "cycles_on_relevant_subgraph": cycles_on_relevant_subgraph,
+            "orientation_ambiguity_only": orientation_ambiguity_only,
             # Provenance
             "graph_source": graph_source,
             "treatment_var": treatment,
             "outcome_var": outcome,
+        }
+
+    def _assess_cycle_identifiability(
+        self,
+        graph: nx.DiGraph,
+        *,
+        cycles: List[List[str]],
+        treatment: Optional[str],
+        outcome: Optional[str],
+    ) -> Dict[str, Any]:
+        """M-fo2: decide whether detected cycles break backdoor identification.
+
+        Backdoor identification of the (treatment, outcome) effect depends only on
+        the subgraph induced by the ancestral set ``An({T,Y}) ∪ {T,Y}`` — the set
+        that determines d-separation between T and Y. A directed cycle entirely
+        OUTSIDE that set can neither open nor block a backdoor path between T and Y,
+        so the estimand stays identifiable; a cycle that intersects it makes
+        backdoor adjustment undefined.
+
+        Conservative fail-closed: when treatment/outcome are unknown/absent, or the
+        graph is non-DAG but ``simple_cycles`` yielded nothing (it raised), we
+        cannot prove irrelevance → treat the cycle as identification-affecting.
+
+        A reciprocal 2-cycle (``A<->B``) is an unoriented edge (CPDAG/PAG), flagged
+        via ``orientation_ambiguity_only`` (informational); it still blocks
+        identification when it lands on the relevant subgraph.
+
+        Scope/assumption (codex MEDIUM): ``An({T,Y})`` is the relevant set for
+        UNCONDITIONAL backdoor identification. If a downstream estimator conditioned
+        on a DESCENDANT of T or Y, that collider could open a path through an
+        otherwise off-subgraph cycle — which this check would not catch. That case
+        is guarded elsewhere: the agent adjustment-set finder excludes
+        colliders/descendants (M-gb2) and DoWhy's own backdoor criterion rejects a
+        non-DAG input. ``nx.ancestors`` on a cyclic graph also OVER-includes
+        (reachability via the cycle), which only tightens the gate (marks more
+        cycles relevant) — a safe direction.
+        """
+        orientation_ambiguity_only = bool(cycles) and all(len(c) == 2 for c in cycles)
+
+        if not treatment or not outcome or treatment not in graph or outcome not in graph:
+            return {
+                "cycle_affects_identification": True,
+                "cycles_on_relevant_subgraph": [list(c) for c in cycles],
+                "orientation_ambiguity_only": orientation_ambiguity_only,
+            }
+        if not cycles:
+            # Non-DAG but cycle set unavailable -> cannot prove irrelevance.
+            return {
+                "cycle_affects_identification": True,
+                "cycles_on_relevant_subgraph": [],
+                "orientation_ambiguity_only": orientation_ambiguity_only,
+            }
+
+        relevant: set[str] = {treatment, outcome}
+        relevant |= nx.ancestors(graph, treatment)
+        relevant |= nx.ancestors(graph, outcome)
+
+        on_relevant = [list(c) for c in cycles if relevant.intersection(c)]
+        return {
+            "cycle_affects_identification": bool(on_relevant),
+            "cycles_on_relevant_subgraph": on_relevant,
+            "orientation_ambiguity_only": orientation_ambiguity_only,
         }
 
     def _compute_centrality(self, graph: nx.DiGraph) -> Dict[str, Any]:
@@ -476,14 +576,16 @@ class NetworkXExecutor(LibraryExecutor):
         }
 
     @staticmethod
-    def _compute_confidence(*, n_nodes: int, is_dag: bool, has_path: bool) -> float:
-        """Derive structural confidence per design spike §2.1.
+    def _compute_confidence(*, n_nodes: int, has_path: bool, identification_blocked: bool) -> float:
+        """Derive structural confidence (M-fo2 precise refinement of spike §2.1).
 
-        - 1.0 when DAG, treatment-outcome path present, >=3 nodes
-        - 0.5 when DAG but path missing OR < 3 nodes
-        - 0.0 when not a DAG (cycles present)
+        - 0.0 when identification is blocked (a directed cycle on the
+          treatment-outcome ancestral subgraph → backdoor adjustment undefined)
+        - 1.0 when identification holds + treatment-outcome path + >=3 nodes
+          (a DAG, OR a non-DAG whose cycle is OFF the relevant subgraph)
+        - 0.5 otherwise (identifiable but path missing OR < 3 nodes)
         """
-        if not is_dag:
+        if identification_blocked:
             return 0.0
         if has_path and n_nodes >= 3:
             return 1.0
