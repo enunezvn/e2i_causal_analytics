@@ -15,14 +15,21 @@
  * @module pages/Home
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 // API Hooks
-import { useKPIList, useKPIHealth } from '@/hooks/api/use-kpi';
+import { useKPIList, useKPIHealth, useBatchCalculateKPIs, useKPIValue } from '@/hooks/api/use-kpi';
 import { useGraphStats } from '@/hooks/api/use-graph';
 import { useAlerts } from '@/hooks/api/use-monitoring';
+import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
+import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
+import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
+import { useOpportunities } from '@/hooks/api/use-gaps';
+import { getValidated } from '@/lib/api-client';
+import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { Progress } from '@/components/ui/progress';
 import {
   Activity,
   Users,
@@ -45,7 +52,6 @@ import {
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/badge';
 import {
   Select,
@@ -171,56 +177,9 @@ const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   ],
 };
 
-const SAMPLE_INSIGHTS: AgentInsight[] = [
-  {
-    id: '1',
-    agentName: 'Gap Analyzer',
-    agentTier: 2,
-    type: 'opportunity',
-    title: 'High-Value Territory Opportunity',
-    summary: 'Northeast region shows 23% untapped potential in CSU market. Recommended: Increase Remibrutinib HCP engagement by 40%.',
-    impact: 'high',
-    timestamp: '2 hours ago',
-    actionable: true,
-    relatedKPIs: ['remi_share', 'remi_hcp'],
-  },
-  {
-    id: '2',
-    agentName: 'Drift Monitor',
-    agentTier: 3,
-    type: 'alert',
-    title: 'Model Performance Drift Detected',
-    summary: 'Kisqali conversion model showing 8% accuracy degradation. Retraining recommended within 7 days.',
-    impact: 'medium',
-    timestamp: '5 hours ago',
-    actionable: true,
-    relatedKPIs: ['kis_nrx', 'conversion_rate'],
-  },
-  {
-    id: '3',
-    agentName: 'Causal Impact',
-    agentTier: 2,
-    type: 'insight',
-    title: 'Speaker Programs Outperforming Digital',
-    summary: 'Fabhalta speaker programs show 2.1x higher ATE than digital campaigns. Consider budget reallocation.',
-    impact: 'high',
-    timestamp: '1 day ago',
-    actionable: true,
-    relatedKPIs: ['fab_ate', 'fab_share'],
-  },
-  {
-    id: '4',
-    agentName: 'Health Score',
-    agentTier: 3,
-    type: 'recommendation',
-    title: 'Patient Adherence Improvement',
-    summary: 'Implementing 3-month refill reminders could increase adherence by 12% based on causal analysis.',
-    impact: 'medium',
-    timestamp: '1 day ago',
-    actionable: true,
-    relatedKPIs: ['adherence', 'patient_starts'],
-  },
-];
+// NOTE: the former SAMPLE_INSIGHTS hardcoded array was removed — the Agent
+// Insights tile now renders the REAL dual-source feed (executive insights + gap
+// opportunities) with honest loading/empty/error states.
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -248,6 +207,87 @@ function getImpactBadge(impact: AgentInsight['impact']) {
     low: 'bg-slate-100 text-slate-700 dark:bg-slate-900/30 dark:text-slate-400',
   };
   return <Badge className={cn('text-xs', colors[impact])}>{impact}</Badge>;
+}
+
+/** Map a backend KPI status string to the KPICard status enum. */
+function mapKpiStatus(
+  status: string | undefined
+): 'healthy' | 'warning' | 'critical' | 'neutral' {
+  switch ((status ?? '').toLowerCase()) {
+    case 'good':
+    case 'healthy':
+      return 'healthy';
+    case 'warning':
+    case 'degraded':
+      return 'warning';
+    case 'critical':
+    case 'unhealthy':
+      return 'critical';
+    default:
+      return 'neutral';
+  }
+}
+
+/** Map a 0-1 health dimension score to a status color class. */
+function healthScoreClass(score: number): string {
+  if (score >= 0.9) return 'text-emerald-600 dark:text-emerald-400';
+  if (score >= 0.7) return 'text-amber-600 dark:text-amber-400';
+  return 'text-rose-600 dark:text-rose-400';
+}
+
+/** Format a large integer with thousands separators (honest empty -> '—'). */
+function formatStat(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return Math.round(value).toLocaleString();
+}
+
+const AGENT_TIER_META: { tier: number; name: string }[] = [
+  { tier: 0, name: 'ML Foundation' },
+  { tier: 1, name: 'Orchestration' },
+  { tier: 2, name: 'Causal Analytics' },
+  { tier: 3, name: 'Monitoring' },
+  { tier: 4, name: 'ML Predictions' },
+  { tier: 5, name: 'Self-Improvement' },
+];
+
+interface QuickStatTileProps {
+  label: string;
+  icon: React.ReactNode;
+  /** Pre-formatted display string ('—' for honest unavailable). */
+  display: string;
+  loading?: boolean;
+  error?: boolean;
+  /** Show a small "sample data" badge when the value is fallback (not real DB). */
+  sampleBadge?: boolean;
+}
+
+function QuickStatTile({ label, icon, display, loading, error, sampleBadge }: QuickStatTileProps) {
+  return (
+    <Card>
+      <CardContent className="py-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-muted/50">{icon}</div>
+          <div className="min-w-0">
+            <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+              {label}
+              {sampleBadge && (
+                <Badge variant="outline" className="text-[10px] px-1 py-0">sample data</Badge>
+              )}
+            </div>
+            <div className="text-xl font-semibold truncate">
+              {loading ? (
+                <span className="text-muted-foreground text-sm">Loading…</span>
+              ) : error ? (
+                <span className="text-muted-foreground text-sm">Unavailable</span>
+              ) : (
+                display
+              )}
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 // =============================================================================
@@ -291,6 +331,52 @@ function Home() {
   // System alerts from monitoring
   const { data: alertsData } = useAlerts();
 
+  // QUICK_STATS: real business_metrics rollup (Total TRx (MTD), HCPs Reached).
+  const {
+    data: kpiSummary,
+    isLoading: summaryLoading,
+    error: summaryError,
+  } = useKpiSummary(selectedBrand);
+
+  // QUICK_STATS: Active Campaigns = count of running experiments.
+  const { data: activeExp, isLoading: activeExpLoading } = useActiveExperimentCount();
+
+  // QUICK_STATS: Model Accuracy = real ROC-AUC (WS1-MP-001, ml_predictions.model_auc).
+  const {
+    data: rocAucResult,
+    isLoading: rocAucLoading,
+  } = useKPIValue('WS1-MP-001', selectedBrand !== 'All' ? selectedBrand : undefined);
+
+  // System Health card: real agent-computed aggregate scores.
+  const {
+    data: health,
+    isLoading: healthLoading,
+    error: healthError,
+  } = useQuickHealthCheck({ refetchInterval: 30000 });
+
+  // Agent Status card: real agent roster.
+  const { data: agentStatus, isLoading: agentsLoading } = useQuery({
+    queryKey: ['agent-status'],
+    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
+    refetchInterval: 30000,
+    retry: false,
+  });
+
+  // AI Insights tile — dual source: executive insights + gap opportunities.
+  const {
+    data: execInsights,
+    isLoading: execInsightsLoading,
+    error: execInsightsError,
+  } = useHomeExecutiveInsights(selectedBrand, { enabled: selectedBrand !== 'All' });
+  const {
+    data: opportunities,
+    isLoading: opportunitiesLoading,
+    error: opportunitiesError,
+  } = useOpportunities(
+    selectedBrand !== 'All' ? { limit: 5 } : { limit: 5 },
+    { retry: false }
+  );
+
   // Transform API KPIs to local KPIMetric format
   const apiKPIs = useMemo((): KPIMetric[] => {
     if (!kpiListData?.kpis) return [];
@@ -311,20 +397,51 @@ function Home() {
     }));
   }, [kpiListData]);
 
-  // Use API metadata when available; values are NOT yet computed by the backend
-  // (/api/kpis serves metadata only). Render names/categories/units for real,
-  // and an honest "Not yet computed" placeholder for the numeric value.
-  // Fall back to SAMPLE_KPIS only in Demo Mode (API offline) — the header badge
-  // already announces "Demo Mode" / "API Offline (using sample data)".
+  // Use API metadata when available; fetch the real numeric VALUES via the
+  // batch endpoint (POST /api/kpis/batch). View-backed KPIs return a real float;
+  // the rest return value:null + error → rendered as an honest "Not yet computed"
+  // PER CARD (the real backend state, NOT a fabrication). Fall back to SAMPLE_KPIS
+  // only in Demo Mode (API offline) — the header badge announces it.
   const effectiveKPIs = useMemo(() => {
     if (apiKPIs.length > 0) {
-      return apiKPIs; // value:0 from the mapper; rendered as "Not yet computed" below
+      return apiKPIs;
     }
     return SAMPLE_KPIS[selectedBrand];
   }, [apiKPIs, selectedBrand]);
 
-  // True only when we are rendering live metadata (no computed values yet).
-  const valuesNotComputed = apiKPIs.length > 0;
+  // True only when we are rendering live metadata (real ids, real values fetched
+  // separately via the batch endpoint below).
+  const liveKpiMode = apiKPIs.length > 0;
+
+  // Fetch real KPI values for the live ids via the batch calculation endpoint.
+  const { mutate: batchCalc, data: batchData } = useBatchCalculateKPIs();
+  const kpiListIds = useMemo(
+    () => kpiListData?.kpis?.map((k) => k.id) ?? [],
+    [kpiListData]
+  );
+  useEffect(() => {
+    if (kpiListIds.length > 0) {
+      batchCalc({
+        kpi_ids: kpiListIds,
+        use_cache: true,
+        context: selectedBrand !== 'All' ? { brand: selectedBrand } : undefined,
+      });
+    }
+    // batchCalc is a stable mutation fn from react-query.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kpiListIds, selectedBrand]);
+  // Map kpi_id → { value, status, error } from the batch result (real values).
+  const valueByKpiId = useMemo(() => {
+    const m = new Map<string, { value: number | null; status: string; error: string | null }>();
+    batchData?.results?.forEach((r) => {
+      m.set(r.kpi_id, {
+        value: r.value ?? null,
+        status: r.status,
+        error: r.error ?? null,
+      });
+    });
+    return m;
+  }, [batchData]);
 
   // Get navigation routes for quick actions
   const navRoutes = getNavigationRoutes().filter((route) => route.path !== '/');
@@ -371,6 +488,100 @@ function Home() {
     // Fall back to sample alerts
     return ACTIVE_ALERTS.filter(a => !dismissedAlerts.includes(a.id));
   }, [alertsData, dismissedAlerts]);
+
+  // Derive per-tier agent counts from the real roster (never hardcoded 15/21).
+  const agentTierStats = useMemo(() => {
+    const agents = agentStatus?.agents ?? [];
+    return AGENT_TIER_META.map((t) => {
+      const inTier = agents.filter((a) => a.tier === t.tier);
+      return {
+        ...t,
+        total: inTier.length,
+        active: inTier.filter((a) => a.status === 'active').length,
+      };
+    });
+  }, [agentStatus]);
+  const totalAgents = agentStatus?.agents?.length ?? 0;
+  const activeAgents = useMemo(
+    () => (agentStatus?.agents ?? []).filter((a) => a.status === 'active').length,
+    [agentStatus]
+  );
+
+  // Merge the two AI-insight sources into one deduped, ranked list.
+  const mergedInsights = useMemo((): AgentInsight[] => {
+    const impactRank = { high: 3, medium: 2, low: 1 } as const;
+    const items: (AgentInsight & { _rank: number })[] = [];
+
+    // Source A — executive insights.
+    (execInsights ?? []).forEach((ins) => {
+      const impact: AgentInsight['impact'] =
+        ins.effect_size != null && Math.abs(ins.effect_size) >= 0.2
+          ? 'high'
+          : ins.effect_size != null && Math.abs(ins.effect_size) >= 0.1
+            ? 'medium'
+            : 'low';
+      items.push({
+        id: `exec:${ins.insight_id}`,
+        agentName: 'Executive Brief',
+        agentTier: 5,
+        type: 'insight',
+        title: ins.title,
+        summary: ins.narrative || ins.recommended_next_analysis || '',
+        impact,
+        timestamp: ins.crystallized_at
+          ? new Date(ins.crystallized_at).toLocaleDateString()
+          : '',
+        actionable: !!ins.recommended_next_analysis,
+        relatedKPIs: ins.kpi ? [ins.kpi] : [],
+        _rank: impactRank[impact],
+      });
+    });
+
+    // Source B — gap opportunities.
+    (opportunities?.opportunities ?? []).forEach((opp) => {
+      const impact: AgentInsight['impact'] =
+        opp.implementation_difficulty === 'low'
+          ? 'high'
+          : opp.implementation_difficulty === 'high'
+            ? 'low'
+            : 'medium';
+      items.push({
+        id: `gap:${opp.gap.gap_id}`,
+        agentName: 'Gap Analyzer',
+        agentTier: 2,
+        type: 'opportunity',
+        title: `${opp.gap.segment_value} ${opp.gap.metric}`,
+        summary: opp.recommended_action,
+        impact,
+        timestamp: opp.time_to_impact || '',
+        actionable: true,
+        relatedKPIs: [opp.gap.metric],
+        _rank: impactRank[impact],
+      });
+    });
+
+    // Dedup by composite id, then by (title+summary) defensively.
+    const byId = new Map<string, (typeof items)[number]>();
+    items.forEach((it) => {
+      if (!byId.has(it.id)) byId.set(it.id, it);
+    });
+    const seen = new Set<string>();
+    const deduped = [...byId.values()].filter((it) => {
+      const k = `${it.title}|${it.summary}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    // Order by impact desc, then deterministic tie-break on id for stable keys.
+    deduped.sort((a, b) => b._rank - a._rank || a.id.localeCompare(b.id));
+    return deduped.map(({ _rank, ...rest }) => {
+      void _rank;
+      return rest;
+    });
+  }, [execInsights, opportunities]);
+
+  const insightsLoading = execInsightsLoading || opportunitiesLoading;
 
   // Dismiss alert handler
   const handleDismissAlert = (id: number) => {
@@ -511,13 +722,44 @@ function Home() {
       {/* Primary Causal Value Chains */}
       <CausalValueChains />
 
-      {/* Quick Stats Bar — no live aggregate-stats Home hook exists today, so we
-          surface the absence honestly instead of fabricating TRx/accuracy/HCP
-          figures. Computed values live on the linked detail pages. */}
-      <EmptyState
-        title="Quick stats not yet computed"
-        description="Portfolio-level rollups (TRx, HCP reach, model accuracy) are not yet served to the landing page. See the KPI Dictionary and Model Performance pages for live metrics."
-      />
+      {/* Quick Stats Bar — REAL data: Total TRx (MTD) + HCPs Reached from the
+          business_metrics rollup; Active Campaigns = running experiments; Model
+          Accuracy = real ROC-AUC (ml_predictions.model_auc). Honest loading /
+          '—' / "sample data" badge where appropriate — never a fabricated value. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <QuickStatTile
+          label="Total TRx (MTD)"
+          icon={<Pill className="h-4 w-4 text-blue-500" />}
+          loading={summaryLoading}
+          error={!!summaryError}
+          display={formatStat(kpiSummary?.metrics?.trx_volume)}
+          sampleBadge={!!kpiSummary && kpiSummary.data_source !== 'database'}
+        />
+        <QuickStatTile
+          label="Active Campaigns"
+          icon={<Activity className="h-4 w-4 text-purple-500" />}
+          loading={activeExpLoading}
+          display={formatStat(activeExp?.active_count)}
+        />
+        <QuickStatTile
+          label="HCPs Reached"
+          icon={<Users className="h-4 w-4 text-emerald-500" />}
+          loading={summaryLoading}
+          error={!!summaryError}
+          display={formatStat(kpiSummary?.metrics?.hcp_reach)}
+          sampleBadge={!!kpiSummary && kpiSummary.data_source !== 'database'}
+        />
+        <QuickStatTile
+          label="Model Accuracy"
+          icon={<Brain className="h-4 w-4 text-rose-500" />}
+          loading={rocAucLoading}
+          display={
+            rocAucResult?.value != null
+              ? `${(rocAucResult.value * 100).toFixed(1)}%`
+              : '—'
+          }
+        />
+      </div>
 
       {/* Active Alerts */}
       {visibleAlerts.length > 0 && (
@@ -640,23 +882,46 @@ function Home() {
                 {KPI_CATEGORIES.map((cat) => (
                   <TabsContent key={cat.id} value={cat.id} className="mt-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                      {filteredKPIs.map((kpi) => (
-                        <KPICard
-                          key={kpi.id}
-                          title={kpi.name}
-                          value={valuesNotComputed ? 'Not yet computed' : kpi.value}
-                          unit={valuesNotComputed ? undefined : kpi.unit}
-                          prefix={valuesNotComputed ? undefined : kpi.prefix}
-                          previousValue={valuesNotComputed ? undefined : kpi.previousValue}
-                          target={valuesNotComputed ? undefined : kpi.target}
-                          sparklineData={valuesNotComputed ? undefined : kpi.sparkline}
-                          status={valuesNotComputed ? 'neutral' : kpi.status}
-                          description={kpi.description}
-                          higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
-                          size="sm"
-                          onClick={() => navigate('/model-performance')}
-                        />
-                      ))}
+                      {filteredKPIs.map((kpi) => {
+                        // In live mode, read the REAL value fetched via the batch
+                        // endpoint. View-backed KPIs return a float; the rest
+                        // return value:null/error → honest "Not yet computed".
+                        if (liveKpiMode) {
+                          const r = valueByKpiId.get(kpi.id);
+                          const hasValue = r != null && r.value != null && !r.error;
+                          return (
+                            <KPICard
+                              key={kpi.id}
+                              title={kpi.name}
+                              value={hasValue ? (r!.value as number) : 'Not yet computed'}
+                              unit={hasValue ? kpi.unit : undefined}
+                              target={hasValue ? kpi.target : undefined}
+                              status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
+                              description={kpi.description}
+                              size="sm"
+                              onClick={() => navigate('/model-performance')}
+                            />
+                          );
+                        }
+                        // Demo Mode (API offline): SAMPLE_KPIS, header badge announces it.
+                        return (
+                          <KPICard
+                            key={kpi.id}
+                            title={kpi.name}
+                            value={kpi.value}
+                            unit={kpi.unit}
+                            prefix={kpi.prefix}
+                            previousValue={kpi.previousValue}
+                            target={kpi.target}
+                            sparklineData={kpi.sparkline}
+                            status={kpi.status}
+                            description={kpi.description}
+                            higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
+                            size="sm"
+                            onClick={() => navigate('/model-performance')}
+                          />
+                        );
+                      })}
                     </div>
                   </TabsContent>
                 ))}
@@ -673,7 +938,7 @@ function Home() {
                     <Sparkles className="h-5 w-5" />
                     Agent Insights
                   </CardTitle>
-                  <CardDescription>Sample insights (live agent feed not yet wired)</CardDescription>
+                  <CardDescription>Executive insights &amp; gap opportunities</CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => navigate('/monitoring')}>
                   View All
@@ -682,37 +947,59 @@ function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {SAMPLE_INSIGHTS.slice(0, 4).map((insight) => (
-                  <div
-                    key={insight.id}
-                    className="flex items-start gap-3 p-3 rounded-lg border bg-[var(--color-card)] hover:bg-muted/50 transition-colors cursor-pointer"
-                    onClick={() => navigate('/causal-discovery')}
-                  >
-                    <div className="mt-0.5">{getInsightIcon(insight.type)}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium text-sm">{insight.title}</span>
-                        {getImpactBadge(insight.impact)}
+              {/* Real, dual-source feed. No SAMPLE_INSIGHTS fallback — honest
+                  loading / error / empty when the substrate is genuinely empty. */}
+              {insightsLoading ? (
+                <p className="text-sm text-muted-foreground py-4">Loading insights…</p>
+              ) : mergedInsights.length === 0 ? (
+                <div className="py-4 space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    No insights yet — run a gap analysis or trigger insight crystallization.
+                  </p>
+                  {opportunitiesError && (
+                    <p className="text-xs text-amber-600">Opportunities temporarily unavailable.</p>
+                  )}
+                  {execInsightsError && selectedBrand !== 'All' && (
+                    <p className="text-xs text-amber-600">Executive insights temporarily unavailable.</p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {mergedInsights.slice(0, 4).map((insight) => (
+                    <div
+                      key={insight.id}
+                      className="flex items-start gap-3 p-3 rounded-lg border bg-[var(--color-card)] hover:bg-muted/50 transition-colors cursor-pointer"
+                      onClick={() => navigate('/causal-discovery')}
+                    >
+                      <div className="mt-0.5">{getInsightIcon(insight.type)}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-medium text-sm">{insight.title}</span>
+                          {getImpactBadge(insight.impact)}
+                        </div>
+                        <p className="text-sm text-muted-foreground line-clamp-2">{insight.summary}</p>
+                        <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                          <Badge variant="outline" className="text-xs">
+                            Tier {insight.agentTier}: {insight.agentName}
+                          </Badge>
+                          {insight.timestamp && (
+                            <>
+                              <span>•</span>
+                              <Clock className="h-3 w-3" />
+                              <span>{insight.timestamp}</span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <p className="text-sm text-muted-foreground line-clamp-2">{insight.summary}</p>
-                      <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                        <Badge variant="outline" className="text-xs">
-                          Tier {insight.agentTier}: {insight.agentName}
-                        </Badge>
-                        <span>•</span>
-                        <Clock className="h-3 w-3" />
-                        <span>{insight.timestamp}</span>
-                      </div>
+                      {insight.actionable && (
+                        <Button variant="outline" size="sm">
+                          Act
+                        </Button>
+                      )}
                     </div>
-                    {insight.actionable && (
-                      <Button variant="outline" size="sm">
-                        Act
-                      </Button>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -728,10 +1015,36 @@ function Home() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <EmptyState
-                title="Service status not on this page"
-                description="Live infrastructure status is on the System Health page."
-              />
+              {healthLoading ? (
+                <p className="text-sm text-muted-foreground py-2">Checking system health…</p>
+              ) : healthError || !health ? (
+                <p className="text-sm text-muted-foreground py-2">Health check unavailable</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Overall</span>
+                    <span className="font-semibold">
+                      {Math.round(health.overall_health_score)} ({health.health_grade})
+                    </span>
+                  </div>
+                  {([
+                    ['Components', health.component_health_score],
+                    ['Models', health.model_health_score],
+                    ['Pipelines', health.pipeline_health_score],
+                    ['Agents', health.agent_health_score],
+                  ] as [string, number][]).map(([label, score]) => (
+                    <div key={label} className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">{label}</span>
+                      <span className={cn('font-medium', healthScoreClass(score))}>
+                        {Math.round(score * 100)}%
+                      </span>
+                    </div>
+                  ))}
+                  {health.warnings?.some((w) => w.toLowerCase().includes('mock data')) && (
+                    <p className="text-xs text-amber-600">Awaiting Health Score agent</p>
+                  )}
+                </div>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -753,10 +1066,32 @@ function Home() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <EmptyState
-                title="Agent status not on this page"
-                description="Live tier and agent health is on the Agent Orchestration page."
-              />
+              {agentsLoading ? (
+                <p className="text-sm text-muted-foreground py-2">Loading agents…</p>
+              ) : totalAgents === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">Agent roster unavailable</p>
+              ) : (
+                <div className="space-y-2">
+                  {agentTierStats
+                    .filter((t) => t.total > 0)
+                    .map((t) => (
+                      <div key={t.tier} className="space-y-1">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">
+                            Tier {t.tier}: {t.name}
+                          </span>
+                          <span className="font-medium">
+                            {t.active}/{t.total}
+                          </span>
+                        </div>
+                        <Progress value={t.total > 0 ? (t.active / t.total) * 100 : 0} className="h-1.5" />
+                      </div>
+                    ))}
+                  <p className="text-xs text-muted-foreground pt-1">
+                    {activeAgents}/{totalAgents} agents active
+                  </p>
+                </div>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
