@@ -238,8 +238,17 @@ class ToolComposer:
             phase_start = datetime.now(timezone.utc)
             logger.info("Phase 2: Creating execution plan...")
 
+            # F6(b): hand the planner a RICH column profile (dtype family,
+            # cardinality, low-card value lists) — not just names — so the LLM
+            # binds column-typed args to real columns AND avoids degenerate /
+            # near-constant targets. available_columns is kept for back-compat.
+            column_profiles = self._extract_column_profiles(context)
             available_columns = self._extract_available_columns(context)
-            plan = await self.planner.plan(decomposition, available_columns=available_columns)
+            plan = await self.planner.plan(
+                decomposition,
+                available_columns=available_columns,
+                column_profiles=column_profiles,
+            )
 
             phase_durations["plan"] = self._elapsed_ms(phase_start)
             logger.info(
@@ -400,6 +409,106 @@ class ToolComposer:
         if isinstance(frame, pd.DataFrame):
             return [str(col) for col in frame.columns]
         return None
+
+    def _extract_column_profiles(self, context: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """Build a per-column PROFILE from the in-context DataFrame (F6(b)).
+
+        For each column the profile carries:
+        - ``name``: the column name
+        - ``dtype_family``: one of ``binary`` / ``numeric-continuous`` /
+          ``categorical`` / ``other`` — the semantic family the planner uses to
+          pick a treatment (binary/low-card), an outcome (numeric), or a
+          segment (low-card categorical)
+        - ``n_unique``: distinct non-null value count (cardinality)
+        - ``n_nonnull``: non-null cell count
+        - ``values``: the actual distinct values for LOW-cardinality columns
+          (<= ``_LOW_CARD_MAX``), else ``None`` — so the LLM avoids
+          near-constant / degenerate targets
+
+        Robustness: real cohort frames contain list-valued (unhashable) columns
+        (e.g. ``comorbidities``). ``Series.nunique()`` raises
+        ``TypeError: unhashable type: 'list'`` on those, so cardinality and the
+        value list fall back to a string-cast path rather than crashing.
+
+        Returns ``None`` when no DataFrame is present (schema-free planning).
+        """
+        import pandas as pd
+
+        frame = context.get("estimation_data")
+        if not isinstance(frame, pd.DataFrame):
+            return None
+
+        _LOW_CARD_MAX = 12
+        profiles: List[Dict[str, Any]] = []
+
+        for col in frame.columns:
+            series = frame[col]
+            n_nonnull = int(series.notna().sum())
+
+            # Cardinality + distinct values, robust to unhashable cells.
+            unhashable = False
+            try:
+                n_unique = int(series.nunique(dropna=True))
+                distinct = series.dropna().unique().tolist()
+            except TypeError:
+                # list/dict-valued cells -> count distinct string reprs.
+                unhashable = True
+                as_str = series.dropna().astype(str)
+                n_unique = int(as_str.nunique())
+                distinct = as_str.unique().tolist()
+
+            dtype_family = self._classify_dtype_family(series, n_unique, unhashable)
+
+            values: Optional[List[Any]] = None
+            if not unhashable and 0 < n_unique <= _LOW_CARD_MAX:
+                # JSON-safe scalars for the prompt (numpy -> python).
+                values = [v.item() if hasattr(v, "item") else v for v in distinct]
+            elif unhashable and 0 < n_unique <= _LOW_CARD_MAX:
+                values = [str(v) for v in distinct]
+
+            profiles.append(
+                {
+                    "name": str(col),
+                    "dtype_family": dtype_family,
+                    "n_unique": n_unique,
+                    "n_nonnull": n_nonnull,
+                    "values": values,
+                }
+            )
+
+        return profiles
+
+    @staticmethod
+    def _classify_dtype_family(series: Any, n_unique: int, unhashable: bool) -> str:
+        """Classify a column into a planner-facing dtype family.
+
+        - ``binary``: numeric/bool with exactly 2 distinct non-null values
+        - ``numeric-continuous``: numeric dtype with > 2 distinct values
+        - ``categorical``: object/category/bool (or string-like) low-ish card
+        - ``other``: unhashable (list/dict-valued) or otherwise unclassifiable
+        """
+        import pandas as pd
+
+        if unhashable:
+            return "other"
+
+        if pd.api.types.is_bool_dtype(series):
+            return "binary" if n_unique <= 2 else "categorical"
+
+        if pd.api.types.is_numeric_dtype(series):
+            if n_unique <= 2:
+                return "binary"
+            return "numeric-continuous"
+
+        # object / category / string -> categorical
+        if (
+            pd.api.types.is_object_dtype(series)
+            or isinstance(series.dtype, pd.CategoricalDtype)
+            or pd.api.types.is_string_dtype(series)
+        ):
+            return "categorical"
+
+        return "other"
 
     def _record_audit_entry(
         self,

@@ -276,6 +276,79 @@ async def test_canonical_query_real_llm_end_to_end():
 
 
 # ---------------------------------------------------------------------------
+# F6(b) (manual-only opt-in): real planner LLM + real column PROFILE bind ONLY
+# real columns. This is the faithful proof for the F6(b) shard — it disproves
+# the failure that the real LLM bound nonexistent columns
+# (outcome='conversion_rate', treatment='Kisqali') on the canonical query.
+#
+# It runs the REAL planner (live network LLM) over a real cohort frame's column
+# PROFILE and asserts that every column-typed argument the planner emitted is an
+# EXACT real column of the frame. Gated behind E2I_RUN_REAL_LLM_E2E=1 (same
+# rationale as the e2e above: nondeterministic LLM JSON must not flake CI).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.getenv("E2I_RUN_REAL_LLM_E2E") != "1"
+    or not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY")),
+    reason=(
+        "manual-only: set E2I_RUN_REAL_LLM_E2E=1 (plus an API key) to run the "
+        "F6(b) real-LLM binding proof. Gated off by default so nondeterministic "
+        "LLM planning JSON cannot flake CI (#504)."
+    ),
+)
+async def test_f6b_real_llm_binds_only_real_columns():
+    from src.agents.tool_composer.composer import ToolComposer
+    from src.agents.tool_composer.decomposer import QueryDecomposer
+    from src.agents.tool_composer.planner import _COLUMN_ARG_KEYS
+    from src.utils.llm_factory import get_chat_llm
+
+    df = _build_cohort_df()
+    column_set = {str(c) for c in df.columns}
+    context = {"brand": "Kisqali", "region": "northeast", "estimation_data": df}
+
+    llm_client = get_chat_llm(model_tier="reasoning", max_tokens=4096)
+
+    # Build the rich column profile exactly as the production composer does.
+    composer = ToolComposer(
+        llm_client=llm_client,
+        enable_memory_contribution=False,
+        config={"phases": {"plan": {"use_episodic_memory": False}}},
+    )
+    column_profiles = composer._extract_column_profiles(context)
+    assert column_profiles is not None
+
+    # Run the REAL decomposer + REAL planner (the live LLM picks the bindings).
+    decomposer = QueryDecomposer(llm_client=llm_client)
+    decomposition = await decomposer.decompose(CANONICAL_QUERY)
+    plan = await composer.planner.plan(decomposition, column_profiles=column_profiles)
+
+    # Every column-typed literal arg the LLM emitted must be a REAL column.
+    emitted: list[tuple[str, str, str]] = []
+    for step in plan.steps:
+        for arg_name, value in step.input_mapping.items():
+            if arg_name not in _COLUMN_ARG_KEYS:
+                continue
+            if isinstance(value, str) and not value.startswith("$"):
+                emitted.append((step.step_id, arg_name, value))
+                assert value in column_set, (
+                    f"planner bound {arg_name}={value!r} which is NOT a real "
+                    f"column (real columns: {sorted(column_set)})"
+                )
+            elif isinstance(value, list):
+                for v in value:
+                    if isinstance(v, str) and not v.startswith("$"):
+                        emitted.append((step.step_id, arg_name, v))
+                        assert v in column_set, (
+                            f"planner bound {arg_name} item {v!r} which is NOT a "
+                            f"real column (real columns: {sorted(column_set)})"
+                        )
+
+    # The plan must actually have bound at least one column-typed arg (otherwise
+    # the assertion above is vacuously true).
+    assert emitted, "planner emitted no column-typed bindings to verify"
+
+
+# ---------------------------------------------------------------------------
 # T2 (Rec#1a): the production caller resolves a real frame and threads it into
 # the composer context under "estimation_data".
 # ---------------------------------------------------------------------------
