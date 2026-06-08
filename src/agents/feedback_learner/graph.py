@@ -253,8 +253,6 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     pattern_accuracy: float | None = None
     recommendation_actionability = min(len(recommendations) / 5.0, 1.0) if recommendations else 0.0
     update_effectiveness = len(applied_updates) / max(len(state.get("proposed_updates") or []), 1)
-    min(1.0, 5000 / max(state.get("total_latency_ms", 1), 1))  # Target < 5s
-    min(len(patterns) / max(len(feedback_items), 1), 1.0) if feedback_items else 0.0
 
     # Get rubric evaluation metrics if available
     rubric_weighted_score = state.get("rubric_weighted_score")
