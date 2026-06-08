@@ -34,10 +34,17 @@ class HealthReportPrompts:
     for generating human-readable summaries and recommendations.
     """
 
-    # Summary generation prompt
+    # Summary generation prompt.
+    #
+    # NOTE: this template is the OPTIMIZABLE source of the human-readable health
+    # summary that ``ScoreComposerNode._generate_summary`` emits. The default
+    # value below renders BYTE-IDENTICALLY to the node's historical inline
+    # construction so wiring the getter in is a pure drop-in. The
+    # ``{components_suffix}`` placeholder is empty for score_composer (which
+    # supplies no component names) and only renders when components are passed.
     summary_template: str = (
-        "Generate a concise health summary for system with grade {grade} and score {score}. "
-        "Components: {components}. Critical issues: {critical_count}. Warnings: {warning_count}."
+        "System health is {status} (Grade: {grade}, Score: {score:.1f}/100). "
+        "{issue_clause}{components_suffix}"
     )
 
     # Recommendation prompt
@@ -170,6 +177,17 @@ class HealthScoreDSPyIntegration:
             f"score={optimization_score:.4f}"
         )
 
+    # Maps a health grade to the human-readable status word used in the summary.
+    # Mirrors ScoreComposerNode._generate_summary's historical mapping so the
+    # optimizable template renders identically.
+    _STATUS_BY_GRADE: Dict[str, str] = {
+        "A": "excellent",
+        "B": "good",
+        "C": "fair",
+        "D": "poor",
+        "F": "critical",
+    }
+
     def get_summary_prompt(
         self,
         grade: str,
@@ -178,13 +196,30 @@ class HealthScoreDSPyIntegration:
         critical_count: int,
         warning_count: int,
     ) -> str:
-        """Get formatted summary prompt with current optimized template."""
+        """Get the formatted summary via the current (optimizable) template.
+
+        Drop-in replacement for ScoreComposerNode's inline summary construction:
+        with ``components=""`` (as score_composer calls it) the output is
+        byte-identical to the historical ``_generate_summary`` string. When
+        component names ARE supplied, a ``Components: ...`` suffix is appended.
+        ``status`` and ``issue_clause`` are derived here so the template stays a
+        pure ``.format()`` string (no conditionals) and remains optimizable.
+        """
+        status = self._STATUS_BY_GRADE.get(grade, "unknown")
+        if critical_count:
+            issue_clause = f"{critical_count} critical issue(s) detected."
+        else:
+            issue_clause = "All systems operational."
+        components_suffix = f" Components: {components}." if components else ""
         return self._prompts.summary_template.format(
             grade=grade,
             score=score,
             components=components,
             critical_count=critical_count,
             warning_count=warning_count,
+            status=status,
+            issue_clause=issue_clause,
+            components_suffix=components_suffix,
         )
 
     def get_recommendation_prompt(
