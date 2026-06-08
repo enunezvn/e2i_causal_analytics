@@ -16,6 +16,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
+from src.rag.fusion_utils import dedup_key
 from src.rag.memory_connector import get_memory_connector
 from src.rag.models.retrieval_models import RetrievalResult
 
@@ -346,8 +347,12 @@ class HybridRetriever:
 
         for results, weight in zip(result_lists, weights, strict=False):
             for rank, result in enumerate(results, start=1):
-                # Use source_id for deduplication - same document from different sources should be boosted
-                key = result.source_id
+                # Content-aware dedup: identical content under different
+                # source_ids collapses to one fused row (avoids double RRF mass
+                # and wasted top-k slots). Shared with hybrid_retriever via
+                # fusion_utils.dedup_key. Cross-list (same content from dense +
+                # sparse) is still correctly boosted because both map to one key.
+                key = dedup_key(result.content, result.source_id)
                 rrf_score = weight / (k + rank)
                 scores[key] = scores.get(key, 0) + rrf_score
                 result_map[key] = result

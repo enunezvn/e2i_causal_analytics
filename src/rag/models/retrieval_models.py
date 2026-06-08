@@ -13,7 +13,14 @@ class RetrievalResult(BaseModel):
     content: str = Field(..., description="Retrieved text content")
     source: str = Field(..., description="Source table name")
     source_id: str = Field(..., description="Record ID in source table")
-    score: float = Field(..., ge=0, le=1, description="Relevance score")
+    score: float = Field(
+        ...,
+        ge=0,
+        description=(
+            "Raw RRF fusion score (sum of weight/(k+rank)); NOT a 0-1 relevance. "
+            "Downstream relevance is the DSPy relevance_score, not this field."
+        ),
+    )
     retrieval_method: Literal["dense", "sparse", "graph", "structured"] = Field(
         ..., description="Method used to retrieve this result"
     )

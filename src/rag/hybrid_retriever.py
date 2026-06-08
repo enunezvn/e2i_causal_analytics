@@ -26,6 +26,7 @@ from src.rag.backends import FulltextBackend, GraphBackend, VectorBackend
 from src.rag.config import (
     RAGConfig,
 )
+from src.rag.fusion_utils import dedup_key
 from src.rag.types import (
     BackendHealth,
     BackendStatus,
@@ -338,20 +339,24 @@ class HybridRetriever:
 
         for source, results in backend_results.items():
             for rank, result in enumerate(results, start=1):
-                id_ranks[result.id][source] = rank
+                # Content-aware dedup shared with retriever.py via
+                # fusion_utils.dedup_key. The dataclass field here is result.id
+                # (not source_id); pass it as the blank-content fallback.
+                key = dedup_key(result.content, result.id)
+                id_ranks[key][source] = rank
                 # Keep the result with most metadata, preserving graph_context
-                if result.id not in id_to_result:
-                    id_to_result[result.id] = result
+                if key not in id_to_result:
+                    id_to_result[key] = result
                 else:
-                    existing = id_to_result[result.id]
+                    existing = id_to_result[key]
                     # Prefer result with graph_context, or more metadata
                     if result.graph_context and not existing.graph_context:
-                        id_to_result[result.id] = result
+                        id_to_result[key] = result
                     elif len(result.metadata) > len(existing.metadata):
                         # Also preserve graph_context from existing if new doesn't have it
                         if existing.graph_context and not result.graph_context:
                             result.graph_context = existing.graph_context
-                        id_to_result[result.id] = result
+                        id_to_result[key] = result
                     elif existing.graph_context is None and result.graph_context:
                         # Merge graph_context into existing
                         existing.graph_context = result.graph_context
@@ -360,7 +365,7 @@ class HybridRetriever:
         weights = self.config.search.fusion_weights
         rrf_scores: Dict[str, float] = {}
 
-        for result_id, source_ranks in id_ranks.items():
+        for key, source_ranks in id_ranks.items():
             score = 0.0
             sources_found = []
 
@@ -369,17 +374,17 @@ class HybridRetriever:
                 score += weight * (1.0 / (self.RRF_K + rank))
                 sources_found.append(source.value)
 
-            rrf_scores[result_id] = score
+            rrf_scores[key] = score
 
             # Update result with RRF score and source attribution
-            result = id_to_result[result_id]
+            result = id_to_result[key]
             result.score = score
             result.metadata["rrf_sources"] = sources_found
             result.metadata["rrf_score"] = score
 
         # Sort by RRF score and return top_k
-        sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
-        return [id_to_result[rid] for rid in sorted_ids[:top_k]]
+        sorted_keys = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        return [id_to_result[k] for k in sorted_keys[:top_k]]
 
     def _apply_graph_boost(self, results: List[RetrievalResult]) -> List[RetrievalResult]:
         """
