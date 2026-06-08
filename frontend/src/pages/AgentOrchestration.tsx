@@ -60,9 +60,10 @@ interface TierMetrics {
   name: string;
   activeAgents: number;
   totalAgents: number;
-  avgResponseTime: number;
-  successRate: number;
-  tasksCompleted: number;
+  /** Per-tier performance metrics are not yet served by /agents/status. */
+  avgResponseTime: number | null;
+  successRate: number | null;
+  tasksCompleted: number | null;
 }
 
 interface OrchestrationStats {
@@ -85,14 +86,17 @@ interface OrchestrationStats {
 
 const ACTIVITIES: AgentActivity[] = [];
 
-const TIER_METRICS: TierMetrics[] = [
-  { tier: 0, name: 'ML Foundation', activeAgents: 6, totalAgents: 8, avgResponseTime: 450, successRate: 98.5, tasksCompleted: 234 },
-  { tier: 1, name: 'Orchestration', activeAgents: 2, totalAgents: 2, avgResponseTime: 120, successRate: 99.8, tasksCompleted: 1205 },
-  { tier: 2, name: 'Causal Analytics', activeAgents: 3, totalAgents: 3, avgResponseTime: 2800, successRate: 94.2, tasksCompleted: 156 },
-  { tier: 3, name: 'Monitoring', activeAgents: 3, totalAgents: 4, avgResponseTime: 350, successRate: 99.1, tasksCompleted: 892 },
-  { tier: 4, name: 'ML Predictions', activeAgents: 2, totalAgents: 2, avgResponseTime: 180, successRate: 97.6, tasksCompleted: 445 },
-  { tier: 5, name: 'Self-Improvement', activeAgents: 2, totalAgents: 2, avgResponseTime: 560, successRate: 96.3, tasksCompleted: 78 },
-];
+// Tier display names. Counts are derived from the live /agents/status
+// payload; per-tier perf metrics (success rate, response time, tasks) are a
+// backend gap (the endpoint returns only agent list + status), rendered "—".
+const TIER_NAMES: Record<number, string> = {
+  0: 'ML Foundation',
+  1: 'Orchestration',
+  2: 'Causal Analytics',
+  3: 'Monitoring',
+  4: 'ML Predictions',
+  5: 'Self-Improvement',
+};
 
 const ORCHESTRATION_STATS: OrchestrationStats = {
   totalAgents: 21,
@@ -200,7 +204,9 @@ function ActivityItem({ activity }: { activity: AgentActivity }) {
 }
 
 function TierMetricsCard({ metrics }: { metrics: TierMetrics }) {
-  const utilizationPercent = (metrics.activeAgents / metrics.totalAgents) * 100;
+  const utilizationPercent =
+    metrics.totalAgents > 0 ? (metrics.activeAgents / metrics.totalAgents) * 100 : 0;
+  const fmt = (v: number | null, suffix = '') => (v === null ? '—' : `${v}${suffix}`);
 
   return (
     <Card>
@@ -210,7 +216,7 @@ function TierMetricsCard({ metrics }: { metrics: TierMetrics }) {
             {TIER_ICONS[metrics.tier]}
             <CardTitle className="text-base">Tier {metrics.tier}: {metrics.name}</CardTitle>
           </div>
-          <Badge variant={metrics.activeAgents === metrics.totalAgents ? 'default' : 'secondary'}>
+          <Badge variant={metrics.totalAgents > 0 && metrics.activeAgents === metrics.totalAgents ? 'default' : 'secondary'}>
             {metrics.activeAgents}/{metrics.totalAgents} active
           </Badge>
         </div>
@@ -226,17 +232,22 @@ function TierMetricsCard({ metrics }: { metrics: TierMetrics }) {
         <div className="grid grid-cols-3 gap-2 text-sm">
           <div>
             <p className="text-muted-foreground text-xs">Avg Response</p>
-            <p className="font-medium">{metrics.avgResponseTime}ms</p>
+            <p className="font-medium">{fmt(metrics.avgResponseTime, 'ms')}</p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">Success Rate</p>
-            <p className="font-medium">{metrics.successRate}%</p>
+            <p className="font-medium">{fmt(metrics.successRate, '%')}</p>
           </div>
           <div>
             <p className="text-muted-foreground text-xs">Tasks Today</p>
-            <p className="font-medium">{metrics.tasksCompleted}</p>
+            <p className="font-medium">{fmt(metrics.tasksCompleted)}</p>
           </div>
         </div>
+        {metrics.avgResponseTime === null && (
+          <p className="text-xs text-muted-foreground">
+            Per-tier performance metrics are not yet served by the agent-status endpoint.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -264,6 +275,24 @@ export default function AgentOrchestration() {
 
   // Use context agents if API not available
   const displayAgents = agentStatus?.agents ?? agents;
+
+  // Derive per-tier active/total counts from the live agent roster. Perf
+  // metrics are null until a metrics endpoint exists (rendered as "—").
+  const tierMetrics = React.useMemo((): TierMetrics[] => {
+    return ([0, 1, 2, 3, 4, 5] as const).map((tier) => {
+      const inTier = displayAgents.filter((a: { tier: number }) => a.tier === tier);
+      const active = inTier.filter((a: { status: string }) => a.status === 'active').length;
+      return {
+        tier,
+        name: TIER_NAMES[tier],
+        activeAgents: active,
+        totalAgents: inTier.length,
+        avgResponseTime: null,
+        successRate: null,
+        tasksCompleted: null,
+      };
+    });
+  }, [displayAgents]);
 
   // Filter agents by selected tier
   const filteredAgents = selectedTier !== null
@@ -448,7 +477,7 @@ export default function AgentOrchestration() {
         {/* Tier Metrics Tab */}
         <TabsContent value="tiers" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {TIER_METRICS.map((metrics) => (
+            {tierMetrics.map((metrics) => (
               <TierMetricsCard key={metrics.tier} metrics={metrics} />
             ))}
           </div>

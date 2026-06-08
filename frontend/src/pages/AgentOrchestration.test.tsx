@@ -328,4 +328,27 @@ describe('AgentOrchestration', () => {
       expect(screen.getByText('All 21 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
   });
+
+  it('derives per-tier active/total counts from live agents and shows "—" for unavailable perf metrics (H7)', async () => {
+    const user = userEvent.setup();
+    render(<AgentOrchestration />, { wrapper: createWrapper() });
+
+    const tierMetricsTab = screen.getByRole('tab', { name: 'Tier Metrics' });
+    await act(async () => {
+      await user.click(tierMetricsTab);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Tier 0: ML Foundation')).toBeInTheDocument();
+    }, { timeout: 5000 });
+
+    // mockAgents has 3 tier-0 agents, 1 of them 'active' -> "1/3 active".
+    expect(screen.getByText('1/3 active')).toBeInTheDocument();
+
+    // The fabricated literals (98.5% success, 450ms, 234 tasks) must be gone;
+    // perf metrics render as an em dash placeholder.
+    expect(screen.queryByText('98.5%')).not.toBeInTheDocument();
+    expect(screen.queryByText('450ms')).not.toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
 });
