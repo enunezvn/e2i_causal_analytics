@@ -144,6 +144,15 @@ class FeedbackLearnerTrainingSignal:
     rubric_decision: Optional[str] = None  # ImprovementDecision value
     rubric_pattern_flags: int = 0  # Number of quality issues flagged
 
+    # === Carried content (for faithful DSPy example conversion — audit F6) ===
+    # Bounded samples of the cycle's actual content so the optimizer trains on
+    # real inputs/outputs instead of empty placeholders.
+    feedback_batch: List[Dict[str, Any]] = field(default_factory=list)
+    patterns: List[Dict[str, Any]] = field(default_factory=list)
+    recommendations: List[Dict[str, Any]] = field(default_factory=list)
+    applied_updates: List[Dict[str, Any]] = field(default_factory=list)
+    learning_summary: str = ""
+
     # === Latency ===
     collection_latency_ms: float = 0.0
     analysis_latency_ms: float = 0.0
@@ -269,11 +278,18 @@ class FeedbackLearnerTrainingSignal:
                 "time_range_end": self.time_range_end,
                 "focus_agents": self.focus_agents,
                 "has_cognitive_context": self.cognitive_context is not None,
+                # F6: carry a bounded sample of the real feedback batch.
+                "feedback_batch": self.feedback_batch[:20],
             },
             "output": {
                 "patterns_detected": self.patterns_detected,
                 "recommendations_generated": self.recommendations_generated,
                 "updates_applied": self.updates_applied,
+                # F6: carry the actual detected content for conversion.
+                "patterns": self.patterns[:20],
+                "recommendations": self.recommendations[:20],
+                "applied_updates": self.applied_updates[:20],
+                "learning_summary": self.learning_summary,
             },
             "quality_metrics": {
                 "pattern_accuracy": self.pattern_accuracy,
@@ -814,7 +830,8 @@ class FeedbackLearnerOptimizer:
 
         # Run optimization
         logger.info(f"Starting GEPA optimization for {phase} phase with budget={budget}")
-        optimized = optimizer.compile(module, trainset=trainset)
+        # Pass the held-out valset so GEPA validates on unseen examples (F6).
+        optimized = optimizer.compile(module, trainset=trainset, valset=valset)
 
         # Optionally save optimized module
         if optimized and hasattr(optimizer, "best_score"):
@@ -862,19 +879,18 @@ class FeedbackLearnerOptimizer:
             logger.warning(f"Insufficient examples ({len(examples)}) for optimization")
             return None
 
-        metrics = {
-            "pattern": self.pattern_metric,
-            "recommendation": self.recommendation_metric,
-            # Add more as needed
-        }
-
         signatures = {
             "pattern": PatternDetectionSignature,
             "recommendation": RecommendationGenerationSignature,
+            "summary": LearningSummarySignature,
         }
-
-        if phase not in metrics or phase not in signatures:
-            logger.warning(f"Unknown optimization phase: {phase}")
+        metrics = {
+            "pattern": self.pattern_metric,
+            "recommendation": self.recommendation_metric,
+            "summary": self.recommendation_metric,  # reuse actionability-style metric
+        }
+        if phase == "update" or phase not in signatures or phase not in metrics:
+            logger.warning(f"Phase '{phase}' not optimizable via MIPROv2; skipping")
             return None
 
         optimizer = MIPROv2(
@@ -888,38 +904,95 @@ class FeedbackLearnerOptimizer:
         return optimized
 
     def _signals_to_examples(self, signals: List[Dict[str, Any]], phase: str) -> List:
-        """Convert training signals to DSPy Examples."""
+        """Convert persisted training signals to DSPy Examples for a phase.
+
+        Builds real, content-bearing examples for 'pattern', 'recommendation',
+        and 'summary'. The 'update' phase is intentionally skipped: its
+        KnowledgeUpdateSignature needs a (recommendation, current_knowledge)
+        pair we do not persist, so producing examples would be fabrication.
+        """
         if not DSPY_AVAILABLE:
             return []
 
+        import json as _json
+
         import dspy
 
-        examples = []
+        if phase == "update":
+            logger.info(
+                "Skipping 'update' phase optimization: no paired current_knowledge "
+                "examples are persisted (audit F6 — honest skip, not a silent stub)."
+            )
+            return []
+
+        examples: list = []
         for signal in signals:
-            # Filter by phase and success
             if signal.get("source_agent") != "feedback_learner":
                 continue
+            if signal.get("reward", 0) < 0.5:  # only successful cycles
+                continue
 
-            reward = signal.get("reward", 0)
-            if reward < 0.5:  # Only use successful examples
+            ic = signal.get("input_context", {}) or {}
+            out = signal.get("output", {}) or {}
+            feedback_batch = ic.get("feedback_batch", []) or []
+            patterns = out.get("patterns", []) or []
+            recommendations = out.get("recommendations", []) or []
+            applied_updates = out.get("applied_updates", []) or []
+            learning_summary = out.get("learning_summary", "") or ""
+
+            # Skip degenerate signals that carry no usable content.
+            if not feedback_batch and not patterns and not learning_summary:
                 continue
 
             try:
                 if phase == "pattern":
-                    example = dspy.Example(
-                        feedback_batch=str(
-                            signal.get("input_context", {}).get("feedback_batch", [])
-                        ),
-                        agent_baselines="{}",
-                        historical_patterns="[]",
-                        patterns=signal.get("output", {}).get("patterns", []),
+                    ex = dspy.Example(
+                        feedback_batch=_json.dumps(feedback_batch),
+                        agent_baselines=_json.dumps(ic.get("agent_baselines", {})),
+                        historical_patterns=_json.dumps(ic.get("historical_patterns", [])),
+                        patterns=patterns,
                         confidence=0.8,
-                        root_causes=[],
+                        root_causes=[
+                            p.get("root_cause_hypothesis")
+                            for p in patterns
+                            if isinstance(p, dict) and p.get("root_cause_hypothesis")
+                        ],
                     ).with_inputs("feedback_batch", "agent_baselines", "historical_patterns")
-                    examples.append(example)
+                    examples.append(ex)
 
-            except Exception as e:
-                logger.debug(f"Failed to convert signal to example: {e}")
+                elif phase == "recommendation":
+                    if not patterns and not recommendations:
+                        continue
+                    ex = dspy.Example(
+                        detected_patterns=_json.dumps(patterns),
+                        prior_learnings=_json.dumps(ic.get("prior_learnings", [])),
+                        optimization_examples=_json.dumps(ic.get("optimization_examples", [])),
+                        recommendations=recommendations,
+                        implementation_order=[
+                            r.get("category") for r in recommendations if isinstance(r, dict)
+                        ],
+                        risk_assessment=str(out.get("risk_assessment", "")),
+                    ).with_inputs("detected_patterns", "prior_learnings", "optimization_examples")
+                    examples.append(ex)
+
+                elif phase == "summary":
+                    if not learning_summary and not patterns:
+                        continue
+                    ex = dspy.Example(
+                        patterns=_json.dumps(patterns),
+                        recommendations=_json.dumps(recommendations),
+                        applied_updates=_json.dumps(applied_updates),
+                        feedback_stats=_json.dumps(ic),
+                        summary=learning_summary,
+                        key_insights=[],
+                        next_steps=[],
+                    ).with_inputs(
+                        "patterns", "recommendations", "applied_updates", "feedback_stats"
+                    )
+                    examples.append(ex)
+
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Failed to convert signal to example ({phase}): {e}")
 
         return examples
 

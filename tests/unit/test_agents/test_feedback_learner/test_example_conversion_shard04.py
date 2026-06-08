@@ -1,0 +1,90 @@
+"""Shard 04: faithful signal->Example conversion (F6)."""
+
+from __future__ import annotations
+
+import inspect as _inspect
+import json
+
+import pytest
+
+from src.agents.feedback_learner.dspy_integration import (
+    DSPY_AVAILABLE,
+    FeedbackLearnerOptimizer,
+    FeedbackLearnerTrainingSignal,
+)
+
+
+def _rich_signal() -> FeedbackLearnerTrainingSignal:
+    return FeedbackLearnerTrainingSignal(
+        batch_id="b1",
+        feedback_count=12,
+        time_range_start="t0",
+        time_range_end="t1",
+        patterns_detected=2,
+        recommendations_generated=2,
+        updates_applied=1,
+        recommendation_actionability=0.8,
+        update_effectiveness=0.9,
+        total_latency_ms=1200.0,
+        rubric_weighted_score=4.5,
+        feedback_batch=[{"feedback_id": "f1", "feedback_type": "rating", "user_feedback": 2}],
+        patterns=[
+            {
+                "pattern_type": "accuracy_issue",
+                "severity": "high",
+                "affected_agents": ["causal_impact"],
+                "root_cause_hypothesis": "gap",
+            }
+        ],
+        recommendations=[{"category": "prompt_update", "expected_impact": "higher accuracy"}],
+        applied_updates=[{"key": "prompt.causal_impact", "new_value": "..."}],
+        learning_summary="Detected an accuracy issue and recommended a prompt update.",
+    )
+
+
+def test_to_dict_carries_feedback_batch_and_patterns():
+    d = _rich_signal().to_dict()
+    assert d["input_context"].get("feedback_batch")  # non-empty
+    assert d["output"].get("patterns")  # non-empty list
+    assert d["output"].get("recommendations")
+    assert d["output"].get("learning_summary")
+
+
+@pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
+def test_conversion_non_empty_for_pattern_recommendation_summary():
+    opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
+    signals = [_rich_signal().to_dict() for _ in range(8)]
+
+    pat = opt._signals_to_examples(signals, "pattern")
+    rec = opt._signals_to_examples(signals, "recommendation")
+    summ = opt._signals_to_examples(signals, "summary")
+    upd = opt._signals_to_examples(signals, "update")
+
+    assert len(pat) == 8
+    assert json.loads(pat[0].feedback_batch)  # non-empty input now
+    assert len(rec) == 8
+    assert json.loads(rec[0].detected_patterns)
+    assert len(summ) == 8
+    # update is intentionally skipped (no paired current_knowledge stored)
+    assert upd == []
+
+
+@pytest.mark.skipif(not DSPY_AVAILABLE, reason="dspy required")
+def test_degenerate_signal_is_skipped():
+    """A signal with no feedback_batch and no patterns must not become an example."""
+    opt = FeedbackLearnerOptimizer(optimizer_type="miprov2")
+    empty = FeedbackLearnerTrainingSignal(
+        batch_id="e",
+        feedback_count=0,
+        time_range_start="t0",
+        time_range_end="t1",
+        total_latency_ms=10.0,
+    ).to_dict()
+    empty["reward"] = 0.9  # force past the reward gate
+    assert opt._signals_to_examples([empty], "pattern") == []
+
+
+def test_gepa_compile_receives_valset():
+    """GEPA must validate on the held-out valset, not the trainset (F6)."""
+    src = _inspect.getsource(FeedbackLearnerOptimizer._optimize_with_gepa)
+    assert "optimizer.compile(module, trainset=trainset, valset=valset)" in src
