@@ -36,7 +36,8 @@ export interface FeedbackSubmission {
 
 export interface FeedbackResult {
   success: boolean;
-  feedbackId?: number;
+  /** Backend canonical snake_case (copilotkit.py FeedbackResponse.feedback_id). */
+  feedback_id?: number;
   message?: string;
   error?: string;
 }
