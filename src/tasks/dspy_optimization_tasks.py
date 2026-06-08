@@ -109,7 +109,23 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
         }
 
     optimization = await run_feedback_learner_optimization(budget=budget)
-    # Install recipient bundles (produced by the Shard 09 follow-on; no-op until then).
+
+    # Produce optimized recipient bundles (Shard 09), best-effort per recipient,
+    # so the install step below has real bundles to install. Each recipient is
+    # isolated: one failing must not abort the others or the cycle.
+    from src.agents.feedback_learner.prompt_bundles import RECIPIENT_FACTORIES
+    from src.agents.feedback_learner.recipient_optimizer import optimize_and_save_recipient
+
+    recipient_bundles: Dict[str, Any] = {}
+    for recipient in RECIPIENT_FACTORIES:
+        try:
+            path = await optimize_and_save_recipient(recipient, budget=budget)
+            recipient_bundles[recipient] = path
+        except Exception as e:  # noqa: BLE001 - one recipient must not abort the run
+            logger.error("Recipient optimization failed for %s: %s", recipient, e)
+            recipient_bundles[recipient] = None
+
+    # Install recipient bundles into the live singletons.
     installed = install_all_prompt_bundles()
 
     mean_reward = (
@@ -126,6 +142,7 @@ async def _run(task_id: str, force: bool, budget: str) -> Dict[str, Any]:
         "trigger_reason": reason,
         "signals": len(signals),
         "optimization": optimization,
+        "recipient_bundles": recipient_bundles,
         "bundles_installed": installed,
         "task_id": task_id,
     }
