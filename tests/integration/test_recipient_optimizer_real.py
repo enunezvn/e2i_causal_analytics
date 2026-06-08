@@ -12,8 +12,12 @@ import os
 
 import pytest
 
+# Gated behind an explicit opt-in: a real GEPA recipient run blocks for minutes in a
+# thread pool pytest-timeout cannot interrupt, hanging CI's --timeout=60 shard to the
+# job limit (#504 lesson). CI sets ANTHROPIC_API_KEY, so require E2I_RUN_REAL_LLM_E2E=1.
 pytestmark = pytest.mark.skipif(
-    not os.getenv("ANTHROPIC_API_KEY"), reason="requires live Anthropic LM"
+    os.getenv("E2I_RUN_REAL_LLM_E2E") != "1" or not os.getenv("ANTHROPIC_API_KEY"),
+    reason="requires E2I_RUN_REAL_LLM_E2E=1 + live Anthropic LM (slow real GEPA run)",
 )
 
 
