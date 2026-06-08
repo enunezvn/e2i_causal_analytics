@@ -1174,6 +1174,65 @@ class TestAsyncCognitiveRAGRetrieve:
             )
 
 
+@pytest.mark.asyncio
+class TestScoreEvidenceEnsuresDspyConfigured:
+    """F7: score_evidence_dspy must configure the DSPy LM itself, so it never
+    silently 0.5-fallbacks when invoked without a prior rewrite having run."""
+
+    async def test_score_evidence_calls_ensure_dspy_configured(self, monkeypatch):
+        import src.api.routes.chatbot_dspy as chatbot_dspy
+
+        # Faithful precondition: DSPy 'available' and the cognitive RAG flag on,
+        # but the LM has NOT yet been configured in this process (the exact state
+        # that produced the uniform-0.5 fallback in repro probe 2).
+        monkeypatch.setattr(chatbot_dspy, "DSPY_AVAILABLE", True, raising=False)
+        monkeypatch.setattr(chatbot_dspy, "CHATBOT_COGNITIVE_RAG_ENABLED", True, raising=False)
+        monkeypatch.setattr(chatbot_dspy, "_dspy_lm_configured", False, raising=False)
+
+        # Spy on the REAL config function (do not replace its behaviour beyond
+        # recording the call; we still let it run its real no-op-on-unavailable path).
+        ensure_calls = {"n": 0}
+        real_ensure = chatbot_dspy._ensure_dspy_configured
+
+        def _spy_ensure():
+            ensure_calls["n"] += 1
+            return real_ensure()
+
+        monkeypatch.setattr(chatbot_dspy, "_ensure_dspy_configured", _spy_ensure)
+
+        # Double only the true external: the LLM scorer. The unit under test
+        # (score_evidence_dspy) runs its real control flow.
+        class _StubScorer:
+            def __call__(self, **kwargs):
+                class _R:
+                    relevance_score = 0.42
+                    key_insight = "stub insight"
+                    follow_up_needed = False
+
+                return _R()
+
+        monkeypatch.setattr(chatbot_dspy, "ChatbotEvidenceScorer", _StubScorer)
+
+        score, insight, follow_up = await chatbot_dspy.score_evidence_dspy(
+            investigation_goal="Answer: TRx trend for Kisqali in Northeast",
+            evidence_item="Causal analysis: hcp_engagement_level -> patient_conversion_rate",
+            source_memory="episodic",
+        )
+
+        # The bug: today _ensure_dspy_configured is NEVER called inside
+        # score_evidence_dspy, so this assertion fails RED on current code.
+        assert ensure_calls["n"] == 1, (
+            "score_evidence_dspy must call _ensure_dspy_configured() before "
+            "constructing the scorer (mirror _get_dspy_query_rewriter); otherwise "
+            "it silently 0.5-fallbacks when no prior rewrite configured the LM."
+        )
+        # And with the LM ensured + scorer returning real values, the result is
+        # the real score, NOT the 0.5 exception fallback.
+        assert score == 0.42
+        assert insight == "stub insight"
+        assert follow_up is False
+
+
 class TestChatbotCognitiveRAGFeatureFlag:
     """Test cases for cognitive RAG feature flag."""
 

@@ -1459,6 +1459,12 @@ async def score_evidence_dspy(
         return (score, evidence_item[:100], overlap > 2)
 
     try:
+        # Ensure DSPy LLM is configured before scoring — score_evidence_dspy can
+        # be invoked without a prior rewrite having configured the LM (repro
+        # probe 2), in which case the scorer would silently 0.5-fallback. Mirror
+        # _get_dspy_query_rewriter, the only other DSPy entry point on this file
+        # that calls _ensure_dspy_configured() before building its module. (F7)
+        _ensure_dspy_configured()
         scorer = ChatbotEvidenceScorer()
         result = scorer(
             investigation_goal=investigation_goal,

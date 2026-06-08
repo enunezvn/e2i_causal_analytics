@@ -10,9 +10,8 @@ into `sys.modules` before an `importlib.import_module` call.
 
 The live cognitive-workflow factories used in production are the unrelated
 `create_dspy_cognitive_workflow` / `create_production_cognitive_workflow`
-functions defined in `src/rag/cognitive_rag_dspy.py` (and
-`src/rag/e2i_cognitive_rag_dspy.py`) -- NOT this 004 module. The file was
-deleted in PR (Refs #694, M12).
+functions defined in `src/rag/cognitive_rag_dspy.py` -- NOT this 004 module.
+The file was deleted in PR (Refs #694, M12).
 
 This guard asserts the file stays deleted.
 """
