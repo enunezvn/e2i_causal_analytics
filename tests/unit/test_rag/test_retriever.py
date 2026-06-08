@@ -422,6 +422,73 @@ class TestReciprocalRankFusion:
         assert "original_score" in fused[0].metadata
         assert fused[0].metadata["original"] == "data"
 
+    def test_rrf_dedups_identical_content_under_distinct_source_ids(self):
+        """Two rows with IDENTICAL content but DIFFERENT source_id must collapse
+        to ONE fused row (not two) so duplicate content does not waste top-k slots
+        or accrue double RRF mass. Faithful: exercises the real RRF, no mocks."""
+        retriever = HybridRetriever()
+
+        dup_content = "Causal analysis: hcp_engagement_level -> patient_conversion_rate, ATE=0.413"
+        dense = [
+            RetrievalResult(
+                source_id="mem_aaaaaaaa",
+                content=dup_content,
+                source=RetrievalSource.VECTOR,
+                score=0.811,
+                retrieval_method="dense",
+                metadata={},
+            ),
+            RetrievalResult(
+                source_id="mem_bbbbbbbb",  # different id, SAME content
+                content=dup_content,
+                source=RetrievalSource.VECTOR,
+                score=0.811,
+                retrieval_method="dense",
+                metadata={},
+            ),
+            RetrievalResult(
+                source_id="mem_cccccccc",
+                content="QC Report: passed. Score: 1.00.",
+                source=RetrievalSource.VECTOR,
+                score=0.726,
+                retrieval_method="dense",
+                metadata={},
+            ),
+        ]
+
+        fused = retriever._reciprocal_rank_fusion(result_lists=[dense], weights=[1.0])
+
+        contents = [r.content for r in fused]
+        assert contents.count(dup_content) == 1, f"identical content survived twice: {contents}"
+        # exactly the 2 distinct contents remain
+        assert len(fused) == 2
+
+    def test_rrf_surfaced_raw_score_matches_metadata_rrf_score(self):
+        """Regression guard: the surfaced top-level score is the RAW RRF fusion sum
+        (echoed identically in metadata['rrf_score']), NOT a 0-1 relevance, and the
+        Pydantic model must accept that raw value (no le=1 rejection). Relevance is
+        the DSPy relevance_score computed downstream, not this field."""
+        retriever = HybridRetriever()
+
+        only = [
+            RetrievalResult(
+                source_id="x1",
+                content="solo row",
+                source=RetrievalSource.VECTOR,
+                score=0.9,
+                retrieval_method="dense",
+                metadata={},
+            ),
+        ]
+
+        fused = retriever._reciprocal_rank_fusion(result_lists=[only], weights=[1.0])
+
+        assert len(fused) == 1
+        # raw RRF for a single rank-1 row at weight 1.0, k=60 -> 1/61 ~= 0.0164
+        assert abs(fused[0].score - (1.0 / 61.0)) < 1e-9
+        # top-level score == metadata rrf_score (single source of truth)
+        assert fused[0].metadata["rrf_score"] == fused[0].score
+
 
 # ============================================================================
 # CONVENIENCE FUNCTION TESTS

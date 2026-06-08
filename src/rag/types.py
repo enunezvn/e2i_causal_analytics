@@ -45,7 +45,7 @@ class RetrievalResult:
         id: Unique identifier for the result
         content: The text content retrieved
         source: Which backend returned this result
-        score: Normalized relevance score (0-1 after RRF)
+        score: Raw RRF fusion score (NOT 0-1; relevance is computed downstream)
         metadata: Additional context (source_type, agent_name, timestamps, etc.)
         graph_context: Connected nodes/edges if from graph search
         query_latency_ms: Time taken for this specific query
