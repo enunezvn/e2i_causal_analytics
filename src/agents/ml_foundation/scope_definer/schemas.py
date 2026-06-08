@@ -164,7 +164,15 @@ class ScopeSpecSchema(BaseAgentSchema):
     target_column: Optional[str] = None
     exclude_columns: Optional[List[str]] = None  # deprecated; use excluded_features
     scaling_method: Optional[str] = None
+    # encoding_method: "onehot" (default, nominal categoricals) | "label"
+    # (legacy integer encoding for ALL categoricals). #790: nominal categoricals
+    # one-hot by default so the linear champion is not handed false-ordinal codes.
     encoding_method: Optional[str] = None
+    # ordinal_features: categoricals that ARE genuinely ordered (e.g. risk
+    # bands, stage I-IV) and should stay integer-encoded (order preserved) even
+    # under the one-hot default. Ignored when encoding_method="label" (all
+    # categoricals are integer-encoded then anyway). #790.
+    ordinal_features: Optional[List[str]] = None
     imputation_strategy: Optional[str] = None
     extract_datetime_features: Optional[bool] = None
 
