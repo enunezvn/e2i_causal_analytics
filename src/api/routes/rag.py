@@ -31,13 +31,14 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.api.dependencies.falkordb_client import get_falkordb
+from src.api.dependencies.supabase_client import get_supabase
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.memory.services.factories import get_supabase_client
 from src.rag import (
     EntityExtractor,
     ExtractedEntities,
     HealthMonitor,
-    HybridRetriever,
     RAGConfig,
     RetrievalResult,
     SearchLogger,
@@ -47,6 +48,17 @@ from src.rag.exceptions import (
     CircuitBreakerOpenError,
     RAGError,
 )
+
+# IMPORTANT: import HybridRetriever from src.rag.hybrid_retriever EXPLICITLY.
+# The `src.rag` package re-exports `HybridRetriever` from src.rag.retriever (the
+# live chatbot impl, no-arg ctor, no get_causal_subgraph/get_causal_path/
+# last_search_stats) — a DIFFERENT class from the one this router's code is
+# written against. RAGService calls .search(top_k=, entities=ExtractedEntities),
+# .get_causal_subgraph(center_node_id=), .get_causal_path(source_id=) and reads
+# .last_search_stats — all of which exist ONLY on this construction-args class
+# (the same one src/api/dependencies/rag.py constructs). Importing the package
+# symbol bound the router to the wrong class -> TypeError on every call (C1).
+from src.rag.hybrid_retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -302,11 +314,73 @@ class RAGService:
             cls._instance = cls()
         return cls._instance
 
+    async def _get_retriever(self) -> HybridRetriever:
+        """Build (once) and return the real HybridRetriever.
+
+        Constructs ASYNC because get_falkordb() is `async def`
+        (src/api/dependencies/falkordb_client.py) and a sync property cannot
+        await it (it would store a coroutine -> AttributeError on the first
+        .select_graph). Mirrors the kwargs shape of dependencies/rag.py.
+        """
+        if self._retriever is None:
+            supabase_client = get_supabase()
+            falkordb_client = await get_falkordb()
+            if supabase_client is None or falkordb_client is None:
+                missing = [
+                    name
+                    for name, c in (
+                        ("Supabase", supabase_client),
+                        ("FalkorDB", falkordb_client),
+                    )
+                    if c is None
+                ]
+                # OWNER DECISION (default 503): backends genuinely down is a
+                # service-availability condition, not an internal error.
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"RAG backends unavailable: {', '.join(missing)}",
+                )
+            # Build the embedding service so the dense (vector) leg actually
+            # works once a corpus exists (mirrors src/api/dependencies/rag.py).
+            # Without it, HybridRetriever.search never embeds the query
+            # (`if embedding is None and self.embedding_service`) and the dense
+            # leg is permanently skipped -- a silent hybrid-search gap. Built
+            # defensively: if the embedding provider is unavailable, log and
+            # proceed with None so the fulltext+graph legs still serve (graceful
+            # degradation, no 500).
+            embedding_service = None
+            try:
+                from src.rag.config import EmbeddingConfig
+                from src.rag.embeddings import OpenAIEmbeddingClient
+
+                embedding_service = OpenAIEmbeddingClient(EmbeddingConfig.from_env())
+            except Exception as e:
+                logger.warning(
+                    "Embedding service unavailable; dense RAG leg disabled "
+                    "(fulltext+graph still active): %s",
+                    e,
+                )
+            self._retriever = HybridRetriever(
+                supabase_client=supabase_client,
+                falkordb_client=falkordb_client,
+                config=self.config,
+                embedding_service=embedding_service,
+            )
+        return self._retriever
+
     @property
     def retriever(self) -> HybridRetriever:
-        """Get or create HybridRetriever."""
+        """Return the already-built retriever (build via `await _get_retriever()`).
+
+        Kept as a thin accessor for callers/tests that pre-set `_retriever`.
+        Raises if accessed before construction, because the real build is async
+        (get_falkordb is `async def`) and cannot run in a sync property.
+        """
         if self._retriever is None:
-            self._retriever = HybridRetriever(self.config)  # type: ignore[call-arg]
+            raise RuntimeError(
+                "retriever not built yet; call `await self._get_retriever()` "
+                "(construction is async because get_falkordb() is async)"
+            )
         return self._retriever
 
     @property
@@ -347,8 +421,9 @@ class RAGService:
         # Extract entities for graph queries
         entities = self.extract_entities(query)
 
-        # Execute search via retriever
-        results = await self.retriever.search(  # type: ignore[call-arg]
+        # Execute search via the (async-built) retriever
+        retriever = await self._get_retriever()
+        results = await retriever.search(
             query=query,
             top_k=top_k,
             entities=entities,  # type: ignore[arg-type]
@@ -358,10 +433,10 @@ class RAGService:
         # Apply minimum score filter
         results = [r for r in results if r.score >= min_score]
 
-        # Get stats
-        stats = self.retriever.get_last_query_stats()  # type: ignore[attr-defined]
+        # Get stats (last_search_stats is a property; SearchStats.to_dict is JSON-safe)
+        stats = retriever.last_search_stats
 
-        return results, stats.__dict__ if stats else {}  # type: ignore[return-value]
+        return results, stats.to_dict() if stats else {}
 
     async def get_causal_subgraph(
         self,
@@ -370,9 +445,10 @@ class RAGService:
         limit: int = 100,
     ) -> Dict[str, Any]:
         """Get causal subgraph around an entity."""
-        return await self.retriever.get_causal_subgraph(  # type: ignore[attr-defined,no-any-return]
-            entity=entity,
-            depth=depth,
+        retriever = await self._get_retriever()
+        return await retriever.get_causal_subgraph(
+            center_node_id=entity,
+            max_depth=depth,
             limit=limit,
         )
 
@@ -383,11 +459,22 @@ class RAGService:
         max_depth: int = 5,
     ) -> Dict[str, Any]:
         """Find causal paths between two entities."""
-        return await self.retriever.get_causal_path(  # type: ignore[attr-defined,no-any-return]
-            source=source,
-            target=target,
-            max_depth=max_depth,
+        retriever = await self._get_retriever()
+        paths = await retriever.get_causal_path(
+            source_id=source,
+            target_id=target,
+            max_length=max_depth,
         )
+        # get_causal_path returns List[GraphPath]; the route handler expects
+        # {"paths": [...]} and CausalPathResponse.paths is List[List[str]].
+        # GraphPath.nodes is List[Dict] with each node {"id","label","type"}
+        # (src/rag/types.py), so normalize each path to a node-id sequence
+        # (OWNER DECISION default: node ids).
+        normalized: List[List[str]] = []
+        for p in paths:
+            nodes = getattr(p, "nodes", None) or []
+            normalized.append([str(n.get("id", "")) for n in nodes])
+        return {"paths": normalized}
 
     async def get_health_status(self) -> Dict[str, Any]:
         """Get health status of all backends."""
