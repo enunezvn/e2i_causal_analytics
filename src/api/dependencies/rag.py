@@ -29,7 +29,7 @@ async def get_rag_dependencies() -> Dict[str, Any]:
         return _rag_deps
 
     supabase_client = get_supabase()
-    falkordb_client = get_falkordb()
+    falkordb_client = await get_falkordb()
 
     if not supabase_client or not falkordb_client:
         missing = []

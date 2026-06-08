@@ -30,7 +30,7 @@ from src.api.routes.rag import (
 )
 from src.rag import ExtractedEntities, RetrievalResult
 from src.rag.exceptions import BackendTimeoutError, CircuitBreakerOpenError, RAGError
-from src.rag.types import RetrievalSource
+from src.rag.types import RetrievalSource, SearchStats
 
 # =============================================================================
 # TEST DATA CLASSES
@@ -74,13 +74,17 @@ def mock_hybrid_retriever():
             ),
         ]
     )
-    retriever.get_last_query_stats = MagicMock(
-        return_value=MagicMock(
-            vector_count=1,
-            fulltext_count=1,
-            graph_count=0,
-            total_latency_ms=150.0,
-        )
+    # The router reads the `last_search_stats` PROPERTY (get_last_query_stats
+    # never existed on either HybridRetriever class). Set a real SearchStats so
+    # SearchStats.to_dict() produces the dict the route serializes.
+    retriever.last_search_stats = SearchStats(
+        query="test",
+        total_latency_ms=150.0,
+        vector_count=1,
+        fulltext_count=1,
+        graph_count=0,
+        fused_count=2,
+        sources_used={"vector": True, "fulltext": True, "graph": False},
     )
     retriever.get_causal_subgraph = AsyncMock(
         return_value={
@@ -203,8 +207,22 @@ class TestRAGService:
         assert retriever is not None
         assert retriever == rag_service._retriever
 
-    def test_retriever_lazy_creation(self):
-        """Test retriever is created lazily."""
+    def test_retriever_property_requires_async_build(self):
+        """The sync `retriever` accessor must RAISE when not yet built.
+
+        Construction is async (get_falkordb is `async def`), so the sync property
+        cannot lazily build; it only returns a pre-set retriever.
+        """
+        RAGService._initialized = False
+        RAGService._instance = None
+        service = RAGService()
+        service._retriever = None
+        with pytest.raises(RuntimeError):
+            _ = service.retriever
+
+    @pytest.mark.asyncio
+    async def test_retriever_lazy_creation_async(self):
+        """Test retriever is created lazily via the async _get_retriever builder."""
         # Reset singleton state
         RAGService._initialized = False
         RAGService._instance = None
@@ -212,6 +230,11 @@ class TestRAGService:
         with (
             patch("src.api.routes.rag.RAGConfig") as mock_config,
             patch("src.api.routes.rag.HybridRetriever") as mock_retriever_class,
+            patch("src.api.routes.rag.get_supabase", return_value=MagicMock()),
+            patch(
+                "src.api.routes.rag.get_falkordb",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
         ):
             mock_config.from_env.return_value = MagicMock()
             mock_retriever_class.return_value = MagicMock()
@@ -219,8 +242,8 @@ class TestRAGService:
             service = RAGService()
             service._retriever = None
 
-            # Access retriever for first time
-            retriever = service.retriever
+            # Build for the first time via the async path
+            retriever = await service._get_retriever()
 
             assert retriever is not None
             mock_retriever_class.assert_called_once()
