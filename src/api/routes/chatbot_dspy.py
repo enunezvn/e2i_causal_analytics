@@ -1544,14 +1544,25 @@ async def cognitive_rag_retrieve(
             filters={"brand": brand_context} if brand_context else None,
         )
 
-        # Step 3: Score and filter evidence
-        for r in results:
-            score, insight, _ = await score_evidence_dspy(
-                investigation_goal=f"Answer: {query}",
-                evidence_item=r.content[:500],
-                source_memory="episodic",
+        # Step 3: Score evidence concurrently (independent per-row LLM calls) (F5).
+        # The calls share investigation_goal/source_memory and differ only by
+        # evidence_item, so they are gathered instead of awaited serially
+        # (~15 s serial -> ~3 s). gather preserves arg order, so the kept-evidence
+        # set/order and the >= 0.3 filter are byte-identical to the serial loop.
+        scored = await asyncio.gather(
+            *(
+                score_evidence_dspy(
+                    investigation_goal=f"Answer: {query}",
+                    evidence_item=r.content[:500],
+                    source_memory="episodic",
+                )
+                for r in results
             )
+        )
 
+        # Filter/keep in original retrieval order (gather preserves arg order).
+        # strict=True: gather returns exactly one result per input row.
+        for r, (score, insight, _) in zip(results, scored, strict=True):
             relevance_scores.append(score)
 
             if score >= 0.3:  # Minimum relevance threshold
