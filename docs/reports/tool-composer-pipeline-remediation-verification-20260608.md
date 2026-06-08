@@ -137,6 +137,16 @@ Built in isolated worktrees off `main`, merged into `feat/tool-composer-function
 
 ---
 
+## Part 5 — Adversarial review (codex)
+
+The integrated diff was reviewed by codex (`codex:codex-rescue`) with the mandatory design-pushback brief. Verdict: **ACCEPT-WITH-NOTES** — the anti-mocking invariant holds throughout (no fabrication; every gap fails closed), the F2a scoping guard (`agent_name == "tool_composer"`) is exact, the Gate-1 refinement does not clobber a legitimately-supplied frame, and F6b enforcement correctly skips `$step` refs / list / dict args. Three MED findings were verified against source and fixed:
+
+- **MED-1 (correctness):** `_resolve_column` matched substrings in *both* directions, so a short real column (`age`) that is a substring of an unrelated value (`dosage`) was silently substituted — a wrong-column path, not fail-fast. Removed the reverse direction (kept value-in-column only); added a regression test (`dosage` must fail fast).
+- **MED-2 (drift):** `_DATAFRAME_KWARGS_KEYS` is defined in two modules (kept separate to avoid a circular import). Added a CI drift-guard test asserting they stay identical (chosen over a cross-module private import to keep the hot path unchanged).
+- **MED-3 (schema):** `DiscoverDagInput.data` was a required field while the `discover_dag` callable accepts `None`; aligned the schema to `Optional[...] = None`.
+
+LOW items (SHAP `n_estimators`, edge-list fail-soft) were assessed acceptable.
+
 ## What remains (honest)
 
 1. **Outcome definition for the flagship query.** "Conversion" = `treatment_initiated` is 94.7% positive on this cohort → degenerate. To get a strong causal answer to the *literal* Kisqali query, either reframe the outcome (e.g. time-to-therapy, adherence on a denser cohort) or widen the cohort. This is a product/data decision; the pipeline now surfaces it honestly instead of fabricating.

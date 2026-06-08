@@ -258,6 +258,63 @@ class TestEnforcement:
         assert "unbound column" in str(exc.value).lower()
 
     @pytest.mark.asyncio
+    async def test_short_column_not_substituted_for_unrelated_value(
+        self, mock_llm_client, mock_tool_registry
+    ):
+        # MED-1 regression (codex review): the substring resolver once matched in
+        # BOTH directions, so a short real column ("age") that is a substring of
+        # an unrelated value ("dosage") was silently substituted -> wrong column.
+        # The reverse direction is removed; 'dosage' must now FAIL FAST.
+        from src.agents.tool_composer.models.composition_models import (
+            DecompositionResult,
+            SubQuestion,
+        )
+
+        decomposition = DecompositionResult(
+            original_query="q",
+            sub_questions=[
+                SubQuestion(id="sq_1", question="q?", intent="CAUSAL", entities=[], depends_on=[])
+            ],
+            decomposition_reasoning="t",
+        )
+        mock_llm_client.set_planning_response(
+            '{"reasoning":"r",'
+            '"tool_mappings":[{"sub_question_id":"sq_1","tool_name":"causal_effect_estimator",'
+            '"confidence":0.9,"reasoning":"x"}],'
+            '"execution_steps":[{"step_id":"step_1","sub_question_id":"sq_1",'
+            '"tool_name":"causal_effect_estimator",'
+            '"input_mapping":{"treatment":"age","outcome":"dosage"},'
+            '"depends_on_steps":[]}],'
+            '"parallel_groups":[["step_1"]]}'
+        )
+        profiles = [
+            {
+                "name": "age",
+                "dtype_family": "numeric-continuous",
+                "n_unique": 50,
+                "n_nonnull": 6,
+                "values": None,
+            },
+            {
+                "name": "engagement_score",
+                "dtype_family": "numeric-continuous",
+                "n_unique": 40,
+                "n_nonnull": 6,
+                "values": None,
+            },
+        ]
+        planner = ToolPlanner(
+            llm_client=mock_llm_client,
+            tool_registry=mock_tool_registry,
+            enable_caching=False,
+            use_episodic_memory=False,
+        )
+        with pytest.raises(PlanningError) as exc:
+            await planner.plan(decomposition, column_profiles=profiles)
+        # 'dosage' must NOT have silently resolved to 'age'.
+        assert "dosage" in str(exc.value)
+
+    @pytest.mark.asyncio
     async def test_good_binding_passes(self, mock_llm_client, mock_tool_registry):
         from src.agents.tool_composer.models.composition_models import (
             DecompositionResult,

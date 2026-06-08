@@ -754,9 +754,9 @@ class ToolPlanner:
 
         Resolution is intentionally conservative: it only returns a column when
         the match is UNAMBIGUOUS (exactly one candidate). Order of attempts:
-        exact case-insensitive / alias-normalized, then substring (both
-        directions). Ambiguous matches return None so enforcement fails fast
-        rather than silently picking the wrong column.
+        exact case-insensitive / alias-normalized, then substring
+        (value-in-column direction only). Ambiguous matches return None so
+        enforcement fails fast rather than silently picking the wrong column.
         """
         norm_value = self._normalize_name(value)
         if not norm_value:
@@ -769,12 +769,14 @@ class ToolPlanner:
         if exact and len(exact) > 1:
             return None  # ambiguous
 
-        # 2. substring match (normalized, either direction), must be unambiguous
-        candidates = [
-            col
-            for col in column_list
-            if norm_value in self._normalize_name(col) or self._normalize_name(col) in norm_value
-        ]
+        # 2. substring match, must be unambiguous. ONLY the value-in-column
+        # direction is allowed: an abbreviated / partial LLM value matching a
+        # real column (e.g. "engagement" -> "engagement_score"). The reverse
+        # (a real column name appearing INSIDE the value) is deliberately NOT
+        # used — it let a short real column (e.g. "age") match an unrelated
+        # value (e.g. "dosage") and silently substitute the wrong column, which
+        # is worse than failing fast on an unbound column.
+        candidates = [col for col in column_list if norm_value in self._normalize_name(col)]
         # de-dup while preserving order
         seen: set = set()
         uniq = [c for c in candidates if not (c in seen or seen.add(c))]

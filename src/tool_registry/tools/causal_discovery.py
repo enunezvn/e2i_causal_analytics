@@ -54,9 +54,14 @@ logger = logging.getLogger(__name__)
 class DiscoverDagInput(BaseModel):
     """Input schema for discover_dag tool."""
 
-    data: Dict[str, List[Any]] = Field(
-        ...,
-        description="Data as dictionary of column names to values (DataFrame.to_dict('list'))",
+    data: Optional[Dict[str, List[Any]]] = Field(
+        default=None,
+        description=(
+            "Data as dictionary of column names to values (DataFrame.to_dict('list')). "
+            "Optional: when omitted, the real DataFrame is resolved from the canonical "
+            "kwargs keys (data / dataframe / estimation_data); the tool fails closed if "
+            "neither is supplied (never fabricates)."
+        ),
     )
     algorithms: List[str] = Field(
         default=["ges", "pc"],

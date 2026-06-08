@@ -101,6 +101,23 @@ def test_numeric_frame_drops_sparse_columns_before_complete_case() -> None:
     assert len(out) == n
 
 
+def test_dataframe_kwargs_keys_in_lockstep() -> None:
+    """MED-2 drift guard (codex review): the canonical DataFrame kwargs keys are
+    defined in two modules — causal_discovery.py and tool_composer/
+    tool_registrations.py — kept separate to avoid a circular import. If they
+    drift apart, the executor auto-inject and these tools would disagree on the
+    contract and frame delivery would silently break. Pin them identical.
+    """
+    from src.agents.tool_composer.tool_registrations import (
+        _DATAFRAME_KWARGS_KEYS as registrations_keys,
+    )
+    from src.tool_registry.tools.causal_discovery import (
+        _DATAFRAME_KWARGS_KEYS as discovery_keys,
+    )
+
+    assert tuple(registrations_keys) == tuple(discovery_keys)
+
+
 def test_numeric_frame_fails_closed_when_too_few_dense_columns() -> None:
     """If dropping sparse columns leaves <2 dense numeric columns, fail closed
     with a descriptive error rather than discovering structure on one variable."""
