@@ -1232,14 +1232,22 @@ async def _fetch_kpis_from_db(brand: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        # Define KPI mappings to metric_name in database
+        # Define KPI mappings to the REAL metric_name values present in
+        # business_metrics. Verified against the live table (4667 rows, brands
+        # Kisqali/Fabhalta/Remibrutinib): the canonical metric_name strings are
+        #   TRx, NBRx, "Market Share Percentage", Conversion_Rate, HCP_Coverage,
+        #   Patient_Touch_Rate (among others).
+        # The previous mapping pointed at metric_names that do NOT exist in the
+        # table (NRx, market_share, conversion_rate, hcp_reach, patient_starts),
+        # so get_by_kpi returned [] for all but TRx and the summary degraded to
+        # the fallback. These corrected names make the rollup read REAL DB values.
         kpi_mappings = {
             "trx_volume": "TRx",
-            "nrx_volume": "NRx",
-            "market_share": "market_share",
-            "conversion_rate": "conversion_rate",
-            "hcp_reach": "hcp_reach",
-            "patient_starts": "patient_starts",
+            "nrx_volume": "NBRx",
+            "market_share": "Market Share Percentage",
+            "conversion_rate": "Conversion_Rate",
+            "hcp_reach": "HCP_Coverage",
+            "patient_starts": "Patient_Touch_Rate",
         }
 
         metrics = {}
@@ -3102,6 +3110,25 @@ async def get_copilotkit_status() -> Dict[str, Any]:
         ),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get(
+    "/kpis/summary",
+    summary="Get the real business_metrics KPI rollup for a brand",
+    operation_id="get_kpi_summary_rest",
+)
+async def kpi_summary_endpoint(brand: str = Query("All")) -> Dict[str, Any]:
+    """REST exposure of the real business_metrics KPI rollup.
+
+    Thin wrapper over the existing :func:`get_kpi_summary` (also registered as a
+    CopilotAction) so the Home QUICK_STATS bar can read Total TRx (MTD) and
+    HCPs Reached directly. Returns ``{brand, period, metrics, data_source}``;
+    ``data_source`` is ``"database"`` for real values, ``"fallback"`` otherwise.
+
+    Open (no auth) to match the sibling ``GET /copilotkit/status`` so the
+    dashboard read works without the auth envelope.
+    """
+    return await get_kpi_summary(brand)
 
 
 # =============================================================================

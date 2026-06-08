@@ -401,6 +401,48 @@ class MonitorResponse(BaseModel):
 
 
 # =============================================================================
+# ACTIVE-COUNT ENDPOINT (Home "Active Campaigns" tile)
+# =============================================================================
+# Declared BEFORE every /{experiment_id}/... route so the static "/active-count"
+# path is never shadowed by the parameterized matcher (the gaps.py/feedback.py
+# route-order-shadow class of bug). All other routes in this file are
+# /{experiment_id}/... or /monitor, so this is safe.
+
+
+@router.get(
+    "/active-count",
+    summary="Count of currently-running experiments (Active Campaigns)",
+    operation_id="get_active_experiment_count",
+)
+async def active_experiment_count() -> Dict[str, Any]:
+    """Return the count of ml_experiments with status='running'.
+
+    This is the codebase's own mapping for "active campaigns" (there is no
+    first-class campaign entity). Reads the real ml_experiments.status column
+    (added + truthfully backfilled in migration 060). Open read for the Home
+    QUICK_STATS tile; honest 0 when the table is empty.
+    """
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+
+        client = get_supabase()
+        if client is None:
+            raise HTTPException(status_code=503, detail="Database unavailable")
+        result = (
+            client.table("ml_experiments")
+            .select("id", count="exact")
+            .eq("status", "running")
+            .execute()
+        )
+        return {"active_count": result.count or 0}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to count active experiments: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e
+
+
+# =============================================================================
 # RANDOMIZATION ENDPOINTS
 # =============================================================================
 

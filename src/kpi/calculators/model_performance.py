@@ -154,8 +154,26 @@ class ModelPerformanceCalculator(KPICalculatorBase):
     def _calc_roc_auc(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
         """Calculate WS1-MP-001: ROC-AUC.
 
-        Retrieves latest ROC-AUC from MLflow.
+        PRIMARY (SQL): reads the real ``ml_predictions.model_auc`` column via the
+        ``kpi_query`` allowlist (registry id ``model_performance_roc_auc``), which
+        is exactly the source declared by ``config/kpi_definitions.yaml`` for
+        WS1-MP-001 (``tables:[ml_predictions] columns:[ml_predictions.model_auc]``).
+        Live-verified: ``ml_predictions`` has 626 non-null ``model_auc`` rows with
+        mean ~= 0.7998.
+
+        FALLBACK (MLflow): preserved as the fail-closed fallback. The previous
+        implementation queried MLflow ONLY (``default_model``/``roc_auc``), which
+        fail-closes to None in prod (no such registered model), so the YAML's
+        declared SQL source was never read. We now try SQL first and fall back to
+        MLflow only when the SQL leg is genuinely unavailable (query error / no
+        rows / NULL average) — never fabricating a plausible default.
         """
+        result, db_error = self._execute_query("model_performance_roc_auc", [])
+        if db_error is None and result:
+            roc_auc = result[0].get("roc_auc")
+            if roc_auc is not None:
+                return float(roc_auc), None
+        # SQL leg unavailable (error, empty, or NULL avg) -> MLflow fail-closed leg.
         model_name = context.get("model_name", "default_model")
         return self._get_metric_from_mlflow(model_name, "roc_auc")
 

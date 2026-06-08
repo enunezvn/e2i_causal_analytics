@@ -218,15 +218,46 @@ def _stub_mlflow_raises(calculator: ModelPerformanceCalculator, exc: Exception) 
     calculator._mlflow_client.get_latest_versions.side_effect = exc
 
 
+def _stub_db_query_empty(calculator: ModelPerformanceCalculator) -> None:
+    """Make the SQL allowlist leg return no rows (so the MLflow fallback runs).
+
+    WS1-MP-001 ROC-AUC now reads ml_predictions.model_auc via the kpi_query
+    allowlist FIRST and falls back to MLflow only when the SQL leg is
+    unavailable. To exercise the MLflow fail-closed paths, stub the db_client's
+    rpc(...).execute().data to an empty list (no rows / NULL avg).
+    """
+    calculator._db_client.rpc.return_value.execute.return_value.data = []
+
+
+def _stub_db_query_returns(calculator: ModelPerformanceCalculator, query_id_value: dict) -> None:
+    """Make the SQL allowlist leg return one row with the given dict."""
+    calculator._db_client.rpc.return_value.execute.return_value.data = [query_id_value]
+
+
 # ===========================================================================
 # Per-calculator unavailability matrices
 # ===========================================================================
 
 
 class TestRocAucUnavailability:
-    """WS1-MP-001 ROC-AUC: 5 unavailability paths."""
+    """WS1-MP-001 ROC-AUC: SQL-primary (ml_predictions.model_auc) + MLflow fallback.
+
+    The calculator reads ml_predictions.model_auc via the kpi_query allowlist
+    FIRST, falling back to MLflow only when the SQL leg is genuinely unavailable
+    (empty/NULL). These tests stub the SQL leg empty to exercise the preserved
+    MLflow fail-closed paths, plus add a SQL-primary success path.
+    """
+
+    def test_sql_primary_returns_real_value(self, calculator_with_mlflow, roc_auc_kpi):
+        # SQL leg returns the real corpus mean ROC-AUC (~0.80) — no MLflow needed.
+        _stub_db_query_returns(calculator_with_mlflow, {"roc_auc": 0.7998})
+        result = calculator_with_mlflow.calculate(roc_auc_kpi, {})
+        assert result.value is not None
+        assert abs(result.value - 0.7998) < 1e-6
+        assert result.error is None
 
     def test_mlflow_client_unavailable(self, calculator_no_mlflow, roc_auc_kpi, monkeypatch):
+        _stub_db_query_empty(calculator_no_mlflow)
         # Force the lazy property to return None (simulating no mlflow installed)
         monkeypatch.setattr(
             ModelPerformanceCalculator, "mlflow_client", property(lambda self: None)
@@ -237,6 +268,7 @@ class TestRocAucUnavailability:
         assert result.status == KPIStatus.UNKNOWN
 
     def test_model_not_found(self, calculator_with_mlflow, roc_auc_kpi):
+        _stub_db_query_empty(calculator_with_mlflow)
         _stub_mlflow_no_versions(calculator_with_mlflow)
         result = calculator_with_mlflow.calculate(roc_auc_kpi, {"model_name": "missing_model"})
         assert result.value is None
@@ -244,6 +276,7 @@ class TestRocAucUnavailability:
         assert result.status == KPIStatus.UNKNOWN
 
     def test_metric_not_found(self, calculator_with_mlflow, roc_auc_kpi):
+        _stub_db_query_empty(calculator_with_mlflow)
         _stub_mlflow_run_missing_metric(calculator_with_mlflow)
         result = calculator_with_mlflow.calculate(roc_auc_kpi, {"model_name": "test"})
         assert result.value is None
@@ -251,6 +284,7 @@ class TestRocAucUnavailability:
         assert result.status == KPIStatus.UNKNOWN
 
     def test_mlflow_exception(self, calculator_with_mlflow, roc_auc_kpi):
+        _stub_db_query_empty(calculator_with_mlflow)
         _stub_mlflow_raises(calculator_with_mlflow, RuntimeError("connection refused"))
         result = calculator_with_mlflow.calculate(roc_auc_kpi, {"model_name": "test"})
         assert result.value is None
@@ -260,6 +294,8 @@ class TestRocAucUnavailability:
         assert result.status == KPIStatus.UNKNOWN
 
     def test_real_value_returned(self, calculator_with_mlflow, roc_auc_kpi):
+        # SQL leg empty -> MLflow fallback returns a real value.
+        _stub_db_query_empty(calculator_with_mlflow)
         _stub_mlflow_returns_metric(calculator_with_mlflow, "roc_auc", 0.85)
         result = calculator_with_mlflow.calculate(roc_auc_kpi, {"model_name": "test"})
         assert result.value == 0.85
