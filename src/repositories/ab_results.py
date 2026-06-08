@@ -163,6 +163,10 @@ class ABResultsRepository(BaseRepository):
                 segment_results=results.segment_results,
             )
 
+        # Column names must match the real ab_experiment_results schema (#705 R5,
+        # a latent bug on a path that had never run end-to-end): per-arm sizes are
+        # control_n / treatment_n (not sample_size_*), and the power column is
+        # observed_power (not statistical_power).
         data = {
             "experiment_id": str(results.experiment_id),
             "analysis_type": results.analysis_type.value,
@@ -174,9 +178,9 @@ class ABResultsRepository(BaseRepository):
             "effect_ci_lower": results.effect_ci_lower,
             "effect_ci_upper": results.effect_ci_upper,
             "p_value": results.p_value,
-            "sample_size_control": results.sample_size_control,
-            "sample_size_treatment": results.sample_size_treatment,
-            "statistical_power": results.statistical_power,
+            "control_n": results.sample_size_control,
+            "treatment_n": results.sample_size_treatment,
+            "observed_power": results.statistical_power,
             "is_significant": results.is_significant,
             "secondary_metrics": results.secondary_metrics,
             "segment_results": results.segment_results,
@@ -268,9 +272,9 @@ class ABResultsRepository(BaseRepository):
             effect_ci_lower=data["effect_ci_lower"],
             effect_ci_upper=data["effect_ci_upper"],
             p_value=data["p_value"],
-            sample_size_control=data["sample_size_control"],
-            sample_size_treatment=data["sample_size_treatment"],
-            statistical_power=data["statistical_power"],
+            sample_size_control=data["control_n"],
+            sample_size_treatment=data["treatment_n"],
+            statistical_power=data.get("observed_power") or 0.0,
             is_significant=data["is_significant"],
             secondary_metrics=data.get("secondary_metrics", []),
             segment_results=data.get("segment_results"),
@@ -433,18 +437,24 @@ class ABResultsRepository(BaseRepository):
                 calibration_adjustment=comparison.calibration_adjustment,
             )
 
+        # Column names must match the real ab_fidelity_comparisons schema (#705 H9):
+        # there is NO prediction_error_percent / ci_coverage column — the analogs
+        # are relative_prediction_error and confidence_interval_coverage. Both, plus
+        # prediction_error / absolute_prediction_error / direction_match /
+        # fidelity_grade, are recomputed by the set_prediction_errors +
+        # set_fidelity_grade triggers from predicted_effect / actual_effect /
+        # predicted_ci_* / fidelity_score, so we send the inputs and the
+        # trigger-authoritative coverage flag (consistent with comparison.ci_coverage).
         data = {
             "experiment_id": str(comparison.experiment_id),
             "twin_simulation_id": str(comparison.twin_simulation_id),
+            "comparison_timestamp": comparison.comparison_timestamp.isoformat(),
             "predicted_effect": comparison.predicted_effect,
             "actual_effect": comparison.actual_effect,
-            "prediction_error": comparison.prediction_error,
-            "prediction_error_percent": comparison.prediction_error_percent,
             "predicted_ci_lower": comparison.predicted_ci_lower,
             "predicted_ci_upper": comparison.predicted_ci_upper,
-            "ci_coverage": comparison.ci_coverage,
+            "confidence_interval_coverage": comparison.ci_coverage,
             "fidelity_score": comparison.fidelity_score,
-            "fidelity_grade": comparison.fidelity_grade,
             "calibration_adjustment": comparison.calibration_adjustment,
         }
 
@@ -547,11 +557,14 @@ class ABResultsRepository(BaseRepository):
             ),
             predicted_effect=data["predicted_effect"],
             actual_effect=data["actual_effect"],
-            prediction_error=data["prediction_error"],
-            prediction_error_percent=data.get("prediction_error_percent", 0.0),
+            prediction_error=data.get("prediction_error", 0.0),
+            # No prediction_error_percent column; relative_prediction_error is the
+            # trigger-computed FRACTION (error / |predicted|) → ×100 for the percent
+            # field on the in-memory record (#705 H9).
+            prediction_error_percent=(data.get("relative_prediction_error") or 0.0) * 100.0,
             predicted_ci_lower=data["predicted_ci_lower"],
             predicted_ci_upper=data["predicted_ci_upper"],
-            ci_coverage=data["ci_coverage"],
+            ci_coverage=data.get("confidence_interval_coverage", False),
             fidelity_score=data["fidelity_score"],
             fidelity_grade=data["fidelity_grade"],
             calibration_adjustment=data.get("calibration_adjustment", {}),
