@@ -38,20 +38,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# F-009 (issue #422): A/B metric observations have no storage table.
-# `database/ml/020_ab_testing_tables.sql` defines `ab_experiment_assignments`
-# and `ab_experiment_enrollments`, but no per-unit metric-observation table
-# exists. Until that schema lands (#422 follow-up), the interim and final
-# result tasks bail with `status='insufficient_data'` at the call site rather
-# than passing `[]` to `_compute_results` (which would persist NaN-tainted
-# `ExperimentResults`). A helper named `_load_*` would itself be a label
-# pattern — there's no path to load from, so the bail is in-line and the
-# reason string is the only honest answer.
-_AB_METRIC_SCHEMA_REASON = (
-    "No per-unit A/B metric-observation storage exists in the current schema. "
-    "See #422 (F-009): bail with insufficient_data rather than persist NaN to "
-    "ab_experiment_results."
-)
+# Per-unit A/B outcomes (#705 R5): the interim + final result tasks load REAL
+# per-HCP values via ExperimentOutcomeRepository (assignments ⋈ business_metrics
+# per_hcp_rollup) instead of the old `control_data = []` placeholder. Both still
+# bail with `status='insufficient_data'` (no NaN persisted) when an arm has too
+# few outcome-bearing units — the #422 NaN-safety guarantee, now data-driven.
 
 
 # Configuration path
@@ -195,8 +186,16 @@ def scheduled_interim_analysis(
                 }
 
             current_enrollment = enrollment_stats.total_enrolled
-            target_sample_size = enrollment_stats.target_sample_size or 1000
-            information_fraction = current_enrollment / target_sample_size
+            # Planned final N: EnrollmentStats has no target_sample_size field
+            # (the previous code referenced a phantom attribute → AttributeError on
+            # a path that had never run; #705 R5). Source it from config when set,
+            # else the real assigned cohort size (total_assigned) as the planned N.
+            target_sample_size = (
+                interim_config.get("target_sample_size") or enrollment_stats.total_assigned or 1000
+            )
+            information_fraction = (
+                current_enrollment / target_sample_size if target_sample_size else 0.0
+            )
 
             # Check if we've reached an analysis milestone
             analysis_schedule = interim_config.get("analysis_schedule", [0.25, 0.5, 0.75])
@@ -238,25 +237,86 @@ def scheduled_interim_analysis(
                         "previous_analyses": len(previous_analyses),
                     }
 
-            # F-009 (#422): there is no per-unit A/B metric-observation table
-            # in the current schema. Bail in-line rather than invoke a helper
-            # that would always return None (relabeling) and rather than pass
-            # `[]` to `perform_interim_analysis` (which would persist NaN to
-            # the DB). When the storage schema lands, the bail is removed and
-            # `perform_interim_analysis` is called with real per-unit values.
-            logger.warning(
-                "Skipping interim analysis for %s: %s",
-                experiment_id,
-                _AB_METRIC_SCHEMA_REASON,
+            # REAL per-unit outcome feed (#705 R5): same assignments ⋈
+            # business_metrics loader as the final-results path. Replaces the #422
+            # `control_data = []` placeholder. Bails honestly (no NaN) when there
+            # are too few outcome-bearing units to run a sequential test.
+            from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+            from src.services.interim_analysis import InterimAnalysisService, MetricData
+
+            exp_res = (
+                exp_repo.client.table("ml_experiments")
+                .select("brand,prediction_target")
+                .eq("id", experiment_id)
+                .limit(1)
+                .execute()
             )
+            exp_rows = exp_res.data or []
+            if not exp_rows:
+                return {
+                    "status": "skipped",
+                    "experiment_id": experiment_id,
+                    "reason": "experiment not found",
+                    "analysis_number": analysis_number,
+                }
+            brand = exp_rows[0].get("brand")
+            primary_metric = exp_rows[0].get("prediction_target") or ""
+
+            outcome_repo = ExperimentOutcomeRepository(supabase_client=exp_repo.client)
+            try:
+                control_data, treatment_data = await outcome_repo.load_arrays(
+                    exp_uuid, primary_metric, brand=brand
+                )
+            except ValueError as metric_err:
+                return {
+                    "status": "skipped",
+                    "experiment_id": experiment_id,
+                    "reason": str(metric_err),
+                    "analysis_number": analysis_number,
+                }
+
+            if len(control_data) < 2 or len(treatment_data) < 2:
+                return {
+                    "status": "insufficient_data",
+                    "experiment_id": experiment_id,
+                    "reason": (
+                        "fewer than 2 outcome-bearing units in an arm "
+                        f"(control={len(control_data)}, treatment={len(treatment_data)})"
+                    ),
+                    "information_fraction": information_fraction,
+                    "current_enrollment": current_enrollment,
+                    "target_sample_size": target_sample_size,
+                    "analysis_number": analysis_number,
+                }
+
+            start_time = time.time()
+            # perform_interim_analysis runs the sequential test AND persists the
+            # row internally (_persist_analysis → ab_interim_analyses), so we do
+            # NOT call record_interim_analysis again (it would violate the
+            # unique_analysis_number constraint).
+            interim_result = await InterimAnalysisService().perform_interim_analysis(
+                experiment_id=exp_uuid,
+                analysis_number=analysis_number,
+                metric_data=MetricData(
+                    name=primary_metric,
+                    control_values=control_data,
+                    treatment_values=treatment_data,
+                ),
+                target_sample_size=target_sample_size,
+            )
+            duration_ms = int((time.time() - start_time) * 1000)
+
             return {
-                "status": "insufficient_data",
+                "status": "completed",
                 "experiment_id": experiment_id,
-                "reason": _AB_METRIC_SCHEMA_REASON,
-                "information_fraction": information_fraction,
-                "current_enrollment": current_enrollment,
-                "target_sample_size": target_sample_size,
-                "analysis_number": analysis_number,
+                "analysis_number": interim_result.analysis_number,
+                "information_fraction": interim_result.information_fraction,
+                "effect_estimate": interim_result.effect_estimate,
+                "p_value": interim_result.p_value,
+                "decision": interim_result.decision.value,
+                "n_control": int(len(control_data)),
+                "n_treatment": int(len(treatment_data)),
+                "duration_ms": duration_ms,
             }
 
         except Exception as e:
@@ -645,73 +705,118 @@ def compute_experiment_results(
         f"Computing {analysis_type} results for experiment {experiment_id}: task {self.request.id}"
     )
 
-    # F-009 (#422): duration_ms is omitted from the insufficient_data return —
-    # there's no computation to time. When the metric-storage schema lands and
-    # `_compute_results` is restored, a `start_time = time.time()` capture and
-    # `duration_ms = int((time.time() - start_time) * 1000)` will be added back
-    # at the result assembly site.
-
     async def execute_computation():
-        from src.repositories.ab_results import ABResultsRepository
-        from src.services.results_analysis import ResultsAnalysisService
+        from src.repositories import get_supabase_client
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+        from src.services.results_analysis import AnalysisType, ResultsAnalysisService
+
+        def _enqueue_fidelity_tracking() -> None:
+            # Best-effort post-results producer (#705 H9): a broker/enqueue failure
+            # must NOT fail result computation (the producer is a side-channel).
+            # fidelity_tracking_update now resolves the experiment-scoped twin sim
+            # (experiment_design_id) and persists a real ab_fidelity_comparisons row.
+            if analysis_type != "final":
+                return
+            try:
+                celery_app.send_task(
+                    "src.tasks.fidelity_tracking_update",
+                    args=[experiment_id],
+                    queue="twins",
+                )
+            except Exception as enqueue_err:
+                logger.warning(
+                    "Could not enqueue fidelity_tracking_update for %s: %s",
+                    experiment_id,
+                    enqueue_err,
+                )
 
         try:
-            ResultsAnalysisService()
-            ABResultsRepository()
-            UUID(experiment_id)  # validates uuid shape; will raise ValueError if malformed
+            exp_uuid = UUID(experiment_id)  # validates uuid shape; raises if malformed
+            results_service = ResultsAnalysisService()
 
-            # F-009 (#422): same schema gap as scheduled_interim_analysis above.
-            # Bail in-line. When the per-unit metric-observation table exists,
-            # this block is replaced by:
-            #   metric_repo = ExperimentMetricObservationRepository()
-            #   control, treatment = await metric_repo.load_arrays(
-            #       experiment_id, primary_metric_from_config
-            #   )
-            #   results = await results_service.compute_itt_results(...)
-            logger.warning(
-                "Skipping results computation for %s: %s",
-                experiment_id,
-                _AB_METRIC_SCHEMA_REASON,
+            # Resolve the experiment's brand + primary metric (its prediction_target)
+            # via the SYNC Supabase client (A/B-side convention — same client the
+            # outcome feed + ABResultsRepository use).
+            client = get_supabase_client()
+            exp_res = (
+                client.table("ml_experiments")
+                .select("brand,prediction_target")
+                .eq("id", experiment_id)
+                .limit(1)
+                .execute()
             )
+            exp_rows = exp_res.data or []
+            if not exp_rows:
+                return {
+                    "status": "skipped",
+                    "experiment_id": experiment_id,
+                    "analysis_type": analysis_type,
+                    "reason": "experiment not found",
+                }
+            brand = exp_rows[0].get("brand")
+            primary_metric = exp_rows[0].get("prediction_target") or ""
 
-            # H9 producer (event-driven): a FINAL analysis enqueues the on-demand
-            # twin-fidelity comparison so prediction calibration tracks real
-            # outcomes. fidelity_tracking_update self-skips when no computed
-            # results / twin simulation exist yet — which is the case until the
-            # per-unit metric-observation schema lands (#422). The fidelity route
-            # (POST /experiments/{id}/fidelity/{sim}, #705 N2) is the immediate
-            # on-demand trigger.
-            #
-            # ⚠️ FUTURE-WIRING REQUIREMENT (when #422 lands): we enqueue with only
-            # experiment_id, so the task resolves twin_simulation_id=None →
-            # compare_experiment_to_twin falls back to the most-recent simulation
-            # GLOBALLY (twin_simulations has no experiment_id column — see that
-            # method's docstring). Before this path produces live rows, EITHER pass
-            # the experiment's real twin_simulation_id here, OR add a
-            # twin_simulations.experiment_id link + scope the fallback — otherwise
-            # it would associate the experiment with the wrong (possibly
-            # cross-brand) twin. Harmless today (no results → skipped).
-            if analysis_type == "final":
-                # Best-effort: a broker/enqueue failure must NOT fail result
-                # computation (the producer is a side-channel, not the result).
-                try:
-                    celery_app.send_task(
-                        "src.tasks.fidelity_tracking_update",
-                        args=[experiment_id],
-                        queue="twins",
-                    )
-                except Exception as enqueue_err:
-                    logger.warning(
-                        "Could not enqueue fidelity_tracking_update for %s: %s",
-                        experiment_id,
-                        enqueue_err,
-                    )
+            # REAL per-unit outcome feed (#705 R5): assignments ⋈ business_metrics
+            # per-HCP rollup. Replaces the #422 `control_data = []` placeholder.
+            outcome_repo = ExperimentOutcomeRepository(supabase_client=client)
+            try:
+                control_data, treatment_data = await outcome_repo.load_arrays(
+                    exp_uuid, primary_metric, brand=brand
+                )
+            except ValueError as metric_err:
+                # primary_metric does not map to a real per-HCP outcome column —
+                # fail closed (no silent column pick), surface honestly.
+                return {
+                    "status": "skipped",
+                    "experiment_id": experiment_id,
+                    "analysis_type": analysis_type,
+                    "reason": str(metric_err),
+                }
+
+            # A pooled two-sample test needs >= 2 outcome-bearing units per arm
+            # (ddof=1 variance). Otherwise bail honestly — no fabrication, no NaN
+            # persisted (the #422 guarantee preserved). Still fire the producer on
+            # final so it self-skips consistently.
+            if len(control_data) < 2 or len(treatment_data) < 2:
+                _enqueue_fidelity_tracking()
+                return {
+                    "status": "insufficient_data",
+                    "experiment_id": experiment_id,
+                    "analysis_type": analysis_type,
+                    "reason": (
+                        "fewer than 2 outcome-bearing units in an arm "
+                        f"(control={len(control_data)}, treatment={len(treatment_data)})"
+                    ),
+                    "n_control": int(len(control_data)),
+                    "n_treatment": int(len(treatment_data)),
+                }
+
+            start_time = time.time()
+            results = await results_service.compute_itt_results(
+                experiment_id=exp_uuid,
+                primary_metric=primary_metric,
+                control_data=control_data,
+                treatment_data=treatment_data,
+                analysis_type=(
+                    AnalysisType.FINAL if analysis_type == "final" else AnalysisType.INTERIM
+                ),
+            )
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            # Now that ab_experiment_results exists, the fidelity producer can
+            # resolve the experiment-scoped twin sim and persist a real comparison.
+            _enqueue_fidelity_tracking()
 
             return {
-                "status": "insufficient_data",
+                "status": "completed",
                 "experiment_id": experiment_id,
                 "analysis_type": analysis_type,
-                "reason": _AB_METRIC_SCHEMA_REASON,
+                "primary_metric": primary_metric,
+                "effect_estimate": results.effect_estimate,
+                "p_value": results.p_value,
+                "n_control": int(len(control_data)),
+                "n_treatment": int(len(treatment_data)),
+                "duration_ms": duration_ms,
             }
 
         except Exception as e:

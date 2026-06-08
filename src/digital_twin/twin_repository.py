@@ -486,6 +486,49 @@ class SimulationRepository(BaseRepository):
             logger.error(f"Failed to list simulations: {e}")
             return []
 
+    async def get_latest_for_experiment(
+        self,
+        experiment_design_id: UUID,
+        *,
+        brand: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Newest twin simulation linked to a specific experiment design.
+
+        Resolves the twin<->experiment association via the REAL
+        ``experiment_design_id`` link (populated by ``link_experiment``). This
+        replaces the cross-brand-unsafe "newest simulation globally" fallback in
+        ``compare_experiment_to_twin`` (#705 H9): a fidelity comparison for
+        experiment X must compare against a twin simulation that pre-screened X,
+        not whatever simulation ran most recently (possibly for another brand).
+
+        Returns None when no simulation is linked to the experiment — callers MUST
+        treat that as "skip / insufficient data", never widen to a global lookup.
+        The optional ``brand`` filter is a defensive guard; ``experiment_design_id``
+        already scopes to a single experiment.
+        """
+        if not self.client:
+            return None
+
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("*")
+                .eq("experiment_design_id", str(experiment_design_id))
+                .order("created_at", desc=True)
+                .limit(1)
+            )
+            if brand:
+                query = query.eq("brand", brand)
+
+            result = await query.execute()
+            rows = result.data or []
+            return rows[0] if rows else None
+        except Exception as e:
+            logger.error(
+                f"Failed to resolve twin simulation for experiment {experiment_design_id}: {e}"
+            )
+            return None
+
     async def update_status(
         self,
         simulation_id: UUID,

@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import numpy as np
+
 
 def _real_fidelity_comparison(exp_id, sim_id):
     from src.services.results_analysis import FidelityComparison
@@ -69,19 +71,41 @@ class TestFidelityTrackingUpdate:
 
 
 class TestFidelityProducer:
+    """The post-results producer fires only on a FINAL analysis. After the R5
+    rewire, ``compute_experiment_results`` first resolves the experiment + loads
+    the real outcome feed; the producer fires on the insufficient_data branch
+    (empty arrays here) AND on the completed branch — but never for interim."""
+
+    @staticmethod
+    def _found_experiment_client():
+        client = MagicMock()
+        (
+            client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
+        ).data = [{"brand": "Fabhalta", "prediction_target": "total_rx_count"}]
+        return client
+
     def test_final_analysis_enqueues_fidelity_tracking_update(self):
         from src.tasks.ab_testing_tasks import compute_experiment_results
 
         exp_id = str(uuid4())
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(return_value=(np.array([]), np.array([])))
         with (
             patch("src.tasks.ab_testing_tasks.celery_app.send_task") as mock_send,
-            patch("src.services.results_analysis.ResultsAnalysisService"),
-            patch("src.repositories.ab_results.ABResultsRepository"),
+            patch(
+                "src.repositories.get_supabase_client",
+                return_value=self._found_experiment_client(),
+            ),
+            patch(
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
+            ),
         ):
-            compute_experiment_results.run(experiment_id=exp_id, analysis_type="final")
+            result = compute_experiment_results.run(experiment_id=exp_id, analysis_type="final")
 
-        # H9 producer: a final analysis enqueues the fidelity task (which itself
-        # self-skips until real results exist — #422 metric schema gap).
+        # Empty arrays -> honest insufficient_data bail, but the FINAL producer
+        # still fires (it self-skips downstream if no twin sim is linked).
+        assert result["status"] == "insufficient_data"
         names = [c.args[0] if c.args else c.kwargs.get("name") for c in mock_send.call_args_list]
         assert "src.tasks.fidelity_tracking_update" in names
 
@@ -89,10 +113,18 @@ class TestFidelityProducer:
         from src.tasks.ab_testing_tasks import compute_experiment_results
 
         exp_id = str(uuid4())
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(return_value=(np.array([]), np.array([])))
         with (
             patch("src.tasks.ab_testing_tasks.celery_app.send_task") as mock_send,
-            patch("src.services.results_analysis.ResultsAnalysisService"),
-            patch("src.repositories.ab_results.ABResultsRepository"),
+            patch(
+                "src.repositories.get_supabase_client",
+                return_value=self._found_experiment_client(),
+            ),
+            patch(
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
+            ),
         ):
             compute_experiment_results.run(experiment_id=exp_id, analysis_type="interim")
 

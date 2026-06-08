@@ -125,6 +125,10 @@ class FidelityComparison:
     # Calibration recommendations
     calibration_adjustment: Dict[str, Any] = field(default_factory=dict)
 
+    # FK to the ab_experiment_results row that produced the actual effect
+    # (auditability: join a fidelity comparison back to its source result).
+    results_id: Optional[str] = None
+
 
 class _SupportsEffectEstimate(Protocol):
     """Minimal contract ``compare_with_twin_prediction`` needs from an actual-results
@@ -319,7 +323,10 @@ class ResultsAnalysisService:
             n_treatment=n_treatment,
         )
 
-        is_significant = p_value < self.config.alpha
+        # Coerce numpy scalar to a native bool — np.bool_ is not JSON
+        # serializable and breaks the ab_experiment_results insert (#705 R5,
+        # a latent bug on a path that had never run end-to-end).
+        is_significant = bool(p_value < self.config.alpha)
 
         # Secondary metrics
         secondary_results = []
@@ -333,19 +340,22 @@ class ResultsAnalysisService:
             analysis_method=analysis_method,
             computed_at=now,
             primary_metric=primary_metric,
-            control_mean=control_mean,
-            treatment_mean=treatment_mean,
-            effect_estimate=effect_estimate,
+            # float()/bool()/int() coercion: stats.t/np operations yield numpy
+            # scalars which are not JSON serializable on the Supabase insert
+            # (#705 R5 — honour the dataclass's native-type contract).
+            control_mean=float(control_mean),
+            treatment_mean=float(treatment_mean),
+            effect_estimate=float(effect_estimate),
             effect_ci_lower=float(ci_lower),
             effect_ci_upper=float(ci_upper),
-            relative_lift=relative_lift,
-            relative_lift_ci_lower=relative_ci_lower,
-            relative_lift_ci_upper=relative_ci_upper,
-            p_value=p_value,
+            relative_lift=float(relative_lift),
+            relative_lift_ci_lower=float(relative_ci_lower),
+            relative_lift_ci_upper=float(relative_ci_upper),
+            p_value=float(p_value),
             is_significant=is_significant,
-            sample_size_control=n_control,
-            sample_size_treatment=n_treatment,
-            statistical_power=power,
+            sample_size_control=int(n_control),
+            sample_size_treatment=int(n_treatment),
+            statistical_power=float(power),
             secondary_metrics=secondary_results,
         )
 
@@ -587,6 +597,8 @@ class ResultsAnalysisService:
             fidelity_score=fidelity_score,
             fidelity_grade=fidelity_grade,
             calibration_adjustment=calibration,
+            # Auditability FK to the source result row, when available (#705 R5).
+            results_id=(str(getattr(actual_results, "id", "") or "") or None),
         )
 
         # Persist comparison
@@ -614,11 +626,13 @@ class ResultsAnalysisService:
         (simulated_ate / _ci_*); fabricates nothing.
 
         The fidelity route always supplies an explicit ``twin_simulation_id``. The
-        ``None`` branch falls back to the most-recent simulation **globally** —
-        ``twin_simulations`` has no ``experiment_id`` column, so it cannot yet be
-        scoped to the experiment. That branch is only reachable by the (currently
-        un-wired) fidelity task; R4-H9 tightens the twin<->experiment resolution
-        when it wires that task. Documented limitation, not a silent fabrication.
+        ``None`` branch (used by the ``fidelity_tracking_update`` task) resolves the
+        twin simulation **experiment-scoped** via ``twin_simulations.experiment_design_id``
+        — the real link populated by ``link_experiment`` — so the comparison always
+        uses a simulation that pre-screened THIS experiment, never the most-recent
+        simulation globally (which could be a different brand). If no simulation is
+        linked to the experiment, this raises (skip), never widening to a global
+        lookup (#705 H9). Fabricates nothing.
         """
         from src.digital_twin.twin_repository import TwinRepository
         from src.memory.services.factories import get_async_supabase_client
@@ -634,11 +648,14 @@ class ResultsAnalysisService:
         if twin_simulation_id is not None:
             sim = await repo.get_simulation(twin_simulation_id)
         else:
-            # Newest simulation GLOBALLY (not experiment-scoped — see docstring).
-            sims = await repo.simulations.list_simulations(limit=1)
-            sim = sims[0] if sims else None
+            # Experiment-scoped resolution via the real experiment_design_id link
+            # (#705 H9) — NEVER the most-recent simulation globally.
+            sim = await repo.simulations.get_latest_for_experiment(experiment_id)
         if not sim:
-            raise ValueError(f"No twin simulation found ({twin_simulation_id})")
+            raise ValueError(
+                f"No twin simulation linked to experiment {experiment_id} "
+                f"(twin_simulation_id={twin_simulation_id})"
+            )
 
         def _f(obj: Any, key: str) -> float:
             v = obj.get(key) if isinstance(obj, dict) else getattr(obj, key)

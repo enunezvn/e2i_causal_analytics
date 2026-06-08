@@ -7,21 +7,17 @@ Closes #422 (F-009). Before this PR the task passed `control_data=[]` and
 producing NaN; the NaN-tainted `ExperimentResults` was persisted to
 `ab_experiment_results`.
 
-After the fix:
-- The task bails in-line with `status='insufficient_data'` and `reason`
-  citing the schema gap (no per-unit A/B metric-observation storage exists).
-- It NEVER calls `compute_itt_results`/`compute_per_protocol_results`/
-  `perform_interim_analysis` from these celery task paths under the current
-  schema. When the storage schema lands (#422 follow-up), the bail is
-  removed and real arrays are passed in.
-
-Iter-1 codex feedback addressed:
-- HIGH #1: removed `_load_experiment_metric_arrays` helper that always
-  returned `None` (a relabeling pattern). The bail is now in-line with the
-  honest reason — no helper pretending to load data.
-- HIGH #2: removed `primary_metric = "conversion_rate"` hardcoded value
-  and `np.ones(...)` "all-compliant" mask placeholders. Those were dead
-  code after the bail anyway.
+The #422 no-NaN invariant — preserved under #705 R5:
+- The real per-unit outcome feed (`ExperimentOutcomeRepository.load_arrays`,
+  assignments ⋈ business_metrics) now supplies the arrays. The task still
+  returns `status='insufficient_data'` and NEVER calls
+  `compute_itt_results`/`compute_per_protocol_results`/`perform_interim_analysis`
+  when an arm has fewer than 2 outcome-bearing units — so empty/degenerate
+  arrays never reach the analysis (no NaN persisted). The difference from the
+  old behavior is that the bail is now DATA-DRIVEN (empty feed) rather than a
+  blanket schema-gap bail; when real assignments + metrics exist, the task
+  computes and persists a real result.
+- The literal `control_data = []` placeholder must remain absent (pinned below).
 """
 
 from __future__ import annotations
@@ -29,6 +25,8 @@ from __future__ import annotations
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
+
+import numpy as np
 
 # Note: imports below use string-form patch targets so the celery worker
 # config does not need to be loaded at test collection time.
@@ -50,17 +48,28 @@ def _fake_self() -> MagicMock:
 class TestComputeExperimentResultsNoEmptyArrays:
     """`compute_experiment_results` MUST NOT pass empty arrays to compute_itt_results."""
 
+    @staticmethod
+    def _found_experiment_client() -> MagicMock:
+        client = MagicMock()
+        (
+            client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
+        ).data = [{"brand": "Fabhalta", "prediction_target": "total_rx_count"}]
+        return client
+
     def test_bails_early_with_insufficient_data_status(self) -> None:
         """
-        With no metric data available, the task returns status='insufficient_data'
-        and does NOT call compute_itt_results / compute_per_protocol_results.
+        When the real outcome feed yields too few outcome-bearing units, the task
+        returns status='insufficient_data' and does NOT call compute_itt_results /
+        compute_per_protocol_results (#705 R5 preserves the #422 no-NaN invariant
+        via the empty/too-small guard — now data-driven, not a blanket bail).
         """
         from src.tasks.ab_testing_tasks import compute_experiment_results
 
         mock_service = MagicMock()
         mock_service.compute_itt_results = AsyncMock()
         mock_service.compute_per_protocol_results = AsyncMock()
-        mock_repo = MagicMock()
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(return_value=(np.array([]), np.array([])))
 
         exp_id = str(uuid4())
 
@@ -70,23 +79,22 @@ class TestComputeExperimentResultsNoEmptyArrays:
                 return_value=mock_service,
             ),
             patch(
-                "src.repositories.ab_results.ABResultsRepository",
-                return_value=mock_repo,
+                "src.repositories.get_supabase_client",
+                return_value=self._found_experiment_client(),
+            ),
+            patch(
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
             ),
         ):
-            # Celery bound tasks: call via `.run(...)` to bypass `self` injection
-            # (the `bind=True` decorator wraps the function so `self` is the
-            # Task instance, not a positional arg the caller supplies).
+            # Celery bound tasks: call via `.run(...)` to bypass `self` injection.
             result: Dict[str, Any] = compute_experiment_results.run(
                 experiment_id=exp_id, analysis_type="interim"
             )
 
-        # Must bail early — no compute calls — no DB write.
+        # Empty arrays -> no compute call -> no NaN-tainted DB write.
         mock_service.compute_itt_results.assert_not_called()
         mock_service.compute_per_protocol_results.assert_not_called()
-
-        # Must surface a structured insufficient_data status (not 'completed'
-        # with NaN-tainted means).
         assert result["status"] == "insufficient_data", (
             f"Expected status='insufficient_data', got {result!r}. "
             "Passing empty arrays to compute_itt_results would produce "
@@ -95,7 +103,7 @@ class TestComputeExperimentResultsNoEmptyArrays:
         assert result["experiment_id"] == exp_id
 
     def test_final_analysis_type_also_bails_no_compute_per_protocol(self) -> None:
-        """`analysis_type='final'` must also bail — never call
+        """`analysis_type='final'` must also bail on an empty feed — never call
         `compute_per_protocol_results` with empty/synthetic compliance masks.
         """
         from src.tasks.ab_testing_tasks import compute_experiment_results
@@ -104,6 +112,8 @@ class TestComputeExperimentResultsNoEmptyArrays:
         mock_service = MagicMock()
         mock_service.compute_itt_results = AsyncMock()
         mock_service.compute_per_protocol_results = AsyncMock()
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(return_value=(np.array([]), np.array([])))
 
         with (
             patch(
@@ -111,8 +121,12 @@ class TestComputeExperimentResultsNoEmptyArrays:
                 return_value=mock_service,
             ),
             patch(
-                "src.repositories.ab_results.ABResultsRepository",
-                return_value=MagicMock(),
+                "src.repositories.get_supabase_client",
+                return_value=self._found_experiment_client(),
+            ),
+            patch(
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
             ),
         ):
             result = compute_experiment_results.run(experiment_id=exp_id, analysis_type="final")
@@ -120,8 +134,8 @@ class TestComputeExperimentResultsNoEmptyArrays:
         mock_service.compute_itt_results.assert_not_called()
         mock_service.compute_per_protocol_results.assert_not_called()
         assert result["status"] == "insufficient_data"
-        # Reason string must mention the schema gap (so users know WHY).
-        assert "schema" in result["reason"].lower() or "#422" in result["reason"]
+        # Reason string explains WHY (too few outcome-bearing units in an arm).
+        assert "outcome-bearing units" in result["reason"]
 
 
 class TestScheduledInterimAnalysisNoEmptyArrays:
@@ -129,25 +143,31 @@ class TestScheduledInterimAnalysisNoEmptyArrays:
 
     def test_skips_or_insufficient_data_when_no_metrics(self) -> None:
         """
-        When the experiment has enrollment but no metric data, the task must
-        either skip or return insufficient_data — NEVER call
-        perform_interim_analysis(metric_data={'control': [], 'treatment': []}).
+        With a found experiment but an EMPTY real outcome feed, the interim task
+        returns insufficient_data and NEVER calls perform_interim_analysis — the
+        #422 no-empty-arrays invariant, preserved under the #705 R5 data-driven feed.
         """
         from src.tasks.ab_testing_tasks import scheduled_interim_analysis
 
         exp_id = str(uuid4())
 
-        # Mock enrollment stats: enough enrollment to trigger analysis under the
-        # default schedule (information_fraction >= 0.25).
+        # Enrollment stats: enough to pass the milestone gate (force=True anyway).
         mock_enrollment_stats = MagicMock()
         mock_enrollment_stats.total_enrolled = 500
-        mock_enrollment_stats.target_sample_size = 1000
+        mock_enrollment_stats.total_assigned = 1000
 
         mock_enrollment_service = MagicMock()
         mock_enrollment_service.get_enrollment_stats = AsyncMock(return_value=mock_enrollment_stats)
 
+        # exp_repo.client resolves the experiment (brand + prediction_target).
         mock_exp_repo = MagicMock()
         mock_exp_repo.get_interim_analyses = AsyncMock(return_value=[])
+        (
+            mock_exp_repo.client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
+        ).data = [{"brand": "Fabhalta", "prediction_target": "total_rx_count"}]
+
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(return_value=(np.array([]), np.array([])))
 
         mock_interim_service = MagicMock()
         mock_interim_service.perform_interim_analysis = AsyncMock()
@@ -166,27 +186,16 @@ class TestScheduledInterimAnalysisNoEmptyArrays:
                 return_value=mock_interim_service,
             ),
             patch(
-                "src.services.results_analysis.ResultsAnalysisService",
-                return_value=MagicMock(),
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
             ),
         ):
             result = scheduled_interim_analysis.run(experiment_id=exp_id, force=True)
 
-        # Must NOT have called perform_interim_analysis with empty arrays.
-        if mock_interim_service.perform_interim_analysis.call_args is not None:
-            kwargs = mock_interim_service.perform_interim_analysis.call_args.kwargs
-            metric_data = kwargs.get("metric_data")
-            if metric_data is not None:
-                assert metric_data.get("control") != [], (
-                    "perform_interim_analysis called with control=[] — F-009 regressed."
-                )
-                assert metric_data.get("treatment") != [], (
-                    "perform_interim_analysis called with treatment=[] — F-009 regressed."
-                )
-
-        assert result["status"] in {"insufficient_data", "skipped", "failed"}, (
-            f"Expected status in {{insufficient_data, skipped, failed}}, "
-            f"got {result.get('status')!r}"
+        # Empty feed -> never call perform_interim_analysis -> no NaN.
+        mock_interim_service.perform_interim_analysis.assert_not_called()
+        assert result["status"] == "insufficient_data", (
+            f"Expected status='insufficient_data', got {result.get('status')!r}"
         )
 
 
