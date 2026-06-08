@@ -31,7 +31,12 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { useTriggerMonitoring } from '@/hooks/api';
+import {
+  useTriggerMonitoring,
+  useInterimAnalyses,
+  useFidelityComparisons,
+} from '@/hooks/api';
+import { EmptyState } from '@/components/ui/EmptyState';
 import {
   AlertSeverity,
   ExperimentHealthStatus,
@@ -69,139 +74,6 @@ interface LocalExperiment {
   start_date: string;
   primary_metric: string;
 }
-
-// =============================================================================
-// SAMPLE DATA (when API is unavailable)
-// =============================================================================
-
-const SAMPLE_EXPERIMENTS: LocalExperiment[] = [
-  {
-    experiment_id: 'exp_kisqali_hcp_outreach_001',
-    experiment_name: 'Kisqali HCP Outreach Campaign',
-    health_status: ExperimentHealthStatus.HEALTHY,
-    total_enrolled: 1250,
-    enrollment_rate_per_day: 25.5,
-    current_information_fraction: 0.65,
-    has_srm: false,
-    active_alerts: 0,
-    last_checked: new Date().toISOString(),
-    variant_breakdown: { control: 625, treatment: 625 },
-    start_date: '2026-01-01',
-    primary_metric: 'trx_conversion_rate',
-  },
-  {
-    experiment_id: 'exp_fabhalta_digital_001',
-    experiment_name: 'Fabhalta Digital Engagement',
-    health_status: ExperimentHealthStatus.WARNING,
-    total_enrolled: 850,
-    enrollment_rate_per_day: 18.2,
-    current_information_fraction: 0.42,
-    has_srm: false,
-    active_alerts: 2,
-    last_checked: new Date().toISOString(),
-    variant_breakdown: { control: 420, treatment: 430 },
-    start_date: '2026-01-05',
-    primary_metric: 'nrx_rate',
-  },
-  {
-    experiment_id: 'exp_remibrutinib_rep_001',
-    experiment_name: 'Remibrutinib Rep Training',
-    health_status: ExperimentHealthStatus.CRITICAL,
-    total_enrolled: 320,
-    enrollment_rate_per_day: 8.5,
-    current_information_fraction: 0.22,
-    has_srm: true,
-    active_alerts: 5,
-    last_checked: new Date().toISOString(),
-    variant_breakdown: { control: 180, treatment: 140 },
-    start_date: '2026-01-10',
-    primary_metric: 'call_quality_score',
-  },
-  {
-    experiment_id: 'exp_multi_brand_001',
-    experiment_name: 'Multi-brand Messaging Test',
-    health_status: ExperimentHealthStatus.HEALTHY,
-    total_enrolled: 2100,
-    enrollment_rate_per_day: 42.0,
-    current_information_fraction: 0.78,
-    has_srm: false,
-    active_alerts: 0,
-    last_checked: new Date().toISOString(),
-    variant_breakdown: { control: 700, treatment_a: 700, treatment_b: 700 },
-    start_date: '2025-12-15',
-    primary_metric: 'engagement_rate',
-  },
-];
-
-const SAMPLE_ALERTS: MonitorAlert[] = [
-  {
-    alert_id: 'alert_001',
-    alert_type: 'enrollment_slow',
-    severity: AlertSeverity.WARNING,
-    experiment_id: 'exp_fabhalta_digital_001',
-    experiment_name: 'Fabhalta Digital Engagement',
-    message: 'Enrollment rate 27% below target',
-    details: { target_rate: 25, actual_rate: 18.2 },
-    recommended_action: 'Consider expanding eligibility criteria or extending recruitment timeline',
-    timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    alert_id: 'alert_002',
-    alert_type: 'srm_detected',
-    severity: AlertSeverity.CRITICAL,
-    experiment_id: 'exp_remibrutinib_rep_001',
-    experiment_name: 'Remibrutinib Rep Training',
-    message: 'Sample Ratio Mismatch detected (p < 0.001)',
-    details: { expected_ratio: '50:50', actual_ratio: '56:44', chi_squared: 12.5 },
-    recommended_action: 'Investigate randomization process immediately. Check for systematic exclusions.',
-    timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-  },
-  {
-    alert_id: 'alert_003',
-    alert_type: 'fidelity_low',
-    severity: AlertSeverity.WARNING,
-    experiment_id: 'exp_remibrutinib_rep_001',
-    experiment_name: 'Remibrutinib Rep Training',
-    message: 'Digital Twin fidelity score dropped below threshold',
-    details: { current_score: 0.72, threshold: 0.85 },
-    recommended_action: 'Review Digital Twin calibration and update model parameters',
-    timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-  },
-];
-
-const SAMPLE_INTERIM_ANALYSES = [
-  {
-    analysis_id: 'ia_001',
-    experiment_id: 'exp_multi_brand_001',
-    analysis_number: 3,
-    performed_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    information_fraction: 0.78,
-    p_value: 0.018,
-    decision: StoppingDecision.CONTINUE,
-    alpha_spent: 0.0234,
-    adjusted_alpha: 0.0212,
-  },
-  {
-    analysis_id: 'ia_002',
-    experiment_id: 'exp_kisqali_hcp_outreach_001',
-    analysis_number: 2,
-    performed_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    information_fraction: 0.65,
-    p_value: 0.042,
-    decision: StoppingDecision.CONTINUE,
-    alpha_spent: 0.0156,
-    adjusted_alpha: 0.0252,
-  },
-];
-
-const SAMPLE_FIDELITY = [
-  { date: '2026-01-10', score: 0.92 },
-  { date: '2026-01-12', score: 0.89 },
-  { date: '2026-01-14', score: 0.85 },
-  { date: '2026-01-16', score: 0.78 },
-  { date: '2026-01-18', score: 0.72 },
-  { date: '2026-01-20', score: 0.74 },
-];
 
 // =============================================================================
 // CONSTANTS
@@ -281,10 +153,24 @@ export default function Experiments() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);
 
-  // API hooks with fallback to sample data
+  // API hooks. No sample-data fallback — honest empty states only.
   const { data: monitorData, isPending: isLoadingMonitor, mutate: triggerMonitor } = useTriggerMonitoring();
 
-  // Derive experiments from monitor data or use sample data
+  // Live interim analyses + fidelity for the currently-selected experiment.
+  // Both endpoints are keyed by a single experiment id.
+  const interimQuery = useInterimAnalyses(selectedExperiment ?? '', {
+    enabled: !!selectedExperiment,
+  });
+  const fidelityQuery = useFidelityComparisons(selectedExperiment ?? '', {
+    enabled: !!selectedExperiment,
+  });
+  const interimAnalyses = interimQuery.data?.analyses ?? [];
+  const fidelityPoints = (fidelityQuery.data?.comparisons ?? []).map((c) => ({
+    date: c.timestamp.split('T')[0],
+    score: c.fidelity_score,
+  }));
+
+  // Derive experiments from live monitor data only — no sample fallback.
   // LocalExperiment extends ExperimentHealthSummary with additional UI fields
   const experiments = useMemo((): LocalExperiment[] => {
     if (monitorData?.experiments?.length) {
@@ -296,14 +182,11 @@ export default function Experiments() {
         primary_metric: 'conversion_rate',
       }));
     }
-    return SAMPLE_EXPERIMENTS;
+    return [];
   }, [monitorData]);
 
   const alerts = useMemo(() => {
-    if (monitorData?.alerts?.length) {
-      return monitorData.alerts;
-    }
-    return SAMPLE_ALERTS;
+    return monitorData?.alerts ?? [];
   }, [monitorData]);
 
   // Filter experiments based on search
@@ -468,6 +351,13 @@ export default function Experiments() {
               className="max-w-md"
             />
           </div>
+
+          {filteredExperiments.length === 0 && (
+            <EmptyState
+              title="No experiments to display"
+              description='Run "Run Monitoring" to load live experiment health from the monitoring service.'
+            />
+          )}
 
           {/* Experiment Cards */}
           <div className="grid gap-4">
@@ -686,48 +576,65 @@ export default function Experiments() {
               <CardDescription>Statistical stopping decisions with alpha spending</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-2 px-4">Experiment</th>
-                      <th className="text-left py-2 px-4">Analysis #</th>
-                      <th className="text-left py-2 px-4">Info Fraction</th>
-                      <th className="text-left py-2 px-4">P-Value</th>
-                      <th className="text-left py-2 px-4">Adj. Alpha</th>
-                      <th className="text-left py-2 px-4">Decision</th>
-                      <th className="text-left py-2 px-4">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {SAMPLE_INTERIM_ANALYSES.map((analysis) => (
-                      <tr key={analysis.analysis_id} className="border-b hover:bg-muted/50">
-                        <td className="py-2 px-4">{analysis.experiment_id}</td>
-                        <td className="py-2 px-4">{analysis.analysis_number}</td>
-                        <td className="py-2 px-4">{(analysis.information_fraction * 100).toFixed(0)}%</td>
-                        <td className="py-2 px-4 font-mono">{analysis.p_value.toFixed(4)}</td>
-                        <td className="py-2 px-4 font-mono">{analysis.adjusted_alpha.toFixed(4)}</td>
-                        <td className="py-2 px-4">
-                          <Badge
-                            variant={
-                              analysis.decision === StoppingDecision.CONTINUE
-                                ? 'secondary'
-                                : analysis.decision === StoppingDecision.STOP_EFFICACY
-                                ? 'default'
-                                : 'destructive'
-                            }
-                          >
-                            {analysis.decision}
-                          </Badge>
-                        </td>
-                        <td className="py-2 px-4 text-muted-foreground">
-                          {formatTimestamp(analysis.performed_at)}
-                        </td>
+              {!selectedExperiment ? (
+                <EmptyState
+                  title="Select an experiment to view interim analyses"
+                  description="Click an experiment in the Experiments tab to load its interim-analysis history."
+                />
+              ) : interimQuery.isLoading ? (
+                <EmptyState title="Loading interim analyses…" />
+              ) : interimQuery.isError ? (
+                <EmptyState
+                  title="Could not load interim analyses"
+                  description={interimQuery.error?.message ?? 'The interim-analyses endpoint returned an error.'}
+                />
+              ) : interimAnalyses.length === 0 ? (
+                <EmptyState
+                  title="No interim analyses yet"
+                  description="This experiment has no recorded interim analyses."
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left py-2 px-4">Experiment</th>
+                        <th className="text-left py-2 px-4">Analysis #</th>
+                        <th className="text-left py-2 px-4">Info Fraction</th>
+                        <th className="text-left py-2 px-4">P-Value</th>
+                        <th className="text-left py-2 px-4">Decision</th>
+                        <th className="text-left py-2 px-4">Date</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {interimAnalyses.map((analysis) => (
+                        <tr key={analysis.analysis_id} className="border-b hover:bg-muted/50">
+                          <td className="py-2 px-4">{selectedExperiment}</td>
+                          <td className="py-2 px-4">{analysis.analysis_number}</td>
+                          <td className="py-2 px-4">{(analysis.information_fraction * 100).toFixed(0)}%</td>
+                          <td className="py-2 px-4 font-mono">{analysis.p_value.toFixed(4)}</td>
+                          <td className="py-2 px-4">
+                            <Badge
+                              variant={
+                                analysis.decision === StoppingDecision.CONTINUE
+                                  ? 'secondary'
+                                  : analysis.decision === StoppingDecision.STOP_EFFICACY
+                                  ? 'default'
+                                  : 'destructive'
+                              }
+                            >
+                              {analysis.decision}
+                            </Badge>
+                          </td>
+                          <td className="py-2 px-4 text-muted-foreground">
+                            {formatTimestamp(analysis.performed_at)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -745,68 +652,102 @@ export default function Experiments() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={SAMPLE_FIDELITY}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis domain={[0.5, 1]} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
-                  <Tooltip formatter={(value) => `${((value as number) * 100).toFixed(1)}%`} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="score"
-                    stroke={COLORS.primary}
-                    strokeWidth={2}
-                    name="Fidelity Score"
-                    dot={{ r: 4 }}
-                  />
-                  {/* Threshold line */}
-                  <Line
-                    type="monotone"
-                    dataKey={() => 0.85}
-                    stroke={COLORS.warning}
-                    strokeDasharray="5 5"
-                    name="Threshold"
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              {!selectedExperiment ? (
+                <EmptyState
+                  title="Select an experiment to view fidelity tracking"
+                  description="Click an experiment in the Experiments tab to compare Digital Twin predictions with observed outcomes."
+                />
+              ) : fidelityQuery.isLoading ? (
+                <EmptyState title="Loading fidelity comparisons…" />
+              ) : fidelityQuery.isError ? (
+                <EmptyState
+                  title="Could not load fidelity comparisons"
+                  description={fidelityQuery.error?.message ?? 'The fidelity endpoint returned an error.'}
+                />
+              ) : fidelityPoints.length === 0 ? (
+                <EmptyState
+                  title="No fidelity comparisons yet"
+                  description="This experiment has no recorded Digital Twin fidelity comparisons."
+                />
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={fidelityPoints}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="date" />
+                      <YAxis domain={[0.5, 1]} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
+                      <Tooltip formatter={(value) => `${((value as number) * 100).toFixed(1)}%`} />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="score"
+                        stroke={COLORS.primary}
+                        strokeWidth={2}
+                        name="Fidelity Score"
+                        dot={{ r: 4 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey={() => 0.85}
+                        stroke={COLORS.warning}
+                        strokeDasharray="5 5"
+                        name="Threshold"
+                        dot={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
 
-              <div className="mt-6 grid md:grid-cols-3 gap-4">
-                <Card className="bg-muted/50">
-                  <CardContent className="pt-4">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold">92%</div>
-                      <div className="text-sm text-muted-foreground">Initial Fidelity</div>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-muted/50">
-                  <CardContent className="pt-4">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-yellow-600">74%</div>
-                      <div className="text-sm text-muted-foreground">Current Fidelity</div>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-muted/50">
-                  <CardContent className="pt-4">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-red-600">-18%</div>
-                      <div className="text-sm text-muted-foreground">Change</div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
+                  <div className="mt-6 grid md:grid-cols-3 gap-4">
+                    <Card className="bg-muted/50">
+                      <CardContent className="pt-4">
+                        <div className="text-center">
+                          <div className="text-2xl font-bold">
+                            {(fidelityPoints[0].score * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-sm text-muted-foreground">Initial Fidelity</div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-muted/50">
+                      <CardContent className="pt-4">
+                        <div className="text-center">
+                          <div className="text-2xl font-bold text-yellow-600">
+                            {(fidelityPoints[fidelityPoints.length - 1].score * 100).toFixed(0)}%
+                          </div>
+                          <div className="text-sm text-muted-foreground">Current Fidelity</div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-muted/50">
+                      <CardContent className="pt-4">
+                        <div className="text-center">
+                          <div className="text-2xl font-bold text-red-600">
+                            {(
+                              (fidelityPoints[fidelityPoints.length - 1].score -
+                                fidelityPoints[0].score) *
+                              100
+                            ).toFixed(0)}
+                            %
+                          </div>
+                          <div className="text-sm text-muted-foreground">Change</div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
 
-              <Alert className="mt-6">
-                <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Calibration Recommended</AlertTitle>
-                <AlertDescription>
-                  Digital Twin fidelity has dropped below the 85% threshold. Consider updating the model
-                  parameters based on the latest experiment observations to improve prediction accuracy.
-                </AlertDescription>
-              </Alert>
+                  {fidelityPoints[fidelityPoints.length - 1].score < 0.85 && (
+                    <Alert className="mt-6">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Calibration Recommended</AlertTitle>
+                      <AlertDescription>
+                        Digital Twin fidelity has dropped below the 85% threshold. Consider updating the
+                        model parameters based on the latest experiment observations to improve prediction
+                        accuracy.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

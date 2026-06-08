@@ -88,7 +88,7 @@ export function AIAgentInsights() {
         {/* Priority Actions */}
         <div className="lg:col-span-1">
           <ErrorBoundary sectionName="Priority Actions">
-            <PriorityActionsROI />
+            <PriorityActionsROI brand={brand} />
           </ErrorBoundary>
         </div>
 

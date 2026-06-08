@@ -39,6 +39,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { KPICard } from '@/components/visualizations';
+import { EmptyState } from '@/components/ui/EmptyState';
 import {
   useResourceHealth,
   useRunOptimization,
@@ -47,119 +48,7 @@ import {
 import type {
   AllocationResult,
   ScenarioResult,
-  OptimizationResponse,
-  ResourceType,
-  OptimizationObjective,
 } from '@/types/resources';
-
-// =============================================================================
-// SAMPLE DATA FOR DEVELOPMENT
-// =============================================================================
-
-const sampleOptimizationResult: OptimizationResponse = {
-  optimization_id: 'opt_abc123',
-  status: 'completed' as never,
-  resource_type: 'budget' as ResourceType,
-  objective: 'maximize_roi' as OptimizationObjective,
-  optimal_allocations: [
-    {
-      entity_id: 'territory_northeast',
-      entity_type: 'territory',
-      current_allocation: 50000,
-      optimized_allocation: 72000,
-      change: 22000,
-      change_percentage: 44.0,
-      expected_impact: 1.35,
-    },
-    {
-      entity_id: 'territory_southeast',
-      entity_type: 'territory',
-      current_allocation: 40000,
-      optimized_allocation: 35000,
-      change: -5000,
-      change_percentage: -12.5,
-      expected_impact: 0.85,
-    },
-    {
-      entity_id: 'territory_midwest',
-      entity_type: 'territory',
-      current_allocation: 60000,
-      optimized_allocation: 68000,
-      change: 8000,
-      change_percentage: 13.3,
-      expected_impact: 1.2,
-    },
-    {
-      entity_id: 'territory_west',
-      entity_type: 'territory',
-      current_allocation: 50000,
-      optimized_allocation: 45000,
-      change: -5000,
-      change_percentage: -10.0,
-      expected_impact: 0.95,
-    },
-    {
-      entity_id: 'territory_southwest',
-      entity_type: 'territory',
-      current_allocation: 30000,
-      optimized_allocation: 40000,
-      change: 10000,
-      change_percentage: 33.3,
-      expected_impact: 1.45,
-    },
-  ],
-  objective_value: 245000,
-  solver_status: 'optimal',
-  solve_time_ms: 150,
-  scenarios: [
-    {
-      scenario_name: 'Conservative (+10%)',
-      total_allocation: 220000,
-      projected_outcome: 280000,
-      roi: 1.27,
-      constraint_violations: [],
-    },
-    {
-      scenario_name: 'Aggressive (+25%)',
-      total_allocation: 260000,
-      projected_outcome: 340000,
-      roi: 1.31,
-      constraint_violations: ['Budget cap exceeded'],
-    },
-    {
-      scenario_name: 'Balanced',
-      total_allocation: 240000,
-      projected_outcome: 310000,
-      roi: 1.29,
-      constraint_violations: [],
-    },
-  ],
-  sensitivity_analysis: {
-    budget_constraint: 0.15,
-    min_coverage: 0.08,
-    max_frequency: 0.05,
-  },
-  projected_total_outcome: 320000,
-  projected_roi: 1.28,
-  impact_by_segment: {
-    high_value: 45,
-    medium_value: 35,
-    low_value: 20,
-  },
-  optimization_summary:
-    'Optimized budget allocation across 5 territories with projected ROI of 1.28x. Recommend shifting resources to Northeast and Southwest territories for maximum impact.',
-  recommendations: [
-    'Increase Northeast territory budget by 44% to capture high-response HCPs',
-    'Reduce Southeast allocation where response rates have declined',
-    'Monitor Southwest territory closely - high growth potential identified',
-    'Consider scenario analysis for Q2 budget planning',
-  ],
-  formulation_latency_ms: 45,
-  optimization_latency_ms: 150,
-  total_latency_ms: 280,
-  timestamp: new Date().toISOString(),
-  warnings: [],
-};
 
 // =============================================================================
 // CHART COLORS
@@ -399,13 +288,13 @@ export default function ResourceOptimization() {
 
   // API hooks
   const { data: healthData, isLoading: healthLoading } = useResourceHealth();
-  const { data: _scenariosData } = useScenarios({ limit: 10 });
+  const { data: scenariosData } = useScenarios({ limit: 10 });
   const runOptimization = useRunOptimization();
 
-  // Prefer live mutation response; fall back to sample data on first render
-  // and when the optimizer service is unavailable.
-  const optimizationResult = runOptimization.data ?? sampleOptimizationResult;
-  const scenarios = optimizationResult.scenarios;
+  // Live optimization output (undefined until the user runs one). The
+  // Scenarios tab additionally consumes the standalone scenarios feed.
+  const optimizationResult = runOptimization.data;
+  const scenarios = optimizationResult?.scenarios ?? scenariosData?.scenarios ?? [];
 
   // Health status
   const isHealthy = healthData?.agent_available && healthData?.scipy_available;
@@ -416,7 +305,7 @@ export default function ResourceOptimization() {
       request: {
         query: `Optimize ${selectedResourceType} allocation to ${selectedObjective.replace('_', ' ')}`,
         resource_type: selectedResourceType as never,
-        allocation_targets: optimizationResult.optimal_allocations.map((a) => ({
+        allocation_targets: (optimizationResult?.optimal_allocations ?? []).map((a) => ({
           entity_id: a.entity_id,
           entity_type: a.entity_type,
           current_allocation: a.current_allocation,
@@ -449,30 +338,6 @@ export default function ResourceOptimization() {
             <Badge variant="outline">{healthData.optimizations_24h} optimizations today</Badge>
           )}
         </div>
-      </div>
-
-      {/* KPI Summary */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard
-          title="Projected ROI"
-          value={`${optimizationResult.projected_roi?.toFixed(2)}x`}
-          description="vs current allocation"
-        />
-        <KPICard
-          title="Projected Outcome"
-          value={`$${((optimizationResult.projected_total_outcome || 0) / 1000).toFixed(0)}K`}
-          description="total projected value"
-        />
-        <KPICard
-          title="Solve Time"
-          value={`${optimizationResult.solve_time_ms}ms`}
-          description={optimizationResult.solver_status || 'optimal'}
-        />
-        <KPICard
-          title="Allocations"
-          value={optimizationResult.optimal_allocations.length.toString()}
-          description="entities optimized"
-        />
       </div>
 
       {/* Configuration Panel */}
@@ -524,8 +389,42 @@ export default function ResourceOptimization() {
         </CardContent>
       </Card>
 
-      {/* Main Content Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      {!optimizationResult ? (
+        <EmptyState
+          title="Run an optimization to see results"
+          description={
+            'Choose a resource type and objective above, then click “Run Optimization”. ' +
+            'Results — allocations, scenarios, sensitivity, and recommendations — will appear here.'
+          }
+        />
+      ) : (
+        <>
+          {/* KPI Summary */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <KPICard
+              title="Projected ROI"
+              value={`${optimizationResult.projected_roi?.toFixed(2)}x`}
+              description="vs current allocation"
+            />
+            <KPICard
+              title="Projected Outcome"
+              value={`$${((optimizationResult.projected_total_outcome || 0) / 1000).toFixed(0)}K`}
+              description="total projected value"
+            />
+            <KPICard
+              title="Solve Time"
+              value={`${optimizationResult.solve_time_ms}ms`}
+              description={optimizationResult.solver_status || 'optimal'}
+            />
+            <KPICard
+              title="Allocations"
+              value={optimizationResult.optimal_allocations.length.toString()}
+              description="entities optimized"
+            />
+          </div>
+
+          {/* Main Content Tabs */}
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="allocations">Allocations</TabsTrigger>
           <TabsTrigger value="scenarios">Scenarios</TabsTrigger>
@@ -823,7 +722,9 @@ export default function ResourceOptimization() {
             </CardContent>
           </Card>
         </TabsContent>
-      </Tabs>
+          </Tabs>
+        </>
+      )}
     </div>
   );
 }
