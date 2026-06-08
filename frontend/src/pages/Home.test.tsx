@@ -17,9 +17,25 @@ import { screen, fireEvent, within } from '@testing-library/react';
 import { renderWithAllProviders } from '@/test/utils';
 import Home from './Home';
 
+// Mock the KPI hook so we can exercise the API-connected branch deterministically.
+// The rest of the suite (no per-test mock) leaves these returning undefined =>
+// Demo Mode (SAMPLE) is the default, so the existing tests are unaffected.
+vi.mock('@/hooks/api/use-kpi', () => ({
+  useKPIList: vi.fn(),
+  useKPIHealth: vi.fn(),
+}));
+import { useKPIList, useKPIHealth } from '@/hooks/api/use-kpi';
+
 describe('Home', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: undefined => Demo Mode (SAMPLE values render) for the legacy suite.
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    });
+    (useKPIHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
   });
 
   // =========================================================================
@@ -41,13 +57,14 @@ describe('Home', () => {
     expect(comboboxes.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('renders quick stats bar', () => {
+  it('renders an honest empty state for quick stats (no fabricated rollups)', () => {
     renderWithAllProviders(<Home />);
 
-    expect(screen.getByText('Total TRx (MTD)')).toBeInTheDocument();
-    expect(screen.getByText('Active Campaigns')).toBeInTheDocument();
-    expect(screen.getByText('HCPs Reached')).toBeInTheDocument();
-    expect(screen.getByText('Model Accuracy')).toBeInTheDocument();
+    // QUICK_STATS fabricated TRx/HCP/accuracy figures were removed; an honest
+    // empty state is rendered instead (no live aggregate-stats Home hook today).
+    expect(screen.getByText('Quick stats not yet computed')).toBeInTheDocument();
+    expect(screen.queryByText('125,430')).not.toBeInTheDocument();
+    expect(screen.queryByText('94.2%')).not.toBeInTheDocument();
   });
 
   // =========================================================================
@@ -226,7 +243,8 @@ describe('Home', () => {
       renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Agent Insights')).toBeInTheDocument();
-      expect(screen.getByText(/Recent recommendations from the 21-agent system/)).toBeInTheDocument();
+      // Relabeled to make the sample/demo nature explicit (live feed not yet wired).
+      expect(screen.getByText(/Sample insights \(live agent feed not yet wired\)/)).toBeInTheDocument();
     });
 
     it('displays sample insights', () => {
@@ -264,20 +282,13 @@ describe('Home', () => {
       expect(screen.getByText('System Health')).toBeInTheDocument();
     });
 
-    it('displays system services', () => {
+    it('renders an honest empty state instead of fabricated service rows', () => {
       renderWithAllProviders(<Home />);
 
-      expect(screen.getByText('API Gateway')).toBeInTheDocument();
-      expect(screen.getByText('PostgreSQL')).toBeInTheDocument();
-      expect(screen.getByText('FalkorDB')).toBeInTheDocument();
-      expect(screen.getByText('Redis Cache')).toBeInTheDocument();
-    });
-
-    it('shows latency values', () => {
-      renderWithAllProviders(<Home />);
-
-      expect(screen.getByText('45ms')).toBeInTheDocument();
-      expect(screen.getByText('12ms')).toBeInTheDocument();
+      // Fabricated service names/latencies were removed; honest empty state + link.
+      expect(screen.getByText('Service status not on this page')).toBeInTheDocument();
+      expect(screen.queryByText('API Gateway')).not.toBeInTheDocument();
+      expect(screen.queryByText('45ms')).not.toBeInTheDocument();
     });
   });
 
@@ -292,18 +303,12 @@ describe('Home', () => {
       expect(screen.getByText('Agent Status')).toBeInTheDocument();
     });
 
-    it('displays tier counts', () => {
+    it('renders an honest empty state instead of fabricated tier counts', () => {
       renderWithAllProviders(<Home />);
 
-      expect(screen.getByText('Tier 0')).toBeInTheDocument();
-      expect(screen.getByText('Tier 1')).toBeInTheDocument();
-      expect(screen.getByText('Tier 2')).toBeInTheDocument();
-    });
-
-    it('shows active agent summary', () => {
-      renderWithAllProviders(<Home />);
-
-      expect(screen.getByText('15/21 agents active')).toBeInTheDocument();
+      // Fabricated tier/agent counts were removed; honest empty state + link.
+      expect(screen.getByText('Agent status not on this page')).toBeInTheDocument();
+      expect(screen.queryByText('15/21 agents active')).not.toBeInTheDocument();
     });
   });
 
@@ -406,5 +411,75 @@ describe('Home', () => {
       expect(octDecText.length).toBeGreaterThan(0);
       expect(allUSText.length).toBeGreaterThan(0);
     });
+  });
+});
+
+// ===========================================================================
+// KPI VALUE HONESTY (H1)
+// ===========================================================================
+// When live /api/kpis metadata is present, the page must render the real KPI
+// names/categories/units and an honest "Not yet computed" placeholder for the
+// numeric value (which the backend does not yet provide) — NOT fabricated
+// SAMPLE TRx / revenue numbers.
+
+describe('KPI value honesty (H1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (useKPIHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: { status: 'healthy' } });
+  });
+
+  it('does NOT render fabricated SAMPLE TRx/revenue numbers when the API is connected', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        kpis: [
+          // workstream includes "commercial" so the KPI lands in the default
+          // (commercial) category tab and is mounted in the DOM.
+          { id: 'trx_total', name: 'Total TRx', workstream: 'commercial', definition: 'Total prescriptions', unit: undefined },
+        ],
+        total: 1,
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithAllProviders(<Home />);
+
+    // The fabricated SAMPLE values must NOT appear when live metadata is present.
+    expect(screen.queryByText('125,430')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$425/)).not.toBeInTheDocument();
+    // The live KPI name IS rendered.
+    expect(screen.getByText('Total TRx')).toBeInTheDocument();
+    // Numeric value shows the honest "not yet computed" placeholder.
+    expect(screen.getAllByText(/not yet computed|—/i).length).toBeGreaterThan(0);
+  });
+});
+
+// ===========================================================================
+// SIDEBAR / STATS HONESTY (H1)
+// ===========================================================================
+// The fabricated System Health service latencies and Agent tier counts (with
+// a hardcoded "15/21 agents active") must not render — real data lives on the
+// System Health and Agent Orchestration pages.
+
+describe('Sidebar / stats honesty (H1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined, isLoading: false, error: null });
+    (useKPIHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+  });
+
+  it('does not fabricate System Health service latencies on the landing page', () => {
+    renderWithAllProviders(<Home />);
+    // Fabricated infra latencies must be gone (real data lives on /system-health).
+    expect(screen.queryByText('45ms')).not.toBeInTheDocument();
+    expect(screen.queryByText('12ms')).not.toBeInTheDocument();
+    expect(screen.queryByText('API Gateway')).not.toBeInTheDocument();
+    // The card still exists and links out.
+    expect(screen.getByText('System Health')).toBeInTheDocument();
+  });
+
+  it('does not fabricate a hardcoded "15/21 agents active" summary', () => {
+    renderWithAllProviders(<Home />);
+    expect(screen.queryByText('15/21 agents active')).not.toBeInTheDocument();
   });
 });

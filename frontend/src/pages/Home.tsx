@@ -24,8 +24,6 @@ import { useKPIList, useKPIHealth } from '@/hooks/api/use-kpi';
 import { useGraphStats } from '@/hooks/api/use-graph';
 import { useAlerts } from '@/hooks/api/use-monitoring';
 import {
-  TrendingUp,
-  TrendingDown,
   Activity,
   Users,
   Target,
@@ -47,6 +45,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/badge';
 import {
   Select,
@@ -56,10 +55,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Progress } from '@/components/ui/progress';
 import {
   KPICard,
-  StatusBadge,
 } from '@/components/visualizations/dashboard';
 import { ExecutiveSummary } from '@/components/dashboard/ExecutiveSummary';
 import { CausalValueChains } from '@/components/dashboard/CausalValueChains';
@@ -99,13 +96,6 @@ interface AgentInsight {
   timestamp: string;
   actionable: boolean;
   relatedKPIs: string[];
-}
-
-interface SystemStatus {
-  service: string;
-  status: 'healthy' | 'warning' | 'error' | 'loading';
-  latency?: number;
-  lastCheck: string;
 }
 
 // =============================================================================
@@ -232,24 +222,6 @@ const SAMPLE_INSIGHTS: AgentInsight[] = [
   },
 ];
 
-const SYSTEM_STATUS: SystemStatus[] = [
-  { service: 'API Gateway', status: 'healthy', latency: 45, lastCheck: '1m ago' },
-  { service: 'PostgreSQL', status: 'healthy', latency: 12, lastCheck: '1m ago' },
-  { service: 'FalkorDB', status: 'healthy', latency: 28, lastCheck: '1m ago' },
-  { service: 'BentoML', status: 'healthy', latency: 156, lastCheck: '1m ago' },
-  { service: 'Celery Workers', status: 'warning', latency: 320, lastCheck: '2m ago' },
-  { service: 'Redis Cache', status: 'healthy', latency: 8, lastCheck: '1m ago' },
-];
-
-const AGENT_TIER_STATS = [
-  { tier: 0, name: 'ML Foundation', agents: 8, active: 6, color: 'bg-slate-500' },
-  { tier: 1, name: 'Orchestration', agents: 2, active: 2, color: 'bg-purple-500' },
-  { tier: 2, name: 'Causal Analytics', agents: 3, active: 3, color: 'bg-blue-500' },
-  { tier: 3, name: 'Monitoring', agents: 4, active: 3, color: 'bg-amber-500' },
-  { tier: 4, name: 'ML Predictions', agents: 2, active: 2, color: 'bg-emerald-500' },
-  { tier: 5, name: 'Self-Improvement', agents: 2, active: 2, color: 'bg-rose-500' },
-];
-
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
@@ -281,14 +253,6 @@ function getImpactBadge(impact: AgentInsight['impact']) {
 // =============================================================================
 // COMPONENT
 // =============================================================================
-
-// Quick Stats Data
-const QUICK_STATS = [
-  { label: 'Total TRx (MTD)', value: '125,430', change: '+6.1%', isPositive: true },
-  { label: 'Active Campaigns', value: '24', change: '+3', isPositive: true },
-  { label: 'HCPs Reached', value: '12,450', change: '-2.3%', isPositive: false },
-  { label: 'Model Accuracy', value: '94.2%', change: '+0.8%', isPositive: true },
-];
 
 // Active Alerts
 const ACTIVE_ALERTS = [
@@ -347,15 +311,20 @@ function Home() {
     }));
   }, [kpiListData]);
 
-  // Use API data when available, fallback to sample data
+  // Use API metadata when available; values are NOT yet computed by the backend
+  // (/api/kpis serves metadata only). Render names/categories/units for real,
+  // and an honest "Not yet computed" placeholder for the numeric value.
+  // Fall back to SAMPLE_KPIS only in Demo Mode (API offline) — the header badge
+  // already announces "Demo Mode" / "API Offline (using sample data)".
   const effectiveKPIs = useMemo(() => {
-    // If API returned KPIs, merge with sample data for values (until batch calc is wired)
     if (apiKPIs.length > 0) {
-      // For now, still use sample values but show we have API connection
-      return SAMPLE_KPIS[selectedBrand];
+      return apiKPIs; // value:0 from the mapper; rendered as "Not yet computed" below
     }
     return SAMPLE_KPIS[selectedBrand];
   }, [apiKPIs, selectedBrand]);
+
+  // True only when we are rendering live metadata (no computed values yet).
+  const valuesNotComputed = apiKPIs.length > 0;
 
   // Get navigation routes for quick actions
   const navRoutes = getNavigationRoutes().filter((route) => route.path !== '/');
@@ -542,31 +511,13 @@ function Home() {
       {/* Primary Causal Value Chains */}
       <CausalValueChains />
 
-      {/* Quick Stats Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {QUICK_STATS.map((stat, idx) => (
-          <div
-            key={idx}
-            className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4 flex items-center justify-between"
-          >
-            <div>
-              <p className="text-xs text-[var(--color-muted-foreground)]">{stat.label}</p>
-              <p className="text-xl font-bold text-[var(--color-foreground)]">{stat.value}</p>
-            </div>
-            <div className={cn(
-              'text-sm font-medium flex items-center gap-1',
-              stat.isPositive ? 'text-emerald-500' : 'text-rose-500'
-            )}>
-              {stat.isPositive ? (
-                <TrendingUp className="h-4 w-4" />
-              ) : (
-                <TrendingDown className="h-4 w-4" />
-              )}
-              {stat.change}
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Quick Stats Bar — no live aggregate-stats Home hook exists today, so we
+          surface the absence honestly instead of fabricating TRx/accuracy/HCP
+          figures. Computed values live on the linked detail pages. */}
+      <EmptyState
+        title="Quick stats not yet computed"
+        description="Portfolio-level rollups (TRx, HCP reach, model accuracy) are not yet served to the landing page. See the KPI Dictionary and Model Performance pages for live metrics."
+      />
 
       {/* Active Alerts */}
       {visibleAlerts.length > 0 && (
@@ -693,13 +644,13 @@ function Home() {
                         <KPICard
                           key={kpi.id}
                           title={kpi.name}
-                          value={kpi.value}
-                          unit={kpi.unit}
-                          prefix={kpi.prefix}
-                          previousValue={kpi.previousValue}
-                          target={kpi.target}
-                          sparklineData={kpi.sparkline}
-                          status={kpi.status}
+                          value={valuesNotComputed ? 'Not yet computed' : kpi.value}
+                          unit={valuesNotComputed ? undefined : kpi.unit}
+                          prefix={valuesNotComputed ? undefined : kpi.prefix}
+                          previousValue={valuesNotComputed ? undefined : kpi.previousValue}
+                          target={valuesNotComputed ? undefined : kpi.target}
+                          sparklineData={valuesNotComputed ? undefined : kpi.sparkline}
+                          status={valuesNotComputed ? 'neutral' : kpi.status}
                           description={kpi.description}
                           higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
                           size="sm"
@@ -722,7 +673,7 @@ function Home() {
                     <Sparkles className="h-5 w-5" />
                     Agent Insights
                   </CardTitle>
-                  <CardDescription>Recent recommendations from the 21-agent system</CardDescription>
+                  <CardDescription>Sample insights (live agent feed not yet wired)</CardDescription>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => navigate('/monitoring')}>
                   View All
@@ -777,22 +728,10 @@ function Home() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-2">
-                {SYSTEM_STATUS.map((service) => (
-                  <div
-                    key={service.service}
-                    className="flex items-center justify-between py-1.5 border-b last:border-0"
-                  >
-                    <div className="flex items-center gap-2">
-                      <StatusBadge status={service.status} size="sm" showIcon={false} />
-                      <span className="text-sm">{service.service}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {service.latency}ms
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <EmptyState
+                title="Service status not on this page"
+                description="Live infrastructure status is on the System Health page."
+              />
               <Button
                 variant="ghost"
                 size="sm"
@@ -814,26 +753,19 @@ function Home() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {AGENT_TIER_STATS.map((tier) => (
-                  <div key={tier.tier} className="space-y-1">
-                    <div className="flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2">
-                        <div className={cn('w-2 h-2 rounded-full', tier.color)} />
-                        <span>Tier {tier.tier}</span>
-                      </div>
-                      <span className="text-muted-foreground">
-                        {tier.active}/{tier.agents} active
-                      </span>
-                    </div>
-                    <Progress value={(tier.active / tier.agents) * 100} className="h-1.5" />
-                  </div>
-                ))}
-              </div>
-              <div className="flex items-center justify-center gap-2 mt-4 pt-3 border-t text-sm">
-                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                <span>15/21 agents active</span>
-              </div>
+              <EmptyState
+                title="Agent status not on this page"
+                description="Live tier and agent health is on the Agent Orchestration page."
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full mt-3"
+                onClick={() => navigate('/agent-orchestration')}
+              >
+                View Agents
+                <ArrowRight className="h-4 w-4 ml-1" />
+              </Button>
             </CardContent>
           </Card>
 
