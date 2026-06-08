@@ -483,6 +483,73 @@ class TestEmitBestEffort:
         assert result["status"] == "completed"
         assert any(a["alert_type"] == "fidelity" for a in result["alerts"])
 
+    @pytest.mark.asyncio
+    async def test_malformed_srm_issue_does_not_break_node(self, monkeypatch):
+        """A detected srm_issue missing a required key must NOT break alert generation.
+
+        Regression guard: the emit path's per-issue body (exp_id + sig_inputs build)
+        must live inside the try/except, so a KeyError on a malformed issue cannot
+        propagate to execute()'s outer handler (which would clear alerts + fail).
+
+        The real srm alert is produced (we patch _generate_srm_alerts to a valid
+        alert) while the raw srm_issue is missing 'chi_squared' — exercising only
+        the emit path's own key access.
+        """
+        from src.agents.experiment_monitor.nodes.alert_generator import AlertGeneratorNode
+
+        captured: List[Dict[str, Any]] = []
+
+        async def _capture(**kwargs):
+            captured.append(kwargs)
+            return True
+
+        monkeypatch.setattr(
+            "src.agents.experiment_monitor.nodes.alert_generator.emit_recipient_signal",
+            _capture,
+        )
+
+        state = _srm_state()
+        # Detected, but missing 'chi_squared' (and others) — would raise KeyError
+        # in the emit path if the dict build is outside the try/except.
+        state["srm_issues"] = [
+            {
+                "experiment_id": "exp-srm-01",
+                "detected": True,
+                # 'chi_squared' / 'p_value' / 'expected_ratio' / 'actual_counts' absent
+                "severity": "critical",
+            }
+        ]
+
+        node = AlertGeneratorNode(use_dspy_prompts=False)
+        # Force a valid generated alert so we isolate the emit path's key access.
+        valid_alert = {
+            "alert_id": "alert-x",
+            "alert_type": "srm",
+            "severity": "critical",
+            "experiment_id": "exp-srm-01",
+            "experiment_name": "Kisqali-SRM-Test",
+            "message": "Sample Ratio Mismatch detected in 'Kisqali-SRM-Test'",
+            "details": {},
+            "recommended_action": "Investigate.",
+            "timestamp": "2026-06-08T00:00:00+00:00",
+        }
+        monkeypatch.setattr(node, "_generate_srm_alerts", lambda _state: [valid_alert])
+
+        result = await node.execute(state)
+
+        # Node must complete and keep the alert; the KeyError must be swallowed.
+        assert result["status"] == "completed", (
+            f"Malformed srm_issue broke the node: status={result['status']}, "
+            f"errors={result.get('errors')}"
+        )
+        assert any(a["alert_type"] == "srm" for a in result["alerts"])
+        # No srm_template signal was emitted (the build failed before emit), but
+        # the summary signal still goes out — proving execution continued.
+        srm_calls = [c for c in captured if c.get("template_field") == "srm_template"]
+        assert srm_calls == []
+        summary_calls = [c for c in captured if c.get("template_field") == "summary_template"]
+        assert summary_calls, "Execution must continue past the malformed-issue emit"
+
 
 # --------------------------------------------------------------------------- #
 # Tests: _signal_reward helper is deterministic and range-correct

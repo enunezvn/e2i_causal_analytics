@@ -181,20 +181,21 @@ class AlertGeneratorNode:
         for issue in srm_issues:
             if not issue.get("detected"):
                 continue
-            # Find the matching alert for the generated output
-            exp_id = issue["experiment_id"]
-            exp_name = experiments.get(exp_id, "Unknown Experiment")
-            matching = [a for a in srm_alerts if a.get("experiment_id") == exp_id]
-            generated_output = matching[0]["message"] if matching else ""
-
-            sig_inputs = {
-                "experiment_name": exp_name,
-                "chi_squared": issue["chi_squared"],
-                "p_value": issue["p_value"],
-                "expected_ratio": str(issue["expected_ratio"]),
-                "actual_counts": str(issue["actual_counts"]),
-            }
             try:
+                # Build the signal entirely inside the try so a malformed issue
+                # (missing any expected key) can never break alert generation.
+                exp_id = issue["experiment_id"]
+                exp_name = experiments.get(exp_id, "Unknown Experiment")
+                matching = [a for a in srm_alerts if a.get("experiment_id") == exp_id]
+                generated_output = matching[0]["message"] if matching else ""
+
+                sig_inputs = {
+                    "experiment_name": exp_name,
+                    "chi_squared": issue["chi_squared"],
+                    "p_value": issue["p_value"],
+                    "expected_ratio": str(issue["expected_ratio"]),
+                    "actual_counts": str(issue["actual_counts"]),
+                }
                 reward = _signal_reward(generated_output, sig_inputs)
                 await emit_recipient_signal(
                     agent_name="experiment_monitor",
