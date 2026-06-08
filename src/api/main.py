@@ -211,7 +211,7 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("E2I Causal Analytics Platform - Starting")
     logger.info("=" * 60)
-    logger.info("Version: 4.1.0")
+    logger.info("Version: %s", API_VERSION)
     logger.info("Timestamp: %s", datetime.now(timezone.utc).isoformat())
 
     # Initialize BentoML client (optional - for ML model serving)
@@ -562,10 +562,13 @@ openapi_tags = [
 # FASTAPI APPLICATION
 # =============================================================================
 
+# Single source of truth for the API version (OpenAPI info.version).
+API_VERSION = "4.2.0"
+
 app = FastAPI(
     title="E2I Causal Analytics Platform",
     description="21-Agent architecture for causal inference, ML interpretability, and digital twin generation",
-    version="4.2.0",
+    version=API_VERSION,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
@@ -820,7 +823,7 @@ async def root() -> Dict[str, Any]:
     """Root endpoint with API information."""
     return {
         "service": "E2I Causal Analytics Platform",
-        "version": "4.2.0",
+        "version": API_VERSION,
         "status": "online",
         "auth_enabled": is_auth_enabled(),
         "docs": "/api/docs",
@@ -866,7 +869,7 @@ async def health_check() -> Dict[str, Any]:
     response = {
         "status": "healthy",
         "service": "e2i-causal-analytics-api",
-        "version": "4.1.0",
+        "version": API_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "components": components,
     }
