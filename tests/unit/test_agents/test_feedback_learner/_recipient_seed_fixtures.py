@@ -1,11 +1,14 @@
-"""Golden seed examples for the per-recipient optimizer (Shard 09, option 3).
+"""TEST-ONLY golden seed examples for the per-recipient optimizer.
 
-These are a small, hand-authored supervised set per recipient template field, so
-the per-recipient optimizer is runnable + testable WITHOUT each recipient first
-emitting training signals (the open design decision in
-09-followon-per-recipient-optimizer.md). They are deterministic and static;
-swap in self-emitted or shared-pool examples (options 1/2) for stronger
-supervision later.
+RELOCATED OUT OF src/ (Gap B §5.5): production must NEVER fall back to these
+hand-authored seeds. The production optimizer now reads each recipient's REAL
+emitted training signals (``source_agent=<recipient>``) and SKIPS a field with
+too few real examples (cold-start), so it never silently optimizes on fake data.
+
+These deterministic, static examples remain useful as a test fixture: they let
+the optimizer's compile/materialize path be exercised end-to-end without a live
+DB, and back the gated real-LM integration test. They are imported ONLY by tests,
+never by ``src/``.
 
 `default_example_provider(agent_name)` returns a callable
 (template_field) -> list[dspy.Example] with `.with_inputs(...)` set to the

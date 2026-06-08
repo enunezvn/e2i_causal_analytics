@@ -25,9 +25,19 @@ pytestmark = pytest.mark.skipif(
 async def test_optimize_and_save_experiment_monitor(tmp_path, monkeypatch):
     from src.agents.feedback_learner.prompt_bundles import load_prompt_bundle
     from src.agents.feedback_learner.recipient_optimizer import optimize_and_save_recipient
+    from tests.unit.test_agents.test_feedback_learner._recipient_seed_fixtures import (
+        default_example_provider,
+    )
 
     monkeypatch.chdir(tmp_path)
-    path = await optimize_and_save_recipient("experiment_monitor", budget="light")
+    # Drive GEPA off the relocated golden-seed fixture so this faithful real-LM run
+    # validates the compile/materialize mechanism without depending on the live
+    # signals table being populated. Production reads real emitted signals instead.
+    path = await optimize_and_save_recipient(
+        "experiment_monitor",
+        example_provider=default_example_provider("experiment_monitor"),
+        budget="light",
+    )
     # If optimization yields instructions, a placeholder-safe bundle is saved.
     if path:
         bundle = load_prompt_bundle("experiment_monitor")
