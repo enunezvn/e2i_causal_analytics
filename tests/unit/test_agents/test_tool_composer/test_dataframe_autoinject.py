@@ -294,3 +294,83 @@ async def test_caller_supplied_data_dict_blocks_dataframe_injection() -> None:
     )
     assert "data" in captured["kwargs_keys"], "the caller's explicit 'data' must reach the tool"
     assert captured["frame"] is None, "the dict 'data' is not a DataFrame; no frame must be present"
+
+
+# ---------------------------------------------------------------------------
+# F7 — refined Gate-1: a present-but-INVALID 'data' kwarg (the planner's
+# discover_dag artifact ``data={'col': '$step.field'}`` — a column->reference
+# string dict, NOT a valid Dict[str, List]) must NOT block auto-injection of
+# the in-context real DataFrame. A GENUINE explicit frame / valid data dict
+# still wins (caller-explicit parity).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_invalid_planner_data_dict_does_not_block_injection() -> None:
+    """F7 falsifiability: the planner emits ``data={'col': '$step.field'}`` for
+    ``discover_dag``. The OLD Gate-1 (key-presence) saw 'data' and skipped
+    injection, so the real frame never reached the tool and discover_dag failed
+    with a ValidationError. The refined Gate-1 treats that column->ref dict as
+    NOT-explicit (values are strings, not lists) and lets injection proceed.
+    """
+    df = pd.DataFrame({"engagement_score": [1.0, 2.0, 3.0], "disease_severity": [0.1, 0.2, 0.3]})
+    captured: Dict[str, Any] = {}
+    registry = _make_data_consuming_registry(captured)
+    executor = PlanExecutor(tool_registry=registry, enable_caching=False)
+    # The planner's BROKEN discover_dag data-dict: column -> reference string.
+    broken_planner_data = {
+        "patient_journey_id": "patient_journey_id",
+        "conversion_rate": "$step_1.conversion_rate",
+    }
+    plan = _make_plan(_make_step({"treatment": "rx", "data": broken_planner_data}))
+
+    with patch(
+        "src.agents.tool_composer.executor.query_active_role_attributions",
+        return_value=[],
+    ):
+        await executor.execute(plan, context={"estimation_data": df})
+
+    assert "estimation_data" in captured["kwargs_keys"], (
+        "a present-but-invalid 'data' dict (column->ref strings) must NOT block "
+        "injection of the real context DataFrame"
+    )
+    assert captured["frame_id"] == id(df), "the real context frame must be injected"
+
+
+@pytest.mark.asyncio
+async def test_explicit_dataframe_in_data_kwarg_wins_over_context() -> None:
+    """F7: a GENUINE explicit DataFrame supplied under the 'data' kwarg is
+    caller-explicit and must NOT be overridden by the context frame.
+    """
+    explicit_df = pd.DataFrame({"rx": [1, 1], "outcome": [0, 1]})
+    context_df = pd.DataFrame({"rx": [0, 0, 0], "outcome": [1, 1, 1]})
+    captured: Dict[str, Any] = {}
+    registry = _make_data_consuming_registry(captured)
+    executor = PlanExecutor(tool_registry=registry, enable_caching=False)
+    plan = _make_plan(_make_step({"treatment": "rx", "data": explicit_df}))
+
+    with patch(
+        "src.agents.tool_composer.executor.query_active_role_attributions",
+        return_value=[],
+    ):
+        await executor.execute(plan, context={"estimation_data": context_df})
+
+    assert captured["frame_id"] == id(explicit_df), (
+        "an explicit DataFrame under 'data' must win over the context frame"
+    )
+    assert "estimation_data" not in captured["kwargs_keys"], (
+        "no auto-injection when the caller already supplied a genuine explicit frame"
+    )
+
+
+def test_is_explicit_dataframe_input_classifies_correctly() -> None:
+    """Unit-level pin on the Gate-1 helper's classification (F7).
+
+    Genuine explicit inputs (a frame / a valid Dict[str, List]) count; the
+    planner's column->ref dict and empty/None values do not.
+    """
+    assert PlanExecutor._is_explicit_dataframe_input(pd.DataFrame({"a": [1, 2]})) is True
+    assert PlanExecutor._is_explicit_dataframe_input({"a": [1, 2], "b": [3, 4]}) is True
+    # planner's column->reference-string dict -> NOT explicit
+    assert PlanExecutor._is_explicit_dataframe_input({"a": "$step.x", "b": "b"}) is False
+    assert PlanExecutor._is_explicit_dataframe_input({}) is False
+    assert PlanExecutor._is_explicit_dataframe_input(None) is False
+    assert PlanExecutor._is_explicit_dataframe_input("not a frame") is False

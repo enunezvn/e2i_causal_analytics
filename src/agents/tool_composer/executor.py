@@ -951,13 +951,38 @@ class PlanExecutor:
         logger.debug(f"Auto-populated experiment_id={experiment_id!r} for tool '{step.tool_name}'")
         return experiment_id
 
+    @staticmethod
+    def _is_explicit_dataframe_input(value: Any) -> bool:
+        """True iff ``value`` is a genuine caller-explicit frame or data dict.
+
+        Gate-1 (caller-explicit-wins) must distinguish a REAL explicit input
+        from the planner's ``discover_dag`` artifact ``data={'col': '$ref'}``
+        (a column->reference-string dict). The latter is NOT a usable frame and
+        NOT a valid ``Dict[str, List]`` discovery dict — so it must NOT block
+        auto-injection of the in-context real DataFrame (F7).
+
+        Counts as explicit when ``value`` is either:
+
+        * a pandas-like DataFrame (duck-typed: has ``.columns`` and ``__len__``),
+          OR
+        * a non-empty ``dict`` whose every value is a list/tuple (the legacy
+          ``DataFrame.to_dict('list')`` contract that ``discover_dag`` accepts).
+        """
+        if value is None:
+            return False
+        if hasattr(value, "columns") and hasattr(value, "__len__"):
+            return True
+        if isinstance(value, dict) and value:
+            return all(isinstance(v, (list, tuple)) for v in value.values())
+        return False
+
     def _maybe_autopopulate_dataframe(
         self,
         step: ExecutionStep,
         resolved_inputs: Dict[str, Any],
         context: Dict[str, Any],
     ) -> Optional[Any]:
-        """Thread a context-carried DataFrame into tool kwargs (F2-core).
+        """Thread a context-carried DataFrame into tool kwargs (F2-core, F7).
 
         The composable tools read their working frame from ``**kwargs`` via
         ``_extract_dataframe_from_kwargs`` — but the planner's
@@ -967,18 +992,31 @@ class PlanExecutor:
 
         1. ``context`` carries a pandas-like DataFrame under ANY canonical
            key in ``_DATAFRAME_KWARGS_KEYS`` (duck-typed: has ``.columns``).
-        2. The caller did NOT already supply ANY of those keys in
-           ``resolved_inputs`` (caller-explicit always wins — C1 parity).
+        2. The caller did NOT already supply a GENUINE explicit frame / valid
+           data dict under any of those keys (caller-explicit always wins —
+           C1 parity).
+
+        F7 refinement: ``discover_dag`` / ``rank_drivers`` consume the SAME
+        real DataFrame as the other causal tools. The planner emits
+        ``data={'col': '$step.field'}`` for ``discover_dag`` — a column->ref
+        dict that is NOT a usable frame and NOT a valid ``Dict[str, List]``.
+        Such a value must NOT count as "caller-explicit" (otherwise the real
+        frame would never be injected and the tool would fail). Gate-1 now
+        treats a canonical key as explicit ONLY when its value is a real frame
+        or a valid data dict (see :meth:`_is_explicit_dataframe_input`); the
+        broken planner dict falls through and injection proceeds.
 
         Returns the frame to inject (under the canonical ``estimation_data``
         key — NOT ``data``, since ``discover_dag``'s ``DiscoverDagInput.data``
         is a Dict), or ``None`` to skip injection entirely. All composable
         tools accept ``**kwargs`` so an unused ``estimation_data`` is harmless.
         """
-        # Gate 1: caller-explicit wins. If resolved_inputs already names ANY
-        # canonical DataFrame key, do not override.
-        if any(key in resolved_inputs for key in _DATAFRAME_KWARGS_KEYS):
-            return None
+        # Gate 1: caller-explicit wins — but ONLY for a GENUINE explicit frame
+        # or valid data dict. A present-but-unusable value (the planner's
+        # column->reference dict for discover_dag) does NOT block injection.
+        for key in _DATAFRAME_KWARGS_KEYS:
+            if key in resolved_inputs and self._is_explicit_dataframe_input(resolved_inputs[key]):
+                return None
 
         # Gate 2: context carries a duck-typed DataFrame under a canonical key.
         for key in _DATAFRAME_KWARGS_KEYS:
