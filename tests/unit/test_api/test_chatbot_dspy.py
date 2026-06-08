@@ -1091,6 +1091,147 @@ class TestAsyncCognitiveRAGRetrieve:
             # Check that search was called
             mock_search.assert_called_once()
 
+    async def test_cognitive_retrieve_forwards_entities_kwarg_to_search(self):
+        """F1: cognitive_rag_retrieve MUST forward an entities= kwarg into
+        hybrid_search so the graph leg can fire (retriever.py runs the graph leg
+        only `if entities:`). Regression guard for the hardcoded kpi_name=None /
+        missing entities= bug.
+
+        We patch only the external boundaries: rewrite_query_dspy (so the test is
+        deterministic and does not fire a real LM) and hybrid_search (the DB/graph
+        boundary). The unit under test (cognitive_rag_retrieve wiring) runs for real.
+        """
+        with (
+            patch(
+                "src.api.routes.chatbot_dspy.rewrite_query_dspy",
+                new_callable=AsyncMock,
+            ) as mock_rewrite,
+            patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search,
+        ):
+            mock_rewrite.return_value = (
+                "rewritten query",  # rewritten_query
+                [],  # search_keywords
+                [],  # graph_entities (empty -> entities coerces to None)
+                "fallback",  # rewrite_method
+            )
+            mock_search.return_value = []  # empty -> no LLM scoring loop, isolates wiring
+
+            await cognitive_rag_retrieve(
+                query="TRx trend for Kisqali in Northeast",
+                brand_context="Kisqali",
+                collect_signal=False,
+            )
+
+            mock_search.assert_called_once()
+            _, kwargs = mock_search.call_args
+            # The hardcoded `kpi_name=None` + MISSING `entities=` is the bug under test.
+            # After the fix, entities= must be PRESENT (never silently dropped). With no
+            # entities extracted, `graph_entities or None` coerces the empty list to None
+            # so the `if entities:` guard at retriever.py skips the leg cleanly.
+            assert "entities" in kwargs, (
+                "hybrid_search called without entities= kwarg — graph leg can never "
+                "fire (F1 regression). chatbot_dspy.py must forward graph_entities."
+            )
+            assert kwargs.get("entities") is None, (
+                "empty graph_entities must coerce to None (not [] / truthy) so the "
+                "`if entities:` guard at retriever.py skips the graph leg cleanly."
+            )
+
+    async def test_cognitive_retrieve_passes_extracted_entities_through(self):
+        """F1/F4: when the rewrite yields graph_entities, those exact entities must
+        reach hybrid_search(entities=...) so RRF receives a second (graph) list and
+        no longer degenerates to single-backend dense. We patch rewrite_query_dspy
+        to return a deterministic entity list (it would otherwise hit a real LLM)
+        and the hybrid_search DB boundary; the wiring between them — the code under
+        test — runs for real.
+        """
+        with (
+            patch(
+                "src.api.routes.chatbot_dspy.rewrite_query_dspy",
+                new_callable=AsyncMock,
+            ) as mock_rewrite,
+            patch("src.rag.retriever.hybrid_search", new_callable=AsyncMock) as mock_search,
+        ):
+            mock_rewrite.return_value = (
+                "TRx metrics for Kisqali Northeast region",  # rewritten_query
+                ["trx", "kisqali", "northeast"],  # search_keywords
+                ["Kisqali", "Northeast", "TRx"],  # graph_entities
+                "dspy",  # rewrite_method
+            )
+            mock_search.return_value = []
+
+            await cognitive_rag_retrieve(
+                query="TRx trend for Kisqali in Northeast",
+                brand_context="Kisqali",
+                collect_signal=False,
+            )
+
+            mock_search.assert_called_once()
+            _, kwargs = mock_search.call_args
+            assert kwargs.get("entities") == ["Kisqali", "Northeast", "TRx"], (
+                "graph_entities extracted by the rewrite were not forwarded as "
+                "entities= to hybrid_search (F1). The graph leg stays dead."
+            )
+
+
+@pytest.mark.asyncio
+class TestScoreEvidenceEnsuresDspyConfigured:
+    """F7: score_evidence_dspy must configure the DSPy LM itself, so it never
+    silently 0.5-fallbacks when invoked without a prior rewrite having run."""
+
+    async def test_score_evidence_calls_ensure_dspy_configured(self, monkeypatch):
+        import src.api.routes.chatbot_dspy as chatbot_dspy
+
+        # Faithful precondition: DSPy 'available' and the cognitive RAG flag on,
+        # but the LM has NOT yet been configured in this process (the exact state
+        # that produced the uniform-0.5 fallback in repro probe 2).
+        monkeypatch.setattr(chatbot_dspy, "DSPY_AVAILABLE", True, raising=False)
+        monkeypatch.setattr(chatbot_dspy, "CHATBOT_COGNITIVE_RAG_ENABLED", True, raising=False)
+        monkeypatch.setattr(chatbot_dspy, "_dspy_lm_configured", False, raising=False)
+
+        # Spy on the REAL config function (do not replace its behaviour beyond
+        # recording the call; we still let it run its real no-op-on-unavailable path).
+        ensure_calls = {"n": 0}
+        real_ensure = chatbot_dspy._ensure_dspy_configured
+
+        def _spy_ensure():
+            ensure_calls["n"] += 1
+            return real_ensure()
+
+        monkeypatch.setattr(chatbot_dspy, "_ensure_dspy_configured", _spy_ensure)
+
+        # Double only the true external: the LLM scorer. The unit under test
+        # (score_evidence_dspy) runs its real control flow.
+        class _StubScorer:
+            def __call__(self, **kwargs):
+                class _R:
+                    relevance_score = 0.42
+                    key_insight = "stub insight"
+                    follow_up_needed = False
+
+                return _R()
+
+        monkeypatch.setattr(chatbot_dspy, "ChatbotEvidenceScorer", _StubScorer)
+
+        score, insight, follow_up = await chatbot_dspy.score_evidence_dspy(
+            investigation_goal="Answer: TRx trend for Kisqali in Northeast",
+            evidence_item="Causal analysis: hcp_engagement_level -> patient_conversion_rate",
+            source_memory="episodic",
+        )
+
+        # The bug: today _ensure_dspy_configured is NEVER called inside
+        # score_evidence_dspy, so this assertion fails RED on current code.
+        assert ensure_calls["n"] == 1, (
+            "score_evidence_dspy must call _ensure_dspy_configured() before "
+            "constructing the scorer (mirror _get_dspy_query_rewriter); otherwise "
+            "it silently 0.5-fallbacks when no prior rewrite configured the LM."
+        )
+        # And with the LM ensured + scorer returning real values, the result is
+        # the real score, NOT the 0.5 exception fallback.
+        assert score == 0.42
+        assert insight == "stub insight"
+        assert follow_up is False
+
 
 class TestChatbotCognitiveRAGFeatureFlag:
     """Test cases for cognitive RAG feature flag."""

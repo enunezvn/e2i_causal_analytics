@@ -1459,6 +1459,12 @@ async def score_evidence_dspy(
         return (score, evidence_item[:100], overlap > 2)
 
     try:
+        # Ensure DSPy LLM is configured before scoring — score_evidence_dspy can
+        # be invoked without a prior rewrite having configured the LM (repro
+        # probe 2), in which case the scorer would silently 0.5-fallback. Mirror
+        # _get_dspy_query_rewriter, the only other DSPy entry point on this file
+        # that calls _ensure_dspy_configured() before building its module. (F7)
+        _ensure_dspy_configured()
         scorer = ChatbotEvidenceScorer()
         result = scorer(
             investigation_goal=investigation_goal,
@@ -1529,22 +1535,40 @@ async def cognitive_rag_retrieve(
     try:
         from src.rag.retriever import hybrid_search
 
-        # Use rewritten query for hybrid search
+        # Use rewritten query for hybrid search.
+        # F1 fix: forward the rewrite's graph_entities so the graph leg fires
+        # (HybridRetriever.search runs the graph leg `if entities:` — retriever.py).
+        # An empty list -> None so the `if entities:` guard is honored and the
+        # graph leg is simply skipped (rather than truthy-empty) when no entities
+        # were extracted. kpi_name stays None: entities= is the primary graph key
+        # and the DSPy rewrite already supplies them.
         results = await hybrid_search(
             query=rewritten_query,
             k=k,
-            kpi_name=None,  # Will be extracted from keywords if needed
+            entities=graph_entities or None,
+            kpi_name=None,
             filters={"brand": brand_context} if brand_context else None,
         )
 
-        # Step 3: Score and filter evidence
-        for r in results:
-            score, insight, _ = await score_evidence_dspy(
-                investigation_goal=f"Answer: {query}",
-                evidence_item=r.content[:500],
-                source_memory="episodic",
+        # Step 3: Score evidence concurrently (independent per-row LLM calls) (F5).
+        # The calls share investigation_goal/source_memory and differ only by
+        # evidence_item, so they are gathered instead of awaited serially
+        # (~15 s serial -> ~3 s). gather preserves arg order, so the kept-evidence
+        # set/order and the >= 0.3 filter are byte-identical to the serial loop.
+        scored = await asyncio.gather(
+            *(
+                score_evidence_dspy(
+                    investigation_goal=f"Answer: {query}",
+                    evidence_item=r.content[:500],
+                    source_memory="episodic",
+                )
+                for r in results
             )
+        )
 
+        # Filter/keep in original retrieval order (gather preserves arg order).
+        # strict=True: gather returns exactly one result per input row.
+        for r, (score, insight, _) in zip(results, scored, strict=True):
             relevance_scores.append(score)
 
             if score >= 0.3:  # Minimum relevance threshold
@@ -1792,6 +1816,53 @@ class SynthesisResult:
 
 
 # =============================================================================
+# FAIL-CLOSED EVIDENCE-SUFFICIENCY POLICY (audit C5)
+# =============================================================================
+
+# Evidence-sufficiency policy for the DSPy synthesis path (audit C5).
+# Mirror the retrieval keep threshold (chatbot_dspy.py score >= 0.3) but require
+# STRICTLY MORE than the boundary AND more than one corroborating row, so the
+# exact 0.3 single-row case fails closed instead of synthesizing.
+EVIDENCE_MIN_AVG_RELEVANCE = 0.3  # keep threshold; sufficiency requires > this
+EVIDENCE_MIN_COUNT = 2  # a single row is never sufficient to assert as fact
+
+
+def _avg_relevance(evidence: List[Dict[str, Any]]) -> float:
+    """Average relevance over evidence (relevance_score, then score, else 0).
+
+    Default is 0.0 (fail-closed), matching the DSPy formatting code's score
+    default. This is intentionally STRICTER than the hardcoded fallback's
+    avg_score (which defaults missing scores to 0.5); a missing score here must
+    NOT be treated as half-relevant.
+    """
+    if not evidence:
+        return 0.0
+    scores = [e.get("relevance_score", e.get("score", 0.0)) for e in evidence]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def _evidence_is_sufficient(evidence: List[Dict[str, Any]]) -> bool:
+    """True only when evidence is strong enough to synthesize an asserted answer.
+
+    Fails closed (False) on: no evidence, a single row, or avg relevance at/below
+    the keep boundary. This is the runtime grounding guard the DSPy path lacked.
+    """
+    if len(evidence) < EVIDENCE_MIN_COUNT:
+        return False
+    return _avg_relevance(evidence) > EVIDENCE_MIN_AVG_RELEVANCE
+
+
+def _validate_citations(citations: List[str], evidence: List[Dict[str, Any]]) -> List[str]:
+    """Drop any LLM-emitted citation that is not an actual supplied source_id."""
+    valid_ids = {str(e.get("source_id")) for e in evidence if e.get("source_id")}
+    dropped = [c for c in citations if c not in valid_ids]
+    if dropped:
+        # Owner decision: surface fabrication rate to telemetry before silent-drop.
+        logger.warning(f"Dropping {len(dropped)} invented citation(s): {dropped}")
+    return [c for c in citations if c in valid_ids]
+
+
+# =============================================================================
 # HARDCODED SYNTHESIS FALLBACK
 # =============================================================================
 
@@ -1944,8 +2015,11 @@ async def synthesize_response_dspy(
             evidence_parts.append(f"[{source_id}] ({source}, relevance: {score:.0%}): {content}")
         evidence_text = "\n\n".join(evidence_parts)
 
-    # Try DSPy synthesis if enabled
-    if CHATBOT_DSPY_SYNTHESIS_ENABLED and DSPY_AVAILABLE:
+    # Try DSPy synthesis ONLY when evidence is sufficient to ground an answer.
+    # On insufficient evidence we fall through to the honest hardcoded branch,
+    # which abstains/hedges (synthesize_response_hardcoded no-evidence branch)
+    # instead of fabricating (audit C5).
+    if CHATBOT_DSPY_SYNTHESIS_ENABLED and DSPY_AVAILABLE and _evidence_is_sufficient(evidence):
         try:
             synthesizer = _get_dspy_synthesizer()
             if synthesizer:
@@ -1961,10 +2035,12 @@ async def synthesize_response_dspy(
                 confidence_statement = result.confidence_statement
                 follow_up_suggestions_str = getattr(result, "follow_up_suggestions", "")
 
-                # Parse evidence citations (comma-separated source_ids)
+                # Parse evidence citations (comma-separated source_ids) then VALIDATE
+                # them against the supplied source_ids — drop any invented ones (C5c).
                 citations_str = result.evidence_citations
                 if citations_str:
-                    evidence_citations = [c.strip() for c in citations_str.split(",") if c.strip()]
+                    parsed = [c.strip() for c in citations_str.split(",") if c.strip()]
+                    evidence_citations = _validate_citations(parsed, evidence)
 
                 # Parse follow-up suggestions
                 if follow_up_suggestions_str:
@@ -1978,18 +2054,28 @@ async def synthesize_response_dspy(
                         s + "?" if not s.endswith("?") else s for s in follow_up_suggestions[:2]
                     ]
 
-                # Determine confidence level from statement
-                confidence_lower = confidence_statement.lower()
-                if "high" in confidence_lower:
+                # Derive confidence from EVIDENCE, not the LLM's own prose (C5d).
+                # The prose may only LOWER, never raise, the evidence-grounded level.
+                avg_rel = _avg_relevance(evidence)
+                n_valid = len(evidence_citations)
+                if avg_rel >= 0.7 and n_valid >= 2:
                     confidence_level = "high"
-                elif "moderate" in confidence_lower or "medium" in confidence_lower:
+                elif avg_rel >= 0.5 or n_valid >= 2:
                     confidence_level = "moderate"
                 else:
+                    confidence_level = "low"
+                prose = confidence_statement.lower()
+                if confidence_level == "high" and "high" not in prose:
+                    confidence_level = "moderate"
+                # Word-boundary match: an LLM saying "low [confidence]" downgrades,
+                # but unrelated substrings ("follow-up", "below", "allow") must NOT.
+                if re.search(r"\blow\b", prose):
                     confidence_level = "low"
 
                 synthesis_method = "dspy"
                 logger.debug(
-                    f"DSPy synthesis complete: {len(response)} chars, {len(evidence_citations)} citations"
+                    f"DSPy synthesis complete: {len(response)} chars, "
+                    f"{len(evidence_citations)} validated citations, confidence={confidence_level}"
                 )
 
         except Exception as e:
