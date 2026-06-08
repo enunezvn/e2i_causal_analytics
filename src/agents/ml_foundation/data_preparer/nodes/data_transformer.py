@@ -84,7 +84,21 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
             )
         exclude_columns = legacy_exclude_columns + list(scope_spec.get("excluded_features", []))
         scaling_method = scope_spec.get("scaling_method", "standard")
-        encoding_method = scope_spec.get("encoding_method", "label")
+        # Issue #790: nominal categoricals default to ONE-HOT. The prior
+        # ``"label"`` default integer-coded nominal categoricals (e.g.
+        # ``payer: HMO=0, PPO=1, EPO=2``), imposing a false magnitude order.
+        # Once integer-coded the columns look numeric, so the downstream
+        # ``ModelTrainerPreprocessor`` (designed to one-hot object-dtype
+        # columns) skips them and the LINEAR champion trains on ordinal codes —
+        # degrading discrimination (faithful HCP-adoption run: AUC 0.777 ordinal
+        # -> 0.803 one-hot, on merit). An explicit ``encoding_method="label"``
+        # still forces the legacy integer encoding for all categoricals; the
+        # ``ordinal_features`` allow-list keeps genuinely-ordered categoricals
+        # (e.g. risk bands) integer-encoded even under the one-hot default.
+        # ``or "onehot"`` (not ``.get(..., "onehot")``) so a scope that dumps
+        # the ScopeSpec schema with ``encoding_method=None`` also gets one-hot.
+        encoding_method = scope_spec.get("encoding_method") or "onehot"
+        ordinal_features = list(scope_spec.get("ordinal_features") or [])
         imputation_strategy = scope_spec.get("imputation_strategy", "mean")
         datetime_features = scope_spec.get("extract_datetime_features", True)
 
@@ -292,82 +306,77 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                         holdout_df[col] = holdout_df[col].fillna(fill_value)
 
         # === CATEGORICAL ENCODING ===
+        # Issue #790: split the categoricals into ordinal (integer-encoded,
+        # order preserved) and nominal (one-hot by default). An explicit
+        # ``encoding_method="label"`` routes ALL categoricals through the legacy
+        # integer encoder (back-compat); otherwise only the declared
+        # ``ordinal_features`` stay integer-encoded and the rest one-hot expand.
         if categorical_cols:
             if encoding_method == "label":
-                for col in categorical_cols:
-                    encoder = LabelEncoder()
-                    all_values = train_df[col].astype(str).tolist()
-                    encoder.fit(all_values)
-                    encoders[col] = encoder
+                ordinal_cols = list(categorical_cols)
+                nominal_cols: List[str] = []
+            else:
+                ordinal_cols = [c for c in categorical_cols if c in ordinal_features]
+                nominal_cols = [c for c in categorical_cols if c not in ordinal_features]
 
-                    train_df[col] = encoder.transform(train_df[col].astype(str))
+            # --- Ordinal / explicitly-label-encoded columns (integer codes) ---
+            # Fit on TRAIN only; ``_safe_label_encode`` absorbs unseen
+            # categories at val/test/holdout time onto the sentinel id.
+            for col in ordinal_cols:
+                encoder = LabelEncoder()
+                encoder.fit(train_df[col].astype(str).tolist())
+                encoders[col] = encoder
 
-                    if validation_df is not None:
-                        validation_df[col] = _safe_label_encode(
-                            encoder, validation_df[col].astype(str)
-                        )
-                    if test_df is not None:
-                        test_df[col] = _safe_label_encode(encoder, test_df[col].astype(str))
-                    if holdout_df is not None:
-                        holdout_df[col] = _safe_label_encode(encoder, holdout_df[col].astype(str))
+                train_df[col] = encoder.transform(train_df[col].astype(str))
+                if validation_df is not None:
+                    validation_df[col] = _safe_label_encode(encoder, validation_df[col].astype(str))
+                if test_df is not None:
+                    test_df[col] = _safe_label_encode(encoder, test_df[col].astype(str))
+                if holdout_df is not None:
+                    holdout_df[col] = _safe_label_encode(encoder, holdout_df[col].astype(str))
 
+            if ordinal_cols:
                 transformations_applied.append(
                     {
                         "type": "encoding",
-                        "method": "label",
-                        "columns": categorical_cols,
+                        # "label" preserves the legacy metadata for explicit
+                        # callers; declared ordinal_features under the one-hot
+                        # default are recorded as "ordinal".
+                        "method": "label" if encoding_method == "label" else "ordinal",
+                        "columns": ordinal_cols,
                     }
                 )
 
-            elif encoding_method == "onehot":
+            # --- Nominal columns (one-hot) ---
+            if nominal_cols:
                 encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-                encoder.fit(train_df[categorical_cols])
+                encoder.fit(train_df[nominal_cols])
                 encoders["onehot"] = encoder
 
                 # Get new column names
-                new_cols = encoder.get_feature_names_out(categorical_cols)
+                new_cols = encoder.get_feature_names_out(nominal_cols)
 
-                # Transform each split
-                train_encoded = pd.DataFrame(
-                    encoder.transform(train_df[categorical_cols]),
-                    columns=new_cols,
-                    index=train_df.index,
-                )
-                train_df = train_df.drop(columns=categorical_cols)
-                train_df = pd.concat([train_df, train_encoded], axis=1)
+                def _apply_onehot(frame: pd.DataFrame) -> pd.DataFrame:
+                    encoded = pd.DataFrame(
+                        encoder.transform(frame[nominal_cols]),
+                        columns=new_cols,
+                        index=frame.index,
+                    )
+                    return pd.concat([frame.drop(columns=nominal_cols), encoded], axis=1)
 
+                train_df = _apply_onehot(train_df)
                 if validation_df is not None:
-                    val_encoded = pd.DataFrame(
-                        encoder.transform(validation_df[categorical_cols]),
-                        columns=new_cols,
-                        index=validation_df.index,
-                    )
-                    validation_df = validation_df.drop(columns=categorical_cols)
-                    validation_df = pd.concat([validation_df, val_encoded], axis=1)
-
+                    validation_df = _apply_onehot(validation_df)
                 if test_df is not None:
-                    test_encoded = pd.DataFrame(
-                        encoder.transform(test_df[categorical_cols]),
-                        columns=new_cols,
-                        index=test_df.index,
-                    )
-                    test_df = test_df.drop(columns=categorical_cols)
-                    test_df = pd.concat([test_df, test_encoded], axis=1)
-
+                    test_df = _apply_onehot(test_df)
                 if holdout_df is not None:
-                    holdout_encoded = pd.DataFrame(
-                        encoder.transform(holdout_df[categorical_cols]),
-                        columns=new_cols,
-                        index=holdout_df.index,
-                    )
-                    holdout_df = holdout_df.drop(columns=categorical_cols)
-                    holdout_df = pd.concat([holdout_df, holdout_encoded], axis=1)
+                    holdout_df = _apply_onehot(holdout_df)
 
                 transformations_applied.append(
                     {
                         "type": "encoding",
                         "method": "onehot",
-                        "original_columns": categorical_cols,
+                        "original_columns": nominal_cols,
                         "new_columns": list(new_cols),
                     }
                 )

@@ -581,9 +581,13 @@ class TestTransformDataDropsUnhashableColumns:
         assert result.get("error") is None
         X_train = result["X_train"]
         # comorbidities dropped; diag + age survive (diag as encoded
-        # categorical, age as scaled numeric).
+        # categorical, age as scaled numeric). #790: with no explicit
+        # encoding_method the nominal ``diag`` one-hot expands (``diag_*``),
+        # so the bare column is replaced by its expansion — the information
+        # still survives the unhashable drop, which is what this test guards.
         assert "comorbidities" not in X_train.columns
-        assert "diag" in X_train.columns
+        diag_cols = [c for c in X_train.columns if c == "diag" or c.startswith("diag_")]
+        assert diag_cols, f"diag information lost after drop: {X_train.columns.tolist()}"
         assert "age" in X_train.columns
 
     async def test_transform_data_no_unhashable_no_drop_transformation(self) -> None:
@@ -1238,3 +1242,147 @@ class TestPredictionTargetKeySeparation:
         # The legacy-named column was NOT treated as the target.
         assert "legacy_y" in result["X_train"].columns
         assert int(result["y_train"].sum()) == 2
+
+
+class TestNominalCategoricalEncodingDefault:
+    """Issue #790: nominal categoricals must reach the model ONE-HOT encoded by
+    default, not integer/ordinal LabelEncoded.
+
+    LabelEncoder imposes a false magnitude order on nominal categories
+    (``HMO=0, PPO=1, EPO=2``). Once integer-coded they look numeric, so the
+    downstream ``ModelTrainerPreprocessor`` (which is designed to one-hot
+    object-dtype columns) skips them and the LINEAR champion trains on ordinal
+    codes — degrading discrimination (faithful HCP-adoption run: AUC
+    0.777 ordinal -> 0.803 one-hot, on merit, no gate gamed). The fix flips the
+    ``encoding_method`` default ``"label"`` -> ``"onehot"`` while honoring an
+    explicit ``"label"`` override and a new ``ordinal_features`` allow-list for
+    genuinely-ordered categoricals (e.g. risk bands).
+    """
+
+    def _state(self, scope_extra: dict) -> dict:
+        # ``payer`` and ``region`` are NOMINAL; ``risk_band`` is genuinely ordinal.
+        train_df = pd.DataFrame(
+            {
+                "payer": ["HMO", "PPO", "EPO", "HMO", "PPO", "EPO"],
+                "region": ["NE", "S", "MW", "W", "NE", "S"],
+                "risk_band": ["low", "med", "high", "low", "med", "high"],
+                "value": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                "target": [0, 1, 0, 1, 0, 1],
+            }
+        )
+        scope_spec = {
+            "prediction_target": "target",
+            "scaling_method": "minmax",
+            "imputation_strategy": "mean",
+            "extract_datetime_features": False,
+        }
+        scope_spec.update(scope_extra)
+        return {
+            "experiment_id": "exp_issue790_onehot_default",
+            "scope_spec": scope_spec,
+            "train_df": train_df,
+        }
+
+    async def test_default_one_hots_nominal_categoricals(self):
+        """With NO ``encoding_method`` set, nominal categoricals one-hot expand:
+        the single ``payer`` column is gone; ``payer_HMO/_PPO/_EPO`` appear."""
+        result = await transform_data(self._state({}))
+
+        assert result.get("error") is None
+        cols = list(result["X_train"].columns)
+        # The single ordinal-coded column must NOT survive.
+        assert "payer" not in cols, f"nominal 'payer' left as single (ordinal) column: {cols}"
+        # One-hot expansion present (OneHotEncoder names: <col>_<value>).
+        expanded = [c for c in cols if c.startswith("payer_")]
+        assert len(expanded) >= 3, f"expected one-hot payer_* columns, got {cols}"
+        # The encoding metadata records one-hot for the nominal columns.
+        enc_steps = [t for t in result["transformations_applied"] if t["type"] == "encoding"]
+        assert any(s["method"] == "onehot" for s in enc_steps), enc_steps
+
+    async def test_explicit_label_still_integer_encodes(self):
+        """Back-compat: an explicit ``encoding_method='label'`` keeps the legacy
+        single-column integer encoding (no one-hot expansion)."""
+        result = await transform_data(self._state({"encoding_method": "label"}))
+
+        assert result.get("error") is None
+        cols = list(result["X_train"].columns)
+        assert "payer" in cols, f"explicit label must keep single 'payer' column: {cols}"
+        assert not [c for c in cols if c.startswith("payer_")], cols
+        enc_steps = [t for t in result["transformations_applied"] if t["type"] == "encoding"]
+        assert all(s["method"] != "onehot" for s in enc_steps), enc_steps
+
+    async def test_ordinal_features_stay_integer_under_onehot_default(self):
+        """``ordinal_features`` are integer-encoded (order preserved) even under
+        the one-hot default; other nominal categoricals still one-hot expand."""
+        result = await transform_data(self._state({"ordinal_features": ["risk_band"]}))
+
+        assert result.get("error") is None
+        cols = list(result["X_train"].columns)
+        # The declared-ordinal column stays a SINGLE column (no one-hot).
+        assert "risk_band" in cols, f"ordinal 'risk_band' should stay single column: {cols}"
+        assert not [c for c in cols if c.startswith("risk_band_")], cols
+        # Nominal columns still expand.
+        assert "payer" not in cols
+        assert [c for c in cols if c.startswith("payer_")], cols
+        assert [c for c in cols if c.startswith("region_")], cols
+
+    async def test_onehot_default_leaves_no_object_columns(self):
+        """The default-encoded feature matrix is fully numeric (no object dtype
+        survives), so ``ModelTrainerPreprocessor`` sees an already-encoded frame
+        instead of re-encoding integer codes."""
+        result = await transform_data(self._state({}))
+
+        assert result.get("error") is None
+        obj_cols = result["X_train"].select_dtypes(include=["object"]).columns.tolist()
+        assert obj_cols == [], f"object columns survived default encoding: {obj_cols}"
+
+    async def test_onehot_default_output_is_preprocessor_passthrough(self):
+        """Production-config guard: the one-hot + standard-scaled default output
+        is recognized as already-preprocessed by ``ModelTrainerPreprocessor``
+        (``preprocessing_type == "passthrough"``), so model_trainer does NOT run
+        a redundant second preprocessing pass. Pins the contract under the
+        production default (scaling_method defaults to "standard"); guards the
+        codex #790 double-processing concern. Faithful (no mocking): drives the
+        real ``transform_data`` -> real ``fit_preprocessing``."""
+        from src.agents.ml_foundation.model_trainer.nodes.preprocessor import fit_preprocessing
+
+        # Enough rows / category variety that StandardScaler yields std~1 on the
+        # one-hot columns so the passthrough heuristic fires deterministically.
+        n = 60
+        payers = ["HMO", "PPO", "EPO"] * (n // 3)
+        regions = (["NE", "S", "MW", "W"] * (n // 4 + 1))[:n]
+        frame = pd.DataFrame(
+            {
+                "payer": payers,
+                "region": regions,
+                "value": [float(i % 7) for i in range(n)],
+                "target": [i % 2 for i in range(n)],
+            }
+        )
+        # scaling_method intentionally UNSET -> production default "standard".
+        state = {
+            "experiment_id": "exp_issue790_passthrough",
+            "scope_spec": {
+                "prediction_target": "target",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+            "train_df": frame.copy(),
+            "validation_df": frame.copy(),
+            "test_df": frame.copy(),
+        }
+        out = await transform_data(state)
+        assert out.get("error") is None, out.get("error")
+
+        pp = await fit_preprocessing(
+            {
+                "train_data": {"X": out["X_train"], "y": out["y_train"]},
+                "validation_data": {"X": out["X_val"], "y": out["y_val"]},
+                "test_data": {"X": out["X_test"], "y": out["y_test"]},
+            }
+        )
+        assert pp.get("error") is None, pp.get("error")
+        assert pp["preprocessing_statistics"]["preprocessing_type"] == "passthrough", (
+            "one-hot + standard-scaled output should passthrough, not re-preprocess; "
+            f"got {pp['preprocessing_statistics']['preprocessing_type']}"
+        )
