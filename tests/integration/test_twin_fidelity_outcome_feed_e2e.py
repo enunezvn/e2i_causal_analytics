@@ -177,6 +177,15 @@ async def test_outcome_feed_and_h9_full_chain():
         )
         assert fid.data, "compare_experiment_to_twin must persist an ab_fidelity_comparisons row"
         assert str(fid.data[0]["twin_simulation_id"]) == sim_scoped
+        # LOW-2: results_id FK back to the source ab_experiment_results row.
+        assert fid.data[0]["results_id"] is not None
+
+        # MED-1: a retry (best-effort producer may re-run) must upsert, not 23505.
+        await svc.compare_experiment_to_twin(uuid.UUID(exp_id))
+        fid2 = (
+            sync.table("ab_fidelity_comparisons").select("*").eq("experiment_id", exp_id).execute()
+        )
+        assert len(fid2.data) == 1, "re-run must upsert (one row), not duplicate or fail"
 
     finally:
         # --- deterministic teardown (FK-safe order) -----------------------

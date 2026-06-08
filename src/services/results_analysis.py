@@ -125,6 +125,10 @@ class FidelityComparison:
     # Calibration recommendations
     calibration_adjustment: Dict[str, Any] = field(default_factory=dict)
 
+    # FK to the ab_experiment_results row that produced the actual effect
+    # (auditability: join a fidelity comparison back to its source result).
+    results_id: Optional[str] = None
+
 
 class _SupportsEffectEstimate(Protocol):
     """Minimal contract ``compare_with_twin_prediction`` needs from an actual-results
@@ -593,6 +597,8 @@ class ResultsAnalysisService:
             fidelity_score=fidelity_score,
             fidelity_grade=fidelity_grade,
             calibration_adjustment=calibration,
+            # Auditability FK to the source result row, when available (#705 R5).
+            results_id=(str(getattr(actual_results, "id", "") or "") or None),
         )
 
         # Persist comparison

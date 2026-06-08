@@ -448,6 +448,9 @@ class ABResultsRepository(BaseRepository):
         data = {
             "experiment_id": str(comparison.experiment_id),
             "twin_simulation_id": str(comparison.twin_simulation_id),
+            # Pin the conflict-key column explicitly so the upsert below is
+            # deterministic (this producer compares a FINAL result to its twin).
+            "comparison_type": "final",
             "comparison_timestamp": comparison.comparison_timestamp.isoformat(),
             "predicted_effect": comparison.predicted_effect,
             "actual_effect": comparison.actual_effect,
@@ -457,8 +460,20 @@ class ABResultsRepository(BaseRepository):
             "fidelity_score": comparison.fidelity_score,
             "calibration_adjustment": comparison.calibration_adjustment,
         }
+        # Auditability FK to the source result row, when the caller supplied it.
+        if comparison.results_id:
+            data["results_id"] = comparison.results_id
 
-        result = self.client.table("ab_fidelity_comparisons").insert(data).execute()
+        # Upsert (not insert): the fidelity producer is best-effort and may re-run
+        # for the same (experiment, sim) — a plain insert would trip the
+        # unique_comparison constraint (experiment_id, twin_simulation_id,
+        # comparison_type) and silently fail the retry. Re-run refreshes the row
+        # with the latest comparison instead (#705 R5).
+        result = (
+            self.client.table("ab_fidelity_comparisons")
+            .upsert(data, on_conflict="experiment_id,twin_simulation_id,comparison_type")
+            .execute()
+        )
 
         if result.data:
             return self._to_fidelity_record(result.data[0])
@@ -559,9 +574,9 @@ class ABResultsRepository(BaseRepository):
             actual_effect=data["actual_effect"],
             prediction_error=data.get("prediction_error", 0.0),
             # No prediction_error_percent column; relative_prediction_error is the
-            # trigger-computed FRACTION (error / |predicted|) → ×100 for the percent
-            # field on the in-memory record (#705 H9).
-            prediction_error_percent=(data.get("relative_prediction_error") or 0.0) * 100.0,
+            # trigger-computed SIGNED fraction (error / |predicted|) → abs ×100 to
+            # match the unsigned percent the write side stores (#705 H9).
+            prediction_error_percent=abs((data.get("relative_prediction_error") or 0.0) * 100.0),
             predicted_ci_lower=data["predicted_ci_lower"],
             predicted_ci_upper=data["predicted_ci_upper"],
             ci_coverage=data.get("confidence_interval_coverage", False),
