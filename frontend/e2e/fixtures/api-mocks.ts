@@ -479,6 +479,164 @@ export async function mockApiRoutes(page: Page): Promise<void> {
       body: JSON.stringify({ results: [], metadata: {} }),
     })
   })
+
+  // --------------------------------------------------------------------------
+  // Home-page tile sources (populate fabricated Home features with real data).
+  // ORDER MATTERS: Playwright matches the MOST-RECENTLY-registered route first,
+  // so these specific routes are registered LAST (here, at the end of
+  // mockApiRoutes) so they win over the broad catch-alls registered above:
+  //   - /api/copilotkit/kpis/summary  must beat  /api/copilotkit/kpis**
+  //   - /api/kpis/batch + /api/kpis/WS1-MP-001  must beat  /api/kpis**
+  // --------------------------------------------------------------------------
+
+  // QUICK_STATS rollup (Total TRx (MTD), HCPs Reached). Real shape from
+  // GET /api/copilotkit/kpis/summary (data_source 'database' = real DB values).
+  await page.route('**/api/copilotkit/kpis/summary**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        brand: 'All',
+        period: 'Last 90 days',
+        metrics: {
+          trx_volume: 125000,
+          nrx_volume: 45000,
+          market_share: 23.5,
+          conversion_rate: 18.2,
+          hcp_reach: 8500,
+          patient_starts: 3200,
+        },
+        data_source: 'database',
+      }),
+    })
+  })
+
+  // Active Campaigns = count of running experiments (GET /api/experiments/active-count).
+  await page.route('**/api/experiments/active-count**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ active_count: 12 }),
+    })
+  })
+
+  // System Health card + Model Health (GET /health-score/quick).
+  await page.route('**/health-score/quick**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        check_id: 'e2e-health-1',
+        check_scope: 'quick',
+        overall_health_score: 92,
+        health_grade: 'A',
+        component_health_score: 0.95,
+        model_health_score: 0.88,
+        pipeline_health_score: 0.82,
+        agent_health_score: 0.92,
+        critical_issues: [],
+        warnings: [],
+        recommendations: [],
+        health_summary: 'All systems operational',
+        check_latency_ms: 120,
+        timestamp: new Date().toISOString(),
+      }),
+    })
+  })
+
+  // Agent Status card (GET /api/agents/status). FE derives per-tier counts.
+  await page.route('**/api/agents/status**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agents: [
+          { id: 'scope_definer', name: 'Scope Definer', tier: 0, status: 'idle', capabilities: ['scoping'] },
+          { id: 'orchestrator', name: 'Orchestrator', tier: 1, status: 'active', capabilities: ['routing'] },
+          { id: 'causal_impact', name: 'Causal Impact', tier: 2, status: 'active', capabilities: ['causal'] },
+          { id: 'gap_analyzer', name: 'Gap Analyzer', tier: 2, status: 'active', capabilities: ['roi'] },
+          { id: 'drift_monitor', name: 'Drift Monitor', tier: 3, status: 'idle', capabilities: ['drift'] },
+        ],
+        total: 5,
+        timestamp: new Date().toISOString(),
+      }),
+    })
+  })
+
+  // KPI batch values (POST /api/kpis/batch) — drives the KPI Overview cards.
+  await page.route('**/api/kpis/batch**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        workstream: null,
+        total_kpis: 2,
+        successful: 1,
+        failed: 1,
+        calculated_at: new Date().toISOString(),
+        results: [
+          { kpi_id: 'WS1-DQ-001', value: 92.5, status: 'good', error: null, calculated_at: new Date().toISOString(), cached: false, metadata: {} },
+          // A view-less KPI returns null/error → honest "Not yet computed".
+          { kpi_id: 'WS1-DQ-002', value: null, status: 'unknown', error: 'not_computed', calculated_at: new Date().toISOString(), cached: false, metadata: {} },
+        ],
+      }),
+    })
+  })
+
+  // Model Accuracy ROC-AUC (GET /api/kpis/WS1-MP-001) — real value ~0.80.
+  await page.route('**/api/kpis/WS1-MP-001**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        kpi_id: 'WS1-MP-001',
+        value: 0.7998,
+        status: 'good',
+        calculated_at: new Date().toISOString(),
+        cached: false,
+        metadata: {},
+      }),
+    })
+  })
+
+  // AI Insights — Source A: executive insights (empty today is the honest state;
+  // return one item so the populated path is exercised in e2e).
+  await page.route('**/api/executive-insights**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          insight_id: 'i1',
+          title: 'High-Value Territory Opportunity',
+          narrative: 'Northeast shows untapped CSU potential.',
+          brand: 'All',
+          region: 'northeast',
+          kpi: 'trx',
+          crystallized_at: new Date().toISOString(),
+          source_count: 3,
+          effect_size: 0.23,
+          effect_direction: 'positive',
+          recommended_next_analysis: 'Increase HCP engagement',
+        },
+      ]),
+    })
+  })
+
+  // AI Insights — Source B: gap opportunities (OpportunityListResponse).
+  await page.route('**/api/gaps/opportunities**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        total_count: 0,
+        quick_wins_count: 0,
+        strategic_bets_count: 0,
+        opportunities: [],
+        total_addressable_value: 0,
+      }),
+    })
+  })
 }
 
 /**

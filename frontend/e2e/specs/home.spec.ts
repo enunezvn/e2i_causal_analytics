@@ -76,6 +76,17 @@ test.describe('Home Page', () => {
     test('should show Model Accuracy stat', async () => {
       await expect(homePage.modelAccuracyStat).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
     })
+
+    test('renders REAL quick-stat values, not the old fabricated constants', async ({ page }) => {
+      // Mocked summary -> Total TRx (MTD) = 125,000 ; HCPs Reached = 8,500 ;
+      // Active Campaigns = 12 ; Model Accuracy = 80.0% (ROC-AUC 0.7998).
+      await expect(page.getByText('125,000')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+      await expect(page.getByText('8,500')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+      await expect(page.getByText('80.0%')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+      // The old fabricated values must be gone.
+      await expect(page.getByText('125,430')).toHaveCount(0)
+      await expect(page.getByText('94.2%')).toHaveCount(0)
+    })
   })
 
   test.describe('KPI Overview', () => {
@@ -150,7 +161,24 @@ test.describe('Home Page', () => {
   test.describe('System Health', () => {
     test('should show system health indicator', async () => {
       const isVisible = await homePage.verifySystemHealthShown()
-      expect(typeof isVisible).toBe('boolean')
+      expect(isVisible).toBeTruthy()
+    })
+
+    test('renders REAL agent health scores, no fabricated latencies', async ({ page }) => {
+      // Mocked /health-score/quick -> grade A, component 95% etc.
+      await expect(page.getByText('Components')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+      await expect(page.getByText('Models')).toBeVisible()
+      // Fabricated infra latencies must NOT appear.
+      await expect(page.getByText('45ms')).toHaveCount(0)
+      await expect(page.getByText('API Gateway')).toHaveCount(0)
+    })
+  })
+
+  test.describe('Agent Status', () => {
+    test('renders REAL tier counts, no hardcoded 15/21', async ({ page }) => {
+      // Mocked /api/agents/status -> 3 active of 5 total.
+      await expect(page.getByText('3/5 agents active')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+      await expect(page.getByText('15/21 agents active')).toHaveCount(0)
     })
   })
 

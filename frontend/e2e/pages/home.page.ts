@@ -243,8 +243,10 @@ export class HomePage extends BasePage {
   }
 
   async verifySystemHealthShown(): Promise<boolean> {
-    // Check for system status indicators
-    const healthTexts = ['System Status', 'healthy', 'Healthy', 'Status', 'Online']
+    // Check for system status indicators. The Home System Health card renders
+    // the "System Health" title + real agent dimension scores (Overall /
+    // Components / Models / ...), so include those alongside the legacy texts.
+    const healthTexts = ['System Health', 'Overall', 'Components', 'System Status', 'healthy', 'Healthy', 'Status', 'Online']
     for (const text of healthTexts) {
       if (await this.page.getByText(text).first().isVisible().catch(() => false)) {
         return true

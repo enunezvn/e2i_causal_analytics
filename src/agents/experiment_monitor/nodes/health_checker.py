@@ -127,7 +127,7 @@ class HealthCheckerNode:
                 # Get all active experiments
                 result = await (
                     client.table("ml_experiments")
-                    .select("id, name, status, config, created_at")
+                    .select("id, experiment_name, status, prediction_target, created_at")
                     .eq("status", "running")
                     .execute()
                 )
@@ -135,7 +135,7 @@ class HealthCheckerNode:
                 # Get specific experiments
                 result = await (
                     client.table("ml_experiments")
-                    .select("id, name, status, config, created_at")
+                    .select("id, experiment_name, status, prediction_target, created_at")
                     .in_("id", state["experiment_ids"])
                     .execute()
                 )
@@ -229,7 +229,9 @@ class HealthCheckerNode:
 
         return ExperimentSummary(
             experiment_id=exp_id,
-            name=experiment.get("name", "Unknown"),
+            # The live ml_experiments table uses `experiment_name` (not `name`);
+            # the previous select referenced a non-existent `name` column.
+            name=experiment.get("experiment_name", experiment.get("name", "Unknown")),
             status=experiment.get("status", "unknown"),
             health_status=health_status,
             days_running=days_running,

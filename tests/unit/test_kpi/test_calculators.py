@@ -171,7 +171,18 @@ class TestModelPerformanceCalculator:
         assert calculator.supports(kpi) is False
 
     def test_calculate_roc_auc_from_mlflow(self, calculator, roc_auc_kpi):
-        """Test ROC-AUC calculation from MLflow."""
+        """Test ROC-AUC falls back to the MLflow leg when the SQL source is empty.
+
+        After the FE↔BE connectivity remediation `_calc_roc_auc` reads the real
+        ``ml_predictions.model_auc`` column via the ``kpi_query`` allowlist FIRST
+        and only falls back to MLflow when that SQL leg is genuinely unavailable
+        (query error / no rows / NULL avg). We force the SQL leg to return "no
+        rows" so this test keeps exercising the MLflow fallback leg it was
+        written for; the SQL-first primary path is covered in
+        ``tests/unit/test_kpi/test_model_performance_fail_closed.py``.
+        """
+        # SQL leg unavailable (no rows) -> control reaches the MLflow fallback leg.
+        calculator._execute_query = Mock(return_value=([], None))
         # Mock MLflow response
         mock_version = Mock()
         mock_version.run_id = "test-run-123"
@@ -220,14 +231,21 @@ class TestModelPerformanceCalculator:
         assert result.status == KPIStatus.CRITICAL
 
     def test_calculate_surfaces_unavailability_when_mlflow_errors(self, calculator, roc_auc_kpi):
-        """When MLflow raises, the result must surface unavailability honestly:
-        value=None, error="mlflow_exception:...", status=UNKNOWN (#439, F-007-PhaseB).
+        """When the SQL leg is empty AND MLflow raises, the result must surface
+        unavailability honestly: value=None, error="mlflow_exception:...",
+        status=UNKNOWN (#439, F-007-PhaseB).
+
+        `_calc_roc_auc` now tries the ``ml_predictions.model_auc`` SQL leg first;
+        we force it empty so control reaches the MLflow leg, which raises. The
+        fail-closed contract (no fabricated 0.5 default) is preserved.
 
         Previously (pre-#439) this returned `value=0.5` — a plausible default
         that conflated "MLflow unreachable" with "model is random". That silent
         fabrication has been removed; full fail-closed coverage lives in
         `tests/unit/test_kpi/test_model_performance_fail_closed.py`.
         """
+        # SQL leg unavailable (no rows) -> control reaches the MLflow leg, which errors.
+        calculator._execute_query = Mock(return_value=([], None))
         calculator._mlflow_client.get_latest_versions.side_effect = Exception("MLflow error")
 
         result = calculator.calculate(roc_auc_kpi)

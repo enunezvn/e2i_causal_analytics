@@ -11,6 +11,8 @@
  * fabricated values.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -196,5 +198,18 @@ describe('InterventionImpact - Intervention Selection', () => {
 
     const interventionNames = screen.getAllByText('Digital Rep Training Program');
     expect(interventionNames.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // M4 regression guard: pins the honest state established by F-002 so a future
+  // edit re-introducing fabricated SAMPLE_* analysis fixtures fails CI.
+  it('source contains no SAMPLE_* analysis fixtures (M4 regression guard)', () => {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), 'src/pages/InterventionImpact.tsx'),
+      'utf8',
+    );
+    // The four analysis fixtures must stay empty-init; no fabricated SAMPLE_ analysis arrays.
+    expect(src).not.toMatch(/SAMPLE_IMPACT_DATA|SAMPLE_TREATMENT_EFFECTS|SAMPLE_BEFORE_AFTER|SAMPLE_SEGMENT_EFFECTS/);
+    // The legitimate static INTERVENTIONS selector catalog IS allowed to remain.
+    expect(src).toMatch(/const INTERVENTIONS: Intervention\[\] = \[/);
   });
 });
