@@ -67,6 +67,29 @@ class MemoryType(Enum):
     PROCEDURAL = "procedural"  # Supabase + pgvector (skills)
 
 
+def _coerce_memory_type(raw: str) -> Optional[MemoryType]:
+    """Validate-or-default an LLM-produced next_memory string to a MemoryType.
+
+    The DSPy hop-decider (HopDecisionSignature.next_memory) is free text. Casting
+    it directly via MemoryType(raw) raises ValueError on any off-vocabulary value
+    (capitalization variants, hallucinated tokens, trailing whitespace). Today
+    that crash is latent (an off-vocab value is filtered out by
+    _retrieve_from_memory before reaching the cast), but the case-insensitive
+    routing added in this change would expose it -- and if it ever fired it would
+    unwind out of InvestigatorModule.forward and be swallowed into a degraded
+    HTTP-200 dict by CausalRAG.cognitive_search, silently truncating the whole
+    investigation (C2). Coerce tolerantly; return None for the uncoercible so the
+    caller can skip that one item instead of discarding the entire board.
+    """
+    if not isinstance(raw, str):
+        return None
+    candidate = raw.strip().lower()
+    try:
+        return MemoryType(candidate)
+    except ValueError:
+        return None
+
+
 class HopType(Enum):
     """Multi-hop investigation sequence."""
 
@@ -339,24 +362,35 @@ class InvestigatorModule(dspy.Module):
                 decision.next_memory, decision.retrieval_query
             )
 
-            # Score and filter evidence
-            for item in raw_evidence:
-                scored = self.score_evidence(
-                    investigation_goal=plan.investigation_goal,
-                    evidence_item=item["content"],
-                    source_memory=decision.next_memory,
+            # Score and filter evidence. Coerce the decider's free-text
+            # next_memory ONCE per hop; skip the whole scoring block if it is
+            # off-vocabulary (C2) instead of crashing the investigation.
+            hop_memory = _coerce_memory_type(decision.next_memory)
+            if hop_memory is None:
+                logger.warning(
+                    "Investigator hop %d returned off-vocabulary next_memory %r; "
+                    "skipping evidence from this hop (no valid MemoryType)",
+                    hop_num,
+                    decision.next_memory,
                 )
-
-                if scored.relevance_score >= 0.5:  # Threshold
-                    evidence_board.append(
-                        Evidence(
-                            source=MemoryType(decision.next_memory),
-                            hop_number=hop_num,
-                            content=item["content"],
-                            relevance_score=scored.relevance_score,
-                            metadata={"key_insight": scored.key_insight},
-                        )
+            else:
+                for item in raw_evidence:
+                    scored = self.score_evidence(
+                        investigation_goal=plan.investigation_goal,
+                        evidence_item=item["content"],
+                        source_memory=hop_memory.value,
                     )
+
+                    if scored.relevance_score >= 0.5:  # Threshold
+                        evidence_board.append(
+                            Evidence(
+                                source=hop_memory,
+                                hop_number=hop_num,
+                                content=item["content"],
+                                relevance_score=scored.relevance_score,
+                                metadata={"key_insight": scored.key_insight},
+                            )
+                        )
 
             queried_memories.add(decision.next_memory)
 
@@ -373,8 +407,21 @@ class InvestigatorModule(dspy.Module):
 
     async def _retrieve_from_memory(self, memory_type: str, query: str) -> List[Dict[Any, Any]]:
         """Execute retrieval against the appropriate memory backend."""
+        coerced = _coerce_memory_type(memory_type)
+        if coerced is None:
+            logger.warning(
+                "Investigator hop requested off-vocabulary memory type %r; "
+                "no backend, skipping hop",
+                memory_type,
+            )
+            return []
+        memory_type = coerced.value
         backend = self.memory_backends.get(memory_type)
         if not backend:
+            # Coercible but unregistered (e.g. 'working' is a valid MemoryType
+            # never offered as a hop target and has no backend). Log so a missing
+            # backend is distinguishable from an off-vocabulary input.
+            logger.warning("No backend registered for memory type %r; skipping hop", memory_type)
             return []
 
         result: List[Dict[Any, Any]]
