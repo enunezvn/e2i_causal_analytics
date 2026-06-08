@@ -1139,8 +1139,10 @@ async def generate_node(state: ChatbotState) -> Dict[str, Any]:
         scores = [ctx.get("relevance_score", ctx.get("score", 0.0)) for ctx in rag_context]
         avg_evidence_score = sum(scores) / len(scores) if scores else 0.0
 
-    # Only use synthesis if evidence quality is sufficient
-    if should_use_synthesis and avg_evidence_score < 0.3:
+    # Only use synthesis if evidence quality is STRICTLY above the keep boundary.
+    # Retrieval keeps at score >= 0.3 (chatbot_dspy.py); the skip gate must be
+    # <= 0.3 so the exact-0.3 single-row case (audit C5e) fails closed here too.
+    if should_use_synthesis and avg_evidence_score <= 0.3:
         should_use_synthesis = False
         logger.debug(f"Skipping synthesis: avg evidence score too low ({avg_evidence_score:.2f})")
 
