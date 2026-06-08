@@ -396,6 +396,16 @@ def _get_agent_kwargs(
             }
         return {"enable_opik": False, "enable_memory": False}
 
+    elif agent_name == "causal_impact":
+        # causal_impact.run() now contributes to tri-memory on success (#788). In the
+        # keyless harness SUPABASE_URL/OPENAI are unset, so store_causal_analysis would
+        # fail functionally — but FIRST it triggers a cold-start load of the
+        # all-MiniLM-L6-v2 fallback embedder (~144s) via insert_episodic_memory_with_text,
+        # blowing the 90s per-agent timeout (the same flake the tool_composer branch
+        # below avoids). Disable memory for the harness only; the memory write path is
+        # covered by its own unit + faithful integration tests and the #785 populate run.
+        return {"enable_memory": False}
+
     elif agent_name == "tool_composer":
         # tool_composer: disable the planner's episodic-memory lookup in the
         # keyless harness. SUPABASE_URL is unset, so the lookup always fails

@@ -460,7 +460,15 @@ class CausalImpactMemoryHooks:
                     "executive_summary": result.get("executive_summary", "")[:500],
                 },
                 entities=None,
-                outcome_type="causal_analysis_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — NOT a
+                # free-text descriptor. The prior literal "causal_analysis_delivered"
+                # was rejected by the enum (22P02) and swallowed, so NO causal_impact
+                # episodic ever landed (#788 / #785). A PROCEED-validated estimate is a
+                # success; a REVIEW-band one is a partial_success.
+                outcome_type=(
+                    "partial_success" if (needs_review or gate_decision == "review") else "success"
+                ),
                 agent_name="causal_impact",
                 importance_score=importance_score,  # PROCEED=0.85, REVIEW=0.5 (H2)
                 e2i_refs=E2IEntityReferences(
@@ -667,6 +675,16 @@ async def contribute_to_memory(
 
     if session_id is None:
         session_id = state.get("session_id") or str(uuid.uuid4())
+
+    # ``session_id`` reaches the ``episodic_memories.session_id uuid`` column. Coerce any
+    # non-UUID value — a non-UUID ``state['session_id']`` or a caller-supplied id (e.g. a
+    # ``query_id``/``experiment_id``) — to a fresh UUID rather than letting the insert fail
+    # the enum/type check and be swallowed (the #787/#788 column trap). Validates BOTH the
+    # None-fallback path above and any explicitly-passed session_id.
+    try:
+        session_id = str(uuid.UUID(str(session_id)))
+    except (ValueError, TypeError):
+        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
