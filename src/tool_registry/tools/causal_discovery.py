@@ -34,7 +34,7 @@ Author: E2I Causal Analytics Team
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import networkx as nx
 import numpy as np
@@ -640,39 +640,175 @@ def get_ranker_tool() -> DriverRankerTool:
     return _ranker_tool_instance
 
 
+# =============================================================================
+# F7: UNIFIED DATA CONTRACT
+# =============================================================================
+#
+# Background (verified by faithful live runs): the Tool Composer had THREE
+# incompatible "data" contracts. The 7 causal tools read a real
+# ``pandas.DataFrame`` from kwargs via the canonical keys
+# ``_DATAFRAME_KWARGS_KEYS`` and the executor auto-injects
+# ``context["estimation_data"]`` for them. But ``discover_dag`` /
+# ``rank_drivers`` wanted a ``Dict[str, List]`` (``DataFrame.to_dict('list')``)
+# and the executor's auto-inject did NOT serve that contract — so any plan that
+# chained ``discover_dag`` failed with a pydantic ValidationError on
+# ``data.<col>`` (the planner emits column->reference strings, not lists).
+#
+# F7 unifies the contract: ``discover_dag`` / ``rank_drivers`` now ALSO accept
+# the real DataFrame via the standard ``estimation_data`` kwarg (one of
+# ``_DATAFRAME_KWARGS_KEYS``), converting internally to the shape they need —
+# WHILE preserving back-compat for an explicitly-supplied ``data: Dict``. The
+# executor's auto-inject is extended (mirroring its Gate-1 "caller-explicit-wins"
+# logic) so these two tools receive ``context["estimation_data"]`` when the
+# planner did not supply explicit data.
+#
+# Anti-mocking invariant (CLAUDE.md): these tools either compute from a REAL
+# frame / dict, or fail closed with a descriptive ``RuntimeError``. They NEVER
+# fabricate data.
+
+# Canonical kwargs keys under which a real DataFrame may be threaded into a
+# composable tool. Defined LOCALLY here (not imported from the higher-level
+# ``tool_composer.tool_registrations``) to keep this low-level registry module
+# free of an upward dependency / import cycle. Kept in lock-step with
+# ``tool_registrations._DATAFRAME_KWARGS_KEYS``.
+_DATAFRAME_KWARGS_KEYS: tuple = ("data", "dataframe", "estimation_data")
+
+
+def _coerce_dataframe(candidate: Any) -> Optional[pd.DataFrame]:
+    """Return ``candidate`` as a DataFrame if it is one (duck-typed), else None.
+
+    Duck-typed so we don't accidentally treat the legacy ``data: Dict[str, List]``
+    contract as a frame (a plain dict has no ``.columns``).
+    """
+    if candidate is None:
+        return None
+    if isinstance(candidate, pd.DataFrame):
+        return candidate
+    if hasattr(candidate, "columns") and hasattr(candidate, "__len__"):
+        # A pandas-like frame from another pandas build / duck type.
+        return candidate  # type: ignore[return-value]
+    return None
+
+
+def _resolve_frame_from_kwargs(extra_kwargs: Dict[str, Any]) -> Optional[pd.DataFrame]:
+    """Return a real DataFrame threaded under any ``_DATAFRAME_KWARGS_KEYS`` key.
+
+    Mirrors ``tool_registrations._extract_dataframe_from_kwargs``. Does NOT
+    raise; the caller fail-closes on ``None`` per the anti-mocking contract.
+    """
+    for key in _DATAFRAME_KWARGS_KEYS:
+        frame = _coerce_dataframe(extra_kwargs.get(key))
+        if frame is not None:
+            return frame
+    return None
+
+
+def _numeric_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce ``df`` to numeric, drop all-NaN columns and any-NaN rows.
+
+    Raises a descriptive ``RuntimeError`` (fail closed) if no usable numeric
+    column or no complete row survives — NEVER fabricates values.
+    """
+    numeric = df.apply(pd.to_numeric, errors="coerce")
+    numeric = numeric.dropna(axis=1, how="all")
+    if numeric.shape[1] == 0:
+        raise RuntimeError(
+            "received a DataFrame with no numeric columns; causal discovery / "
+            "driver ranking require numeric variables. Supply numeric features "
+            "or an explicit contract value."
+        )
+    numeric = numeric.dropna(axis=0, how="any")
+    if numeric.shape[0] == 0:
+        raise RuntimeError(
+            "received a DataFrame whose numeric columns share no complete "
+            "(non-NaN) rows; cannot run on an empty frame."
+        )
+    return numeric
+
+
+def _frame_to_numeric_dict(df: pd.DataFrame) -> Dict[str, List[Any]]:
+    """Convert a DataFrame to the ``Dict[str, List]`` shape discovery needs."""
+    return _numeric_frame(df).to_dict("list")
+
+
+def _is_valid_data_dict(value: Any) -> bool:
+    """True iff ``value`` is the legacy ``data: Dict[str, List]`` contract.
+
+    The planner sometimes emits ``data={'col': '$step.field'}`` (column ->
+    reference string) which is NOT a valid discovery dict; such a value must be
+    rejected so the injected DataFrame is used instead.
+    """
+    if not isinstance(value, dict) or not value:
+        return False
+    return all(isinstance(v, (list, tuple)) for v in value.values())
+
+
 async def discover_dag(
-    data: Union[pd.DataFrame, Dict[str, List[Any]]],
+    data: Union[pd.DataFrame, Dict[str, List[Any]], None] = None,
     algorithms: Optional[List[str]] = None,
     ensemble_threshold: float = 0.5,
     alpha: float = 0.05,
     max_k: Optional[int] = None,
     node_names: Optional[List[str]] = None,
     trace_context: Optional[Dict[str, str]] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     Discover DAG structure from observational data.
 
     This is the registered tool function that wraps CausalDiscoveryTool.
 
+    Data contract (F7 — unified):
+        Accepts the working data via EITHER of two routes, in priority order:
+
+        1. **Explicit ``data``** — a ``pandas.DataFrame`` OR the legacy
+           ``Dict[str, List]`` (``DataFrame.to_dict('list')``). Caller-explicit
+           always wins (C1 trust-gate parity).
+        2. **Injected real DataFrame** — under any canonical
+           ``_DATAFRAME_KWARGS_KEYS`` key in ``**kwargs`` (the executor injects
+           the in-context frame under ``estimation_data``). Converted internally
+           to the ``Dict[str, List]`` shape via ``_frame_to_numeric_dict``.
+
+        If NEITHER yields usable data, the tool FAILS CLOSED with a descriptive
+        ``RuntimeError`` — it NEVER fabricates a synthetic frame.
+
     Args:
-        data: DataFrame or dict of column name to values
+        data: DataFrame, dict of column name to values, or None (then the frame
+            is resolved from ``**kwargs`` canonical keys).
         algorithms: Algorithms to use (default: ["ges", "pc"])
         ensemble_threshold: Minimum algorithm agreement (0-1)
         alpha: Significance level for CI tests
         max_k: Maximum conditioning set size
         node_names: Custom node names
         trace_context: Opik trace context
+        **kwargs: May carry the real DataFrame under a canonical key
+            (``data`` / ``dataframe`` / ``estimation_data``).
 
     Returns:
         Dictionary with discovered DAG and metadata
     """
     tool = get_discovery_tool()
 
-    # Convert DataFrame to dict if needed
-    if isinstance(data, pd.DataFrame):
-        data_dict = data.to_dict("list")
+    # Resolve the working data, caller-explicit first (F7 unified contract).
+    explicit_frame = _coerce_dataframe(data)
+    if explicit_frame is not None:
+        # Explicit DataFrame -> numeric Dict (engine consumes numeric vars).
+        data_dict = _frame_to_numeric_dict(explicit_frame)
+    elif _is_valid_data_dict(data):
+        # Legacy explicit Dict[str, List] contract — pass through unchanged.
+        data_dict = data  # type: ignore[assignment]
     else:
-        data_dict = data
+        # No usable explicit ``data``: try the injected real DataFrame from
+        # the canonical kwargs keys (executor auto-inject).
+        injected = _resolve_frame_from_kwargs(kwargs)
+        if injected is None:
+            raise RuntimeError(
+                "discover_dag requires a real DataFrame (under one of "
+                f"{list(_DATAFRAME_KWARGS_KEYS)!r}) or an explicit "
+                "`data: Dict[str, List]`; none was supplied. The tool fails "
+                "closed rather than fabricate data (CLAUDE.md anti-mocking)."
+            )
+        data_dict = _frame_to_numeric_dict(injected)
 
     result = await tool.invoke(
         DiscoverDagInput(
@@ -689,46 +825,161 @@ async def discover_dag(
     return result.model_dump()
 
 
-async def rank_drivers(
-    dag_edge_list: List[Dict[str, str]],
+def _compute_shap_from_frame(
+    df: pd.DataFrame,
     target: str,
-    shap_values: Union[np.ndarray, List[List[float]]],
-    feature_names: List[str],
+    feature_names: Optional[List[str]] = None,
+) -> Tuple[List[List[float]], List[str]]:
+    """Compute REAL SHAP values + feature names from a DataFrame and target.
+
+    F7: ``rank_drivers`` consumes the SAME real DataFrame as ``discover_dag``.
+    Its predictive importance needs SHAP values, which require a fitted model.
+    This derives them honestly from the frame:
+
+    1. Coerce to numeric, drop all-NaN cols / any-NaN rows.
+    2. ``feature_names`` = numeric columns minus ``target`` (or the explicit
+       list, intersected with what's present).
+    3. Fit a RandomForest on ``(features, target)`` and compute TreeExplainer
+       SHAP values.
+
+    Fails closed (descriptive ``RuntimeError``) if ``target`` is absent or no
+    usable features remain. NEVER fabricates SHAP values.
+    """
+    numeric = _numeric_frame(df)
+    if target not in numeric.columns:
+        raise RuntimeError(
+            f"rank_drivers: target {target!r} is not a numeric column of the "
+            f"supplied DataFrame (numeric columns: {list(numeric.columns)}). "
+            "Cannot compute predictive importance without the target."
+        )
+
+    if feature_names:
+        feats = [c for c in feature_names if c in numeric.columns and c != target]
+    else:
+        feats = [c for c in numeric.columns if c != target]
+    if not feats:
+        raise RuntimeError(
+            "rank_drivers: no usable numeric feature columns remain after "
+            f"excluding target {target!r}; cannot compute SHAP values."
+        )
+
+    import shap
+    from sklearn.ensemble import RandomForestRegressor
+
+    x = numeric[feats].to_numpy(dtype=float)
+    y = numeric[target].to_numpy(dtype=float)
+    model = RandomForestRegressor(n_estimators=50, random_state=0).fit(x, y)
+    explainer = shap.TreeExplainer(model)
+    shap_array = np.asarray(explainer.shap_values(x), dtype=float)
+    # TreeExplainer may return (n_samples, n_features) or, for some models, a
+    # list/3D array; collapse to a 2-D (n_samples, n_features) matrix.
+    if shap_array.ndim == 3:
+        shap_array = shap_array.mean(axis=2)
+    return shap_array.tolist(), feats
+
+
+def _normalize_edge_list(
+    dag_edge_list: List[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    """Keep only ``source``/``target`` (as strings) from each edge.
+
+    F7: the chain ``discover_dag.edge_list -> rank_drivers.dag_edge_list`` is the
+    documented pipeline (see ``planner.py``). ``discover_dag`` emits edges with
+    extra keys (``confidence: float``, ``type: str``, ``algorithms: list``) but
+    ``RankDriversInput.dag_edge_list`` is typed ``List[Dict[str, str]]`` and the
+    ranker only reads ``edge["source"]`` / ``edge["target"]``. Stripping the
+    extra keys lets the real ``discover_dag`` output flow into ``rank_drivers``
+    on ONE data source without loosening the schema. Edges missing source/target
+    are skipped (fail-soft on a malformed edge, never fabricate one).
+    """
+    normalized: List[Dict[str, str]] = []
+    for edge in dag_edge_list or []:
+        if not isinstance(edge, dict):
+            continue
+        src = edge.get("source")
+        tgt = edge.get("target")
+        if src is None or tgt is None:
+            continue
+        normalized.append({"source": str(src), "target": str(tgt)})
+    return normalized
+
+
+async def rank_drivers(
+    dag_edge_list: List[Dict[str, Any]],
+    target: str,
+    shap_values: Union[np.ndarray, List[List[float]], None] = None,
+    feature_names: Optional[List[str]] = None,
     concordance_threshold: int = 2,
     importance_percentile: float = 0.25,
     trace_context: Optional[Dict[str, str]] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     Rank features by causal vs predictive importance.
 
     This is the registered tool function that wraps DriverRankerTool.
 
+    Data contract (F7 — unified):
+        Predictive importance needs ``shap_values`` + ``feature_names``. These
+        may be supplied explicitly (caller-explicit wins) OR derived from the
+        SAME real DataFrame that ``discover_dag`` consumed:
+
+        * If BOTH ``shap_values`` and ``feature_names`` are supplied → use them.
+        * Else, resolve a real DataFrame from ``**kwargs`` canonical keys
+          (``data`` / ``dataframe`` / ``estimation_data``; the executor injects
+          the in-context frame under ``estimation_data``) and compute REAL SHAP
+          values from ``(features, target)`` via ``_compute_shap_from_frame``.
+        * If neither path yields data → FAIL CLOSED (``RuntimeError``). Never
+          fabricates SHAP values.
+
     Args:
-        dag_edge_list: DAG as list of edges
-        target: Target variable name
-        shap_values: SHAP values (n_samples x n_features)
-        feature_names: Feature names
+        dag_edge_list: DAG as list of edges (e.g. ``$step_1.edge_list`` from a
+            chained ``discover_dag``).
+        target: Target variable name (required — predictive importance is
+            computed relative to it).
+        shap_values: SHAP values (n_samples x n_features), or None to derive.
+        feature_names: Feature names, or None to derive from the frame.
         concordance_threshold: Max rank diff for concordant features
         importance_percentile: Top percentile for "important"
         trace_context: Opik trace context
+        **kwargs: May carry the real DataFrame under a canonical key.
 
     Returns:
         Dictionary with rankings and analysis
     """
     tool = get_ranker_tool()
 
-    # Convert numpy to list if needed
-    if isinstance(shap_values, np.ndarray):
-        shap_list = shap_values.tolist()
+    if shap_values is not None and feature_names:
+        # Caller-explicit wins.
+        if isinstance(shap_values, np.ndarray):
+            shap_list = shap_values.tolist()
+        else:
+            shap_list = shap_values
+        resolved_features = feature_names
     else:
-        shap_list = shap_values
+        # Derive REAL SHAP from the same in-context DataFrame.
+        frame = _resolve_frame_from_kwargs(kwargs)
+        if frame is None:
+            raise RuntimeError(
+                "rank_drivers requires either explicit `shap_values` + "
+                "`feature_names`, or a real DataFrame (under one of "
+                f"{list(_DATAFRAME_KWARGS_KEYS)!r}) to derive them from. None "
+                "was supplied. The tool fails closed rather than fabricate "
+                "SHAP values (CLAUDE.md anti-mocking)."
+            )
+        shap_list, resolved_features = _compute_shap_from_frame(frame, target, feature_names)
+
+    # F7: normalize the edge list so a chained ``discover_dag.edge_list`` (which
+    # carries extra ``confidence``/``type``/``algorithms`` keys) validates
+    # against ``RankDriversInput.dag_edge_list`` (``List[Dict[str, str]]``).
+    normalized_edges = _normalize_edge_list(dag_edge_list)
 
     result = await tool.invoke(
         RankDriversInput(
-            dag_edge_list=dag_edge_list,
+            dag_edge_list=normalized_edges,
             target=target,
             shap_values=shap_list,
-            feature_names=feature_names,
+            feature_names=resolved_features,
             concordance_threshold=concordance_threshold,
             importance_percentile=importance_percentile,
             trace_context=trace_context,
