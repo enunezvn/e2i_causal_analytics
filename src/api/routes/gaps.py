@@ -22,6 +22,7 @@ Version: 4.2.0
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, cast
@@ -279,10 +280,76 @@ class GapHealthResponse(BaseModel):
 
 
 # =============================================================================
-# IN-MEMORY STORAGE (replace with Supabase in production)
+# PERSISTENCE (Supabase) with an in-memory dev fallback (M2)
 # =============================================================================
+# Process-local fallback — used ONLY when Supabase is unconfigured or the dev
+# flag E2I_GAPS_FEEDBACK_INMEMORY=1 is set. In prod (gunicorn --workers 2) this
+# is bypassed: the repo is the single source of truth shared across workers.
 
 _analyses_store: Dict[str, GapAnalysisResponse] = {}
+
+
+def _get_repo():
+    """Return a GapsRepository, or None if Supabase is unavailable."""
+    try:
+        from src.api.repositories.gaps_repository import GapsRepository
+
+        return GapsRepository()
+    except Exception as exc:  # ServiceConnectionError when unconfigured
+        logger.warning("Gaps persistence unavailable, using in-memory fallback: %s", exc)
+        return None
+
+
+def _use_inmemory_fallback() -> bool:
+    """True when we should fall back to the process-local dict (dev/offline)."""
+    if os.environ.get("E2I_GAPS_FEEDBACK_INMEMORY") == "1":
+        return True
+    try:
+        return _get_repo() is None
+    except Exception:
+        return True
+
+
+async def _persist_analysis(response: GapAnalysisResponse) -> None:
+    """Write one analysis to Supabase (or the dict fallback)."""
+    if _use_inmemory_fallback():
+        _analyses_store[response.analysis_id] = response
+        return
+    repo = _get_repo()
+    if repo is None:
+        _analyses_store[response.analysis_id] = response
+        return
+    await repo.upsert(response)
+
+
+async def _load_analysis(analysis_id: str) -> Optional[GapAnalysisResponse]:
+    """Read one analysis from Supabase (or the dict fallback)."""
+    if _use_inmemory_fallback():
+        return _analyses_store.get(analysis_id)
+    repo = _get_repo()
+    if repo is None:
+        return _analyses_store.get(analysis_id)
+    return await repo.get(analysis_id)
+
+
+async def _completed_analyses(brand: Optional[str] = None) -> List[GapAnalysisResponse]:
+    """Completed analyses for list_opportunities (repo or dict fallback)."""
+    if _use_inmemory_fallback():
+        return list(_analyses_store.values())
+    repo = _get_repo()
+    if repo is None:
+        return list(_analyses_store.values())
+    return await repo.list_completed(brand=brand)
+
+
+async def _all_analyses() -> List[GapAnalysisResponse]:
+    """All analyses for get_gap_health (repo or dict fallback)."""
+    if _use_inmemory_fallback():
+        return list(_analyses_store.values())
+    repo = _get_repo()
+    if repo is None:
+        return list(_analyses_store.values())
+    return await repo.list_all()
 
 
 # =============================================================================
@@ -334,7 +401,7 @@ async def run_gap_analysis(
 
     if async_mode:
         # Store pending analysis
-        _analyses_store[analysis_id] = response
+        await _persist_analysis(response)
 
         # Schedule background task
         background_tasks.add_task(
@@ -350,7 +417,7 @@ async def run_gap_analysis(
     try:
         result = await _execute_gap_analysis(request)
         result.analysis_id = analysis_id
-        _analyses_store[analysis_id] = result
+        await _persist_analysis(result)
         return result
     except HTTPException:
         # F-010-backend (#429, codex iter-1 M1): preserve the 503
@@ -361,7 +428,7 @@ async def run_gap_analysis(
         logger.error(f"Gap analysis failed: {e}")
         response.status = AnalysisStatus.FAILED
         response.warnings.append(str(e))
-        _analyses_store[analysis_id] = response
+        await _persist_analysis(response)
         raise HTTPException(status_code=500, detail=f"Gap analysis failed: {e}")
 
 
@@ -397,7 +464,8 @@ async def list_opportunities(
     strategic_bets: List[PrioritizedOpportunity] = []
     total_value = 0.0
 
-    for analysis in _analyses_store.values():
+    analyses = await _completed_analyses(brand=brand)
+    for analysis in analyses:
         if analysis.status != AnalysisStatus.COMPLETED:
             continue
 
@@ -457,14 +525,11 @@ async def get_gap_health() -> GapHealthResponse:
 
     # Count recent analyses
     now = datetime.now(timezone.utc)
-    analyses_24h = sum(
-        1 for a in _analyses_store.values() if (now - a.timestamp).total_seconds() < 86400
-    )
+    analyses = await _all_analyses()
+    analyses_24h = sum(1 for a in analyses if (now - a.timestamp).total_seconds() < 86400)
 
     # Get last analysis
-    last_analysis = None
-    if _analyses_store:
-        last_analysis = max(a.timestamp for a in _analyses_store.values())
+    last_analysis = max((a.timestamp for a in analyses), default=None)
 
     return GapHealthResponse(
         status="healthy" if agent_available else "degraded",
@@ -494,13 +559,14 @@ async def get_gap_analysis(analysis_id: str) -> GapAnalysisResponse:
     Raises:
         HTTPException: If analysis not found
     """
-    if analysis_id not in _analyses_store:
+    result = await _load_analysis(analysis_id)
+    if result is None:
         raise HTTPException(
             status_code=404,
             detail=f"Gap analysis {analysis_id} not found",
         )
 
-    return _analyses_store[analysis_id]
+    return result
 
 
 # =============================================================================
@@ -516,24 +582,28 @@ async def _run_gap_analysis_task(
     try:
         logger.info(f"Starting gap analysis task {analysis_id}")
 
-        # Update status
-        if analysis_id in _analyses_store:
-            _analyses_store[analysis_id].status = AnalysisStatus.DETECTING
+        # Update status (read-modify-persist; in-memory mutates in place)
+        existing = await _load_analysis(analysis_id)
+        if existing is not None:
+            existing.status = AnalysisStatus.DETECTING
+            await _persist_analysis(existing)
 
         # Execute analysis
         result = await _execute_gap_analysis(request)
         result.analysis_id = analysis_id
 
         # Store result
-        _analyses_store[analysis_id] = result
+        await _persist_analysis(result)
 
         logger.info(f"Gap analysis {analysis_id} completed successfully")
 
     except Exception as e:
         logger.error(f"Gap analysis {analysis_id} failed: {e}")
-        if analysis_id in _analyses_store:
-            _analyses_store[analysis_id].status = AnalysisStatus.FAILED
-            _analyses_store[analysis_id].warnings.append(str(e))
+        existing = await _load_analysis(analysis_id)
+        if existing is not None:
+            existing.status = AnalysisStatus.FAILED
+            existing.warnings.append(str(e))
+            await _persist_analysis(existing)
 
 
 async def _execute_gap_analysis(
