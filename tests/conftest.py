@@ -407,7 +407,17 @@ def _restore_asyncio_run_after_pollution():
 @pytest.fixture(autouse=True)
 def _restore_tool_registry_after_pollution():
     """Restore the global ToolRegistry singleton's tools after each test (#782)."""
-    from src.tool_registry.registry import get_registry
+    try:
+        from src.tool_registry.registry import get_registry
+    except ImportError:
+        # Minimal test environments (e.g. the synthetic-benchmarks job, which
+        # installs only requirements-synthetic.txt and so lacks pydantic — a
+        # transitive dep of the registry module) never touch the ToolRegistry, so
+        # there is nothing to restore. No-op instead of erroring every collected
+        # test. (The registry import was added to this autouse fixture in #782;
+        # before that the benchmark env never imported it — hence the regression.)
+        yield
+        return
 
     registry = get_registry()
     snapshot = registry.snapshot()
