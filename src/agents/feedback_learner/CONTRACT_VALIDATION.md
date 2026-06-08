@@ -2,9 +2,9 @@
 
 **Agent**: Feedback Learner
 **Tier**: 5 (Self-Improvement)
-**Version**: 4.3
-**Validation Date**: 2026-02-09 (loop-closure update 2026-06-08)
-**Status**: COMPLIANT — DSPy self-improvement loop now closed & wired for prod (see §0)
+**Version**: 4.4
+**Validation Date**: 2026-02-09 (final accuracy pass 2026-06-08)
+**Status**: COMPLIANT — DSPy self-improvement loop closed, wired, and no-synthetic-in-prod enforced (see §0)
 
 ---
 
@@ -12,42 +12,113 @@
 
 The Feedback Learner agent is a Tier 5 Self-Improvement agent that learns from user feedback to improve system performance. It processes feedback batches, detects systematic patterns, generates improvement recommendations, and updates organizational knowledge. This validation confirms the implementation aligns with tier5-contracts.md specifications and specialist documentation.
 
-**Test Results**: 356/356 passing (100%)
-**Test Duration**: 1.54s
+**Test Results**: 392/392 passing (100%) as of final accuracy pass 2026-06-08
 
 ---
 
-## 0. DSPy Self-Improvement Loop — Closure Status (2026-06-08)
+## 0. DSPy Self-Improvement Loop — Closure Status (2026-06-08, final accuracy pass)
+
+### 0.1 Background
 
 The 2026-06-07 audit (`docs/reports/dspy-feedback-loop-audit-20260607.md`) found
-the DSPy prompt-optimization loop was an **open loop**: signals were emitted but
-never persisted by the learner, never read back, the optimizer/trigger/scheduler
-were never invoked, and `update_optimized_prompts()` had zero production callers.
-The earlier blanket "COMPLIANT/operational" claim for self-improvement was
-therefore not evidence-backed.
+the DSPy prompt-optimization loop was **open**: signals were emitted but never
+persisted by the learner, never read back, the optimizer/trigger/scheduler were
+never invoked, and `update_optimized_prompts()` had zero production callers.
 
-The loop is now **closed and wired for active production** (no feature-flag gate;
-deploy itself remains the owner's action). The wired path, with evidence:
+The loop is now **closed and wired** (no feature-flag gate; prod deploy is the
+owner's action). This section documents the exact state as of the final accuracy
+pass — replacing any stale "blanket COMPLIANT" claims with an evidence-backed
+description.
 
-| Stage | Mechanism | Where |
+### 0.2 Signal persistence — where and when
+
+Signals now persist at **two points**:
+
+1. **Graph finalize node** (`graph.py` `_finalize_training_signal`): persists the
+   `FeedbackLearnerTrainingSignal` after every graph run — i.e., after every call
+   to `POST /feedback/learn` and every graph-direct invocation, not just
+   `agent.learn()`.
+2. **`agent.learn()`** explicitly calls `signal_store.persist_training_signal`
+   after the graph run completes.
+
+### 0.3 Scheduled generation and consumption
+
+| Beat task | Schedule | Role |
 |---|---|---|
-| Persist learner signal (F5) | `learn()` -> `signal_store.persist_training_signal` | `agent.py`, `signal_store.py` |
-| Read back (F3/F4) | `get_feedback_learner_training_signals` (filters `source_agent`) | `signal_store.py`, `rag/memory_adapters.py` |
-| Faithful conversion (F6) | carried content -> `_signals_to_examples` (pattern/recommendation/summary) | `dspy_integration.py`, `graph.py` |
-| Optimize + save (F1) | `optimization_runner.run_feedback_learner_optimization` (GEPA, real LM) | `optimization_runner.py`, `optimization/dspy_lm.py` |
-| Consume (closes loop) | `PatternAnalyzerNode` loads the optimized `feedback_learner_pattern` module | `nodes/pattern_analyzer.py` |
-| Install into recipients (F2) | `prompt_bundles.install_all_prompt_bundles` at app startup + after each run | `prompt_bundles.py`, `api/main.py` |
-| Schedule (F1 keystone) | daily Celery beat `run_dspy_prompt_optimization` gated by `GEPAOptimizationTrigger` | `tasks/dspy_optimization_tasks.py`, `workers/celery_app.py` |
-| Cleanup | F7 honest drop logging; F8 dead expressions removed | `tier2_signal_router.py`, `graph.py` |
+| `src.tasks.run_feedback_learning_cycle` | every 6 h (`DSPY_MIN_SIGNALS`-unrelated) | GENERATES training signals by running `agent.learn()`; produces rows consumed by the optimizer |
+| `src.tasks.run_dspy_prompt_optimization` | every 24 h | CONSUMES signals; gated by `GEPAOptimizationTrigger` (default `min_signals=20`, env `DSPY_MIN_SIGNALS`) |
 
-A faithful real-LM GEPA run (bounded, cheapest-disproof) confirmed the optimize
-step runs end-to-end: the LM reaches GEPA's workers, the metric scores real
-predictions, and an artifact is saved + load-round-trips. Latent bugs the audit's
-introspection-only check missed were fixed in the process (GEPA `budget`->`auto`
-kwarg, metric returning a plain dict crashing `dspy.Evaluate`, LM not propagated
-to optimizer worker threads, empty instruction-hash on save). The **per-recipient
-optimizer** that produces recipient bundles is the scoped follow-on (Shard 09);
-until it produces a bundle the install path is wired but installs nothing.
+Both are registered in `src/workers/celery_app.py` and `src/tasks/dspy_optimization_tasks.py`.
+The trigger threshold default is **20** (previously an unreachable 100).
+
+### 0.4 Full wired path
+
+| Stage | Mechanism | File |
+|---|---|---|
+| Persist (graph) | `_finalize_training_signal` → `persist_training_signal` | `graph.py`, `signal_store.py` |
+| Persist (agent) | `agent.learn()` → `persist_training_signal` | `agent.py`, `signal_store.py` |
+| Generate beat | `run_feedback_learning_cycle` (6 h) | `tasks/dspy_optimization_tasks.py` |
+| Read back | `get_feedback_learner_training_signals` (filters `source_agent`) | `signal_store.py` |
+| Convert | `_signals_to_examples` (pattern/recommendation/summary) | `dspy_integration.py` |
+| Optimize + save | `optimization_runner.run_feedback_learner_optimization` (GEPA) | `optimization_runner.py` |
+| Consume — self | `PatternAnalyzerNode` loads the optimized `feedback_learner_pattern` module | `nodes/pattern_analyzer.py` |
+| Consume — recipients | `prompt_bundles.install_all_prompt_bundles` at app startup + after each run | `prompt_bundles.py`, `api/main.py` |
+| Optimize beat | `run_dspy_prompt_optimization` (24 h), gated by `GEPAOptimizationTrigger` | `tasks/dspy_optimization_tasks.py`, `workers/celery_app.py` |
+
+### 0.5 Per-recipient signal emission (all 4 recipients self-emit)
+
+All four recipient agents now emit training signals via
+`src/agents/feedback_learner/recipient_emit.py::emit_recipient_signal` from their
+generating nodes:
+
+| Recipient | Node that calls `emit_recipient_signal` |
+|---|---|
+| `experiment_monitor` | `nodes/alert_generator.py` |
+| `explainer` | `nodes/narrative_generator.py` |
+| `health_score` | `nodes/score_composer.py` |
+| `resource_optimizer` | `nodes/impact_projector.py` |
+
+The per-recipient optimizer (`recipient_optimizer.py`) reads the emitted signals
+via `signal_example_provider` and **skips** any template field that has fewer than
+2 real examples. It **never** falls back to golden seeds; the cold-start path is
+skip, not synthetic fill.
+
+### 0.6 Golden seeds — relocated to tests, banned from src
+
+`src/agents/feedback_learner/recipient_seeds.py` **no longer exists**. The
+golden seed examples are a test-only fixture at
+`tests/unit/test_agents/test_feedback_learner/_recipient_seed_fixtures.py`.
+
+This no-synthetic-in-prod invariant is locked in by three guardrail tests:
+- `test_recipient_scaffolding_b0.py::test_recipient_seeds_not_importable_from_src`
+  — asserts `src.agents.feedback_learner.recipient_seeds` is not importable.
+- `test_recipient_scaffolding_b0.py::test_optimize_recipient_source_has_no_seed_import`
+  — asserts `recipient_optimizer` source contains no `recipient_seeds` import.
+- `test_no_synthetic_seed_in_prod.py::test_no_src_module_imports_recipient_seeds_or_test_fixture`
+  — walks the whole `src/` tree and asserts no file imports `recipient_seeds` OR
+  `_recipient_seed_fixtures` (the relocated fixture's new name).
+
+### 0.7 Honest current-state caveat (real usage pending)
+
+The loop is **wired and validated** — a faithful bounded real-LM GEPA run
+(cheapest-disproof) confirmed the optimize step runs end-to-end and that the
+latent bugs found during the audit are fixed (GEPA `budget`→`auto` kwarg, metric
+returning a plain dict crashing `dspy.Evaluate`, LM not propagated to optimizer
+worker threads, empty instruction-hash on save; see
+`docs/reports/dspy-loop-disproof-20260608/EVIDENCE.md`).
+
+**However**: the loop is currently **starved of real production data**. There is
+no real user feedback flowing yet, and the recipient agents are not yet exercised
+by real production traffic. This means:
+
+- The optimization beats fire on schedule but find 0 signals → the
+  `GEPAOptimizationTrigger` gate (threshold 20) blocks optimization → no bundle
+  is produced → `install_all_prompt_bundles` installs nothing. This is correct
+  and expected behaviour, not a bug.
+- Real production self-improvement will begin automatically once real usage
+  generates enough signals to cross the threshold.
+- **Synthetic data is used only in tests/validation, never installed to prod as
+  real training data.** The guardrail tests above lock this in.
 
 ---
 
@@ -400,14 +471,22 @@ The `get_handoff()` method generates orchestrator handoffs with:
 
 ## 13. Test Coverage
 
-| Test File | Tests | Status |
-|-----------|-------|--------|
-| `test_feedback_collector.py` | 11 | PASSING |
-| `test_pattern_analyzer.py` | 14 | PASSING |
-| `test_learning_extractor.py` | 17 | PASSING |
-| `test_knowledge_updater.py` | 17 | PASSING |
-| `test_integration.py` | 25 | PASSING |
-| **Total** | **356** | **100% PASSING** |
+392 tests collected in `tests/unit/test_agents/test_feedback_learner/` — 100% passing.
+
+Key test files added on this branch (beyond the original 356):
+
+| Test File | Purpose |
+|-----------|---------|
+| `test_recipient_scaffolding_b0.py` | B0 substrate + guardrails (seed ban, emit contract, provider round-trip, metric) |
+| `test_no_synthetic_seed_in_prod.py` | src/-wide import-ban on golden-seed modules (§0.6 guardrail) |
+| `test_recipient_optimizer_shard09.py` | Per-recipient GEPA optimizer end-to-end |
+| `test_gepa_trigger_a3_threshold.py` | `GEPAOptimizationTrigger` default=20, env-override |
+| `test_finalize_node_persistence.py` | Graph finalize node persists signal on every run |
+| `test_graph_finalize_training_signal.py` | `_finalize_training_signal` state contracts |
+| `test_prompt_bundles_shard07.py` | `install_all_prompt_bundles` wiring |
+| `test_pattern_analyzer_optimized_shard06.py` | `PatternAnalyzerNode` loads optimized module |
+| `test_example_conversion_shard04.py` | `_signals_to_examples` faithful conversion |
+| `test_optimization_runner_shard05.py` | `optimization_runner` end-to-end (stubbed LM) |
 
 ---
 
@@ -420,10 +499,11 @@ The `get_handoff()` method generates orchestrator handoffs with:
 | Implicit feedback | Specified in design | Stub only | LOW - Future enhancement |
 | Memory hooks | File exists | Integration pending | LOW - Memory system integration |
 | OpenTelemetry | Span tracing | Latency tracking only | LOW - Observability enhancement |
+| Per-recipient bundle in prod | Wired and tested | Installs nothing until real signals cross `min_signals=20` threshold | LOW - Working as designed; starvation resolves with real usage |
 
 ### 14.2 Rationale
 
-The agent is fully functional with the core learning cycle. Implicit feedback and memory hooks are enhancement features that can be added incrementally without breaking contracts. The DSPy integration is complete and ready for optimization when dspy is installed.
+The agent is fully functional with the core learning cycle and the DSPy loop is closed end-to-end. Implicit feedback and memory hooks are enhancement features that can be added incrementally without breaking contracts. The DSPy self-improvement loop produces no bundle yet because real usage has not generated enough training signals (threshold 20) — this is correct skip-on-cold-start behaviour, not a deficiency.
 
 ---
 
@@ -464,17 +544,26 @@ The agent is fully compliant with core contracts. No immediate action needed.
 
 ## Appendix A: File Inventory
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `__init__.py` | 61 | Module exports |
-| `agent.py` | 342 | Main agent class, I/O contracts |
-| `graph.py` | 288 | LangGraph workflow assembly |
-| `state.py` | 151 | State TypedDicts |
-| `dspy_integration.py` | 681 | DSPy signatures, training signals, optimization |
-| `memory_hooks.py` | - | Memory integration (placeholder) |
-| `nodes/__init__.py` | - | Node exports |
-| `nodes/feedback_collector.py` | 203 | Feedback collection node |
-| `nodes/pattern_analyzer.py` | 319 | Pattern analysis node |
-| `nodes/learning_extractor.py` | 296 | Learning extraction node |
-| `nodes/knowledge_updater.py` | 198 | Knowledge update node |
-| **Total** | **~7,184** | |
+| File | Purpose |
+|------|---------|
+| `__init__.py` | Module exports |
+| `agent.py` | Main agent class, I/O contracts |
+| `graph.py` | LangGraph workflow assembly; `_finalize_training_signal` persists on every run |
+| `state.py` | State TypedDicts |
+| `dspy_integration.py` | DSPy signatures, training signals, optimization, `GEPAOptimizationTrigger` |
+| `signal_store.py` | `persist_training_signal`, `get_feedback_learner_training_signals` |
+| `optimization_runner.py` | `run_feedback_learner_optimization` (GEPA end-to-end) |
+| `prompt_bundles.py` | `install_all_prompt_bundles` (installed at app startup via `api/main.py`) |
+| `recipient_emit.py` | `emit_recipient_signal` — called by all 4 recipient agent nodes |
+| `recipient_optimizer.py` | Per-recipient GEPA optimizer; `signal_example_provider`; no golden-seed fallback |
+| `recipient_metrics.py` | `get_recipient_metric` — generic heuristic metric returning `dspy.Prediction(score, feedback)` |
+| `scheduler.py` | Scheduler helpers |
+| `mlflow_tracker.py` | MLflow artifact tracking for optimization runs |
+| `memory_hooks.py` | Memory integration (placeholder; integration pending) |
+| `nodes/feedback_collector.py` | Feedback collection node |
+| `nodes/pattern_analyzer.py` | Pattern analysis node; loads optimized module when available |
+| `nodes/learning_extractor.py` | Learning extraction node |
+| `nodes/knowledge_updater.py` | Knowledge update node |
+
+**Test-only (NOT in src/):**
+`tests/unit/test_agents/test_feedback_learner/_recipient_seed_fixtures.py` — golden seeds, test fixture only
