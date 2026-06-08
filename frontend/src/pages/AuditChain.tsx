@@ -48,20 +48,7 @@ import {
   useLowConfidenceEntries,
 } from '@/hooks/api';
 import { StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
-
-// =============================================================================
-// TYPES
-// =============================================================================
-
-// Extended workflow item for UI (includes computed fields)
-interface WorkflowListItem {
-  workflow_id: string;
-  brand?: string;
-  first_agent: string;
-  last_agent: string;
-  entry_count: number;
-  started_at: string;
-}
+import { EmptyState } from '@/components/ui/EmptyState';
 
 // =============================================================================
 // CONSTANTS
@@ -83,46 +70,6 @@ const TIER_COLORS: Record<number, string> = {
   3: '#10b981', // emerald
   4: '#f59e0b', // amber
   5: '#ef4444', // red
-};
-
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_WORKFLOWS: WorkflowListItem[] = [
-  {
-    workflow_id: 'wf-001-abc123',
-    brand: 'Kisqali',
-    first_agent: 'orchestrator',
-    last_agent: 'explainer',
-    entry_count: 8,
-    started_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    workflow_id: 'wf-002-def456',
-    brand: 'Fabhalta',
-    first_agent: 'orchestrator',
-    last_agent: 'prediction_synthesizer',
-    entry_count: 6,
-    started_at: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
-  },
-  {
-    workflow_id: 'wf-003-ghi789',
-    brand: 'Remibrutinib',
-    first_agent: 'orchestrator',
-    last_agent: 'gap_analyzer',
-    entry_count: 5,
-    started_at: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-  },
-];
-
-const SAMPLE_TIER_DISTRIBUTION: Record<number, number> = {
-  0: 0,
-  1: 2,
-  2: 3,
-  3: 2,
-  4: 1,
-  5: 2,
 };
 
 // =============================================================================
@@ -156,6 +103,7 @@ function AuditChain() {
   const {
     data: recentWorkflowsData,
     isLoading: isLoadingWorkflows,
+    isError: isWorkflowsError,
     refetch: refetchWorkflows,
   } = useRecentWorkflows({ limit: 20 }, { refetchInterval: 60000 });
 
@@ -182,9 +130,10 @@ function AuditChain() {
     enabled: !!selectedWorkflow,
   });
 
-  // Use API data or fall back to samples
-  const workflows = recentWorkflowsData ?? SAMPLE_WORKFLOWS;
-  const distribution = tierDistribution ?? SAMPLE_TIER_DISTRIBUTION;
+  // Live data only — no fabricated fallback. Absence renders empty/error states.
+  // Memoised so the empty fallbacks keep stable references across renders.
+  const workflows = useMemo(() => recentWorkflowsData ?? [], [recentWorkflowsData]);
+  const distribution = useMemo(() => tierDistribution ?? {}, [tierDistribution]);
 
   // Prepare chart data for tier distribution
   const tierChartData = useMemo(() => {
@@ -308,6 +257,16 @@ function AuditChain() {
                 <div className="flex items-center justify-center py-8">
                   <RefreshCw className="h-6 w-6 animate-spin text-[var(--color-muted-foreground)]" />
                 </div>
+              ) : isWorkflowsError ? (
+                <EmptyState
+                  title="Failed to load workflows"
+                  description="The audit workflow endpoint returned an error. Try refreshing."
+                />
+              ) : workflows.length === 0 ? (
+                <EmptyState
+                  title="No workflows found"
+                  description="No audit workflows have been recorded yet. Workflows appear here as agents execute."
+                />
               ) : (
                 <div className="space-y-3">
                   {workflows.map((workflow) => (
