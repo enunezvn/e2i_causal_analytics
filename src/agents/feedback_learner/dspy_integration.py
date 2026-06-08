@@ -815,12 +815,14 @@ class FeedbackLearnerOptimizer:
         # Get GEPA metric for feedback learner
         metric = get_metric_for_agent("feedback_learner")
 
-        # Create GEPA optimizer
+        # Create GEPA optimizer. create_gepa_optimizer maps the budget preset to
+        # GEPA's `auto` parameter; passing budget= would land in **kwargs and
+        # raise TypeError in GEPA() (no `budget` param). Use auto=budget.
         optimizer = create_gepa_optimizer(
             metric=metric,
             trainset=trainset,
             valset=valset,
-            budget=budget,
+            auto=budget,
             enable_tool_optimization=False,  # Feedback Learner is Deep agent, not Hybrid
             seed=42,
         )
@@ -828,24 +830,21 @@ class FeedbackLearnerOptimizer:
         # Create module
         module = dspy.ChainOfThought(signatures[phase])
 
+        # Bind the configured LM directly to the module so GEPA's parallel
+        # evaluation workers use it. dspy's thread-local settings.lm does NOT
+        # propagate to the optimizer's worker threads, so relying on the global
+        # config alone yields "No LM is loaded" in every rollout (scores 0.0).
+        lm = getattr(dspy.settings, "lm", None)
+        if lm is not None and hasattr(module, "set_lm"):
+            module.set_lm(lm)
+
         # Run optimization
         logger.info(f"Starting GEPA optimization for {phase} phase with budget={budget}")
         # Pass the held-out valset so GEPA validates on unseen examples (F6).
         optimized = optimizer.compile(module, trainset=trainset, valset=valset)
 
-        # Optionally save optimized module
-        if optimized and hasattr(optimizer, "best_score"):
-            try:
-                version_id = await save_optimized_module(  # type: ignore[call-arg,misc]
-                    agent_name="feedback_learner",
-                    optimized_module=optimized,
-                    budget=budget,
-                    score=optimizer.best_score,
-                )
-                logger.info(f"Saved optimized module version: {version_id}")
-            except Exception as e:
-                logger.warning(f"Failed to save optimized module: {e}")
-
+        # Saving is handled by the orchestrator (optimization_runner) using the
+        # sync save_optimized_module(module, agent_name, metadata=...) signature.
         return optimized
 
     async def _optimize_with_miprov2(

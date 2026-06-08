@@ -80,14 +80,18 @@ def save_optimized_module(
     # Get module state
     module_state = module.dump_state() if hasattr(module, "dump_state") else {}
 
-    # Extract instructions for hashing
+    # Extract instructions for hashing. Older dspy exposed `extended_signature`;
+    # dspy 3.x predictors expose `signature`. Fall back so the optimized
+    # instructions (and thus the dedup hash) are actually captured — otherwise
+    # every saved version hashes to the empty string and dedup silently breaks.
     instructions = []
     if hasattr(module, "predictors"):
         for predictor in module.predictors():
-            if hasattr(predictor, "extended_signature"):
-                sig = predictor.extended_signature
-                if hasattr(sig, "instructions"):
-                    instructions.append(sig.instructions)
+            sig = getattr(predictor, "extended_signature", None) or getattr(
+                predictor, "signature", None
+            )
+            if sig is not None and getattr(sig, "instructions", None):
+                instructions.append(sig.instructions)
 
     instruction_text = "\n---\n".join(instructions)
     instruction_hash = compute_instruction_hash(instruction_text)
