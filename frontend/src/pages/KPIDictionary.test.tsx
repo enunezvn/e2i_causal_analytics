@@ -135,11 +135,11 @@ describe('KPIDictionary', () => {
   it('shows correct total KPI count', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    // Component uses SAMPLE_KPIS (46 KPIs) when API returns fewer than 46
-    // Traverse up through parent divs to get the full card
+    // Live /api/kpis is the source of truth (H6) — count reflects the live
+    // mockKPIs length, not a hardcoded 46-row literal.
     const totalKPIsLabel = screen.getByText('Total KPIs');
     const cardContainer = totalKPIsLabel.parentElement?.parentElement;
-    expect(cardContainer).toHaveTextContent('46');
+    expect(cardContainer).toHaveTextContent(String(mockKPIs.length));
     expect(cardContainer).toHaveTextContent('Across all workstreams');
   });
 
@@ -231,8 +231,10 @@ describe('KPIDictionary', () => {
   it('shows showing count in filter info', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    // Component uses SAMPLE_KPIS (46 KPIs) when API returns fewer than 46
-    expect(screen.getByText(/Showing 46 of 46 KPIs/i)).toBeInTheDocument();
+    // Live /api/kpis is the source of truth (H6) — count reflects mockKPIs.length.
+    expect(
+      screen.getByText(new RegExp(`Showing ${mockKPIs.length} of ${mockKPIs.length} KPIs`, 'i')),
+    ).toBeInTheDocument();
   });
 
   it('updates count when search filters results', async () => {
@@ -244,11 +246,16 @@ describe('KPIDictionary', () => {
       await user.type(searchInput, 'ROC-AUC');
     });
 
-    // Component uses SAMPLE_KPIS (46 KPIs) - searching for specific KPI shows fewer
+    // Live /api/kpis is the source of truth (H6) — searching narrows the live
+    // mockKPIs set; the "of <total>" denominator is mockKPIs.length.
     await waitFor(() => {
-      expect(screen.getByText(/Showing \d+ of 46 KPIs/i)).toBeInTheDocument();
-      // Should show fewer than 46 after filtering
-      expect(screen.queryByText(/Showing 46 of 46 KPIs/i)).not.toBeInTheDocument();
+      expect(
+        screen.getByText(new RegExp(`Showing \\d+ of ${mockKPIs.length} KPIs`, 'i')),
+      ).toBeInTheDocument();
+      // Should show fewer than the full set after filtering.
+      expect(
+        screen.queryByText(new RegExp(`Showing ${mockKPIs.length} of ${mockKPIs.length} KPIs`, 'i')),
+      ).not.toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -280,7 +287,7 @@ describe('KPIDictionary', () => {
     expect(spinner).toBeInTheDocument();
   });
 
-  it('uses sample data when API returns nothing', () => {
+  it('renders an honest empty/error state when the API returns nothing (no sample fallback)', () => {
     (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -291,10 +298,9 @@ describe('KPIDictionary', () => {
 
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    // Should still show content from sample KPIs
+    // H6: no SAMPLE_KPIS literal fallback. Absence surfaces an honest empty state.
     expect(screen.getByText('KPI Dictionary')).toBeInTheDocument();
-    // Sample data has 20 KPIs
-    expect(screen.getByText(/Showing.*of.*KPIs/i)).toBeInTheDocument();
+    expect(screen.getByText(/No KPIs available/i)).toBeInTheDocument();
   });
 
   it('shows causal library badge on KPIs using DoWhy/EconML', () => {
@@ -330,12 +336,13 @@ describe('KPIDictionary', () => {
   it('counts causal-enabled KPIs correctly', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    // Component uses SAMPLE_KPIS (46 KPIs) - 19 use dowhy/econml
-    // Find the Causal KPIs stat card by traversing up to the card container
+    // Live /api/kpis is the source of truth (H6). Count of KPIs whose
+    // primary_causal_library !== 'none' across the live mockKPIs set.
+    const expectedCausal = mockKPIs.filter((k) => k.primary_causal_library !== 'none').length;
     const causalLabel = screen.getByText('Causal KPIs');
     // Get the parent card container (goes up: span -> div.flex -> div.card)
     const causalCard = causalLabel.closest('.bg-\\[var\\(--color-card\\)\\]');
-    expect(causalCard).toHaveTextContent('19');
+    expect(causalCard).toHaveTextContent(String(expectedCausal));
     expect(causalCard).toHaveTextContent('Using DoWhy/EconML');
   });
 
@@ -406,5 +413,42 @@ describe('KPIDictionary', () => {
 
     const allTab = screen.getByRole('tab', { name: /All KPIs/i });
     expect(allTab).toHaveAttribute('data-state', 'active');
+  });
+
+  // =========================================================================
+  // H6: LIVE /api/kpis IS THE SOURCE OF TRUTH (no >=46 SAMPLE_KPIS fallback)
+  // =========================================================================
+
+  it('uses live KPIs as the source of truth even when fewer than 46 are returned (H6)', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { kpis: mockKPIs, total: mockKPIs.length }, // mockKPIs has 4 entries
+      isLoading: false,
+      error: null,
+    });
+    (useWorkstreams as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+    (useKPIHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: { status: 'healthy' } });
+
+    render(<KPIDictionary />, { wrapper: createWrapper() });
+
+    // Header count reflects the LIVE total (mockKPIs.length), not the 46-row literal.
+    expect(
+      screen.getByText(new RegExp(`Complete reference of all ${mockKPIs.length} KPIs`, 'i')),
+    ).toBeInTheDocument();
+    // A live KPI renders.
+    expect(screen.getByText('Source Coverage - Patients')).toBeInTheDocument();
+  });
+
+  it('renders an empty state when the API returns no KPIs (H6)', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { kpis: [], total: 0 },
+      isLoading: false,
+      error: null,
+    });
+    (useWorkstreams as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+    (useKPIHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+
+    render(<KPIDictionary />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/No KPIs available/i)).toBeInTheDocument();
   });
 });
