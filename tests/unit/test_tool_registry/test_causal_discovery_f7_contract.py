@@ -27,6 +27,7 @@ from src.tool_registry.tools.causal_discovery import (
     _frame_to_numeric_dict,
     _is_valid_data_dict,
     _normalize_edge_list,
+    _numeric_frame,
     discover_dag,
     rank_drivers,
 )
@@ -71,6 +72,48 @@ def test_frame_to_numeric_dict_fails_closed_on_no_numeric() -> None:
     df = pd.DataFrame({"cat": ["x", "y"], "cat2": ["a", "b"]})
     with pytest.raises(RuntimeError, match="no numeric columns"):
         _frame_to_numeric_dict(df)
+
+
+def test_numeric_frame_drops_sparse_columns_before_complete_case() -> None:
+    """Regression for the real-cohort integration bug: a few mostly-null columns
+    must NOT annihilate the cohort.
+
+    On the real 52-col Kisqali frame, requiring complete rows across ALL numeric
+    columns (incl. ~94%-null adherence_rate / refill_count) dropped EVERY row ->
+    "cannot run on an empty frame". The dense signal columns must survive; the
+    sparse ones are dropped (with a WARNING) before the complete-case filter.
+    """
+    n = 100
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame(
+        {
+            "dense_a": rng.normal(0, 1, n),
+            "dense_b": rng.normal(0, 1, n),
+            "dense_c": rng.normal(0, 1, n),
+            # 10% populated -> below the 0.5 non-null threshold -> dropped.
+            "sparse": [1.0 if i < 10 else None for i in range(n)],
+        }
+    )
+    out = _numeric_frame(df)
+    assert "sparse" not in out.columns
+    assert set(out.columns) == {"dense_a", "dense_b", "dense_c"}
+    # NOT reduced to ~10 rows by the sparse column's nulls.
+    assert len(out) == n
+
+
+def test_numeric_frame_fails_closed_when_too_few_dense_columns() -> None:
+    """If dropping sparse columns leaves <2 dense numeric columns, fail closed
+    with a descriptive error rather than discovering structure on one variable."""
+    n = 100
+    df = pd.DataFrame(
+        {
+            "dense": list(range(n)),
+            "sparse1": [1.0 if i < 5 else None for i in range(n)],
+            "sparse2": [2.0 if i < 5 else None for i in range(n)],
+        }
+    )
+    with pytest.raises(RuntimeError, match="fewer than 2"):
+        _numeric_frame(df)
 
 
 def test_normalize_edge_list_strips_extra_keys() -> None:

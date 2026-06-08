@@ -703,8 +703,21 @@ def _resolve_frame_from_kwargs(extra_kwargs: Dict[str, Any]) -> Optional[pd.Data
     return None
 
 
-def _numeric_frame(df: pd.DataFrame) -> pd.DataFrame:
-    """Coerce ``df`` to numeric, drop all-NaN columns and any-NaN rows.
+# Minimum fraction of non-null values a numeric column must have to be kept
+# BEFORE the complete-case (drop-any-NaN) row filter. A real cohort frame mixes
+# dense signal columns (~94% populated) with a few very sparse ones (e.g.
+# adherence_rate ~6%); requiring complete rows across ALL of them annihilates
+# the cohort. Dropping sparse columns first preserves the usable signal.
+_MIN_NONNULL_FRAC = 0.5
+
+
+def _numeric_frame(df: pd.DataFrame, min_nonnull_frac: float = _MIN_NONNULL_FRAC) -> pd.DataFrame:
+    """Coerce ``df`` to numeric, drop all-NaN + overly-sparse columns, then any-NaN rows.
+
+    The complete-case (``dropna(how="any")``) filter is applied ONLY over columns
+    that are at least ``min_nonnull_frac`` populated, so a handful of mostly-empty
+    columns cannot reduce a real cohort to zero complete rows. Dropped sparse
+    columns are surfaced via a WARNING (no silent caps).
 
     Raises a descriptive ``RuntimeError`` (fail closed) if no usable numeric
     column or no complete row survives — NEVER fabricates values.
@@ -717,13 +730,35 @@ def _numeric_frame(df: pd.DataFrame) -> pd.DataFrame:
             "driver ranking require numeric variables. Supply numeric features "
             "or an explicit contract value."
         )
-    numeric = numeric.dropna(axis=0, how="any")
-    if numeric.shape[0] == 0:
+
+    # Drop overly-sparse columns BEFORE the complete-case row filter so a few
+    # 90%-null columns don't annihilate the usable cohort.
+    nonnull_frac = numeric.notna().mean()
+    dense = numeric.loc[:, nonnull_frac >= min_nonnull_frac]
+    dropped = [str(c) for c in numeric.columns if c not in dense.columns]
+    if dropped:
+        logger.warning(
+            "causal_discovery: dropping %d sparse numeric column(s) "
+            "(non-null fraction < %.2f) before complete-case filter: %s",
+            len(dropped),
+            min_nonnull_frac,
+            dropped,
+        )
+    if dense.shape[1] < 2:
         raise RuntimeError(
-            "received a DataFrame whose numeric columns share no complete "
+            "received a DataFrame with fewer than 2 sufficiently-populated "
+            f"numeric columns (non-null fraction >= {min_nonnull_frac}); causal "
+            "discovery / driver ranking need at least two dense numeric "
+            "variables. Supply denser features or an explicit contract value."
+        )
+
+    complete = dense.dropna(axis=0, how="any")
+    if complete.shape[0] == 0:
+        raise RuntimeError(
+            "received a DataFrame whose dense numeric columns share no complete "
             "(non-NaN) rows; cannot run on an empty frame."
         )
-    return numeric
+    return complete
 
 
 def _frame_to_numeric_dict(df: pd.DataFrame) -> Dict[str, List[Any]]:
