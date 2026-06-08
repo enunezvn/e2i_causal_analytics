@@ -8,12 +8,16 @@
  * @module components/insights/ExperimentRecommendations
  */
 
+import { useEffect } from 'react';
 import { FlaskConical, TrendingUp, Users, Clock, CheckCircle2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { useTriggerMonitoring } from '@/hooks/api';
+import { EmptyState } from '@/components/ui/EmptyState';
+import type { ExperimentHealthSummary } from '@/types/experiments';
 
 // =============================================================================
 // TYPES
@@ -36,52 +40,6 @@ interface Experiment {
   digitalTwinScore: number;
   riskLevel: 'low' | 'medium' | 'high';
 }
-
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_EXPERIMENTS: Experiment[] = [
-  {
-    id: 'exp-1',
-    title: 'Increased Call Frequency - NE Region',
-    hypothesis: 'Increasing rep call frequency from 2x to 3x monthly will improve TRx by 15%+',
-    primaryMetric: 'TRx Volume',
-    expectedLift: 18.5,
-    confidence: 0.87,
-    sampleSize: 450,
-    duration: '8 weeks',
-    status: 'recommended',
-    digitalTwinScore: 0.92,
-    riskLevel: 'low',
-  },
-  {
-    id: 'exp-2',
-    title: 'Digital-First Engagement Pilot',
-    hypothesis: 'Replacing 1 in-person call with digital touchpoint maintains engagement at lower cost',
-    primaryMetric: 'Engagement Score',
-    expectedLift: -2.1,
-    confidence: 0.78,
-    sampleSize: 320,
-    duration: '6 weeks',
-    status: 'simulated',
-    digitalTwinScore: 0.76,
-    riskLevel: 'medium',
-  },
-  {
-    id: 'exp-3',
-    title: 'Sample Distribution Optimization',
-    hypothesis: 'Targeted sample distribution to high-potential HCPs increases conversion 20%+',
-    primaryMetric: 'Conversion Rate',
-    expectedLift: 23.2,
-    confidence: 0.82,
-    sampleSize: 280,
-    duration: '10 weeks',
-    status: 'approved',
-    digitalTwinScore: 0.88,
-    riskLevel: 'low',
-  },
-];
 
 // =============================================================================
 // HELPERS
@@ -120,6 +78,34 @@ function getRiskConfig(risk: Experiment['riskLevel']) {
     high: { label: 'High Risk', className: 'text-rose-600' },
   };
   return config[risk];
+}
+
+/**
+ * Map a live experiment health summary into the card's Experiment shape.
+ * The live summary has no Digital-Twin prescreen score or expected-lift, so we
+ * surface real health/enrollment/info-fraction and label risk by health_status
+ * rather than fabricate twin scores.
+ */
+function toExperimentCard(summary: ExperimentHealthSummary): Experiment {
+  const risk: Experiment['riskLevel'] =
+    summary.health_status === 'critical'
+      ? 'high'
+      : summary.health_status === 'warning'
+      ? 'medium'
+      : 'low';
+  return {
+    id: summary.experiment_id,
+    title: summary.experiment_name,
+    hypothesis: `Monitoring active — ${summary.active_alerts} open alert(s).`,
+    primaryMetric: 'Enrollment',
+    expectedLift: 0,
+    confidence: summary.current_information_fraction,
+    sampleSize: summary.total_enrolled,
+    duration: `${(summary.current_information_fraction * 100).toFixed(0)}% info`,
+    status: 'running',
+    digitalTwinScore: summary.current_information_fraction,
+    riskLevel: risk,
+  };
 }
 
 // =============================================================================
@@ -215,8 +201,16 @@ function ExperimentCard({ experiment }: { experiment: Experiment }) {
 // =============================================================================
 
 export function ExperimentRecommendations({ className }: ExperimentRecommendationsProps) {
-  const recommendedCount = SAMPLE_EXPERIMENTS.filter(e => e.status === 'recommended').length;
-  const simulatedCount = SAMPLE_EXPERIMENTS.filter(e => e.status === 'simulated').length;
+  const { data, isPending, mutate } = useTriggerMonitoring();
+
+  // Trigger a one-shot monitoring sweep on mount — there is no GET-list
+  // endpoint; the monitor endpoint returns the live experiment summaries.
+  useEffect(() => {
+    mutate({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const experiments = (data?.experiments ?? []).map(toExperimentCard);
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -233,34 +227,36 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {recommendedCount > 0 && (
-              <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-600">
-                {recommendedCount} New
-              </Badge>
-            )}
-            {simulatedCount > 0 && (
-              <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-600">
-                {simulatedCount} Simulated
-              </Badge>
-            )}
-          </div>
+          {experiments.length > 0 && (
+            <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600">
+              {experiments.length} Active
+            </Badge>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {SAMPLE_EXPERIMENTS.map((experiment) => (
-          <ExperimentCard key={experiment.id} experiment={experiment} />
-        ))}
-
-        {/* Info Banner */}
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-purple-500/5 border border-purple-500/20">
-          <AlertCircle className="h-4 w-4 text-purple-500 mt-0.5" />
-          <div className="text-xs text-[var(--color-muted-foreground)]">
-            <span className="font-medium text-purple-600">Digital Twin Pre-Screening:</span> All
-            experiments are simulated using our Digital Twin environment before live deployment to
-            estimate outcomes and minimize risk.
-          </div>
-        </div>
+        {isPending ? (
+          <EmptyState title="Loading experiments…" />
+        ) : experiments.length === 0 ? (
+          <EmptyState
+            title="No experiments to recommend"
+            description="Once experiments are running, the monitoring service will surface them here."
+          />
+        ) : (
+          <>
+            {experiments.map((experiment) => (
+              <ExperimentCard key={experiment.id} experiment={experiment} />
+            ))}
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-purple-500/5 border border-purple-500/20">
+              <AlertCircle className="h-4 w-4 text-purple-500 mt-0.5" />
+              <div className="text-xs text-[var(--color-muted-foreground)]">
+                <span className="font-medium text-purple-600">Digital Twin Pre-Screening:</span> All
+                experiments are simulated using our Digital Twin environment before live deployment to
+                estimate outcomes and minimize risk.
+              </div>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
