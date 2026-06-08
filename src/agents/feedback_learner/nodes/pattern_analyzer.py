@@ -37,16 +37,29 @@ class PatternAnalyzerNode:
     Identifies systematic issues requiring attention.
     """
 
-    def __init__(self, use_llm: bool = False, llm: Optional[Any] = None):
+    def __init__(
+        self,
+        use_llm: bool = False,
+        llm: Optional[Any] = None,
+        prefer_optimized: bool = True,
+    ):
         """
         Initialize pattern analyzer.
 
         Args:
             use_llm: Whether to use LLM for analysis
             llm: Optional LLM instance
+            prefer_optimized: When True, prefer the latest saved optimized DSPy
+                module (feedback_learner_pattern) produced by the optimization
+                loop — this is what closes the self-improvement loop. Falls back
+                cleanly to LLM/deterministic when no artifact or LM is present.
         """
         self.use_llm = use_llm
         self.llm = llm
+        self.prefer_optimized = prefer_optimized
+        self._optimized_module: Optional[Any] = None
+        self._optimized_meta: Dict[str, Any] = {}
+        self._optimized_load_attempted = False
 
     async def execute(self, state: FeedbackLearnerState) -> FeedbackLearnerState:
         """Execute pattern analysis."""
@@ -68,11 +81,16 @@ class PatternAnalyzerNode:
                     "status": "extracting",
                 }
 
-            # Analyze patterns
-            if self.use_llm and self.llm:
-                result = await self._analyze_with_llm(state)
-            else:
-                result = self._analyze_deterministic(state)
+            # Analyze patterns: prefer the optimized DSPy module (closes the
+            # self-improvement loop); fall back to LLM, then deterministic.
+            result = None
+            if self.prefer_optimized:
+                result = self._analyze_with_dspy(state)
+            if result is None:
+                if self.use_llm and self.llm:
+                    result = await self._analyze_with_llm(state)
+                else:
+                    result = self._analyze_deterministic(state)
 
             analysis_time = int((time.time() - start_time) * 1000)
 
@@ -218,6 +236,99 @@ class PatternAnalyzerNode:
             "patterns": patterns,
             "clusters": clusters,
             "model_used": "deterministic",
+        }
+
+    def _load_optimized_pattern_module(self) -> Optional[Any]:
+        """Load the latest optimized feedback_learner_pattern module, or None.
+
+        Cached after first attempt. Uses a zero-arg factory because
+        load_optimized_module calls module_cls() (versioning.py).
+        """
+        if self._optimized_load_attempted:
+            return self._optimized_module
+        self._optimized_load_attempted = True
+        try:
+            import dspy
+
+            from src.optimization.gepa import load_optimized_module
+
+            from ..dspy_integration import PatternDetectionSignature
+
+            module, meta = load_optimized_module(
+                lambda: dspy.ChainOfThought(PatternDetectionSignature),
+                agent_name="feedback_learner_pattern",
+            )
+            self._optimized_module = module
+            self._optimized_meta = meta
+            logger.info(
+                "Loaded optimized pattern module version=%s",
+                meta.get("version_id", "?"),
+            )
+        except FileNotFoundError:
+            logger.debug("No optimized pattern module saved yet; using fallback")
+            self._optimized_module = None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Failed to load optimized pattern module: %s", e)
+            self._optimized_module = None
+        return self._optimized_module
+
+    def _analyze_with_dspy(self, state: FeedbackLearnerState) -> Optional[Dict[str, Any]]:
+        """Run the optimized DSPy module. Returns a result dict or None to fall back."""
+        module = self._load_optimized_pattern_module()
+        if module is None:
+            return None
+
+        import dspy
+
+        from src.optimization.dspy_lm import ensure_dspy_configured
+
+        if not ensure_dspy_configured():
+            return None
+
+        import json as _json
+
+        # Bind the configured LM so the module runs regardless of thread context.
+        lm = getattr(dspy.settings, "lm", None)
+        if lm is not None and hasattr(module, "set_lm"):
+            module.set_lm(lm)
+
+        feedback_items = state.get("feedback_items") or []
+        cognitive = cast(Dict[str, Any], state.get("cognitive_context") or {})
+        try:
+            prediction = module(
+                feedback_batch=_json.dumps([dict(fb) for fb in feedback_items[:20]]),
+                agent_baselines=_json.dumps(cognitive.get("agent_baselines", {})),
+                historical_patterns=_json.dumps(cognitive.get("historical_patterns", [])),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Optimized DSPy pattern analysis failed; falling back: %s", e)
+            return None
+
+        raw_patterns = getattr(prediction, "patterns", []) or []
+        patterns: List[DetectedPattern] = []
+        for i, p in enumerate(raw_patterns, start=1):
+            if not isinstance(p, dict):
+                continue
+            patterns.append(
+                DetectedPattern(
+                    pattern_id=f"P{i}",
+                    pattern_type=str(p.get("type", p.get("pattern_type", "unknown"))),
+                    description=str(p.get("description", "")),
+                    frequency=int(p.get("frequency", 0) or 0),
+                    severity=str(p.get("severity", "medium")),
+                    affected_agents=list(p.get("affected_agents", []) or []),
+                    example_feedback_ids=[
+                        fb["feedback_id"] for fb in feedback_items[:3] if "feedback_id" in fb
+                    ],
+                    root_cause_hypothesis=str(p.get("root_cause_hypothesis", "")),
+                )
+            )
+
+        version = self._optimized_meta.get("version_id", "unknown")
+        return {
+            "patterns": patterns,
+            "clusters": self._cluster_patterns(patterns),
+            "model_used": f"dspy_optimized:{version}",
         }
 
     async def _analyze_with_llm(self, state: FeedbackLearnerState) -> Dict[str, Any]:

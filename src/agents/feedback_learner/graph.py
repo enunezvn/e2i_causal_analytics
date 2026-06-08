@@ -42,6 +42,7 @@ def build_feedback_learner_graph(
     cognitive_rag: Optional[Any] = None,
     db_client: Optional[Any] = None,
     enable_rubric_evaluation: bool = True,
+    prefer_optimized: bool = True,
 ):
     """
     Build the Feedback Learner agent graph with DSPy integration.
@@ -61,6 +62,8 @@ def build_feedback_learner_graph(
         cognitive_rag: Optional CognitiveRAG instance for context enrichment
         db_client: Optional database client for storing rubric evaluations
         enable_rubric_evaluation: Whether to include rubric evaluation node (default: True)
+        prefer_optimized: Whether the pattern analyzer should prefer the latest
+            optimized DSPy module (closes the self-improvement loop; default: True)
 
     Returns:
         Compiled LangGraph workflow
@@ -70,7 +73,7 @@ def build_feedback_learner_graph(
 
     # Initialize nodes
     collector = FeedbackCollectorNode(feedback_store, outcome_store)
-    analyzer = PatternAnalyzerNode(use_llm=use_llm, llm=llm)
+    analyzer = PatternAnalyzerNode(use_llm=use_llm, llm=llm, prefer_optimized=prefer_optimized)
     rubric_node = RubricNode(db_client=db_client) if enable_rubric_evaluation else None
     extractor = LearningExtractorNode(use_llm=use_llm, llm=llm)
     updater = KnowledgeUpdaterNode(knowledge_stores)

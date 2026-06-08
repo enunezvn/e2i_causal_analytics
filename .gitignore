@@ -230,3 +230,9 @@ data/kg_cache/*.json
 # as artifacts/dspy/causal_role_classifier.json; intermediate Bootstrap/MIPROv2
 # compile outputs at n=200 stay local-only).
 artifacts/dspy/cr_*_n200.json
+
+# DSPy self-improvement loop runtime artifacts (feedback-loop-closure):
+# optimized module versions, recipient prompt bundles, and trigger state are
+# produced at runtime on the droplet's shared FS — never commit them.
+optimized_modules/
+optimized_prompts/
