@@ -32,7 +32,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -40,6 +40,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_operator
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+
+if TYPE_CHECKING:
+    from src.api.repositories.feedback_repository import FeedbackRepository
 
 # Opik Feedback Loop imports (Phase 4 - G23)
 try:
@@ -385,7 +388,7 @@ _updates_store: Dict[str, KnowledgeUpdate] = {}
 _feedback_store: List[FeedbackItem] = []
 
 
-def _get_repo():
+def _get_repo() -> "Optional[FeedbackRepository]":
     """Return a FeedbackRepository, or None if Supabase is unavailable."""
     try:
         from src.api.repositories.feedback_repository import FeedbackRepository
