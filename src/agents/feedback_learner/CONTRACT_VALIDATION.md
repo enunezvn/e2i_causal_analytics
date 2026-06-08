@@ -2,9 +2,9 @@
 
 **Agent**: Feedback Learner
 **Tier**: 5 (Self-Improvement)
-**Version**: 4.2
-**Validation Date**: 2026-02-09
-**Status**: COMPLIANT
+**Version**: 4.3
+**Validation Date**: 2026-02-09 (loop-closure update 2026-06-08)
+**Status**: COMPLIANT — DSPy self-improvement loop now closed & wired for prod (see §0)
 
 ---
 
@@ -14,6 +14,40 @@ The Feedback Learner agent is a Tier 5 Self-Improvement agent that learns from u
 
 **Test Results**: 356/356 passing (100%)
 **Test Duration**: 1.54s
+
+---
+
+## 0. DSPy Self-Improvement Loop — Closure Status (2026-06-08)
+
+The 2026-06-07 audit (`docs/reports/dspy-feedback-loop-audit-20260607.md`) found
+the DSPy prompt-optimization loop was an **open loop**: signals were emitted but
+never persisted by the learner, never read back, the optimizer/trigger/scheduler
+were never invoked, and `update_optimized_prompts()` had zero production callers.
+The earlier blanket "COMPLIANT/operational" claim for self-improvement was
+therefore not evidence-backed.
+
+The loop is now **closed and wired for active production** (no feature-flag gate;
+deploy itself remains the owner's action). The wired path, with evidence:
+
+| Stage | Mechanism | Where |
+|---|---|---|
+| Persist learner signal (F5) | `learn()` -> `signal_store.persist_training_signal` | `agent.py`, `signal_store.py` |
+| Read back (F3/F4) | `get_feedback_learner_training_signals` (filters `source_agent`) | `signal_store.py`, `rag/memory_adapters.py` |
+| Faithful conversion (F6) | carried content -> `_signals_to_examples` (pattern/recommendation/summary) | `dspy_integration.py`, `graph.py` |
+| Optimize + save (F1) | `optimization_runner.run_feedback_learner_optimization` (GEPA, real LM) | `optimization_runner.py`, `optimization/dspy_lm.py` |
+| Consume (closes loop) | `PatternAnalyzerNode` loads the optimized `feedback_learner_pattern` module | `nodes/pattern_analyzer.py` |
+| Install into recipients (F2) | `prompt_bundles.install_all_prompt_bundles` at app startup + after each run | `prompt_bundles.py`, `api/main.py` |
+| Schedule (F1 keystone) | daily Celery beat `run_dspy_prompt_optimization` gated by `GEPAOptimizationTrigger` | `tasks/dspy_optimization_tasks.py`, `workers/celery_app.py` |
+| Cleanup | F7 honest drop logging; F8 dead expressions removed | `tier2_signal_router.py`, `graph.py` |
+
+A faithful real-LM GEPA run (bounded, cheapest-disproof) confirmed the optimize
+step runs end-to-end: the LM reaches GEPA's workers, the metric scores real
+predictions, and an artifact is saved + load-round-trips. Latent bugs the audit's
+introspection-only check missed were fixed in the process (GEPA `budget`->`auto`
+kwarg, metric returning a plain dict crashing `dspy.Evaluate`, LM not propagated
+to optimizer worker threads, empty instruction-hash on save). The **per-recipient
+optimizer** that produces recipient bundles is the scoped follow-on (Shard 09);
+until it produces a bundle the install path is wired but installs nothing.
 
 ---
 

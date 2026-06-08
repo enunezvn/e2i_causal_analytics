@@ -54,6 +54,11 @@ from src.tasks.drift_monitoring_tasks import (
     send_drift_alert_notifications,
     track_model_performance,
 )
+
+# DSPy prompt self-improvement loop (audit F1 keystone): importing the module
+# fires the @celery_app.task decorator so the scheduled optimization trigger is
+# registered for the beat + worker.
+from src.tasks.dspy_optimization_tasks import run_dspy_prompt_optimization
 from src.tasks.feast_tasks import (
     check_feature_freshness,
     materialize_features,
@@ -123,6 +128,8 @@ __all__ = [
     "run_feedback_loop_long_window",
     "analyze_concept_drift_from_truth",
     "run_full_feedback_loop",
+    # DSPy prompt self-improvement loop (audit F1 keystone)
+    "run_dspy_prompt_optimization",
     # NPPES NPI taxonomy cache (issue #154)
     "refresh_npi_taxonomy_cache",
     # Risk-score prediction DB writes (issue #173)
