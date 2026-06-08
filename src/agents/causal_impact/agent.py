@@ -6,7 +6,7 @@ Estimates causal effects using DoWhy/EconML with natural language interpretation
 import logging
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
 from src.agents.base import SkillsMixin
 from src.agents.causal_impact.graph import create_causal_impact_graph
@@ -950,7 +950,9 @@ class CausalImpactAgent(SkillsMixin):
             logger.error(f"Failed to save episodic memory: {e}")
             return None
 
-    async def _contribute_to_memory(self, output: Dict[str, Any], state: Dict[str, Any]) -> None:
+    async def _contribute_to_memory(
+        self, output: CausalImpactOutput, state: Dict[str, Any]
+    ) -> None:
         """Contribute this analysis to the tri-memory architecture (#788).
 
         Routes through the canonical ``contribute_to_memory`` path: ``store_causal_analysis``
@@ -978,7 +980,12 @@ class CausalImpactAgent(SkillsMixin):
                 session_id = str(uuid4())
 
             await contribute_to_memory(
-                result=output,
+                # ``output`` is a CausalImpactOutput TypedDict; cast (a runtime
+                # no-op that preserves object identity) to the canonical
+                # ``Dict[str, Any]`` contract — a TypedDict is not assignable to
+                # dict[str, Any] under mypy invariance. NOT ``dict(output)``,
+                # which would copy and break callers asserting the same payload.
+                result=cast(Dict[str, Any], output),
                 state=state,
                 session_id=session_id,
                 brand=state.get("brand"),
