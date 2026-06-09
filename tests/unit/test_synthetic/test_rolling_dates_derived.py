@@ -55,6 +55,29 @@ def test_feature_value_timestamps_anchor_to_reference():
     assert max(days) >= REF - timedelta(days=7)
 
 
+def test_shift_dates_to_window_clips_future_preserves_past():
+    """Direct guard on the clip semantics (codex LOW): future dates collapse onto the
+    reference, past/present dates are left untouched (an affine rescale would move
+    them and flatten the recency mixture). Also covers the 'YYYY-MM-DD HH:MM:SS'
+    time-suffix preservation path."""
+    cfg = GeneratorConfig(seed=1, anchor_to_now=True, anchor_reference=REF)
+    gen = PatientGenerator(cfg)
+    dates = [
+        "2026-05-01",            # past -> untouched
+        "2026-06-09",            # == ref -> untouched
+        "2026-08-15",            # future -> clipped to ref
+        "2026-12-31 14:30:00",   # future w/ time -> clipped to ref, time tail kept
+    ]
+    out = gen._shift_dates_to_window(dates)
+    assert out[0] == "2026-05-01"
+    assert out[1] == "2026-06-09"
+    assert out[2] == "2026-06-09"
+    assert out[3] == "2026-06-09 14:30:00"
+    # off -> identity
+    off = PatientGenerator(GeneratorConfig(seed=1))
+    assert off._shift_dates_to_window(dates) == dates
+
+
 def test_derived_dates_default_off_not_anchored_to_now():
     patients = PatientGenerator(
         GeneratorConfig(seed=11, n_records=200, brand=Brand.KISQALI)
