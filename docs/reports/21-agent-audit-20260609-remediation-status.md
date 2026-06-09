@@ -33,7 +33,7 @@ current fix locations in `21-agent-audit-20260609-repro/reverify_results.json`.
 | F16 | MED | data_preparer | LIVE (`DataFrame.append` removed pandas 2.x) → pd.concat | ✅ PR | #834 |
 | F17 | MED | cohort_constructor | LIVE (bad top-level import) → absolute import paths | ✅ PR | #835 |
 | F18 | LOW | causal_impact | LIVE but fail-closed-CORRECT (chat-completeness only) | ◻ optional | — |
-| F19 | LOW | model_trainer | LIVE (no in-agent thread cap → 5.9 GB) | ⏳ pending | — |
+| F19 | LOW | model_trainer | LIVE (no in-agent thread cap → 5.9 GB) → BLAS/OpenMP cap at chokepoint | ✅ PR | #836 |
 
 **Security (separate workstream):** §6 RLS — 73 prod tables with RLS disabled.
 Decide per-table policies; do not blindly enable. Not auto-actioned here.
