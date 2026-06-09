@@ -20,12 +20,14 @@ from ..config import (
     RegionEnum,
 )
 from ..dgp.treatment_arm import (
+    _BRAND_CATE_SCALE,
     assign_segment,
     assign_treatment_arm,
     binary_outcome_with_cate,
     brand_scaled_cate,
     rd_map_from_tau,
 )
+from .cohort_outcomes import generate_discontinuation_outcomes
 from .base import BaseGenerator, GeneratorConfig
 
 
@@ -118,6 +120,18 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         )
         # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
         cate_map = rd_map_from_tau(segment, tau_i)
+
+        # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
+        # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses
+        # Shard 03's _BRAND_CATE_SCALE so a Kisqali probe differs from a Remibrutinib one.
+        _coh = generate_discontinuation_outcomes(
+            rng=self._rng,
+            treatment_arm=np.asarray(treatment_arm, dtype=int),
+            disease_severity=confounders["disease_severity"],
+            academic_hcp=confounders["academic_hcp"],
+            segment=np.asarray(segment),
+            brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
+        )
 
         # days_to_treatment only for initiators (preserve prior shape)
         days_to_treatment: Any = np.where(
@@ -229,8 +243,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "propensity_score": np.round(propensity, 4),
                 "segment_assignment": segment,
                 "treatment_effect_estimate": np.round(tau_i, 4),
-                "discontinued_180d": [None] * n,
-                "persistent_180d": [None] * n,
+                "discontinued_180d": _coh["discontinued_180d"],
+                "persistent_180d": _coh["persistent_180d"],
             }
         )
 
