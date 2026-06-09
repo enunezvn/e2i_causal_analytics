@@ -28,7 +28,7 @@ current fix locations in `21-agent-audit-20260609-repro/reverify_results.json`.
 | F14 | MED | prediction_synthesizer | LIVE (same) | ⏳ pending | — |
 | F9 | MED | model_selector | LIVE (`execute_query` missing → 40% frozen) → real PostgREST queries + unmask | ✅ PR | #831 |
 | F10 | MED | experiment_designer | LIVE (MockKnowledgeStore unmarked) | ⏳ pending | — |
-| F11 | MED | drift_monitor | LIVE (structural_drift dropped) | ⏳ pending | — |
+| F11 | MED | drift_monitor | LIVE (structural_drift dropped) → wired end-to-end: input DAG fields threaded + aggregator/summary/recs/output/memory include structural | ✅ PR | #832 |
 | F15 | MED | feedback_learner | LIVE (empty stores → 0.0 effectiveness) | ⏳ pending | — |
 | F16 | MED | data_preparer | LIVE (`DataFrame.append` removed pandas 2.x) | ⏳ pending | — |
 | F17 | MED | cohort_constructor | LIVE (bad top-level import) | ⏳ pending | — |
