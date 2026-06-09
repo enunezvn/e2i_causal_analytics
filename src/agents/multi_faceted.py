@@ -50,6 +50,13 @@ import re
 
 MULTI_FACETED_PATTERNS: tuple[str, ...] = (
     # Conjunctive multi-question markers ("and also", "compare X vs Y, then ...").
+    # NB: "and then" is a DELIBERATE canonical multi_faceted phrase here, locked by
+    # test_multi_faceted_ssot.py::test_pattern_matches_canonical_phrase. A review
+    # (2026-06-09) noted that on a degenerate repeated single ask ("forecast … and
+    # then forecast … again") this over-routes to tool_composer, but the phrase is
+    # an intentional product contract, NOT introduced by the multi-part routing
+    # fix — so it is left as-is rather than silently broken. (The new sequence-
+    # marker promotion is additive; it does not touch these original 4 patterns.)
     r"and (also|then|additionally|furthermore)",
     r"compare .* (vs|versus|against|to) .* and",
     r"(combine|integrate|synthes).*(analyses|results|findings)",

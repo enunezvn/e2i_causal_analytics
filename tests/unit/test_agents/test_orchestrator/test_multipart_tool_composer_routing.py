@@ -86,6 +86,8 @@ class TestMultipartRoutesToToolComposer:
             # Codex 2nd pass: "using the <modifier> results" dependent handoff +
             # 2 strong intents → promoted.
             "Which HCP segments responded best? Using the model results, design a test.",
+            # Genuine "and then" pipeline (2 mapped intents) → tool_composer.
+            "Which HCP segments responded best and then design a test.",
         ],
     )
     def test_dependent_pipeline_routes_to_tool_composer(self, query):
