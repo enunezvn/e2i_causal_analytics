@@ -103,6 +103,18 @@ class ROICalculatorNode:
             gaps_detected = state.get("gaps_detected", [])
 
             if not gaps_detected:
+                # F2 fail-closed: "no gaps" can mean either (a) the analysis ran fine
+                # and genuinely found nothing, or (b) an upstream node (e.g. gap_detector)
+                # already FAILED and left gaps_detected empty. Distinguish via state["errors"]:
+                # if a terminal error was accumulated, propagate FAILED rather than the
+                # normal 'prioritizing' hand-off, so the failure is not laundered downstream.
+                if state.get("errors"):
+                    return {
+                        "roi_estimates": [],
+                        "total_addressable_value": 0.0,
+                        "roi_latency_ms": 0,
+                        "status": "failed",
+                    }
                 return {
                     "roi_estimates": [],
                     "total_addressable_value": 0.0,
@@ -142,6 +154,9 @@ class ROICalculatorNode:
         except Exception as e:
             logger.error(f"ROI calculation failed: {e}")
             roi_latency_ms = int((time.time() - start_time) * 1000)
+            # F2: returning only the NEW error is correct -- state["errors"] uses an
+            # additive reducer (operator.add), so this is MERGED onto any upstream errors
+            # rather than overwriting them.
             return {
                 "errors": [
                     {
