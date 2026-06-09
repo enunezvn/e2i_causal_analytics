@@ -30,8 +30,8 @@ current fix locations in `21-agent-audit-20260609-repro/reverify_results.json`.
 | F10 | MED | experiment_designer | LIVE (MockKnowledgeStore unmarked) → EmptyKnowledgeStore prod default (honest empty); Mock kept for tests; org-defaults prompt section only when real | ✅ PR | #833 |
 | F11 | MED | drift_monitor | LIVE (structural_drift dropped) → wired end-to-end: input DAG fields threaded + aggregator/summary/recs/output/memory include structural | ✅ PR | #832 |
 | F15 | MED | feedback_learner | LIVE (empty stores → 0.0 effectiveness) | ⏳ pending | — |
-| F16 | MED | data_preparer | LIVE (`DataFrame.append` removed pandas 2.x) | ⏳ pending | — |
-| F17 | MED | cohort_constructor | LIVE (bad top-level import) | ⏳ pending | — |
+| F16 | MED | data_preparer | LIVE (`DataFrame.append` removed pandas 2.x) → pd.concat | ✅ PR | #834 |
+| F17 | MED | cohort_constructor | LIVE (bad top-level import) → absolute import paths | ✅ PR | #835 |
 | F18 | LOW | causal_impact | LIVE but fail-closed-CORRECT (chat-completeness only) | ◻ optional | — |
 | F19 | LOW | model_trainer | LIVE (no in-agent thread cap → 5.9 GB) | ⏳ pending | — |
 
