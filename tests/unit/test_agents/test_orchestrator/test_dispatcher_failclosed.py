@@ -128,3 +128,62 @@ async def test_registered_agent_still_dispatched():
     assert res["success"] is True
     assert res["result"]["narrative"] == "real response"
     assert agent.analyze.called
+
+
+def test_failclosed_output_failure_details_matches_state_contract():
+    """#814 contract regression: the fail-closed path populates ``failure_details``
+    as a ``List[Dict]`` (one entry per failed agent) — see
+    ``OrchestratorAgent._build_output``. Before #814 the dispatcher fabricated a
+    ``success=True`` mock, so the failure branch (and thus this list) was never
+    populated in the registry-less harness/prod-degraded path; the
+    ``OrchestratorState.failure_details`` annotation was therefore left as
+    ``Optional[Dict]`` and never exercised. The fail-closed default makes that path
+    production-reachable under a partial registry, so the state contract must accept
+    the real ``List[Dict]`` shape with NO ContractValidator type error (this is the
+    exact Tier 1-5 harness ``type_error`` the fail-closed path would otherwise emit).
+
+    Drives the REAL ``_build_output`` and the REAL ``ContractValidator`` — no mocks.
+    """
+    from src.agents.orchestrator.agent import OrchestratorAgent
+    from src.agents.orchestrator.state import OrchestratorState
+    from src.testing.contract_validator import ContractValidator
+
+    failclosed_state: Dict[str, Any] = {
+        "query_id": "q-failclosed",
+        "status": "failed",
+        "synthesized_response": "I was unable to complete the analysis.",
+        "response_confidence": 0.0,
+        "agent_results": [
+            {
+                "agent_name": "causal_impact",
+                "success": False,
+                "result": None,
+                "error": (
+                    "Agent 'causal_impact' is not available in the dispatcher "
+                    "registry; dispatch fails closed (no fabricated result)."
+                ),
+                "latency_ms": 0,
+            },
+            {
+                "agent_name": "explainer",
+                "success": False,
+                "result": None,
+                "error": (
+                    "Agent 'explainer' is not available in the dispatcher "
+                    "registry; dispatch fails closed (no fabricated result)."
+                ),
+                "latency_ms": 0,
+            },
+        ],
+    }
+
+    output = OrchestratorAgent(enable_opik=False)._build_output(failclosed_state)
+
+    # Producer reality: a LIST of per-agent failure dicts (already true today).
+    assert isinstance(output["failure_details"], list)
+    assert {d["agent_name"] for d in output["failure_details"]} == {"causal_impact", "explainer"}
+
+    # The STATE CONTRACT must accept that list shape with zero type errors.
+    result = ContractValidator().validate_state(output, OrchestratorState)
+    fd_errors = [te for te in result.type_errors if te.get("field") == "failure_details"]
+    assert fd_errors == [], f"failure_details violates OrchestratorState contract: {fd_errors}"

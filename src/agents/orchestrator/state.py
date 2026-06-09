@@ -260,7 +260,10 @@ class OrchestratorState(TypedDict, total=False):
     successful_agents: NotRequired[List[str]]
     failed_agents: NotRequired[List[str]]
     has_partial_failure: NotRequired[bool]
-    failure_details: NotRequired[Optional[Dict[str, Any]]]
+    # One dict per failed agent: {"agent_name", "error", "latency_ms"} (see
+    # OrchestratorAgent._build_output). Populated on the #814 fail-closed path;
+    # consumed as a list in chatbot_graph._build_partial_failure_warning.
+    failure_details: NotRequired[Optional[List[Dict[str, Any]]]]
     orchestrator_error: NotRequired[Optional[str]]
     orchestrator_error_type: NotRequired[Optional[str]]
     timestamp: NotRequired[Optional[str]]
