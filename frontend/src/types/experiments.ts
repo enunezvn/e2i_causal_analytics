@@ -553,6 +553,10 @@ export interface MonitorResponse {
   alerts: MonitorAlert[];
   /** Summary message */
   monitor_summary: string;
+  /** Monitor-agent errors (e.g. a node could not reach the DB). Non-empty means
+   *  the result may be incomplete rather than a genuine empty dataset, so the UI
+   *  can show an error state instead of "no experiments". */
+  errors?: string[];
   /** Recommended actions */
   recommended_actions: string[];
   /** Check latency in milliseconds */

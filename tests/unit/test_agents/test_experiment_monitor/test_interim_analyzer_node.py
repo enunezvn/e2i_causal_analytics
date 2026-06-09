@@ -43,7 +43,7 @@ class TestInterimAnalyzerGetClient:
     async def test_get_client_lazy_loads(self):
         """Test that client is lazily loaded."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get_client:
             mock_client = MagicMock()
@@ -121,7 +121,7 @@ class TestInterimAnalyzerExecute:
         node = InterimAnalyzerNode()
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None  # Use mock path
@@ -139,7 +139,7 @@ class TestInterimAnalyzerExecute:
         state_with_experiments["check_latency_ms"] = 100
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -508,7 +508,7 @@ class TestEdgeCases:
         }
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None

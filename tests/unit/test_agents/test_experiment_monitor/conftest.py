@@ -777,3 +777,15 @@ def _no_live_supabase_in_recipient_tests(monkeypatch):
         "src.memory.services.factories.get_supabase_client",
         lambda: None,
     )
+
+    # The experiment-monitor nodes resolve their client via the ASYNC factory
+    # (get_async_supabase_client). Neutralize it too so monitor unit tests that
+    # do not inject/patch a client stay OFFLINE -> the nodes fail closed (empty +
+    # recorded error) rather than touching the live DB or fabricating mock data.
+    async def _async_none():
+        return None
+
+    monkeypatch.setattr(
+        "src.memory.services.factories.get_async_supabase_client",
+        _async_none,
+    )

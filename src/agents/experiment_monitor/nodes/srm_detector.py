@@ -44,9 +44,9 @@ class SRMDetectorNode:
     async def _get_client(self):
         """Lazy load Supabase client."""
         if self._client is None:
-            from src.memory.services.factories import get_supabase_client
+            from src.memory.services.factories import get_async_supabase_client
 
-            self._client = await get_supabase_client()
+            self._client = await get_async_supabase_client()
         return self._client
 
     async def execute(self, state: ExperimentMonitorState) -> ExperimentMonitorState:
