@@ -327,6 +327,12 @@ def _resolve_hcp_adoption(
     df = pd.DataFrame(rows)
     if "adoption_category" not in df.columns:
         return None
+    # A cohort member must carry an adoption label; drop unlabeled rows (e.g. baseline
+    # non-synthetic HCPs whose adoption_category is NULL) so the cohort is the populated
+    # adoption population, not a NULL-diluted mix.
+    df = df[df["adoption_category"].notna()].copy()
+    if df.empty:
+        return None
     # Binary helper for estimators; the canonical OUTCOME column stays adoption_category.
     df["adopted"] = (
         df["adoption_category"].astype(str).str.upper() == "ADOPTER"
