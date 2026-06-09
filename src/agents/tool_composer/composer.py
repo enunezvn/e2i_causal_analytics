@@ -244,11 +244,26 @@ class ToolComposer:
             # near-constant targets. available_columns is kept for back-compat.
             column_profiles = self._extract_column_profiles(context)
             available_columns = self._extract_available_columns(context)
-            plan = await self.planner.plan(
-                decomposition,
-                available_columns=available_columns,
-                column_profiles=column_profiles,
-            )
+            # #810: when the caller resolved a defined-KPI substrate, the causal
+            # outcome column is carried in context["kpi_outcome"]; bind it so the
+            # analysis measures the KPI rather than an LLM-guessed column.
+            outcome_hint = (context or {}).get("kpi_outcome")
+            # #810: for a defined-KPI causal question, build a DETERMINISTIC causal
+            # analysis plan (causal_effect_estimator + cate_analyzer + driver
+            # ranking) over the KPI substrate. Free-form LLM planning is unreliable
+            # for this (it picks descriptive tools / categorical treatments / passes
+            # string cohort args that cascade-fail), so we bind the proven causal
+            # plan directly. Falls back to LLM planning when no usable treatment.
+            plan = None
+            if outcome_hint:
+                plan = self._build_kpi_causal_plan(decomposition, context, outcome_hint)
+            if plan is None:
+                plan = await self.planner.plan(
+                    decomposition,
+                    available_columns=available_columns,
+                    column_profiles=column_profiles,
+                    outcome_hint=outcome_hint,
+                )
 
             phase_durations["plan"] = self._elapsed_ms(phase_start)
             logger.info(
@@ -509,6 +524,184 @@ class ToolComposer:
             return "categorical"
 
         return "other"
+
+    def _build_kpi_causal_plan(
+        self,
+        decomposition: Any,
+        context: Optional[Dict[str, Any]],
+        outcome: str,
+    ) -> Optional[Any]:
+        """Build a DETERMINISTIC causal-analysis plan over a KPI substrate (#810).
+
+        For a defined-KPI causal question (``context["kpi_outcome"]`` set) the
+        analysis is well-posed: estimate the causal effect of a driver on the KPI
+        outcome (``causal_effect_estimator``), rank drivers by importance
+        (``discover_dag`` -> ``rank_drivers``), and measure segment heterogeneity
+        (``cate_analyzer``) — exactly "what drove <KPI>, and which segments respond
+        best". The treatment is the best BINARY (then numeric) driver; confounders
+        are the other numeric drivers; segments are the categorical drivers. All
+        bind to REAL columns of the KPI frame (no fabrication).
+
+        Returns ``None`` (caller falls back to LLM planning) when there is no KPI
+        frame or no usable treatment driver.
+        """
+        from .models.composition_models import ExecutionPlan, ExecutionStep, ToolMapping
+
+        profiles = self._extract_column_profiles(context or {})
+        if not profiles:
+            return None
+        prof = {str(p["name"]): p for p in profiles if p.get("name")}
+
+        def _family(name: str) -> Any:
+            return prof[name].get("dtype_family")
+
+        def _card(name: str) -> int:
+            try:
+                return int(prof[name].get("n_unique") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        binary = [n for n in prof if _family(n) == "binary" and n != outcome]
+        numeric = [n for n in prof if _family(n) == "numeric-continuous" and n != outcome]
+        # Segments: LOW-cardinality categoricals only (2..12 distinct). Excludes
+        # high-cardinality ID columns (trigger_id/patient_id/hcp_id) that would
+        # produce one-row segments with NaN CATE.
+        seg_candidates = [
+            n for n in prof if _family(n) == "categorical" and n != outcome and 2 <= _card(n) <= 12
+        ]
+
+        treatment_candidates = binary or numeric
+        treatment: Optional[str] = treatment_candidates[0] if treatment_candidates else None
+        if treatment is None:
+            logger.info(
+                "KPI causal plan: no usable (binary/numeric) treatment driver for "
+                "outcome %r; falling back to LLM planning.",
+                outcome,
+            )
+            return None
+        confounders = [c for c in numeric if c != treatment][:5]
+        segments = seg_candidates[:2]
+
+        sub_questions = list(getattr(decomposition, "sub_questions", []) or [])
+        first_sq = str(sub_questions[0].id) if sub_questions else "sq_1"
+
+        def _sq_for(intents: set[str]) -> str:
+            for sq in sub_questions:
+                if str(getattr(sq, "intent", "")).upper() in intents:
+                    return str(sq.id)
+            return first_sq
+
+        causal_sq = _sq_for({"CAUSAL", "DESCRIPTIVE"})
+        comparative_sq = _sq_for({"COMPARATIVE"})
+        src = "composable"
+
+        steps: List[Any] = []
+        mappings: List[Any] = []
+
+        steps.append(
+            ExecutionStep(
+                step_id="kpi_ate",
+                sub_question_id=causal_sq,
+                tool_name="causal_effect_estimator",
+                source_agent=src,
+                input_mapping={
+                    "treatment": treatment,
+                    "outcome": outcome,
+                    "confounders": confounders,
+                },
+            )
+        )
+        mappings.append(
+            ToolMapping(
+                sub_question_id=causal_sq,
+                tool_name="causal_effect_estimator",
+                source_agent=src,
+                confidence=0.9,
+                reasoning=f"Estimate the causal effect of {treatment} on the KPI outcome {outcome}.",
+            )
+        )
+        steps.append(
+            ExecutionStep(
+                step_id="kpi_dag",
+                sub_question_id=causal_sq,
+                tool_name="discover_dag",
+                source_agent=src,
+                input_mapping={},
+            )
+        )
+        mappings.append(
+            ToolMapping(
+                sub_question_id=causal_sq,
+                tool_name="discover_dag",
+                source_agent=src,
+                confidence=0.7,
+                reasoning="Discover structure among the KPI drivers.",
+            )
+        )
+        steps.append(
+            ExecutionStep(
+                step_id="kpi_rank",
+                sub_question_id=causal_sq,
+                tool_name="rank_drivers",
+                source_agent=src,
+                input_mapping={"target": outcome, "dag_edge_list": "$kpi_dag.edge_list"},
+                depends_on_steps=["kpi_dag"],
+            )
+        )
+        mappings.append(
+            ToolMapping(
+                sub_question_id=causal_sq,
+                tool_name="rank_drivers",
+                source_agent=src,
+                confidence=0.7,
+                reasoning=f"Rank the drivers of the KPI outcome {outcome} by importance.",
+            )
+        )
+        parallel_first = ["kpi_ate", "kpi_dag"]
+        if segments:
+            steps.append(
+                ExecutionStep(
+                    step_id="kpi_cate",
+                    sub_question_id=comparative_sq,
+                    tool_name="cate_analyzer",
+                    source_agent=src,
+                    input_mapping={
+                        "treatment": treatment,
+                        "outcome": outcome,
+                        "segments": segments,
+                    },
+                )
+            )
+            mappings.append(
+                ToolMapping(
+                    sub_question_id=comparative_sq,
+                    tool_name="cate_analyzer",
+                    source_agent=src,
+                    confidence=0.85,
+                    reasoning="Segment-level treatment effects to find the best-responding segments.",
+                )
+            )
+            parallel_first.append("kpi_cate")
+
+        logger.info(
+            "KPI causal plan: outcome=%r treatment=%r confounders=%s segments=%s (%d steps).",
+            outcome,
+            treatment,
+            confounders,
+            segments,
+            len(steps),
+        )
+        return ExecutionPlan(
+            decomposition=decomposition,
+            steps=steps,
+            tool_mappings=mappings,
+            parallel_groups=[parallel_first, ["kpi_rank"]],
+            planning_reasoning=(
+                f"Deterministic KPI causal analysis for outcome '{outcome}': effect of "
+                f"'{treatment}' (confounders={confounders}), driver ranking, and segment "
+                f"heterogeneity (segments={segments})."
+            ),
+        )
 
     def _record_audit_entry(
         self,

@@ -44,7 +44,7 @@ from src.repositories.chatbot_conversation import (
 from src.repositories.chatbot_message import (
     get_chatbot_message_repository,
 )
-from src.services import cohort_resolution
+from src.services import cohort_resolution, kpi_resolution
 from src.utils.llm_factory import get_chat_llm
 
 logger = logging.getLogger(__name__)
@@ -95,11 +95,11 @@ class E2IDataQueryInput(BaseModel):
     )
     brand: Optional[str] = Field(
         default=None,
-        description="Brand filter: Kisqali, Fabhalta, or Remibrutinib",
+        description="Brand filter, resolved case-insensitively against the actual data values (e.g., Kisqali)",
     )
     region: Optional[str] = Field(
         default=None,
-        description="Region filter (e.g., US, EU, APAC)",
+        description="Region filter, resolved case-insensitively against the actual data values (e.g., Northeast)",
     )
     kpi_name: Optional[str] = Field(
         default=None,
@@ -129,7 +129,7 @@ class E2IDataQueryInput(BaseModel):
             "example": {
                 "query_type": "kpi",
                 "brand": "Kisqali",
-                "region": "US",
+                "region": "Northeast",
                 "kpi_name": "TRx",
                 "time_range": "last_30_days",
                 "limit": 10,
@@ -146,11 +146,11 @@ class CausalAnalysisInput(BaseModel):
     )
     brand: Optional[str] = Field(
         default=None,
-        description="Brand filter: Kisqali, Fabhalta, or Remibrutinib",
+        description="Brand filter, resolved case-insensitively against the actual data values (e.g., Kisqali)",
     )
     region: Optional[str] = Field(
         default=None,
-        description="Region filter (e.g., US, EU, APAC)",
+        description="Region filter, resolved case-insensitively against the actual data values (e.g., Northeast)",
     )
     time_period: Optional[str] = Field(
         default="last_30_days",
@@ -168,7 +168,7 @@ class CausalAnalysisInput(BaseModel):
             "example": {
                 "kpi_name": "TRx",
                 "brand": "Kisqali",
-                "region": "US",
+                "region": "Northeast",
                 "time_period": "last_30_days",
                 "min_confidence": 0.7,
             }
@@ -269,11 +269,11 @@ class OrchestratorToolInput(BaseModel):
     )
     brand: Optional[str] = Field(
         default=None,
-        description="Brand context for the query (Kisqali, Fabhalta, Remibrutinib)",
+        description="Brand context for the query, resolved case-insensitively against the actual data values (e.g., Kisqali)",
     )
     region: Optional[str] = Field(
         default=None,
-        description="Region context for the query (US, EU, APAC)",
+        description="Region context for the query, resolved case-insensitively against the actual data values (e.g., Northeast)",
     )
     session_id: Optional[str] = Field(
         default=None,
@@ -286,7 +286,7 @@ class OrchestratorToolInput(BaseModel):
                 "query": "Analyze the impact of rep visits on Kisqali TRx in the Northeast",
                 "target_agent": "causal_impact",
                 "brand": "Kisqali",
-                "region": "US",
+                "region": "Northeast",
                 "session_id": "sess_abc123",
             }
         }
@@ -301,14 +301,13 @@ class ToolComposerToolInput(BaseModel):
     )
     brand: Optional[str] = Field(
         default=None,
-        description="Brand context for the query (Kisqali, Fabhalta, Remibrutinib)",
+        description="Brand context for the query, resolved case-insensitively against the actual data values (e.g., Kisqali)",
     )
     region: Optional[str] = Field(
         default=None,
         description=(
-            "Region context for the query. Resolved against the patient_journeys "
-            "geographic_region enum (US census regions: Northeast, South, "
-            "Midwest, West); case-insensitive."
+            "Region context for the query, resolved case-insensitively against the "
+            "actual geographic_region values in the data (US census regions)."
         ),
     )
     session_id: Optional[str] = Field(
@@ -336,7 +335,7 @@ class ToolComposerToolInput(BaseModel):
             "example": {
                 "query": "Compare TRx trends across Kisqali, Fabhalta, and Remibrutinib, then explain causal factors",
                 "brand": None,
-                "region": "US",
+                "region": "Northeast",
                 "session_id": "sess_abc123",
                 "max_parallel": 3,
             }
@@ -580,8 +579,8 @@ async def e2i_data_query_tool(
 
     Args:
         query_type: Type of data to query (kpi, causal_chain, agent_analysis, etc.)
-        brand: Optional brand filter (Kisqali, Fabhalta, Remibrutinib)
-        region: Optional region filter (US, EU, APAC)
+        brand: Optional brand filter, resolved case-insensitively against the actual data values
+        region: Optional region filter, resolved case-insensitively against the actual data values
         kpi_name: Specific KPI name for KPI/causal queries
         agent_name: Agent name filter for agent_analysis queries
         time_range: Time range for the query (last_7_days, last_30_days, etc.)
@@ -638,8 +637,8 @@ async def causal_analysis_tool(
 
     Args:
         kpi_name: KPI to analyze (TRx, NRx, conversion_rate, market_share)
-        brand: Brand filter (Kisqali, Fabhalta, Remibrutinib)
-        region: Region filter (US, EU, APAC)
+        brand: Brand filter, resolved case-insensitively against the actual data values
+        region: Region filter, resolved case-insensitively against the actual data values
         time_period: Time period for analysis
         min_confidence: Minimum confidence threshold (0-1)
 
@@ -1024,8 +1023,8 @@ async def orchestrator_tool(
     Args:
         query: The query to process through the orchestrator
         target_agent: Optional specific agent to route to
-        brand: Brand context (Kisqali, Fabhalta, Remibrutinib)
-        region: Region context (US, EU, APAC)
+        brand: Brand context, resolved case-insensitively against the actual data values
+        region: Region context, resolved case-insensitively against the actual data values
         session_id: Session ID for context continuity
 
     Returns:
@@ -1167,8 +1166,8 @@ async def tool_composer_tool(
 
     Args:
         query: Multi-faceted query requiring decomposition
-        brand: Brand context (Kisqali, Fabhalta, Remibrutinib)
-        region: Region context (US, EU, APAC)
+        brand: Brand context, resolved case-insensitively against the actual data values
+        region: Region context, resolved case-insensitively against the actual data values
         session_id: Session ID for context continuity
         max_parallel: Maximum parallel tool executions (1-5)
 
@@ -1186,24 +1185,57 @@ async def tool_composer_tool(
             "max_parallel": max_parallel,
         }
 
+        # Issue #810: KPI-aware data resolution. When the query targets a defined
+        # KPI (e.g. "what drove <brand> conversion ..."), resolve the KPI's REAL
+        # substrate (e.g. triggers ⋈ treatment_events for Conversion Rate) with
+        # the KPI outcome materialized, rather than the patient-clinical cohort.
+        # This takes precedence over the cohort frame for KPI-outcome questions.
+        kpi_resolved = False
+        try:
+            kpi = kpi_resolution.recognize_kpi(query)
+            if kpi is not None:
+                kpi_frame = kpi_resolution.resolve_kpi_frame(kpi, brand, region)
+                if kpi_frame is not None:
+                    context["estimation_data"] = kpi_frame.frame
+                    context["kpi_outcome"] = kpi_frame.outcome_column
+                    context["kpi_name"] = kpi_frame.kpi_name
+                    context["kpi_driver_columns"] = kpi_frame.driver_columns
+                    kpi_resolved = True
+                    logger.info(
+                        "Tool composer: resolved KPI '%s' substrate (%d rows, "
+                        "outcome=%s, truncated=%s) for brand=%s region=%s",
+                        kpi_frame.kpi_name,
+                        len(kpi_frame.frame),
+                        kpi_frame.outcome_column,
+                        kpi_frame.is_truncated,
+                        brand,
+                        region,
+                    )
+        except Exception as kpi_err:
+            logger.warning(
+                f"Tool composer: KPI resolution failed, falling back to cohort: {kpi_err}"
+            )
+
         # Rec#1a: resolve a REAL cohort DataFrame for (brand, region) and thread
         # it into the composer context under the canonical "estimation_data" key.
         # The executor auto-injects it into composable tool kwargs. Best-effort:
         # if the loader is unavailable or raises, log and proceed -- the tools
-        # then fail-closed honestly rather than fabricating values.
-        try:
-            estimation_frame = _resolve_cohort_frame(brand, region, data_source)
-            if estimation_frame is not None:
-                context["estimation_data"] = estimation_frame
-                logger.info(
-                    "Tool composer: resolved estimation_data frame "
-                    f"({len(estimation_frame)} rows) for brand={brand} region={region}"
+        # then fail-closed honestly rather than fabricating values. Skipped when a
+        # KPI substrate already resolved (the KPI frame is the right outcome data).
+        if not kpi_resolved:
+            try:
+                estimation_frame = _resolve_cohort_frame(brand, region, data_source)
+                if estimation_frame is not None:
+                    context["estimation_data"] = estimation_frame
+                    logger.info(
+                        "Tool composer: resolved estimation_data frame "
+                        f"({len(estimation_frame)} rows) for brand={brand} region={region}"
+                    )
+            except Exception as resolve_err:
+                logger.warning(
+                    f"Tool composer: cohort resolution failed, proceeding without "
+                    f"estimation_data: {resolve_err}"
                 )
-        except Exception as resolve_err:
-            logger.warning(
-                f"Tool composer: cohort resolution failed, proceeding without "
-                f"estimation_data: {resolve_err}"
-            )
 
         # Get LLM client for Tool Composer (use reasoning tier for complex queries)
         llm_client = get_chat_llm(model_tier="reasoning", max_tokens=4096)

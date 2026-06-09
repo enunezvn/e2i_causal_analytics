@@ -273,7 +273,7 @@ class CohortStatisticsOutput(BaseModel):
         {
             "name": "brand",
             "type": "str",
-            "description": "Brand name (Remibrutinib, Fabhalta, Kisqali)",
+            "description": "Brand name, resolved case-insensitively against the actual data values",
         },
         {
             "name": "indication",

@@ -85,13 +85,17 @@ class TestComposerDerivesColumns:
         recorded: dict = {}
         real_plan = composer.planner.plan
 
-        async def _spy(decomposition, available_columns=None, column_profiles=None):
+        async def _spy(
+            decomposition, available_columns=None, column_profiles=None, outcome_hint=None
+        ):
             recorded["available_columns"] = available_columns
             recorded["column_profiles"] = column_profiles
+            recorded["outcome_hint"] = outcome_hint
             return await real_plan(
                 decomposition,
                 available_columns=available_columns,
                 column_profiles=column_profiles,
+                outcome_hint=outcome_hint,
             )
 
         composer.planner.plan = _spy  # type: ignore[method-assign]
@@ -121,13 +125,17 @@ class TestComposerDerivesColumns:
         recorded: dict = {}
         real_plan = composer.planner.plan
 
-        async def _spy(decomposition, available_columns=None, column_profiles=None):
+        async def _spy(
+            decomposition, available_columns=None, column_profiles=None, outcome_hint=None
+        ):
             recorded["available_columns"] = available_columns
             recorded["column_profiles"] = column_profiles
+            recorded["outcome_hint"] = outcome_hint
             return await real_plan(
                 decomposition,
                 available_columns=available_columns,
                 column_profiles=column_profiles,
+                outcome_hint=outcome_hint,
             )
 
         composer.planner.plan = _spy  # type: ignore[method-assign]

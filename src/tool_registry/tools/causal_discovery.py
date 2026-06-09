@@ -180,13 +180,19 @@ class RankDriversInput(BaseModel):
 
 
 class FeatureRankingItem(BaseModel):
-    """Single feature ranking information."""
+    """Single feature ranking information.
+
+    The causal fields (``causal_rank``, ``rank_difference``, ``causal_score``) are
+    ``Optional``: they are ``None`` — not ``0`` — when no causal estimate exists
+    (e.g. the predictive-only fallback when the DAG has no edges), so a missing
+    causal estimate is never mistaken for a real zero-effect value.
+    """
 
     feature_name: str
-    causal_rank: int
+    causal_rank: Optional[int] = None
     predictive_rank: int
-    rank_difference: int
-    causal_score: float
+    rank_difference: Optional[int] = None
+    causal_score: Optional[float] = None
     predictive_score: float
     is_direct_cause: bool
     path_length: Optional[int]
@@ -202,9 +208,12 @@ class RankDriversOutput(BaseModel):
         description="Feature rankings sorted by causal importance",
     )
     n_features: int = Field(default=0, description="Number of features ranked")
-    rank_correlation: float = Field(
-        default=0.0,
-        description="Spearman correlation between causal and predictive ranks",
+    rank_correlation: Optional[float] = Field(
+        default=None,
+        description=(
+            "Spearman correlation between causal and predictive ranks; None when "
+            "no causal ranking exists (e.g. predictive-only fallback)"
+        ),
     )
     causal_only_features: List[str] = Field(
         default_factory=list,
@@ -945,6 +954,62 @@ def _normalize_edge_list(
     return normalized
 
 
+def _predictive_only_ranking(
+    target: str,
+    shap_list: Union[np.ndarray, List[List[float]]],
+    feature_names: List[str],
+    trace_context: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Rank drivers by PREDICTIVE (SHAP) importance only — used when no causal DAG
+    edges were discovered.
+
+    The DAG-based ranker requires every SHAP feature to be a node of the causal
+    graph; an empty DAG cannot satisfy that, so the causal-vs-predictive
+    concordance is undefined. The mean |SHAP| importance ranking is still a real,
+    honest result (predictive drivers of the target) — return it rather than
+    failing the step. Fails closed only when the SHAP matrix is unusable (never
+    fabricates importances).
+    """
+    arr = np.asarray(shap_list, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] == 0 or arr.shape[1] != len(feature_names):
+        raise RuntimeError(
+            "rank_drivers: cannot compute a predictive ranking — SHAP matrix shape "
+            f"{getattr(arr, 'shape', None)} does not match {len(feature_names)} features."
+        )
+    mean_abs = np.abs(arr).mean(axis=0)
+    order = list(np.argsort(mean_abs)[::-1])
+    rankings = [
+        FeatureRankingItem(
+            feature_name=str(feature_names[idx]),
+            # No DAG -> no causal estimate. None (not 0) so the absence is explicit
+            # and never read as a real zero-effect causal value.
+            causal_rank=None,
+            predictive_rank=rank,
+            rank_difference=None,
+            causal_score=None,
+            predictive_score=float(mean_abs[idx]),
+            is_direct_cause=False,
+            path_length=None,
+        )
+        for rank, idx in enumerate(order, start=1)
+    ]
+    out = RankDriversOutput(
+        success=True,
+        target_variable=target,
+        rankings=rankings,
+        n_features=len(feature_names),
+        # Causal-vs-predictive concordance is undefined without a DAG -> None, not 0.0.
+        rank_correlation=None,
+        causal_only_features=[],
+        predictive_only_features=[str(f) for f in feature_names],
+        concordant_features=[],
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        trace_id=(trace_context or {}).get("trace_id") if isinstance(trace_context, dict) else None,
+        errors=["no causal DAG edges discovered; predictive (SHAP) ranking only"],
+    )
+    return out.model_dump()
+
+
 async def rank_drivers(
     dag_edge_list: List[Dict[str, Any]],
     target: str,
@@ -1014,6 +1079,12 @@ async def rank_drivers(
     # carries extra ``confidence``/``type``/``algorithms`` keys) validates
     # against ``RankDriversInput.dag_edge_list`` (``List[Dict[str, str]]``).
     normalized_edges = _normalize_edge_list(dag_edge_list)
+
+    # When no causal DAG edges were discovered, the DAG-based ranker cannot run
+    # (it requires every SHAP feature to be a graph node). Fall back to a real
+    # predictive-only (SHAP) ranking rather than failing the step.
+    if not normalized_edges:
+        return _predictive_only_ranking(target, shap_list, resolved_features, trace_context)
 
     result = await tool.invoke(
         RankDriversInput(

@@ -206,30 +206,75 @@ def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optio
     return brand, region
 
 
-def _resolve_tool_composer_data(payload: Dict[str, Any]) -> Optional[Any]:
-    """Best-effort resolve a real cohort frame for the ``tool_composer`` agent.
+def _resolve_tool_composer_data(
+    payload: Dict[str, Any],
+) -> tuple[Optional[Any], Optional[str], bool]:
+    """Best-effort resolve real estimation data for the ``tool_composer`` agent.
 
-    Derives ``(brand, region)`` from the dispatch context and calls
-    :func:`src.services.cohort_resolution.resolve_cohort_frame`, which returns a
-    real ``patient_journeys`` DataFrame or ``None`` (fail closed) — it NEVER
-    fabricates a cohort. Any exception (import error, infra failure, etc.) is
-    logged and swallowed so the dispatch proceeds WITHOUT data; the composable
-    tools then fail closed honestly rather than running on a wrong/fake cohort.
+    Returns ``(frame, kpi_outcome, is_truncated)`` — ``is_truncated`` mirrors
+    :attr:`KpiFrame.is_truncated` so this (orchestrator) path surfaces capped-data
+    provenance exactly like the chatbot-tools path, instead of dropping it:
 
-    Returning ``None`` here means the dispatcher does NOT add a ``data`` key, so
-    ``ToolComposerAgent.run`` leaves ``estimation_data`` unset and the executor's
-    duck-typed gate is not tripped by a ``None`` value.
+    * Issue #810 — if the query targets a defined KPI (e.g. *"what drove <brand>
+      conversion ..."*), resolve that KPI's REAL substrate (e.g. triggers ⋈
+      treatment_events for Conversion Rate) via
+      :func:`src.services.kpi_resolution.resolve_kpi_frame`; ``kpi_outcome`` is the
+      KPI's outcome column so the planner binds the causal outcome to the KPI.
+    * Otherwise fall back to the patient-clinical cohort via
+      :func:`src.services.cohort_resolution.resolve_cohort_frame` (``kpi_outcome``
+      is ``None``).
+
+    Both resolvers fail closed (``None``) and NEVER fabricate. Any exception is
+    logged and swallowed so dispatch proceeds WITHOUT data; the composable tools
+    then fail closed honestly. ``(None, None, False)`` means the dispatcher adds no
+    ``data`` key, so the executor's duck-typed gate is not tripped by a ``None``.
     """
     brand, region = _extract_brand_region(payload)
+    query = payload.get("query") if isinstance(payload.get("query"), str) else None
+
+    # Issue #810: KPI-aware resolution takes precedence for KPI-outcome queries.
+    if query:
+        try:
+            from src.services import kpi_resolution
+
+            kpi = kpi_resolution.recognize_kpi(query)
+            if kpi is not None:
+                kpi_frame = kpi_resolution.resolve_kpi_frame(kpi, brand, region)
+                if kpi_frame is not None:
+                    logger.info(
+                        "tool_composer dispatch: resolved KPI '%s' substrate (%d rows, "
+                        "outcome=%s) for brand=%r region=%r.",
+                        kpi_frame.kpi_name,
+                        len(kpi_frame.frame),
+                        kpi_frame.outcome_column,
+                        brand,
+                        region,
+                    )
+                    if kpi_frame.is_truncated:
+                        logger.warning(
+                            "tool_composer dispatch: KPI '%s' substrate is a TRUNCATED "
+                            "sample (row cap hit) for brand=%r region=%r; results are "
+                            "based on a partial slice.",
+                            kpi_frame.kpi_name,
+                            brand,
+                            region,
+                        )
+                    return kpi_frame.frame, kpi_frame.outcome_column, kpi_frame.is_truncated
+        except Exception as exc:  # noqa: BLE001 - best-effort, never block dispatch
+            logger.warning(
+                "tool_composer dispatch: KPI resolution failed, falling back to cohort: %s",
+                exc,
+            )
+
     if brand is None and region is None:
-        # Nothing to resolve against; the resolver would return None anyway.
+        # Nothing to resolve against; the cohort resolver would return None anyway.
         # Skip the import/call entirely so we don't take a DB round-trip for an
         # unscoped query.
         logger.info(
             "tool_composer dispatch: no brand/region in parsed_query/user_context; "
             "proceeding without estimation_data (tools fail closed)."
         )
-        return None
+        return None, None, False
     try:
         from src.services.cohort_resolution import resolve_cohort_frame
 
@@ -241,14 +286,14 @@ def _resolve_tool_composer_data(payload: Dict[str, Any]) -> Optional[Any]:
                 brand,
                 region,
             )
-            return None
+            return None, None, False
         logger.info(
             "tool_composer dispatch: resolved cohort frame (%d rows) for brand=%r region=%r.",
             len(frame),
             brand,
             region,
         )
-        return frame
+        return frame, None, False
     except Exception as exc:  # noqa: BLE001 - best-effort, never block dispatch
         logger.warning(
             "tool_composer dispatch: cohort resolution failed for brand=%r "
@@ -257,7 +302,7 @@ def _resolve_tool_composer_data(payload: Dict[str, Any]) -> Optional[Any]:
             region,
             exc,
         )
-        return None
+        return None, None, False
 
 
 def _generate_dispatch_id() -> str:
@@ -649,9 +694,17 @@ class DispatcherNode:
         # wrapped-model agents). Best-effort + fail-closed: a None result means
         # we do NOT add the ``data`` key at all.
         if dispatch["agent_name"] == "tool_composer":
-            frame = _resolve_tool_composer_data(agent_input)
+            frame, kpi_outcome, kpi_truncated = _resolve_tool_composer_data(agent_input)
             if frame is not None:
                 agent_input["data"] = frame
+                # #810: carry the KPI outcome column so the planner binds the
+                # causal outcome to the KPI (added only when a frame resolved).
+                if kpi_outcome is not None:
+                    agent_input["kpi_outcome"] = kpi_outcome
+                # #810: surface capped-data provenance (parity with the chatbot
+                # path) so downstream synthesis can caveat a truncated sample.
+                if kpi_truncated:
+                    agent_input["kpi_truncated"] = True
 
         return agent_input
 
