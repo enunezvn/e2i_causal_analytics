@@ -97,3 +97,22 @@ async def test_kpi_summary_all_brand_market_share_is_none_not_misleading_zero():
     assert result["data_source"] == "database"
     assert result["metrics"]["market_share"] is None
     assert "trx_volume" in result["metrics"]
+
+
+@pytest.mark.asyncio
+async def test_kpi_summary_includes_real_dynamic_data_through_date():
+    """get_kpi_summary returns a DYNAMIC `data_through` = the real latest
+    treatment_events prescription date (data-coverage end), so the FE can render
+    "No recent activity — data through <date>" without hardcoding the date."""
+    from src.api.dependencies.supabase_client import get_supabase
+
+    client = get_supabase()
+    rpc = client.rpc(
+        "kpi_query", {"query_id": "business_impact_data_through", "params": []}
+    ).execute()
+    real_max = rpc.data[0]["data_through"] if rpc.data else None
+
+    result = await get_kpi_summary("Kisqali")
+    assert "data_through" in result
+    assert result["data_through"] == real_max
+    assert result["data_through"] is not None  # treatment_events has real data

@@ -1215,6 +1215,24 @@ def _coerce_metric(value: Any) -> Optional[float]:
     return int(num) if num.is_integer() else num
 
 
+def _fetch_data_through(client: Any) -> Optional[str]:
+    """Latest prescription event_date in treatment_events (the data-coverage end),
+    via the vetted kpi_query allowlist. None when unavailable. Lets the FE render a
+    DYNAMIC "data through <date>" label on empty tiles instead of a bare 0."""
+    if client is None:
+        return None
+    try:
+        response = client.rpc(
+            "kpi_query", {"query_id": "business_impact_data_through", "params": []}
+        ).execute()
+        rows = response.data or []
+        value = rows[0].get("data_through") if rows else None
+        return str(value) if value is not None else None
+    except Exception as e:
+        logger.warning(f"[CopilotKit] KPI summary data_through query failed: {e}")
+        return None
+
+
 async def get_kpi_summary(brand: str) -> Dict[str, Any]:
     """
     Get the REAL KPI summary for a brand for the Home landing tiles.
@@ -1247,6 +1265,7 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
             "period": "Last 30 days",
             "metrics": dict.fromkeys(metric_fields),
             "data_source": "unavailable",
+            "data_through": None,
             "error": f"Unknown brand: {brand}. Available: {valid_brands[:-1]}",
         }
 
@@ -1289,6 +1308,10 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
         "period": "Last 30 days",
         "metrics": metrics,
         "data_source": "database" if any_ok else "unavailable",
+        # Data-coverage end (latest treatment_events prescription date) so the FE
+        # renders a 0/null tile as "No recent activity -- data through <date>" with
+        # a DYNAMIC date, not a bare 0. None when unavailable.
+        "data_through": _fetch_data_through(client),
     }
 
 

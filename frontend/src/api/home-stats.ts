@@ -26,6 +26,10 @@ export interface KpiSummaryResponse {
   };
   /** 'database' = real DB values; 'fallback' = sample data. */
   data_source: 'database' | 'fallback' | string;
+  /** Latest treatment_events prescription date (data-coverage end), ISO `YYYY-MM-DD`,
+   *  or null when unavailable. Used to render "No recent activity — data through
+   *  <date>" on empty (0/null) tiles with a dynamic date. */
+  data_through?: string | null;
 }
 
 /** Fetch the real KPI rollup for a brand. */
