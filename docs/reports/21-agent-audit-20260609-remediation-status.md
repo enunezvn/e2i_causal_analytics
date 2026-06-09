@@ -21,7 +21,7 @@ current fix locations in `21-agent-audit-20260609-repro/reverify_results.json`.
 | F6 | HIGH | tool_composer | LIVE (success=True on 0/N tools) → fail-closed gate + route | ✅ PR | #827 |
 | F8 | HIGH | feature_analyzer | LIVE (np.random SHAP bg unlabeled) → fail-closed + provenance e2e | ✅ PR | #828 |
 | F3 | HIGH | observability_connector | RESOLVED by #826 (`client=`→`supabase_client=` at agent.py:91 + metrics_aggregator.py:30; async repo reaches 5313 real spans, proven by real-DB test) | ✅ DONE | #826 |
-| F4 | HIGH | model_deployer | LIVE (simulated→success=True, 0 rows) | ⏳ pending | — |
+| F4 | HIGH | model_deployer | LIVE (simulated→success=True, 0 rows) → fail-closed flags + honest db_persisted; persistence rewire deferred to #829 | ✅ PR | #830 |
 | F7 | HIGH | experiment_monitor | RESOLVED by #820 (4 nodes await get_async_supabase_client) | ✅ DONE | #820 |
 | F12 | MED | heterogeneous_optimizer | LIVE (no input bridge → dead via chat, fail-closed) | ⏳ pending | — |
 | F13 | MED | resource_optimizer | LIVE (same) | ⏳ pending | — |
