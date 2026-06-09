@@ -390,25 +390,32 @@ async def _query_algorithm_trends(
         # Process results into trend data
         trends: Dict[str, Dict[str, Any]] = {}
         for row in result or []:
-            algo = row.get("algorithm")
-            period = row.get("time_period")
+            # Fresh names + narrow to str: the dict ``.get`` returns Any|None, but
+            # ``period`` was already str-typed by the grouping loop above and
+            # ``algo`` indexes the str-keyed ``trends``. Skip malformed rows rather
+            # than key a trend on a missing algorithm/period (in practice these are
+            # always present — ``result`` is built from the grouping above).
+            row_algo = row.get("algorithm")
+            row_period = row.get("time_period")
+            if not isinstance(row_algo, str) or not isinstance(row_period, str):
+                continue
             avg_metric = row.get("avg_metric", 0.5)
             run_count = row.get("run_count", 0)
 
-            if algo not in trends:
-                trends[algo] = {
+            if row_algo not in trends:
+                trends[row_algo] = {
                     "recent_avg": 0.5,
                     "older_avg": 0.5,
                     "recent_count": 0,
                     "older_count": 0,
                 }
 
-            if period == "recent":
-                trends[algo]["recent_avg"] = avg_metric
-                trends[algo]["recent_count"] = run_count
-            elif period == "older":
-                trends[algo]["older_avg"] = avg_metric
-                trends[algo]["older_count"] = run_count
+            if row_period == "recent":
+                trends[row_algo]["recent_avg"] = avg_metric
+                trends[row_algo]["recent_count"] = run_count
+            elif row_period == "older":
+                trends[row_algo]["older_avg"] = avg_metric
+                trends[row_algo]["older_count"] = run_count
 
         # Compute trend direction and change
         for algo, data in trends.items():
