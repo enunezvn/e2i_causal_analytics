@@ -122,3 +122,23 @@ def test_persistence_cohort_exposes_non_negative_retention_benefit():
     assert spec is not None
     assert "retention_benefit" in spec.covariate_columns
     assert (spec.frame["retention_benefit"] >= 0).all()
+
+
+def test_discontinuation_retention_benefit_no_nan_on_null_persistent():
+    # codex #06 F3 follow-up: a disc-cohort row with discontinued_180d populated but
+    # persistent_180d NULL must yield retention_benefit=0 (not NaN).
+    rows = [
+        {"patient_id": "p1", "brand": "Kisqali", "geographic_region": "northeast",
+         "disease_severity": 6.0, "academic_hcp": 1, "treatment_arm": 1,
+         "discontinued_180d": 1, "persistent_180d": None, "is_synthetic": True},
+        {"patient_id": "p2", "brand": "Kisqali", "geographic_region": "northeast",
+         "disease_severity": 5.0, "academic_hcp": 0, "treatment_arm": 0,
+         "discontinued_180d": 0, "persistent_180d": 1, "is_synthetic": True},
+    ]
+    spec = cr.resolve_cohort_outcome_frame(
+        "discontinuation", brand="Kisqali", region="northeast",
+        supabase_client=_FakeClient(rows))
+    assert spec is not None
+    assert "retention_benefit" in spec.covariate_columns
+    assert spec.frame["retention_benefit"].notna().all()
+    assert (spec.frame["retention_benefit"] >= 0).all()

@@ -308,10 +308,15 @@ def resolve_cohort_outcome_frame(
             PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY,
         )
 
+        # Coerce defensively: the discontinuation cohort filters on discontinued_180d
+        # (not persistent_180d), so a row could carry a null persistent_180d. NaN/None
+        # -> 0 keeps retention_benefit a non-negative float with no NaN (a non-persistent
+        # or unknown-persistence patient has 0 retention benefit), so resource_optimizer
+        # never sees a NaN/negative expected_response.
+        sev = pd.to_numeric(df["disease_severity"], errors="coerce").fillna(0.0)
+        pers = pd.to_numeric(df["persistent_180d"], errors="coerce").fillna(0.0)
         df["retention_benefit"] = (
-            PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY
-            * df["disease_severity"].astype(float)
-            * df["persistent_180d"].astype(float)
+            PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * sev * pers
         ).clip(lower=0.0)
         present_covars = present_covars + ["retention_benefit"]
     return CohortOutcomeSpec(
