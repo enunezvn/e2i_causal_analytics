@@ -60,7 +60,16 @@ class LoaderConfig:
         if not self.supabase_url:
             self.supabase_url = os.getenv("SUPABASE_URL")
         if not self.supabase_key:
-            self.supabase_key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
+            # ETL/seeding writes require the service-role grant: anon/authenticated
+            # are INSERT-denied on this stack (post-#058 grant tightening). Prefer the
+            # service-role key, mirroring src/api/dependencies/supabase_client.py:96 and
+            # src/feature_store/client.py. Fall back to anon only for read-only/dry-run.
+            self.supabase_key = (
+                os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+                or os.getenv("SUPABASE_SERVICE_KEY")
+                or os.getenv("SUPABASE_KEY")
+                or os.getenv("SUPABASE_ANON_KEY")
+            )
 
 
 # Table loading order (respects foreign key dependencies)
@@ -147,6 +156,10 @@ TABLE_COLUMNS = {
         "trigger_id",
         "patient_id",
         "hcp_id",
+        # brand_id is text NOT NULL on the triggers table; the generator already
+        # emits it from the patient's brand (trigger_generator.py:201). Must be
+        # registered or the loader strips it -> 23502 not-null violation.
+        "brand_id",
         "trigger_timestamp",
         "trigger_type",
         "priority",
@@ -403,6 +416,15 @@ class BatchLoader:
             return False, "Supabase client not available"
 
         records = batch_df.to_dict(orient="records")
+
+        # Coerce integral floats -> int. pandas upcasts integer columns to float
+        # whenever a row carries NaN (missingness), so e.g. age_at_diagnosis renders
+        # as "13.0", which a Postgres integer/smallint column rejects (22P02). int is
+        # also accepted by double-precision columns, so this is safe for both.
+        for rec in records:
+            for k, v in rec.items():
+                if isinstance(v, float) and v.is_integer():
+                    rec[k] = int(v)
 
         for attempt in range(self.config.max_retries):
             try:
