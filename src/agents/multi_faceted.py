@@ -70,8 +70,10 @@ MULTI_FACETED_PATTERNS: tuple[str, ...] = (
 # deliberately distinct from additive/parallel joins ("and also", "compare X
 # and Y"), which are single comparisons or parallel delegations, NOT pipelines.
 _SEQUENTIAL_MARKER_REGEX = re.compile(
-    r"\b(then|after that|and then|followed by|after determining|"
-    r"based on (that|those|the)|use (that|those|the results?)|once (we|you))\b",
+    r"\b(then|after that|after this|and then|followed by|after determining|"
+    r"based on (that|those|this|these|the)|"
+    r"(use|using) (that|those|this|these|the results?)|"
+    r"once (we|you))\b",
     re.IGNORECASE,
 )
 

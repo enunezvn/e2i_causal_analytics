@@ -80,6 +80,9 @@ class TestMultipartRoutesToToolComposer:
             "Compare the causal impact and segment response, then recommend an experiment",
             # single strong intent (prediction) + "then <verb>" → caught by new SSOT pattern
             "Forecast next quarter TRx, then build the target list",
+            # Codex HIGH-1: anaphoric "based on this" + 2 strong intents (segment +
+            # experiment) → promoted via the broadened sequence marker.
+            "Which HCP segments responded best? Based on this, design a test to confirm it.",
         ],
     )
     def test_dependent_pipeline_routes_to_tool_composer(self, query):
@@ -193,6 +196,11 @@ class TestSequentialPromotion:
         assert has_sequential_composition("do A, then do B") is True
         assert has_sequential_composition("after that, estimate the lift") is True
         assert has_sequential_composition("based on that, recommend a plan") is True
+        # Codex HIGH-1: anaphoric "this/these" + "using ... results" forms.
+        assert has_sequential_composition("based on this, design a test") is True
+        assert has_sequential_composition("based on these results, forecast trx") is True
+        assert has_sequential_composition("after this, recommend a plan") is True
+        assert has_sequential_composition("using those results, estimate the lift") is True
         assert has_sequential_composition("compare A and B") is False
         assert has_sequential_composition("X and also Y") is False
 
@@ -230,18 +238,37 @@ class TestBroadenedSsotPatterns:
 
 # ---------------------------------------------------------------------------
 # Fix 3b — LLM-disambiguation decision predicate (unit, deterministic)
+# Gated STRICTLY on the sequence/dependency marker (Codex HIGH-2): the
+# permissive facet/topic scorers fire on additive/parallel combos and must NOT
+# divert a correct deterministic parallel route to the LLM.
 # ---------------------------------------------------------------------------
 class TestLlmDisambiguationPredicate:
     def _node(self) -> IntentClassifierNode:
         return IntentClassifierNode.__new__(IntentClassifierNode)
 
-    def test_soft_signal_single_intent_escalates(self):
-        # facet-scorer-positive, single strong intent, primary != multi_faceted
+    def test_sequence_marker_single_intent_escalates(self):
+        # dependency marker present, single strong intent (not promoted) → escalate
         node = self._node()
-        q = "why did the causal effect drop, what should we do"
+        q = "design a test based on these results"
         pr = dict(node._pattern_classify(q.lower()))
         assert pr["primary_intent"] != "multi_faceted"
         assert node._needs_llm_disambiguation(q, pr) is True
+
+    def test_additive_topic_combo_does_not_escalate(self):
+        # Codex HIGH-2: forecast + drift fires is_multi_faceted_topic_count but has
+        # NO sequence marker → must keep its deterministic parallel route, not LLM.
+        node = self._node()
+        q = "forecast trx and detect drift in model inputs"
+        pr = dict(node._pattern_classify(q.lower()))
+        assert node._needs_llm_disambiguation(q, pr) is False
+
+    def test_facet_signal_without_marker_does_not_escalate(self):
+        # facet-scorer-positive but marker-free → no escalation (changed from the
+        # pre-Codex behaviour, which wrongly escalated on the facet scorer).
+        node = self._node()
+        q = "why did the causal effect drop, what should we do"
+        pr = dict(node._pattern_classify(q.lower()))
+        assert node._needs_llm_disambiguation(q, pr) is False
 
     def test_clean_single_intent_does_not_escalate(self):
         node = self._node()
@@ -255,3 +282,50 @@ class TestLlmDisambiguationPredicate:
         pr = dict(node._pattern_classify(q.lower()))
         assert pr["primary_intent"] == "multi_faceted"
         assert node._needs_llm_disambiguation(q, pr) is False
+
+
+# ---------------------------------------------------------------------------
+# Fix 3b — execute() upgrade-only guard (Codex HIGH-2): LLM disambiguation may
+# only UPGRADE a confident deterministic result to multi_faceted; it must never
+# DOWNGRADE it (e.g. an LLM parse-error → "general"). Controlled-LLM tests (the
+# external LLM is stubbed to test the routing guard, not the LLM itself).
+# ---------------------------------------------------------------------------
+class _StubResp:
+    def __init__(self, content: str):
+        self.content = content
+        self.response_metadata: dict = {}
+
+
+class _StubLLM:
+    def __init__(self, content: str):
+        self._content = content
+
+    async def ainvoke(self, _prompt):
+        return _StubResp(self._content)
+
+
+class TestExecuteUpgradeGuard:
+    def _node_with_llm(self, monkeypatch, content: str) -> IntentClassifierNode:
+        import src.agents.orchestrator.nodes.intent_classifier as mod
+
+        monkeypatch.setattr(mod, "_get_opik_connector", lambda: None)
+        node = IntentClassifierNode.__new__(IntentClassifierNode)
+        node.llm = _StubLLM(content)
+        node._provider = "anthropic"
+        return node
+
+    def test_llm_general_does_not_downgrade_confident_route(self, monkeypatch):
+        # confident single intent (experiment_design) + dependency marker escalates,
+        # but the LLM returns "general" → keep the deterministic experiment_design.
+        node = self._node_with_llm(monkeypatch, '{"primary_intent": "general", "confidence": 0.5}')
+        out = asyncio.run(node.execute({"query": "design a test based on these results"}))
+        assert out["intent"]["primary_intent"] == "experiment_design"
+
+    def test_llm_multi_faceted_upgrades(self, monkeypatch):
+        # same query, but the LLM judges it multi_faceted → take the upgrade.
+        node = self._node_with_llm(
+            monkeypatch,
+            '{"primary_intent": "multi_faceted", "confidence": 0.9, "requires_multi_agent": true}',
+        )
+        out = asyncio.run(node.execute({"query": "design a test based on these results"}))
+        assert out["intent"]["primary_intent"] == "multi_faceted"
