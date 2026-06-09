@@ -213,6 +213,59 @@ def write_parquet_snapshots(datasets: dict, out_dir) -> str:
     return str(out)
 
 
+# Canonical cohort -> outcome column map (INDEX §CANONICAL; mirrors cohort_resolution._PJ_COHORTS)
+_COHORT_OUTCOME = {
+    "initiation": "treatment_initiated",
+    "discontinuation": "discontinued_180d",
+    "persistence": "persistent_180d",
+}
+_CF_BRANDS = ["Remibrutinib", "Kisqali", "Fabhalta"]
+
+
+def write_cohort_frames(out_dir) -> list:
+    """Write the resolved per-(cohort,brand) causal frames estimators/agents consume,
+    derived offline from the parquet snapshots. 9 patient cells + hcp_adoption."""
+    import pandas as pd
+    from pathlib import Path
+
+    out = Path(out_dir)
+    cf = out / "cohort_frames"
+    cf.mkdir(parents=True, exist_ok=True)
+    pj = pd.read_parquet(out / "patient_journeys.parquet")
+    mlp = pd.read_parquet(out / "ml_predictions.parquet")[
+        ["patient_id", "treatment_effect_estimate"]
+    ]
+    pj = pj.merge(mlp, on="patient_id", how="left")
+    written = []
+    for cohort, outcome in _COHORT_OUTCOME.items():
+        for brand in _CF_BRANDS:
+            sub = pj[pj["brand"] == brand].copy()
+            if cohort in ("discontinuation", "persistence"):
+                sub = sub[sub["treatment_initiated"] == 1]  # eligibility: only initiators
+            cols = ["treatment_arm", outcome, "disease_severity", "age_at_diagnosis",
+                    "segment_assignment", "propensity_score", "treatment_effect_estimate",
+                    "brand", "is_synthetic"]
+            frame = sub[[c for c in cols if c in sub.columns]].rename(columns={outcome: "outcome"})
+            path = cf / f"{cohort}__{brand}.parquet"
+            frame.to_parquet(path, index=False)
+            written.append(str(path))
+    # hcp_adoption (HCP grain): prefer Shard 06's per-HCP CATE artifact, else hcp_profiles
+    for brand in _CF_BRANDS:
+        cate_path = out / f"per_hcp_cate_hcp_adoption_{brand}.parquet"
+        dest = cf / f"hcp_adoption__{brand}.parquet"
+        if cate_path.exists():
+            pd.read_parquet(cate_path).to_parquet(dest, index=False)
+            written.append(str(dest))
+        elif (out / "hcp_profiles.parquet").exists():
+            hp = pd.read_parquet(out / "hcp_profiles.parquet")
+            keep = [c for c in ("hcp_id", "adoption_category", "peer_influence_score",
+                                "influence_network_size", "is_synthetic") if c in hp.columns]
+            hp[keep].to_parquet(dest, index=False)
+            written.append(str(dest))
+    logger.info("Wrote %d cohort frames to %s", len(written), cf)
+    return written
+
+
 def load_to_supabase(datasets: dict, dry_run: bool = False, verbose: bool = False):
     """Load datasets to Supabase."""
     logger.info("")
