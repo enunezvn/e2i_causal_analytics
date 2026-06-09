@@ -207,9 +207,7 @@ class FalkorDBConfig:
             # Prefer the standardized FALKORDB_GRAPH_NAME (used by the seed
             # script and memory subsystem); keep FALKORDB_GRAPH as a back-compat
             # fallback so existing overrides still apply.
-            graph_name=os.getenv(
-                "FALKORDB_GRAPH_NAME", os.getenv("FALKORDB_GRAPH", "e2i_causal")
-            ),
+            graph_name=os.getenv("FALKORDB_GRAPH_NAME", os.getenv("FALKORDB_GRAPH", "e2i_causal")),
             password=os.getenv("FALKORDB_PASSWORD"),
             max_connections=int(os.getenv("FALKORDB_MAX_CONNECTIONS", "10")),
             connection_timeout_seconds=float(os.getenv("FALKORDB_TIMEOUT", "5.0")),
