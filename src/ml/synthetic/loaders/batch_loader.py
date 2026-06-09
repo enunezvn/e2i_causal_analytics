@@ -97,6 +97,10 @@ TABLE_COLUMNS = {
         "geographic_region",
         "years_experience",
         "total_patient_volume",
+        # Shard 06.3 adoption cohort substrate (resolver reads these from hcp_profiles).
+        "peer_influence_score",
+        "influence_network_size",
+        "adoption_category",
         "is_synthetic",
     ],
     "patient_journeys": [

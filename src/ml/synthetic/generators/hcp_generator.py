@@ -16,6 +16,7 @@ from ..config import (
     SpecialtyEnum,
 )
 from .base import BaseGenerator
+from .hcp_adoption_artifact import ADOPTER_VALUE, _compute_adoption
 
 
 class HCPGenerator(BaseGenerator[pd.DataFrame]):
@@ -94,6 +95,23 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
         # Generate practice types with academic bias for certain specialties
         practice_types = self._generate_practice_types(specialties)
 
+        # Shard 06.3: HCP-grain adoption COHORT on the hcp_profiles DB grain. Draw an
+        # EXOGENOUS centrality (lognormal network topology), then the shared adoption
+        # DGP (centrality -> arm -> adoption). peer_influence_score = the continuous
+        # centrality/engagement proxy (the resolver's treatment column);
+        # adoption_category = the canonical ADOPTER/NON_ADOPTER label. Brand scale uses
+        # the configured brand (cohort is otherwise brand-agnostic at the DB grain).
+        network_size = self._rng.lognormal(mean=3.0, sigma=1.1, size=n)
+        centrality = np.log1p(network_size)
+        centrality_z = (centrality - centrality.mean()) / (centrality.std() + 1e-9)
+        _brand_for_scale = (
+            self.config.brand.value if self.config.brand else Brand.REMIBRUTINIB.value
+        )
+        _adopt = _compute_adoption(self._rng, centrality_z, _brand_for_scale)
+        adoption_category = np.where(
+            _adopt["adopted"] == 1, ADOPTER_VALUE, "NON_ADOPTER"
+        )
+
         # Generate base data
         df = pd.DataFrame(
             {
@@ -110,6 +128,10 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
                 "academic_hcp": self._generate_academic_flags(practice_types),
                 "total_patient_volume": self._generate_patient_volumes(practice_types),
                 "brand": brands,
+                # Shard 06.3 adoption cohort substrate (registered in TABLE_COLUMNS).
+                "peer_influence_score": np.round(centrality, 4),
+                "influence_network_size": network_size.round().astype(int),
+                "adoption_category": adoption_category,
             }
         )
 
