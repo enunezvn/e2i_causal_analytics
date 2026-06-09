@@ -14,20 +14,23 @@ data. ``ToolComposerAgent.run`` reads ``input_data["data"]`` but the dispatcher
 never supplied it, so multi_faceted queries via the orchestrator delivered 0
 data and the real causal tools all fail-closed.
 
-These tests pin the wiring DETERMINISTICALLY (no network): they patch
-``resolve_cohort_frame`` (imported lazily inside the dispatcher helper) to assert
-the wiring behaviour, including the fail-closed contract for unrecognized brands
-and for resolver exceptions.
+F12/F13/F14 generalized this single special-case into the
+``dispatcher.INPUT_RESOLVERS`` registry — the tool_composer data resolution now
+lives in ``_resolve_tool_composer_input`` and is applied in ``_dispatch_agent``
+after ``_prepare_agent_input`` builds the generic payload. These tests pin the
+SAME wiring (no network): they patch ``resolve_cohort_frame`` (imported lazily
+inside the dispatcher helper) and assert on the resolver's output, including the
+fail-closed contract for unrecognized brands and resolver exceptions.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import pandas as pd
 
 from src.agents.orchestrator.nodes import dispatcher as disp
-from src.agents.orchestrator.nodes.dispatcher import DispatcherNode
+from src.agents.orchestrator.nodes.dispatcher import DispatcherNode, NeedsStructuredInput
 
 
 def _state_with_entities(
@@ -72,6 +75,28 @@ def _other_dispatch(agent_name: str) -> Dict[str, Any]:
     }
 
 
+def _resolved_input(
+    node: DispatcherNode, state: Dict[str, Any], dispatch: Dict[str, Any]
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Mirror ``_dispatch_agent``'s flow for a non-kwargs agent: build the generic
+    payload, then apply the agent's INPUT_RESOLVER (if any) and merge.
+
+    Returns the merged input dict (what the agent method would receive) or a
+    ``NeedsStructuredInput`` when the resolver fails closed. tool_composer never
+    fails closed, so for it this always returns a dict.
+    """
+    prepared = node._prepare_agent_input(state, dispatch)  # type: ignore[arg-type]
+    resolver = disp.INPUT_RESOLVERS.get(dispatch["agent_name"])
+    if resolver is None:
+        return prepared
+    resolved = resolver(prepared, dispatch)  # type: ignore[arg-type]
+    if isinstance(resolved, NeedsStructuredInput):
+        return resolved
+    merged = dict(prepared)
+    merged.update(resolved)
+    return merged
+
+
 def test_tool_composer_input_carries_real_dataframe(monkeypatch) -> None:
     """A tool_composer dispatch with brand/region entities -> ``data`` is a frame.
 
@@ -90,8 +115,8 @@ def test_tool_composer_input_carries_real_dataframe(monkeypatch) -> None:
     monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_frame", fake_resolve)
 
     node = DispatcherNode()
-    prepared = node._prepare_agent_input(
-        _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
+    prepared = _resolved_input(
+        node, _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
     )
 
     assert captured == {"brand": "Kisqali", "region": "Northeast"}
@@ -116,7 +141,8 @@ def test_brand_region_fallback_to_user_context(monkeypatch) -> None:
     monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_frame", fake_resolve)
 
     node = DispatcherNode()
-    prepared = node._prepare_agent_input(
+    prepared = _resolved_input(
+        node,
         _state_with_entities(user_context={"brand": "Fabhalta", "region": "South"}),
         _tool_composer_dispatch(),
     )
@@ -140,8 +166,8 @@ def test_unrecognized_brand_proceeds_without_data(monkeypatch) -> None:
     monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_frame", fake_resolve)
 
     node = DispatcherNode()
-    prepared = node._prepare_agent_input(
-        _state_with_entities("NotARealBrand", "Northeast"), _tool_composer_dispatch()
+    prepared = _resolved_input(
+        node, _state_with_entities("NotARealBrand", "Northeast"), _tool_composer_dispatch()
     )
 
     assert "data" not in prepared
@@ -158,8 +184,8 @@ def test_resolver_exception_proceeds_without_data(monkeypatch) -> None:
     monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_frame", fake_resolve)
 
     node = DispatcherNode()
-    prepared = node._prepare_agent_input(
-        _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
+    prepared = _resolved_input(
+        node, _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
     )
 
     assert "data" not in prepared
@@ -176,36 +202,27 @@ def test_no_brand_or_region_skips_resolution(monkeypatch) -> None:
     monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_frame", fake_resolve)
 
     node = DispatcherNode()
-    prepared = node._prepare_agent_input(_state_with_entities(), _tool_composer_dispatch())
+    prepared = _resolved_input(node, _state_with_entities(), _tool_composer_dispatch())
 
     assert called["n"] == 0
     assert "data" not in prepared
 
 
-def test_other_agents_never_get_data_key(monkeypatch) -> None:
-    """Scoping: non-tool_composer dispatches never gain a ``data`` key.
+def test_other_agents_have_no_tool_composer_data_resolver() -> None:
+    """Scoping: non-tool_composer agents never gain a ``data`` key.
 
-    Even with brand/region entities present and a resolver available, only the
-    tool_composer agent's input may carry ``data`` -- other agents' wrapped
-    input models (e.g. drift_monitor) would TypeError on an undeclared kwarg.
+    The registry enforces this structurally — agents that do not declare a
+    ``data``-threading resolver simply are not in ``INPUT_RESOLVERS`` (or their
+    resolver does not emit ``data``). drift_monitor's wrapped input model would
+    TypeError on an undeclared ``data`` kwarg, so it must never receive one.
     """
-    resolver_called = {"n": 0}
-
-    def fake_resolve(brand, region):  # noqa: ANN001
-        resolver_called["n"] += 1
-        return pd.DataFrame({"x": [1]})
-
-    monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_frame", fake_resolve)
-
-    node = DispatcherNode()
     for other in ("causal_impact", "gap_analyzer", "drift_monitor"):
-        prepared = node._prepare_agent_input(
-            _state_with_entities("Kisqali", "Northeast"), _other_dispatch(other)
-        )
-        assert "data" not in prepared, f"{other} unexpectedly got a data key"
-
-    # The resolver must not even be invoked for non-tool_composer agents.
-    assert resolver_called["n"] == 0
+        resolver = disp.INPUT_RESOLVERS.get(other)
+        if resolver is None:
+            continue  # no resolver → can never add a data key
+        out = resolver({"query": "q", "session_id": "s"}, _other_dispatch(other))
+        if isinstance(out, dict):
+            assert "data" not in out, f"{other} resolver unexpectedly emitted a data key"
 
 
 def test_extract_brand_region_prefers_entities_over_user_context() -> None:
@@ -230,6 +247,7 @@ def _kpi_frame(is_truncated: bool):
         frame=pd.DataFrame({"accepted": [0, 1], "converted": [0, 1]}),
         outcome_column="converted",
         driver_columns=["accepted"],
+        treatment_column="accepted",
         kpi_id="WS3-BI-009",
         kpi_name="Conversion Rate",
         is_truncated=is_truncated,
@@ -245,8 +263,8 @@ def test_tool_composer_kpi_truncation_provenance_threaded(monkeypatch) -> None:
     )
 
     node = DispatcherNode()
-    prepared = node._prepare_agent_input(
-        _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
+    prepared = _resolved_input(
+        node, _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
     )
     assert isinstance(prepared["data"], pd.DataFrame)
     assert prepared["kpi_outcome"] == "converted"
@@ -261,8 +279,8 @@ def test_tool_composer_kpi_not_truncated_omits_flag(monkeypatch) -> None:
     )
 
     node = DispatcherNode()
-    prepared = node._prepare_agent_input(
-        _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
+    prepared = _resolved_input(
+        node, _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
     )
     assert prepared["kpi_outcome"] == "converted"
     assert "kpi_truncated" not in prepared

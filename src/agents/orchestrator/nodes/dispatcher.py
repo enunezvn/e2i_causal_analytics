@@ -10,7 +10,8 @@ import importlib
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Set, Type, cast
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 from .._agent_method_map import get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
@@ -305,6 +306,272 @@ def _resolve_tool_composer_data(
         return None, None, False
 
 
+# ---------------------------------------------------------------------------
+# Generic, data-driven input-resolver registry (audit F12/F13/F14)
+# ---------------------------------------------------------------------------
+#
+# Some agents require structured analytical inputs that the generic orchestrator
+# payload does not carry. Rather than a per-agent ``if`` chain in the dispatcher,
+# a single ``INPUT_RESOLVERS`` registry maps each such agent to a resolver. Each
+# resolver — given the prepared payload + dispatch — returns EITHER:
+#
+#   * a ``Dict`` of REAL, data-grounded inputs to apply, OR
+#   * a ``NeedsStructuredInput`` fail-closed signal when the required inputs
+#     cannot be honestly grounded in real data.
+#
+# Nothing is fabricated. Where the real data substrate exists (e.g. the KPI
+# ``KpiFrame`` for heterogeneous_optimizer) the resolver BUILDS the inputs from
+# real columns; where it does not (resource_optimizer's allocation problem,
+# prediction_synthesizer's trained model) the resolver fails closed with a clear,
+# actionable reason — and self-activates automatically once the data lands.
+
+
+@dataclass(frozen=True)
+class NeedsStructuredInput:
+    """Tagged-union return from an input resolver: the agent's required inputs
+    could NOT be grounded in real data, so dispatch must FAIL CLOSED with a clear
+    message instead of fabricating inputs or raising a raw TypeError/ValueError.
+    """
+
+    agent_name: str
+    missing: Tuple[str, ...]
+    reason: str
+    rest_endpoint: Optional[str] = None
+
+    def to_error(self) -> str:
+        endpoint = f" Supply them via {self.rest_endpoint}." if self.rest_endpoint else ""
+        return (
+            f"{self.agent_name} needs structured inputs that could not be grounded in "
+            f"real data ({self.reason}); missing: {', '.join(self.missing)}.{endpoint} "
+            "Failing closed — no values were fabricated."
+        )
+
+
+# A resolver maps (prepared agent_input, dispatch) -> real inputs OR a fail-closed signal.
+InputResolver = Callable[
+    [Dict[str, Any], AgentDispatch], Union[Dict[str, Any], NeedsStructuredInput]
+]
+
+
+def _resolve_tool_composer_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Dict[str, Any]:
+    """Resolve the real cohort/KPI substrate for ``tool_composer`` (F2(a)/#810).
+
+    Returns a dict carrying ``data`` (a real cohort/KPI frame) plus optional
+    ``kpi_outcome``/``kpi_truncated`` provenance. tool_composer NEVER fails closed
+    at dispatch — when no frame resolves it proceeds WITHOUT ``data`` and its
+    composable tools fail closed honestly — so this resolver always returns a
+    (possibly empty) dict, never ``NeedsStructuredInput``.
+    """
+    out: Dict[str, Any] = {}
+    frame, kpi_outcome, kpi_truncated = _resolve_tool_composer_data(agent_input)
+    if frame is not None:
+        out["data"] = frame
+        if kpi_outcome is not None:
+            out["kpi_outcome"] = kpi_outcome
+        if kpi_truncated:
+            out["kpi_truncated"] = True
+    return out
+
+
+# heterogeneous_optimizer's tier0 passthrough (cate_estimator.py) only engages a
+# supplied frame at >= 100 rows; below that it would silently fall through to the
+# Supabase/mock path, so the resolver fails closed rather than feed it.
+_HET_MIN_ROWS = 100
+_HET_REQUIRED = ("treatment_var", "outcome_var", "effect_modifiers")
+
+
+def _resolve_heterogeneous_optimizer_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Build heterogeneous_optimizer's causal spec from REAL data, or fail closed.
+
+    (1) An explicit analyst-supplied spec in ``dispatch.parameters`` wins — that
+        is a deliberate, honest choice. (2) Otherwise BUILD from the real KPI
+        substrate: recognize the KPI, materialize the real ``KpiFrame``, and bind
+        ``treatment_var``/``outcome_var``/``effect_modifiers`` to the frame's REAL
+        columns (the KPI's defined treatment, its outcome, and the remaining real
+        driver columns), threading the frame via ``tier0_data``. (3) When no KPI
+        substrate (with a defined treatment and enough real rows) can be resolved,
+        fail closed — never a fabricated treatment/outcome/modifier.
+    """
+    params = dispatch.get("parameters") or {}
+
+    # (1) explicit analyst-supplied causal spec passes through verbatim.
+    if all(params.get(k) for k in _HET_REQUIRED):
+        passthrough = (
+            "treatment_var",
+            "outcome_var",
+            "effect_modifiers",
+            "segment_vars",
+            "data_source",
+            "filters",
+            "tier0_data",
+            "confounders",
+            "role_attributions",
+        )
+        out: Dict[str, Any] = {k: params[k] for k in passthrough if params.get(k) is not None}
+        out.setdefault("segment_vars", [])
+        out.setdefault("data_source", "router_parameters")
+        return out
+
+    # (2) build the substrate from the real KPI frame.
+    query = agent_input.get("query")
+    brand, region = _extract_brand_region(agent_input)
+    try:
+        from src.services import kpi_resolution
+
+        kpi = kpi_resolution.recognize_kpi(query)
+        if kpi is not None:
+            kpi_frame = kpi_resolution.resolve_kpi_frame(kpi, brand, region)
+            treatment = getattr(kpi_frame, "treatment_column", None)
+            if kpi_frame is not None and treatment and len(kpi_frame.frame) >= _HET_MIN_ROWS:
+                # Exclude the treatment AND its raw source column from the effect
+                # modifiers — the source is a deterministic function of the
+                # treatment, so using it as a modifier would leak the treatment
+                # into itself (invalid heterogeneity).
+                excluded = {treatment, getattr(kpi_frame, "treatment_source_column", None)}
+                modifiers = [c for c in kpi_frame.driver_columns if c not in excluded]
+                if modifiers:
+                    logger.info(
+                        "heterogeneous_optimizer dispatch: built causal spec from KPI '%s' "
+                        "substrate (treatment=%s, outcome=%s, modifiers=%s, %d real rows).",
+                        kpi_frame.kpi_name,
+                        treatment,
+                        kpi_frame.outcome_column,
+                        modifiers,
+                        len(kpi_frame.frame),
+                    )
+                    return {
+                        "treatment_var": treatment,
+                        "outcome_var": kpi_frame.outcome_column,
+                        "effect_modifiers": modifiers,
+                        "segment_vars": modifiers,
+                        "data_source": f"kpi_substrate:{kpi_frame.kpi_id}",
+                        "tier0_data": kpi_frame.frame,
+                    }
+    except Exception as exc:  # noqa: BLE001 - best-effort; fail closed below
+        logger.warning(
+            "heterogeneous_optimizer dispatch: KPI substrate build failed (%s); failing closed.",
+            exc,
+        )
+
+    # (3) cannot ground in real data → fail closed (no fabricated causal spec).
+    return NeedsStructuredInput(
+        agent_name="heterogeneous_optimizer",
+        missing=_HET_REQUIRED,
+        reason=(
+            "no recognized KPI substrate with a defined treatment and "
+            f">={_HET_MIN_ROWS} real rows to bind the causal spec; a chat query "
+            "alone cannot name the treatment/outcome/effect-modifier columns"
+        ),
+        rest_endpoint="POST /segments/analyze",
+    )
+
+
+def _resolve_resource_optimizer_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Pass through a REAL allocation problem from ``dispatch.parameters``, else
+    fail closed.
+
+    ``optimize`` requires ``allocation_targets`` (entities + response
+    coefficients) and ``constraints`` (budgets). These constitute a fully
+    specified optimization problem. There is NO data substrate today that
+    materializes per-entity response coefficients (the rep-activity/allocation
+    rows are absent), so fabricating them is forbidden. When an API/router caller
+    supplies a real problem in ``parameters`` it passes through (as a CLEAN kwarg
+    set — eliminating the generic-payload leak); otherwise fail closed.
+    """
+    params = dispatch.get("parameters") or {}
+    targets = params.get("allocation_targets")
+    if targets:
+        out: Dict[str, Any] = {
+            "allocation_targets": targets,
+            "constraints": params.get("constraints") or [],
+            "query": agent_input.get("query") or "",
+        }
+        session_id = agent_input.get("session_id")
+        if session_id is not None:
+            out["session_id"] = session_id
+        for opt in ("resource_type", "objective", "solver_type", "run_scenarios", "scenario_count"):
+            if params.get(opt) is not None:
+                out[opt] = params[opt]
+        return out
+
+    return NeedsStructuredInput(
+        agent_name="resource_optimizer",
+        missing=("allocation_targets", "constraints"),
+        reason=(
+            "no real per-entity allocation/response substrate exists in the data "
+            "(rep-activity allocation rows are absent), so the optimization problem "
+            "cannot be built without inventing entities, response coefficients and budgets"
+        ),
+        rest_endpoint="POST /resources/optimize",
+    )
+
+
+def _resolve_prediction_synthesizer_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Pass through a REAL prediction request from ``dispatch.parameters``, else
+    fail closed.
+
+    ``synthesize`` requires a specific ``entity_id`` and ``prediction_target``.
+    There is no registered champion model today and a chat query names no specific
+    entity, so picking "the first entity the user happened to mention" would
+    fabricate a prediction for an arbitrary unit. When an API/router caller
+    supplies a real (entity_id, prediction_target) it passes through (clean kwarg
+    set); otherwise fail closed.
+    """
+    params = dispatch.get("parameters") or {}
+    entity_id = params.get("entity_id")
+    target = params.get("prediction_target")
+    if entity_id and target:
+        out: Dict[str, Any] = {
+            "entity_id": entity_id,
+            "prediction_target": target,
+            "query": agent_input.get("query") or "",
+        }
+        session_id = agent_input.get("session_id")
+        if session_id is not None:
+            out["session_id"] = session_id
+        for opt in (
+            "features",
+            "entity_type",
+            "time_horizon",
+            "models_to_use",
+            "ensemble_method",
+            "include_context",
+        ):
+            if params.get(opt) is not None:
+                out[opt] = params[opt]
+        return out
+
+    return NeedsStructuredInput(
+        agent_name="prediction_synthesizer",
+        missing=("entity_id", "prediction_target"),
+        reason=(
+            "no registered champion model and no specific real entity to predict for; "
+            "a chat query names neither, so a prediction cannot be synthesized without "
+            "inventing an entity — supply a specific entity_id and prediction_target as "
+            "structured dispatch parameters"
+        ),
+        rest_endpoint=None,
+    )
+
+
+# Single source of truth: agent_name -> input resolver. Add a resolver here, not
+# an ``if`` branch in ``_dispatch_agent`` (#F12/F13/F14).
+INPUT_RESOLVERS: Dict[str, InputResolver] = {
+    "tool_composer": _resolve_tool_composer_input,
+    "heterogeneous_optimizer": _resolve_heterogeneous_optimizer_input,
+    "resource_optimizer": _resolve_resource_optimizer_input,
+    "prediction_synthesizer": _resolve_prediction_synthesizer_input,
+}
+
+
 def _generate_dispatch_id() -> str:
     """Generate unique dispatch identifier."""
     return f"disp_{uuid.uuid4().hex[:16]}"
@@ -450,6 +717,38 @@ class DispatcherNode:
 
         try:
             agent_input = self._prepare_agent_input(state, dispatch)
+
+            # Generic, data-driven input resolution (#F12/F13/F14). A per-agent
+            # resolver either returns REAL inputs to apply or a structured
+            # ``NeedsStructuredInput`` fail-closed signal — replacing the old
+            # ``tool_composer`` special-case. Resolvers NEVER fabricate inputs.
+            resolver = INPUT_RESOLVERS.get(agent_name)
+            if resolver is not None:
+                resolved = resolver(agent_input, dispatch)
+                if isinstance(resolved, NeedsStructuredInput):
+                    latency = int((time.time() - start_time) * 1000)
+                    logger.info(
+                        "dispatcher: %r failing closed — %s",
+                        agent_name,
+                        resolved.reason,
+                    )
+                    return AgentResult(
+                        agent_name=agent_name,
+                        success=False,
+                        result=None,
+                        error=resolved.to_error(),
+                        latency_ms=latency,
+                    )
+                if spec.uses_kwargs:
+                    # kwargs agents (optimize/synthesize): the resolver returns the
+                    # COMPLETE clean kwarg set, eliminating the generic-payload leak
+                    # (user_context/parsed_query/span_id/...) that previously raised
+                    # TypeError on the ``method(**agent_input)`` splat.
+                    agent_input = resolved
+                else:
+                    # single-dict agents (run): merge the resolved real inputs;
+                    # the agent reads the keys it declares and ignores extras.
+                    agent_input.update(resolved)
 
             # Wrap input in a Pydantic / dataclass model when the agent expects
             # one (e.g. DriftMonitorInput, ExperimentMonitorInput).
@@ -722,31 +1021,11 @@ class DispatcherNode:
             "execution_mode": dispatch.get("execution_mode", "sequential"),
         }
 
-        # F2(a): the ``tool_composer`` agent's real causal tools need a cohort
-        # DataFrame to run on. ``ToolComposerAgent.run`` normalizes
-        # ``input_data["data"]`` -> ``context["estimation_data"]``, which the
-        # executor auto-injects into composable-tool kwargs. The orchestrator
-        # path otherwise never supplies it (parameters={} from the router), so
-        # multi_faceted queries delivered 0 data and the tools all fail-closed.
-        #
-        # Resolve a REAL cohort frame from the query's brand/region and thread it
-        # as ``data``. Scoped strictly to ``tool_composer`` so no other agent's
-        # input gains a ``data`` key it doesn't declare (which would TypeError on
-        # wrapped-model agents). Best-effort + fail-closed: a None result means
-        # we do NOT add the ``data`` key at all.
-        if dispatch["agent_name"] == "tool_composer":
-            frame, kpi_outcome, kpi_truncated = _resolve_tool_composer_data(agent_input)
-            if frame is not None:
-                agent_input["data"] = frame
-                # #810: carry the KPI outcome column so the planner binds the
-                # causal outcome to the KPI (added only when a frame resolved).
-                if kpi_outcome is not None:
-                    agent_input["kpi_outcome"] = kpi_outcome
-                # #810: surface capped-data provenance (parity with the chatbot
-                # path) so downstream synthesis can caveat a truncated sample.
-                if kpi_truncated:
-                    agent_input["kpi_truncated"] = True
-
+        # Per-agent input resolution (real cohort/KPI data for tool_composer, the
+        # causal spec for heterogeneous_optimizer, etc.) now lives in the generic
+        # ``INPUT_RESOLVERS`` registry, applied in ``_dispatch_agent`` after this
+        # builds the generic payload (#F12/F13/F14). This method only assembles
+        # the contract pass-through fields.
         return agent_input
 
     async def _dispatch_fallback(self, agent_name: str, state: OrchestratorState) -> AgentResult:
