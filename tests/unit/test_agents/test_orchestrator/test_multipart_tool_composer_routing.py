@@ -175,6 +175,13 @@ class TestPromotionDefersToParallelPairs:
 
         assert PARALLEL_INTENT_PAIRS == {frozenset(k) for k in RouterNode.MULTI_AGENT_PATTERNS}
 
+    def test_reversed_pair_gets_canonical_priorities(self):
+        # Codex LOW: the pair surfaces reversed (segment primary, causal secondary);
+        # the order-insensitive MULTI_AGENT_PATTERNS lookup must still apply the
+        # deliberate critical/high priorities -> [causal_impact, heterogeneous_optimizer].
+        q = "Which segments responded best and what was the campaign impact?"
+        assert _classify_and_route(q) == ["causal_impact", "heterogeneous_optimizer"]
+
 
 # ---------------------------------------------------------------------------
 # Fix 1 — RouterNode safety net (unit)

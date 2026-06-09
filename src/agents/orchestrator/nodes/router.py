@@ -196,9 +196,23 @@ class RouterNode:
 
         # Check for multi-agent patterns
         if intent.get("requires_multi_agent") and intent.get("secondary_intents"):
-            key = (intent["primary_intent"], intent["secondary_intents"][0])
-            if key in self.MULTI_AGENT_PATTERNS:
-                pattern = self.MULTI_AGENT_PATTERNS[key]
+            primary_intent = intent["primary_intent"]
+            secondary0 = intent["secondary_intents"][0]
+            # Order-insensitive lookup: MULTI_AGENT_PATTERNS is keyed canonically,
+            # but the query may surface the pair in either order. Match either
+            # direction so the deliberate critical/high priorities are preserved
+            # (consistent with the classifier's order-insensitive
+            # PARALLEL_INTENT_PAIRS deference).
+            pattern_key = next(
+                (
+                    k
+                    for k in ((primary_intent, secondary0), (secondary0, primary_intent))
+                    if k in self.MULTI_AGENT_PATTERNS
+                ),
+                None,
+            )
+            if pattern_key is not None:
+                pattern = self.MULTI_AGENT_PATTERNS[pattern_key]
                 for agent_name, priority in pattern:
                     dispatch_plan.append(
                         self._get_dispatch_for_agent(
