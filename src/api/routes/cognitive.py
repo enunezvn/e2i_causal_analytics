@@ -79,10 +79,12 @@ def get_orchestrator():
     """Get or create OrchestratorAgent singleton.
 
     Wires the orchestrator with a registry of real Tier 0-5 agents via
-    ``create_agent_registry``. Without a registry the dispatcher silently
-    falls back to canned mock narratives (``dispatcher._mock_agent_execution``),
-    so every "cognitive" API response would be fabricated — that mode is now
-    only used when the factory itself fails to instantiate any agents.
+    ``create_agent_registry``. Without a registry — or for an agent missing from
+    a partial registry — the dispatcher FAILS CLOSED with a structured error
+    rather than fabricating a result (#814), so a degraded/misconfigured
+    registry surfaces an honest error instead of canned mock narratives. (The
+    canned ``dispatcher._mock_agent_execution`` scaffold is test-only, reachable
+    only via ``DispatcherNode(allow_mock=True)``.)
     """
     global _orchestrator_instance
     if _orchestrator_instance is None:

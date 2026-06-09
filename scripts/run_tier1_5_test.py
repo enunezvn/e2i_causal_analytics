@@ -424,6 +424,17 @@ def _get_agent_kwargs(
         # agent is NOT in TIER1_5_EXPECTED_FAIL_AGENTS).
         return {"config": {"phases": {"plan": {"use_episodic_memory": False}}}}
 
+    elif agent_name == "orchestrator":
+        # The harness exercises the orchestrator's OWN contract (intent routing +
+        # synthesis); it instantiates it WITHOUT a sub-agent registry (the real
+        # Tier 2-5 agents are validated as their own harness entries). Since #814
+        # the dispatcher fails CLOSED for an unregistered agent instead of
+        # fabricating a result, so a registry-less orchestrator would dispatch
+        # every routed agent to a structured failure and the orchestrator's
+        # contract would regress. allow_mock=True opts this test-only path into
+        # the canned dispatcher scaffold (production never sets it -> fail-closed).
+        return {"allow_mock": True}
+
     return {}
 
 

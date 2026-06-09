@@ -20,8 +20,8 @@ from src.agents.base.audit_chain_mixin import create_workflow_initializer
 from src.utils.audit_chain import AgentTier
 
 from .nodes import (
+    DispatcherNode,
     classify_intent,
-    dispatch_to_agents,
     retrieve_rag_context,
     route_to_agents,
     synthesize_response,
@@ -33,6 +33,7 @@ def create_orchestrator_graph(
     agent_registry: Optional[Dict[str, Any]] = None,
     enable_checkpointing: bool = False,
     enable_rag: bool = True,
+    allow_mock: bool = False,
 ) -> CompiledStateGraph:
     """Build the Orchestrator agent graph.
 
@@ -49,6 +50,10 @@ def create_orchestrator_graph(
         agent_registry: Optional dict mapping agent_name to agent instance
         enable_checkpointing: Whether to enable graph checkpointing
         enable_rag: Whether to enable RAG context retrieval (default: True)
+        allow_mock: TEST-ONLY. Forwarded to the DispatcherNode — when True a
+            dispatch to an agent absent from the registry returns the canned mock
+            scaffold; default False makes a missing/partial registry FAIL CLOSED
+            (no fabricated values, #814). Production never sets this.
 
     Returns:
         Compiled StateGraph
@@ -71,18 +76,17 @@ def create_orchestrator_graph(
 
     workflow.add_node("route", route_to_agents)  # type: ignore[type-var,arg-type,call-overload]
 
-    # Dispatcher node with agent registry
-    if agent_registry:
-        from .nodes import DispatcherNode
+    # Dispatcher node. Always a DispatcherNode so the test-only mock scaffold is
+    # gated by allow_mock: with a (possibly partial) registry and allow_mock=False
+    # a missing agent FAILS CLOSED rather than fabricating a result (#814). The
+    # registry-less branch (agent_registry falsy) is non-production; tests opt into
+    # the canned scaffold via allow_mock=True.
+    dispatcher = DispatcherNode(agent_registry, allow_mock=allow_mock)
 
-        dispatcher = DispatcherNode(agent_registry)
+    async def dispatch_node(state):
+        return await dispatcher.execute(state)
 
-        async def dispatch_with_registry(state):
-            return await dispatcher.execute(state)
-
-        workflow.add_node("dispatch", dispatch_with_registry)  # type: ignore[type-var,arg-type,call-overload]
-    else:
-        workflow.add_node("dispatch", dispatch_to_agents)  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node("dispatch", dispatch_node)  # type: ignore[type-var,arg-type,call-overload]
 
     workflow.add_node("synthesize", synthesize_response)  # type: ignore[type-var,arg-type,call-overload]
 

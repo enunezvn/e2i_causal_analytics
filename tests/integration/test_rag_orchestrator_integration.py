@@ -5,6 +5,12 @@ Tests the complete flow from query input through orchestrator
 with RAG context enrichment to synthesized response.
 
 This validates Phase 2 Checkpoint 2.4 implementation.
+
+These exercise the orchestrator graph without instantiating real agents, so the
+registry-less orchestrators are built with ``allow_mock=True`` to opt into the
+test-only dispatcher mock scaffold. Production builds the orchestrator with a real
+registry and ``allow_mock=False`` (the default), which fails closed for a
+missing/partial registry rather than fabricating values (#814).
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -66,7 +72,7 @@ def mock_rag_retriever():
 @pytest.fixture
 def orchestrator_with_mock_rag(mock_rag_retriever):
     """Create orchestrator with mocked RAG retriever."""
-    orchestrator = OrchestratorAgent()
+    orchestrator = OrchestratorAgent(allow_mock=True)
 
     # Patch the RAG retriever in the rag_context node
     with patch(
@@ -86,7 +92,7 @@ class TestRAGOrchestratorWorkflow:
     @pytest.mark.asyncio
     async def test_full_workflow_with_rag_context(self):
         """Test complete workflow from query to response with RAG."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "Why did Kisqali TRx drop in Q3?",
@@ -123,7 +129,7 @@ class TestRAGOrchestratorWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_with_brand_entity(self):
         """Test that brand entities flow through RAG to agents."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "What is the impact of HCP engagement on Kisqali conversions?",
@@ -137,7 +143,7 @@ class TestRAGOrchestratorWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_with_kpi_entity(self):
         """Test that KPI entities are used for RAG filtering."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "Analyze TRx performance trends",
@@ -150,7 +156,7 @@ class TestRAGOrchestratorWorkflow:
     @pytest.mark.asyncio
     async def test_workflow_preserves_query_context(self):
         """Test that query context flows through entire workflow."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "Why is market share declining?",
@@ -169,7 +175,7 @@ class TestRAGContextEnrichment:
     @pytest.mark.asyncio
     async def test_rag_context_has_expected_structure(self):
         """Test that RAG context has expected structure."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "Test query"}
 
@@ -183,7 +189,7 @@ class TestRAGContextEnrichment:
     @pytest.mark.asyncio
     async def test_citations_built_from_rag(self):
         """Test that citations are built from RAG context."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "What drives conversions?"}
 
@@ -200,7 +206,7 @@ class TestRAGOrchestratorPerformance:
     @pytest.mark.asyncio
     async def test_orchestration_overhead_under_2_seconds(self):
         """Test that orchestration overhead (including RAG) is under 2s."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "What is the causal effect of HCP targeting?"}
 
@@ -222,7 +228,7 @@ class TestRAGOrchestratorPerformance:
     @pytest.mark.asyncio
     async def test_rag_latency_under_500ms(self):
         """Test that RAG context retrieval is under 500ms target."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "Test query"}
 
@@ -254,8 +260,9 @@ class TestRAGGraphConfiguration:
     @pytest.mark.asyncio
     async def test_workflow_without_rag(self):
         """Test that workflow works when RAG is disabled."""
-        # Create graph without RAG
-        graph = create_orchestrator_graph(enable_rag=False)
+        # Create graph without RAG (allow_mock: registry-less graph uses the
+        # test-only scaffold so dispatch completes; prod default fails closed).
+        graph = create_orchestrator_graph(enable_rag=False, allow_mock=True)
 
         initial_state = {
             "query": "Test without RAG",
@@ -323,7 +330,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_workflow_continues_on_rag_failure(self):
         """Test that workflow continues even if RAG fails."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         # Mock RAG to fail
         with patch.object(RAGContextNode, "execute", side_effect=Exception("RAG retrieval failed")):
@@ -340,7 +347,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_empty_rag_results_handled(self):
         """Test that empty RAG results are handled gracefully."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "Query with no matching documents"}
 
@@ -401,7 +408,7 @@ class TestEndToEndScenarios:
     @pytest.mark.asyncio
     async def test_brand_performance_query(self):
         """Test brand performance analysis query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "Why is Kisqali underperforming in the Northeast region?",
@@ -417,7 +424,7 @@ class TestEndToEndScenarios:
     @pytest.mark.asyncio
     async def test_causal_impact_query(self):
         """Test causal impact analysis query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "What is the causal effect of HCP engagement on TRx?",
@@ -430,7 +437,7 @@ class TestEndToEndScenarios:
     @pytest.mark.asyncio
     async def test_prediction_query(self):
         """Test prediction/forecast query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "What will be the TRx forecast for next quarter?",
@@ -443,7 +450,7 @@ class TestEndToEndScenarios:
     @pytest.mark.asyncio
     async def test_experiment_design_query(self):
         """Test experiment design query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "Design an A/B test for new HCP targeting strategy",
@@ -456,7 +463,7 @@ class TestEndToEndScenarios:
     @pytest.mark.asyncio
     async def test_system_health_query(self):
         """Test system health check query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "What is the current system health status?",

@@ -183,8 +183,10 @@ async def test_dispatcher_normalizes_dataclass_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_keeps_mock_path_when_agent_not_registered() -> None:
-    """Backward-compat: empty registry still falls back to the canned mocks."""
+async def test_dispatcher_fails_closed_when_agent_not_registered() -> None:
+    """#814: an empty/partial registry FAILS CLOSED by default — a missing agent
+    yields a structured ``success=False`` error, NOT a fabricated mock narrative.
+    The canned scaffold is reachable only via ``DispatcherNode(allow_mock=True)``."""
     dispatcher = DispatcherNode()
     state = {
         "query": "what causes adoption?",
@@ -202,8 +204,9 @@ async def test_dispatcher_keeps_mock_path_when_agent_not_registered() -> None:
 
     result = await dispatcher.execute(state)
     agent_result = result["agent_results"][0]
-    assert agent_result["success"] is True
-    assert "narrative" in (agent_result["result"] or {})
+    assert agent_result["success"] is False
+    assert agent_result["result"] is None
+    assert "causal_impact" in agent_result["error"]
 
 
 @pytest.mark.asyncio

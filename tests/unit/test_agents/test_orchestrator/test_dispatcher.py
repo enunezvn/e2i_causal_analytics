@@ -17,7 +17,7 @@ class TestDispatcherNode:
     @pytest.mark.asyncio
     async def test_dispatch_single_agent_mock(self):
         """Test dispatching to a single agent with mock execution."""
-        dispatcher = DispatcherNode()
+        dispatcher = DispatcherNode(allow_mock=True)
 
         state = {
             "query": "what drives conversions?",
@@ -47,7 +47,7 @@ class TestDispatcherNode:
     @pytest.mark.asyncio
     async def test_dispatch_multiple_agents_parallel(self):
         """Test dispatching to multiple agents in parallel."""
-        dispatcher = DispatcherNode()
+        dispatcher = DispatcherNode(allow_mock=True)
 
         state = {
             "query": "what drives conversions and how do we improve?",
@@ -81,7 +81,7 @@ class TestDispatcherNode:
     @pytest.mark.asyncio
     async def test_dispatch_sequential_groups(self):
         """Test sequential execution of parallel groups."""
-        dispatcher = DispatcherNode()
+        dispatcher = DispatcherNode(allow_mock=True)
 
         state = {
             "query": "analyze conversions by segment",
@@ -226,7 +226,9 @@ class TestDispatcherNode:
         mock_agent = MagicMock()
         mock_agent.analyze = AsyncMock(side_effect=RuntimeError("Primary failed"))
 
-        dispatcher = DispatcherNode(agent_registry={"failing_agent": mock_agent})
+        # allow_mock=True: the fallback agent ('explainer') is not in the registry,
+        # so the fallback resolves via the test-only mock scaffold.
+        dispatcher = DispatcherNode(agent_registry={"failing_agent": mock_agent}, allow_mock=True)
 
         state = {
             "query": "test query",
@@ -263,7 +265,9 @@ class TestDispatcherNode:
 
         mock_agent.analyze = AsyncMock(side_effect=slow_analyze)
 
-        dispatcher = DispatcherNode(agent_registry={"slow_agent": mock_agent})
+        # allow_mock=True: the fallback agent ('causal_impact') is not in the
+        # registry, so the fallback resolves via the test-only mock scaffold.
+        dispatcher = DispatcherNode(agent_registry={"slow_agent": mock_agent}, allow_mock=True)
 
         state = {
             "query": "test query",
@@ -320,7 +324,7 @@ class TestDispatcherNode:
     @pytest.mark.asyncio
     async def test_dispatch_latency_measurement(self):
         """Test dispatch latency measurement."""
-        dispatcher = DispatcherNode()
+        dispatcher = DispatcherNode(allow_mock=True)
 
         state = {
             "query": "test query",
@@ -355,7 +359,9 @@ class TestDispatcherNode:
 
     @pytest.mark.asyncio
     async def test_dispatch_to_agents_function(self):
-        """Test standalone dispatch_to_agents function."""
+        """The standalone dispatch_to_agents (registry-less graph node) FAILS
+        CLOSED (#814): no registry + allow_mock off -> structured success=False,
+        never a fabricated mock result."""
         state = {
             "query": "test query",
             "dispatch_plan": [
@@ -374,6 +380,8 @@ class TestDispatcherNode:
 
         assert "agent_results" in result
         assert len(result["agent_results"]) == 1
+        assert result["agent_results"][0]["success"] is False
+        assert result["agent_results"][0]["result"] is None
 
 
 class TestMockAgentExecution:

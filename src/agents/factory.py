@@ -196,6 +196,11 @@ def create_agent_registry(
     """
     registry: Dict[str, Any] = {}
     exclude_set: Set[str] = set(exclude_agents or [])
+    # Agents that were ENABLED + selected but failed to instantiate. Tracked so a
+    # PARTIAL registry is surfaced loudly to operators (#814): a dropped agent
+    # makes the dispatcher fail closed for that route, so a silent drop would look
+    # like a routing bug rather than a missing-credential / import misconfig.
+    dropped: List[str] = []
 
     for agent_name, config in AGENT_REGISTRY_CONFIG.items():
         # Skip disabled agents
@@ -227,12 +232,24 @@ def create_agent_registry(
             if agent_instance:
                 registry[agent_name] = agent_instance
                 logger.info(f"Registered agent: {agent_name} (Tier {config['tier']})")
+            else:
+                dropped.append(agent_name)
+                logger.warning(f"Agent {agent_name} returned no instance; dropped from registry")
 
         except Exception as e:
             if fail_on_import_error:
                 raise ImportError(f"Failed to import agent {agent_name}: {e}") from e
+            dropped.append(agent_name)
             logger.warning(f"Failed to create agent {agent_name}: {e}")
 
+    if dropped:
+        logger.warning(
+            "create_agent_registry: PARTIAL registry — %d enabled agent(s) dropped: %s. "
+            "Dispatches routed to these agents will FAIL CLOSED (no fabricated fallback); "
+            "check missing credentials/imports if this is unexpected.",
+            len(dropped),
+            sorted(dropped),
+        )
     logger.info(f"Created agent registry with {len(registry)} agents")
     return registry
 

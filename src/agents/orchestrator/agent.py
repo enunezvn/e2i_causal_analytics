@@ -44,6 +44,7 @@ class OrchestratorAgent:
         agent_registry: Optional[Dict[str, Any]] = None,
         enable_checkpointing: bool = False,
         enable_opik: bool = True,
+        allow_mock: bool = False,
     ):
         """Initialize orchestrator agent.
 
@@ -51,10 +52,18 @@ class OrchestratorAgent:
             agent_registry: Optional dict mapping agent_name to agent instance
             enable_checkpointing: Whether to enable graph checkpointing
             enable_opik: Whether to enable Opik distributed tracing (default: True)
+            allow_mock: TEST-ONLY. When True, a dispatch to an agent absent from
+                the registry returns the canned dispatcher mock scaffold (used by
+                orchestrator integration tests that exercise the graph without real
+                agents). Default False makes a missing/partial registry FAIL CLOSED
+                (#814); production never sets this.
         """
         self.agent_registry = agent_registry or {}
+        self._allow_mock = allow_mock
         self.graph = create_orchestrator_graph(
-            agent_registry=agent_registry, enable_checkpointing=enable_checkpointing
+            agent_registry=agent_registry,
+            enable_checkpointing=enable_checkpointing,
+            allow_mock=allow_mock,
         )
         self.enable_opik = enable_opik
         self._opik_tracer: Optional["OrchestratorOpikTracer"] = None
@@ -347,7 +356,9 @@ class OrchestratorAgent:
 
         # Rebuild graph with updated registry
         self.graph = create_orchestrator_graph(
-            agent_registry=self.agent_registry, enable_checkpointing=False
+            agent_registry=self.agent_registry,
+            enable_checkpointing=False,
+            allow_mock=self._allow_mock,
         )
 
     def unregister_agent(self, agent_name: str):
@@ -361,5 +372,7 @@ class OrchestratorAgent:
 
             # Rebuild graph with updated registry
             self.graph = create_orchestrator_graph(
-                agent_registry=self.agent_registry, enable_checkpointing=False
+                agent_registry=self.agent_registry,
+                enable_checkpointing=False,
+                allow_mock=self._allow_mock,
             )

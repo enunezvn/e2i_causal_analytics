@@ -1,4 +1,11 @@
-"""Integration tests for OrchestratorAgent."""
+"""Integration tests for OrchestratorAgent.
+
+These exercise the orchestrator graph end-to-end without instantiating real
+agents, so they construct ``OrchestratorAgent(allow_mock=True)`` to opt into the
+test-only dispatcher mock scaffold. Production builds the orchestrator with a
+real registry and ``allow_mock=False`` (the default), which fails closed for a
+missing/partial registry rather than fabricating values (#814).
+"""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,7 +20,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_complete_workflow(self):
         """Test complete orchestrator workflow."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "what is the impact of hcp engagement on patient conversions?",
@@ -39,7 +46,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_with_query_id(self):
         """Test that provided query_id is preserved."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "test query",
@@ -53,7 +60,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_without_query_id(self):
         """Test that query_id is generated if not provided."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "test query"}
 
@@ -65,7 +72,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_missing_query(self):
         """Test that missing query raises ValueError."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"user_id": "user_123"}
 
@@ -75,7 +82,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_causal_effect_query(self):
         """Test orchestrator with causal effect query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "what drives patient conversion rates?",
@@ -90,7 +97,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_performance_gap_query(self):
         """Test orchestrator with performance gap query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "where are the roi opportunities for improving performance?",
@@ -105,7 +112,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_prediction_query(self):
         """Test orchestrator with prediction query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "what will be the forecast for next quarter conversions?",
@@ -120,7 +127,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_general_query(self):
         """Test orchestrator with general/unclear query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "hello there, how are you?",
@@ -135,7 +142,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_with_conversation_history(self):
         """Test orchestrator with conversation history."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "what about segment analysis?",
@@ -152,7 +159,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_run_with_session_id(self):
         """Test orchestrator with session tracking."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {
             "query": "test query",
@@ -167,7 +174,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_latency_breakdown(self):
         """Test that all latency components are measured."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "what drives conversions?"}
 
@@ -201,7 +208,7 @@ class TestOrchestratorAgent:
     @pytest.mark.asyncio
     async def test_intent_classification_metadata(self):
         """Test that intent classification metadata is included."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "what causes conversion rate changes?"}
 
@@ -219,7 +226,7 @@ class TestOrchestratorHelperMethods:
     @pytest.mark.asyncio
     async def test_classify_intent(self):
         """Test standalone classify_intent helper."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         intent = await orchestrator.classify_intent("what is the impact of hcp engagement?")
 
@@ -231,7 +238,7 @@ class TestOrchestratorHelperMethods:
     @pytest.mark.asyncio
     async def test_route_query(self):
         """Test standalone route_query helper."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         agents = await orchestrator.route_query("what drives patient conversions?")
 
@@ -251,7 +258,7 @@ class TestOrchestratorHelperMethods:
 
     def test_register_agent(self):
         """Test register_agent method."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         mock_agent = MagicMock()
         orchestrator.register_agent("new_agent", mock_agent)
@@ -272,14 +279,14 @@ class TestOrchestratorHelperMethods:
 
     def test_unregister_nonexistent_agent(self):
         """Test unregister_agent with non-existent agent."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         # Should not raise error
         orchestrator.unregister_agent("nonexistent_agent")
 
     def test_generate_query_id(self):
         """Test query ID generation."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         query_id = orchestrator._generate_query_id()
 
@@ -365,7 +372,7 @@ class TestOrchestratorOutputContract:
     @pytest.mark.asyncio
     async def test_output_has_required_fields(self):
         """Test that output has all required contract fields."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "test query"}
 
@@ -393,7 +400,7 @@ class TestOrchestratorOutputContract:
     @pytest.mark.asyncio
     async def test_output_types(self):
         """Test that output field types are correct."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "test query"}
 
@@ -416,7 +423,7 @@ class TestOrchestratorOutputContract:
     @pytest.mark.asyncio
     async def test_agent_results_structure(self):
         """Test that agent_results have correct structure."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "what drives conversions?"}
 
@@ -442,7 +449,7 @@ class TestOrchestratorPerformance:
     @pytest.mark.asyncio
     async def test_orchestration_overhead_target(self):
         """Test that orchestration overhead meets <2s target."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "what drives conversions?"}
 
@@ -462,7 +469,7 @@ class TestOrchestratorPerformance:
     @pytest.mark.asyncio
     async def test_classification_speed(self):
         """Test that intent classification is fast (<500ms target)."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "what is the impact of hcp engagement?"}
 
@@ -474,7 +481,7 @@ class TestOrchestratorPerformance:
     @pytest.mark.asyncio
     async def test_routing_speed(self):
         """Test that routing is very fast (<50ms target)."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "what drives conversions?"}
 
@@ -490,7 +497,7 @@ class TestOrchestratorEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_query(self):
         """Test orchestrator with empty query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": ""}
 
@@ -502,7 +509,7 @@ class TestOrchestratorEdgeCases:
     @pytest.mark.asyncio
     async def test_very_long_query(self):
         """Test orchestrator with very long query."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         long_query = "what is the impact " * 100  # Very long query
 
@@ -515,7 +522,7 @@ class TestOrchestratorEdgeCases:
     @pytest.mark.asyncio
     async def test_special_characters_in_query(self):
         """Test orchestrator with special characters."""
-        orchestrator = OrchestratorAgent()
+        orchestrator = OrchestratorAgent(allow_mock=True)
 
         input_data = {"query": "what's the impact? (HCP engagement -> conversions)"}
 
