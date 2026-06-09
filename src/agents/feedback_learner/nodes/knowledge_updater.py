@@ -71,6 +71,11 @@ class KnowledgeUpdaterNode:
                 **state,
                 "proposed_updates": proposed_updates,
                 "applied_updates": applied,
+                # F15 (audit): whether a real knowledge_store apply-backend is
+                # wired. When False, applied_updates is structurally empty
+                # regardless of feedback, so update_effectiveness must be
+                # reported as None (unmeasurable) rather than a misleading 0.0.
+                "update_backend_wired": bool(self.stores),
                 "learning_summary": summary,
                 "update_latency_ms": update_time,
                 "total_latency_ms": total_time,

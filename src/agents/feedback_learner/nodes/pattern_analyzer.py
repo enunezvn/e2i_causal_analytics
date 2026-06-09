@@ -31,6 +31,36 @@ def _get_opik_connector():
         return None
 
 
+def _rating_to_numeric(value: Any) -> Optional[float]:
+    """Normalize a user rating to a 1-5 numeric scale.
+
+    F15 (audit): the real feedback source (``chatbot_message_feedback``) stores
+    ratings as enum STRINGS (``thumbs_up``/``thumbs_down``), but the low-rating
+    pattern detector previously accepted only ``int``/``float`` — silently
+    dropping every real string rating, so collected feedback produced zero
+    patterns and ``update_effectiveness`` stayed pinned at 0.0. Handle both
+    numeric ratings and the string forms; return None for genuinely unknown
+    values (excluded, not coerced).
+    """
+    if isinstance(value, bool):
+        return 5.0 if value else 1.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        positive = {"thumbs_up", "thumbsup", "up", "positive", "good", "helpful", "yes", "👍"}
+        negative = {"thumbs_down", "thumbsdown", "down", "negative", "bad", "unhelpful", "no", "👎"}
+        if v in positive:
+            return 5.0
+        if v in negative:
+            return 1.0
+        try:
+            return float(v)  # numeric-as-string (e.g. "4")
+        except ValueError:
+            return None
+    return None
+
+
 class PatternAnalyzerNode:
     """
     Deep reasoning for pattern detection in feedback.
@@ -125,27 +155,28 @@ class PatternAnalyzerNode:
         summary.get("by_type", {})
         by_agent = summary.get("by_agent", {})
 
-        # Check for low ratings pattern
-        ratings = [
-            fb
+        # Check for low ratings pattern. F15 (audit): normalize numeric AND
+        # string ratings (thumbs_up/down) so real chatbot feedback is not
+        # silently dropped from pattern detection.
+        rated = [
+            (fb, _rating_to_numeric(fb["user_feedback"]))
             for fb in feedback_items
-            if fb["feedback_type"] == "rating" and isinstance(fb["user_feedback"], (int, float))
+            if fb["feedback_type"] == "rating"
         ]
-        if ratings:
-            avg_rating = sum(fb["user_feedback"] for fb in ratings) / len(ratings)
+        rated = [(fb, num) for fb, num in rated if num is not None]
+        if rated:
+            avg_rating = sum(num for _, num in rated) / len(rated)
             if avg_rating < 3.0:  # Assuming 1-5 scale
-                affected_agents = list(
-                    {fb["source_agent"] for fb in ratings if fb["user_feedback"] < 3}
-                )
+                affected_agents = list({fb["source_agent"] for fb, num in rated if num < 3})
                 patterns.append(
                     DetectedPattern(
                         pattern_id=f"P{pattern_id}",
                         pattern_type="accuracy_issue",
                         description="Low average user ratings detected",
-                        frequency=len(ratings),
+                        frequency=len(rated),
                         severity="high" if avg_rating < 2.0 else "medium",
                         affected_agents=affected_agents,
-                        example_feedback_ids=[fb["feedback_id"] for fb in ratings[:3]],
+                        example_feedback_ids=[fb["feedback_id"] for fb, _ in rated[:3]],
                         root_cause_hypothesis="Agent responses may not meet user expectations",
                     )
                 )

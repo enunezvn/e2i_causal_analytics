@@ -211,6 +211,57 @@ class ChatbotFeedbackRepository(BaseRepository):
         ).execute()
         return result.data or []
 
+    async def get_feedback(
+        self,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        agents: Optional[List[str]] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Return real user feedback in the shape FeedbackLearnerAgent's
+        collector expects (``id``/``timestamp``/``rating``/``correction``/
+        ``agent``/``query``/``response``/``metadata``).
+
+        F15 (audit): this is the REAL feedback source for the feedback-learner
+        DSPy loop. It reads the ``chatbot_message_feedback`` table (real user
+        ratings + comments) so ``update_effectiveness`` is no longer pinned at
+        0.0 by an unwired empty store. Filters by ``created_at`` window and
+        (optionally) ``agent_name``.
+        """
+        if not self.client:
+            return []
+
+        query = self.client.table(self.table_name).select(
+            "id, created_at, rating, comment, agent_name, query_text, response_preview, metadata"
+        )
+        if start_time:
+            query = query.gte("created_at", start_time)
+        if end_time:
+            query = query.lte("created_at", end_time)
+        if agents:  # guard: an empty .in_() list is an error
+            query = query.in_("agent_name", agents)
+
+        result = await query.order("created_at", desc=True).limit(limit).execute()
+        rows = result.data or []
+
+        mapped: List[Dict[str, Any]] = []
+        for r in rows:
+            item: Dict[str, Any] = {
+                "id": str(r.get("id", "")),
+                "timestamp": r.get("created_at", ""),
+                "agent": r.get("agent_name") or "unknown",
+                "query": r.get("query_text", ""),
+                "response": r.get("response_preview", ""),
+                "correction": r.get("comment"),
+                "metadata": r.get("metadata", {}),
+            }
+            # Only include "rating" when present so the collector classifies
+            # feedback_type as "rating" (vs "correction") correctly.
+            if r.get("rating") is not None:
+                item["rating"] = r.get("rating")
+            mapped.append(item)
+        return mapped
+
     async def get_feedback_summary(
         self,
         days: int = 7,
