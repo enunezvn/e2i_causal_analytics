@@ -50,13 +50,21 @@ graph TD
     AC --> AV
 ```
 
-> **Retired 2026-06-05** (memory-audit remediation, migrations `031`/`032`/`033`):
-> `cognitive_cycles`, `investigation_hops`, and the three orphan MIPROv2-era
-> `dspy_*` optimization tables (`dspy_optimization_runs`, `dspy_prompt_versions`,
-> `dspy_cognitive_context_history`) were **dropped**. The live DSPy optimization
-> substrate is `dspy_agent_training_signals` + the GEPA `023` tables; live
-> conversation history is `chatbot_conversations`. The retired entries below are
-> kept for historical reference and flagged inline.
+> **Retired 2026-06-05** (memory-audit remediation, migration `033`): the three
+> orphan MIPROv2-era `dspy_*` optimization tables (`dspy_optimization_runs`,
+> `dspy_prompt_versions`, `dspy_cognitive_context_history`) were **dropped**. The
+> live DSPy optimization substrate is `dspy_agent_training_signals` + the GEPA
+> `023` tables.
+>
+> **Restored 2026-06-09** (audit-F1 reversal, migration `042`): `cognitive_cycles`
+> and `investigation_hops` — dropped by migration `032` on a mistaken "no writer"
+> rationale — are **live again**. They are the parent ledger of the 4-phase
+> cognitive cycle whose `cycle_id` the live workflow already threads onto
+> `episodic_memories` / `learning_signals`; the producer
+> (`src/memory/cognitive_integration.py::CognitiveService`) was simply never wired,
+> and now is. The broken `016` similarity RPCs (retired by `031`) stay retired —
+> RAG-over-history is served by `episodic_memories` + HybridRetriever, and live
+> conversation history by `chatbot_conversations`.
 
 ---
 
@@ -84,7 +92,7 @@ Long-term experience storage with vector embeddings for semantic retrieval.
 | Column | Type | Description |
 |--------|------|-------------|
 | `memory_id` | UUID (PK) | Auto-generated |
-| `cycle_id` | UUID (legacy; `cognitive_cycles` retired mig 032 — FK removed by CASCADE, column kept) | Originating cognitive cycle |
+| `cycle_id` | UUID — parent `cognitive_cycles` restored mig 042 (soft reference; enforced FK not re-added — the async reflector may write a child before the parent row, so the link is intentionally soft) | Originating cognitive cycle |
 | `agent_name` | e2i_agent_name | Which agent created this memory |
 | `event_type` | memory_event_type | Type of event |
 | `summary` | TEXT | Natural language summary |
@@ -170,13 +178,15 @@ layer (schema per `database/memory/001_agentic_memory_schema_v1.3.sql`).
 
 ### cognitive_cycles
 
-> **🗑️ RETIRED 2026-06-05** — dropped by migration
-> `032_drop_cognitive_cycles_trio.sql` (the dependent `016` similarity RPCs were
-> retired first by migration `031`). This was a **superseded** conversation/
-> query-history store with **no writer anywhere in `src/`**: live conversation
-> history is served by `chatbot_conversations`, and the live 4-phase cognitive
-> workflow persists to `episodic_memories` + `learning_signals` + FalkorDB. The
-> schema below is retained for historical reference only.
+> **♻️ RESTORED 2026-06-09 — LIVE** (migration `042_restore_cognitive_cycles_trio.sql`,
+> reverses `032`). This is the **parent ledger** of the 4-phase cognitive cycle,
+> not a superseded conversation store. The live workflow
+> `src/memory/cognitive_integration.py::CognitiveService.process_query` generates a
+> `cycle_id` per query and threads it onto `episodic_memories` / `learning_signals`;
+> `_persist_cognitive_cycle` now writes the parent row (real data, best-effort,
+> never seeded) so those references resolve. The broken `016` similarity RPCs stay
+> retired (mig `031`) — vector RAG-over-history is served by `episodic_memories` +
+> HybridRetriever; conversation history by `chatbot_conversations`.
 
 Tracks the 4-phase cognitive workflow: Summarizer → Investigator → Agent → Reflector.
 
@@ -196,17 +206,17 @@ Tracks the 4-phase cognitive workflow: Summarizer → Investigator → Agent →
 
 ### investigation_hops
 
-> **🗑️ RETIRED 2026-06-05** — dropped by migration
-> `032_drop_cognitive_cycles_trio.sql`. It was the FK child of the retired
-> `cognitive_cycles` with no writer/reader in `src/` (audit F1/F3). The schema
-> below is retained for historical reference only.
+> **♻️ RESTORED 2026-06-09 — LIVE** (migration `042_restore_cognitive_cycles_trio.sql`,
+> reverses `032`). FK child of the restored `cognitive_cycles` (parent recreated
+> first). Captures per-hop detail of the Investigator phase; its `cycle_id` FK to
+> `cognitive_cycles` is live again.
 
 Detailed hop-by-hop tracking for the investigator phase.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `hop_id` | UUID (PK) | |
-| `cycle_id` | UUID (legacy; `cognitive_cycles` retired mig 032 — FK removed by CASCADE, column kept) | Parent cycle |
+| `cycle_id` | UUID — parent `cognitive_cycles` restored mig 042 (soft reference; enforced FK not re-added — the async reflector may write a child before the parent row, so the link is intentionally soft) | Parent cycle |
 | `hop_number` | INTEGER | Sequence (1, 2, 3...) |
 | `source_type` | VARCHAR(50) | `vector_search`, `graph_query`, `sql_query`, `memory_recall` |
 | `source_query` | TEXT | The query executed |
@@ -221,7 +231,7 @@ Feedback data used for DSPy optimization and self-improvement.
 | Column | Type | Description |
 |--------|------|-------------|
 | `signal_id` | UUID (PK) | |
-| `cycle_id` | UUID (legacy; `cognitive_cycles` retired mig 032 — FK removed by CASCADE, column kept) | Related cycle |
+| `cycle_id` | UUID — parent `cognitive_cycles` restored mig 042 (soft reference; enforced FK not re-added — the async reflector may write a child before the parent row, so the link is intentionally soft) | Related cycle |
 | `signal_type` | learning_signal_type | Type of feedback |
 | `signal_value` | FLOAT | Numeric signal (-1 to 1 or 1–5 rating) |
 | `correction_text` | TEXT | User's correction (if any) |

@@ -53,19 +53,28 @@ def test_f1_conversation_repository_is_retired() -> None:
     assert not bare, f"repositories/__init__.py still references ConversationRepository: {bare}"
 
 
-def test_f1_no_src_writer_resurrects_cognitive_cycles() -> None:
+def test_f1_cognitive_cycles_producer_is_wired() -> None:
+    """REVERSAL (owner decision 2026-06-09): cognitive_cycles was NOT vestigial —
+    it is the parent ledger of the live 4-phase cycle whose cycle_id the workflow
+    already threads onto episodic_memories / learning_signals. Migration 042
+    restored it and the 4-phase service now writes the parent row. This guard
+    asserts the producer stays wired (the inverse of the original 'no writer'
+    assertion, which encoded the mistaken drop)."""
     import re
 
-    pat = re.compile(r"""table\(\s*["']cognitive_cycles["']\s*\)\s*\.\s*(insert|upsert|update)""")
-    offenders = [
-        str(p.relative_to(_ROOT))
-        for p in _SRC.rglob("*.py")
-        if pat.search(p.read_text(encoding="utf-8", errors="ignore"))
-    ]
-    assert not offenders, f"cognitive_cycles must have no writer (audit F1); found: {offenders}"
+    integ = (_SRC / "memory" / "cognitive_integration.py").read_text(encoding="utf-8")
+    pat = re.compile(r"""table\(\s*["']cognitive_cycles["']\s*\)\s*\.\s*(insert|upsert)""")
+    assert pat.search(integ), (
+        "cognitive_cycles must have a producer in cognitive_integration.py "
+        "(audit-F1 reversal, mig 042); the 4-phase workflow persists the parent "
+        "cycle row so cycle_id references stop dangling."
+    )
 
 
-def test_f1_retire_and_drop_migrations_present() -> None:
+def test_f1_retire_then_restore_migrations_present() -> None:
+    """031 retired the broken 016 RPCs and 032 dropped the trio; 042 then
+    RESTORED cognitive_cycles + investigation_hops (owner reversal 2026-06-09).
+    All three remain in the tree as the audit-trail of the decision."""
     rpc = (_DB / "memory" / "031_retire_conversation_similarity_rpcs.sql").read_text()
     assert "search_similar_conversations" in rpc and "get_conversations_with_feedback" in rpc
     drop = (_DB / "memory" / "032_drop_cognitive_cycles_trio.sql").read_text()
@@ -73,6 +82,13 @@ def test_f1_retire_and_drop_migrations_present() -> None:
     assert "DROP TABLE IF EXISTS cognitive_cycles" in drop
     # FK child must be dropped before the parent.
     assert drop.index("investigation_hops") < drop.index("cognitive_cycles CASCADE")
+    restore = (_DB / "memory" / "042_restore_cognitive_cycles_trio.sql").read_text()
+    assert "CREATE TABLE IF NOT EXISTS cognitive_cycles" in restore
+    assert "CREATE TABLE IF NOT EXISTS investigation_hops" in restore
+    # Parent recreated before the FK child references it.
+    assert restore.index("cognitive_cycles") < restore.index(
+        "REFERENCES cognitive_cycles(cycle_id)"
+    )
 
 
 # ---------------------------------------------------------------------------

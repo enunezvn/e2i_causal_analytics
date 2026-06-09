@@ -316,7 +316,12 @@ class CognitiveService:
         import uuid
 
         start_time = time.time()
+        cycle_started_at = datetime.now(timezone.utc)
         phases_completed = []
+        # Hoisted so the error path can still persist a partial cognitive_cycles row.
+        phase1_result: Dict[str, Any] = {}
+        phase2_result: Dict[str, Any] = {}
+        phase3_result: Dict[str, Any] = {}
 
         # Generate IDs
         session_id = input.session_id or str(uuid.uuid4())
@@ -406,6 +411,22 @@ class CognitiveService:
 
             processing_time = (time.time() - start_time) * 1000
 
+            # Persist the parent cognitive_cycles ledger row (best-effort, real data)
+            # so the cycle_id stamped on messages / episodic_memories / learning_signals
+            # has a real parent (table restored by migration 042). Never raises.
+            await self._persist_cognitive_cycle(
+                cycle_id=cycle_id,
+                session_id=session_id,
+                cognitive_input=input,
+                phase1_result=phase1_result,
+                phase2_result=phase2_result,
+                phase3_result=phase3_result,
+                phases_completed=phases_completed,
+                status="completed",
+                started_at=cycle_started_at,
+                duration_ms=processing_time,
+            )
+
             return CognitiveQueryOutput(
                 session_id=session_id,
                 cycle_id=cycle_id,
@@ -425,6 +446,21 @@ class CognitiveService:
             logger.error(f"Cognitive cycle failed: {e}", exc_info=True)
             processing_time = (time.time() - start_time) * 1000
 
+            # Best-effort: record the failed cycle too (status='error') for observability.
+            await self._persist_cognitive_cycle(
+                cycle_id=cycle_id,
+                session_id=session_id,
+                cognitive_input=input,
+                phase1_result=phase1_result,
+                phase2_result=phase2_result,
+                phase3_result=phase3_result,
+                phases_completed=phases_completed,
+                status="error",
+                started_at=cycle_started_at,
+                duration_ms=processing_time,
+                error_message=str(e),
+            )
+
             return CognitiveQueryOutput(
                 session_id=session_id,
                 cycle_id=cycle_id,
@@ -439,6 +475,88 @@ class CognitiveService:
                 processing_time_ms=processing_time,
                 worth_remembering=False,
             )
+
+    async def _persist_cognitive_cycle(
+        self,
+        *,
+        cycle_id: str,
+        session_id: str,
+        cognitive_input: CognitiveQueryInput,
+        phase1_result: Dict[str, Any],
+        phase2_result: Dict[str, Any],
+        phase3_result: Dict[str, Any],
+        phases_completed: List[str],
+        status: str,
+        started_at: datetime,
+        duration_ms: float,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Persist the parent ``cognitive_cycles`` row for one 4-phase cycle.
+
+        The live workflow stamps ``cycle_id`` onto working-memory messages,
+        ``episodic_memories`` and ``learning_signals``; this writes the parent
+        ledger row those IDs reference (table restored by migration 042, which
+        reverses the audit-F1 drop). Real data only — populated from the actual
+        phase results, never seeded.
+
+        Best-effort: a single terminal upsert run off the event loop. Any failure
+        is logged and swallowed so a persistence problem never breaks the
+        user-facing response.
+        """
+        try:
+            from src.memory.services.factories import get_supabase_client
+
+            entities = phase1_result.get("entities") or {}
+            evidence = phase2_result.get("evidence") or []
+
+            brands = entities.get("brands") or (
+                [cognitive_input.brand] if cognitive_input.brand else None
+            )
+            regions = entities.get("regions") or (
+                [cognitive_input.region] if cognitive_input.region else None
+            )
+
+            confidence = phase3_result.get("confidence")
+            if confidence is not None:
+                confidence = max(0.0, min(1.0, float(confidence)))
+
+            record: Dict[str, Any] = {
+                "cycle_id": cycle_id,
+                "session_id": session_id,
+                "user_id": cognitive_input.user_id,
+                "user_query": cognitive_input.query,
+                "detected_intent": phase1_result.get("query_type"),
+                "detected_entities": entities,
+                "brands_discussed": brands,
+                "regions_discussed": regions,
+                "hops_executed": phase2_result.get("hops_executed") or len(evidence),
+                "evidence_collected": len(evidence),
+                # Agent identity goes in the JSONB column, NOT the e2i_agent_name[]
+                # enum array, so a free-form label can never trip a 22P02 enum error.
+                "agent_outputs": {
+                    "agent_used": phase3_result.get("agent_used"),
+                    "phases_completed": phases_completed,
+                },
+                "synthesized_response": phase3_result.get("response"),
+                "confidence_score": confidence,
+                "visualization_config": phase3_result.get("visualization_config"),
+                "status": status,
+                "error_message": error_message,
+                "started_at": started_at.isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "total_duration_ms": int(duration_ms),
+            }
+            # Drop None so DB defaults apply and nullable/typed columns stay untouched.
+            record = {k: v for k, v in record.items() if v is not None}
+
+            def _write() -> None:
+                client = get_supabase_client()
+                client.table("cognitive_cycles").upsert(record, on_conflict="cycle_id").execute()
+
+            await asyncio.to_thread(_write)
+            logger.debug("Persisted cognitive_cycles row %s (status=%s)", cycle_id, status)
+        except Exception as exc:  # best-effort: never break the live cognitive path
+            logger.warning("cognitive_cycles persist skipped for %s: %s", cycle_id, exc)
 
     # =========================================================================
     # PHASE IMPLEMENTATIONS

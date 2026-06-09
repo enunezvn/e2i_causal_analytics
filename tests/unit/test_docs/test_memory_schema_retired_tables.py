@@ -1,19 +1,20 @@
-"""Guard: memory-subsystem schema docs reflect the 2026-06-05 audit remediation.
+"""Guard: memory-subsystem schema docs reflect the current table reality.
 
-Audit finding **F6** (`docs/reports/memory-system-audit-20260605.md`): the
-schema docs presented `cognitive_cycles` / `investigation_hops` as live tables
-and labelled `episodic_memories.cycle_id` / `learning_signals.cycle_id` as live
-``FK -> cognitive_cycles``. Those tables were subsequently **dropped** by the
-remediation (migrations ``031``/``032``; verified absent in the droplet DB), and
-the CASCADE drop removed the FK constraints — so the columns are now plain
-orphaned UUIDs, not foreign keys. Separately, the dormant `semantic_memory_cache`
-sync wrappers were retired (commit ``9cb0dc19``, F2/F4): the table + its
-populating RPC remain as a deploy-seed substrate, but there is no live
-producer/reader.
+Audit finding **F6** (`docs/reports/memory-system-audit-20260605.md`) first asked
+the docs to stop presenting the dropped trio as live. Migrations ``031``/``032``
+dropped the ``016`` RPCs + ``cognitive_cycles``/``investigation_hops``.
 
-This is an anti-resurrection guard (real assertions against the real docs, no
-mocks): it FAILS if the docs re-present the dropped tables as live, or drop the
-RETIRED provenance, or stop labelling `semantic_memory_cache` as seed-only.
+**Reversal (owner decision 2026-06-09):** that drop was wrong — ``cognitive_cycles``
+is the parent ledger of the live 4-phase cognitive cycle (its ``cycle_id`` is
+already threaded onto ``episodic_memories`` / ``learning_signals``), so migration
+``042`` RESTORED both tables and the 4-phase workflow now writes the parent row.
+The docs must therefore present these tables as LIVE (restored, producer wired),
+NOT retired. ``semantic_memory_cache`` remains genuinely seed-only (F2/F4).
+
+This is an anti-staleness guard (real assertions against the real docs, no mocks):
+it FAILS if the docs still present the restored tables as retired/dropped, drop
+the restore (042) provenance, omit the producer, or stop labelling
+``semantic_memory_cache`` as seed-only.
 """
 
 from __future__ import annotations
@@ -26,9 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_DOC = REPO_ROOT / "docs" / "data" / "07-SUPPORTING-SCHEMAS.md"
 ONBOARDING = REPO_ROOT / "docs" / "ONBOARDING.md"
 
-# Tables dropped by migration 032 (FK child investigation_hops, then parent
-# cognitive_cycles). The drop migration that retired the 016 RPCs is 031.
-RETIRED_TABLES = ("cognitive_cycles", "investigation_hops")
+# Tables restored by migration 042 (reverses the 032 drop).
+RESTORED_TABLES = ("cognitive_cycles", "investigation_hops")
 
 
 def _section(text: str, heading: str) -> str:
@@ -42,28 +42,31 @@ def _section(text: str, heading: str) -> str:
     return match.group(1)
 
 
-def test_retired_tables_marked_retired_with_migration_provenance() -> None:
-    """Each dropped table's section states it was RETIRED and cites mig 032."""
+def test_restored_tables_marked_restored_with_migration_provenance() -> None:
+    """Each restored table's section states it is LIVE/RESTORED and cites mig 042,
+    and must NOT carry a retired/dropped banner."""
     text = SCHEMA_DOC.read_text(encoding="utf-8")
-    for table in RETIRED_TABLES:
+    for table in RESTORED_TABLES:
         body = _section(text, table)
-        assert re.search(r"retired|removed|dropped", body, re.IGNORECASE), (
-            f"### {table} section must state it was RETIRED — it is dropped in "
-            f"the live DB (migrations 031/032); docs must not present it as live."
+        assert re.search(r"restored|live", body, re.IGNORECASE), (
+            f"### {table} section must state it was RESTORED / is live (migration 042)."
         )
-        assert "032" in body, (
-            f"### {table} section must cite migration 032 (the drop) for provenance."
+        assert "042" in body, (
+            f"### {table} section must cite migration 042 (the restore) for provenance."
+        )
+        assert "🗑️ RETIRED" not in body, (
+            f"### {table} must not still carry a 'RETIRED' banner — it was restored (mig 042)."
         )
 
 
-def test_no_live_fk_label_to_dropped_cognitive_cycles() -> None:
-    """`cycle_id` columns must not be labelled as a live FK to a dropped table."""
-    text = SCHEMA_DOC.read_text(encoding="utf-8")
-    offenders = re.findall(r"FK\s*(?:->|→)\s*`?cognitive_cycles`?", text)
-    assert not offenders, (
-        "docs still label cycle_id as a live 'FK -> cognitive_cycles', but "
-        "cognitive_cycles was dropped (mig 032; CASCADE removed the FK). "
-        "Annotate the column as legacy/retired instead."
+def test_cognitive_cycles_documents_its_producer() -> None:
+    """The cognitive_cycles section names the live producer so a reader knows the
+    parent ledger is now written (not an orphan)."""
+    body = _section(SCHEMA_DOC.read_text(encoding="utf-8"), "cognitive_cycles")
+    assert "cognitive_integration" in body or "CognitiveService" in body, (
+        "### cognitive_cycles must name its producer "
+        "(src/memory/cognitive_integration.py::CognitiveService) — the 4-phase "
+        "workflow persists the parent cycle row (audit-F1 reversal, mig 042)."
     )
 
 
@@ -81,10 +84,11 @@ def test_semantic_memory_cache_marked_seed_only() -> None:
     )
 
 
-def test_onboarding_does_not_list_cognitive_cycles_as_live() -> None:
-    """The onboarding memory-table list must not advertise a dropped table."""
+def test_onboarding_lists_cognitive_cycles_as_live() -> None:
+    """The onboarding memory-table list advertises cognitive_cycles again now that
+    it is restored + wired (mig 042)."""
     text = ONBOARDING.read_text(encoding="utf-8")
-    assert "cognitive_cycles" not in text, (
-        "docs/ONBOARDING.md still lists cognitive_cycles as a live memory table; "
-        "it was dropped (mig 032)."
+    assert "cognitive_cycles" in text, (
+        "docs/ONBOARDING.md must list cognitive_cycles as a live memory table again "
+        "(restored mig 042; producer wired in cognitive_integration.py)."
     )
