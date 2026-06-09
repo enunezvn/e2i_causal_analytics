@@ -561,8 +561,27 @@ async def check_rollback_availability(state: Dict[str, Any]) -> Dict[str, Any]:
             previous_deployment_id = state.get("previous_deployment_id")
 
             if not previous_deployment_id:
-                # Try to find from deployment history
-                previous_deployment_id = f"deploy_prev_{uuid.uuid4().hex[:8]}"
+                # F4 (audit): fail CLOSED. The prior code fabricated a random
+                # ``deploy_prev_<uuid>`` rollback target here, so a rollback
+                # would point at a deployment that does not exist. There is no
+                # real ml_deployments-history lookup wired yet, so with no real
+                # previous_deployment_id in state we honestly report that no
+                # rollback target is available (do NOT fabricate one).
+                logger.warning(
+                    "Rollback requested for stage=%s but no real previous "
+                    "deployment is known (none in state, deployment-history "
+                    "lookup not implemented) — reporting rollback_available=False",
+                    current_stage,
+                )
+                return {
+                    "rollback_available": False,
+                    "previous_deployment_id": None,
+                    "previous_deployment_url": None,
+                    "rollback_reason": (
+                        "No previous deployment id in state; deployment-history "
+                        "lookup not implemented — cannot fabricate a rollback target"
+                    ),
+                }
 
             previous_deployment_url = f"https://api.e2i.com/v1/{experiment_id}-prev/predict"
 
