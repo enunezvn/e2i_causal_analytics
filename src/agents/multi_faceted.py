@@ -72,8 +72,12 @@ MULTI_FACETED_PATTERNS: tuple[str, ...] = (
 _SEQUENTIAL_MARKER_REGEX = re.compile(
     r"\b(then|after that|after this|and then|followed by|after determining|"
     r"based on (that|those|this|these|the)|"
-    r"(use|using) (that|those|this|these|the results?)|"
-    r"once (we|you))\b",
+    r"once (we|you))\b"
+    # "using those" / "using these results" (anaphoric) and "using the [<=3
+    # modifier words] results" — e.g. "using the model results", "using the
+    # previous results" (Codex 2nd pass HIGH-1).
+    r"|\b(use|using) (that|those|this|these)\b"
+    r"|\b(use|using) the (?:[\w-]+ ){0,3}results?\b",
     re.IGNORECASE,
 )
 

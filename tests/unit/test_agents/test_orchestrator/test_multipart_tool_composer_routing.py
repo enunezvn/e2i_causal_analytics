@@ -9,28 +9,30 @@ agent and never reached ``tool_composer`` (which owns real decomposition in
 
   Fix 1 (router safety net): when the classifier flags ``requires_multi_agent``
     but the (primary, secondary) pair is NOT one of the hard-coded parallel
-    ``MULTI_AGENT_PATTERNS``, route to ``tool_composer`` instead of silently
-    collapsing to a single agent. ``router.py``.
+    ``MULTI_AGENT_PATTERNS``, parallel-delegate primary + top real-domain
+    secondary instead of silently dropping the secondary intent. A classifier-
+    promoted ``multi_faceted`` primary routes to ``tool_composer``. ``router.py``.
 
   Fix 2 (classifier pipeline promotion): a sequential/dependency marker
-    ("then", "after that", "based on that", …) joining 2+ distinct strong
-    intents promotes the primary intent to ``multi_faceted`` (→ tool_composer).
-    ``intent_classifier.py`` + ``multi_faceted.has_sequential_composition``.
+    ("then", "after that", "based on that/this/these", "using the … results", …)
+    joining 2+ distinct strong intents promotes the primary intent to
+    ``multi_faceted`` (→ tool_composer). ``intent_classifier.py`` +
+    ``multi_faceted.has_sequential_composition``.
 
-  Fix 3 (broaden detection + LLM backstop): two new SSOT ``MULTI_FACETED_PATTERNS``
-    for natural sequential forms (both require a "then"-marker so they cannot
-    flip the locked single-intent negatives), plus a deterministic
-    ``_needs_llm_disambiguation`` predicate that escalates borderline soft-signal
-    queries (facet/topic scorers) to the existing Haiku fallback.
+  Fix 3 (broaden detection): two new SSOT ``MULTI_FACETED_PATTERNS`` for natural
+    sequential forms (both require a "then"-marker so they cannot flip the locked
+    single-intent negatives), and a broadened sequential-marker regex. (An
+    earlier LLM-escalation backstop was removed — see the
+    TestSingleIntentWithIncidentalMarkerStaysSingle note below.)
 
 DESIGN GUARD (respects the locked ``near-miss-single-regex-hit-loses-on-score``
 case in test_intent_classifier_multi_faceted.py): the discriminator is an
-*explicit sequence/dependency marker*, NOT merely "2 intents fired". Compound /
-parallel asks ("compare X and Y", "what causes A and what drives B and also
-explain C") have no such marker and MUST stay single-agent.
+*explicit sequence/dependency marker joining >=2 analytical asks*, NOT merely a
+marker phrase and NOT merely "2 intents fired". Compound/parallel asks
+("compare X and Y", "what causes A and what drives B and also explain C") and
+single asks with an incidental marker phrase MUST stay single-/parallel-agent.
 
-No mocks: the deterministic pattern + routing layers are exercised directly; the
-LLM backstop is tested via its decision predicate, not by faking an LLM.
+No mocks: the deterministic pattern + routing layers are exercised directly.
 """
 
 from __future__ import annotations
@@ -83,6 +85,9 @@ class TestMultipartRoutesToToolComposer:
             # Codex HIGH-1: anaphoric "based on this" + 2 strong intents (segment +
             # experiment) → promoted via the broadened sequence marker.
             "Which HCP segments responded best? Based on this, design a test to confirm it.",
+            # Codex 2nd pass: "using the <modifier> results" dependent handoff +
+            # 2 strong intents → promoted.
+            "Which HCP segments responded best? Using the model results, design a test.",
         ],
     )
     def test_dependent_pipeline_routes_to_tool_composer(self, query):
@@ -201,6 +206,9 @@ class TestSequentialPromotion:
         assert has_sequential_composition("based on these results, forecast trx") is True
         assert has_sequential_composition("after this, recommend a plan") is True
         assert has_sequential_composition("using those results, estimate the lift") is True
+        # Codex 2nd pass: "using the <modifier> results" must also match.
+        assert has_sequential_composition("using the model results, design a test") is True
+        assert has_sequential_composition("using the previous results, forecast") is True
         assert has_sequential_composition("compare A and B") is False
         assert has_sequential_composition("X and also Y") is False
 
@@ -237,95 +245,33 @@ class TestBroadenedSsotPatterns:
 
 
 # ---------------------------------------------------------------------------
-# Fix 3b — LLM-disambiguation decision predicate (unit, deterministic)
-# Gated STRICTLY on the sequence/dependency marker (Codex HIGH-2): the
-# permissive facet/topic scorers fire on additive/parallel combos and must NOT
-# divert a correct deterministic parallel route to the LLM.
+# Single ask + an INCIDENTAL dependency-marker phrase must stay single-agent.
+# (Codex HIGH-2, 2026-06-09: an earlier LLM-escalation backstop — "Fix 3b" —
+# fired on the marker alone with no second-ask requirement, so single-intent
+# queries with a temporal/data-source phrase ["after this week's data refresh",
+# "using the results column"] got escalated and could be wrongly promoted to the
+# 180s tool_composer. A real probe confirmed that escalation ONLY ever fired on
+# single-intent queries — genuine 2-intent pipelines are already promoted by the
+# sequential-composition rule first — so the backstop was pure harm + redundant
+# and was removed. A dependency marker only routes to tool_composer when it joins
+# >=2 analytical asks.)
 # ---------------------------------------------------------------------------
-class TestLlmDisambiguationPredicate:
-    def _node(self) -> IntentClassifierNode:
-        return IntentClassifierNode.__new__(IntentClassifierNode)
-
-    def test_sequence_marker_single_intent_escalates(self):
-        # dependency marker present, single strong intent (not promoted) → escalate
-        node = self._node()
-        q = "design a test based on these results"
-        pr = dict(node._pattern_classify(q.lower()))
-        assert pr["primary_intent"] != "multi_faceted"
-        assert node._needs_llm_disambiguation(q, pr) is True
-
-    def test_additive_topic_combo_does_not_escalate(self):
-        # Codex HIGH-2: forecast + drift fires is_multi_faceted_topic_count but has
-        # NO sequence marker → must keep its deterministic parallel route, not LLM.
-        node = self._node()
-        q = "forecast trx and detect drift in model inputs"
-        pr = dict(node._pattern_classify(q.lower()))
-        assert node._needs_llm_disambiguation(q, pr) is False
-
-    def test_facet_signal_without_marker_does_not_escalate(self):
-        # facet-scorer-positive but marker-free → no escalation (changed from the
-        # pre-Codex behaviour, which wrongly escalated on the facet scorer).
-        node = self._node()
-        q = "why did the causal effect drop, what should we do"
-        pr = dict(node._pattern_classify(q.lower()))
-        assert node._needs_llm_disambiguation(q, pr) is False
-
-    def test_clean_single_intent_does_not_escalate(self):
-        node = self._node()
-        q = "what is the trx for kisqali"
-        pr = dict(node._pattern_classify(q.lower()))
-        assert node._needs_llm_disambiguation(q, pr) is False
-
-    def test_already_multi_faceted_does_not_escalate(self):
-        node = self._node()
-        q = "which segment responded best, then design a test"
-        pr = dict(node._pattern_classify(q.lower()))
-        assert pr["primary_intent"] == "multi_faceted"
-        assert node._needs_llm_disambiguation(q, pr) is False
-
-
-# ---------------------------------------------------------------------------
-# Fix 3b — execute() upgrade-only guard (Codex HIGH-2): LLM disambiguation may
-# only UPGRADE a confident deterministic result to multi_faceted; it must never
-# DOWNGRADE it (e.g. an LLM parse-error → "general"). Controlled-LLM tests (the
-# external LLM is stubbed to test the routing guard, not the LLM itself).
-# ---------------------------------------------------------------------------
-class _StubResp:
-    def __init__(self, content: str):
-        self.content = content
-        self.response_metadata: dict = {}
-
-
-class _StubLLM:
-    def __init__(self, content: str):
-        self._content = content
-
-    async def ainvoke(self, _prompt):
-        return _StubResp(self._content)
-
-
-class TestExecuteUpgradeGuard:
-    def _node_with_llm(self, monkeypatch, content: str) -> IntentClassifierNode:
-        import src.agents.orchestrator.nodes.intent_classifier as mod
-
-        monkeypatch.setattr(mod, "_get_opik_connector", lambda: None)
-        node = IntentClassifierNode.__new__(IntentClassifierNode)
-        node.llm = _StubLLM(content)
-        node._provider = "anthropic"
-        return node
-
-    def test_llm_general_does_not_downgrade_confident_route(self, monkeypatch):
-        # confident single intent (experiment_design) + dependency marker escalates,
-        # but the LLM returns "general" → keep the deterministic experiment_design.
-        node = self._node_with_llm(monkeypatch, '{"primary_intent": "general", "confidence": 0.5}')
-        out = asyncio.run(node.execute({"query": "design a test based on these results"}))
-        assert out["intent"]["primary_intent"] == "experiment_design"
-
-    def test_llm_multi_faceted_upgrades(self, monkeypatch):
-        # same query, but the LLM judges it multi_faceted → take the upgrade.
-        node = self._node_with_llm(
-            monkeypatch,
-            '{"primary_intent": "multi_faceted", "confidence": 0.9, "requires_multi_agent": true}',
-        )
-        out = asyncio.run(node.execute({"query": "design a test based on these results"}))
-        assert out["intent"]["primary_intent"] == "multi_faceted"
+class TestSingleIntentWithIncidentalMarkerStaysSingle:
+    @pytest.mark.parametrize(
+        "query,expected_agent",
+        [
+            # "after this" is a temporal modifier here, not a 2-step pipeline
+            ("After this week's data refresh, forecast next quarter TRx", "prediction_synthesizer"),
+            # "using the results column" is a data-source phrase, not a prior step
+            (
+                "Using the results column from the model table, forecast next quarter TRx",
+                "prediction_synthesizer",
+            ),
+            # single design ask referencing external context (one analytical task)
+            ("Design a test based on these results", "experiment_designer"),
+        ],
+    )
+    def test_single_ask_with_marker_not_tool_composer(self, query, expected_agent):
+        agents = _classify_and_route(query)
+        assert "tool_composer" not in agents
+        assert agents == [expected_agent]

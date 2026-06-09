@@ -213,21 +213,11 @@ class IntentClassifierNode:
         # Try pattern matching first (fastest)
         pattern_result = self._pattern_classify(query)
 
-        high_conf = pattern_result["confidence"] >= 0.8
-        if high_conf and not self._needs_llm_disambiguation(query, pattern_result):
+        if pattern_result["confidence"] >= 0.8:
             intent = pattern_result
         else:
-            # Fall back to LLM for ambiguous OR borderline multi-part cases (Fix
-            # 3b). Guard (Codex HIGH-2, 2026-06-09): LLM disambiguation may only
-            # UPGRADE a confident deterministic result to multi_faceted — never
-            # DOWNGRADE it (e.g. an LLM parse-error → "general" must not clobber a
-            # confident parallel/single route). For the genuine low-confidence
-            # path, always take the LLM result.
-            llm_intent = await self._llm_classify(state.get("query", ""))
-            if high_conf and llm_intent.get("primary_intent") != "multi_faceted":
-                intent = pattern_result
-            else:
-                intent = llm_intent
+            # Fall back to LLM for genuinely ambiguous (low-confidence) cases.
+            intent = await self._llm_classify(state.get("query", ""))
 
         classification_time = int((time.time() - start_time) * 1000)
 
@@ -315,33 +305,6 @@ class IntentClassifierNode:
             secondary_intents=secondary[:2],
             requires_multi_agent=requires_multi_agent,
         )
-
-    def _needs_llm_disambiguation(self, query: str, pattern_result: IntentClassification) -> bool:
-        """Decide whether a confidently pattern-classified *single* intent should
-        still be escalated to the LLM (Fix 3b).
-
-        The deterministic layers (regex patterns + sequential-pipeline promotion)
-        catch the lexically clear multi-part queries. This predicate catches the
-        residual: a query that carries an explicit sequence/dependency marker yet
-        was NOT promoted to ``multi_faceted`` (e.g. a dependency marker the
-        promotion's "2 distinct strong intents" rule and the SSOT "then <verb>"
-        patterns both missed). For those, the Haiku fallback (whose prompt lists
-        ``multi_faceted``) makes the final call.
-
-        Gated STRICTLY on the sequence marker. The permissive facet/topic scorers
-        are deliberately NOT used here: they fire on additive/parallel
-        combinations (e.g. "forecast trx and detect drift") that have no
-        dependency, and escalating those would wrongly divert a correct
-        deterministic parallel route to the LLM — and risk an LLM parse-error
-        downgrading it to "general" (Codex review, 2026-06-09). The escalation is
-        additionally upgrade-only at the ``execute`` call site.
-
-        Returns ``False`` when the result is already ``multi_faceted`` (the
-        deterministic layers already decided) or when no sequence marker present.
-        """
-        if pattern_result.get("primary_intent") == "multi_faceted":
-            return False
-        return has_sequential_composition(query.lower())
 
     async def _llm_classify(self, query: str) -> IntentClassification:
         """LLM-based classification for ambiguous cases.
