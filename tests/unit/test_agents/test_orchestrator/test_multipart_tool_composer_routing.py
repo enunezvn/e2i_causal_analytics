@@ -3,9 +3,9 @@
 Audited gap (docs/reports/orchestrator-classifier-audit-20260609.md, findings C2/C3):
 the orchestrator only recognised "multi-faceted" via the narrowest of three
 detectors (``MULTI_FACETED_PATTERNS``), so genuinely multi-part *dependent*
-queries — "do A, and which B, **then** C using A/B" — fell through to a single
-agent and never reached ``tool_composer`` (which owns real decomposition in
-``tool_composer/decomposer.py``). Three coordinated fixes close it:
+queries — "which B, **then** C using B" — fell through to a single agent and
+never reached ``tool_composer`` (which owns real decomposition in
+``tool_composer/decomposer.py``). Two coordinated fixes close it:
 
   Fix 1 (router safety net): when the classifier flags ``requires_multi_agent``
     but the (primary, secondary) pair is NOT one of the hard-coded parallel
@@ -15,20 +15,22 @@ agent and never reached ``tool_composer`` (which owns real decomposition in
 
   Fix 2 (classifier pipeline promotion): a sequential/dependency marker
     ("then", "after that", "based on that/this/these", "using the … results", …)
-    joining 2+ distinct strong intents promotes the primary intent to
-    ``multi_faceted`` (→ tool_composer). ``intent_classifier.py`` +
+    joining **>=2 distinct MAPPED strong intents** promotes the primary intent
+    to ``multi_faceted`` (→ tool_composer). ``intent_classifier.py`` +
     ``multi_faceted.has_sequential_composition``.
 
-  Fix 3 (broaden detection): two new SSOT ``MULTI_FACETED_PATTERNS`` for natural
-    sequential forms (both require a "then"-marker so they cannot flip the locked
-    single-intent negatives), and a broadened sequential-marker regex. (An
-    earlier LLM-escalation backstop was removed — see the
-    TestSingleIntentWithIncidentalMarkerStaysSingle note below.)
+The discriminator is **a dependency marker joining >=2 recognised analytical
+intents** — exactly when tool_composer's sub-question decomposition is useful.
+This is enforced ONLY by Fix 2's promotion (no extra SSOT ``MULTI_FACETED_PATTERNS``:
+a bare "then <verb>" pattern would promote a single mapped intent — "if X
+completes, then forecast" — and an LLM-escalation backstop fired on the marker
+alone; both over-routed single asks to the 180s tool_composer and were rejected
+in review). Consequence (precision over recall): a multi-part query whose
+sub-asks the intent regexes do not recognise routes to the best single agent
+rather than over-routing to tool_composer.
 
 DESIGN GUARD (respects the locked ``near-miss-single-regex-hit-loses-on-score``
-case in test_intent_classifier_multi_faceted.py): the discriminator is an
-*explicit sequence/dependency marker joining >=2 analytical asks*, NOT merely a
-marker phrase and NOT merely "2 intents fired". Compound/parallel asks
+case in test_intent_classifier_multi_faceted.py): compound/parallel asks
 ("compare X and Y", "what causes A and what drives B and also explain C") and
 single asks with an incidental marker phrase MUST stay single-/parallel-agent.
 
@@ -78,10 +80,6 @@ class TestMultipartRoutesToToolComposer:
             # 2 strong intents (segment + experiment) joined by "then" → pipeline
             "What drove the Kisqali uplift, and which segments responded best, "
             "then design a test to confirm it?",
-            # comparison + recommendation joined by "then"
-            "Compare the causal impact and segment response, then recommend an experiment",
-            # single strong intent (prediction) + "then <verb>" → caught by new SSOT pattern
-            "Forecast next quarter TRx, then build the target list",
             # Codex HIGH-1: anaphoric "based on this" + 2 strong intents (segment +
             # experiment) → promoted via the broadened sequence marker.
             "Which HCP segments responded best? Based on this, design a test to confirm it.",
@@ -91,6 +89,8 @@ class TestMultipartRoutesToToolComposer:
         ],
     )
     def test_dependent_pipeline_routes_to_tool_composer(self, query):
+        # Promotion requires >=2 distinct MAPPED strong intents + a dependency
+        # marker (each query above maps segment_analysis + experiment_design).
         assert _classify_and_route(query) == ["tool_composer"]
 
 
@@ -214,32 +214,29 @@ class TestSequentialPromotion:
 
 
 # ---------------------------------------------------------------------------
-# Fix 3a — broadened SSOT patterns for natural sequential forms (unit)
+# The SSOT pattern set stays at 4: dependent-pipeline routing is done via
+# classifier promotion (>=2 distinct strong intents + a dependency marker), NOT
+# extra patterns. A bare "then <verb>" pattern would promote SINGLE asks (Codex
+# 3rd pass: "if X completes, then forecast" / "forecast …, then forecast … again").
 # ---------------------------------------------------------------------------
-class TestBroadenedSsotPatterns:
-    def test_pattern_count_is_six(self):
-        # Intentional broadening from 4 → 6 (the lock makes this observable).
-        assert len(MULTI_FACETED_PATTERNS) == 6
+class TestNoSsotSequentialPatterns:
+    def test_pattern_count_stays_four(self):
+        assert len(MULTI_FACETED_PATTERNS) == 4
 
-    def test_then_verb_form_classifies_multi_faceted(self):
-        # single intent (prediction) + "then build" → new pattern catches it
+    def test_single_intent_then_verb_not_promoted(self):
+        # 1 mapped intent (prediction) + "then build" → NOT multi_faceted
         assert (
             _classify("forecast next quarter trx, then build the target list")["primary_intent"]
-            == "multi_faceted"
+            != "multi_faceted"
         )
 
-    def test_and_which_then_form_classifies_multi_faceted(self):
+    def test_conditional_then_not_promoted(self):
+        # "if X completes, then forecast" is a single ask with a conditional
+        # precondition, not a 2-step pipeline.
         assert (
-            _classify("show the uplift, and which segments responded, then estimate the roi")[
+            _classify("if the data refresh completes, then forecast next quarter trx")[
                 "primary_intent"
             ]
-            == "multi_faceted"
-        )
-
-    def test_new_patterns_do_not_flip_locked_negative(self):
-        # the broadened patterns require a 'then'-marker, so this stays single
-        assert (
-            _classify("compare growth rates for cohort a and cohort b")["primary_intent"]
             != "multi_faceted"
         )
 
@@ -269,6 +266,25 @@ class TestSingleIntentWithIncidentalMarkerStaysSingle:
             ),
             # single design ask referencing external context (one analytical task)
             ("Design a test based on these results", "experiment_designer"),
+            # Codex 3rd pass: conditional precondition + single ask (1 mapped intent)
+            (
+                "If the data refresh completes, then forecast next quarter TRx",
+                "prediction_synthesizer",
+            ),
+            # Codex 3rd pass: same ask repeated (1 distinct mapped intent)
+            (
+                "Forecast next quarter TRx, then forecast next quarter TRx again",
+                "prediction_synthesizer",
+            ),
+            # 1 mapped intent (prediction) + "then build the target list" (unmapped 2nd step)
+            ("Forecast next quarter TRx, then build the target list", "prediction_synthesizer"),
+            # under-mapped: only segment_analysis maps here (causal/experiment phrasings
+            # don't hit the intent regexes) -> route to the best single agent, not the
+            # 180s tool_composer. Precision over recall (documented limitation).
+            (
+                "Compare the causal impact and segment response, then recommend an experiment",
+                "heterogeneous_optimizer",
+            ),
         ],
     )
     def test_single_ask_with_marker_not_tool_composer(self, query, expected_agent):

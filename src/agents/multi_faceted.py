@@ -54,15 +54,18 @@ MULTI_FACETED_PATTERNS: tuple[str, ...] = (
     r"compare .* (vs|versus|against|to) .* and",
     r"(combine|integrate|synthes).*(analyses|results|findings)",
     r"(both|multiple) (effects?|analyses|perspectives?)",
-    # Sequential / dependent-pipeline forms (orchestrator multi-part routing,
-    # 2026-06-09; audit findings C2/C3). BOTH require an explicit "then"-marker
-    # so they cannot flip the locked single-intent negatives in
-    # test_intent_classifier_multi_faceted.py — additive/list joins without a
-    # sequence marker ("compare A and B", "X and also Y") stay single-agent.
-    r",\s+and\s+(what|which|how|why|who|where)\b.*\bthen\b",
-    r"\bthen\s+(design|identify|recommend|predict|estimate|compare|find|"
-    r"build|simulate|determine|use|forecast|analyz)",
 )
+# NOTE (2026-06-09, audit C2/C3 + Codex review): dependent-pipeline detection is
+# NOT done with extra SSOT patterns. A bare "then <verb>" / ", and <wh> ... then"
+# pattern fires multi_faceted from a SINGLE mapped intent ("if X completes, then
+# forecast" / "forecast …, then forecast … again"), which wrongly routes single
+# asks to the 180s tool_composer. Instead, ``IntentClassifierNode._pattern_classify``
+# promotes to multi_faceted only when a sequence/dependency marker
+# (``has_sequential_composition``) joins **>=2 distinct strong intents** — i.e.
+# >=2 recognised analytical asks, which is exactly when tool_composer's
+# sub-question decomposition is useful. This favours precision: a multi-part query
+# whose sub-asks the intent regexes do not recognise routes to the best single
+# agent rather than over-routing to tool_composer.
 
 
 # Sequential / dependency connectors that signal a *dependent pipeline*
