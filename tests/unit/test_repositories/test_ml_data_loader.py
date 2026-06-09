@@ -231,3 +231,134 @@ class TestGetMLDataLoader:
         """Test that function returns MLDataLoader."""
         loader = get_ml_data_loader(supabase_client=MagicMock())
         assert isinstance(loader, MLDataLoader)
+
+
+# ----------------------------------------------------- provenance (R7)
+class _RecordingQuery:
+    """Fluent fake query builder recording every ``.eq`` call."""
+
+    def __init__(self, eq_log):
+        self._eq_log = eq_log
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        self._eq_log.append(a)
+        return self
+
+    def gte(self, *a, **k):
+        return self
+
+    def lt(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        class _R:
+            data: list = []
+
+        return _R()
+
+
+class _RecordingClient:
+    def __init__(self, eq_log):
+        self._eq_log = eq_log
+
+    def table(self, name):
+        return _RecordingQuery(self._eq_log)
+
+
+class TestProvenanceDefaultExclude:
+    """R7: taggable-table reads default-exclude is_synthetic; untagged are skipped."""
+
+    @pytest.mark.asyncio
+    async def test_load_table_sample_excludes_synthetic_on_taggable_table(self):
+        eq_log: list = []
+        loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
+        await loader.load_table_sample("business_metrics", columns=["hcp_id", "trx_count"])
+        assert ("is_synthetic", False) in eq_log
+
+    @pytest.mark.asyncio
+    async def test_load_table_sample_skips_predicate_on_nontaggable_table(self):
+        eq_log: list = []
+        loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
+        await loader.load_table_sample("agent_activities", columns=["id"])
+        assert ("is_synthetic", False) not in eq_log
+
+    @pytest.mark.asyncio
+    async def test_load_table_sample_includes_synthetic_when_opted_in(self):
+        eq_log: list = []
+        loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
+        await loader.load_table_sample(
+            "business_metrics", columns=["hcp_id"], include_synthetic=True
+        )
+        assert ("is_synthetic", False) not in eq_log
+
+    @pytest.mark.asyncio
+    async def test_load_date_range_excludes_synthetic_on_taggable_table(self):
+        eq_log: list = []
+        loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
+        await loader._load_date_range(
+            table="triggers", filters=None, date_column="trigger_timestamp"
+        )
+        assert ("is_synthetic", False) in eq_log
+
+    @pytest.mark.asyncio
+    async def test_count_records_excludes_synthetic_on_taggable_table(self):
+        eq_log: list = []
+        loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
+        await loader.count_records("patient_journeys")
+        assert ("is_synthetic", False) in eq_log
+
+    @pytest.mark.asyncio
+    async def test_get_date_range_excludes_synthetic_on_taggable_table(self):
+        eq_log: list = []
+        loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
+        await loader.get_date_range("business_metrics", date_column="metric_date")
+        assert ("is_synthetic", False) in eq_log
+
+
+class TestHeterogeneousConnectorProvenance:
+    """R9: heterogeneous connector threads include_synthetic to MLDataLoader."""
+
+    @pytest.mark.asyncio
+    async def test_query_forwards_default_exclude(self):
+        from unittest.mock import AsyncMock
+
+        from src.agents.heterogeneous_optimizer.connectors.supabase_connector import (
+            HeterogeneousOptimizerDataConnector,
+        )
+
+        connector = HeterogeneousOptimizerDataConnector()
+        connector._initialized = True
+        connector._loader = MagicMock()
+        connector._loader.load_table_sample = AsyncMock(return_value=pd.DataFrame())
+
+        await connector.query("business_metrics", columns=["hcp_id"])
+
+        _, kwargs = connector._loader.load_table_sample.call_args
+        assert kwargs["include_synthetic"] is False
+
+    @pytest.mark.asyncio
+    async def test_query_forwards_opt_in(self):
+        from unittest.mock import AsyncMock
+
+        from src.agents.heterogeneous_optimizer.connectors.supabase_connector import (
+            HeterogeneousOptimizerDataConnector,
+        )
+
+        connector = HeterogeneousOptimizerDataConnector()
+        connector._initialized = True
+        connector._loader = MagicMock()
+        connector._loader.load_table_sample = AsyncMock(return_value=pd.DataFrame())
+
+        await connector.query("business_metrics", columns=["hcp_id"], include_synthetic=True)
+
+        _, kwargs = connector._loader.load_table_sample.call_args
+        assert kwargs["include_synthetic"] is True
