@@ -89,11 +89,20 @@ class EffectEstimate(BaseModel):
     n_samples: int
 
 
-class CATEInput(BaseModel):
-    """Input for conditional average treatment effect analysis"""
+class CateAnalyzerInput(BaseModel):
+    """Input schema for the ``cate_analyzer`` tool (F6(b)).
 
-    effect_estimate: EffectEstimate
-    segment_variables: List[str]
+    This mirrors the REAL ``cate_analyzer(treatment, outcome, segments)``
+    callable signature so the planner sees the correct argument shape. The
+    previous ``CATEInput`` model declared ``effect_estimate`` /
+    ``segment_variables`` — fields the callable never accepts — which misled the
+    planner. ``segments`` is ``List[str]`` (dataset COLUMN names), not
+    ``List[Dict]``.
+    """
+
+    treatment: str
+    outcome: str
+    segments: List[str] = []
 
 
 class CATEResults(BaseModel):
@@ -1304,7 +1313,7 @@ def sensitivity_analyzer(ate: float, ci_lower: float, **kwargs) -> Dict[str, Any
     ],
     output_schema="CATEResults",
     avg_execution_ms=3000,
-    input_model=CATEInput,
+    input_model=CateAnalyzerInput,
     output_model=CATEResults,
 )
 def cate_analyzer(treatment: str, outcome: str, segments: List[str], **kwargs) -> CATEResults:

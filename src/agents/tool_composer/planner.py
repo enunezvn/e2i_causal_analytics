@@ -167,6 +167,7 @@ class ToolPlanner:
         self,
         decomposition: DecompositionResult,
         available_columns: Optional[List[str]] = None,
+        column_profiles: Optional[List[Dict[str, Any]]] = None,
     ) -> ExecutionPlan:
         """
         Create an execution plan from decomposed sub-questions.
@@ -177,11 +178,24 @@ class ToolPlanner:
                 provided, the planner instructs the LLM to bind tool arguments
                 (treatment/outcome/segment/metric/covariates) to these exact
                 names (F6) instead of inventing column names.
+            column_profiles: Optional richer per-column profile (F6(b)): each
+                item is a dict with ``name`` / ``dtype_family`` / ``n_unique`` /
+                ``n_nonnull`` / ``values``. When supplied, the planner gives the
+                LLM semantic binding guidance (binary->treatment, numeric->
+                outcome, low-card categorical->segments; map business terms to
+                real columns; never use a brand/region VALUE as a column) AND
+                enforces the bindings against the real schema (best-effort
+                resolution first, then fail-fast). ``available_columns`` is
+                derived from the profile when not explicitly passed (back-compat).
 
         Returns:
             ExecutionPlan with tool mappings and execution steps
         """
         logger.info(f"Planning execution for {decomposition.question_count} sub-questions")
+
+        # F6(b): keep available_columns working / derivable from the profile.
+        if available_columns is None and column_profiles:
+            available_columns = [str(p["name"]) for p in column_profiles if p.get("name")]
 
         try:
             # G6: Check for similar cached plan
@@ -207,6 +221,7 @@ class ToolPlanner:
                 tools_description,
                 similar_compositions,
                 available_columns,
+                column_profiles,
             )
 
             # Parse response
@@ -216,9 +231,16 @@ class ToolPlanner:
             tool_mappings = self._build_tool_mappings(parsed)
             execution_steps = self._build_execution_steps(parsed, decomposition)
 
-            # F6 (defense-in-depth): warn -- do NOT fail -- when a column-arg
-            # literal references a name absent from the real dataset schema.
-            self._warn_unbound_columns(execution_steps, available_columns)
+            # F6(b) enforcement (defense-in-depth): when the real schema is
+            # available, best-effort RESOLVE column-typed args to real columns
+            # (case-insensitive / alias / substring), then FAIL FAST on any that
+            # still cannot be bound — so an invented column never reaches the
+            # fail-closed tool. When NO schema is available we keep the original
+            # F6 warn-only fallback (we cannot validate without a schema).
+            if available_columns:
+                self._enforce_column_bindings(execution_steps, available_columns)
+            else:
+                self._warn_unbound_columns(execution_steps, available_columns)
 
             parallel_groups = parsed.get("parallel_groups", [])
 
@@ -338,6 +360,7 @@ class ToolPlanner:
         tools_description: str,
         similar_compositions: Optional[List[Dict[str, Any]]] = None,
         available_columns: Optional[List[str]] = None,
+        column_profiles: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """Call the LLM for planning with optional episodic + schema context."""
         # Format sub-questions
@@ -359,10 +382,12 @@ class ToolPlanner:
         if episodic_context:
             user_message = f"{episodic_context}\n\n{user_message}"
 
-        # F6: schema-binding -- when a real dataset is present, list its columns
-        # and instruct the LLM to bind argument values to EXACT names so the
-        # downstream tools do not fail-closed on invented column references.
-        columns_block = self._format_columns_block(available_columns)
+        # F6 / F6(b): schema-binding -- when a real dataset is present, list its
+        # columns (with dtype family + value distributions when a profile is
+        # supplied) and instruct the LLM to bind argument values to EXACT names
+        # so the downstream tools do not fail-closed on invented columns AND so
+        # it avoids degenerate / near-constant targets.
+        columns_block = self._format_columns_block(available_columns, column_profiles)
         if columns_block:
             user_message = f"{user_message}\n\n{columns_block}"
 
@@ -377,11 +402,27 @@ class ToolPlanner:
         # LangChain returns AIMessage with .content attribute
         return cast(str, response.content)
 
-    def _format_columns_block(self, available_columns: Optional[List[str]]) -> str:
-        """Build the schema-binding prompt section for real dataset columns (F6).
+    def _format_columns_block(
+        self,
+        available_columns: Optional[List[str]],
+        column_profiles: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """Build the schema-binding prompt section for real dataset columns.
 
-        Returns an empty string when no columns are supplied.
+        When ``column_profiles`` is supplied (F6(b)) the block carries each
+        column's dtype family, cardinality, non-null count and (for low-card
+        columns) its value list, plus explicit SEMANTIC binding guidance so the
+        LLM picks a binary column for ``treatment``, a numeric column for
+        ``outcome`` and low-card categoricals for ``segments`` -- and never
+        binds a brand/region VALUE as a column name.
+
+        Falls back to the legacy F6 name-only block when only
+        ``available_columns`` is supplied. Returns an empty string when neither
+        is available.
         """
+        if column_profiles:
+            return self._format_profile_block(column_profiles)
+
         if not available_columns:
             return ""
         column_list = ", ".join(str(c) for c in available_columns)
@@ -392,6 +433,58 @@ class ToolPlanner:
             "do NOT invent column names. Use $step_X.field syntax only to "
             "reference prior step outputs, not for dataset columns."
         )
+
+    def _format_profile_block(self, column_profiles: List[Dict[str, Any]]) -> str:
+        """Render the rich per-column profile + semantic binding guidance (F6(b))."""
+        # Keep the legacy "## Available dataset columns:" header so existing
+        # name-only assertions and the comma-list contract still hold.
+        names = [str(p.get("name", "")) for p in column_profiles if p.get("name")]
+        column_list = ", ".join(names)
+
+        lines = [
+            f"## Available dataset columns: {column_list}",
+            "",
+            "## Column profile (dtype family | cardinality | values):",
+        ]
+        for p in column_profiles:
+            name = str(p.get("name", ""))
+            fam = str(p.get("dtype_family", "other"))
+            n_unique = p.get("n_unique", "?")
+            n_nonnull = p.get("n_nonnull", "?")
+            values = p.get("values")
+            detail = f"- {name}: {fam}, n_unique={n_unique}, n_nonnull={n_nonnull}"
+            if values is not None:
+                detail += f", values={values}"
+            lines.append(detail)
+
+        lines.extend(
+            [
+                "",
+                "## Column-binding rules (CRITICAL — a real dataset is loaded):",
+                "- Bind every column-typed argument (treatment, outcome, "
+                "confounders, covariates, segments, metric, dimension) to an "
+                "EXACT column name from the list above. Do NOT invent column "
+                "names.",
+                "- Prefer a BINARY (or low-cardinality) column for `treatment`.",
+                "- Prefer a NUMERIC-CONTINUOUS column for `outcome`. NEVER pick a "
+                "near-constant / degenerate column (one whose values are almost "
+                "all the same) as the outcome or treatment — check the value "
+                "distribution above.",
+                "- Prefer LOW-CARDINALITY CATEGORICAL columns for `segments`.",
+                "- Map business terms to the closest REAL column: e.g. "
+                '"conversion"/"adoption"/"response" -> the relevant '
+                'numeric/binary column; "driver"/"factor" -> a candidate '
+                'treatment/confounder column; "segment" -> a categorical '
+                "column. If no real column matches a business term, pick the "
+                "nearest admissible column rather than inventing one.",
+                '- NEVER use a brand or region VALUE (e.g. "Kisqali", '
+                '"Northeast") as a column name — those are filter VALUES, not '
+                "columns.",
+                "- Use $step_X.field syntax ONLY to reference prior step outputs, "
+                "never for dataset columns.",
+            ]
+        )
+        return "\n".join(lines)
 
     def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
         """Format similar compositions as context for the LLM."""
@@ -585,6 +678,110 @@ class ToolPlanner:
                         value,
                         sorted(column_set),
                     )
+
+    def _enforce_column_bindings(
+        self,
+        steps: List[ExecutionStep],
+        available_columns: List[str],
+    ) -> None:
+        """Resolve, then enforce, column-typed args against the real schema (F6(b)).
+
+        Defense-in-depth on top of the LLM's prompt guidance. For each step,
+        every column-typed argument (``_COLUMN_ARG_KEYS``: treatment / outcome /
+        segment(s) / metric / covariate(s) / dimension) is checked:
+
+        1. **Best-effort resolution.** If the literal value is not an exact
+           column but resolves unambiguously to one via a case-insensitive,
+           simple-alias (strip non-alphanumerics) or substring match, the step's
+           ``input_mapping`` is rewritten in place to the REAL column name.
+        2. **Fail-fast.** If a column-typed literal still cannot be resolved to a
+           real column, raise ``PlanningError`` with a clear ``unbound column``
+           reason BEFORE the plan reaches the executor / fail-closed tool.
+
+        This is deliberately scoped to plain-string literals under known
+        column-arg keys: ``$step_X.field`` references, list-valued args and dict
+        params are left untouched (they are not single-column references).
+        """
+        column_list = [str(c) for c in available_columns]
+        column_set = set(column_list)
+        # case-folded + alias index for resolution (built once)
+        norm_index: Dict[str, List[str]] = {}
+        for col in column_list:
+            norm_index.setdefault(self._normalize_name(col), []).append(col)
+
+        for step in steps:
+            for arg_name, value in list(step.input_mapping.items()):
+                if arg_name not in _COLUMN_ARG_KEYS:
+                    continue
+                # Only single-string literals are single-column references.
+                if not isinstance(value, str) or value.startswith("$"):
+                    continue
+                if value in column_set:
+                    continue  # already a real column
+
+                resolved = self._resolve_column(value, column_list, norm_index)
+                if resolved is not None:
+                    logger.info(
+                        "Plan step %s: resolved column-arg '%s'='%s' -> real column '%s'.",
+                        step.step_id,
+                        arg_name,
+                        value,
+                        resolved,
+                    )
+                    step.input_mapping[arg_name] = resolved
+                    continue
+
+                # Unresolvable -> fail fast with a clear reason.
+                raise PlanningError(
+                    f"unbound column: {value!r} (not in schema) — plan step "
+                    f"{step.step_id} binds '{arg_name}'='{value}', which is not a "
+                    f"real dataset column and could not be resolved to one. "
+                    f"Available columns: {sorted(column_set)}."
+                )
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        """Lowercase and strip non-alphanumerics for alias matching."""
+        return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+    def _resolve_column(
+        self,
+        value: str,
+        column_list: List[str],
+        norm_index: Dict[str, List[str]],
+    ) -> Optional[str]:
+        """Best-effort resolve ``value`` to a single real column, else None.
+
+        Resolution is intentionally conservative: it only returns a column when
+        the match is UNAMBIGUOUS (exactly one candidate). Order of attempts:
+        exact case-insensitive / alias-normalized, then substring
+        (value-in-column direction only). Ambiguous matches return None so
+        enforcement fails fast rather than silently picking the wrong column.
+        """
+        norm_value = self._normalize_name(value)
+        if not norm_value:
+            return None
+
+        # 1. exact normalized (case-insensitive / alias) match
+        exact = norm_index.get(norm_value)
+        if exact and len(exact) == 1:
+            return exact[0]
+        if exact and len(exact) > 1:
+            return None  # ambiguous
+
+        # 2. substring match, must be unambiguous. ONLY the value-in-column
+        # direction is allowed: an abbreviated / partial LLM value matching a
+        # real column (e.g. "engagement" -> "engagement_score"). The reverse
+        # (a real column name appearing INSIDE the value) is deliberately NOT
+        # used — it let a short real column (e.g. "age") match an unrelated
+        # value (e.g. "dosage") and silently substitute the wrong column, which
+        # is worse than failing fast on an unbound column.
+        candidates = [col for col in column_list if norm_value in self._normalize_name(col)]
+        # de-dup while preserving order
+        uniq = list(dict.fromkeys(candidates))
+        if len(uniq) == 1:
+            return uniq[0]
+        return None
 
     def _check_cycles(self, steps: List[ExecutionStep]) -> None:
         """Check for cycles in step dependencies"""
