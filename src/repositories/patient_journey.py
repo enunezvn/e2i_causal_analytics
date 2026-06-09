@@ -21,6 +21,7 @@ class PatientJourneyRepository(SplitAwareRepository):
 
     table_name = "patient_journeys"
     model_class = None  # Set to PatientJourney model when available
+    HAS_PROVENANCE = True  # patient_journeys carries is_synthetic (Shard 01)
 
     async def get_by_brand(
         self,
@@ -96,7 +97,9 @@ class PatientJourneyRepository(SplitAwareRepository):
             split=split,
         )
 
-    async def get_data_freshness(self, brand: str) -> Dict[str, Any]:
+    async def get_data_freshness(
+        self, brand: str, include_synthetic: bool = False
+    ) -> Dict[str, Any]:
         """
         Calculate data freshness metrics for a brand.
 
@@ -108,6 +111,7 @@ class PatientJourneyRepository(SplitAwareRepository):
 
         Args:
             brand: Brand name
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict with avg_lag_hours, max_lag_hours, stale_count, total_records
@@ -120,15 +124,17 @@ class PatientJourneyRepository(SplitAwareRepository):
                 "total_records": 0,
             }
 
+        from src.repositories.provenance import apply_provenance_filter
+
         # Query patient_journeys for data_lag_hours filtered by brand
-        result = await (
+        query = (
             self.client.table(self.table_name)
             .select("data_lag_hours")
             .eq("brand", brand)
             .not_.is_("data_lag_hours", "null")
-            .limit(10000)
-            .execute()
         )
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await query.limit(10000).execute()
 
         if not result.data:
             return {
@@ -152,18 +158,22 @@ class PatientJourneyRepository(SplitAwareRepository):
     async def get_freshness_by_source(
         self,
         brand: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Get data freshness metrics grouped by data source.
 
         Args:
             brand: Optional brand filter
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict mapping data_source to freshness metrics
         """
         if not self.client:
             return {}
+
+        from src.repositories.provenance import apply_provenance_filter
 
         query = (
             self.client.table(self.table_name)
@@ -174,6 +184,7 @@ class PatientJourneyRepository(SplitAwareRepository):
         if brand:
             query = query.eq("brand", brand)
 
+        query = apply_provenance_filter(query, include_synthetic)
         result = await query.limit(10000).execute()
 
         if not result.data:
@@ -204,12 +215,14 @@ class PatientJourneyRepository(SplitAwareRepository):
     async def get_journey_stage_distribution(
         self,
         brand: str,
+        include_synthetic: bool = False,
     ) -> Dict[str, int]:
         """
         Get distribution of patients across journey stages.
 
         Args:
             brand: Brand name
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict mapping journey_stage to count
@@ -217,13 +230,15 @@ class PatientJourneyRepository(SplitAwareRepository):
         if not self.client:
             return {}
 
-        result = await (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("journey_stage")
             .eq("brand", brand)
-            .limit(10000)
-            .execute()
         )
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await query.limit(10000).execute()
 
         if not result.data:
             return {}
@@ -239,6 +254,7 @@ class PatientJourneyRepository(SplitAwareRepository):
     async def get_source_stacking_metrics(
         self,
         brand: str,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Get cross-source matching and stacking metrics.
@@ -247,6 +263,7 @@ class PatientJourneyRepository(SplitAwareRepository):
 
         Args:
             brand: Brand name
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict with stacking metrics:
@@ -263,13 +280,15 @@ class PatientJourneyRepository(SplitAwareRepository):
                 "avg_match_confidence": 0.0,
             }
 
-        result = await (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("source_stacking_flag, source_match_confidence")
             .eq("brand", brand)
-            .limit(10000)
-            .execute()
         )
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await query.limit(10000).execute()
 
         if not result.data:
             return {

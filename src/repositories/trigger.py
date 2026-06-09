@@ -30,6 +30,7 @@ class TriggerRepository(BaseRepository):
 
     table_name = "triggers"
     model_class = None  # Set to Trigger model when available
+    HAS_PROVENANCE = True  # triggers carries is_synthetic (Shard 01)
 
     async def get_by_hcp(
         self,
@@ -75,6 +76,7 @@ class TriggerRepository(BaseRepository):
         self,
         days: int = 7,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get triggers from the last N days.
@@ -82,6 +84,7 @@ class TriggerRepository(BaseRepository):
         Args:
             days: Number of days to look back
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Recent triggers ordered by timestamp descending
@@ -89,16 +92,19 @@ class TriggerRepository(BaseRepository):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
         # Calculate the cutoff date
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
-        result = await (
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .gte("trigger_timestamp", cutoff_date.isoformat())
-            .order("trigger_timestamp", desc=True)
-            .limit(limit)
-            .execute()
+        )
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await (
+            query.order("trigger_timestamp", desc=True).limit(limit).execute()
         )
 
         return [self._to_model(row) for row in result.data]
@@ -107,6 +113,7 @@ class TriggerRepository(BaseRepository):
         self,
         patient_id: str,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get triggers for a specific patient.
@@ -114,6 +121,7 @@ class TriggerRepository(BaseRepository):
         Args:
             patient_id: Patient identifier
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of Trigger records ordered by timestamp descending
@@ -121,13 +129,16 @@ class TriggerRepository(BaseRepository):
         if not self.client:
             return []
 
-        result = await (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("patient_id", patient_id)
-            .order("trigger_timestamp", desc=True)
-            .limit(limit)
-            .execute()
+        )
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await (
+            query.order("trigger_timestamp", desc=True).limit(limit).execute()
         )
 
         return [self._to_model(row) for row in result.data]
@@ -136,6 +147,7 @@ class TriggerRepository(BaseRepository):
         self,
         brand: Optional[str] = None,
         days: int = 30,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Calculate the Change-Fail Rate (WS2 KPI).
@@ -145,6 +157,7 @@ class TriggerRepository(BaseRepository):
         Args:
             brand: Optional brand filter
             days: Number of days to look back
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict with change_fail_rate, total_changes, failed_changes
@@ -155,6 +168,8 @@ class TriggerRepository(BaseRepository):
                 "total_changes": 0,
                 "failed_changes": 0,
             }
+
+        from src.repositories.provenance import apply_provenance_filter
 
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -169,6 +184,7 @@ class TriggerRepository(BaseRepository):
         if brand:
             query = query.eq("brand", brand)
 
+        query = apply_provenance_filter(query, include_synthetic)
         result = await query.limit(10000).execute()
 
         if not result.data:
@@ -191,6 +207,7 @@ class TriggerRepository(BaseRepository):
         self,
         brand: Optional[str] = None,
         days: int = 30,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Calculate trigger acceptance rate.
@@ -200,6 +217,7 @@ class TriggerRepository(BaseRepository):
         Args:
             brand: Optional brand filter
             days: Number of days to look back
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict with acceptance_rate, total_delivered, total_accepted
@@ -210,6 +228,8 @@ class TriggerRepository(BaseRepository):
                 "total_delivered": 0,
                 "total_accepted": 0,
             }
+
+        from src.repositories.provenance import apply_provenance_filter
 
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -223,6 +243,7 @@ class TriggerRepository(BaseRepository):
         if brand:
             query = query.eq("brand", brand)
 
+        query = apply_provenance_filter(query, include_synthetic)
         result = await query.limit(10000).execute()
 
         if not result.data:
@@ -247,6 +268,7 @@ class TriggerRepository(BaseRepository):
         end_date: datetime,
         brand: Optional[str] = None,
         limit: int = 5000,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get triggers within a date range.
@@ -256,12 +278,15 @@ class TriggerRepository(BaseRepository):
             end_date: End of range
             brand: Optional brand filter
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Triggers within range, ordered by timestamp
         """
         if not self.client:
             return []
+
+        from src.repositories.provenance import apply_provenance_filter
 
         query = (
             self.client.table(self.table_name)
@@ -273,6 +298,7 @@ class TriggerRepository(BaseRepository):
         if brand:
             query = query.eq("brand", brand)
 
+        query = apply_provenance_filter(query, include_synthetic)
         result = await query.order("trigger_timestamp", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in result.data]
