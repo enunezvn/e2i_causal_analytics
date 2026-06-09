@@ -241,6 +241,32 @@ function formatStat(value: number | null | undefined): string {
   return Math.round(value).toLocaleString();
 }
 
+/** Format an ISO `YYYY-MM-DD` data-coverage date as e.g. "Dec 2025" (dynamic,
+ *  never hardcoded). Returns null for a missing/invalid date. */
+function formatDataThrough(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+}
+
+/** Display for a KPI tile: the real value, or an honest "No recent activity —
+ *  data through <date>" when the metric is 0/null (no recent data, NOT a
+ *  fabrication). The date comes from the backend (`data_through`), so it is
+ *  dynamic and advances when fresh data lands. */
+function kpiTileDisplay(
+  value: number | null | undefined,
+  summary: { data_through?: string | null } | undefined,
+): { display: string; muted: boolean } {
+  const noActivity = !!summary && (value === 0 || value === null || value === undefined);
+  if (!noActivity) return { display: formatStat(value), muted: false };
+  const through = formatDataThrough(summary?.data_through);
+  return {
+    display: through ? `No recent activity — data through ${through}` : 'No recent activity',
+    muted: true,
+  };
+}
+
 const AGENT_TIER_META: { tier: number; name: string }[] = [
   { tier: 0, name: 'ML Foundation' },
   { tier: 1, name: 'Orchestration' },
@@ -259,9 +285,20 @@ interface QuickStatTileProps {
   error?: boolean;
   /** Show a small "sample data" badge when the value is fallback (not real DB). */
   sampleBadge?: boolean;
+  /** Render `display` as smaller muted prose (e.g. "No recent activity — data
+   *  through Dec 2025") instead of a large stat number. */
+  muted?: boolean;
 }
 
-function QuickStatTile({ label, icon, display, loading, error, sampleBadge }: QuickStatTileProps) {
+function QuickStatTile({
+  label,
+  icon,
+  display,
+  loading,
+  error,
+  sampleBadge,
+  muted,
+}: QuickStatTileProps) {
   return (
     <Card>
       <CardContent className="py-4">
@@ -274,7 +311,11 @@ function QuickStatTile({ label, icon, display, loading, error, sampleBadge }: Qu
                 <Badge variant="outline" className="text-[10px] px-1 py-0">sample data</Badge>
               )}
             </div>
-            <div className="text-xl font-semibold truncate">
+            <div
+              className={
+                muted ? 'text-sm font-normal text-muted-foreground' : 'text-xl font-semibold truncate'
+              }
+            >
               {loading ? (
                 <span className="text-muted-foreground text-sm">Loading…</span>
               ) : error ? (
@@ -337,6 +378,11 @@ function Home() {
     isLoading: summaryLoading,
     error: summaryError,
   } = useKpiSummary(selectedBrand);
+
+  // Honest tile display: the real value, or "No recent activity — data through
+  // <date>" when 0/null (no recent data, not a fabrication).
+  const trxTile = kpiTileDisplay(kpiSummary?.metrics?.trx_volume, kpiSummary);
+  const hcpReachTile = kpiTileDisplay(kpiSummary?.metrics?.hcp_reach, kpiSummary);
 
   // QUICK_STATS: Active Campaigns = count of running experiments.
   const { data: activeExp, isLoading: activeExpLoading } = useActiveExperimentCount();
@@ -732,7 +778,8 @@ function Home() {
           icon={<Pill className="h-4 w-4 text-blue-500" />}
           loading={summaryLoading}
           error={!!summaryError}
-          display={formatStat(kpiSummary?.metrics?.trx_volume)}
+          display={trxTile.display}
+          muted={trxTile.muted}
           sampleBadge={!!kpiSummary && kpiSummary.data_source !== 'database'}
         />
         <QuickStatTile
@@ -746,7 +793,8 @@ function Home() {
           icon={<Users className="h-4 w-4 text-emerald-500" />}
           loading={summaryLoading}
           error={!!summaryError}
-          display={formatStat(kpiSummary?.metrics?.hcp_reach)}
+          display={hcpReachTile.display}
+          muted={hcpReachTile.muted}
           sampleBadge={!!kpiSummary && kpiSummary.data_source !== 'database'}
         />
         <QuickStatTile
