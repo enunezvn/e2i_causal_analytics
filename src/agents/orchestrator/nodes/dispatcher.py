@@ -305,6 +305,108 @@ def _resolve_tool_composer_data(
         return None, None, False
 
 
+# ---------------------------------------------------------------------------
+# Per-agent dispatch input synthesizers (Shard 08 / #260-style chat reach)
+# ---------------------------------------------------------------------------
+# gap_analyzer / heterogeneous_optimizer / prediction_synthesizer /
+# resource_optimizer declare NO input_model in AGENT_METHOD_MAP, so
+# _prepare_agent_input's generic payload omits their required keys and they fail
+# closed when reached via chat. Each synthesizer derives the required keys from
+# the NL query + the resolved brand/region. Fail-closed: never fabricate a
+# brand; a missing brand leaves the agent's own validator to surface a
+# structured AgentResult.error.
+#
+# Two registries by call convention:
+#   * _DISPATCH_INPUT_SYNTHESIZERS — uses_kwargs=False agents (.run(input_data)):
+#     the synthesized keys AUGMENT the generic payload (it is splatted as a
+#     single dict, so the extra generic keys are harmless and even required,
+#     e.g. gap_analyzer/het_optimizer both require ``query``).
+#   * _KWARGS_INPUT_SYNTHESIZERS — uses_kwargs=True agents (method(**kwargs)):
+#     the synthesizer REPLACES the payload (project to the method's declared
+#     params only) so the generic keys never splat and TypeError.
+
+_GAP_DEFAULT_METRICS = ["trx", "conversion_rate"]  # gap_analyzer connector keys
+_GAP_DEFAULT_SEGMENTS = ["region"]  # 4-region pivot (gate 5)
+
+
+def _synthesize_gap_analyzer_input(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """metrics/segments/brand required by GapAnalyzerAgent._validate_input."""
+    brand, _region = _extract_brand_region(payload)
+    out: Dict[str, Any] = {
+        "metrics": list(_GAP_DEFAULT_METRICS),
+        "segments": list(_GAP_DEFAULT_SEGMENTS),
+    }
+    if brand is not None:
+        out["brand"] = brand
+    return out
+
+
+def _synthesize_heterogeneous_optimizer_input(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """treatment_var/outcome_var/segment_vars/effect_modifiers/data_source required by
+    HeterogeneousOptimizerAgent._validate_input. The synthetic DGP (Shard 03) binds a
+    per-unit treatment arm (``treatment_arm``), the initiation outcome
+    (``treatment_initiated``), and disease_severity as the heterogeneity driver — these
+    are the CANONICAL patient_journeys column names (INDEX §CANONICAL SSOT), so they
+    are the recoverable var-set for any cohort. Agents consume the arg VALUE, so we
+    pass the canonical stored column names directly."""
+    brand, region = _extract_brand_region(payload)
+    return {
+        "treatment_var": "treatment_arm",
+        "outcome_var": "treatment_initiated",
+        "segment_vars": ["disease_severity"],
+        "effect_modifiers": ["disease_severity", "age_at_diagnosis"],
+        "data_source": "patient_journeys",
+        "filters": {k: v for k, v in (("brand", brand), ("region", region)) if v},
+    }
+
+
+_DISPATCH_INPUT_SYNTHESIZERS: Dict[str, Any] = {
+    "gap_analyzer": _synthesize_gap_analyzer_input,
+    "heterogeneous_optimizer": _synthesize_heterogeneous_optimizer_input,
+}
+
+
+def _synthesize_resource_optimizer_input(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """allocation_targets/constraints required by ResourceOptimizerAgent.optimize.
+    Builds targets from per-HCP CATE + current spend (Shard 08 allocation_builder),
+    scoped to the resolved brand. Fail-closed: no brand / missing artifact -> empty
+    targets + no budget constraint, and the agent's problem_formulator surfaces
+    'No allocation targets provided'."""
+    from src.ml.synthetic.artifacts.allocation_builder import build_allocation_targets
+
+    brand, _region = _extract_brand_region(payload)
+    targets, budget = build_allocation_targets(brand=brand)  # ([], 0.0) when unresolved
+    constraints = (
+        [{"constraint_type": "budget", "value": budget, "scope": "global"}] if budget > 0 else []
+    )
+    return {
+        "query": payload.get("query") or "",
+        "allocation_targets": targets,
+        "constraints": constraints,
+        "resource_type": "budget",
+        "objective": "maximize_outcome",
+    }
+
+
+def _synthesize_prediction_synthesizer_input(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """entity_id/prediction_target required positionally by synthesize(). Derive the
+    HCP id from parsed_query entities (type='hcp_id'); prediction_target from the KPI
+    the query names (default 'conversion'). Fail-closed: a missing entity_id is omitted
+    so the agent's own signature surfaces the missing positional arg."""
+    entity_id = _entity_value(payload, "hcp_id") or _entity_value(payload, "entity_id")
+    target = _entity_value(payload, "kpi") or "conversion"
+    out: Dict[str, Any] = {"prediction_target": target, "query": payload.get("query") or ""}
+    if entity_id is not None:
+        out["entity_id"] = entity_id
+    return out
+
+
+_KWARGS_INPUT_SYNTHESIZERS: Dict[str, Any] = {
+    "resource_optimizer": _synthesize_resource_optimizer_input,
+    "prediction_synthesizer": _synthesize_prediction_synthesizer_input,
+}
+
+
 def _generate_dispatch_id() -> str:
     """Generate unique dispatch identifier."""
     return f"disp_{uuid.uuid4().hex[:16]}"
@@ -746,6 +848,30 @@ class DispatcherNode:
                 # path) so downstream synthesis can caveat a truncated sample.
                 if kpi_truncated:
                     agent_input["kpi_truncated"] = True
+
+        # Shard 08: kwargs-splat agents (resource_optimizer / prediction_synthesizer)
+        # are reached via ``method(**agent_input)``, so only the method's declared
+        # params may be present — the generic keys (user_context/parsed_query/
+        # span_id/dispatch_id/execution_mode/session_id) would TypeError on splat.
+        # REPLACE the payload with the projected synthesized kwargs, then merge any
+        # router-supplied per-agent parameters on top (the router set them for this
+        # agent specifically).
+        kwargs_synth = _KWARGS_INPUT_SYNTHESIZERS.get(dispatch["agent_name"])
+        if kwargs_synth is not None:
+            synthesized = kwargs_synth(agent_input)
+            params = dispatch.get("parameters") or {}
+            return {**synthesized, **params}
+
+        # Shard 08: dict-splat agents (gap_analyzer / heterogeneous_optimizer) are
+        # reached via ``.run(agent_input)`` as a single dict, so the synthesized keys
+        # AUGMENT the generic payload — filling ONLY what the generic payload + router
+        # params did not already supply (router params win; they were set for this
+        # agent).
+        synthesizer = _DISPATCH_INPUT_SYNTHESIZERS.get(dispatch["agent_name"])
+        if synthesizer is not None:
+            for key, value in synthesizer(agent_input).items():
+                if key not in agent_input or agent_input.get(key) in (None, {}, []):
+                    agent_input[key] = value
 
         return agent_input
 
