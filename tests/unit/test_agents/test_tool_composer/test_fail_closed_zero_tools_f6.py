@@ -25,12 +25,8 @@ from src.agents.tool_composer.models.composition_models import (
 
 def _wire(composer, *, tools_executed, tools_succeeded, synth_confidence):
     """Mock the four phase handlers so execution yields the given success ratio."""
-    decomp = DecompositionResult(
-        original_query="q", sub_questions=[], decomposition_reasoning="r"
-    )
-    plan = ExecutionPlan(
-        decomposition=decomp, steps=[], tool_mappings=[], planning_reasoning="r"
-    )
+    decomp = DecompositionResult(original_query="q", sub_questions=[], decomposition_reasoning="r")
+    plan = ExecutionPlan(decomposition=decomp, steps=[], tool_mappings=[], planning_reasoning="r")
     trace = ExecutionTrace(
         plan_id=plan.plan_id,
         tools_executed=tools_executed,
