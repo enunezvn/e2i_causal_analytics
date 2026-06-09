@@ -73,11 +73,17 @@ def test_produce_bundle_never_breaks_format(tmp_path, monkeypatch):
 
 
 def test_golden_seeds_have_inputs_set():
-    """Golden seed examples must declare their input fields (with_inputs)."""
+    """Golden seed examples must declare their input fields (with_inputs).
+
+    The seeds were relocated out of src/ to a test-only fixture (Gap B §5.5);
+    production no longer falls back to them. They remain a useful offline fixture.
+    """
     import pytest
 
     pytest.importorskip("dspy")
-    from src.agents.feedback_learner.recipient_seeds import default_example_provider
+    from tests.unit.test_agents.test_feedback_learner._recipient_seed_fixtures import (
+        default_example_provider,
+    )
 
     provider = default_example_provider("experiment_monitor")
     srm = provider("srm_template")

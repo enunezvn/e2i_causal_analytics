@@ -10,7 +10,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import List, Literal, cast
+from typing import Any, Dict, List, Literal, cast
 
 from src.agents.experiment_monitor.dspy_integration import (
     get_experiment_monitor_dspy_integration,
@@ -20,8 +20,47 @@ from src.agents.experiment_monitor.state import (
     ExperimentMonitorState,
     MonitorAlert,
 )
+from src.agents.feedback_learner.recipient_emit import emit_recipient_signal
 
 logger = logging.getLogger(__name__)
+
+
+def _signal_reward(generated_output: str, signature_inputs: Dict[str, Any]) -> float:
+    """Deterministic heuristic reward for a generated alert/summary output.
+
+    Scores the output on three criteria, each contributing equally:
+    1. Non-empty output (0 if empty, 1 otherwise).
+    2. References at least one key input value as a string in the output.
+    3. Reasonable length (>= 20 characters).
+
+    Returns a float in [0, 1].
+    """
+    if not generated_output:
+        return 0.0
+
+    score = 0.0
+    total = 3.0
+
+    # Criterion 1: non-empty
+    score += 1.0
+
+    # Criterion 2: output references at least one key input value
+    output_lower = generated_output.lower()
+    found_reference = False
+    for val in signature_inputs.values():
+        val_str = str(val).lower()
+        # Only bother checking values that are informative (non-trivial strings/numbers)
+        if len(val_str) >= 2 and val_str in output_lower:
+            found_reference = True
+            break
+    if found_reference:
+        score += 1.0
+
+    # Criterion 3: reasonable length (>= 20 chars)
+    if len(generated_output) >= 20:
+        score += 1.0
+
+    return round(score / total, 6)
 
 
 class AlertGeneratorNode:
@@ -72,9 +111,10 @@ class AlertGeneratorNode:
 
             alerts: List[MonitorAlert] = []
 
-            # Generate SRM alerts
+            # Generate SRM alerts and emit training signals for each
             srm_alerts = self._generate_srm_alerts(state)
             alerts.extend(srm_alerts)
+            await self._emit_srm_signals(state, srm_alerts)
 
             # Generate enrollment alerts
             enrollment_alerts = self._generate_enrollment_alerts(state)
@@ -88,12 +128,16 @@ class AlertGeneratorNode:
             interim_alerts = self._generate_interim_alerts(state)
             alerts.extend(interim_alerts)
 
-            # Generate fidelity alerts (if any)
+            # Generate fidelity alerts and emit training signals for each
             fidelity_alerts = self._generate_fidelity_alerts(state)
             alerts.extend(fidelity_alerts)
+            await self._emit_alert_signals(fidelity_alerts)
 
             # Create summary
             summary = self._create_summary(state, alerts)
+
+            # Emit summary training signal (best-effort)
+            await self._emit_summary_signal(state, alerts, summary)
 
             # Generate recommendations
             recommendations = self._generate_recommendations(state, alerts)
@@ -121,6 +165,118 @@ class AlertGeneratorNode:
             state["recommended_actions"] = []
 
         return state
+
+    async def _emit_srm_signals(
+        self,
+        state: ExperimentMonitorState,
+        srm_alerts: List[MonitorAlert],
+    ) -> None:
+        """Emit srm_template training signals for generated SRM alerts.
+
+        Best-effort: any failure is caught and logged, never propagated.
+        """
+        srm_issues = state.get("srm_issues", [])
+        experiments = {e["experiment_id"]: e["name"] for e in state.get("experiments", [])}
+
+        for issue in srm_issues:
+            if not issue.get("detected"):
+                continue
+            try:
+                # Build the signal entirely inside the try so a malformed issue
+                # (missing any expected key) can never break alert generation.
+                exp_id = issue["experiment_id"]
+                exp_name = experiments.get(exp_id, "Unknown Experiment")
+                matching = [a for a in srm_alerts if a.get("experiment_id") == exp_id]
+                generated_output = matching[0]["message"] if matching else ""
+
+                sig_inputs = {
+                    "experiment_name": exp_name,
+                    "chi_squared": issue["chi_squared"],
+                    "p_value": issue["p_value"],
+                    "expected_ratio": str(issue["expected_ratio"]),
+                    "actual_counts": str(issue["actual_counts"]),
+                }
+                reward = _signal_reward(generated_output, sig_inputs)
+                await emit_recipient_signal(
+                    agent_name="experiment_monitor",
+                    signature_inputs=sig_inputs,
+                    generated_output=generated_output,
+                    reward=reward,
+                    template_field="srm_template",
+                )
+            except Exception as exc:  # noqa: BLE001 - emission is best-effort
+                logger.debug("SRM signal emit failed (best-effort): %s", exc)
+
+    async def _emit_alert_signals(self, fidelity_alerts: List[MonitorAlert]) -> None:
+        """Emit alert_template training signals for generated fidelity alerts.
+
+        Best-effort: any failure is caught and logged, never propagated.
+        """
+        for alert in fidelity_alerts:
+            sig_inputs = {
+                "experiment_name": alert.get("experiment_name", ""),
+                "alert_type": alert.get("alert_type", ""),
+                "severity": alert.get("severity", ""),
+                "details": str(alert.get("details", {})),
+            }
+            generated_output = alert.get("message", "")
+            try:
+                reward = _signal_reward(generated_output, sig_inputs)
+                await emit_recipient_signal(
+                    agent_name="experiment_monitor",
+                    signature_inputs=sig_inputs,
+                    generated_output=generated_output,
+                    reward=reward,
+                    template_field="alert_template",
+                )
+            except Exception as exc:  # noqa: BLE001 - emission is best-effort
+                logger.debug("Alert signal emit failed (best-effort): %s", exc)
+
+    async def _emit_summary_signal(
+        self,
+        state: ExperimentMonitorState,
+        alerts: List[MonitorAlert],
+        summary: str,
+    ) -> None:
+        """Emit summary_template training signal for the generated monitor summary.
+
+        Best-effort: any failure is caught and logged, never propagated.
+        """
+        experiments = state.get("experiments", [])
+        health_counts = {"healthy": 0, "warning": 0, "critical": 0}
+        for exp in experiments:
+            status = exp.get("health_status", "unknown")
+            if status in health_counts:
+                health_counts[status] += 1
+
+        issue_types: List[str] = []
+        if state.get("srm_issues"):
+            issue_types.append("srm")
+        if state.get("enrollment_issues"):
+            issue_types.append("enrollment")
+        if state.get("fidelity_issues"):
+            issue_types.append("fidelity")
+        if state.get("interim_triggers"):
+            issue_types.append("interim")
+
+        sig_inputs = {
+            "experiments_checked": state.get("experiments_checked", 0),
+            "healthy_count": health_counts["healthy"],
+            "warning_count": health_counts["warning"],
+            "critical_count": health_counts["critical"],
+            "issue_types": ", ".join(issue_types) if issue_types else "none",
+        }
+        try:
+            reward = _signal_reward(summary, sig_inputs)
+            await emit_recipient_signal(
+                agent_name="experiment_monitor",
+                signature_inputs=sig_inputs,
+                generated_output=summary,
+                reward=reward,
+                template_field="summary_template",
+            )
+        except Exception as exc:  # noqa: BLE001 - emission is best-effort
+            logger.debug("Summary signal emit failed (best-effort): %s", exc)
 
     def _get_srm_message(
         self,

@@ -34,19 +34,36 @@ class ResourceOptimizationPrompts:
     and recommendations from mathematical optimization results.
     """
 
-    # Optimization summary prompt
+    # Optimization summary prompt.
+    #
+    # NOTE: this template is the OPTIMIZABLE source of the human-readable
+    # optimization summary that ``ImpactProjectorNode._generate_summary``
+    # RETURNS (not just renders-and-discards). The default value below leads with
+    # the node's historical canonical sentence (so existing summary assertions —
+    # "Optimization complete", "ROI" — hold) and keeps every metadata placeholder
+    # the getter supplies, so the optimizer can tune the wording while the loop
+    # output flows all the way to the user. ``objective_value`` carries the
+    # projected outcome value (what the node calls ``total_outcome``).
     summary_template: str = (
-        "Summarize optimization results for {resource_type} allocation. "
-        "Objective: {objective}. Solver: {solver_type}. "
-        "Optimal value: {objective_value}. Projected ROI: {projected_roi}. "
-        "Entities optimized: {entity_count}. Changes: {increase_count} increases, {decrease_count} decreases."
+        "Optimization complete. Projected outcome: {objective_value:.0f} "
+        "(ROI: {projected_roi:.2f}). Recommended changes: {increase_count} increases, "
+        "{decrease_count} decreases. "
+        "[{resource_type} | objective={objective} | solver={solver_type} | "
+        "{entity_count} entities]"
     )
 
-    # Allocation recommendation prompt
+    # Allocation recommendation prompt.
+    #
+    # OPTIMIZABLE source of the per-entity recommendation line that
+    # ``ImpactProjectorNode._generate_recommendations`` RETURNS. The getter
+    # derives ``direction``/``preposition``/``change_abs``/``impact_clause`` so a
+    # single pure ``.format()`` template renders BOTH the increase and the
+    # decrease line shapes (each contains "Increase"/"Reduce" + entity + amounts),
+    # keeping the node output substring-compatible with the historical strings.
     recommendation_template: str = (
-        "Generate recommendations for {entity_id} ({entity_type}). "
-        "Current: {current}. Optimized: {optimized}. Change: {change_pct}%. "
-        "Expected impact: {expected_impact}."
+        "{direction} allocation {preposition} {entity_id} ({entity_type}) by "
+        "{change_abs:.1f} ({change_pct:.0f}%): {current:.0f} -> {optimized:.0f}. "
+        "{impact_clause}"
     )
 
     # Scenario comparison prompt
@@ -229,7 +246,23 @@ class ResourceOptimizerDSPyIntegration:
         change_pct: float,
         expected_impact: float,
     ) -> str:
-        """Get formatted recommendation prompt."""
+        """Get the formatted recommendation via the current (optimizable) template.
+
+        Drop-in for ImpactProjectorNode's inline recommendation construction:
+        ``direction``/``preposition``/``change_abs``/``impact_clause`` are derived
+        here from the allocation delta so the template stays a pure ``.format()``
+        string (no conditionals) and renders the canonical Increase / Reduce line
+        depending on whether the optimized allocation is above or below current.
+        """
+        change_abs = abs(optimized - current)
+        if optimized >= current:
+            direction = "Increase"
+            preposition = "to"
+            impact_clause = f"Expected impact: {expected_impact:.0f}."
+        else:
+            direction = "Reduce"
+            preposition = "from"
+            impact_clause = "Reallocate to higher-impact targets."
         return self._prompts.recommendation_template.format(  # type: ignore[no-any-return]
             entity_id=entity_id,
             entity_type=entity_type,
@@ -237,6 +270,10 @@ class ResourceOptimizerDSPyIntegration:
             optimized=optimized,
             change_pct=change_pct,
             expected_impact=expected_impact,
+            change_abs=change_abs,
+            direction=direction,
+            preposition=preposition,
+            impact_clause=impact_clause,
         )
 
     def get_scenario_comparison_prompt(

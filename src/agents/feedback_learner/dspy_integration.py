@@ -491,7 +491,8 @@ class GEPAOptimizationTrigger:
     """
 
     # Minimum signals required for optimization
-    min_signals: int = 100
+    # ~1 signal/cycle; 20 ≈ reachable in normal operation
+    min_signals: int = 20
 
     # Minimum reward improvement delta to trigger
     min_reward_delta: float = 0.05

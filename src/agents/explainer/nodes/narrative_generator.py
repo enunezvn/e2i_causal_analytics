@@ -19,12 +19,50 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from src.agents.feedback_learner.recipient_emit import emit_recipient_signal
+
+from ..dspy_integration import get_explainer_dspy_integration
 from ..state import ExplainerState, Insight, NarrativeSection
 
 if TYPE_CHECKING:
     from ..memory_hooks import ExplanationMemoryHooks
 
 logger = logging.getLogger(__name__)
+
+
+def _signal_reward(output: str, inputs: Dict[str, Any]) -> float:
+    """Deterministic heuristic reward in [0, 1] for an emitted recipient signal.
+
+    Rewards a non-empty, reasonably-bounded output that references its inputs.
+    Mirrors the spirit of ``feedback_learner.recipient_metrics`` (no LM, no I/O)
+    so the optimizer has a stable supervisory signal over real emitted rows.
+
+    Components (each contributes up to a fraction of 1.0):
+      * non-empty            -> 0.4 base for any non-blank text
+      * reasonable length    -> 0.3 for length in [40, 4000] chars
+      * references the inputs -> 0.3 scaled by how many input VALUES appear
+    """
+    text = (output or "").strip()
+    if not text:
+        return 0.0
+
+    score = 0.4  # non-empty base
+
+    length = len(text)
+    if 40 <= length <= 4000:
+        score += 0.3
+    elif length > 0:
+        # Soft partial credit for short/long but present text.
+        score += 0.1
+
+    # Reference component: fraction of input VALUES (stringified) present in text.
+    lowered = text.lower()
+    values = [str(v).strip() for v in inputs.values() if str(v).strip()]
+    if values:
+        hits = sum(1 for v in values if v.lower() in lowered)
+        score += 0.3 * (hits / len(values))
+
+    return max(0.0, min(1.0, score))
 
 
 class NarrativeGeneratorNode:
@@ -113,6 +151,11 @@ class NarrativeGeneratorNode:
                     result=result,
                 )
 
+            # === RECIPIENT SELF-EMISSION (DSPy loop) ===
+            # Emit training signals so the explainer can optimize its OWN prompts
+            # from real produced output. Best-effort; never breaks generation.
+            await self._emit_recipient_signals(state, result)
+
             # Build updated state - result is Dict[str, Any] from _generate_narrative
             # We spread result dict which mypy can't verify against TypedDict
             updated_state: ExplainerState = {
@@ -146,8 +189,10 @@ class NarrativeGeneratorNode:
 
         sections = []
 
-        # Executive Summary
-        exec_summary = self._create_executive_summary(insights, themes, expertise)
+        # Executive Summary — source the lead directive from the optimizable
+        # ``executive_summary_template`` (feedback_learner-optimized) so the
+        # optimized prompt is genuinely consumed; the rendered body is preserved.
+        exec_summary = self._compose_executive_summary(insights, themes, expertise)
         sections.append(
             NarrativeSection(
                 section_type="summary",
@@ -336,6 +381,129 @@ class NarrativeGeneratorNode:
             "detailed_explanation": combined,
             "narrative_sections": sections,
         }
+
+    def _avg_confidence(self, insights: List[Insight]) -> float:
+        """Mean insight confidence (0.5 default when no insights)."""
+        if not insights:
+            return 0.5
+        return sum(i.get("confidence", 0.5) for i in insights) / len(insights)
+
+    def _compose_executive_summary(
+        self, insights: List[Insight], themes: List[str], expertise: str
+    ) -> str:
+        """Render the executive summary via the optimizable content template.
+
+        The optimizable ``executive_summary_template`` (consumed through the
+        explainer DSPy integration) is a CONTENT template, not an LLM directive:
+        the getter receives the canonical body (the expertise-adapted prose +
+        top-insight highlights from ``_create_executive_summary``) and the
+        getter's rendered output IS the executive summary. Optimizing the
+        template therefore changes user-visible output without ever shipping
+        instruction text as content (mirrors health_score B3).
+
+        If the getter or its ``.format()`` fails for any reason, the inline body
+        is returned alone (output semantics preserved, never corrupted).
+        """
+        body = self._create_executive_summary(insights, themes, expertise)
+        try:
+            finding_count = len([i for i in insights if i.get("category") == "finding"])
+            integration = get_explainer_dspy_integration()
+            rendered = integration.get_executive_summary_prompt(
+                user_expertise=expertise,
+                key_findings_count=finding_count,
+                avg_confidence=round(self._avg_confidence(insights), 2),
+                summary_body=body,
+            )
+        except Exception as e:  # noqa: BLE001 - template sourcing must never break generation
+            logger.warning(f"Executive-summary template sourcing failed (non-fatal): {e}")
+            return body
+        rendered = (rendered or "").strip()
+        # Use the rendered template output AS the summary; fall back to the
+        # canonical body only if rendering produced nothing usable.
+        return rendered if rendered else body
+
+    async def _emit_recipient_signals(self, state: ExplainerState, result: Dict[str, Any]) -> None:
+        """Emit recipient training signals for the produced explanation text.
+
+        Best-effort (the imported ``emit_recipient_signal`` is itself best-effort
+        and never raises, but we still guard here so a wiring slip can never break
+        narrative generation). signature_inputs are keyed by the SIGNATURE
+        input_fields per the B1-B4 contract
+        (``recipient_required_input_keys('explainer')``):
+
+          * ``executive_summary_template``  ->
+                analysis_results, user_expertise, focus_areas, output_format
+          * ``narrative_section_template``   -> insights, audience, format
+        """
+        try:
+            expertise = state.get("user_expertise", "analyst")
+            output_format = state.get("output_format", "narrative")
+            insights = state.get("extracted_insights") or []
+            focus_areas = state.get("focus_areas") or []
+
+            # Compact, deterministic summary of the analysis inputs the summary
+            # was produced from (the signature's ``analysis_results`` field).
+            contexts = state.get("analysis_context") or []
+            analysis_results_repr = ", ".join(
+                str(c.get("analysis_type") or c.get("source_agent") or "analysis") for c in contexts
+            ) or (state.get("query") or "analysis results")
+            focus_repr = ", ".join(focus_areas) if focus_areas else "all"
+
+            # --- executive_summary_template ---
+            exec_text = result.get("executive_summary") or ""
+            if exec_text:
+                exec_inputs: Dict[str, Any] = {
+                    "analysis_results": analysis_results_repr,
+                    "user_expertise": expertise,
+                    "focus_areas": focus_repr,
+                    "output_format": output_format,
+                }
+                await self._emit_one(
+                    template_field="executive_summary_template",
+                    signature_inputs=exec_inputs,
+                    generated_output=exec_text,
+                )
+
+            # --- narrative_section_template ---
+            # The combined narrative (detailed_explanation) is the section text
+            # the node produced; emit it under the narrative-section signature.
+            narrative_text = result.get("detailed_explanation") or ""
+            sections = result.get("narrative_sections") or []
+            if narrative_text and sections:
+                insights_repr = (
+                    "; ".join(str(i.get("statement", "")) for i in insights if i.get("statement"))
+                    or "no insights"
+                )
+                section_inputs: Dict[str, Any] = {
+                    "insights": insights_repr,
+                    "audience": expertise,
+                    "format": output_format,
+                }
+                await self._emit_one(
+                    template_field="narrative_section_template",
+                    signature_inputs=section_inputs,
+                    generated_output=narrative_text,
+                )
+        except Exception as e:  # noqa: BLE001 - emission is best-effort, never fail the run
+            logger.warning(f"Recipient signal emission failed (non-fatal): {e}")
+
+    async def _emit_one(
+        self,
+        template_field: str,
+        signature_inputs: Dict[str, Any],
+        generated_output: str,
+    ) -> None:
+        """Emit a single recipient signal (best-effort)."""
+        try:
+            await emit_recipient_signal(
+                agent_name="explainer",
+                signature_inputs=signature_inputs,
+                generated_output=generated_output,
+                reward=_signal_reward(generated_output, signature_inputs),
+                template_field=template_field,
+            )
+        except Exception as e:  # noqa: BLE001 - best-effort
+            logger.warning(f"emit_recipient_signal({template_field}) failed (non-fatal): {e}")
 
     def _create_executive_summary(
         self, insights: List[Insight], themes: List[str], expertise: str

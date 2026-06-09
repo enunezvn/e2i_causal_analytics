@@ -5,19 +5,33 @@ templates into a PromptBundle (Shard 07). Materialization is placeholder-safe:
 the recipient code calls .format(**kwargs), so every original {placeholder} must
 survive or the recipient will raise KeyError at runtime.
 
-OPEN DESIGN DECISION (see 09-followon-per-recipient-optimizer.md): recipients
-consume prompts but most do not emit training signals, so the optimizer needs a
-supervised example source. This module is parameterized by an `example_provider`
-so the data-source decision (self-emission / shared pool / golden seed) is
-pluggable; it DEFAULTS to a small golden seed set (recipient_seeds.py) so the
-path is runnable + testable today. Swap in real self-emission later.
+DATA SOURCE (Gap B §5.4/§5.5): each recipient optimizes on its OWN real emitted
+training signals (``source_agent=<recipient>`` in ``dspy_agent_training_signals``,
+written by ``recipient_emit.emit_recipient_signal``). The default
+``example_provider`` is :func:`signal_example_provider`, which reads those rows
+and builds ``dspy.Example``s. If a recipient has fewer than two real examples for
+a field, that field is SKIPPED (cold-start) and the recipient keeps its current
+default template. Production NEVER falls back to a golden seed set — synthetic
+seeds live only as a test fixture (``tests/.../_recipient_seed_fixtures.py``).
+A caller may still inject a custom ``example_provider`` (e.g. tests pass the seed
+fixture's provider) to exercise the compile/materialize path offline.
+
+EMIT↔PROVIDER CONTRACT (B1-B4 MUST follow): when a recipient emits a signal it
+MUST key ``signature_inputs`` by the backing SIGNATURE's ``input_fields`` names —
+NOT by the ``.format()`` template placeholder names. For 3 of the 4 recipients
+(explainer, health_score, resource_optimizer) the template placeholders DIFFER
+from the signature input-field names, so keying by placeholders would make
+:func:`signal_example_provider` silently drop every row (it requires ALL of
+``signature.input_fields`` to be present). Use :func:`recipient_required_input_keys`
+to discover, per template field, exactly which keys to populate. The provider logs
+a WARNING (not silent) when an agent has rows but none match the required keys.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, cast
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +39,33 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)(?::[^}]*)?\}")
 
 # template field -> DSPy signature name on the recipient's dspy_integration module,
 # used by the live optimizer to know which signature backs which .format() template.
+# Only fields with a backing signature are listed; fields with no signature
+# (e.g. experiment_monitor.enrollment_template) are intentionally omitted.
+#
+# CONTRACT: B1-B4 MUST emit signature_inputs keyed by the signature's input_fields
+# (NOT the template placeholders). The two name sets differ for explainer,
+# health_score, and resource_optimizer. Call recipient_required_input_keys() to
+# get the exact keys to populate per template field.
 RECIPIENT_SIGNATURE_FIELDS: Dict[str, Dict[str, str]] = {
     "experiment_monitor": {
         "srm_template": "SRMDescriptionSignature",
         "summary_template": "MonitorSummarySignature",
         "alert_template": "AlertGenerationSignature",
+    },
+    "explainer": {
+        "executive_summary_template": "ExplanationSynthesisSignature",
+        "detailed_explanation_template": "ExplanationSynthesisSignature",
+        "insight_extraction_template": "InsightExtractionSignature",
+        "narrative_section_template": "NarrativeStructureSignature",
+    },
+    "health_score": {
+        "summary_template": "HealthSummarySignature",
+        "recommendation_template": "HealthRecommendationSignature",
+    },
+    "resource_optimizer": {
+        "summary_template": "OptimizationSummarySignature",
+        "recommendation_template": "AllocationRecommendationSignature",
+        "scenario_comparison_template": "ScenarioNarrativeSignature",
     },
 }
 
@@ -92,6 +128,181 @@ def _current_templates(agent_name: str) -> Dict[str, str]:
     return {k: v for k, v in prompts.to_dict().items() if isinstance(v, str)}
 
 
+def _signature_for(agent_name: str, field: str) -> Optional[Any]:
+    """Resolve the DSPy signature class backing a recipient's template field."""
+    import importlib
+
+    sig_name = RECIPIENT_SIGNATURE_FIELDS.get(agent_name, {}).get(field)
+    if not sig_name:
+        return None
+    try:
+        mod = importlib.import_module(f"src.agents.{agent_name}.dspy_integration")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Cannot import dspy_integration for %s: %s", agent_name, e)
+        return None
+    return getattr(mod, sig_name, None)
+
+
+def recipient_required_input_keys(agent_name: str) -> Dict[str, List[str]]:
+    """Map each optimizable template field -> the signature input_field names B1-B4
+    MUST populate as ``signature_inputs`` keys when emitting a signal.
+
+    This is the EXPLICIT, DISCOVERABLE contract for self-emission: a recipient must
+    key its emitted ``signature_inputs`` by the backing SIGNATURE's ``input_fields``
+    (NOT by the ``.format()`` template placeholders, which differ for explainer,
+    health_score, and resource_optimizer). :func:`signal_example_provider` requires
+    every one of these keys to be present, else it drops the row (and warns).
+
+    Returns ``{template_field: [input_field_name, ...]}`` for every field in
+    ``RECIPIENT_SIGNATURE_FIELDS[agent_name]`` whose signature resolves. B1-B4
+    import this so they cannot key the emission wrong.
+    """
+    out: Dict[str, List[str]] = {}
+    for field in RECIPIENT_SIGNATURE_FIELDS.get(agent_name, {}):
+        signature = _signature_for(agent_name, field)
+        if signature is None:
+            continue
+        out[field] = list(getattr(signature, "input_fields", {}).keys())
+    return out
+
+
+def _fetch_recipient_signals(agent_name: str, client: Any, min_reward: float, limit: int):
+    """Read this recipient's emitted signals via SignalCollectorAdapter (sync wrapper)."""
+    from src.rag.memory_adapters import SignalCollectorAdapter
+
+    adapter = SignalCollectorAdapter(supabase_client=client)
+    # get_signals_for_optimization is async; run it synchronously so the provider
+    # callable matches the existing (field) -> list signature GEPA expects.
+    import asyncio
+
+    coro = adapter.get_signals_for_optimization(
+        source_agent=agent_name, min_reward=min_reward, limit=limit
+    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None and loop.is_running():
+        # Already inside an event loop (e.g. optimize_recipient is async): run the
+        # adapter's blocking client call on a worker thread to avoid re-entrancy.
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(lambda: asyncio.run(coro)).result()
+    return asyncio.run(coro)
+
+
+def signal_example_provider(
+    agent_name: str,
+    client: Optional[Any] = None,
+    min_reward: float = 0.5,
+    limit: int = 1000,
+) -> Callable[[str], List[Any]]:
+    """Build a provider that reads REAL emitted signals into dspy.Examples.
+
+    Returns ``(template_field) -> list[dspy.Example]``. For each emitted signal
+    row (``source_agent=agent_name``), constructs
+    ``dspy.Example(**signature_inputs, <gold_field>=generated).with_inputs(
+    *signature_input_fields)`` where ``<gold_field>`` is the signature's first
+    output field. Rows missing the inputs/generated payload are skipped. If a
+    field has fewer than two usable examples, the caller (optimize_recipient)
+    skips it (cold-start) — production never falls back to golden seeds.
+    """
+    try:
+        import dspy
+    except ImportError:  # pragma: no cover - dspy is a hard dep in prod
+
+        def _empty(_field: str) -> List[Any]:
+            return []
+
+        return _empty
+
+    resolved_client = client
+    if resolved_client is None:
+        try:
+            from src.memory.services.factories import get_supabase_client
+
+            maybe = get_supabase_client()
+            # get_supabase_client may be sync or async depending on wiring.
+            import inspect
+
+            if inspect.isawaitable(maybe):
+                import asyncio
+
+                resolved_client = asyncio.run(cast(Coroutine[Any, Any, Any], maybe))
+            else:
+                resolved_client = maybe
+        except Exception as e:  # noqa: BLE001
+            logger.warning("No Supabase client for %s signal provider: %s", agent_name, e)
+            resolved_client = None
+
+    if resolved_client is None:
+
+        def _empty(_field: str) -> List[Any]:
+            logger.info("No client; recipient %s has no real signals (cold-start)", agent_name)
+            return []
+
+        return _empty
+
+    try:
+        signals = _fetch_recipient_signals(agent_name, resolved_client, min_reward, limit)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to read signals for %s: %s", agent_name, e)
+        signals = []
+
+    def provider(field: str) -> List[Any]:
+        signature = _signature_for(agent_name, field)
+        if signature is None:
+            return []
+        input_fields = list(getattr(signature, "input_fields", {}).keys())
+        output_fields = list(getattr(signature, "output_fields", {}).keys())
+        if not input_fields or not output_fields:
+            return []
+        gold_field = output_fields[0]
+
+        examples: List[Any] = []
+        rows_with_payload = 0  # rows that carried both signature_inputs and generated
+        for row in signals:
+            ctx = row.get("input_context") or {}
+            sig_inputs = ctx.get("signature_inputs") or {}
+            generated = (row.get("output") or {}).get("generated")
+            # ``ctx["template_field"]`` (written by emit_recipient_signal) is
+            # provenance-only here: signals are already filtered by source_agent,
+            # and a recipient may emit one field's signal without the others, so we
+            # match on the signature's input_fields rather than the template_field.
+            if not sig_inputs or not generated:
+                continue
+            rows_with_payload += 1
+            # Only keep examples that carry every input the signature needs. B1-B4
+            # MUST key signature_inputs by signature.input_fields (see
+            # recipient_required_input_keys), NOT by template placeholders.
+            kwargs = {k: sig_inputs[k] for k in input_fields if k in sig_inputs}
+            if len(kwargs) != len(input_fields):
+                continue
+            kwargs[gold_field] = generated
+            try:
+                examples.append(dspy.Example(**kwargs).with_inputs(*input_fields))
+            except Exception as e:  # noqa: BLE001
+                logger.debug("Skipping malformed signal for %s.%s: %s", agent_name, field, e)
+
+        # Loud (not silent) when the agent HAS emitted rows but NONE match the
+        # required input keys — the classic B1-B4 key-mismatch bug.
+        if rows_with_payload and not examples:
+            logger.warning(
+                "Recipient %s emitted %d signal(s) but NONE matched %s required "
+                "input keys %s — check that signature_inputs are keyed by the "
+                "signature's input_fields (NOT template placeholders); see "
+                "recipient_required_input_keys().",
+                agent_name,
+                rows_with_payload,
+                field,
+                input_fields,
+            )
+        return examples
+
+    return provider
+
+
 async def optimize_recipient(
     agent_name: str,
     example_provider: Optional[Callable[[str], List[Any]]] = None,
@@ -122,19 +333,23 @@ async def optimize_recipient(
         return {}
 
     if example_provider is None:
-        from .recipient_seeds import default_example_provider
-
-        example_provider = default_example_provider(agent_name)
+        # PRODUCTION default: each recipient optimizes on its OWN real emitted
+        # signals. No golden-seed fallback — a field with <2 real examples is
+        # skipped below (cold-start), the recipient keeps its default template.
+        example_provider = signal_example_provider(agent_name)
 
     import dspy
 
-    from src.optimization.gepa import create_gepa_optimizer, get_metric_for_agent
+    from src.optimization.gepa import create_gepa_optimizer
+
+    from .recipient_metrics import get_recipient_metric
 
     recipient_mod = importlib.import_module(f"src.agents.{agent_name}.dspy_integration")
-    # Normalize the recipient's metric so GEPA's valset Evaluate never hits the
-    # plain-dict `int + dict` crash (the StandardAgentGEPAMetric still returns a
-    # plain dict; wrapping here is surgical — no blast radius on other agents).
-    metric = _wrap_metric(get_metric_for_agent(agent_name))
+    # Per-recipient deterministic heuristic metric (Gap B §5.1), normalized through
+    # _wrap_metric so GEPA's valset Evaluate never hits the plain-dict `int + dict`
+    # crash. get_recipient_metric already returns a Prediction, but wrapping is a
+    # harmless idempotent safety net (and keeps the contract uniform).
+    metric = _wrap_metric(get_recipient_metric(agent_name))
     lm = getattr(dspy.settings, "lm", None)
 
     instructions: Dict[str, str] = {}
@@ -145,7 +360,9 @@ async def optimize_recipient(
                 continue
             examples = list(example_provider(field) or [])
             if len(examples) < 2:
-                logger.info("Too few seed examples for %s.%s; skipping", agent_name, field)
+                logger.info(
+                    "Too few real examples for %s.%s (cold-start); skipping", agent_name, field
+                )
                 continue
             split = max(1, int(len(examples) * 0.8))
             trainset, valset = examples[:split], examples[split:] or examples[:1]
@@ -219,8 +436,8 @@ async def optimize_and_save_recipient(
     if not current:
         return None
     # Score is a coarse signal that an optimization ran; the install path uses it
-    # for last-write provenance. We keep it modest (0.7) since the golden-seed
-    # supervision is weak until real self-emission lands.
+    # for last-write provenance. We keep it modest (0.7) since the heuristic
+    # supervision over a small real-signal corpus is weak early in the loop.
     return produce_bundle_from_instructions(
         agent_name, current_templates=current, instructions=instructions, score=0.7
     )

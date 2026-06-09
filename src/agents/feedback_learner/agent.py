@@ -140,6 +140,8 @@ class FeedbackLearnerAgent:
                 use_llm=self._use_llm,
                 llm=self._llm,
                 cognitive_rag=self._cognitive_rag,
+                persist_signals=self._persist_signals,
+                persist_client=self._persist_client,
             )
         return self._graph
 
@@ -201,16 +203,9 @@ class FeedbackLearnerAgent:
         if training_signal is not None and hasattr(training_signal, "compute_reward"):
             training_reward = training_signal.compute_reward()
 
-        # Persist the finalized signal so it is durable + readable by the
-        # optimizer (audit F5). Best-effort: never fail the cycle on DB error.
-        if (
-            self._persist_signals
-            and training_signal is not None
-            and hasattr(training_signal, "compute_reward")
-        ):
-            from .signal_store import persist_training_signal
-
-            await persist_training_signal(training_signal, client=self._persist_client)
+        # Note: persistence is now owned by the finalize_node closure inside the
+        # graph (graph.py) so every caller — including the API route — persists
+        # exactly once. Do NOT re-persist here.
 
         return FeedbackLearnerOutput(
             batch_id=batch_id,

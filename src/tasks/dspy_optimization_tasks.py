@@ -76,7 +76,8 @@ def _decide_trigger(signals: List[Dict[str, Any]], state: Dict[str, Any]) -> Tup
 
     n = len(signals)
     mean_reward = (sum(float(s.get("reward", 0.0)) for s in signals) / n) if n else 0.0
-    min_signals = int(os.getenv("DSPY_MIN_SIGNALS", "100"))
+    # ~1 signal/cycle; 20 ≈ reachable in normal operation
+    min_signals = int(os.getenv("DSPY_MIN_SIGNALS", "20"))
     trigger = GEPAOptimizationTrigger(min_signals=min_signals)
     return trigger.should_trigger(
         signal_count=n,
@@ -155,3 +156,58 @@ def run_dspy_prompt_optimization(
     """Production trigger for the DSPy self-improvement loop (F1 keystone)."""
     logger.info("Starting DSPy prompt optimization: task %s (force=%s)", self.request.id, force)
     return cast(Dict[str, Any], run_async(_run(self.request.id, force, budget)))
+
+
+async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, Any]:
+    """Execute a single feedback learning cycle via FeedbackLearnerAgent.learn()."""
+    from datetime import timedelta
+
+    from src.agents.feedback_learner.agent import FeedbackLearnerAgent
+
+    end_time = datetime.now(timezone.utc)
+    start_time = end_time - timedelta(hours=window_hours)
+
+    agent = FeedbackLearnerAgent(use_llm=True, persist_signals=True)
+    output = await agent.learn(
+        time_range_start=start_time.isoformat(),
+        time_range_end=end_time.isoformat(),
+    )
+    return {
+        "status": output.status,
+        "feedback_count": output.feedback_count,
+        "training_reward": output.training_reward,
+        "task_id": task_id,
+    }
+
+
+@celery_app.task(bind=True, name="src.tasks.run_feedback_learning_cycle")
+def run_feedback_learning_cycle(self) -> Dict[str, Any]:
+    """GENERATES training signals consumed by run_dspy_prompt_optimization.
+
+    Constructs a recent time window, runs FeedbackLearnerAgent.learn() to
+    process user feedback and persist a training signal to
+    dspy_agent_training_signals (persistence happens in the finalize node).
+    The daily optimize beat then reads those signals and gates on
+    GEPAOptimizationTrigger before running MIPROv2.
+
+    Schedule: every 6 hours (beat entry "feedback-learning-cycle", queue
+    "analytics").  Window size: DSPY_LEARN_WINDOW_HOURS env var (default 24).
+    """
+    window_hours = float(os.getenv("DSPY_LEARN_WINDOW_HOURS", "24"))
+    logger.info(
+        "Starting feedback learning cycle: task %s (window=%.1fh)",
+        self.request.id,
+        window_hours,
+    )
+    try:
+        return cast(
+            Dict[str, Any],
+            run_async(_run_learning_cycle(self.request.id, window_hours)),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, never raise out of task
+        logger.error("Feedback learning cycle failed: task %s — %s", self.request.id, exc)
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "task_id": self.request.id,
+        }

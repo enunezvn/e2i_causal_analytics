@@ -45,11 +45,21 @@ class ExplanationPrompts:
         "Output format: {output_format}."
     )
 
-    # Executive summary prompt
+    # Executive summary template.
+    #
+    # CONTENT-TEMPLATE (mirrors health_score B3): this renders the ACTUAL
+    # user-facing executive summary, NOT an LLM directive. The getter
+    # (get_executive_summary_prompt) supplies the canonical ``{summary_body}``
+    # (the expertise-adapted prose + top-insight highlights produced by
+    # NarrativeGeneratorNode._create_executive_summary) plus a short metadata
+    # header. Because the getter output IS the summary, optimizing this template
+    # changes user-visible output WITHOUT corrupting it (no instruction text is
+    # ever shipped as content). All three placeholders are retained so the
+    # template stays optimizable and existing getter tests stay green.
     executive_summary_template: str = (
-        "Generate an executive summary for {user_expertise} audience. "
-        "Key findings: {key_findings_count}. Confidence: {avg_confidence}. "
-        "Focus on business impact and actionable insights."
+        "**Executive Summary** ({user_expertise} audience · "
+        "{key_findings_count} key finding(s) · avg confidence {avg_confidence})\n\n"
+        "{summary_body}"
     )
 
     # Detailed explanation prompt
@@ -259,13 +269,27 @@ class ExplainerDSPyIntegration:
         user_expertise: str,
         key_findings_count: int,
         avg_confidence: float,
+        summary_body: str = "",
     ) -> str:
-        """Get formatted executive summary prompt."""
-        return self._prompts.executive_summary_template.format(
+        """Render the executive summary via the optimizable content template.
+
+        Drop-in for NarrativeGeneratorNode's inline summary construction: the
+        node passes ``summary_body`` (the expertise-adapted prose + top-insight
+        highlights from ``_create_executive_summary``) and the rendered output
+        IS the executive summary content — NOT an LLM directive. Optimizing
+        ``executive_summary_template`` therefore changes user-visible output
+        without ever shipping instruction text as content (the B3 pattern).
+
+        Called with no ``summary_body`` (the getter-contract tests' usage) it
+        still renders valid content: the metadata header alone.
+        """
+        rendered = self._prompts.executive_summary_template.format(
             user_expertise=user_expertise,
             key_findings_count=key_findings_count,
             avg_confidence=avg_confidence,
+            summary_body=summary_body,
         )
+        return rendered.rstrip()
 
     def get_detailed_explanation_prompt(
         self,

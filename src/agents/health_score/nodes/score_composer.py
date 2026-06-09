@@ -9,12 +9,38 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from src.agents.feedback_learner.recipient_emit import emit_recipient_signal
+
+from ..dspy_integration import get_health_score_dspy_integration
 from ..metrics import DEFAULT_GRADES, DEFAULT_WEIGHTS, GradeThresholds, ScoreWeights
 from ..state import HealthScoreState
 
 logger = logging.getLogger(__name__)
+
+
+def _signal_reward(output: str, inputs: Dict[str, Any]) -> float:
+    """Deterministic heuristic reward in [0, 1] for an emitted summary signal.
+
+    No randomness, no I/O — same (output, inputs) always yields the same value so
+    the optimizer trains on a stable, reproducible reward. Rewards a well-formed,
+    informative summary: it must be non-empty, carry the grade + score anchors,
+    and resolve to a known status word (not the "unknown" fallback).
+    """
+    if not output:
+        return 0.0
+    score = 0.4  # base credit for producing any non-empty summary
+    grade = str(inputs.get("grade", ""))
+    if grade and f"Grade: {grade}" in output:
+        score += 0.2
+    if "/100" in output:
+        score += 0.2
+    # A resolvable status word (excellent/good/fair/poor/critical) signals the
+    # grade mapped cleanly; the "unknown" fallback indicates a malformed grade.
+    if "unknown" not in output.lower():
+        score += 0.2
+    return round(min(score, 1.0), 4)
 
 
 class ScoreComposerNode:
@@ -67,8 +93,8 @@ class ScoreComposerNode:
             # Generate diagnostic reasoning
             diagnosis = self._generate_diagnosis(state, scores)
 
-            # Generate enhanced summary with diagnosis
-            summary = self._generate_summary(overall_score_100, grade, critical_issues)
+            # Generate enhanced summary with diagnosis (via the optimizable template)
+            summary = self._generate_summary(overall_score_100, grade, critical_issues, warnings)
 
             # Add diagnosis insights to summary if there are issues
             if diagnosis["root_causes"]:
@@ -77,6 +103,15 @@ class ScoreComposerNode:
                 if diagnosis["priority_fixes"]:
                     top_fix = diagnosis["priority_fixes"][0]
                     summary += f"\n- Top Priority: {top_fix['action']} ({top_fix['component']})"
+
+            # Emit a recipient training signal for the summary template (best-effort).
+            await self._emit_summary_signal(
+                overall_score=overall_score_100,
+                grade=grade,
+                scores=scores,
+                critical_issues=critical_issues,
+                summary=summary,
+            )
 
             check_time = state.get("total_latency_ms", 0) + int((time.time() - start_time) * 1000)
 
@@ -163,25 +198,66 @@ class ScoreComposerNode:
 
         return critical, warnings
 
-    def _generate_summary(self, score: float, grade: str, issues: List[str]) -> str:
-        """Generate health summary."""
-        status_map = {
-            "A": "excellent",
-            "B": "good",
-            "C": "fair",
-            "D": "poor",
-            "F": "critical",
-        }
-        status = status_map.get(grade, "unknown")
+    def _generate_summary(
+        self, score: float, grade: str, issues: List[str], warnings: Optional[List[str]] = None
+    ) -> str:
+        """Generate health summary via the optimizable summary template.
 
-        summary = f"System health is {status} (Grade: {grade}, Score: {score:.1f}/100)."
+        Drop-in for the former inline construction: routes through
+        ``HealthScoreDSPyIntegration.get_summary_prompt`` (the previously-dead
+        getter) so the optimizable ``summary_template`` is actually consumed. The
+        default template renders byte-identically to the historical string;
+        ``components=""`` is passed since score_composer summaries do not enumerate
+        component names.
+        """
+        integration = get_health_score_dspy_integration()
+        return integration.get_summary_prompt(
+            grade=grade,
+            score=score,
+            components="",
+            critical_count=len(issues),
+            warning_count=len(warnings or []),
+        )
 
-        if issues:
-            summary += f" {len(issues)} critical issue(s) detected."
-        else:
-            summary += " All systems operational."
+    async def _emit_summary_signal(
+        self,
+        overall_score: float,
+        grade: str,
+        scores: Dict[str, float],
+        critical_issues: List[str],
+        summary: str,
+    ) -> None:
+        """Emit ONE recipient training signal for the summary template.
 
-        return summary
+        Best-effort: a persistence failure must never break score composition.
+        ``signature_inputs`` is keyed by ``HealthSummarySignature.input_fields``
+        (the explicit emit<->provider contract from
+        ``recipient_required_input_keys('health_score')['summary_template']``):
+        ``overall_score, grade, component_scores, critical_issues``. Only fields
+        backed by real, fully-populated node data are emitted.
+        """
+        try:
+            component_scores = ", ".join(f"{dim}={val:.2f}" for dim, val in scores.items())
+            critical_repr = "; ".join(critical_issues) if critical_issues else "None"
+            signature_inputs: Dict[str, Any] = {
+                "overall_score": float(overall_score),
+                "grade": grade,
+                "component_scores": component_scores,
+                "critical_issues": critical_repr,
+            }
+            # Emit only when every contract field is populated.
+            if not all(v not in (None, "") for v in signature_inputs.values()):
+                return
+            reward = _signal_reward(summary, signature_inputs)
+            await emit_recipient_signal(
+                agent_name="health_score",
+                signature_inputs=signature_inputs,
+                generated_output=summary,
+                reward=reward,
+                template_field="summary_template",
+            )
+        except Exception as e:  # noqa: BLE001 - emission is best-effort, never fail the run
+            logger.warning("health_score recipient signal emission skipped: %s", e)
 
     def _generate_diagnosis(self, state: HealthScoreState, scores: dict) -> dict:
         """Generate diagnostic reasoning for health issues.
