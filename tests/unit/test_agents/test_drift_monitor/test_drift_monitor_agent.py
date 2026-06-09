@@ -21,6 +21,55 @@ class TestDriftMonitorAgent:
         assert agent is not None
         assert agent.graph is not None
 
+    def test_dag_fields_are_threaded_into_state(self):
+        """F11 (audit): the V4.4 structural drift detector reads
+        baseline_dag_adjacency/current_dag_adjacency/dag_nodes from state. Those
+        MUST be accepted on DriftMonitorInput and threaded through
+        _create_initial_state, otherwise the detector is dead on the agent/
+        orchestrator path (the Input model strips undeclared fields)."""
+        agent = DriftMonitorAgent()
+        input_data = DriftMonitorInput(
+            query="Check causal-DAG drift",
+            features_to_monitor=["a", "b"],
+            dag_nodes=["a", "b"],
+            baseline_dag_adjacency=[[0, 1], [0, 0]],
+            current_dag_adjacency=[[0, 0], [1, 0]],
+            check_structural_drift=True,
+        )
+
+        state = agent._create_initial_state(input_data)
+
+        assert state.get("dag_nodes") == ["a", "b"]
+        assert state.get("baseline_dag_adjacency") == [[0, 1], [0, 0]]
+        assert state.get("current_dag_adjacency") == [[0, 0], [1, 0]]
+        assert state.get("check_structural_drift") is True
+
+    @pytest.mark.asyncio
+    async def test_structural_drift_surfaces_end_to_end(self):
+        """F11 (audit): with differing baseline/current DAGs supplied via the
+        Input model, structural drift must flow input -> detector -> aggregator
+        -> output. Previously dead because DriftMonitorInput stripped the DAG
+        fields, so the structural detector always saw None and skipped."""
+        agent = DriftMonitorAgent()
+        input_data = DriftMonitorInput(
+            query="causal dag drift",
+            features_to_monitor=["a", "b", "c"],
+            dag_nodes=["a", "b", "c"],
+            # Baseline a->b->c ; current is a very different structure.
+            baseline_dag_adjacency=[[0, 1, 0], [0, 0, 1], [0, 0, 0]],
+            current_dag_adjacency=[[0, 0, 1], [1, 0, 0], [0, 1, 0]],
+            check_data_drift=False,
+            check_model_drift=False,
+            check_concept_drift=False,
+        )
+
+        result = await agent.run(input_data)
+
+        # The structural detector ran (no longer skipped) and surfaced results.
+        assert len(result.structural_drift_results) > 0, (
+            "structural drift must surface end-to-end once DAG fields are threaded"
+        )
+
     @pytest.mark.asyncio
     async def test_run_basic(self):
         """Test basic agent execution."""
