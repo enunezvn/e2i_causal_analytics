@@ -273,8 +273,9 @@ TIER 0: ML Foundation (8 agents)
   → model_selector → model_trainer → model_deployer → observability_connector
 
 TIER 1: Coordination (2 agents)
-  orchestrator (4-stage classifier + router)
-  tool_composer (multi-faceted query decomposition)
+  orchestrator (intent classifier [regex → Haiku LLM fallback] + router;
+                routes dependent multi-part queries to tool_composer)
+  tool_composer (multi-part query decomposition: sub-questions + dependency DAG)
 
 TIER 2: Causal Analytics (3 agents)
   causal_impact (DoWhy refutation)

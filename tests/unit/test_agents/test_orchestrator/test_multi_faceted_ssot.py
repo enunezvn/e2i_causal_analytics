@@ -45,7 +45,11 @@ class TestPatternsAreSSOT:
 
     def test_pattern_count_locked(self):
         # Lock the count so a silent regex addition is observable.
-        assert len(MULTI_FACETED_PATTERNS) == 4
+        # 2026-06-09: intentionally broadened 4 → 6 with two sequential-pipeline
+        # forms (",and <wh> ... then", "then <verb>") for orchestrator multi-part
+        # routing (audit C2). Both require an explicit "then"-marker so they
+        # cannot flip the locked single-intent negatives.
+        assert len(MULTI_FACETED_PATTERNS) == 6
 
     def test_patterns_are_immutable(self):
         assert isinstance(MULTI_FACETED_PATTERNS, tuple)

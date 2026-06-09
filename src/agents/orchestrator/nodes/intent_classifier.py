@@ -30,7 +30,12 @@ import re
 import time
 from typing import Literal, cast
 
-from src.agents.multi_faceted import MULTI_FACETED_PATTERNS
+from src.agents.multi_faceted import (
+    MULTI_FACETED_PATTERNS,
+    has_sequential_composition,
+    is_multi_faceted_facet_score,
+    is_multi_faceted_topic_count,
+)
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 
@@ -210,10 +215,14 @@ class IntentClassifierNode:
         # Try pattern matching first (fastest)
         pattern_result = self._pattern_classify(query)
 
-        if pattern_result["confidence"] >= 0.8:
+        if pattern_result["confidence"] >= 0.8 and not self._needs_llm_disambiguation(
+            query, pattern_result
+        ):
             intent = pattern_result
         else:
-            # Fall back to LLM for ambiguous cases
+            # Fall back to LLM for ambiguous OR borderline multi-part cases
+            # (Fix 3b: soft multi-faceted signals that the deterministic layers
+            # may have under-classified — see _needs_llm_disambiguation).
             intent = await self._llm_classify(state.get("query", ""))
 
         classification_time = int((time.time() - start_time) * 1000)
@@ -273,12 +282,59 @@ class IntentClassifierNode:
 
         # Secondary intents in the same deterministic order.
         secondary = [k for k, v in ranked[1:] if v > 0]
+        requires_multi_agent = len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8
+
+        # Fix 2 (audit C2/C3) — sequential-pipeline promotion. A dependency
+        # marker ("then", "after that", "based on that", …) joining 2+ DISTINCT
+        # strong intents signals a *dependent pipeline* the Tool Composer should
+        # decompose — not a single intent and not a parallel pair. Guarded to an
+        # explicit sequence marker so additive/parallel compounds (e.g. "what
+        # causes A and what drives B and also explain C") stay single-agent,
+        # preserving the locked near-miss negatives in
+        # test_intent_classifier_multi_faceted.py.
+        strong_components = [
+            name for name, score in ranked if score >= 0.8 and name != "multi_faceted"
+        ]
+        if (
+            primary != "multi_faceted"
+            and len(strong_components) >= 2
+            and has_sequential_composition(query)
+        ):
+            primary = "multi_faceted"
+            confidence = max(confidence, scores.get("multi_faceted", 0.0), 0.85)
+            secondary = strong_components
+            requires_multi_agent = True
 
         return IntentClassification(
             primary_intent=cast(IntentType, primary),
             confidence=confidence,
             secondary_intents=secondary[:2],
-            requires_multi_agent=len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8,
+            requires_multi_agent=requires_multi_agent,
+        )
+
+    def _needs_llm_disambiguation(self, query: str, pattern_result: IntentClassification) -> bool:
+        """Decide whether a confidently pattern-classified *single* intent should
+        still be escalated to the LLM (Fix 3b).
+
+        The deterministic layers (regex patterns + sequential-pipeline promotion)
+        catch the lexically clear multi-part queries. This predicate catches the
+        residual: a query the pattern layer classified as a *non-multi_faceted*
+        single intent at high confidence, yet which carries a soft multi-faceted
+        signal — a sequence/dependency marker, or ≥2 facets, or ≥2 analytics
+        topic groups. For those, the Haiku fallback (whose prompt already lists
+        ``multi_faceted``) makes the final call rather than silently routing to
+        one agent.
+
+        Returns ``False`` when the result is already ``multi_faceted`` (the
+        deterministic layers already decided) or when no soft signal is present.
+        """
+        if pattern_result.get("primary_intent") == "multi_faceted":
+            return False
+        q = query.lower()
+        return bool(
+            has_sequential_composition(q)
+            or is_multi_faceted_facet_score(q)
+            or is_multi_faceted_topic_count(q)
         )
 
     async def _llm_classify(self, query: str) -> IntentClassification:

@@ -54,7 +54,42 @@ MULTI_FACETED_PATTERNS: tuple[str, ...] = (
     r"compare .* (vs|versus|against|to) .* and",
     r"(combine|integrate|synthes).*(analyses|results|findings)",
     r"(both|multiple) (effects?|analyses|perspectives?)",
+    # Sequential / dependent-pipeline forms (orchestrator multi-part routing,
+    # 2026-06-09; audit findings C2/C3). BOTH require an explicit "then"-marker
+    # so they cannot flip the locked single-intent negatives in
+    # test_intent_classifier_multi_faceted.py — additive/list joins without a
+    # sequence marker ("compare A and B", "X and also Y") stay single-agent.
+    r",\s+and\s+(what|which|how|why|who|where)\b.*\bthen\b",
+    r"\bthen\s+(design|identify|recommend|predict|estimate|compare|find|"
+    r"build|simulate|determine|use|forecast|analyz)",
 )
+
+
+# Sequential / dependency connectors that signal a *dependent pipeline*
+# ("do A, then B using A"). This is the precise Tool-Composer routing signal —
+# deliberately distinct from additive/parallel joins ("and also", "compare X
+# and Y"), which are single comparisons or parallel delegations, NOT pipelines.
+_SEQUENTIAL_MARKER_REGEX = re.compile(
+    r"\b(then|after that|and then|followed by|after determining|"
+    r"based on (that|those|the)|use (that|those|the results?)|once (we|you))\b",
+    re.IGNORECASE,
+)
+
+
+def has_sequential_composition(query: str) -> bool:
+    """Return ``True`` when the query chains a *dependent* second step onto a
+    first via an explicit sequence/dependency connector.
+
+    Examples → ``True``: "do A, then B", "after that estimate the lift",
+    "based on that recommend a plan".
+    Examples → ``False``: "compare A and B", "X and also Y" (additive, not
+    sequential).
+
+    Used by ``IntentClassifierNode`` to promote a multi-intent dependent query
+    to ``multi_faceted`` (→ ``tool_composer``). Lives in the SSOT module so the
+    multi-faceted detection logic has exactly one home (issue #288).
+    """
+    return bool(_SEQUENTIAL_MARKER_REGEX.search(query))
 
 
 _FACET_CONJUNCTION_WORDS: tuple[str, ...] = (
