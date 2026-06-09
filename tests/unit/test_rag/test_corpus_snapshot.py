@@ -17,7 +17,12 @@ def test_keeps_latest_row_per_metric_region_combo():
     # rows arrive ordered by metric_date DESC (as the DB query returns them)
     rows = [
         {"metric_name": "TRx", "region": "west", "metric_date": "2025-10-29", "value": 5},
-        {"metric_name": "TRx", "region": "west", "metric_date": "2025-09-01", "value": 4},  # older dup
+        {
+            "metric_name": "TRx",
+            "region": "west",
+            "metric_date": "2025-09-01",
+            "value": 4,
+        },  # older dup
         {"metric_name": "TRx", "region": "east", "metric_date": "2025-08-01", "value": 3},
         {"metric_name": "NBRx", "region": "west", "metric_date": "2025-07-01", "value": 2},
     ]

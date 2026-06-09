@@ -43,7 +43,9 @@ async def test_multihop_pipeline_returns_corpus_and_is_crash_safe():
     result = await cognitive_rag_retrieve(
         query=STRONG_QUERY, brand_context="Kisqali", k=5, enable_multi_hop=True
     )
-    assert 1 <= result.hop_count <= _MULTIHOP_MAX_HOPS, f"hop_count out of range: {result.hop_count}"
+    assert 1 <= result.hop_count <= _MULTIHOP_MAX_HOPS, (
+        f"hop_count out of range: {result.hop_count}"
+    )
     assert result.evidence, "multi-hop pipeline returned no evidence"
     # The top result must be real operational-corpus KPI prose (rendered from
     # business_metrics: "<metric> for <brand> in the <region> on <date>: value ..."),
@@ -95,7 +97,9 @@ async def test_multihop_runs_bounded_with_real_llm():
     the hop cap; a well-served query early-stops. Both stay within bounds."""
     weak = await cognitive_rag_retrieve(
         query="Summarize cross-brand competitive dynamics and unmet need signals",
-        brand_context="", k=5, enable_multi_hop=True,
+        brand_context="",
+        k=5,
+        enable_multi_hop=True,
     )
     assert 1 <= weak.hop_count <= _MULTIHOP_MAX_HOPS
 

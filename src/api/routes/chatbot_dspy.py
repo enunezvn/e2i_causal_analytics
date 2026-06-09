@@ -1665,9 +1665,7 @@ async def cognitive_rag_retrieve(
             queries_used = {rewritten_query}  # hop 1 already used the rewritten query
             while decider is not None and hop_count < _MULTIHOP_MAX_HOPS:
                 avg_so_far = (
-                    sum(relevance_scores) / len(relevance_scores)
-                    if relevance_scores
-                    else 0.0
+                    sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
                 )
                 if _evidence_sufficient(evidence, avg_so_far):
                     break
@@ -1693,9 +1691,7 @@ async def cognitive_rag_retrieve(
                     break
                 next_memory = str(getattr(decision, "next_memory", "STOP"))
                 confidence = _validate_confidence(getattr(decision, "confidence", 0.0))
-                if not _should_continue_hop(
-                    next_memory, confidence, hop_count, _MULTIHOP_MAX_HOPS
-                ):
+                if not _should_continue_hop(next_memory, confidence, hop_count, _MULTIHOP_MAX_HOPS):
                     break
                 retrieval_query = str(getattr(decision, "retrieval_query", "") or "").strip()
                 # A blank or already-tried query yields no new evidence — treat it

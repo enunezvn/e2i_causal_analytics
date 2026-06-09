@@ -8,13 +8,7 @@ regression back to a hardcoded False is caught without needing live backends.
 
 from pathlib import Path
 
-GRAPH = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "api"
-    / "routes"
-    / "chatbot_graph.py"
-)
+GRAPH = Path(__file__).resolve().parents[3] / "src" / "api" / "routes" / "chatbot_graph.py"
 
 
 def test_caller_forwards_multihop_flag():

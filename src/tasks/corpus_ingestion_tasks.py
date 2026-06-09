@@ -20,9 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, name="src.tasks.sync_operational_corpus")
-def sync_operational_corpus(
-    self, brands: Optional[list[str]] = None
-) -> dict[str, Any]:
+def sync_operational_corpus(self, brands: Optional[list[str]] = None) -> dict[str, Any]:
     """Index the latest snapshot of every (brand, metric, region) KPI combo.
 
     Args:
@@ -31,9 +29,7 @@ def sync_operational_corpus(
     Returns:
         ``{"indexed": <n_new_rows>, "brands": <brands|"all">}``.
     """
-    inserted = asyncio.run(
-        index_business_metrics(latest_per_combo=True, brands=brands)
-    )
+    inserted = asyncio.run(index_business_metrics(latest_per_combo=True, brands=brands))
     logger.info(
         "sync_operational_corpus: indexed %d new corpus rows (brands=%s)",
         len(inserted),

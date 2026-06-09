@@ -33,10 +33,16 @@ async def test_snapshot_ingestion_covers_every_brand_region_combo():
     # All brands present in business_metrics must be present in the corpus.
     bm_brands = {
         (r["brand"] or "").lower()
-        for r in (sb.table("business_metrics").select("brand").not_.is_("brand", "null").execute().data or [])
+        for r in (
+            sb.table("business_metrics").select("brand").not_.is_("brand", "null").execute().data
+            or []
+        )
         if r.get("brand")
     }
-    corpus_rows = sb.table("episodic_memories").select("brand,region").eq("agent_name", AGENT).execute().data or []
+    corpus_rows = (
+        sb.table("episodic_memories").select("brand,region").eq("agent_name", AGENT).execute().data
+        or []
+    )
     corpus_brands = {(r.get("brand") or "") for r in corpus_rows}
     corpus_regions = {(r.get("region") or "") for r in corpus_rows}
 

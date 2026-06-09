@@ -165,9 +165,7 @@ def _fetch_brand_rows(
     page = 0
     page_size = 1000
     while True:
-        batch = (
-            base.range(page * page_size, page * page_size + page_size - 1).execute().data or []
-        )
+        batch = base.range(page * page_size, page * page_size + page_size - 1).execute().data or []
         all_rows.extend(batch)
         if len(batch) < page_size:
             break

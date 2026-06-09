@@ -82,9 +82,7 @@ async def test_sparse_leg_serves_operational_corpus():
         filters={"brand": TITLECASE_BRAND},
     )
     assert results, "sparse leg returned ZERO rows for a commercial query"
-    from_episodic = [
-        r for r in results if r.metadata.get("source_name") == "episodic_memories"
-    ]
+    from_episodic = [r for r in results if r.metadata.get("source_name") == "episodic_memories"]
     assert from_episodic, (
         "sparse leg surfaced no episodic_memories rows (operational corpus not "
         "indexed in hybrid_fulltext_search); sources="
@@ -110,11 +108,15 @@ async def test_corpus_appears_in_both_legs_and_wins_fusion():
     """
     connector = get_memory_connector()
     dense = await connector.vector_search_by_text(
-        query_text=COMMERCIAL_QUERY, k=8, filters={"brand": TITLECASE_BRAND},
+        query_text=COMMERCIAL_QUERY,
+        k=8,
+        filters={"brand": TITLECASE_BRAND},
         min_similarity=EFFECTIVE_FLOOR,
     )
     sparse = await connector.fulltext_search(
-        query_text=COMMERCIAL_QUERY, k=8, filters={"brand": TITLECASE_BRAND},
+        query_text=COMMERCIAL_QUERY,
+        k=8,
+        filters={"brand": TITLECASE_BRAND},
     )
     dense_corpus = {r.content for r in dense if _mentions_corpus(r.content)}
     sparse_corpus = {r.content for r in sparse if _mentions_corpus(r.content)}
