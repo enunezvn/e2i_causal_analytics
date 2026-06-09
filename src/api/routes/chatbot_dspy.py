@@ -1662,6 +1662,7 @@ async def cognitive_rag_retrieve(
         # enable_multi_hop / ChatbotHopDecider (audit F6).
         if enable_multi_hop:
             decider = _get_dspy_hop_decider()
+            queries_used = {rewritten_query}  # hop 1 already used the rewritten query
             while decider is not None and hop_count < _MULTIHOP_MAX_HOPS:
                 avg_so_far = (
                     sum(relevance_scores) / len(relevance_scores)
@@ -1696,10 +1697,13 @@ async def cognitive_rag_retrieve(
                     next_memory, confidence, hop_count, _MULTIHOP_MAX_HOPS
                 ):
                     break
-                retrieval_query = (
-                    str(getattr(decision, "retrieval_query", "") or "").strip()
-                    or rewritten_query
-                )
+                retrieval_query = str(getattr(decision, "retrieval_query", "") or "").strip()
+                # A blank or already-tried query yields no new evidence — treat it
+                # as STOP rather than re-running + re-scoring the same rows on every
+                # remaining hop (codex LOW).
+                if not retrieval_query or retrieval_query in queries_used:
+                    break
+                queries_used.add(retrieval_query)
                 hop_count += 1
                 more_kept, more_scores = await _hop(retrieval_query)
                 evidence = _dedupe_evidence(evidence + more_kept)

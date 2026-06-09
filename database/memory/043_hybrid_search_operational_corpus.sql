@@ -157,12 +157,18 @@ BEGIN
     -- wants documents sharing ANY query term, ranked by overlap (ts_rank_cd). We
     -- OR-combine the AND tsquery (& -> |) for the episodic branch ONLY; the
     -- causal_paths/agent_activities/triggers branches keep their tested
-    -- AND-semantics (out of F2 scope). Caveat: an explicit negation (-term ->
-    -- !term) would also flip under & -> |; these analytics queries do not negate.
-    v_or_query := COALESCE(
-        NULLIF(replace(tsquery_val::text, '&', '|'), '')::tsquery,
-        tsquery_val
-    );
+    -- AND-semantics (out of F2 scope). A naive blanket replace would also turn a
+    -- negation (a & !b) into (a | !b), inverting the exclusion into a match-most
+    -- probe (codex MED). Guard it: if the parsed query carries a negation, keep
+    -- the original AND-semantics for safety; otherwise OR-combine the positives.
+    IF position('!' in tsquery_val::text) > 0 THEN
+        v_or_query := tsquery_val;
+    ELSE
+        v_or_query := COALESCE(
+            NULLIF(replace(tsquery_val::text, '&', '|'), '')::tsquery,
+            tsquery_val
+        );
+    END IF;
 
     BEGIN
         v_max_staleness := NULLIF(filters->>'max_staleness', '')::float;

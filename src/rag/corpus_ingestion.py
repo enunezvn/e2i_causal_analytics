@@ -146,12 +146,17 @@ def _fetch_brand_rows(
     coverage, no omitted combos (audit F3b). ``False`` keeps the legacy bounded
     recent-N behavior.
     """
+    # metric_date DESC drives latest-per-combo; metric_id (PK) is a deterministic
+    # secondary key so offset pagination over same-date rows can neither skip nor
+    # duplicate a row across page boundaries (codex MED) -> _latest_per_combo sees
+    # a stable total order and cannot miss a combo.
     base = (
         sb.table("business_metrics")
         .select(_METRIC_COLUMNS)
         .eq("brand", brand)
         .not_.is_("metric_name", "null")
         .order("metric_date", desc=True)
+        .order("metric_id")
     )
     if not latest_per_combo:
         return list(base.limit(limit_per_brand).execute().data or [])
