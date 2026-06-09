@@ -15,6 +15,7 @@ Options:
 """
 
 import argparse
+import json
 import logging
 import sys
 from datetime import datetime
@@ -172,6 +173,46 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
     return datasets
 
 
+def write_parquet_snapshots(datasets: dict, out_dir) -> str:
+    """Dual-sink companion to load_to_supabase: write each dataset to
+    <out_dir>/<table>.parquet + a manifest.json. Rows are is_synthetic-stamped
+    upstream by generate_datasets. Requires pyarrow."""
+    from pathlib import Path
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    tables = []
+    for table_name, df in datasets.items():
+        path = out / f"{table_name}.parquet"
+        # Some columns (e.g. feature_values.value/entity_values) hold Python
+        # dict/list objects — the same shape the DB jsonb columns carry. pyarrow
+        # cannot infer a uniform type for a heterogeneous object column, so
+        # JSON-encode any object column that contains dict/list cells. This keeps
+        # the snapshot faithful (values round-trip as JSON text) and the offline
+        # path unblocked, byte-equivalent to the jsonb the loader upserts.
+        df_out = df.copy()
+        for col in df_out.columns:
+            if df_out[col].dtype == "object" and df_out[col].map(
+                lambda v: isinstance(v, (dict, list))
+            ).any():
+                df_out[col] = df_out[col].map(
+                    lambda v: json.dumps(v, default=str)
+                    if isinstance(v, (dict, list))
+                    else v
+                )
+        df_out.to_parquet(path, index=False)
+        tables.append({"table": table_name, "path": str(path), "rows": int(len(df_out))})
+        logger.info("  Parquet %s (%d rows)", path, len(df_out))
+    manifest = {
+        "run_timestamp": datetime.now().isoformat(),
+        "is_synthetic": True,
+        "tables": tables,
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
+    logger.info("Wrote %d parquet snapshots + manifest to %s", len(tables), out)
+    return str(out)
+
+
 def load_to_supabase(datasets: dict, dry_run: bool = False, verbose: bool = False):
     """Load datasets to Supabase."""
     logger.info("")
@@ -221,6 +262,10 @@ def main():
     parser.add_argument("--dgp", type=str, default="confounded",
                        choices=["simple_linear", "confounded", "heterogeneous", "time_series", "selection_bias"],
                        help="DGP type to use")
+    parser.add_argument("--parquet-out", type=str, default=None,
+                       help="Also write each dataset to <dir>/<table>.parquet + manifest.json")
+    parser.add_argument("--parquet-only", action="store_true",
+                       help="Write parquet only; SKIP the Supabase load (pollution-free)")
     args = parser.parse_args()
 
     if args.verbose:
@@ -244,6 +289,16 @@ def main():
     try:
         # Generate datasets
         datasets = generate_datasets(sizes, dgp_type, verbose=args.verbose)
+
+        # Parquet dual-sink (optional). --parquet-only skips the DB load entirely
+        # (pollution-free: no writes to shared prod tables, no DB creds needed).
+        if args.parquet_out or args.parquet_only:
+            out_dir = args.parquet_out or f"data/synthetic/parquet/{datetime.now():%Y%m%dT%H%M%S}"
+            write_parquet_snapshots(datasets, out_dir)
+            write_cohort_frames(out_dir)  # Task 6
+            if args.parquet_only:
+                logger.info("parquet-only: skipping Supabase load")
+                return 0
 
         # Load to Supabase
         results = load_to_supabase(datasets, dry_run=args.dry_run, verbose=args.verbose)
