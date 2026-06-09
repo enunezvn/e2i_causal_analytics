@@ -23,7 +23,14 @@ from supabase import Client, create_client
 
 # Import CohortConstructor (F17: absolute package path — the bare top-level
 # `cohort_constructor` package does not exist, so this raised ModuleNotFoundError)
-from src.agents.cohort_constructor import CohortConfig, CohortConstructor, Criterion, Operator
+from src.agents.cohort_constructor import (
+    CohortConfig,
+    CohortConstructor,
+    Criterion,
+    CriterionType,
+    Operator,
+    TemporalRequirements,
+)
 
 # ============================================
 # E2I AGENT CONTRACT
@@ -98,7 +105,11 @@ class CohortConstructorAgent:
 
             # Step 3: Construct cohort
             constructor = CohortConstructor(config)
-            eligible_df, metadata = constructor.construct_cohort(patient_df)
+            eligible_df, execution_result = constructor.construct_cohort(patient_df)
+            # construct_cohort returns a CohortExecutionResult dataclass; the
+            # storage + return path below consume it as a dict (cohort_id /
+            # eligibility_log / **metadata), so materialize the dict form.
+            metadata = execution_result.to_dict()
 
             # Step 4: Store results in Supabase
             execution_id = self._store_cohort_execution(config, metadata, patient_df, eligible_df)
@@ -176,11 +187,19 @@ class CohortConstructorAgent:
                 # Convert DB record to CohortConfig
                 return self._db_record_to_config(db_config)
 
-        # Option 3: Create from brand/indication defaults
+        # Option 3: brand/indication defaults. There is NO real source of default
+        # cohort criteria for a brand/indication (CohortConfig has no from_brand
+        # factory), and fabricating a default cohort spec would yield a plausible-
+        # but-fake cohort. Fail closed rather than invent eligibility criteria.
         brand = input_data["scope_spec"]["brand"]
         indication = input_data["scope_spec"]["indication"]
 
-        return CohortConfig.from_brand(brand, indication)
+        raise NotImplementedError(
+            f"No cohort configuration available for brand={brand!r}, "
+            f"indication={indication!r}: supply an explicit 'cohort_config' or an "
+            "active row in ml_cohort_definitions (use_existing_config=True). "
+            "Default-from-brand cohort generation is not implemented."
+        )
 
     def _db_record_to_config(self, db_record: Dict) -> CohortConfig:
         """Convert database record to CohortConfig"""
@@ -190,8 +209,9 @@ class CohortConstructorAgent:
                 field=c["field"],
                 operator=Operator(c["operator"]),
                 value=c["value"],
-                description=c.get("description"),
-                clinical_rationale=c.get("clinical_rationale"),
+                criterion_type=CriterionType.INCLUSION,
+                description=c.get("description", ""),
+                clinical_rationale=c.get("clinical_rationale", ""),
             )
             for c in db_record["inclusion_criteria"]
         ]
@@ -201,21 +221,26 @@ class CohortConstructorAgent:
                 field=c["field"],
                 operator=Operator(c["operator"]),
                 value=c["value"],
-                description=c.get("description"),
-                clinical_rationale=c.get("clinical_rationale"),
+                criterion_type=CriterionType.EXCLUSION,
+                description=c.get("description", ""),
+                clinical_rationale=c.get("clinical_rationale", ""),
             )
             for c in db_record["exclusion_criteria"]
         ]
 
+        # lookback/followup/index_date_field live on TemporalRequirements, not on
+        # CohortConfig directly.
         return CohortConfig(
             brand=db_record["brand"],
             indication=db_record["indication"],
             cohort_name=db_record["cohort_name"],
             inclusion_criteria=inclusion,
             exclusion_criteria=exclusion,
-            lookback_days=db_record.get("lookback_days", 180),
-            followup_days=db_record.get("followup_days", 90),
-            index_date_field=db_record.get("index_date_field", "diagnosis_date"),
+            temporal_requirements=TemporalRequirements(
+                lookback_days=db_record.get("lookback_days", 180),
+                followup_days=db_record.get("followup_days", 90),
+                index_date_field=db_record.get("index_date_field", "diagnosis_date"),
+            ),
             version=db_record.get("version", "1.0.0"),
         )
 
