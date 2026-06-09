@@ -18,6 +18,12 @@ from ..config import (
     InsuranceTypeEnum,
     RegionEnum,
 )
+from ..dgp.treatment_arm import (
+    assign_segment,
+    assign_treatment_arm,
+    binary_outcome_with_cate,
+    brand_scaled_cate,
+)
 from .base import BaseGenerator, GeneratorConfig
 
 
@@ -86,15 +92,33 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # Generate confounders FIRST (they affect both treatment and outcome)
         confounders = self._generate_confounders(n, dgp_type)
 
-        # Generate treatment (engagement) based on confounders
+        # Generate treatment (engagement) based on confounders. engagement_score is
+        # retained as an EMITTED covariate (continuous), but the causal treatment for
+        # arm-based estimators is now the confounded BINARY arm below (Task 03.1).
         engagement_scores = self._generate_treatment(confounders, dgp_type)
 
-        # Generate outcome with TRUE causal effect
-        outcomes = self._generate_outcome(
-            engagement_scores,
-            confounders,
-            true_ate,
-            dgp_type,
+        # Confounded binary treatment ARM + estimable propensity with overlap
+        # (Task 03.1). Confounders carry disease_severity + academic_hcp.
+        treatment_arm, propensity = assign_treatment_arm(confounders, self._rng)
+
+        # Per-unit segment + brand-scaled CATE (Task 03.2). Distinct per brand so
+        # a Kisqali probe yields a different structure than Remibrutinib (gate 6).
+        brand_enum = self.config.brand or Brand.REMIBRUTINIB
+        segment = assign_segment(confounders["disease_severity"])
+        cate_map = brand_scaled_cate(brand_enum)
+
+        # Prevalence-banded binary outcome carrying E[tau]=TRUE_ATE (Task 03.3).
+        # REPLACES the expit(...)>0.5 outcome for treatment_initiated so the label
+        # is recoverable (in-band [0.20,0.50]) rather than degenerate.
+        treatment_initiated, tau_i = binary_outcome_with_cate(
+            treatment_arm, confounders, segment, cate_map, self._rng
+        )
+
+        # days_to_treatment only for initiators (preserve prior shape)
+        days_to_treatment: Any = np.where(
+            treatment_initiated == 1,
+            self._random_int(7, 90, n),
+            np.nan,
         )
 
         # Generate dates and assign splits
@@ -126,8 +150,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "disease_severity": confounders["disease_severity"],
                 "academic_hcp": confounders["academic_hcp"],
                 "engagement_score": engagement_scores,
-                "treatment_initiated": outcomes["treatment_initiated"],
-                "days_to_treatment": outcomes["days_to_treatment"],
+                "treatment_initiated": treatment_initiated,
+                "days_to_treatment": days_to_treatment,
                 "geographic_region": self._random_choice(
                     [r.value for r in RegionEnum],
                     n,
@@ -138,23 +162,27 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                     p=[self.INSURANCE_DIST[i] for i in InsuranceTypeEnum],
                 ),
                 "age_at_diagnosis": self._random_int(18, 85, n),
-                # Causal substrate columns (Shard 01 M2 DDL). Emitted as NULL
-                # placeholders here so the loader carries them (TABLE_COLUMNS
-                # registration, Shard 02 Task 1) and validate_datasets does not
-                # flag them as critical_missing. Values are populated by Shard
-                # 03's DGP (treatment_arm/propensity_score/segment_assignment)
-                # and Shard 06's outcome builders (discontinued_180d/persistent_180d).
-                "treatment_arm": [None] * n,
-                "propensity_score": [None] * n,
-                "segment_assignment": [None] * n,
+                # Causal substrate columns (Shard 01 M2 DDL). Populated by Shard
+                # 03's DGP: treatment_arm/propensity_score/segment_assignment are
+                # the confounded arm + estimable propensity + per-unit CATE segment;
+                # treatment_effect_estimate is the per-unit brand-scaled tau (the
+                # recoverable ground truth). discontinued_180d/persistent_180d stay
+                # NULL here — Shard 06's outcome builders own those.
+                "treatment_arm": treatment_arm,
+                "propensity_score": np.round(propensity, 4),
+                "segment_assignment": segment,
+                "treatment_effect_estimate": np.round(tau_i, 4),
                 "discontinued_180d": [None] * n,
                 "persistent_180d": [None] * n,
             }
         )
 
-        # Store ground truth metadata
-        df.attrs["true_ate"] = true_ate
+        # Store ground truth metadata (realized values from the wired DGP)
+        df.attrs["true_ate"] = float(np.mean(tau_i))
+        df.attrs["cate_by_segment"] = cate_map
+        df.attrs["brand"] = brand_enum.value
         df.attrs["dgp_type"] = dgp_type.value
+        df.attrs["prevalence"] = float(np.mean(treatment_initiated))
         df.attrs["confounders"] = dgp_config.confounders if dgp_config else []
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")

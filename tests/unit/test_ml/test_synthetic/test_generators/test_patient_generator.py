@@ -137,7 +137,11 @@ class TestPatientGenerator:
         df = generator.generate()
 
         assert "true_ate" in df.attrs
-        assert df.attrs["true_ate"] == 0.25  # Confounded DGP
+        # Shard 03 wires the arm-based recoverable DGP: true_ate is now the
+        # REALIZED mean of the per-unit brand-scaled CATE (mean(tau_i)), in the
+        # designed [0.15,0.50] band — NOT the old static continuous-engagement
+        # config constant 0.25 (that encoded the pre-arm degenerate path).
+        assert 0.15 <= df.attrs["true_ate"] <= 0.50
         assert df.attrs["dgp_type"] == "confounded"
         assert "confounders" in df.attrs
 
@@ -187,7 +191,8 @@ class TestPatientGeneratorDGPs:
         generator = PatientGenerator(config)
         df = generator.generate()
 
-        assert df.attrs["true_ate"] == 0.40
+        # Shard 03: arm-based realized true_ate (mean tau_i) in the designed band.
+        assert 0.15 <= df.attrs["true_ate"] <= 0.50
         assert df.attrs["dgp_type"] == "simple_linear"
 
     def test_confounded_dgp(self):
@@ -200,7 +205,8 @@ class TestPatientGeneratorDGPs:
         generator = PatientGenerator(config)
         df = generator.generate()
 
-        assert df.attrs["true_ate"] == 0.25
+        # Shard 03: arm-based realized true_ate (mean tau_i) in the designed band.
+        assert 0.15 <= df.attrs["true_ate"] <= 0.50
         assert "disease_severity" in df.attrs["confounders"]
         assert "academic_hcp" in df.attrs["confounders"]
 
@@ -228,7 +234,8 @@ class TestPatientGeneratorDGPs:
         generator = PatientGenerator(config)
         df = generator.generate()
 
-        assert df.attrs["true_ate"] == 0.30
+        # Shard 03: arm-based realized true_ate (mean tau_i) in the designed band.
+        assert 0.15 <= df.attrs["true_ate"] <= 0.50
         assert df.attrs["dgp_type"] == "time_series"
 
     def test_selection_bias_dgp(self):
@@ -241,7 +248,8 @@ class TestPatientGeneratorDGPs:
         generator = PatientGenerator(config)
         df = generator.generate()
 
-        assert df.attrs["true_ate"] == 0.35
+        # Shard 03: arm-based realized true_ate (mean tau_i) in the designed band.
+        assert 0.15 <= df.attrs["true_ate"] <= 0.50
         assert df.attrs["dgp_type"] == "selection_bias"
 
 
