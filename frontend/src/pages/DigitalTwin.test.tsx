@@ -315,6 +315,30 @@ describe('DigitalTwin', () => {
     expect(screen.getByText(/1840\s*ms/i)).toBeInTheDocument();
   });
 
+  it('shows a SYNTHETIC badge when the result data_provenance is synthetic', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, data_provenance: 'synthetic_uplift_v1' },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    expect(screen.getByText(/^SYNTHETIC$/)).toBeInTheDocument();
+  });
+
+  it('does NOT show a SYNTHETIC badge for a non-synthetic provenance', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, data_provenance: 'database' },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    expect(screen.queryByText(/^SYNTHETIC$/)).not.toBeInTheDocument();
+  });
+
   it('does NOT render outcome sections the backend never returns', () => {
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,

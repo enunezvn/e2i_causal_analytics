@@ -181,7 +181,12 @@ JOURNEY_STAGES = [
 ]
 JOURNEY_STATUSES = ["active", "stable", "transitioning", "completed"]
 PRIORITY_LEVELS = ["critical", "high", "medium", "low"]
-DATA_SOURCES = ["IQVIA_APLD", "IQVIA_LAAD", "HealthVerity", "Komodo", "Veeva"]
+# Provenance honesty (Shard 07 D1): this generator emits SYNTHETIC records. Labeling
+# them with real vendor feeds ("IQVIA_APLD"/"HealthVerity"/...) is dishonest
+# provenance — synthetic rows would look real. The single honest synthetic label is
+# threaded through every emitted record's data_source (and stamped is_synthetic=True).
+SYNTHETIC_DATA_SOURCE = "synthetic_e2i_v3"
+DATA_SOURCES = [SYNTHETIC_DATA_SOURCE]
 AGENT_NAMES = [
     "orchestrator",
     "causal_impact",
@@ -357,9 +362,10 @@ class E2IDataGenerator:
                             "target_count": random.randint(100, 500),
                             "effective_date": self.config.data_start_date.isoformat(),
                             "expiration_date": None,
-                            "data_source": "IQVIA_APLD",
-                            "methodology_notes": "Derived from prescribing data",
+                            "data_source": SYNTHETIC_DATA_SOURCE,
+                            "methodology_notes": "Synthetic reference universe (E2I v3)",
                             "created_at": datetime.now().isoformat(),
+                            "is_synthetic": True,
                         }
                     )
 
@@ -377,9 +383,10 @@ class E2IDataGenerator:
                         "target_count": random.randint(10000, 50000),
                         "effective_date": self.config.data_start_date.isoformat(),
                         "expiration_date": None,
-                        "data_source": "HealthVerity",
-                        "methodology_notes": "Claims-based patient identification",
+                        "data_source": SYNTHETIC_DATA_SOURCE,
+                        "methodology_notes": "Synthetic patient universe (E2I v3)",
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
 
@@ -435,6 +442,7 @@ class E2IDataGenerator:
                     "sales_rep_id": f"REP_{random.randint(1, 50):03d}",
                     "created_at": datetime.now().isoformat(),
                     "updated_at": datetime.now().isoformat(),
+                    "is_synthetic": True,
                 }
             )
 
@@ -528,6 +536,7 @@ class E2IDataGenerator:
                     "split_config_id": self.split_config_id,
                     "created_at": datetime.now().isoformat(),
                     "updated_at": datetime.now().isoformat(),
+                    "is_synthetic": True,
                 }
             )
 
@@ -607,6 +616,7 @@ class E2IDataGenerator:
                         "data_split": pj["data_split"],
                         "split_config_id": self.split_config_id,
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
                 event_count += 1
@@ -647,6 +657,7 @@ class E2IDataGenerator:
                         "data_split": pj["data_split"],
                         "split_config_id": self.split_config_id,
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
                 event_count += 1
@@ -673,6 +684,7 @@ class E2IDataGenerator:
                         "data_split": pj["data_split"],
                         "split_config_id": self.split_config_id,
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
                 event_count += 1
@@ -785,6 +797,7 @@ class E2IDataGenerator:
                         "data_split": pj["data_split"],
                         "split_config_id": self.split_config_id,
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
                 pred_count += 1
@@ -888,7 +901,7 @@ class E2IDataGenerator:
                         },
                         "supporting_evidence": {
                             "confidence": round(random.uniform(0.7, 0.95), 3),
-                            "sources": random.sample(DATA_SOURCES, 2),
+                            "sources": random.sample(DATA_SOURCES, min(2, len(DATA_SOURCES))),
                         },
                         "recommended_action": random.choice(
                             [
@@ -919,6 +932,7 @@ class E2IDataGenerator:
                         "split_config_id": self.split_config_id,
                         "created_at": datetime.now().isoformat(),
                         "updated_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
 
@@ -990,6 +1004,7 @@ class E2IDataGenerator:
                             "data_split": data_split,
                             "split_config_id": self.split_config_id,
                             "created_at": datetime.now().isoformat(),
+                            "is_synthetic": True,
                         }
                     )
                     activity_count += 1
@@ -1045,6 +1060,7 @@ class E2IDataGenerator:
                                 "data_split": data_split,
                                 "split_config_id": self.split_config_id,
                                 "created_at": datetime.now().isoformat(),
+                                "is_synthetic": True,
                             }
                         )
                         metric_count += 1
@@ -1133,6 +1149,7 @@ class E2IDataGenerator:
                     "data_split": data_split,
                     "split_config_id": self.split_config_id,
                     "created_at": datetime.now().isoformat(),
+                    "is_synthetic": True,
                 }
             )
 
@@ -1178,6 +1195,7 @@ class E2IDataGenerator:
                                 "ip_hash": generate_hash(f"{user_id}_{current_date}"),
                                 "engagement_score": round(random.uniform(0.3, 0.99), 2),
                                 "created_at": datetime.now().isoformat(),
+                                "is_synthetic": True,
                             }
                         )
                         session_count += 1
@@ -1231,6 +1249,7 @@ class E2IDataGenerator:
                         },
                         "data_quality_score": round(random.uniform(0.85, 0.99), 2),
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
 
@@ -1310,6 +1329,7 @@ class E2IDataGenerator:
                         ),
                         "iaa_group_id": iaa_group_id,
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
                 annotation_count += 1
@@ -1373,6 +1393,7 @@ class E2IDataGenerator:
                             "consistency_check": random.choice(["passed", "warning"]),
                         },
                         "created_at": datetime.now().isoformat(),
+                        "is_synthetic": True,
                     }
                 )
 
@@ -1428,6 +1449,7 @@ class E2IDataGenerator:
                             "survey_source": random.choice(["Veeva", "Internal", "Third_Party"]),
                             "response_quality_flag": random.random() > 0.05,
                             "created_at": datetime.now().isoformat(),
+                            "is_synthetic": True,
                         }
                     )
 
@@ -1533,6 +1555,7 @@ class E2IDataGenerator:
                         "std_mult": std_mult,
                     },
                     "detected_by": "kpi_577_seed",
+                    "is_synthetic": True,
                 }
             )
 
