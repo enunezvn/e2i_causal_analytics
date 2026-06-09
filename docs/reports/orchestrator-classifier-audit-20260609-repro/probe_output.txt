@@ -1,0 +1,215 @@
+====================================================================================================
+PROBE 1 — 4-stage ClassificationPipeline (classifier/ package) — the AUDITED module
+====================================================================================================
+
+[causal] 'What was the impact of the Q3 Kisqali campaign on prescriptions?'
+   routing_pattern : CLARIFICATION_NEEDED
+   target_agents   : []
+   primary/conf    : ('CAUSAL_ANALYSIS', 0.4)
+   domains_detected: [('CAUSAL_ANALYSIS', 0.4), ('MONITORING', 0.4), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Unable to determine query intent with sufficient confidence
+
+[gap] 'Where are we underperforming in the Northeast region?'
+   routing_pattern : CLARIFICATION_NEEDED
+   target_agents   : []
+   primary/conf    : ('MONITORING', 0.4)
+   domains_detected: [('MONITORING', 0.4), ('GAP_ANALYSIS', 0.37), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Unable to determine query intent with sufficient confidence
+
+[segment] 'Which HCP segments responded best to the messaging?'
+   routing_pattern : CLARIFICATION_NEEDED
+   target_agents   : []
+   primary/conf    : ('MONITORING', 0.4)
+   domains_detected: [('MONITORING', 0.4), ('HETEROGENEITY', 0.37), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Unable to determine query intent with sufficient confidence
+
+[experiment] 'Design an A/B test for the new rep cadence.'
+   routing_pattern : CLARIFICATION_NEEDED
+   target_agents   : []
+   primary/conf    : ('EXPERIMENTATION', 0.46)
+   domains_detected: [('EXPERIMENTATION', 0.46), ('MONITORING', 0.4), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Unable to determine query intent with sufficient confidence
+
+[prediction] "Predict next quarter's TRx for Fabhalta."
+   *** CRASH *** ValidationError: 1 validation error for TemporalFeatures
+
+[monitoring] 'Is there any data drift in the model inputs?'
+   routing_pattern : PARALLEL_DELEGATION
+   target_agents   : ['drift_monitor', 'causal_impact', 'explainer']
+   primary/conf    : ('MONITORING', 0.58)
+   domains_detected: [('MONITORING', 0.58), ('CAUSAL_ANALYSIS', 0.3), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Multi-domain query with independent sub-tasks
+
+[explanation] 'Explain why the ATE dropped last month.'
+   *** CRASH *** ValidationError: 1 validation error for TemporalFeatures
+
+[cohort] 'Build a cohort of CSU patients eligible for Remibrutinib.'
+   routing_pattern : PARALLEL_DELEGATION
+   target_agents   : ['cohort_constructor', 'drift_monitor', 'explainer']
+   primary/conf    : ('COHORT_DEFINITION', 0.62)
+   domains_detected: [('COHORT_DEFINITION', 0.62), ('MONITORING', 0.4), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Multi-domain query with independent sub-tasks
+
+[multi_dependent] 'What drove the Kisqali uplift, and which segments responded best, then design a test to confirm it?'
+   routing_pattern : TOOL_COMPOSER
+   target_agents   : ['tool_composer']
+   primary/conf    : ('EXPERIMENTATION', 0.56)
+   domains_detected: [('EXPERIMENTATION', 0.56), ('HETEROGENEITY', 0.49), ('CAUSAL_ANALYSIS', 0.45), ('MONITORING', 0.4), ('GAP_ANALYSIS', 0.34), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Multi-domain query with 1 data dependencies requiring tool composition
+
+[ambiguous] 'Show me the numbers.'
+   routing_pattern : PARALLEL_DELEGATION
+   target_agents   : ['explainer', 'drift_monitor']
+   primary/conf    : ('EXPLANATION', 0.51)
+   domains_detected: [('EXPLANATION', 0.51), ('MONITORING', 0.4)]
+   used_llm_layer  : False
+   reasoning       : Multi-domain query with independent sub-tasks
+
+[exploration] 'How many oncologists are in the West territory?'
+   routing_pattern : PARALLEL_DELEGATION
+   target_agents   : ['explainer', 'drift_monitor', 'heterogeneous_optimizer', 'gap_analyzer']
+   primary/conf    : ('EXPLANATION', 0.51)
+   domains_detected: [('EXPLANATION', 0.51), ('MONITORING', 0.4), ('HETEROGENEITY', 0.37), ('GAP_ANALYSIS', 0.37)]
+   used_llm_layer  : False
+   reasoning       : Multi-domain query with independent sub-tasks
+
+[comparison] 'Compare Kisqali vs Fabhalta adoption across regions.'
+   routing_pattern : CLARIFICATION_NEEDED
+   target_agents   : []
+   primary/conf    : ('MONITORING', 0.4)
+   domains_detected: [('MONITORING', 0.4), ('GAP_ANALYSIS', 0.35), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Unable to determine query intent with sufficient confidence
+
+[greeting] 'hello'
+   routing_pattern : CLARIFICATION_NEEDED
+   target_agents   : []
+   primary/conf    : ('MONITORING', 0.4)
+   domains_detected: [('MONITORING', 0.4), ('EXPLANATION', 0.3)]
+   used_llm_layer  : False
+   reasoning       : Unable to determine query intent with sufficient confidence
+
+----------------------------------------------------------------------------------------------------
+HYPOTHESIS  every (non-crashing) query is multi-domain (>=2)  : True
+HYPOTHESIS  MONITORING present in EVERY query                : True
+HYPOTHESIS  EXPLANATION present in EVERY query               : True
+OUTCOME     CLARIFICATION_NEEDED count                       : 6/13
+OUTCOME     CRASH count                                      : 2/13
+            CRASH [prediction] ValidationError: 1 validation error for TemporalFeatures
+time_references.0
+  Input should be a va
+            CRASH [explanation] ValidationError: 1 validation error for TemporalFeatures
+time_references.0
+  Input should be a va
+----------------------------------------------------------------------------------------------------
+
+
+====================================================================================================
+PROBE 2 — LIVE engine wired into create_orchestrator_graph()
+          IntentClassifierNode._pattern_classify + RouterNode
+====================================================================================================
+
+[causal] 'What was the impact of the Q3 Kisqali campaign on prescriptions?'
+   primary_intent  : causal_effect  (conf=0.8666666666666667)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['causal_impact']
+
+[gap] 'Where are we underperforming in the Northeast region?'
+   primary_intent  : performance_gap  (conf=0.9333333333333333)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['gap_analyzer']
+
+[segment] 'Which HCP segments responded best to the messaging?'
+   primary_intent  : segment_analysis  (conf=0.9333333333333333)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['heterogeneous_optimizer']
+
+[experiment] 'Design an A/B test for the new rep cadence.'
+   primary_intent  : experiment_design  (conf=0.9333333333333333)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['experiment_designer']
+
+[prediction] "Predict next quarter's TRx for Fabhalta."
+   primary_intent  : prediction  (conf=0.8666666666666667)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['prediction_synthesizer']
+
+[monitoring] 'Is there any data drift in the model inputs?'
+   primary_intent  : drift_check  (conf=0.8666666666666667)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['drift_monitor']
+
+[explanation] 'Explain why the ATE dropped last month.'
+   primary_intent  : causal_effect  (conf=0.8666666666666667)
+   secondary       : ['explanation']
+   multi_agent     : True
+   -> dispatched   : ['causal_impact']
+
+[cohort] 'Build a cohort of CSU patients eligible for Remibrutinib.'
+   primary_intent  : cohort_definition  (conf=1.0)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['cohort_constructor']
+
+[multi_dependent] 'What drove the Kisqali uplift, and which segments responded best, then design a test to confirm it?'
+   primary_intent  : segment_analysis  (conf=0.9333333333333333)
+   secondary       : ['experiment_design']
+   multi_agent     : True
+   -> dispatched   : ['heterogeneous_optimizer']
+
+[ambiguous] 'Show me the numbers.'
+   primary_intent  : general  (conf=0.5)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['explainer']
+
+[exploration] 'How many oncologists are in the West territory?'
+   primary_intent  : general  (conf=0.5)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['explainer']
+
+[comparison] 'Compare Kisqali vs Fabhalta adoption across regions.'
+   primary_intent  : general  (conf=0.5)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['explainer']
+
+[greeting] 'hello'
+   primary_intent  : general  (conf=0.5)
+   secondary       : []
+   multi_agent     : False
+   -> dispatched   : ['explainer']
+
+
+====================================================================================================
+PROBE 3 — DomainMapper on the EMPTY query and a pure greeting (base-score floor test)
+====================================================================================================
+
+   query=''
+   domains_detected: [('MONITORING', 0.4), ('EXPLANATION', 0.3)]
+   is_multi_domain : True
+   primary_domain  : MONITORING
+
+   query='hello'
+   domains_detected: [('MONITORING', 0.4), ('EXPLANATION', 0.3)]
+   is_multi_domain : True
+   primary_domain  : MONITORING
+
+   query='asdf qwerty zzz'
+   domains_detected: [('MONITORING', 0.4), ('EXPLANATION', 0.3)]
+   is_multi_domain : True
+   primary_domain  : MONITORING

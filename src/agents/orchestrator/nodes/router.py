@@ -196,9 +196,23 @@ class RouterNode:
 
         # Check for multi-agent patterns
         if intent.get("requires_multi_agent") and intent.get("secondary_intents"):
-            key = (intent["primary_intent"], intent["secondary_intents"][0])
-            if key in self.MULTI_AGENT_PATTERNS:
-                pattern = self.MULTI_AGENT_PATTERNS[key]
+            primary_intent = intent["primary_intent"]
+            secondary0 = intent["secondary_intents"][0]
+            # Order-insensitive lookup: MULTI_AGENT_PATTERNS is keyed canonically,
+            # but the query may surface the pair in either order. Match either
+            # direction so the deliberate critical/high priorities are preserved
+            # (consistent with the classifier's order-insensitive
+            # PARALLEL_INTENT_PAIRS deference).
+            pattern_key = next(
+                (
+                    k
+                    for k in ((primary_intent, secondary0), (secondary0, primary_intent))
+                    if k in self.MULTI_AGENT_PATTERNS
+                ),
+                None,
+            )
+            if pattern_key is not None:
+                pattern = self.MULTI_AGENT_PATTERNS[pattern_key]
                 for agent_name, priority in pattern:
                     dispatch_plan.append(
                         self._get_dispatch_for_agent(
@@ -208,6 +222,40 @@ class RouterNode:
                     )
                 # Group by priority for parallel execution
                 parallel_groups = self._group_by_priority(dispatch_plan)
+            elif intent["primary_intent"] != "multi_faceted":
+                # Fix 1 (audit C3): genuinely multi-intent (2 strong intents) but
+                # no hard-coded parallel pattern for this pair. Parallel-delegate
+                # primary + top secondary rather than SILENTLY DROPPING the
+                # secondary intent (the pre-fix behaviour). Dependent *pipelines*
+                # are a different case: the classifier promotes those to
+                # ``multi_faceted`` (sequential-composition signal), which falls
+                # through to single-agent dispatch → ``tool_composer`` below.
+                #
+                # ``multi_faceted`` is a META-signal, not an agent domain. When
+                # it appears only as a *secondary* (a weak "and also"-style hint
+                # under a stronger primary, with NO sequential dependency), it is
+                # NOT a pipeline — skip it and delegate to the top real-domain
+                # secondary so we don't spuriously spawn tool_composer alongside
+                # the primary agent.
+                secondary_intent = next(
+                    (s for s in intent["secondary_intents"] if s != "multi_faceted"),
+                    None,
+                )
+                if secondary_intent is not None:
+                    dispatch_plan = [
+                        self._get_dispatch_for_agent(
+                            self._agent_for_intent(intent["primary_intent"]), "critical"
+                        ),
+                        self._get_dispatch_for_agent(
+                            self._agent_for_intent(secondary_intent), "high"
+                        ),
+                    ]
+                    parallel_groups = self._group_by_priority(dispatch_plan)
+                # else: only a multi_faceted meta-hint as secondary → fall through
+                # to single-agent dispatch on the (stronger) primary intent.
+            # else: primary == "multi_faceted" → leave dispatch_plan empty so the
+            # single-agent dispatch below routes to tool_composer (which owns the
+            # real sub-question decomposition + dependency DAG).
 
         # Single agent dispatch
         if not dispatch_plan:
@@ -371,6 +419,17 @@ class RouterNode:
             "routing_latency_ms": routing_time,
             "current_phase": "dispatching",
         }
+
+    def _agent_for_intent(self, intent_name: str) -> str:
+        """Resolve the primary agent name for an intent (Fix 1 helper).
+
+        Falls back to ``explainer`` for unknown intents so the parallel-delegation
+        path can never produce an empty/invalid agent name.
+        """
+        agents = self.INTENT_TO_AGENTS.get(intent_name)
+        if agents:
+            return agents[0]["agent_name"]
+        return "explainer"
 
     def _get_dispatch_for_agent(
         self, agent_name: str, priority: Literal["low", "medium", "high", "critical"]

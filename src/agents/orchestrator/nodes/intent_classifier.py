@@ -30,7 +30,10 @@ import re
 import time
 from typing import Literal, cast
 
-from src.agents.multi_faceted import MULTI_FACETED_PATTERNS
+from src.agents.multi_faceted import (
+    MULTI_FACETED_PATTERNS,
+    has_sequential_composition,
+)
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
 
@@ -74,6 +77,21 @@ INTENT_PRIORITY: tuple[str, ...] = (
     "explanation",  # interpretation
     "system_health",  # operational status (catch-all for "health")
     "general",  # fallback
+)
+
+
+# Intent pairs that ``RouterNode`` deliberately routes as PARALLEL 2-agent work.
+# Mirror of ``RouterNode.MULTI_AGENT_PATTERNS`` keys (kept in sync by
+# test_multipart_tool_composer_routing.py::test_parallel_pairs_mirror_router).
+# The sequential-pipeline promotion defers to these: a dependency marker joining
+# exactly one of these pairs is treated as the parallel pair (the marker is often
+# an incidental leading preamble), not promoted to ``multi_faceted``/tool_composer.
+PARALLEL_INTENT_PAIRS: frozenset[frozenset[str]] = frozenset(
+    {
+        frozenset({"causal_effect", "segment_analysis"}),
+        frozenset({"performance_gap", "resource_allocation"}),
+        frozenset({"prediction", "explanation"}),
+    }
 )
 
 
@@ -213,7 +231,7 @@ class IntentClassifierNode:
         if pattern_result["confidence"] >= 0.8:
             intent = pattern_result
         else:
-            # Fall back to LLM for ambiguous cases
+            # Fall back to LLM for genuinely ambiguous (low-confidence) cases.
             intent = await self._llm_classify(state.get("query", ""))
 
         classification_time = int((time.time() - start_time) * 1000)
@@ -273,12 +291,44 @@ class IntentClassifierNode:
 
         # Secondary intents in the same deterministic order.
         secondary = [k for k, v in ranked[1:] if v > 0]
+        requires_multi_agent = len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8
+
+        # Fix 2 (audit C2/C3) — sequential-pipeline promotion. A dependency
+        # marker ("then", "after that", "based on that", …) joining 2+ DISTINCT
+        # strong intents signals a *dependent pipeline* the Tool Composer should
+        # decompose — not a single intent and not a parallel pair. Guarded to an
+        # explicit sequence marker so additive/parallel compounds (e.g. "what
+        # causes A and what drives B and also explain C") stay single-agent,
+        # preserving the locked near-miss negatives in
+        # test_intent_classifier_multi_faceted.py.
+        strong_components = [
+            name for name, score in ranked if score >= 0.8 and name != "multi_faceted"
+        ]
+        # Defer to the deliberate parallel pairs: a dependency marker + EXACTLY 2
+        # intents that RouterNode routes as a parallel pair is the pair, not a
+        # tool_composer pipeline. The marker is often an incidental leading
+        # preamble ("Based on the model output, forecast … and explain …"); the
+        # two asks themselves are the defined parallel pair. >=3 intents are
+        # genuinely multi-faceted and still promote.
+        is_parallel_pair = (
+            len(strong_components) == 2 and frozenset(strong_components) in PARALLEL_INTENT_PAIRS
+        )
+        if (
+            primary != "multi_faceted"
+            and len(strong_components) >= 2
+            and not is_parallel_pair
+            and has_sequential_composition(query)
+        ):
+            primary = "multi_faceted"
+            confidence = max(confidence, scores.get("multi_faceted", 0.0), 0.85)
+            secondary = strong_components
+            requires_multi_agent = True
 
         return IntentClassification(
             primary_intent=cast(IntentType, primary),
             confidence=confidence,
             secondary_intents=secondary[:2],
-            requires_multi_agent=len(secondary) > 0 and scores.get(secondary[0], 0) > 0.8,
+            requires_multi_agent=requires_multi_agent,
         )
 
     async def _llm_classify(self, query: str) -> IntentClassification:

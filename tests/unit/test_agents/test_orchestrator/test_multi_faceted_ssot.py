@@ -45,6 +45,10 @@ class TestPatternsAreSSOT:
 
     def test_pattern_count_locked(self):
         # Lock the count so a silent regex addition is observable.
+        # 2026-06-09: dependent-pipeline routing is done via classifier promotion
+        # on >=2 strong intents + a dependency marker (multi_faceted.
+        # has_sequential_composition), NOT extra patterns — a bare "then <verb>"
+        # pattern over-routes single asks. So the SSOT pattern set stays at 4.
         assert len(MULTI_FACETED_PATTERNS) == 4
 
     def test_patterns_are_immutable(self):

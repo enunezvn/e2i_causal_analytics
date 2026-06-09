@@ -50,11 +50,62 @@ import re
 
 MULTI_FACETED_PATTERNS: tuple[str, ...] = (
     # Conjunctive multi-question markers ("and also", "compare X vs Y, then ...").
+    # NB: "and then" is a DELIBERATE canonical multi_faceted phrase here, locked by
+    # test_multi_faceted_ssot.py::test_pattern_matches_canonical_phrase. A review
+    # (2026-06-09) noted that on a degenerate repeated single ask ("forecast … and
+    # then forecast … again") this over-routes to tool_composer, but the phrase is
+    # an intentional product contract, NOT introduced by the multi-part routing
+    # fix — so it is left as-is rather than silently broken. (The new sequence-
+    # marker promotion is additive; it does not touch these original 4 patterns.)
     r"and (also|then|additionally|furthermore)",
     r"compare .* (vs|versus|against|to) .* and",
     r"(combine|integrate|synthes).*(analyses|results|findings)",
     r"(both|multiple) (effects?|analyses|perspectives?)",
 )
+# NOTE (2026-06-09, audit C2/C3 + Codex review): dependent-pipeline detection is
+# NOT done with extra SSOT patterns. A bare "then <verb>" / ", and <wh> ... then"
+# pattern fires multi_faceted from a SINGLE mapped intent ("if X completes, then
+# forecast" / "forecast …, then forecast … again"), which wrongly routes single
+# asks to the 180s tool_composer. Instead, ``IntentClassifierNode._pattern_classify``
+# promotes to multi_faceted only when a sequence/dependency marker
+# (``has_sequential_composition``) joins **>=2 distinct strong intents** — i.e.
+# >=2 recognised analytical asks, which is exactly when tool_composer's
+# sub-question decomposition is useful. This favours precision: a multi-part query
+# whose sub-asks the intent regexes do not recognise routes to the best single
+# agent rather than over-routing to tool_composer.
+
+
+# Sequential / dependency connectors that signal a *dependent pipeline*
+# ("do A, then B using A"). This is the precise Tool-Composer routing signal —
+# deliberately distinct from additive/parallel joins ("and also", "compare X
+# and Y"), which are single comparisons or parallel delegations, NOT pipelines.
+_SEQUENTIAL_MARKER_REGEX = re.compile(
+    r"\b(then|after that|after this|and then|followed by|after determining|"
+    r"based on (that|those|this|these|the)|"
+    r"once (we|you))\b"
+    # "using those" / "using these results" (anaphoric) and "using the [<=3
+    # modifier words] results" — e.g. "using the model results", "using the
+    # previous results" (Codex 2nd pass HIGH-1).
+    r"|\b(use|using) (that|those|this|these)\b"
+    r"|\b(use|using) the (?:[\w-]+ ){0,3}results?\b",
+    re.IGNORECASE,
+)
+
+
+def has_sequential_composition(query: str) -> bool:
+    """Return ``True`` when the query chains a *dependent* second step onto a
+    first via an explicit sequence/dependency connector.
+
+    Examples → ``True``: "do A, then B", "after that estimate the lift",
+    "based on that recommend a plan".
+    Examples → ``False``: "compare A and B", "X and also Y" (additive, not
+    sequential).
+
+    Used by ``IntentClassifierNode`` to promote a multi-intent dependent query
+    to ``multi_faceted`` (→ ``tool_composer``). Lives in the SSOT module so the
+    multi-faceted detection logic has exactly one home (issue #288).
+    """
+    return bool(_SEQUENTIAL_MARKER_REGEX.search(query))
 
 
 _FACET_CONJUNCTION_WORDS: tuple[str, ...] = (
