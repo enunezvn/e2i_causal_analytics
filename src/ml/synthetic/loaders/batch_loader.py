@@ -136,6 +136,11 @@ TABLE_COLUMNS = {
         "model_version",
         "prediction_timestamp",
         "data_split",
+        # Causal substrate read by migration 044 (causal_metrics_ate / _cate);
+        # values populated by Shard 03's DGP, columns must survive the loader.
+        "treatment_effect_estimate",
+        "heterogeneous_effect",
+        "segment_assignment",
         "is_synthetic",
     ],
     "triggers": [

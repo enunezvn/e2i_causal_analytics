@@ -137,6 +137,11 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
             "uncertainty": round(uncertainty, 3),
             "model_version": model_version,
             "prediction_date": prediction_date.strftime("%Y-%m-%d"),
+            # Causal substrate columns (populated by Shard 03's DGP; NULL here so
+            # the loader carries them and migration 044's AVG(...) sees the column).
+            "treatment_effect_estimate": None,
+            "heterogeneous_effect": None,
+            "segment_assignment": None,
         }
 
     def _generate_standalone_predictions(self, n: int) -> pd.DataFrame:
@@ -187,5 +192,10 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
                 "uncertainty": np.round(uncertainties, 3),
                 "model_version": model_versions,
                 "prediction_date": prediction_dates,
+                # Causal substrate columns (populated by Shard 03's DGP; NULL
+                # here so the loader carries them and migration 044 sees them).
+                "treatment_effect_estimate": [None] * n,
+                "heterogeneous_effect": [None] * n,
+                "segment_assignment": [None] * n,
             }
         )
