@@ -66,7 +66,8 @@ class TestGetByKpi(TestBusinessMetricRepository):
         mock_result = MagicMock()
         mock_result.data = sample_metrics
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        # chain: select().eq(metric_name).eq(is_synthetic).limit().offset().execute()
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
 
         result = await repo.get_by_kpi(kpi_name="TRx")
 
@@ -84,8 +85,11 @@ class TestGetByKpi(TestBusinessMetricRepository):
         mock_offset.execute = mock_execute
         mock_limit = MagicMock()
         mock_limit.offset.return_value = mock_offset
+        # provenance .eq("is_synthetic", False) inserted after the filter .eq()s
+        mock_eq_prov = MagicMock()
+        mock_eq_prov.limit.return_value = mock_limit
         mock_eq_brand = MagicMock()
-        mock_eq_brand.limit.return_value = mock_limit
+        mock_eq_brand.eq.return_value = mock_eq_prov
         mock_eq_kpi = MagicMock()
         mock_eq_kpi.eq.return_value = mock_eq_brand
         mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_kpi
@@ -94,6 +98,7 @@ class TestGetByKpi(TestBusinessMetricRepository):
 
         assert len(result) == 2
         mock_eq_kpi.eq.assert_called_with("brand", "Kisqali")
+        mock_eq_brand.eq.assert_called_with("is_synthetic", False)
 
     @pytest.mark.asyncio
     async def test_respects_limit(self, repo, mock_client, sample_metrics):
@@ -106,14 +111,17 @@ class TestGetByKpi(TestBusinessMetricRepository):
         mock_offset.execute = mock_execute
         mock_limit = MagicMock()
         mock_limit.offset.return_value = mock_offset
+        # provenance .eq("is_synthetic", False) inserted after the filter .eq()
+        mock_eq_prov = MagicMock()
+        mock_eq_prov.limit.return_value = mock_limit
         mock_eq = MagicMock()
-        mock_eq.limit.return_value = mock_limit
+        mock_eq.eq.return_value = mock_eq_prov
         mock_client.table.return_value.select.return_value.eq.return_value = mock_eq
 
         result = await repo.get_by_kpi(kpi_name="TRx", limit=1)
 
         assert len(result) == 1
-        mock_eq.limit.assert_called_with(1)
+        mock_eq_prov.limit.assert_called_with(1)
 
 
 @pytest.mark.unit
@@ -126,7 +134,8 @@ class TestGetTimeSeries(TestBusinessMetricRepository):
         mock_result = MagicMock()
         mock_result.data = sample_metrics
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute = mock_execute
+        # chain: select().eq(metric_name).eq(brand).eq(is_synthetic).order().limit().execute()
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_time_series(kpi_name="TRx", brand="Kisqali")
 
@@ -143,8 +152,11 @@ class TestGetTimeSeries(TestBusinessMetricRepository):
         mock_limit.execute = mock_execute
         mock_order = MagicMock()
         mock_order.limit.return_value = mock_limit
+        # provenance .eq("is_synthetic", False) inserted after .lte(), before .order()
+        mock_eq_prov = MagicMock()
+        mock_eq_prov.order.return_value = mock_order
         mock_lte = MagicMock()
-        mock_lte.order.return_value = mock_order
+        mock_lte.eq.return_value = mock_eq_prov
         mock_gte = MagicMock()
         mock_gte.lte.return_value = mock_lte
         mock_eq_brand = MagicMock()
@@ -163,6 +175,7 @@ class TestGetTimeSeries(TestBusinessMetricRepository):
         assert len(result) == 2
         mock_eq_brand.gte.assert_called_with("metric_date", "2025-01-01")
         mock_gte.lte.assert_called_with("metric_date", "2025-01-31")
+        mock_lte.eq.assert_called_with("is_synthetic", False)
 
     @pytest.mark.asyncio
     async def test_orders_by_date_ascending(self, repo, mock_client, sample_metrics):
@@ -175,8 +188,11 @@ class TestGetTimeSeries(TestBusinessMetricRepository):
         mock_limit.execute = mock_execute
         mock_order = MagicMock()
         mock_order.limit.return_value = mock_limit
+        # provenance .eq("is_synthetic", False) inserted after .eq(brand), before .order()
+        mock_eq_prov = MagicMock()
+        mock_eq_prov.order.return_value = mock_order
         mock_eq_brand = MagicMock()
-        mock_eq_brand.order.return_value = mock_order
+        mock_eq_brand.eq.return_value = mock_eq_prov
         mock_eq_kpi = MagicMock()
         mock_eq_kpi.eq.return_value = mock_eq_brand
         mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_kpi
@@ -184,7 +200,8 @@ class TestGetTimeSeries(TestBusinessMetricRepository):
         result = await repo.get_time_series(kpi_name="TRx", brand="Kisqali")
 
         assert len(result) == 2
-        mock_eq_brand.order.assert_called_with("metric_date", desc=False)
+        mock_eq_prov.order.assert_called_with("metric_date", desc=False)
+        mock_eq_brand.eq.assert_called_with("is_synthetic", False)
 
     @pytest.mark.asyncio
     async def test_returns_empty_list_without_client(self):
@@ -234,7 +251,7 @@ class TestGetLatestSnapshot(TestBusinessMetricRepository):
         mock_result = MagicMock()
         mock_result.data = snapshot_metrics
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_latest_snapshot(brand="Kisqali")
 
@@ -251,7 +268,7 @@ class TestGetLatestSnapshot(TestBusinessMetricRepository):
         mock_result = MagicMock()
         mock_result.data = snapshot_metrics
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_latest_snapshot(brand="Kisqali")
 
@@ -265,7 +282,7 @@ class TestGetLatestSnapshot(TestBusinessMetricRepository):
         mock_result = MagicMock()
         mock_result.data = snapshot_metrics
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_latest_snapshot(brand="Kisqali")
 
@@ -290,7 +307,7 @@ class TestGetLatestSnapshot(TestBusinessMetricRepository):
         mock_result = MagicMock()
         mock_result.data = []
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = mock_execute
 
         result = await repo.get_latest_snapshot(brand="NonexistentBrand")
 
@@ -307,7 +324,8 @@ class TestGetByRegion(TestBusinessMetricRepository):
         mock_result = MagicMock()
         mock_result.data = sample_metrics
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        # chain: select().eq(region).eq(is_synthetic).limit().offset().execute()
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
 
         result = await repo.get_by_region(region="US")
 
@@ -324,8 +342,11 @@ class TestGetByRegion(TestBusinessMetricRepository):
         mock_offset.execute = mock_execute
         mock_limit = MagicMock()
         mock_limit.offset.return_value = mock_offset
+        # provenance .eq("is_synthetic", False) inserted after the filter .eq()s
+        mock_eq_prov = MagicMock()
+        mock_eq_prov.limit.return_value = mock_limit
         mock_eq_brand = MagicMock()
-        mock_eq_brand.limit.return_value = mock_limit
+        mock_eq_brand.eq.return_value = mock_eq_prov
         mock_eq_region = MagicMock()
         mock_eq_region.eq.return_value = mock_eq_brand
         mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_region
@@ -334,6 +355,7 @@ class TestGetByRegion(TestBusinessMetricRepository):
 
         assert len(result) == 2
         mock_eq_region.eq.assert_called_with("brand", "Kisqali")
+        mock_eq_brand.eq.assert_called_with("is_synthetic", False)
 
 
 @pytest.mark.unit
@@ -528,3 +550,93 @@ class TestGetRoiSummary(TestBusinessMetricRepository):
         # The function filters ROI and value independently
         expected_total_value = 100 + 200 + 150
         assert result["total_value"] == expected_total_value
+
+
+@pytest.mark.unit
+class TestProvenanceDefaultExclude(TestBusinessMetricRepository):
+    """Provenance read-path enforcement (Shard 07, R1/R2/R3)."""
+
+    @pytest.mark.asyncio
+    async def test_get_time_series_excludes_synthetic_by_default(self, repo, mock_client):
+        """Default call appends .eq('is_synthetic', False) after the brand filter."""
+        result = MagicMock()
+        result.data = []
+        # third .eq in the chain is the provenance predicate
+        chain = mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value
+        chain.eq.return_value.order.return_value.limit.return_value.execute = AsyncMock(
+            return_value=result
+        )
+
+        await repo.get_time_series("TRx", "Kisqali")
+
+        chain.eq.assert_called_with("is_synthetic", False)
+
+    @pytest.mark.asyncio
+    async def test_get_time_series_includes_synthetic_when_opted_in(self, repo, mock_client):
+        """include_synthetic=True does NOT append the provenance predicate."""
+        result = MagicMock()
+        result.data = []
+        # opt-in: no third .eq -> .order called directly off the brand .eq
+        chain = mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value
+        chain.order.return_value.limit.return_value.execute = AsyncMock(return_value=result)
+
+        await repo.get_time_series("TRx", "Kisqali", include_synthetic=True)
+
+        chain.eq.assert_not_called()
+        chain.order.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_get_latest_snapshot_excludes_synthetic_by_default(self, repo, mock_client):
+        """get_latest_snapshot appends .eq('is_synthetic', False) after the brand filter."""
+        result = MagicMock()
+        result.data = []
+        # chain: select().eq(brand).eq(is_synthetic).order().order().limit().execute()
+        chain = mock_client.table.return_value.select.return_value.eq.return_value
+        chain.eq.return_value.order.return_value.order.return_value.limit.return_value.execute = (
+            AsyncMock(return_value=result)
+        )
+
+        await repo.get_latest_snapshot("Kisqali")
+
+        chain.eq.assert_called_with("is_synthetic", False)
+
+    @pytest.mark.asyncio
+    async def test_get_latest_snapshot_includes_synthetic_when_opted_in(self, repo, mock_client):
+        """include_synthetic=True omits the provenance predicate from the snapshot query."""
+        result = MagicMock()
+        result.data = []
+        chain = mock_client.table.return_value.select.return_value.eq.return_value
+        chain.order.return_value.order.return_value.limit.return_value.execute = AsyncMock(
+            return_value=result
+        )
+
+        await repo.get_latest_snapshot("Kisqali", include_synthetic=True)
+
+        chain.eq.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_by_kpi_excludes_synthetic_by_default(self, repo, mock_client):
+        """get_by_kpi (get_many path) appends provenance predicate via HAS_PROVENANCE."""
+        result = MagicMock()
+        result.data = []
+        # chain: select().eq(metric_name).eq(is_synthetic).limit().offset().execute()
+        chain = mock_client.table.return_value.select.return_value.eq.return_value
+        chain.eq.return_value.limit.return_value.offset.return_value.execute = AsyncMock(
+            return_value=result
+        )
+
+        await repo.get_by_kpi("TRx")
+
+        chain.eq.assert_called_with("is_synthetic", False)
+
+    @pytest.mark.asyncio
+    async def test_get_by_kpi_includes_synthetic_when_opted_in(self, repo, mock_client):
+        """get_by_kpi(include_synthetic=True) skips the provenance predicate."""
+        result = MagicMock()
+        result.data = []
+        chain = mock_client.table.return_value.select.return_value.eq.return_value
+        chain.limit.return_value.offset.return_value.execute = AsyncMock(return_value=result)
+
+        await repo.get_by_kpi("TRx", include_synthetic=True)
+
+        chain.eq.assert_not_called()

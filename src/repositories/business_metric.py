@@ -28,12 +28,14 @@ class BusinessMetricRepository(BaseRepository):
 
     table_name = "business_metrics"
     model_class = None  # Set to BusinessMetric model when available
+    HAS_PROVENANCE = True  # business_metrics carries is_synthetic (Shard 01)
 
     async def get_by_kpi(
         self,
         kpi_name: str,
         brand: Optional[str] = None,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get metrics for a specific KPI.
@@ -42,6 +44,7 @@ class BusinessMetricRepository(BaseRepository):
             kpi_name: KPI identifier (metric_name in table)
             brand: Optional brand filter
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of BusinessMetric records
@@ -49,7 +52,9 @@ class BusinessMetricRepository(BaseRepository):
         filters = {"metric_name": kpi_name}
         if brand:
             filters["brand"] = brand
-        return await self.get_many(filters=filters, limit=limit)
+        return await self.get_many(
+            filters=filters, limit=limit, include_synthetic=include_synthetic
+        )
 
     async def get_time_series(
         self,
@@ -57,6 +62,7 @@ class BusinessMetricRepository(BaseRepository):
         brand: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get time series data for a KPI.
@@ -66,6 +72,7 @@ class BusinessMetricRepository(BaseRepository):
             brand: Brand name
             start_date: Optional start date (YYYY-MM-DD format)
             end_date: Optional end date (YYYY-MM-DD format)
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Time-ordered list of metrics (ascending by date)
@@ -85,6 +92,10 @@ class BusinessMetricRepository(BaseRepository):
         if end_date:
             query = query.lte("metric_date", end_date)
 
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = apply_provenance_filter(query, include_synthetic)
+
         # Order by date ascending for time series
         result = await query.order("metric_date", desc=False).limit(1000).execute()
 
@@ -93,6 +104,7 @@ class BusinessMetricRepository(BaseRepository):
     async def get_latest_snapshot(
         self,
         brand: str,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Get the latest snapshot of all KPIs for a brand.
@@ -101,6 +113,7 @@ class BusinessMetricRepository(BaseRepository):
 
         Args:
             brand: Brand name
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict of metric_name to {value, target, achievement_rate, date}
@@ -108,13 +121,18 @@ class BusinessMetricRepository(BaseRepository):
         if not self.client:
             return {}
 
+        from src.repositories.provenance import apply_provenance_filter
+
         # Get all metrics for brand, ordered by name then date DESC
         # This ensures for each metric_name, the first row is the latest
-        result = await (
+        query = (
             self.client.table(self.table_name)
             .select("metric_name, metric_date, value, target, achievement_rate, roi")
             .eq("brand", brand)
-            .order("metric_name")
+        )
+        query = apply_provenance_filter(query, include_synthetic)
+        result = await (
+            query.order("metric_name")
             .order("metric_date", desc=True)
             .limit(5000)
             .execute()
@@ -146,6 +164,7 @@ class BusinessMetricRepository(BaseRepository):
         region: str,
         brand: Optional[str] = None,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get metrics filtered by region.
@@ -154,6 +173,7 @@ class BusinessMetricRepository(BaseRepository):
             region: Region identifier
             brand: Optional brand filter
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of BusinessMetric records
@@ -161,7 +181,9 @@ class BusinessMetricRepository(BaseRepository):
         filters = {"region": region}
         if brand:
             filters["brand"] = brand
-        return await self.get_many(filters=filters, limit=limit)
+        return await self.get_many(
+            filters=filters, limit=limit, include_synthetic=include_synthetic
+        )
 
     async def get_achievement_summary(
         self,
