@@ -12,6 +12,7 @@ Phases 3-4 of the CopilotKit-DSPy observability integration plan.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -1235,6 +1236,7 @@ def get_rag_signal_collector() -> RAGTrainingSignalCollector:
 
 # Cached DSPy query rewriter instance
 _dspy_query_rewriter: Optional["ChatbotQueryRewriter"] = None
+_dspy_hop_decider: Optional["ChatbotHopDecider"] = None
 
 
 def _get_dspy_query_rewriter() -> Optional["ChatbotQueryRewriter"]:
@@ -1494,6 +1496,74 @@ class CognitiveRAGResult:
     retrieval_method: str  # "cognitive" or "basic"
 
 
+# =============================================================================
+# F6 — Multi-hop retrieval control (wiring ChatbotHopDecider into the loop)
+# =============================================================================
+# The audit found enable_multi_hop ignored, hop_count hardcoded to 1, and
+# ChatbotHopDecider never instantiated. The loop below escalates ONLY when hop-1
+# evidence is insufficient (so simple, well-answered KPI queries stay single-hop
+# with NO extra LLM call), then consults the decider for a refined retrieval
+# query, up to CHATBOT_RAG_MAX_HOPS. Live default-on via CHATBOT_RAG_MULTI_HOP.
+_MULTIHOP_MAX_HOPS = int(os.getenv("CHATBOT_RAG_MAX_HOPS", "3"))
+# A hop-1 result with >= N kept rows at >= this avg relevance is "good enough" —
+# stop without paying for a decider LLM call. Mirrors the reward heuristic
+# (RAGTrainingSignal.compute_reward: evidence_count >= 3 and hop_count <= 2).
+_MULTIHOP_SUFFICIENT_EVIDENCE = 3
+_MULTIHOP_SUFFICIENT_AVG_RELEVANCE = 0.6
+# HopDecisionSignature.confidence is "confidence that MORE evidence is needed"
+# (low = sufficient). Continue only when the decider is at least this confident.
+_MULTIHOP_CONTINUE_CONFIDENCE = 0.5
+_MULTIHOP_AVAILABLE_MEMORIES = "episodic, semantic, procedural"
+
+
+def _evidence_sufficient(evidence: List[Dict[str, Any]], avg_relevance: float) -> bool:
+    """True when hop-1 evidence is strong enough to stop without a decider call."""
+    return (
+        len(evidence) >= _MULTIHOP_SUFFICIENT_EVIDENCE
+        and avg_relevance >= _MULTIHOP_SUFFICIENT_AVG_RELEVANCE
+    )
+
+
+def _should_continue_hop(
+    next_memory: str, confidence: float, hop_number: int, max_hops: int
+) -> bool:
+    """Decide whether to perform another hop given the decider's output."""
+    if hop_number >= max_hops:
+        return False
+    if (next_memory or "").strip().upper() == "STOP":
+        return False
+    return confidence >= _MULTIHOP_CONTINUE_CONFIDENCE
+
+
+def _dedupe_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Dedupe accumulated multi-hop evidence by source_id, preserving order."""
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for item in evidence:
+        sid = item.get("source_id")
+        if sid in seen:
+            continue
+        seen.add(sid)
+        out.append(item)
+    return out
+
+
+def _get_dspy_hop_decider() -> Optional["ChatbotHopDecider"]:
+    """Get or create the DSPy multi-hop decider instance (mirrors the rewriter)."""
+    global _dspy_hop_decider
+    if not DSPY_AVAILABLE or not CHATBOT_COGNITIVE_RAG_ENABLED:
+        return None
+    _ensure_dspy_configured()
+    if _dspy_hop_decider is None:
+        try:
+            _dspy_hop_decider = ChatbotHopDecider()
+            logger.info("Initialized DSPy ChatbotHopDecider")
+        except Exception as e:
+            logger.warning(f"Failed to initialize DSPy hop decider: {e}")
+            return None
+    return _dspy_hop_decider
+
+
 async def cognitive_rag_retrieve(
     query: str,
     conversation_context: str = "",
@@ -1535,53 +1605,105 @@ async def cognitive_rag_retrieve(
     try:
         from src.rag.retriever import hybrid_search
 
-        # Use rewritten query for hybrid search.
-        # F1 fix: forward the rewrite's graph_entities so the graph leg fires
-        # (HybridRetriever.search runs the graph leg `if entities:` — retriever.py).
-        # An empty list -> None so the `if entities:` guard is honored and the
-        # graph leg is simply skipped (rather than truthy-empty) when no entities
-        # were extracted. kpi_name stays None: entities= is the primary graph key
-        # and the DSPy rewrite already supplies them.
-        results = await hybrid_search(
-            query=rewritten_query,
-            k=k,
-            entities=graph_entities or None,
-            kpi_name=None,
-            filters={"brand": brand_context} if brand_context else None,
-        )
+        async def _hop(search_query: str) -> Tuple[List[Dict[str, Any]], List[float]]:
+            """One retrieval+scoring hop -> (kept_evidence, all_relevance_scores).
 
-        # Step 3: Score evidence concurrently (independent per-row LLM calls) (F5).
-        # The calls share investigation_goal/source_memory and differ only by
-        # evidence_item, so they are gathered instead of awaited serially
-        # (~15 s serial -> ~3 s). gather preserves arg order, so the kept-evidence
-        # set/order and the >= 0.3 filter are byte-identical to the serial loop.
-        scored = await asyncio.gather(
-            *(
-                score_evidence_dspy(
-                    investigation_goal=f"Answer: {query}",
-                    evidence_item=r.content[:500],
-                    source_memory="episodic",
-                )
-                for r in results
+            F1: forward the rewrite's graph_entities so the graph leg fires
+            (HybridRetriever.search runs the graph leg `if entities:`); empty ->
+            None so the guard is honored. kpi_name stays None: entities= is the
+            primary graph key. F5: score the rows concurrently via asyncio.gather
+            (gather preserves arg order, so the kept set/order and the >= 0.3
+            filter are identical to a serial loop).
+            """
+            results = await hybrid_search(
+                query=search_query,
+                k=k,
+                entities=graph_entities or None,
+                kpi_name=None,
+                filters={"brand": brand_context} if brand_context else None,
             )
-        )
-
-        # Filter/keep in original retrieval order (gather preserves arg order).
-        # strict=True: gather returns exactly one result per input row.
-        for r, (score, insight, _) in zip(results, scored, strict=True):
-            relevance_scores.append(score)
-
-            if score >= 0.3:  # Minimum relevance threshold
-                evidence.append(
-                    {
-                        "source_id": r.source_id,
-                        "content": r.content[:500],
-                        "score": r.score,
-                        "relevance_score": score,
-                        "key_insight": insight,
-                        "source": r.source,
-                    }
+            scored = await asyncio.gather(
+                *(
+                    score_evidence_dspy(
+                        investigation_goal=f"Answer: {query}",
+                        evidence_item=r.content[:500],
+                        source_memory="episodic",
+                    )
+                    for r in results
                 )
+            )
+            kept: List[Dict[str, Any]] = []
+            scores: List[float] = []
+            for r, (score, insight, _) in zip(results, scored, strict=True):
+                scores.append(score)
+                if score >= 0.3:  # Minimum relevance threshold
+                    kept.append(
+                        {
+                            "source_id": r.source_id,
+                            "content": r.content[:500],
+                            "score": r.score,
+                            "relevance_score": score,
+                            "key_insight": insight,
+                            "source": r.source,
+                        }
+                    )
+            return kept, scores
+
+        # Hop 1 (always runs).
+        kept, scores = await _hop(rewritten_query)
+        evidence.extend(kept)
+        relevance_scores.extend(scores)
+
+        # F6: additional hops, driven by ChatbotHopDecider — but ONLY when hop-1
+        # evidence is insufficient (strong evidence stops early with no extra LLM
+        # call, keeping simple KPI queries single-hop). The decider proposes a
+        # refined retrieval_query per hop; we accumulate + dedupe by source_id and
+        # report the real hop_count. This wires the previously-dead
+        # enable_multi_hop / ChatbotHopDecider (audit F6).
+        if enable_multi_hop:
+            decider = _get_dspy_hop_decider()
+            while decider is not None and hop_count < _MULTIHOP_MAX_HOPS:
+                avg_so_far = (
+                    sum(relevance_scores) / len(relevance_scores)
+                    if relevance_scores
+                    else 0.0
+                )
+                if _evidence_sufficient(evidence, avg_so_far):
+                    break
+                try:
+                    decision = decider(
+                        investigation_goal=f"Answer: {query}",
+                        current_evidence=json.dumps(
+                            [
+                                {
+                                    "content": e["content"][:200],
+                                    "relevance": e["relevance_score"],
+                                }
+                                for e in evidence
+                            ]
+                        )[:2000],
+                        hop_number=hop_count,
+                        available_memories=_MULTIHOP_AVAILABLE_MEMORIES,
+                    )
+                except Exception as hop_err:
+                    logger.warning(
+                        f"Multi-hop decider failed; stopping at hop {hop_count}: {hop_err}"
+                    )
+                    break
+                next_memory = str(getattr(decision, "next_memory", "STOP"))
+                confidence = _validate_confidence(getattr(decision, "confidence", 0.0))
+                if not _should_continue_hop(
+                    next_memory, confidence, hop_count, _MULTIHOP_MAX_HOPS
+                ):
+                    break
+                retrieval_query = (
+                    str(getattr(decision, "retrieval_query", "") or "").strip()
+                    or rewritten_query
+                )
+                hop_count += 1
+                more_kept, more_scores = await _hop(retrieval_query)
+                evidence = _dedupe_evidence(evidence + more_kept)
+                relevance_scores.extend(more_scores)
 
     except Exception as e:
         logger.error(f"Cognitive RAG retrieval failed: {e}")
