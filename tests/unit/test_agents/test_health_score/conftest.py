@@ -357,3 +357,32 @@ def quick_check_state():
         "errors": [],
         "status": "pending",
     }
+
+
+# ============================================================================
+# OFFLINE GUARD — recipient self-emission isolation
+# ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _no_live_supabase_in_recipient_tests(monkeypatch):
+    """Isolate recipient self-emission tests from the live Supabase signals table.
+
+    ``emit_recipient_signal`` (src/agents/feedback_learner/recipient_emit.py)
+    resolves a Supabase client from the default factory when none is passed.
+    Without this guard, unit tests that call the recipient's generating nodes
+    would write synthetic rows to ``dspy_agent_training_signals`` in the live
+    DB, polluting the optimizer's real training corpus.
+
+    Force the factory-level client to ``None`` so the best-effort persist path
+    no-ops.  The import of ``get_supabase_client`` happens INSIDE the async
+    function (not at module level), so patching the factory module attribute is
+    sufficient — no second patch on ``recipient_emit`` is needed.
+
+    Tests that supply an explicit ``client=`` kwarg bypass the factory entirely
+    and are unaffected by this patch.
+    """
+    monkeypatch.setattr(
+        "src.memory.services.factories.get_supabase_client",
+        lambda: None,
+    )
