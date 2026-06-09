@@ -398,10 +398,10 @@ def cleanup_old_drift_history(
     effective_retention = retention_days or schedule_config.get("retention_days", 90)
 
     async def run_cleanup():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {"status": "skipped", "reason": "No database client available"}
 

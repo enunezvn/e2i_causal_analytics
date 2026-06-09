@@ -27,7 +27,7 @@ def _get_span_repository():
 
             client = get_supabase_client()
             if client:
-                _span_repository = ObservabilitySpanRepository(client=client)
+                _span_repository = ObservabilitySpanRepository(supabase_client=client)
         except Exception as e:
             logger.warning(f"Failed to initialize span repository: {e}")
     return _span_repository

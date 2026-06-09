@@ -757,9 +757,9 @@ class OptunaOptimizer:
             Dictionary with study_id, success status, and any errors
         """
         try:
-            from src.repositories import get_supabase_client
+            from src.memory.services.factories import get_async_supabase_client
 
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if client is None:
                 logger.warning("Supabase client not available, skipping database save")
                 return {"success": False, "error": "Supabase not available"}

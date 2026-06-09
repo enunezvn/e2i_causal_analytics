@@ -128,7 +128,7 @@ class TestRunFeedbackLoopRpcSignature:
     actually accepts.
     """
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_rpc_called_without_p_batch_size_kwarg(self, mock_get_client, mock_supabase_client):
         """``run_feedback_loop`` RPC is invoked with ONLY ``p_prediction_type``.
 
@@ -170,7 +170,7 @@ class TestRunFeedbackLoopRpcSignature:
                 f"Unexpected extra RPC kwargs: {set(rpc_kwargs.keys()) - {'p_prediction_type'}}"
             )
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_rpc_called_for_each_prediction_type(self, mock_get_client, mock_supabase_client):
         """Each prediction type in the override list triggers exactly one RPC call."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
@@ -217,7 +217,7 @@ class TestRunFeedbackLoopShortWindow:
 
         assert run_feedback_loop_short_window.name == "src.tasks.run_feedback_loop_short_window"
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_processes_short_window_types(self, mock_get_client, mock_supabase_client):
         """Test that task processes trigger and next_best_action types."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
@@ -233,7 +233,7 @@ class TestRunFeedbackLoopShortWindow:
         prediction_types = result.get("prediction_types", [])
         assert "trigger" in prediction_types or "next_best_action" in prediction_types
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_accepts_custom_types(self, mock_get_client, mock_supabase_client):
         """Test that task accepts custom prediction types override."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
@@ -246,7 +246,7 @@ class TestRunFeedbackLoopShortWindow:
         assert result is not None
         assert result.get("prediction_types") == custom_types
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_handles_no_client(self, mock_get_client):
         """Test graceful handling when no database client."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
@@ -286,7 +286,7 @@ class TestRunFeedbackLoopMediumWindow:
 
         assert run_feedback_loop_medium_window.name == "src.tasks.run_feedback_loop_medium_window"
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_processes_churn(self, mock_get_client, mock_supabase_client):
         """Test that task processes churn prediction type."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_medium_window
@@ -328,7 +328,7 @@ class TestRunFeedbackLoopLongWindow:
 
         assert run_feedback_loop_long_window.name == "src.tasks.run_feedback_loop_long_window"
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_processes_long_window_types(self, mock_get_client, mock_supabase_client):
         """Test that task processes market_share_impact and risk types."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_long_window
@@ -370,7 +370,7 @@ class TestAnalyzeConceptDriftFromTruth:
 
         assert analyze_concept_drift_from_truth.name == "src.tasks.analyze_concept_drift_from_truth"
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_queries_drift_alerts(self, mock_get_client, mock_drift_alerts_data):
         """Test that task queries v_drift_alerts view."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
@@ -408,7 +408,7 @@ class TestAnalyzeConceptDriftFromTruth:
         assert result.get("status") == "completed"
         assert "drift_results" in result
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_detects_accuracy_alert(self, mock_get_client, mock_drift_alerts_data):
         """Test that task detects accuracy degradation alerts."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
@@ -444,7 +444,7 @@ class TestAnalyzeConceptDriftFromTruth:
         alerts = result.get("alerts", [])
         assert any(a.get("type") == "accuracy_degradation" for a in alerts)
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_accepts_prediction_type_filter(self, mock_get_client):
         """Test that task accepts prediction_type filter."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
@@ -473,7 +473,7 @@ class TestAnalyzeConceptDriftFromTruth:
         assert result is not None
         assert result.get("prediction_type") == "churn"
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_uses_custom_windows(self, mock_get_client):
         """Test that task accepts custom baseline and current windows."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
@@ -506,7 +506,7 @@ class TestAnalyzeConceptDriftFromTruth:
         assert result.get("baseline_days") == 120
         assert result.get("current_days") == 14
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_handles_no_client_drift(self, mock_get_client):
         """Test graceful handling when no database client."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth
@@ -546,7 +546,7 @@ class TestRunFullFeedbackLoop:
         assert run_full_feedback_loop.name == "src.tasks.run_full_feedback_loop"
 
     @patch("src.tasks.feedback_loop_tasks.analyze_concept_drift_from_truth")
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_runs_all_windows(self, mock_get_client, mock_drift_task, mock_supabase_client):
         """Test that task runs feedback loop for all prediction types."""
         from src.tasks.feedback_loop_tasks import run_full_feedback_loop
@@ -560,7 +560,7 @@ class TestRunFullFeedbackLoop:
         assert result.get("window") == "full"
 
     @patch("src.tasks.feedback_loop_tasks.analyze_concept_drift_from_truth")
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_triggers_drift_analysis(
         self, mock_get_client, mock_drift_task, mock_supabase_client
     ):
@@ -577,7 +577,7 @@ class TestRunFullFeedbackLoop:
         mock_drift_task.delay.assert_called_once()
 
     @patch("src.tasks.feedback_loop_tasks.analyze_concept_drift_from_truth")
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_task_skips_drift_analysis_when_disabled(
         self, mock_get_client, mock_drift_task, mock_supabase_client
     ):
@@ -682,7 +682,7 @@ class TestTaskConfiguration:
 class TestTaskErrorHandling:
     """Tests for task error handling."""
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_short_window_handles_rpc_error(self, mock_get_client):
         """Test short-window task handles RPC errors gracefully."""
         from src.tasks.feedback_loop_tasks import run_feedback_loop_short_window
@@ -698,7 +698,7 @@ class TestTaskErrorHandling:
         assert result is not None
         assert len(result.get("errors", [])) > 0 or result.get("status") == "partial"
 
-    @patch("src.memory.services.factories.get_supabase_client")
+    @patch("src.memory.services.factories.get_async_supabase_client")
     def test_drift_analysis_handles_query_error(self, mock_get_client):
         """Test drift analysis handles query errors gracefully."""
         from src.tasks.feedback_loop_tasks import analyze_concept_drift_from_truth

@@ -93,12 +93,18 @@ class TestObservabilityConnectorAgentProperties:
 
     @pytest.mark.asyncio
     async def test_is_db_enabled_returns_false_when_unavailable(self):
-        """Test is_db_enabled returns False when repository is unavailable."""
-        agent = ObservabilityConnectorAgent()
+        """Test is_db_enabled returns False when repository is unavailable.
 
-        agent._span_repository = None
+        ``span_repository`` lazily rebuilds when ``_span_repository`` is None, so
+        simulating "unavailable" requires the client itself to be unavailable.
+        (Pre-#821 this passed only because the ``client=`` kwarg TypeError forced
+        the rebuild to None; with the kwarg fixed we must patch the client.)
+        """
+        with patch("src.repositories.get_supabase_client", return_value=None):
+            agent = ObservabilityConnectorAgent()
+            agent._span_repository = None
 
-        assert agent.is_db_enabled is False
+            assert agent.is_db_enabled is False
 
 
 class TestObservabilityConnectorAgent:
