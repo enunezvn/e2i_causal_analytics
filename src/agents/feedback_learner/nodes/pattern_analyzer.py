@@ -158,25 +158,28 @@ class PatternAnalyzerNode:
         # Check for low ratings pattern. F15 (audit): normalize numeric AND
         # string ratings (thumbs_up/down) so real chatbot feedback is not
         # silently dropped from pattern detection.
-        rated = [
+        scored_raw = [
             (fb, _rating_to_numeric(fb["user_feedback"]))
             for fb in feedback_items
             if fb["feedback_type"] == "rating"
         ]
-        rated = [(fb, num) for fb, num in rated if num is not None]
-        if rated:
-            avg_rating = sum(num for _, num in rated) / len(rated)
+        # Bind to a NEW variable (not a reassignment of ``scored_raw``) so mypy
+        # infers the None-filtered element type as ``float`` rather than keeping
+        # the original ``float | None`` declared type.
+        scored = [(fb, num) for fb, num in scored_raw if num is not None]
+        if scored:
+            avg_rating = sum(num for _, num in scored) / len(scored)
             if avg_rating < 3.0:  # Assuming 1-5 scale
-                affected_agents = list({fb["source_agent"] for fb, num in rated if num < 3})
+                affected_agents = list({fb["source_agent"] for fb, num in scored if num < 3})
                 patterns.append(
                     DetectedPattern(
                         pattern_id=f"P{pattern_id}",
                         pattern_type="accuracy_issue",
                         description="Low average user ratings detected",
-                        frequency=len(rated),
+                        frequency=len(scored),
                         severity="high" if avg_rating < 2.0 else "medium",
                         affected_agents=affected_agents,
-                        example_feedback_ids=[fb["feedback_id"] for fb, _ in rated[:3]],
+                        example_feedback_ids=[fb["feedback_id"] for fb, _ in scored[:3]],
                         root_cause_hypothesis="Agent responses may not meet user expectations",
                     )
                 )
