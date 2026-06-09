@@ -281,6 +281,16 @@ celery_app.conf.beat_schedule = {
         "schedule": 86400.0,  # 24 hours
         "options": {"queue": "analytics"},
     },
+    # Operational KPI corpus sync every 24 hours (audit F3b). Re-indexes the
+    # latest snapshot of every (brand, metric_name, region) combo from
+    # business_metrics into the RAG substrate (episodic_memories). Scheduled
+    # AFTER the business_metrics ETL rollups above so it picks up fresh facts;
+    # idempotent prose dedup means only new/changed snapshots are embedded.
+    "sync-operational-corpus": {
+        "task": "src.tasks.sync_operational_corpus",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "analytics"},
+    },
     # -------------------------------------------------------------------------
     # A/B Testing Tasks (Phase 15)
     # -------------------------------------------------------------------------

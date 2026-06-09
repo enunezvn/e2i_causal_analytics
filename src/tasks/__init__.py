@@ -35,6 +35,10 @@ from src.tasks.ab_testing_tasks import (
     srm_detection_sweep,
 )
 
+# Operational KPI corpus sync (audit F3b): importing the module registers the
+# Celery task so the worker discovers it for the beat schedule.
+from src.tasks.corpus_ingestion_tasks import sync_operational_corpus
+
 # Crystallization subsystem (#376 Phase 4): importing the module fires the
 # @celery_app.task decorator so the portfolio task is discoverable by the
 # Celery worker. Without this line, the worker boot would NOT see
@@ -141,6 +145,8 @@ __all__ = [
     "refresh_npi_taxonomy_cache",
     # Risk-score prediction DB writes (issue #173)
     "write_risk_score_predictions",
+    # Operational KPI corpus sync (audit F3b)
+    "sync_operational_corpus",
     # Insight lifecycle subsystem
     "consolidate_insights",
     "sentinel_dispatcher",

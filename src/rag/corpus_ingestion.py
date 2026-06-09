@@ -114,6 +114,62 @@ async def index_operational_corpus(
     return inserted
 
 
+def _latest_per_combo(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the latest row per (metric_name, region) from a date-DESC stream.
+
+    The live ``business_metrics`` table is irregular: the most-recent date carries
+    only a subset of (metric_name, region) combos, so a naive ``limit_per_brand``
+    (order-by-date-desc, take N) silently omits combos (e.g. Remibrutinib and the
+    ``west`` region were entirely absent from the corpus). Given rows already
+    ordered by ``metric_date`` DESC, the FIRST occurrence of each combo is its
+    latest snapshot; later (older) duplicates are dropped. Guarantees every combo
+    present exactly once.
+    """
+    seen: set[tuple[Any, Any]] = set()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        key = (row.get("metric_name"), row.get("region"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def _fetch_brand_rows(
+    sb: Any, brand: str, limit_per_brand: int, latest_per_combo: bool
+) -> list[dict[str, Any]]:
+    """Fetch the business_metrics rows to index for one brand.
+
+    ``latest_per_combo=True`` paginates ALL of the brand's rows (date-DESC) and
+    returns the latest snapshot of every (metric_name, region) combo -- full
+    coverage, no omitted combos (audit F3b). ``False`` keeps the legacy bounded
+    recent-N behavior.
+    """
+    base = (
+        sb.table("business_metrics")
+        .select(_METRIC_COLUMNS)
+        .eq("brand", brand)
+        .not_.is_("metric_name", "null")
+        .order("metric_date", desc=True)
+    )
+    if not latest_per_combo:
+        return list(base.limit(limit_per_brand).execute().data or [])
+
+    all_rows: list[dict[str, Any]] = []
+    page = 0
+    page_size = 1000
+    while True:
+        batch = (
+            base.range(page * page_size, page * page_size + page_size - 1).execute().data or []
+        )
+        all_rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        page += 1
+    return _latest_per_combo(all_rows)
+
+
 def _existing_corpus_descriptions(sb: Any, agent_name: str) -> set[str]:
     """Return the set of already-indexed corpus descriptions for idempotency.
 
@@ -151,6 +207,7 @@ async def index_business_metrics(
     supabase_client: Any = None,
     agent_name: str = _DEFAULT_AGENT_NAME,
     dedup: bool = True,
+    latest_per_combo: bool = False,
 ) -> list[str]:
     """Read REAL ``business_metrics`` rows and index them into the RAG substrate.
 
@@ -171,6 +228,10 @@ async def index_business_metrics(
         supabase_client: optional injected client (defaults to the prod client).
         agent_name: e2i_agent_name attribution (default 'corpus_ingestion').
         dedup: skip rows already indexed under ``agent_name`` (default True).
+        latest_per_combo: when True, index the latest snapshot of EVERY
+            (metric_name, region) combo per brand (full coverage; ``limit_per_brand``
+            ignored). The durable Celery sync uses this so no combo is omitted
+            (audit F3b). When False, the legacy bounded recent-N behavior.
 
     Returns:
         The inserted episodic ``memory_id``s (only the NEW rows when ``dedup``).
@@ -186,16 +247,7 @@ async def index_business_metrics(
     batch_seen: set[str] = set()
     skipped = 0
     for brand in brands:
-        resp = (
-            sb.table("business_metrics")
-            .select(_METRIC_COLUMNS)
-            .eq("brand", brand)
-            .not_.is_("metric_name", "null")
-            .order("metric_date", desc=True)
-            .limit(limit_per_brand)
-            .execute()
-        )
-        for row in resp.data or []:
+        for row in _fetch_brand_rows(sb, brand, limit_per_brand, latest_per_combo):
             text = render_business_metric(row)
             # Skip already-indexed prose and intra-batch duplicates (idempotency).
             if text in already or text in batch_seen:
