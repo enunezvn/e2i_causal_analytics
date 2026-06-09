@@ -12,6 +12,15 @@ import pandas as pd
 from ..config import Brand
 from .base import BaseGenerator, GeneratorConfig
 
+# Known-ground-truth trigger->prescription conversion lift (accepted-arm minus
+# rejected-arm), in [0,1]. The conversion frame / kpi_query COMPUTES the realized
+# lift; this constant only SEEDS the data (Shard 05). Mid-band of the +10-20pp target.
+DESIGNED_CONVERSION_LIFT = 0.15
+_P_REJECTED = 0.25  # base rejected-arm conversion (in the 0.20-0.50 recoverable band)
+_P_ACCEPTED = _P_REJECTED + DESIGNED_CONVERSION_LIFT  # 0.40
+# Per-priority lift scale (all > 0 => sign-stable CATE-by-priority heterogeneity).
+_PRIORITY_LIFT_FACTOR = {"critical": 1.3, "high": 1.3, "medium": 1.0, "low": 0.7}
+
 
 class TriggerGenerator(BaseGenerator[pd.DataFrame]):
     """
@@ -63,6 +72,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         config: Optional[GeneratorConfig] = None,
         patient_df: Optional[pd.DataFrame] = None,
         hcp_df: Optional[pd.DataFrame] = None,
+        treatment_df: Optional[pd.DataFrame] = None,
     ):
         """
         Initialize the trigger generator.
@@ -71,10 +81,19 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             config: Generator configuration.
             patient_df: Patient DataFrame for foreign key integrity.
             hcp_df: HCP DataFrame for foreign key integrity.
+            treatment_df: Existing treatment_events (the prescription substrate).
+                Reserved for future de-duplication against baseline prescriptions;
+                the conversion lift is realized via injected prescriptions exposed
+                on `injected_prescriptions` (Shard 05).
         """
         super().__init__(config)
         self.patient_df = patient_df
         self.hcp_df = hcp_df
+        self.treatment_df = treatment_df
+        # treatment_events 'prescription' rows this generator appends to encode the
+        # known accepted-vs-rejected conversion lift. The loader caller merges these
+        # into datasets["treatment_events"] (scripts/load_synthetic_data.py).
+        self.injected_prescriptions: pd.DataFrame = pd.DataFrame()
 
     def generate(self) -> pd.DataFrame:
         """
@@ -86,8 +105,10 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         n = self.config.n_records
         self._log(f"Generating {n} triggers...")
 
-        if self.patient_df is not None and self.hcp_df is not None:
-            # Generate triggers linked to patients and HCPs
+        if self.patient_df is not None:
+            # Generate triggers linked to patients (hcp_id is read off the patient
+            # row, so hcp_df is not required for the linked path — passing only
+            # patient_df keeps the patient's brand/journey flowing into the trigger).
             records = []
             triggers_per_patient = max(1, n // len(self.patient_df))
 
@@ -108,8 +129,72 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         if "trigger_timestamp" in df.columns:
             df["data_split"] = self._assign_splits(df["trigger_timestamp"].tolist())
 
+        # Encode the KNOWN trigger->prescription conversion lift: for each trigger,
+        # draw "prescription lands in [trigger_ts, trigger_ts+30d]?" with a per-arm
+        # probability (accepted > rejected), scaled by priority. The injected rows are
+        # exposed via self.injected_prescriptions and MUST be merged into
+        # treatment_events by the loader caller (load_synthetic_data.py, Task 4).
+        self.injected_prescriptions = self._inject_conversion_prescriptions(df)
+
         self._log(f"Generated {len(df)} triggers")
         return df
+
+    def _inject_conversion_prescriptions(self, triggers: pd.DataFrame) -> pd.DataFrame:
+        """Build treatment_events 'prescription' rows that realize the designed
+        accepted-vs-rejected conversion lift, each landing inside the trigger's
+        30-day conversion window. Deterministic via the generator RNG.
+
+        Returns a DataFrame with post-rename treatment_events columns (patient_id,
+        brand, event_date, event_type, duration_days) self-stamped is_synthetic=True.
+        Empty when there are no triggers.
+        """
+        if triggers is None or len(triggers) == 0:
+            return pd.DataFrame()
+
+        ts = pd.to_datetime(triggers["trigger_timestamp"])
+        accepted = triggers["acceptance_status"].astype(str).str.lower().eq("accepted")
+        if "priority" in triggers.columns:
+            priority = triggers["priority"].astype(str).str.lower()
+            factor = priority.map(_PRIORITY_LIFT_FACTOR).fillna(1.0).to_numpy(dtype=float)
+        else:
+            factor = np.ones(len(triggers), dtype=float)
+
+        # Per-trigger injection probability: arm base * priority factor, clipped <=1.
+        base = np.where(accepted.to_numpy(), _P_ACCEPTED, _P_REJECTED)
+        p_inject = np.clip(base * factor, 0.0, 1.0)
+        draw = self._rng.random(len(triggers))
+        inject = draw < p_inject
+
+        if not inject.any():
+            return pd.DataFrame()
+
+        sel = triggers[inject].reset_index(drop=True)
+        sel_ts = ts[inject].reset_index(drop=True)
+        # Offset 1..27 days after the trigger => strictly inside the 30d window.
+        offsets = self._rng.integers(1, 28, size=len(sel))
+        event_dates = [
+            (t + pd.Timedelta(days=int(o))).strftime("%Y-%m-%d")
+            for t, o in zip(sel_ts, offsets, strict=False)
+        ]
+        if "brand" in sel.columns:
+            brand_vals = sel["brand"].to_numpy()
+        elif "brand_id" in sel.columns:
+            brand_vals = sel["brand_id"].to_numpy()
+        else:
+            brand_vals = np.array([Brand.REMIBRUTINIB.value] * len(sel))
+        return pd.DataFrame(
+            {
+                "treatment_event_id": self._generate_ids("trxc", len(sel)),
+                "patient_id": sel["patient_id"].to_numpy(),
+                "brand": brand_vals,
+                "event_date": event_dates,
+                "event_type": ["prescription"] * len(sel),
+                "duration_days": self._rng.integers(7, 90, size=len(sel)),
+                # APPENDED to treatment_events AFTER the central is_synthetic stamp,
+                # so self-stamp here or these rows leak into real-mode KPIs.
+                "is_synthetic": True,
+            }
+        )
 
     def _generate_trigger_record(self, patient: pd.Series) -> Dict:
         """Generate a trigger record linked to patient."""
