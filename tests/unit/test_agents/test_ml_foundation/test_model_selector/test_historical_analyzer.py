@@ -122,6 +122,15 @@ class TestQueryHistoricalExperimentsF9:
         records = await _query_historical_experiments("nonexistent_type")
         assert records == []
 
+    @pytest.mark.asyncio
+    async def test_trend_query_empty_algorithms_returns_empty(self):
+        from src.agents.ml_foundation.model_selector.nodes.historical_analyzer import (
+            _query_algorithm_trends,
+        )
+
+        # F9 + codex: an empty list must not reach PostgREST .in_() (undefined behavior).
+        assert await _query_algorithm_trends([]) == {}
+
 
 class TestGetDefaultSuccessRates:
     """Tests for _get_default_success_rates helper."""

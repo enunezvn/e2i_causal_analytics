@@ -83,18 +83,24 @@ async def _query_historical_experiments(
         )
         if kpi_category:
             exp_query = exp_query.eq("kpi_category", kpi_category)
-        experiments = exp_query.order("created_at", desc=True).limit(100).execute().data or []
+        # Bound the experiment set (newest first) to keep the experiment_id IN-list
+        # small. The original SQL applied ORDER BY ex.created_at DESC LIMIT 100 to the
+        # JOINED rows, so we do NOT cap the per-table fetches at 100 — we cap the
+        # joined result below (capping each side independently would drop valid
+        # completed runs belonging to slightly-older experiments).
+        experiments = exp_query.order("created_at", desc=True).limit(500).execute().data or []
         if not experiments:
             return []
 
         exp_by_id = {e["id"]: e for e in experiments if e.get("id") is not None}
+        if not exp_by_id:
+            return []
 
         runs = (
             client.table("ml_training_runs")
             .select("algorithm_name,algorithm_family,primary_metric_value,status,experiment_id")
             .in_("experiment_id", list(exp_by_id.keys()))
             .eq("status", "completed")
-            .limit(100)
             .execute()
             .data
             or []
@@ -117,7 +123,10 @@ async def _query_historical_experiments(
                     "created_at": exp.get("created_at"),
                 }
             )
-        return records
+        # Replicate ORDER BY ex.created_at DESC LIMIT 100 on the joined result
+        # (ISO timestamp strings sort lexicographically == chronologically).
+        records.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        return records[:100]
 
     except Exception as e:
         # F9: log instead of silently swallowing — a bare except previously hid that
@@ -319,6 +328,10 @@ async def _query_algorithm_trends(
     Returns:
         Dictionary mapping algorithm name to trend data
     """
+    if not algorithm_names:
+        # PostgREST .in_() with an empty list is undefined/client-dependent — guard it.
+        return {}
+
     try:
         from src.repositories.ml_data_loader import MLDataLoader
 
