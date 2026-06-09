@@ -155,14 +155,19 @@ class TestHealthScoreMetrics:
         assert sample_metrics.total_latency_ms == 1250
 
     def test_metrics_default_values(self):
-        """Test metrics with default values."""
+        """Test metrics with default values.
+
+        F1 (fail-closed): per-dimension scores default to ``None`` — an
+        unmeasured dimension is honest absence, never a fabricated ``0.0``. The
+        composite defaults to a clearly non-healthy ``0.0`` / grade ``"F"``.
+        """
         metrics = HealthScoreMetrics()
         assert metrics.overall_health_score == 0.0
         assert metrics.health_grade == "F"
-        assert metrics.component_health_score == 0.0
-        assert metrics.model_health_score == 0.0
-        assert metrics.pipeline_health_score == 0.0
-        assert metrics.agent_health_score == 0.0
+        assert metrics.component_health_score is None
+        assert metrics.model_health_score is None
+        assert metrics.pipeline_health_score is None
+        assert metrics.agent_health_score is None
         assert metrics.critical_issues_count == 0
         assert metrics.warnings_count == 0
         assert metrics.check_scope == "full"
