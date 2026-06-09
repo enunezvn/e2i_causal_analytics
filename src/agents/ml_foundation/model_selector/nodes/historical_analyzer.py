@@ -63,35 +63,69 @@ async def _query_historical_experiments(
         from src.repositories.ml_data_loader import MLDataLoader
 
         loader = MLDataLoader()
+        client = loader.client
+        if client is None:
+            logger.warning(
+                "Historical experiment query unavailable: no Supabase client; model "
+                "selection will fall back to default success rates."
+            )
+            return []
 
-        # Query ml_training_runs table
-        query = """
-            SELECT
-                tr.algorithm_name,
-                tr.algorithm_family,
-                tr.primary_metric_value,
-                tr.status,
-                ex.problem_type,
-                ex.kpi_category,
-                ex.created_at
-            FROM ml_training_runs tr
-            JOIN ml_experiments ex ON tr.experiment_id = ex.id
-            WHERE ex.problem_type = :problem_type
-            AND tr.status = 'completed'
-        """
-        params = {"problem_type": problem_type}
-
+        # F9: query via the real PostgREST path. The prior code called a
+        # non-existent ``MLDataLoader.execute_query`` whose AttributeError was
+        # silently swallowed, so the historical query never actually ran. PostgREST
+        # cannot express the ml_training_runs JOIN ml_experiments, so we run two
+        # simple filtered queries and join in Python.
+        exp_query = (
+            client.table("ml_experiments")
+            .select("id,problem_type,kpi_category,created_at")
+            .eq("problem_type", problem_type)
+        )
         if kpi_category:
-            query += " AND ex.kpi_category = :kpi_category"
-            params["kpi_category"] = kpi_category
+            exp_query = exp_query.eq("kpi_category", kpi_category)
+        experiments = exp_query.order("created_at", desc=True).limit(100).execute().data or []
+        if not experiments:
+            return []
 
-        query += " ORDER BY ex.created_at DESC LIMIT 100"
+        exp_by_id = {e["id"]: e for e in experiments if e.get("id") is not None}
 
-        result = await loader.execute_query(query, params)  # type: ignore[attr-defined]
-        return result if result else []
+        runs = (
+            client.table("ml_training_runs")
+            .select("algorithm_name,algorithm_family,primary_metric_value,status,experiment_id")
+            .in_("experiment_id", list(exp_by_id.keys()))
+            .eq("status", "completed")
+            .limit(100)
+            .execute()
+            .data
+            or []
+        )
 
-    except Exception:
-        # Return empty if database not available
+        records: List[Dict[str, Any]] = []
+        for run in runs:
+            exp = exp_by_id.get(run.get("experiment_id"))
+            if exp is None:
+                continue
+            records.append(
+                {
+                    "algorithm_name": run.get("algorithm_name"),
+                    "algorithm_family": run.get("algorithm_family"),
+                    "primary_metric_value": run.get("primary_metric_value"),
+                    "status": run.get("status"),
+                    "experiment_id": run.get("experiment_id"),
+                    "problem_type": exp.get("problem_type"),
+                    "kpi_category": exp.get("kpi_category"),
+                    "created_at": exp.get("created_at"),
+                }
+            )
+        return records
+
+    except Exception as e:
+        # F9: log instead of silently swallowing — a bare except previously hid that
+        # execute_query did not exist, so a broken query looked like "no data".
+        logger.warning(
+            "Historical experiment query failed (%s); falling back to default success rates.",
+            e,
+        )
         return []
 
 
@@ -238,6 +272,35 @@ async def get_algorithm_trends(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _parse_started_at(value: Any) -> Optional[datetime]:
+    """Parse a started_at value (ISO string or datetime) into an aware datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_trend_metric(row: Dict[str, Any]) -> float:
+    """COALESCE the trend metric: test auc_roc -> test r2 -> validation auc_roc -> 0.5.
+
+    Mirrors the prior SQL ``COALESCE((test_metrics->>'auc_roc')::float, ...)``.
+    """
+    test = row.get("test_metrics") or {}
+    val = row.get("validation_metrics") or {}
+    for source, key in ((test, "auc_roc"), (test, "r2"), (val, "auc_roc")):
+        if isinstance(source, dict) and source.get(key) is not None:
+            try:
+                return float(source[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.5
+
+
 async def _query_algorithm_trends(
     algorithm_names: List[str],
     recent_days: int = 30,
@@ -260,44 +323,54 @@ async def _query_algorithm_trends(
         from src.repositories.ml_data_loader import MLDataLoader
 
         loader = MLDataLoader()
+        client = loader.client
+        if client is None:
+            logger.warning("Algorithm trend query unavailable: no Supabase client.")
+            return {}
 
         now = datetime.now(timezone.utc)
         recent_cutoff = now - timedelta(days=recent_days)
         older_cutoff = now - timedelta(days=older_days)
 
-        # Query for trend data by time period
-        query = """
-            SELECT
-                algorithm,
-                CASE
-                    WHEN started_at >= :recent_cutoff THEN 'recent'
-                    WHEN started_at >= :older_cutoff THEN 'older'
-                    ELSE 'historical'
-                END as time_period,
-                AVG(
-                    COALESCE(
-                        (test_metrics->>'auc_roc')::float,
-                        (test_metrics->>'r2')::float,
-                        (validation_metrics->>'auc_roc')::float,
-                        0.5
-                    )
-                ) as avg_metric,
-                COUNT(*) as run_count
-            FROM ml_training_runs
-            WHERE algorithm = ANY(:algorithms)
-            AND status = 'completed'
-            AND started_at >= :older_cutoff
-            GROUP BY algorithm, time_period
-            ORDER BY algorithm, time_period
-        """
+        # F9: query via the real PostgREST path (prior code called the non-existent
+        # MLDataLoader.execute_query). PostgREST cannot do the CASE-bucketing /
+        # JSONB-AVG / GROUP BY, so fetch the completed runs in the window and
+        # aggregate per (algorithm, time_period) in Python — producing the same
+        # {algorithm, time_period, avg_metric, run_count} shape the SQL returned.
+        runs = (
+            client.table("ml_training_runs")
+            .select("algorithm,started_at,test_metrics,validation_metrics,status")
+            .in_("algorithm", algorithm_names)
+            .eq("status", "completed")
+            .gte("started_at", older_cutoff.isoformat())
+            .execute()
+            .data
+            or []
+        )
 
-        params = {
-            "algorithms": algorithm_names,
-            "recent_cutoff": recent_cutoff.isoformat(),
-            "older_cutoff": older_cutoff.isoformat(),
-        }
+        metrics_by_group: Dict[tuple, List[float]] = {}
+        for run in runs:
+            algo = run.get("algorithm")
+            started = _parse_started_at(run.get("started_at"))
+            if algo is None or started is None:
+                continue
+            if started >= recent_cutoff:
+                period = "recent"
+            elif started >= older_cutoff:
+                period = "older"
+            else:
+                period = "historical"
+            metrics_by_group.setdefault((algo, period), []).append(_extract_trend_metric(run))
 
-        result = await loader.execute_query(query, params)  # type: ignore[attr-defined]
+        result = [
+            {
+                "algorithm": algo,
+                "time_period": period,
+                "avg_metric": (sum(vals) / len(vals)) if vals else 0.5,
+                "run_count": len(vals),
+            }
+            for (algo, period), vals in metrics_by_group.items()
+        ]
 
         # Process results into trend data
         trends: Dict[str, Dict[str, Any]] = {}

@@ -1,10 +1,13 @@
 """Unit tests for historical_analyzer node."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from src.agents.ml_foundation.model_selector.nodes.historical_analyzer import (
     _get_default_recommendations,
     _get_default_success_rates,
+    _query_historical_experiments,
     analyze_historical_performance,
     get_algorithm_trends,
     get_recommendations_from_history,
@@ -39,6 +42,85 @@ def causal_kpi_state():
         "problem_type": "regression",
         "kpi_category": "causal",
     }
+
+
+class TestQueryHistoricalExperimentsF9:
+    """F9: _query_historical_experiments runs the real PostgREST path and no longer
+    silently swallows the (previously missing) execute_query AttributeError."""
+
+    @staticmethod
+    def _builder(data):
+        """A PostgREST query-builder mock whose chained calls return self."""
+        b = MagicMock()
+        for method in ("select", "eq", "order", "limit", "in_", "gte"):
+            getattr(b, method).return_value = b
+        b.execute.return_value = MagicMock(data=data)
+        return b
+
+    @pytest.mark.asyncio
+    @patch("src.repositories.ml_data_loader.MLDataLoader")
+    async def test_joins_runs_to_experiments_via_postgrest(self, mock_loader_cls):
+        exp_b = self._builder(
+            [
+                {
+                    "id": "e1",
+                    "problem_type": "binary_classification",
+                    "kpi_category": "churn",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+        )
+        runs_b = self._builder(
+            [
+                {
+                    "algorithm_name": "XGBoost",
+                    "algorithm_family": "gradient_boosting",
+                    "primary_metric_value": 0.82,
+                    "status": "completed",
+                    "experiment_id": "e1",
+                }
+            ]
+        )
+        client = MagicMock()
+        client.table.side_effect = lambda name: exp_b if name == "ml_experiments" else runs_b
+        mock_loader_cls.return_value.client = client
+
+        records = await _query_historical_experiments("binary_classification", "churn")
+
+        assert len(records) == 1
+        rec = records[0]
+        assert rec["algorithm_name"] == "XGBoost"
+        assert rec["primary_metric_value"] == 0.82
+        # experiment fields flattened up from the joined ml_experiments row
+        assert rec["problem_type"] == "binary_classification"
+        assert rec["kpi_category"] == "churn"
+        assert rec["experiment_id"] == "e1"
+
+    @pytest.mark.asyncio
+    @patch("src.repositories.ml_data_loader.MLDataLoader")
+    async def test_no_client_returns_empty_and_logs(self, mock_loader_cls, caplog):
+        import logging
+
+        mock_loader_cls.return_value.client = None
+        with caplog.at_level(logging.WARNING):
+            records = await _query_historical_experiments("binary_classification")
+
+        assert records == []
+        # F9: degradation is LOGGED, not silently swallowed.
+        assert any(
+            "Supabase client" in r.message or "default success rates" in r.message
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    @patch("src.repositories.ml_data_loader.MLDataLoader")
+    async def test_no_matching_experiments_returns_empty(self, mock_loader_cls):
+        client = MagicMock()
+        client.table.return_value = self._builder([])  # no experiments match
+        mock_loader_cls.return_value.client = client
+
+        records = await _query_historical_experiments("nonexistent_type")
+        assert records == []
 
 
 class TestGetDefaultSuccessRates:
