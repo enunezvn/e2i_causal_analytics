@@ -240,6 +240,7 @@ jobs:
             tests/unit/test_ragas_smoke_workflow.py \
             tests/unit/test_ragas_workflow_timeout.py \
             tests/unit/test_sampling_frame_gate.py \
+            tests/unit/test_supabase_client_misuse_guard.py \
             tests/unit/test_workflows_yaml_parse.py \
             tests/api/test_predictions_endpoints.py \
             tests/api/test_explain_endpoints.py \

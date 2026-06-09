@@ -349,11 +349,11 @@ def enrollment_health_check(
     start_time = time.time()
 
     async def execute_check():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
         from src.services.enrollment import EnrollmentService
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {
                     "status": "skipped",
@@ -526,12 +526,12 @@ def srm_detection_sweep(
     start_time = time.time()
 
     async def execute_sweep():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
         from src.repositories.ab_experiment import ABExperimentRepository
         from src.services.results_analysis import ResultsAnalysisService
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {
                     "status": "skipped",
@@ -940,10 +940,10 @@ def check_all_active_experiments(
     logger.info(f"Checking all active experiments: task {self.request.id}")
 
     async def execute_check():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {
                     "status": "skipped",
@@ -1027,10 +1027,10 @@ def cleanup_old_ab_results(
     effective_retention = retention_days or schedule_config.get("retention_days", 365)
 
     async def execute_cleanup():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {"status": "skipped", "reason": "No database client available"}
 

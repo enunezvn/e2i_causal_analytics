@@ -88,7 +88,7 @@ class ObservabilityConnectorAgent:
 
                 client = get_supabase_client()
                 if client:
-                    self._span_repository = ObservabilitySpanRepository(client=client)
+                    self._span_repository = ObservabilitySpanRepository(supabase_client=client)
             except Exception as e:
                 logger.warning(f"Failed to initialize span repository: {e}")
         return self._span_repository

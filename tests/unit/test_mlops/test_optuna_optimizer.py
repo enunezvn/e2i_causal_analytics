@@ -886,27 +886,21 @@ class TestSaveToDatabase:
             "duration_seconds": 60.0,
         }
 
-        # Patch the import inside the function - need to patch the module itself
-        import sys
-
-        original_module = sys.modules.get("src.repositories.supabase_client")
-
-        # Create a mock module that raises ImportError
-        mock_module = MagicMock()
-        mock_module.get_supabase_client = MagicMock(side_effect=ImportError("Mock import error"))
-        sys.modules["src.repositories.supabase_client"] = mock_module
-
-        try:
+        # Issue #821: save_to_database imports get_async_supabase_client from
+        # src.memory.services.factories; patch it to return None to
+        # deterministically exercise the "client unavailable" branch
+        # (`if client is None: return {"success": False, ...}`). The prior
+        # sys.modules["src.repositories.supabase_client"] shim never intercepted
+        # the real `from src.repositories import ...` import — the test passed
+        # only via the await-on-sync TypeError that this PR fixes.
+        with patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=None),
+        ):
             result = await optimizer.save_to_database(
                 study=mock_study,
                 optimization_results=optimization_results,
             )
-        finally:
-            # Restore original module
-            if original_module is not None:
-                sys.modules["src.repositories.supabase_client"] = original_module
-            else:
-                sys.modules.pop("src.repositories.supabase_client", None)
 
         assert result["success"] is False
         assert "error" in result
@@ -947,10 +941,12 @@ class TestSaveToDatabase:
         mock_client = MagicMock()
         mock_client.table = MagicMock(return_value=mock_table)
 
-        # Patch get_supabase_client at the location where it's imported
-        # The code does: from src.repositories import get_supabase_client
+        # Patch the async factory at the location where it's imported.
+        # The code does: from src.memory.services.factories import
+        # get_async_supabase_client (issue #821 — was the SYNC get_supabase_client,
+        # awaited, which raised TypeError; the await-on-sync bug this test missed).
         with patch(
-            "src.repositories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new=AsyncMock(return_value=mock_client),
         ):
             result = await optimizer.save_to_database(

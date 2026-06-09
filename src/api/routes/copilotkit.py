@@ -898,14 +898,21 @@ class LangGraphAgent(_LangGraphAGUIAgent):
 # =============================================================================
 
 
-def _get_agent_registry_repository():
-    """Get AgentRegistryRepository instance with Supabase client."""
+async def _get_agent_registry_repository():
+    """Get AgentRegistryRepository instance with an ASYNC Supabase client.
+
+    AgentRegistryRepository.get_by_tier -> BaseRepository.get_many awaits
+    ``query.execute()``, so the repo requires the ASYNC client (the sync
+    ``get_supabase()`` client raised ``TypeError`` on ``await execute()``).
+    The base constructor takes ``supabase_client=`` (issue #821; the prior
+    ``client=`` kwarg raised TypeError -> None -> silent sample-agent fallback).
+    """
     try:
-        from src.api.dependencies.supabase_client import get_supabase
+        from src.memory.services.factories import get_async_supabase_client
         from src.repositories.agent_registry import AgentRegistryRepository
 
-        client = get_supabase()
-        return AgentRegistryRepository(client=client) if client else None
+        client = await get_async_supabase_client()
+        return AgentRegistryRepository(supabase_client=client) if client else None
     except Exception as e:
         logger.warning(f"Failed to get AgentRegistryRepository: {e}")
         return None
@@ -1322,7 +1329,7 @@ async def _fetch_agents_from_db() -> Optional[List[Dict[str, Any]]]:
     Returns:
         List of agent dicts or None if unavailable
     """
-    repo = _get_agent_registry_repository()
+    repo = await _get_agent_registry_repository()
     if not repo:
         return None
 
