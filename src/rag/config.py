@@ -178,7 +178,11 @@ class FalkorDBConfig:
 
     host: str = "localhost"
     port: int = 6379  # 6379 internal (docker), 6381 external (host)
-    graph_name: str = "e2i_knowledge"
+    # Canonical causal graph seeded by scripts/seed_falkordb.py and shared with
+    # the memory subsystem (config/005_memory_config.yaml). The RAG graph
+    # backend's Cypher traverses CAUSES/AFFECTS paths that live in this graph;
+    # the prior "e2i_knowledge" default pointed at a graph nothing ever seeds.
+    graph_name: str = "e2i_causal"
     password: Optional[str] = None
 
     # Connection pooling
@@ -200,7 +204,12 @@ class FalkorDBConfig:
         return cls(
             host=os.getenv("FALKORDB_HOST", "localhost"),
             port=int(os.getenv("FALKORDB_PORT", "6379")),
-            graph_name=os.getenv("FALKORDB_GRAPH", "e2i_knowledge"),
+            # Prefer the standardized FALKORDB_GRAPH_NAME (used by the seed
+            # script and memory subsystem); keep FALKORDB_GRAPH as a back-compat
+            # fallback so existing overrides still apply.
+            graph_name=os.getenv(
+                "FALKORDB_GRAPH_NAME", os.getenv("FALKORDB_GRAPH", "e2i_causal")
+            ),
             password=os.getenv("FALKORDB_PASSWORD"),
             max_connections=int(os.getenv("FALKORDB_MAX_CONNECTIONS", "10")),
             connection_timeout_seconds=float(os.getenv("FALKORDB_TIMEOUT", "5.0")),
