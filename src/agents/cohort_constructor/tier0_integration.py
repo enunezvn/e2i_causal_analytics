@@ -19,10 +19,11 @@ from datetime import datetime
 from typing import Any, Dict, List, cast
 
 import pandas as pd
-
-# Import CohortConstructor
-from cohort_constructor import CohortConfig, CohortConstructor, Criterion, Operator
 from supabase import Client, create_client
+
+# Import CohortConstructor (F17: absolute package path — the bare top-level
+# `cohort_constructor` package does not exist, so this raised ModuleNotFoundError)
+from src.agents.cohort_constructor import CohortConfig, CohortConstructor, Criterion, Operator
 
 # ============================================
 # E2I AGENT CONTRACT
@@ -468,7 +469,8 @@ def example_3_compare_cohort_definitions():
 
     # Create test data
     import numpy as np
-    from cohort_constructor import compare_cohorts
+
+    from src.agents.cohort_constructor.constructor import compare_cohorts
 
     np.random.seed(42)
     n = 1000
