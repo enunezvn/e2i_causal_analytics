@@ -415,6 +415,26 @@ def load_to_supabase(datasets: dict, dry_run: bool = False, verbose: bool = Fals
     return results
 
 
+def write_hcp_adoption_artifacts(out_dir, seed: int = 42) -> list:
+    """Write the per-(brand) per-HCP CATE artifacts Shard 08's allocation builder
+    consumes: <out_dir>/per_hcp_cate_hcp_adoption_<brand>.parquet. The optum_hcp
+    analytic frame is leak-safe (exogenous centrality -> arm -> adoption, Shard 06.3).
+    Written BEFORE write_cohort_frames so the cohort-frame writer picks up the real
+    per-HCP CATE instead of its hcp_profiles fallback."""
+    from src.ml.synthetic.generators.hcp_adoption_artifact import (
+        generate_hcp_adoption_frame,
+        write_per_hcp_cate_artifact,
+    )
+
+    written = []
+    for brand in _CF_BRANDS:
+        frame = generate_hcp_adoption_frame(seed=seed, n_hcps=2000, brand=brand)
+        out = write_per_hcp_cate_artifact(frame, brand=brand, out_dir=out_dir)
+        written.append(str(out))
+    logger.info("  Wrote %d per-HCP CATE artifacts (Shard 08 input)", len(written))
+    return written
+
+
 def main():
     parser = argparse.ArgumentParser(description="Load synthetic data to Supabase")
     parser.add_argument("--dry-run", action="store_true", help="Validate without loading")
@@ -504,6 +524,7 @@ def main():
         if args.parquet_out or args.parquet_only:
             out_dir = args.parquet_out or f"data/synthetic/parquet/{datetime.now():%Y%m%dT%H%M%S}"
             write_parquet_snapshots(datasets, out_dir)
+            write_hcp_adoption_artifacts(out_dir, seed=42)  # Shard 08 per-HCP CATE input
             write_cohort_frames(out_dir)  # Task 6
             if args.parquet_only:
                 logger.info("parquet-only: skipping Supabase load")
