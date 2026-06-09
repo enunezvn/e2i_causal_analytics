@@ -17,9 +17,11 @@ Options:
 import argparse
 import json
 import logging
+import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -79,13 +81,19 @@ SMALL_SIZES = {
 
 
 def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: bool = False,
-                      id_prefix: str = ""):
+                      id_prefix: str = "", anchor_to_now: bool = False,
+                      anchor_reference: Optional[date] = None):
     """Generate synthetic datasets for tables that exist in Supabase.
 
     id_prefix namespaces every generated entity id (Generator base prepends it) so a
     synthetic validation dataset's ids stay DISJOINT from the existing dev baseline —
     the loader's UPSERT then cannot clobber pre-existing rows, and cleanup by
     is_synthetic is FK-safe. Empty prefix reproduces the legacy ids.
+
+    anchor_to_now (Shard 04) remaps every date-emitting generator's span onto a
+    rolling window ending at anchor_reference (or today), with the bulk inside
+    NOW()-30d — defeats migration-044 staleness so windowed KPIs read non-zero.
+    Resolved at generation time, so each run regenerates fresh dates.
     """
     datasets = {}
 
@@ -98,21 +106,21 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 1. Generate HCPs (no dependencies)
     logger.info(f"Generating {sizes['hcp']:,} HCP profiles...")
-    hcp_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["hcp"])
+    hcp_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["hcp"])
     hcp_df = HCPGenerator(hcp_config).generate()
     datasets["hcp_profiles"] = hcp_df
     logger.info(f"  Generated {len(hcp_df):,} HCPs")
 
     # 2. Generate Patients (depends on HCPs)
     logger.info(f"Generating {sizes['patient']:,} patient journeys...")
-    patient_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["patient"], dgp_type=dgp_type)
+    patient_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["patient"], dgp_type=dgp_type)
     patient_df = PatientGenerator(patient_config, hcp_df=hcp_df).generate()
     datasets["patient_journeys"] = patient_df
     logger.info(f"  Generated {len(patient_df):,} patients")
 
     # 3. Generate Treatment Events (depends on patients)
     logger.info(f"Generating {sizes['treatment']:,} treatment events...")
-    treatment_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["treatment"])
+    treatment_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["treatment"])
     treatment_df = TreatmentGenerator(treatment_config, patient_df=patient_df).generate()
     # Rename columns to match database schema
     if "treatment_date" in treatment_df.columns:
@@ -126,7 +134,7 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 4. Generate ML Predictions (depends on patients)
     logger.info(f"Generating {sizes['prediction']:,} ML predictions...")
-    prediction_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["prediction"])
+    prediction_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["prediction"])
     prediction_df = PredictionGenerator(prediction_config, patient_df=patient_df).generate()
     # Rename columns to match database schema
     if "prediction_date" in prediction_df.columns:
@@ -136,21 +144,21 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 5. Generate Triggers (depends on patients and HCPs)
     logger.info(f"Generating {sizes['trigger']:,} triggers...")
-    trigger_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["trigger"])
+    trigger_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["trigger"])
     trigger_df = TriggerGenerator(trigger_config, patient_df=patient_df, hcp_df=hcp_df).generate()
     datasets["triggers"] = trigger_df
     logger.info(f"  Generated {len(trigger_df):,} triggers")
 
     # 6. Generate Business Metrics (for Gap Analyzer)
     logger.info(f"Generating {sizes['business_metrics']:,} business metrics...")
-    bm_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["business_metrics"])
+    bm_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["business_metrics"])
     bm_df = BusinessMetricsGenerator(bm_config).generate()
     datasets["business_metrics"] = bm_df
     logger.info(f"  Generated {len(bm_df):,} business metrics")
 
     # 7. Seed Feature Store (for Drift Monitor)
     logger.info("Seeding feature store (groups and features)...")
-    fs_seeder = FeatureStoreSeeder(GeneratorConfig(id_prefix=id_prefix, seed=seed))
+    fs_seeder = FeatureStoreSeeder(GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference))
     feature_groups_df, features_df = fs_seeder.seed()
     datasets["feature_groups"] = feature_groups_df
     datasets["features"] = features_df
@@ -158,7 +166,7 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 8. Generate Feature Values (depends on feature store and patient data)
     logger.info(f"Generating {sizes['feature_values']:,} feature values...")
-    fv_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["feature_values"])
+    fv_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["feature_values"])
     fv_generator = FeatureValueGenerator(fv_config, features_df=features_df, patient_df=patient_df)
     fv_df = fv_generator.generate()
     datasets["feature_values"] = fv_df
@@ -330,6 +338,13 @@ def main():
                        help="Entity-id namespace prefix (default 'scv'). Keeps synthetic "
                             "ids disjoint from the dev baseline so UPSERT cannot clobber "
                             "existing rows. Pass '' to reproduce legacy un-namespaced ids.")
+    parser.add_argument("--anchor-to-now", action="store_true",
+                       help="Remap all generated dates onto a rolling window ending today "
+                            "(bulk inside NOW()-30d) so windowed KPIs read non-zero. "
+                            "Defeats migration-044 staleness; regenerated per run.")
+    parser.add_argument("--anchor-ref", type=str, default=None,
+                       help="Reference date (YYYY-MM-DD) for --anchor-to-now. Falls back to "
+                            "$SYNTH_ANCHOR_REF, then today. Used to prove per-run regeneration.")
     args = parser.parse_args()
 
     if args.verbose:
@@ -348,11 +363,24 @@ def main():
     }
     dgp_type = dgp_map[args.dgp]
 
+    # Resolve the rolling-window reference (CLI > $SYNTH_ANCHOR_REF > today).
+    anchor_reference = None
+    if args.anchor_to_now:
+        ref_str = args.anchor_ref or os.getenv("SYNTH_ANCHOR_REF")
+        if ref_str:
+            anchor_reference = date.fromisoformat(ref_str)
+        logger.info(
+            f"Rolling-window anchoring ON (reference={anchor_reference or 'today'})"
+        )
+
     start_time = datetime.now()
 
     try:
         # Generate datasets
-        datasets = generate_datasets(sizes, dgp_type, verbose=args.verbose, id_prefix=args.tag)
+        datasets = generate_datasets(
+            sizes, dgp_type, verbose=args.verbose, id_prefix=args.tag,
+            anchor_to_now=args.anchor_to_now, anchor_reference=anchor_reference,
+        )
 
         # Parquet dual-sink (optional). --parquet-only skips the DB load entirely
         # (pollution-free: no writes to shared prod tables, no DB creds needed).
