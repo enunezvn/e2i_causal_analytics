@@ -43,7 +43,9 @@ def test_accepted_minus_rejected_lift_matches_design():
     # patient's other windows, so the injected-only lift over-states DESIGNED_CONVERSION_LIFT.
     # The faithful in-band (+10-20pp) check — where arm-NEUTRAL baseline prescriptions
     # dilute the lift back down — is the Task 5 DB gate, not this unit test.
-    assert lift > 0.08, lift          # clearly positive, sign-stable
+    # Mechanism lower bound anchored to the fixed-seed injected-only lift (~0.30), so a
+    # mechanism regression (e.g. 0.30 -> 0.10) FAILS rather than slipping past a loose 0.08.
+    assert lift > 0.20, lift          # strong sign-stable injected-only lift
     assert lift < 0.40, lift          # bounded — not a degenerate all-accepted artifact
     assert DESIGNED_CONVERSION_LIFT == 0.15  # the seed constant is the documented target
 

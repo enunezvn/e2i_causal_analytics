@@ -62,8 +62,9 @@ def _arm_conv_rate(accepted: bool) -> float:
 
 def test_conversion_lift_sign_stable_and_in_band():
     lift = _arm_conv_rate(True) - _arm_conv_rate(False)
-    assert lift > 0.08, f"lift {lift} not sign-stable/clear (degenerate)"
-    assert lift < 0.25, f"lift {lift} above the +10-20pp design band"
+    # Enforce the STATED +10-20pp design band (realized 0.1335 on the seeded load),
+    # not merely sign-stability — a regression to 8pp or a blow-out to 24pp must fail.
+    assert 0.10 <= lift <= 0.20, f"lift {lift} outside the +10-20pp design band"
 
 
 def test_action_rate_uplift_treatment_exceeds_control():
