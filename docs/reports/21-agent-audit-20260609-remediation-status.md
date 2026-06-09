@@ -41,15 +41,25 @@ Decide per-table policies; do not blindly enable. Not auto-actioned here.
 ## Follow-ups discovered during remediation
 
 - **Orchestrator dispatch envelope masks domain-level failure** (found in F6 codex
-  review, gpt-5.5). `dispatcher.py:537-540` wraps every normal agent return in
+  review, gpt-5.5). `dispatcher.py` wraps every normal agent return in
   `AgentResult(success=True)`; `synthesizer.py:66-68` filters on that outer flag, so a
   domain-failed agent (incl. a 0/N tool_composer) is counted successful
   (`chatbot_graph.py:951-974`). The honest response text + 0.0 confidence still flow
   through `_extract_response`, so the *fabricated-answer* harm is closed by F6 (#827);
   the residual is **transport-`success` vs domain-`success` accounting**, a general
-  behavior across ALL agents. Needs its own scoped PR (broad dispatcher/synthesizer
-  change, high ripple — cf. #814); NOT bundled into F6. (Could not file as a GitHub
-  issue — external-write blocked under the loop authorization.)
+  behavior across ALL agents. **PARTIALLY CLOSED by #839** (F12/F13/F14): a scoped
+  domain-failure guard now maps `status=="failed"` → `success=False` for the three
+  resolver-backed agents (heterogeneous_optimizer/resource_optimizer/prediction_synthesizer).
+  The GENERAL all-agents version still needs its own scoped PR (broad dispatcher/synthesizer
+  change, high ripple — cf. #814).
+- **prediction_synthesizer wired-but-empty → issue #840** (found while fixing F14 dispatch
+  in #839). Registered + chat-reachable, but the factory never injects a `model_registry`,
+  no model-client deployment manifest exists (→ `model_clients={}` "UNVALIDATED mode"), and
+  `ml_model_registry`/`v_champion_models` = 0 rows. #839 made it fail closed honestly; #840
+  tracks wiring the registry + deploying model clients to make chat predictions live
+  (upstream dep: #829). Sibling: `resource_optimizer` is fully functional given a structured
+  problem but has no per-entity allocation/response data substrate to auto-construct one
+  from chat (data/product decision, not a wiring gap — not separately filed).
 - **SHAP provenance not persisted / not consumed downstream** (found in F8 codex review,
   gpt-5.5). F8 (#828) propagates `data_provenance` through the agent output contract and
   stops persisting skipped runs, but: (a) a `data_provenance` COLUMN on `ml_shap_analyses`
