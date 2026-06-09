@@ -211,6 +211,10 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
   }, []);
 
   const experiments = (data?.experiments ?? []).map(toExperimentCard);
+  // Non-empty when the monitor agent hit errors (e.g. a node could not reach the
+  // DB). Distinguishes a backend failure from a genuine empty dataset so the
+  // panel does NOT show a misleading "no experiments" state over a crash.
+  const monitorErrors = data?.errors ?? [];
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -237,6 +241,13 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
       <CardContent className="space-y-3">
         {isPending ? (
           <EmptyState title="Loading experiments…" />
+        ) : experiments.length === 0 && monitorErrors.length > 0 ? (
+          <EmptyState
+            title="Couldn’t load experiments"
+            description={`The monitoring service reported ${monitorErrors.length} error(s): ${monitorErrors
+              .slice(0, 2)
+              .join('; ')}`}
+          />
         ) : experiments.length === 0 ? (
           <EmptyState
             title="No experiments to recommend"

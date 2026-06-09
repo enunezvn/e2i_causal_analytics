@@ -372,10 +372,10 @@ class TestExperimentMonitorAgentIntegration:
         # We need to mock the Supabase client to avoid real DB calls
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_client:
-            # Return None client to trigger mock data paths
+            # Return None client to fail closed (no mock data)
             mock_client.return_value = None
 
             agent = ExperimentMonitorAgent()

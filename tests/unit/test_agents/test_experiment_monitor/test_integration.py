@@ -82,7 +82,7 @@ class TestEndToEndWorkflows:
         mock_client.table.return_value = mock_query
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=mock_client,
         ):
@@ -191,7 +191,7 @@ class TestEndToEndWorkflows:
 
         # Use real alert generator to generate enrollment alerts
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -230,7 +230,7 @@ class TestEndToEndWorkflows:
         state["status"] = "analyzing"
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -317,7 +317,7 @@ class TestEndToEndWorkflows:
     async def test_workflow_with_multiple_issues(self, state_with_all_issues):
         """Test workflow handles multiple concurrent issues."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -604,19 +604,22 @@ class TestErrorHandling:
                 pass  # Expected
 
     @pytest.mark.asyncio
-    async def test_database_unavailable_uses_fallback(self, base_monitor_state):
-        """Test that database unavailability triggers fallback behavior."""
+    async def test_database_unavailable_fails_closed_no_mock(self, base_monitor_state):
+        """Database unavailability must FAIL CLOSED (no mock data): the node records
+        an error and returns no experiments, rather than fabricating plausible ones."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=None,  # Simulate no DB connection
         ):
-            # Real nodes should handle None client gracefully
             health_node = HealthCheckerNode()
             result = await health_node.execute(base_monitor_state)
 
-        # Should not crash, may have warnings or use mock data
+        # Should not crash; no fabricated experiments; the failure is recorded.
         assert "status" in result
+        assert result.get("experiments", []) == []
+        errors = result.get("errors", [])
+        assert any("client unavailable" in str(e.get("error", "")).lower() for e in errors), errors
 
 
 class TestEdgeCases:
@@ -691,7 +694,7 @@ class TestEdgeCases:
         state["experiments_checked"] = 3
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -712,7 +715,7 @@ class TestEdgeCases:
         state["srm_issues"] = [create_srm_issue("exp-border", p_value=0.001, severity="warning")]
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -758,7 +761,7 @@ class TestEdgeCases:
         ]
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
             return_value=None,
         ):

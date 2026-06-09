@@ -38,7 +38,7 @@ class TestSRMDetectorGetClient:
     async def test_get_client_lazy_loads(self):
         """Test that client is lazily loaded."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get_client:
             mock_client = MagicMock()
@@ -54,7 +54,7 @@ class TestSRMDetectorGetClient:
     async def test_get_client_caches_result(self):
         """Test that client is cached after first load."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get_client:
             mock_client = MagicMock()
@@ -113,7 +113,7 @@ class TestSRMDetectorExecute:
         node = SRMDetectorNode()
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -128,7 +128,7 @@ class TestSRMDetectorExecute:
         node = SRMDetectorNode()
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -145,7 +145,7 @@ class TestSRMDetectorExecute:
         state_with_experiments["check_latency_ms"] = 100
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -593,7 +593,7 @@ class TestEdgeCases:
         }
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None

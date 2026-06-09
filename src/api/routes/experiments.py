@@ -398,6 +398,10 @@ class MonitorResponse(BaseModel):
     recommended_actions: List[str]
     check_latency_ms: int
     timestamp: datetime
+    # Non-empty when the monitor agent hit errors (e.g. a node could not reach
+    # the DB). Surfaces failures to the client instead of masking a crash as an
+    # honest-looking empty result (HTTP 200 with experiments=[]).
+    errors: List[str] = []
 
 
 # =============================================================================
@@ -1299,6 +1303,18 @@ async def trigger_experiment_monitoring(
             for alert in result.alerts
         ]
 
+        # Surface monitor-agent errors so a node crash (e.g. a DB-client failure)
+        # is NOT masked as an honest-looking HTTP 200 with experiments=[]. The
+        # summary also flags them so the signal is visible without inspecting the
+        # errors list.
+        agent_errors = list(result.errors or [])
+        summary = result.monitor_summary
+        if agent_errors:
+            summary = (
+                f"{summary} | WARNING: {len(agent_errors)} monitor error(s): "
+                f"{'; '.join(agent_errors[:3])}"
+            )
+
         return MonitorResponse(
             experiments_checked=result.experiments_checked,
             healthy_count=result.healthy_count,
@@ -1306,10 +1322,11 @@ async def trigger_experiment_monitoring(
             critical_count=result.critical_count,
             experiments=experiments,
             alerts=alerts,
-            monitor_summary=result.monitor_summary,
+            monitor_summary=summary,
             recommended_actions=result.recommended_actions,
             check_latency_ms=result.check_latency_ms,
             timestamp=datetime.now(timezone.utc),
+            errors=agent_errors,
         )
 
     except Exception as e:
