@@ -41,8 +41,20 @@ def test_risk_difference_orders_by_segment():
     assert rd_high > rd_low > -0.05, f"high RD {rd_high:.3f} !> low RD {rd_low:.3f}"
 
 
-def test_tau_i_mean_equals_brand_cate_weighted():
-    _, seg, _, tau_i, cate_map = _frame(Brand.FABHALTA)
-    # per-unit tau_i equals the brand-scaled segment CATE (the recoverable truth)
-    assert np.isclose(tau_i[0], cate_map[seg[0]])
-    assert set(np.round(np.unique(tau_i), 4)) == set(cate_map.values())
+def test_tau_i_is_recoverable_rd_scale_segment_cate():
+    """tau_i is the per-segment counterfactual RISK-DIFFERENCE CATE (recoverable,
+    de-confounded), NOT the latent-scale cate_map. It takes exactly 3 distinct
+    values, ordered high>medium>low>0, and on the RD (probability) scale each is
+    strictly smaller than the corresponding latent CATE (binarization attenuates).
+    """
+    from src.ml.synthetic.dgp.treatment_arm import SEGMENT_MEDIUM, rd_map_from_tau
+
+    _, seg, _, tau_i, latent_map = _frame(Brand.FABHALTA)
+    # exactly 3 distinct per-segment values
+    rd = rd_map_from_tau(seg, tau_i)
+    assert len(set(np.round(list(rd.values()), 6))) == 3
+    # ordered high>medium>low>0 (de-confounded RD ordering preserved)
+    assert rd[SEGMENT_HIGH] > rd[SEGMENT_MEDIUM] > rd[SEGMENT_LOW] > 0
+    # each RD-scale value is smaller than the latent CATE it derives from
+    for s in (SEGMENT_HIGH, SEGMENT_MEDIUM, SEGMENT_LOW):
+        assert 0 < rd[s] < latent_map[s]

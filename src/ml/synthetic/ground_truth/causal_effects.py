@@ -5,8 +5,10 @@ Stores known TRUE_ATE and CATE values for each DGP/brand combination
 to enable pipeline validation.
 """
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..config import DGP_CONFIGS, Brand, DGPType
@@ -92,6 +94,19 @@ class GroundTruthStore:
     def get_all(self) -> List[GroundTruthEffect]:
         """Get all stored ground truth effects."""
         return list(self._effects.values())
+
+    def to_json_file(self, path: str) -> None:
+        """Persist all stored ground-truth effects to a JSON sidecar so the
+        Shard 11 acceptance harness can compare estimates vs truth.
+
+        Writes the artifact at `data/synthetic/ground_truth_<run>.json`
+        (INDEX §CANONICAL v1.1 ground-truth artifact). Shard 11 reads
+        TRUE_ATE/CATE from this file rather than filtering ml_predictions
+        on a non-existent cohort/brand column.
+        """
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        payload = [e.to_dict() for e in self.get_all()]
+        Path(path).write_text(json.dumps(payload, indent=2))
 
     def validate_estimate(self, brand: Brand, dgp_type: DGPType, estimated_ate: float) -> Dict:
         """

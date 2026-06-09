@@ -23,6 +23,7 @@ from ..dgp.treatment_arm import (
     assign_treatment_arm,
     binary_outcome_with_cate,
     brand_scaled_cate,
+    rd_map_from_tau,
 )
 from .base import BaseGenerator, GeneratorConfig
 
@@ -101,18 +102,21 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # (Task 03.1). Confounders carry disease_severity + academic_hcp.
         treatment_arm, propensity = assign_treatment_arm(confounders, self._rng)
 
-        # Per-unit segment + brand-scaled CATE (Task 03.2). Distinct per brand so
-        # a Kisqali probe yields a different structure than Remibrutinib (gate 6).
+        # Per-unit segment + brand-scaled latent CATE (Task 03.2). Distinct per
+        # brand so a Kisqali probe yields a different structure than Remibrutinib.
         brand_enum = self.config.brand or Brand.REMIBRUTINIB
         segment = assign_segment(confounders["disease_severity"])
-        cate_map = brand_scaled_cate(brand_enum)
+        latent_cate_map = brand_scaled_cate(brand_enum)
 
         # Prevalence-banded binary outcome carrying E[tau]=TRUE_ATE (Task 03.3).
         # REPLACES the expit(...)>0.5 outcome for treatment_initiated so the label
-        # is recoverable (in-band [0.20,0.50]) rather than degenerate.
+        # is recoverable (in-band [0.20,0.50]) rather than degenerate. tau_i is the
+        # per-unit RD-scale (de-confounded, recoverable) segment CATE.
         treatment_initiated, tau_i = binary_outcome_with_cate(
-            treatment_arm, confounders, segment, cate_map, self._rng
+            treatment_arm, confounders, segment, latent_cate_map, self._rng
         )
+        # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
+        cate_map = rd_map_from_tau(segment, tau_i)
 
         # days_to_treatment only for initiators (preserve prior shape)
         days_to_treatment: Any = np.where(

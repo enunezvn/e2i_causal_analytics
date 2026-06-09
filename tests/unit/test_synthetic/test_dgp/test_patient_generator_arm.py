@@ -22,9 +22,18 @@ def test_patient_frame_carries_arm_segment_tau():
     assert df["treatment_arm"].sum() >= 30 and (len(df) - df["treatment_arm"].sum()) >= 100
     # prevalence band (INDEX) for the wired DGP
     assert 0.20 <= df["treatment_initiated"].mean() <= 0.50
-    # per-unit tau distinct by segment, Kisqali-scaled (!= base 0.50/0.30/0.15)
-    taus = set(np.round(df["treatment_effect_estimate"].unique(), 4))
-    assert taus == {0.70, 0.42, 0.21}  # base {0.50,0.30,0.15} x Kisqali scale 1.40
+    # per-unit tau is the RECOVERABLE RD-scale segment CATE: exactly 3 distinct
+    # values, ordered high>medium>low>0, and Kisqali-scaled (distinct per brand).
+    # (NOT the latent {0.70,0.42,0.21} — binarization attenuates to the RD scale.)
+    taus = sorted(df["treatment_effect_estimate"].dropna().unique())
+    assert len(taus) == 3, taus
+    assert taus[0] > 0 and taus[0] < taus[1] < taus[2]
+    # de-confounded RD scale is well below the latent Kisqali high CATE 0.70
+    assert taus[2] < 0.70
+    # tie tau back to segment ordering: high segment carries the largest tau
+    high = df[df["segment_assignment"] == "high_severity"]["treatment_effect_estimate"].iloc[0]
+    low = df[df["segment_assignment"] == "low_severity"]["treatment_effect_estimate"].iloc[0]
+    assert high == taus[2] and low == taus[0]
 
 
 def test_predictions_inherit_causal_cols():

@@ -17,6 +17,7 @@ from .treatment_arm import (
     assign_treatment_arm,
     binary_outcome_with_cate,
     brand_scaled_cate,
+    rd_map_from_tau,
 )
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "brand_scaled_cate",
     "assign_segment",
     "binary_outcome_with_cate",
+    "rd_map_from_tau",
     "SEGMENT_HIGH",
     "SEGMENT_MEDIUM",
     "SEGMENT_LOW",
