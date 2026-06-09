@@ -37,7 +37,9 @@ class TestProvenanceDefaultExclude(TestPatientJourneyRepository):
         result = MagicMock()
         result.data = []
         # chain: select().eq(brand).not_.is_().eq(is_synthetic).limit().execute()
-        chain = mock_client.table.return_value.select.return_value.eq.return_value.not_.is_.return_value
+        chain = (
+            mock_client.table.return_value.select.return_value.eq.return_value.not_.is_.return_value
+        )
         chain.eq.return_value.limit.return_value.execute = AsyncMock(return_value=result)
 
         await repo.get_data_freshness("Kisqali")
@@ -48,7 +50,9 @@ class TestProvenanceDefaultExclude(TestPatientJourneyRepository):
     async def test_get_data_freshness_includes_synthetic_when_opted_in(self, repo, mock_client):
         result = MagicMock()
         result.data = []
-        chain = mock_client.table.return_value.select.return_value.eq.return_value.not_.is_.return_value
+        chain = (
+            mock_client.table.return_value.select.return_value.eq.return_value.not_.is_.return_value
+        )
         chain.limit.return_value.execute = AsyncMock(return_value=result)
 
         await repo.get_data_freshness("Kisqali", include_synthetic=True)

@@ -103,9 +103,7 @@ class TriggerRepository(BaseRepository):
             .gte("trigger_timestamp", cutoff_date.isoformat())
         )
         query = apply_provenance_filter(query, include_synthetic)
-        result = await (
-            query.order("trigger_timestamp", desc=True).limit(limit).execute()
-        )
+        result = await query.order("trigger_timestamp", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in result.data]
 
@@ -131,15 +129,9 @@ class TriggerRepository(BaseRepository):
 
         from src.repositories.provenance import apply_provenance_filter
 
-        query = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("patient_id", patient_id)
-        )
+        query = self.client.table(self.table_name).select("*").eq("patient_id", patient_id)
         query = apply_provenance_filter(query, include_synthetic)
-        result = await (
-            query.order("trigger_timestamp", desc=True).limit(limit).execute()
-        )
+        result = await query.order("trigger_timestamp", desc=True).limit(limit).execute()
 
         return [self._to_model(row) for row in result.data]
 

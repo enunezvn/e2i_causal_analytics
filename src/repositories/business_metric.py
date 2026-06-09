@@ -132,10 +132,7 @@ class BusinessMetricRepository(BaseRepository):
         )
         query = apply_provenance_filter(query, include_synthetic)
         result = await (
-            query.order("metric_name")
-            .order("metric_date", desc=True)
-            .limit(5000)
-            .execute()
+            query.order("metric_name").order("metric_date", desc=True).limit(5000).execute()
         )
 
         if not result.data:

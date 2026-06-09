@@ -232,11 +232,7 @@ class PatientJourneyRepository(SplitAwareRepository):
 
         from src.repositories.provenance import apply_provenance_filter
 
-        query = (
-            self.client.table(self.table_name)
-            .select("journey_stage")
-            .eq("brand", brand)
-        )
+        query = self.client.table(self.table_name).select("journey_stage").eq("brand", brand)
         query = apply_provenance_filter(query, include_synthetic)
         result = await query.limit(10000).execute()
 
