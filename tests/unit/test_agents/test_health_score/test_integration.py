@@ -127,6 +127,99 @@ class TestHealthScoreAgentCheckHealth:
         assert len(result.critical_issues) > 0
 
 
+class TestHealthScoreFailClosed:
+    """F1 anti-fabrication guard: absence of a real backend must NOT be
+    encoded as a healthy 100/grade-A result tagged ``measured``.
+
+    Reality: there are no real ``metrics_store``/``pipeline_store``/
+    ``agent_registry`` implementations, and a default ``HealthScoreAgent()``
+    wires no health_client either. The honest result is therefore
+    ``unknown`` (no dimensions measured), never a fabricated perfect score.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_stores_does_not_fabricate_grade_a(self):
+        """With NO stores wired, the agent must not report a perfect, measured
+        health (the live-dashboard 100/A/measured bug)."""
+        agent = HealthScoreAgent()
+        result = await agent.check_health(scope="full")
+
+        # The core anti-fabrication invariants:
+        assert result.data_provenance != "measured"
+        assert result.health_grade != "A"
+        assert result.overall_health_score != 100.0
+
+    @pytest.mark.asyncio
+    async def test_no_stores_reports_unknown_provenance(self):
+        """With zero measurable dimensions the provenance is ``unknown`` and the
+        result surfaces a critical issue explaining why."""
+        agent = HealthScoreAgent()
+        result = await agent.check_health(scope="full")
+
+        assert result.data_provenance == "unknown"
+        assert result.overall_health_score == 0.0
+        assert any("could be measured" in issue.lower() for issue in result.critical_issues)
+
+    @pytest.mark.asyncio
+    async def test_component_only_reports_partial(self, mock_health_client):
+        """A real health_client (component dimension) with no other stores must
+        report ``partial`` provenance computed over only the measured dim."""
+        agent = HealthScoreAgent(health_client=mock_health_client)
+        result = await agent.check_health(scope="full")
+
+        assert result.data_provenance == "partial"
+        # All 5 mock components healthy => component dim 1.0 => overall 100 over
+        # the single measured dimension. Grade A is honest HERE because the one
+        # measured dimension really is healthy; provenance discloses it's partial.
+        assert result.component_health_score == 1.0
+
+    @pytest.mark.asyncio
+    async def test_quick_check_measures_components(self, mock_health_client):
+        """Codex F1.2: quick_check() with a real health_client MUST measure
+        components (provenance not 'unknown', component score present), not skip
+        them and collapse to 0/F/unknown."""
+        agent = HealthScoreAgent(health_client=mock_health_client)
+        result = await agent.quick_check()
+
+        assert result.data_provenance != "unknown"
+        assert result.component_health_score == 1.0
+        assert result.overall_health_score > 0.0
+
+    @pytest.mark.asyncio
+    async def test_unmeasured_per_dim_scores_are_none_not_one(self, mock_health_client):
+        """Codex F1.1: with only the component backend wired, the OUTPUT must NOT
+        expose a fabricated 1.0 for the unmeasured model/pipeline/agent dims.
+        Unmeasured == None."""
+        agent = HealthScoreAgent(health_client=mock_health_client)
+        result = await agent.check_health(scope="full")
+
+        assert result.component_health_score == 1.0  # measured
+        assert result.model_health_score is None  # unmeasured, NOT 1.0
+        assert result.pipeline_health_score is None
+        assert result.agent_health_score is None
+
+    @pytest.mark.asyncio
+    async def test_recommendations_do_not_claim_healthy_when_unmeasured(self, mock_health_client):
+        """Codex F1.1: an unmeasured dimension must yield a 'wire a real backend'
+        recommendation and must NOT produce the 'system is healthy' message."""
+        agent = HealthScoreAgent(health_client=mock_health_client)
+        result = await agent.check_health(scope="full")
+
+        recs = " ".join(result.recommendations).lower()
+        assert "system is healthy" not in recs
+        assert "unmeasured" in recs
+
+    @pytest.mark.asyncio
+    async def test_handoff_does_not_crash_on_unmeasured_model_score(self, mock_health_client):
+        """Codex F1.1: get_handoff reads model_health_score < 0.8; a None
+        (unmeasured) dim must not crash and must not read as healthy."""
+        agent = HealthScoreAgent(health_client=mock_health_client)
+        result = await agent.check_health(scope="full")
+        handoff = agent.get_handoff(result)  # must not raise
+
+        assert handoff["component_scores"]["model"] is None
+
+
 class TestHealthScoreAgentHandoff:
     """Tests for handoff generation"""
 

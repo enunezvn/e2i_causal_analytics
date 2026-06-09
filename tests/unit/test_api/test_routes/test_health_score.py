@@ -65,8 +65,12 @@ def mock_agent_result():
         critical_issues=[],
         warnings=["Some warning"],
         health_summary="System health is good",
+        total_latency_ms=1250,
         check_latency_ms=1250,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        # F1: the route now propagates the agent's real provenance into the
+        # response; must be a concrete string (not an auto-MagicMock attr).
+        data_provenance="partial",
     )
 
 
@@ -205,6 +209,66 @@ async def test_full_health_check_calls_run_with_full_scope():
         mock_run.assert_called_once_with(scope=CheckScope.FULL)
 
 
+# -----------------------------------------------------------------------------
+# F1: /check must surface the AGENT'S real provenance, not a hardcoded
+# 'measured'. With no real stores wired, the agent fails closed to 'unknown';
+# the route must propagate that, not fabricate health.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_health_check_propagates_agent_provenance(mock_agent_result):
+    """_execute_health_check must copy the agent's data_provenance into the
+    response. A real default agent (no model/pipeline/agent stores) reports
+    'partial' or 'unknown' — never a hardcoded 'measured'."""
+    mock_agent_result.data_provenance = "unknown"
+    mock_agent = MagicMock()
+    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
+    # _execute_health_check imports HealthScoreAgent from src.agents.health_score,
+    # so the patch target is the source module (mirrors the other route tests).
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+        result = await _execute_health_check(CheckScope.FULL)
+    assert result.data_provenance == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_execute_health_check_wires_real_health_client():
+    """_execute_health_check must construct the agent with the REAL
+    SupabaseHealthClient so component health is genuinely measured (not the
+    fail-open mock path). SupabaseHealthClient is left UNPATCHED so we assert a
+    real instance is threaded through."""
+    from src.agents.health_score import SupabaseHealthClient
+
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        agent = MagicMock()
+        agent.check_health = AsyncMock(
+            return_value=MagicMock(
+                overall_health_score=25.0,
+                health_grade="F",
+                component_health_score=1.0,
+                model_health_score=0.0,
+                pipeline_health_score=0.0,
+                agent_health_score=0.0,
+                critical_issues=[],
+                warnings=[],
+                health_summary="partial",
+                total_latency_ms=10,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                data_provenance="partial",
+            )
+        )
+        return agent
+
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=_capture):
+        await _execute_health_check(CheckScope.FULL)
+
+    assert "health_client" in captured["kwargs"]
+    assert isinstance(captured["kwargs"]["health_client"], SupabaseHealthClient)
+
+
 # =============================================================================
 # ENDPOINT TESTS - get_component_health
 # =============================================================================
@@ -288,14 +352,15 @@ async def test_get_component_health_discloses_placeholder_provenance(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_get_component_health_real_provenance_when_agent_available(mock_agent_result):
-    """When the real agent is available, /components must report measured
-    provenance (not placeholder)."""
+async def test_get_component_health_serves_placeholder_even_when_agent_available(mock_agent_result):
+    """F1b: /components serves hardcoded _get_mock_component_health() data; it
+    does NOT actually invoke the agent. Mere agent importability is NOT a
+    measurement, so the response must be tagged 'placeholder', never 'measured'."""
     mock_agent = MagicMock()
     mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
     with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
         result = await get_component_health()
-    assert result.data_provenance == "measured"
+    assert result.data_provenance == "placeholder"
 
 
 @pytest.mark.asyncio
@@ -322,13 +387,15 @@ async def test_get_model_health_discloses_placeholder_provenance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_model_health_real_provenance_when_agent_available(mock_agent_result):
-    """When the real agent is available, /models must report measured provenance."""
+async def test_get_model_health_serves_placeholder_even_when_agent_available(mock_agent_result):
+    """F1b: /models serves hardcoded _get_mock_model_health() (accuracy=0.89,
+    auc=0.92). Mere agent importability is NOT a measurement, so the response
+    must be tagged 'placeholder', never 'measured'."""
     mock_agent = MagicMock()
     mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
     with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
         result = await get_model_health()
-    assert result.data_provenance == "measured"
+    assert result.data_provenance == "placeholder"
 
 
 # -----------------------------------------------------------------------------
@@ -366,14 +433,15 @@ async def test_get_pipeline_health_discloses_placeholder_provenance(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_get_pipeline_health_real_provenance_when_agent_available(mock_agent_result):
-    """When the real agent is available, /pipelines must report measured
-    provenance (not placeholder)."""
+async def test_get_pipeline_health_serves_placeholder_even_when_agent_available(mock_agent_result):
+    """F1b: /pipelines serves hardcoded _get_mock_pipeline_health() data. Mere
+    agent importability is NOT a measurement, so the response must be tagged
+    'placeholder', never 'measured'."""
     mock_agent = MagicMock()
     mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
     with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
         result = await get_pipeline_health()
-    assert result.data_provenance == "measured"
+    assert result.data_provenance == "placeholder"
 
 
 @pytest.mark.asyncio
@@ -400,13 +468,15 @@ async def test_get_agent_health_discloses_placeholder_provenance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_agent_health_real_provenance_when_agent_available(mock_agent_result):
-    """When the real agent is available, /agents must report measured provenance."""
+async def test_get_agent_health_serves_placeholder_even_when_agent_available(mock_agent_result):
+    """F1b: /agents serves hardcoded _get_mock_agent_health() data. Mere agent
+    importability is NOT a measurement, so the response must be tagged
+    'placeholder', never 'measured'."""
     mock_agent = MagicMock()
     mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
     with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
         result = await get_agent_health()
-    assert result.data_provenance == "measured"
+    assert result.data_provenance == "placeholder"
 
 
 # =============================================================================
@@ -774,6 +844,29 @@ async def test_execute_health_check_quick_mode(mock_agent_result):
         await _execute_health_check(CheckScope.QUICK)
 
         mock_agent.quick_check.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_health_check_passes_unmeasured_scores_as_none(mock_agent_result):
+    """Codex F1.1: an unmeasured per-dimension score (None on the agent output)
+    must pass through to HealthScoreResponse as None, NOT be coerced to 0.0/1.0
+    and presented to the dashboard as a real measurement."""
+    mock_agent_result.component_health_score = 0.9  # measured
+    mock_agent_result.model_health_score = None  # unmeasured
+    mock_agent_result.pipeline_health_score = None
+    mock_agent_result.agent_health_score = None
+    mock_agent_result.data_provenance = "partial"
+    mock_agent = MagicMock()
+    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
+
+    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+        result = await _execute_health_check(CheckScope.FULL)
+
+    assert result.component_health_score == 0.9
+    assert result.model_health_score is None
+    assert result.pipeline_health_score is None
+    assert result.agent_health_score is None
+    assert result.data_provenance == "partial"
 
 
 @pytest.mark.asyncio

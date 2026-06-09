@@ -47,11 +47,13 @@ class HealthScoreMetrics:
     overall_health_score: float = 0.0
     health_grade: str = "F"
 
-    # Component scores (0-1 scale)
-    component_health_score: float = 0.0
-    model_health_score: float = 0.0
-    pipeline_health_score: float = 0.0
-    agent_health_score: float = 0.0
+    # Component scores (0-1 scale). F1: None == unmeasured dimension (no real
+    # backend). An unmeasured dim is OMITTED from the MLflow metrics below
+    # (honest absence) rather than logged as a fabricated 0.0.
+    component_health_score: Optional[float] = None
+    model_health_score: Optional[float] = None
+    pipeline_health_score: Optional[float] = None
+    agent_health_score: Optional[float] = None
 
     # Issue counts
     critical_issues_count: int = 0
@@ -62,18 +64,28 @@ class HealthScoreMetrics:
     total_latency_ms: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert metrics to dictionary for MLflow logging."""
-        return {
+        """Convert metrics to dictionary for MLflow logging.
+
+        F1: per-dimension scores that are None (unmeasured) are OMITTED so
+        MLflow records honest absence — never a fabricated 0.0 for a dimension
+        that has no real backend. (mlflow.log_metrics requires numeric values.)
+        """
+        metrics: Dict[str, Any] = {
             "overall_health_score": self.overall_health_score,
             "health_grade_numeric": self._grade_to_numeric(self.health_grade),
-            "component_health_score": self.component_health_score,
-            "model_health_score": self.model_health_score,
-            "pipeline_health_score": self.pipeline_health_score,
-            "agent_health_score": self.agent_health_score,
             "critical_issues_count": self.critical_issues_count,
             "warnings_count": self.warnings_count,
             "total_latency_ms": self.total_latency_ms,
         }
+        for key, value in (
+            ("component_health_score", self.component_health_score),
+            ("model_health_score", self.model_health_score),
+            ("pipeline_health_score", self.pipeline_health_score),
+            ("agent_health_score", self.agent_health_score),
+        ):
+            if value is not None:
+                metrics[key] = value
+        return metrics
 
     @staticmethod
     def _grade_to_numeric(grade: str) -> int:

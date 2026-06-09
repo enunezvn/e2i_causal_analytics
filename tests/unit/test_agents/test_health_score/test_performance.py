@@ -141,7 +141,10 @@ class TestHealthScoreSLA:
         elapsed = time.perf_counter() - start
 
         assert elapsed < 1.0, f"Quick check took {elapsed:.3f}s, exceeds 1s SLA"
-        assert result.get("component_health_score") == 1.0
+        # F1: quick scope skips the component check, so the dimension is
+        # UNMEASURED (no fail-open 1.0 score).
+        assert result.get("component_health_measured") is False
+        assert result.get("component_health_score") is None
 
     @pytest.mark.asyncio
     async def test_full_check_under_5s(self):
@@ -150,12 +153,16 @@ class TestHealthScoreSLA:
 
         node = ScoreComposerNode()
 
-        # Pre-populated state with all health checks complete
+        # Pre-populated state with all health checks complete (all measured).
         state = _create_mock_state(scope="full")
         state["component_health_score"] = 0.9
+        state["component_health_measured"] = True
         state["model_health_score"] = 0.85
+        state["model_health_measured"] = True
         state["pipeline_health_score"] = 0.8
+        state["pipeline_health_measured"] = True
         state["agent_health_score"] = 0.95
+        state["agent_health_measured"] = True
 
         start = time.perf_counter()
         result = await node.execute(state)

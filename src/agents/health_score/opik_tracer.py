@@ -264,10 +264,11 @@ class HealthCheckTraceContext:
         total_duration_ms: int,
         overall_score: float,
         health_grade: str,
-        component_score: float,
-        model_score: float,
-        pipeline_score: float,
-        agent_score: float,
+        # F1: per-dim scores may be None (unmeasured); only stored as metadata.
+        component_score: Optional[float],
+        model_score: Optional[float],
+        pipeline_score: Optional[float],
+        agent_score: Optional[float],
         critical_issues: List[str],
         warnings: List[str],
     ) -> None:
