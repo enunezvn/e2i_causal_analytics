@@ -250,6 +250,7 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
                 "shap_skipped": True,
                 "skip_reason": "model_uri not provided - SHAP analysis requires a model",
                 "status": "skipped",
+                "data_provenance": "unavailable",
                 # Provide empty defaults for downstream processing
                 "global_importance_ranked": [],
                 "top_features": [],
