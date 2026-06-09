@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, cast
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +229,7 @@ def signal_example_provider(
             if inspect.isawaitable(maybe):
                 import asyncio
 
-                resolved_client = asyncio.run(maybe)
+                resolved_client = asyncio.run(cast(Coroutine[Any, Any, Any], maybe))
             else:
                 resolved_client = maybe
         except Exception as e:  # noqa: BLE001
