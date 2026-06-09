@@ -486,10 +486,18 @@ def _resolve_resource_optimizer_input(
     """
     params = dispatch.get("parameters") or {}
     targets = params.get("allocation_targets")
-    if targets:
+    constraints = params.get("constraints") or []
+    # The optimizer's problem_formulator REQUIRES a budget constraint; passing
+    # targets with no budget would fail internally (and would otherwise be counted
+    # as a successful dispatch). Require BOTH a real target set and a real budget
+    # constraint, else fail closed naming exactly what is missing.
+    has_budget = any(
+        isinstance(c, dict) and str(c.get("constraint_type")) == "budget" for c in constraints
+    )
+    if targets and has_budget:
         out: Dict[str, Any] = {
             "allocation_targets": targets,
-            "constraints": params.get("constraints") or [],
+            "constraints": constraints,
             "query": agent_input.get("query") or "",
         }
         session_id = agent_input.get("session_id")
@@ -500,13 +508,19 @@ def _resolve_resource_optimizer_input(
                 out[opt] = params[opt]
         return out
 
+    missing: List[str] = []
+    if not targets:
+        missing.append("allocation_targets")
+    if not has_budget:
+        missing.append("constraints (with a budget constraint)")
     return NeedsStructuredInput(
         agent_name="resource_optimizer",
-        missing=("allocation_targets", "constraints"),
+        missing=tuple(missing),
         reason=(
-            "no real per-entity allocation/response substrate exists in the data "
-            "(rep-activity allocation rows are absent), so the optimization problem "
-            "cannot be built without inventing entities, response coefficients and budgets"
+            "a real allocation problem (entities with response coefficients AND a budget "
+            "constraint) must be supplied; no per-entity allocation/response substrate exists "
+            "in the data (rep-activity allocation rows are absent) to build one without "
+            "inventing entities, response coefficients and budgets"
         ),
         rest_endpoint="POST /resources/optimize",
     )
@@ -570,6 +584,35 @@ INPUT_RESOLVERS: Dict[str, InputResolver] = {
     "resource_optimizer": _resolve_resource_optimizer_input,
     "prediction_synthesizer": _resolve_prediction_synthesizer_input,
 }
+
+
+# Resolver-backed agents that must FAIL CLOSED when the agent's OWN output reports
+# an internal failure (``status == "failed"``). A domain failure (e.g. no models
+# registered, infeasible optimization) must never be reported as a successful
+# dispatch — otherwise the dispatcher's transport-level ``success=True`` would
+# launder an empty/failed analysis into a "success" (#F12/F13/F14). tool_composer
+# is intentionally EXCLUDED: its success semantics are governed by F6 (#827)
+# tool-level fail-closed + the synthesizer's filtering, not a status field.
+_FAIL_CLOSED_ON_FAILED_STATUS = frozenset(
+    {"heterogeneous_optimizer", "resource_optimizer", "prediction_synthesizer"}
+)
+
+
+def _agent_failed(agent_name: str, result: Dict[str, Any]) -> Optional[str]:
+    """Return a failure detail string if ``result`` from ``agent_name`` reports an
+    internal domain failure that must fail the dispatch closed, else ``None``.
+
+    Only applies to the resolver-backed fail-closed agents and only on an explicit
+    ``status == "failed"`` (the contract all three set on their failure paths,
+    e.g. heterogeneous_optimizer agent.py: ``"failed" if errors else "completed"``).
+    """
+    if agent_name not in _FAIL_CLOSED_ON_FAILED_STATUS:
+        return None
+    if str(result.get("status")) != "failed":
+        return None
+    errors = result.get("errors") or []
+    detail = "; ".join(str(e.get("error", e)) if isinstance(e, dict) else str(e) for e in errors)
+    return detail or "agent reported status=failed"
 
 
 def _generate_dispatch_id() -> str:
@@ -833,10 +876,34 @@ class DispatcherNode:
                 )
 
             latency = int((time.time() - start_time) * 1000)
+            normalized = _normalize_agent_result(raw_result)
+
+            # Domain-failure guard: a resolver-backed agent that ran but reported
+            # an internal failure (e.g. prediction_synthesizer with no registered
+            # models, resource_optimizer with an infeasible/under-specified problem)
+            # must FAIL CLOSED — never be laundered into a successful dispatch.
+            failure_detail = _agent_failed(agent_name, normalized)
+            if failure_detail is not None:
+                logger.info(
+                    "dispatcher: %r ran but reported status=failed; failing closed (%s).",
+                    agent_name,
+                    failure_detail,
+                )
+                return AgentResult(
+                    agent_name=agent_name,
+                    success=False,
+                    result=normalized,
+                    error=(
+                        f"{agent_name} could not produce a real result "
+                        f"({failure_detail}); failing closed — no values were fabricated."
+                    ),
+                    latency_ms=latency,
+                )
+
             return AgentResult(
                 agent_name=agent_name,
                 success=True,
-                result=_normalize_agent_result(raw_result),
+                result=normalized,
                 error=None,
                 latency_ms=latency,
             )

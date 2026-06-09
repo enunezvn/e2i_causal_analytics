@@ -33,6 +33,7 @@ do not run any heavy pipeline.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
@@ -381,3 +382,110 @@ async def test_no_agent_fabricates_on_bare_chat() -> None:
         res = out["agent_results"][0]
         assert res["success"] is False, f"{name} should fail closed on bare chat, got success"
         assert "fabricat" in (res["error"] or "").lower()
+
+
+# ---------------------------------------------------------------------------
+# resource_optimizer: a budget constraint is required (codex HIGH)
+# ---------------------------------------------------------------------------
+
+
+def test_resource_optimizer_targets_without_budget_fails_closed() -> None:
+    """Targets supplied but NO budget constraint → fail closed (the optimizer's
+    problem_formulator requires a budget; passing an under-specified problem would
+    otherwise be laundered into a 'successful' but internally-failed dispatch)."""
+    params = {
+        "allocation_targets": [
+            {
+                "entity_id": "t1",
+                "entity_type": "territory",
+                "current_allocation": 1000.0,
+                "expected_response": 1.0,
+            }
+        ],
+        "constraints": [{"constraint_type": "capacity", "value": 5.0}],  # no budget
+    }
+    resolved = disp.INPUT_RESOLVERS["resource_optimizer"](
+        {"query": "optimize", "session_id": "s1"},
+        _dispatch("resource_optimizer", params),
+    )
+    assert isinstance(resolved, NeedsStructuredInput)
+    assert any("budget" in m for m in resolved.missing)
+
+
+# ---------------------------------------------------------------------------
+# Domain-failure guard: an agent that runs but reports status=failed must NOT be
+# laundered into a successful dispatch (codex HIGH).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_domain_failure_guard_fails_closed_on_failed_status() -> None:
+    """A resolver-backed agent whose method returns ``status='failed'`` (e.g.
+    prediction_synthesizer with no registered models) must yield success=False."""
+
+    async def fake_synthesize(**kwargs):  # noqa: ANN003
+        return {
+            "status": "failed",
+            "errors": [{"node": "orchestrator", "error": "No models available"}],
+        }
+
+    agent = MagicMock()
+    agent.synthesize = fake_synthesize
+    del agent.analyze
+
+    node = DispatcherNode(agent_registry={"prediction_synthesizer": agent})
+    out = await node.execute(
+        _state(
+            "prediction_synthesizer",
+            "predict",
+        )
+        | {
+            "dispatch_plan": [
+                {
+                    "agent_name": "prediction_synthesizer",
+                    "priority": "high",
+                    "parameters": {"entity_id": "HCP-1", "prediction_target": "conversion"},
+                    "timeout_ms": 15000,
+                    "fallback_agent": None,
+                    "execution_mode": "parallel",
+                }
+            ],
+        }
+    )
+    res = out["agent_results"][0]
+    assert res["success"] is False
+    err = (res["error"] or "").lower()
+    assert "no models available" in err
+    assert "fabricat" in err
+
+
+@pytest.mark.asyncio
+async def test_domain_failure_guard_allows_completed_status() -> None:
+    """The guard must NOT over-fire: a ``status='completed'`` result still succeeds."""
+
+    async def fake_synthesize(**kwargs):  # noqa: ANN003
+        return {"status": "completed", "prediction_summary": "real result"}
+
+    agent = MagicMock()
+    agent.synthesize = fake_synthesize
+    del agent.analyze
+
+    node = DispatcherNode(agent_registry={"prediction_synthesizer": agent})
+    out = await node.execute(
+        _state("prediction_synthesizer", "predict")
+        | {
+            "dispatch_plan": [
+                {
+                    "agent_name": "prediction_synthesizer",
+                    "priority": "high",
+                    "parameters": {"entity_id": "HCP-1", "prediction_target": "conversion"},
+                    "timeout_ms": 15000,
+                    "fallback_agent": None,
+                    "execution_mode": "parallel",
+                }
+            ],
+        }
+    )
+    res = out["agent_results"][0]
+    assert res["success"] is True, res.get("error")
+    assert res["result"]["prediction_summary"] == "real result"
