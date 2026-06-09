@@ -77,3 +77,48 @@ def test_unrecognized_brand_fails_closed():
     assert cr.resolve_cohort_outcome_frame(
         "discontinuation", brand="NotABrand", region=None,
         supabase_client=_FakeClient(_PJ_ROWS)) is None
+
+
+_HCP_ROWS = [
+    {"hcp_id": f"h_{i}", "peer_influence_score": 3.0 + (i % 5),
+     "influence_network_size": 10 + i,
+     "adoption_category": "ADOPTER" if i % 3 else "NON_ADOPTER",
+     "geographic_region": "northeast"}
+    for i in range(20)
+]
+
+
+def test_hcp_adoption_resolves_runnable_varset():
+    spec = cr.resolve_cohort_outcome_frame(
+        "hcp_adoption", brand="Kisqali", region="northeast",
+        supabase_client=_FakeClient(_HCP_ROWS))
+    assert spec is not None
+    assert spec.outcome_column == "adoption_category"
+    assert spec.treatment_column == "peer_influence_score"
+    assert spec.treatment_column in spec.frame.columns
+
+
+def test_hcp_adoption_unrecognized_region_fails_closed():
+    # codex #06 HIGH FINDING-1: region must fail closed for the hcp grain too.
+    assert cr.resolve_cohort_outcome_frame(
+        "hcp_adoption", brand="Kisqali", region="NotARegion",
+        supabase_client=_FakeClient(_HCP_ROWS)) is None
+
+
+def test_hcp_adoption_missing_treatment_fails_closed():
+    # codex #06 MED FINDING-2: no spec when peer_influence_score is absent.
+    rows = [{"hcp_id": "h1", "adoption_category": "ADOPTER",
+             "influence_network_size": 10, "geographic_region": "northeast"}]
+    assert cr.resolve_cohort_outcome_frame(
+        "hcp_adoption", brand="Kisqali", region=None,
+        supabase_client=_FakeClient(rows)) is None
+
+
+def test_persistence_cohort_exposes_non_negative_retention_benefit():
+    # codex #06 MED FINDING-3: retention_benefit recomputed at resolve time.
+    spec = cr.resolve_cohort_outcome_frame(
+        "persistence", brand="Kisqali", region="northeast",
+        supabase_client=_FakeClient(_PJ_ROWS))
+    assert spec is not None
+    assert "retention_benefit" in spec.covariate_columns
+    assert (spec.frame["retention_benefit"] >= 0).all()

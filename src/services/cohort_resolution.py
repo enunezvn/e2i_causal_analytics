@@ -271,7 +271,9 @@ def resolve_cohort_outcome_frame(
     """
     key = str(cohort).strip().lower()
     if key == "hcp_adoption":
-        return _resolve_hcp_adoption(brand, supabase_client=supabase_client, limit=limit)
+        return _resolve_hcp_adoption(
+            brand, region, supabase_client=supabase_client, limit=limit
+        )
     if key not in _PJ_COHORTS:
         logger.info("cohort_resolution: unknown cohort %r -> fail closed", cohort)
         return None
@@ -293,6 +295,25 @@ def resolve_cohort_outcome_frame(
     if df.empty:
         return None
     present_covars = [c for c in covars if c in df.columns]
+    # Shard 06: retention_benefit (>=0) is RECOMPUTED at resolve time (not persisted —
+    # Task 06.2) so resource_optimizer's problem_formulator (rejects expected_response<0)
+    # can read it for the disc/persist cohorts. = per-severity scale * disease_severity *
+    # persistent_180d. Only materializes when persistent_180d is populated (synthetic);
+    # real rows have NULL persistent_180d and are dropped above, so the synthetic-DGP
+    # constant never touches a real cohort.
+    if key in ("discontinuation", "persistence") and {
+        "disease_severity", "persistent_180d"
+    } <= set(df.columns):
+        from src.ml.synthetic.generators.cohort_outcomes import (
+            PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY,
+        )
+
+        df["retention_benefit"] = (
+            PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY
+            * df["disease_severity"].astype(float)
+            * df["persistent_180d"].astype(float)
+        ).clip(lower=0.0)
+        present_covars = present_covars + ["retention_benefit"]
     return CohortOutcomeSpec(
         cohort=key, frame=df.reset_index(drop=True),
         outcome_column=outcome, treatment_column=treatment,
@@ -302,6 +323,7 @@ def resolve_cohort_outcome_frame(
 
 def _resolve_hcp_adoption(
     brand: Optional[str],
+    region: Optional[str],
     *,
     supabase_client: Optional[Any] = None,
     limit: Optional[int] = None,
@@ -310,15 +332,30 @@ def _resolve_hcp_adoption(
     has). Outcome = the canonical adoption_category (ADOPTER/NON_ADOPTER); a binary
     `adopted` helper is derived in-frame for estimators. treatment = the HCP arm
     proxy (peer_influence_score, the exogenous centrality/engagement score);
-    covariate = influence_network_size."""
+    covariate = influence_network_size.
+
+    Fails closed (mirroring the patient-journey branch) on an unrecognized brand or
+    region, on empty/unlabeled data, or when the treatment column (peer_influence_score)
+    is absent/all-null — never hands back a spec downstream estimators cannot run.
+    """
     norm_brand = _normalize_brand(brand)
     if brand and brand.strip() and norm_brand is None:
         logger.info("cohort_resolution: unrecognized brand %r -> fail closed", brand)
         return None
+    norm_region = _normalize_region(region)
+    if region and region.strip() and norm_region is None:
+        logger.info("cohort_resolution: unrecognized region %r -> fail closed", region)
+        return None
     client = supabase_client if supabase_client is not None else _default_client()
     q = client.table("hcp_profiles").select(
-        "hcp_id,peer_influence_score,influence_network_size,adoption_category"
+        "hcp_id,peer_influence_score,influence_network_size,"
+        "adoption_category,geographic_region"
     )
+    # NOTE: hcp_profiles has NO `brand` column (HCPs are not brand-partitioned at this
+    # grain — the per-brand CATE lives in the Shard-06.3 parquet artifact). We VALIDATE
+    # brand above (fail closed on a bogus literal) but do not filter the query by it.
+    if norm_region:
+        q = q.eq("geographic_region", norm_region)
     if limit:
         q = q.limit(limit)
     rows = getattr(q.execute(), "data", None) or []
@@ -331,6 +368,11 @@ def _resolve_hcp_adoption(
     # non-synthetic HCPs whose adoption_category is NULL) so the cohort is the populated
     # adoption population, not a NULL-diluted mix.
     df = df[df["adoption_category"].notna()].copy()
+    # The treatment column must exist and be non-null, else the spec is unrunnable —
+    # fail closed (parallel to the patient-journey branch's treatment guard).
+    if "peer_influence_score" not in df.columns:
+        return None
+    df = df[df["peer_influence_score"].notna()].copy()
     if df.empty:
         return None
     # Binary helper for estimators; the canonical OUTCOME column stays adoption_category.
