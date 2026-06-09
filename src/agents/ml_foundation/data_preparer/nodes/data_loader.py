@@ -193,7 +193,10 @@ async def _load_from_supabase(
         # Combined temporal + entity split
         # This is already temporal, now ensure entity integrity
         combined_result = splitter.combined_split(
-            dataset.train.append(dataset.val).append(dataset.test),
+            # F16: DataFrame.append was removed in pandas 2.x — combine the temporal
+            # splits with pd.concat before the entity-level re-split (the downstream
+            # split keys on date/entity COLUMNS, so a fresh index is safe).
+            pd.concat([dataset.train, dataset.val, dataset.test], ignore_index=True),
             date_column=date_column,
             entity_column=entity_column,
             split_date=split_date,
