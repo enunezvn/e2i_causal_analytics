@@ -318,13 +318,26 @@ def _generate_span_id() -> str:
 class DispatcherNode:
     """Parallel agent dispatch with timeout handling."""
 
-    def __init__(self, agent_registry: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        agent_registry: Optional[Dict[str, Any]] = None,
+        *,
+        allow_mock: bool = False,
+    ):
         """Initialize dispatcher with agent registry.
 
         Args:
-            agent_registry: Dict mapping agent_name to agent instance
+            agent_registry: Dict mapping agent_name to agent instance.
+            allow_mock: TEST-ONLY. When ``True``, a dispatch to an agent that is
+                absent from ``agent_registry`` returns a canned
+                :meth:`_mock_agent_execution` response (used by unit tests that
+                exercise routing/timeout/fallback mechanics without instantiating
+                real agents). MUST stay ``False`` in production (the default): a
+                missing agent then FAILS CLOSED with a structured error instead of
+                fabricating plausible-but-fake analytics values (#814).
         """
         self.agents = agent_registry or {}
+        self.allow_mock = allow_mock
 
     async def execute(self, state: OrchestratorState) -> OrchestratorState:
         """Execute agent dispatch.
@@ -398,17 +411,38 @@ class DispatcherNode:
 
         Real agents are reached via the per-agent dispatch spec in
         ``AGENT_METHOD_MAP`` (method name, async vs sync, kwargs splat, optional
-        Pydantic input model). Mock execution is only used when the agent name
-        is absent from the registry — never as a silent fallback when the
-        registered agent exists but is missing the configured method.
+        Pydantic input model).
+
+        When the agent name is absent from the registry the dispatcher FAILS
+        CLOSED (#814): it returns a structured ``success=False`` error rather
+        than a fabricated result, so a partial/empty registry (e.g. an agent that
+        failed to instantiate) can never surface plausible-but-fake analytics to
+        the user. The canned :meth:`_mock_agent_execution` scaffold is reachable
+        ONLY when ``allow_mock=True`` (test-only; unit tests that exercise
+        routing without instantiating real agents).
         """
         agent_name = dispatch["agent_name"]
         start_time = time.time()
 
-        # Mock implementation when no registry entry exists (used by unit
-        # tests that exercise routing without instantiating real agents).
         if agent_name not in self.agents:
-            return await self._mock_agent_execution(dispatch, state)
+            if self.allow_mock:
+                return await self._mock_agent_execution(dispatch, state)
+            latency = int((time.time() - start_time) * 1000)
+            logger.warning(
+                "dispatcher: no registry entry for agent %r and allow_mock is off; "
+                "failing closed (no fabricated fallback).",
+                agent_name,
+            )
+            return AgentResult(
+                agent_name=agent_name,
+                success=False,
+                result=None,
+                error=(
+                    f"Agent '{agent_name}' is not available in the dispatcher registry; "
+                    "dispatch fails closed (no fabricated result)."
+                ),
+                latency_ms=latency,
+            )
 
         agent = self.agents[agent_name]
         timeout_ms = dispatch["timeout_ms"]
@@ -529,7 +563,14 @@ class DispatcherNode:
     async def _mock_agent_execution(
         self, dispatch: AgentDispatch, state: OrchestratorState
     ) -> AgentResult:
-        """Mock agent execution for testing.
+        """Mock agent execution — TEST-ONLY.
+
+        Returns canned narratives with fabricated illustrative values for unit
+        tests that exercise dispatch mechanics (routing/parallel/timeout/
+        fallback) without instantiating real agents. This is reachable ONLY when
+        the dispatcher is constructed with ``allow_mock=True``; in production
+        (``allow_mock=False``, the default) a missing agent fails closed instead
+        (see :meth:`_dispatch_agent`). It must never run on production traffic.
 
         Args:
             dispatch: Dispatch configuration
@@ -754,7 +795,13 @@ def _normalize_agent_result(raw: Any) -> Dict[str, Any]:
 
 # Export for use in graph
 async def dispatch_to_agents(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Node function for agent dispatch.
+    """Node function for agent dispatch (the graph's registry-less else-branch).
+
+    Constructs a dispatcher with NO registry and ``allow_mock=False``, so every
+    dispatch FAILS CLOSED with a structured error rather than fabricating a
+    result (#814). This branch runs only when the orchestrator graph was built
+    without an ``agent_registry``; the production graph always passes a populated
+    registry and uses :meth:`DispatcherNode.execute` directly.
 
     Args:
         state: Current state
