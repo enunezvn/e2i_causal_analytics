@@ -570,7 +570,8 @@ class ToolComposer:
             n for n in prof if _family(n) == "categorical" and n != outcome and 2 <= _card(n) <= 12
         ]
 
-        treatment = (binary or numeric or [None])[0]
+        treatment_candidates = binary or numeric
+        treatment: Optional[str] = treatment_candidates[0] if treatment_candidates else None
         if treatment is None:
             logger.info(
                 "KPI causal plan: no usable (binary/numeric) treatment driver for "
@@ -582,12 +583,12 @@ class ToolComposer:
         segments = seg_candidates[:2]
 
         sub_questions = list(getattr(decomposition, "sub_questions", []) or [])
-        first_sq = sub_questions[0].id if sub_questions else "sq_1"
+        first_sq = str(sub_questions[0].id) if sub_questions else "sq_1"
 
         def _sq_for(intents: set[str]) -> str:
             for sq in sub_questions:
                 if str(getattr(sq, "intent", "")).upper() in intents:
-                    return sq.id
+                    return str(sq.id)
             return first_sq
 
         causal_sq = _sq_for({"CAUSAL", "DESCRIPTIVE"})
