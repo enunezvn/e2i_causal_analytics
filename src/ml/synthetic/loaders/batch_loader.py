@@ -88,6 +88,7 @@ TABLE_COLUMNS = {
         "geographic_region",
         "years_experience",
         "total_patient_volume",
+        "is_synthetic",
     ],
     "patient_journeys": [
         "patient_journey_id",
@@ -104,6 +105,15 @@ TABLE_COLUMNS = {
         "days_to_treatment",
         "age_at_diagnosis",
         "data_split",
+        # causal substrate (Shard 01 M2 DDL; values filled by Shard 03/06).
+        # Emitted as NULL placeholders by PatientGenerator so validate_datasets
+        # does not flag them as critical_missing and the loader carries them.
+        "treatment_arm",
+        "propensity_score",
+        "segment_assignment",
+        "discontinued_180d",
+        "persistent_180d",
+        "is_synthetic",
     ],
     "treatment_events": [
         "treatment_event_id",
@@ -114,6 +124,7 @@ TABLE_COLUMNS = {
         "event_type",
         "duration_days",
         "data_split",
+        "is_synthetic",
     ],
     "ml_predictions": [
         "prediction_id",
@@ -125,6 +136,7 @@ TABLE_COLUMNS = {
         "model_version",
         "prediction_timestamp",
         "data_split",
+        "is_synthetic",
     ],
     "triggers": [
         "trigger_id",
@@ -151,6 +163,7 @@ TABLE_COLUMNS = {
         "supporting_evidence",
         "recommended_action",
         "data_split",
+        "is_synthetic",
     ],
     "business_metrics": [
         "metric_id",
@@ -170,6 +183,7 @@ TABLE_COLUMNS = {
         "confidence_interval_upper",
         "sample_size",
         "data_split",
+        "is_synthetic",
     ],
     "feature_groups": [
         "id",
@@ -180,6 +194,7 @@ TABLE_COLUMNS = {
         "source_table",
         "expected_update_frequency_hours",
         "max_age_hours",
+        "is_synthetic",
     ],
     "features": [
         "id",
@@ -191,6 +206,7 @@ TABLE_COLUMNS = {
         "owner",
         "tags",
         "drift_threshold",
+        "is_synthetic",
     ],
     "feature_values": [
         "id",
@@ -199,6 +215,7 @@ TABLE_COLUMNS = {
         "value",
         "event_timestamp",
         "freshness_status",
+        "is_synthetic",
     ],
 }
 

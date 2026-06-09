@@ -138,6 +138,17 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                     p=[self.INSURANCE_DIST[i] for i in InsuranceTypeEnum],
                 ),
                 "age_at_diagnosis": self._random_int(18, 85, n),
+                # Causal substrate columns (Shard 01 M2 DDL). Emitted as NULL
+                # placeholders here so the loader carries them (TABLE_COLUMNS
+                # registration, Shard 02 Task 1) and validate_datasets does not
+                # flag them as critical_missing. Values are populated by Shard
+                # 03's DGP (treatment_arm/propensity_score/segment_assignment)
+                # and Shard 06's outcome builders (discontinued_180d/persistent_180d).
+                "treatment_arm": [None] * n,
+                "propensity_score": [None] * n,
+                "segment_assignment": [None] * n,
+                "discontinued_180d": [None] * n,
+                "persistent_180d": [None] * n,
             }
         )
 
