@@ -26,7 +26,7 @@ current fix locations in `21-agent-audit-20260609-repro/reverify_results.json`.
 | F12 | MED | heterogeneous_optimizer | LIVE (no input bridge → dead via chat, fail-closed) | ⏳ pending | — |
 | F13 | MED | resource_optimizer | LIVE (same) | ⏳ pending | — |
 | F14 | MED | prediction_synthesizer | LIVE (same) | ⏳ pending | — |
-| F9 | MED | model_selector | LIVE (`execute_query` missing → 40% frozen) | ⏳ pending | — |
+| F9 | MED | model_selector | LIVE (`execute_query` missing → 40% frozen) → real PostgREST queries + unmask | ✅ PR | #831 |
 | F10 | MED | experiment_designer | LIVE (MockKnowledgeStore unmarked) | ⏳ pending | — |
 | F11 | MED | drift_monitor | LIVE (structural_drift dropped) | ⏳ pending | — |
 | F15 | MED | feedback_learner | LIVE (empty stores → 0.0 effectiveness) | ⏳ pending | — |
