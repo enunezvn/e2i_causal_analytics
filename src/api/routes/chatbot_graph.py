@@ -74,6 +74,12 @@ CHATBOT_SIGNAL_COLLECTION_ENABLED = os.getenv("CHATBOT_SIGNAL_COLLECTION", "true
 # Orchestrator integration feature flag - routes complex queries through orchestrator/tool_composer
 CHATBOT_ORCHESTRATOR_ENABLED = os.getenv("CHATBOT_ORCHESTRATOR", "true").lower() == "true"
 
+# Cognitive-RAG multi-hop feature flag (audit F6). Default-on: the loop escalates
+# ONLY when hop-1 evidence is insufficient (strong evidence -> single hop, no
+# extra LLM call), so simple KPI queries stay fast while complex/under-served
+# queries gather more context. Set CHATBOT_RAG_MULTI_HOP=false to force single-hop.
+CHATBOT_RAG_MULTI_HOP_ENABLED = os.getenv("CHATBOT_RAG_MULTI_HOP", "true").lower() == "true"
+
 # Intents that should be routed through the orchestrator for agent dispatch
 ORCHESTRATOR_ROUTED_INTENTS = {
     IntentType.CAUSAL_ANALYSIS,
@@ -579,7 +585,7 @@ async def retrieve_rag_node(state: ChatbotState) -> Dict[str, Any]:
                 brand_context=brand,
                 intent=str(intent) if intent else "",
                 k=5,
-                enable_multi_hop=False,  # Start with single-hop
+                enable_multi_hop=CHATBOT_RAG_MULTI_HOP_ENABLED,  # F6: live, early-stop
                 collect_signal=True,  # Collect training signals
             )
 
