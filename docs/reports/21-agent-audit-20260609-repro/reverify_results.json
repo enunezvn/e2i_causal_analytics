@@ -1,0 +1,404 @@
+[
+  {
+    "id": "F1",
+    "agent": "health_score",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "src/api/routes/health_score.py:789 \u2014 HealthScoreAgent() instantiated with zero arguments, all stores default to None",
+      "src/agents/health_score/agent.py:92-115 \u2014 __init__ defaults all stores to None when not provided",
+      "src/agents/health_score/nodes/component_health.py:78-83 \u2014 when health_client is None, _create_mock_status() is called for all components",
+      "src/agents/health_score/nodes/model_health.py:73-85 \u2014 when metrics_store is None, returns empty list defaulting to score 1.0",
+      "src/agents/health_score/nodes/pipeline_health.py:~65-90 \u2014 when pipeline_store is None, returns empty list defaulting to score 1.0",
+      "src/agents/health_score/nodes/agent_health.py:~65-90 \u2014 when agent_registry is None, returns empty list defaulting to score 1.0",
+      "src/agents/health_score/nodes/score_composer.py:74-77 \u2014 all missing scores default to 1.0, yielding overall_health_score=100.0 and grade='A'",
+      "src/api/routes/health_score.py:751-776 \u2014 _resolve_health_provenance() constructs HealthScoreAgent(enable_mlflow=False, enable_opik=False) with no stores to check importability, returns MEASURED if construction succeeds \u2014 but the agent WILL use mock data internally",
+      "src/api/routes/health_score.py:461-481 (/components), 512-532 (/models), 563-583 (/pipelines), 614-638 (/agents) \u2014 all four endpoints call _resolve_health_provenance() and tag responses data_provenance='measured', but then call _get_mock_*_health() which fabricates hardcoded values (accuracy=0.89, auc_roc=0.92, etc.) without actually running the real agent with real stores"
+    ],
+    "recent_commit_impact": "UNCHANGED \u2014 commit b6b9b6c8 (2026-06-04) added data_provenance gating to /pipelines and /agents (mirroring /components and /models from earlier PR #666), BUT the gating mechanism is broken: it only checks if HealthScoreAgent CAN be instantiated, not whether it has real stores. The agent instantiation on line 789 still has all stores=None, and _resolve_health_provenance() still instantiates HealthScoreAgent with no stores just to check importability. The F1b issue (REST endpoints returning hardcoded values while tagged MEASURED) is STILL PRESENT and WORSENED by b6b9b6c8 because now all four endpoints tag mock data as MEASURED after the provenance check passes falsely.\"",
+    "fix_locations": [
+      "src/api/routes/health_score.py:789 \u2014 must inject real HealthScoreAgent with actual stores (health_client=SupabaseHealthClient(), metrics_store=real_metrics_store, pipeline_store=real_pipeline_store, agent_registry=real_agent_registry)",
+      "src/api/routes/health_score.py:771 \u2014 _resolve_health_provenance() must either (a) accept and check the actual agent instance passed in, or (b) validate that the constructed agent actually HAS non-None stores before returning MEASURED",
+      "src/api/routes/health_score.py:441-481, 491-532, 542-583, 593-638 \u2014 /components, /models, /pipelines, /agents endpoints must either (a) call the real agent instead of _get_mock_*_health(), or (b) NOT tag the response as data_provenance='measured' when falling back to mocks"
+    ],
+    "notes": "The audit finding describes TWO related problems: F1a (agent initialized with all stores=None) and F1b (REST endpoints returning hardcoded mocks tagged as measured). BOTH are STILL PRESENT. The recent commit b6b9b6c8 attempted to gate /pipelines and /agents with _resolve_health_provenance(), but this gating is INEFFECTIVE because it only checks if the agent class can be instantiated, not whether it has real stores. The four endpoints (/components, /models, /pipelines, /agents) directly call _get_mock_*_health() and then tag the response as MEASURED without actually executing the real agent with real stores. The main /check, /quick, /full endpoints do execute the agent (line 789-794) but still with all stores=None, so they also yield fake 100.0/A scores from mock data. REMEDIATION REQUIRES: (1) dependency injection of real stores into HealthScoreAgent constructor calls, (2) fixing _resolve_health_provenance() to validate actual stores not just instantiability, OR (3) NOT tagging mock-only responses as MEASURED. Currently the defect allows dashboard users to see hardcoded model accuracy (0.89) and AUC-ROC (0.92) values tagged as 'measured' without any real agent execution or real model metrics.\""
+  },
+  {
+    "id": "F2",
+    "agent": "Claude Code (read-only audit verification)",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/gap_analyzer/nodes/roi_calculator.py:91-155 (execute method) \u2014 does not check state.get('errors') when gaps_detected is empty. Returns status 'prioritizing' even if prior node failed.",
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/gap_analyzer/nodes/prioritizer.py:48-179 (execute method) \u2014 does not check state.get('errors'). Returns status 'completed' even if gaps_detected/roi_estimates empty due to upstream failure.",
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/gap_analyzer/nodes/formatter.py:30-113 (execute method) \u2014 line 98 ALWAYS returns status 'completed' without checking state.get('errors'). When gap_detector fails with exception, the error is accumulated in state['errors'] but formatter ignores it.",
+      "/home/enunez/Projects/e2i_causal_analytics/src/api/routes/gaps.py:664-666 (line 664-666) \u2014 status determination does check result.get('status'), BUT since formatter always returns 'completed', this logic is ineffective. The errors accumulated in result dict are never checked.",
+      "Gap detector correctly catches exceptions and returns {status: 'failed', errors: [...]} (gap_detector.py:222-234), but downstream nodes do not propagate terminal-failure status when errors are present."
+    ],
+    "recent_commit_impact": "No recent commits fixed this defect. Commit c766f294 (refactor m2 repo guarding) addressed a different concern (list_opportunities/get_gap_health repo access patterns). Commit 3253790e was about orchestrator, not gap_analyzer. The failing-forward behavior (status 'completed' when errors present) remains unchanged on current main HEAD.",
+    "fix_locations": [
+      "src/agents/gap_analyzer/nodes/roi_calculator.py:102-112 (roi_calculator.execute try block) \u2014 add check for state.get('errors') before line 103 gaps_detected logic",
+      "src/agents/gap_analyzer/nodes/roi_calculator.py:142-155 (roi_calculator.execute except block) \u2014 ensure errors are preserved/merged when exception occurs",
+      "src/agents/gap_analyzer/nodes/prioritizer.py:48-71 (prioritizer.execute try block) \u2014 add check for state.get('errors') before line 60 gaps check",
+      "src/agents/gap_analyzer/nodes/prioritizer.py:167-179 (prioritizer.execute except block) \u2014 ensure errors preserved",
+      "src/agents/gap_analyzer/nodes/formatter.py:30-99 (formatter.execute full method) \u2014 add state.get('errors') check; if non-empty, return {status: 'failed', errors: [...]} instead of 'completed'",
+      "src/api/routes/gaps.py:684 (after line 684 in _execute_gap_analysis) \u2014 optionally add explicit check: if result.get('errors'), set status to AnalysisStatus.FAILED as belt-and-suspenders"
+    ],
+    "notes": "The defect manifests as: (1) gap_detector correctly catches exception (segment-column mismatch on real Supabase data) and returns status='failed' with errors dict, (2) roi_calculator receives state with errors but no gaps_detected; it checks 'if not gaps_detected' at line 105 and returns status='prioritizing' without checking errors, (3) prioritizer receives empty roi_estimates, checks 'if not gaps_detected or not roi_estimates' at line 64 and returns status='completed' without checking errors, (4) formatter always returns status='completed' at line 98 without checking errors, (5) gaps.py receives result with status='completed' so it returns HTTP 200 AnalysisStatus.COMPLETED despite errors being present in the internal state. Terminal failure status is silently converted to success. The audit's task #3 'P0 F2: gap_analyzer stop laundering failed\u2192completed' directly names this issue.\""
+  },
+  {
+    "id": "F3",
+    "agent": "observability_connector",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "metrics_aggregator.py:30 calls ObservabilitySpanRepository(client=client) - WRONG KWARG",
+      "agent.py:91 calls ObservabilitySpanRepository(client=client) - WRONG KWARG",
+      "BaseRepository.__init__ at base.py:28 expects parameter name 'supabase_client', not 'client'",
+      "span_emitter.py:57 correctly uses ObservabilitySpanRepository(supabase_client=client)",
+      "batch_processor.py:189 correctly uses ObservabilitySpanRepository(supabase_client=client)",
+      "Integration tests in test_observability_integration.py use supabase_client=client",
+      "The incorrect kwarg will raise TypeError, caught silently, causing fallback to _get_mock_spans path"
+    ],
+    "recent_commit_impact": "No recent commits fixed this defect. Latest commit a23f4040 (2026-02-08) only made type annotation fixes, did not change the function signatures or fix the kwarg names.\",\n",
+    "fix_locations": [
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/ml_foundation/observability_connector/nodes/metrics_aggregator.py:30",
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/ml_foundation/observability_connector/agent.py:91"
+    ],
+    "notes": "The defect is a simple but critical parameter name mismatch: both files pass 'client=' but the BaseRepository constructor expects 'supabase_client='. This causes TypeError when trying to initialize the repository, which is caught and silently ignored, forcing a fallback to mock data (_get_mock_spans). The fix is mechanical: replace 'client=' with 'supabase_client=' at the two locations. The fact that this wasn't caught by tests suggests the integration tests may be skipped in CI or the repository initialization paths aren't exercised in unit tests.\""
+  },
+  {
+    "id": "F4",
+    "agent": "model_deployer",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "Lines 934-951 in registry_manager.py: register_model() returns registration_successful=True and fabricates model_version=1 even when MLflow registration fails (registered_model_name is None). When model_uri='simulated://model' (or any invalid URI), _register_model_mlflow() returns (None, None, None), but the function falls through to simulation fallback and still returns registration_successful=True. Line 948 hardcodes this regardless of whether actual MLflow registration succeeded.",
+      "Lines 1211-1237 in registry_manager.py: promote_stage() returns promotion_successful=True at line 1237 regardless of mlflow_success value. When _transition_stage_mlflow() fails and sets mlflow_success=False (lines 1203-1209), the function still returns promotion_successful=True and promotion_timestamp, fabricating a successful promotion.",
+      "Line 565 in deployment_orchestrator.py: check_rollback_availability() fabricates a random UUID rollback ID when previous_deployment_id is missing: `previous_deployment_id = f'deploy_prev_{uuid.uuid4().hex[:8]}'`. This creates a fake rollback ID that was never actually deployed.",
+      "Lines 373-375 in agent.py: _store_to_database() short-circuits with early return when model_registry_id is None, causing ml_deployments and ml_model_registry tables to never receive writes despite the agent returning status='completed'. The function logs a warning but returns without creating any database records.",
+      "Current HEAD commit 3253790e (Merge PR #818) does not contain fixes for these defects. The most recent registry_manager.py change (fef9b04d) only modified regulatory audit logic, not the registration/promotion/storage flows."
+    ],
+    "recent_commit_impact": "No recent commits have addressed this defect. The most recent change to registry_manager.py (fef9b04d, 'feat(tier0): clinical/commercial deployment-intent axis') only modified the _evaluate_absolute_threshold_gates function to support deployment_intent parameter for regulatory gates. The defective register_model, promote_stage, and database storage logic remains untouched. The agent.py file similarly has not received any fixes to the _store_to_database short-circuit logic.",
+    "fix_locations": [
+      "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py:948 \u2014 Change registration_successful return value to depend on whether actual MLflow registration succeeded (check if registered_model_name came from real MLflow vs fallback simulation)",
+      "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py:935-939 \u2014 When MLflow registration fails, should return registration_successful=False instead of falling back to simulation with True",
+      "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py:1237 \u2014 Make promotion_successful conditional on mlflow_success value instead of always True",
+      "src/agents/ml_foundation/model_deployer/nodes/deployment_orchestrator.py:565 \u2014 Remove fabrication of random UUID rollback ID; only set previous_deployment_id if it actually exists or can be queried from deployment history",
+      "src/agents/ml_foundation/model_deployer/agent.py:373-375 \u2014 Remove short-circuit return when model_registry_id is None; either fail the overall deployment or handle gracefully without silent data loss"
+    ],
+    "notes": "CRITICAL: This defect creates a false signal of success to downstream systems. When MLflow is unavailable (simulated://model URIs, or real MLflow connection failures), the model_deployer fabricates successful registrations and promotions with fake data (random UUIDs, default version=1, simulated stage transitions). The _store_to_database short-circuit ensures these fabricated successes are never written to the database, meaning ml_deployments and ml_model_registry stay empty (0 rows) despite status='completed'. This breaks observability, audit trails, and downstream rollback availability checks. The audit finding matches current code exactly \u2014 no fixes have been applied."
+  },
+  {
+    "id": "F6",
+    "agent": "tool_composer",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "src/agents/tool_composer/composer.py line 364: success=status in (CompositionStatus.SUCCESS, CompositionStatus.PARTIAL) \u2014 PARTIAL status (set when tools_succeeded==0 at line 351) results in success=True",
+      "src/agents/tool_composer/composer.py lines 313-320 (PHASE 4: SYNTHESIZE): response = await self.synthesizer.synthesize(synthesis_input) is called UNCONDITIONALLY even when execution_trace.tools_succeeded==0",
+      "src/agents/tool_composer/synthesizer.py lines 101-136: ResponseSynthesizer.synthesize() calls self._call_llm() (line 118) which invokes the LLM to generate a response with confidence even when all tools failed; no guard on execution_trace.tools_succeeded",
+      "src/agents/tool_composer/synthesizer.py line 125: confidence=parsed.get('confidence', 0.8) \u2014 LLM response defaults to 0.8 confidence and is used as-is",
+      "src/agents/tool_composer/composer.py lines 344-351: When tools_succeeded < tools_executed (including when ==0), status becomes PARTIAL rather than FAILED"
+    ],
+    "recent_commit_impact": "commit a47a28d6 (Jun 9 02:55) only fixed mypy errors in _build_kpi_causal_plan (type annotations). Commit dec84d35 (Jun 9 02:41) added KPI-aware causal routing but did not touch the BUILD-RESULT block. Commit 10903b39 (Jun 7 11:37, 'honest tools') fixed tool_registrations.py but the defect was already present in composer.py BUILD-RESULT block at that point. No recent commit has addressed the core issue: tools_succeeded==0 should gate synthesis and force success=False + status=FAILED.",
+    "fix_locations": [
+      "src/agents/tool_composer/composer.py line 344-368 (BUILD-RESULT block): Add guard: if execution_trace.tools_succeeded == 0, set status=FAILED and success=False WITHOUT calling synthesizer",
+      "src/agents/tool_composer/composer.py line 313-320 (PHASE 4: SYNTHESIZE): Add conditional gate: only call synthesizer if execution_trace.tools_succeeded > 0, else return fallback response with confidence=0 and no LLM answer",
+      "src/agents/tool_composer/synthesizer.py lines 101-136 (synthesize method): Add guard check at entry: if synthesis_input.execution_trace.tools_succeeded==0, return ComposedResponse(answer='All tools failed', confidence=0, failed_components=...) without calling LLM"
+    ],
+    "notes": "The audit claim is precise: despite #813 'honest tools' fixing the tools themselves (tool_registrations.py), the BUILD-RESULT block still maps tools_succeeded==0 to success=True by conflating PARTIAL (any completion) with successful execution. The synthesizer has NO anti-fabrication guard: it always asks the LLM to synthesize, even with 0 tool outputs, allowing the LLM to fabricate a plausible-sounding answer from the original query alone. This violates the fail-closed contract: when tools fail, the composition should surface that failure (success=False, status=FAILED), not hide it behind a synthesis-generated answer with ~0.8 confidence. The fix requires a three-part gate: (1) detect tools_succeeded==0 in BUILD-RESULT, (2) conditionally skip synthesis when tools failed, (3) add a sentinel check in synthesizer.synthesize() as defense-in-depth.\""
+  },
+  {
+    "id": "F7",
+    "agent": "claude-haiku-4-5-20251001",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "Line 674 in factories.py: get_supabase_client() is defined as 'def get_supabase_client():' (synchronous, not async)",
+      "Line 748 in factories.py: get_async_supabase_client() exists as 'async def get_async_supabase_client():' but is not being used",
+      "Line 45 in health_checker.py: self._client = await get_supabase_client() \u2014 awaiting a sync function",
+      "Line 49 in srm_detector.py: self._client = await get_supabase_client() \u2014 awaiting a sync function",
+      "Line 47 in interim_analyzer.py: self._client = await get_supabase_client() \u2014 awaiting a sync function",
+      "Line 41 in fidelity_checker.py: self._client = await get_supabase_client() \u2014 awaiting a sync function",
+      "Tests in test_health_checker_node.py (line 46) mock get_supabase_client as AsyncMock, creating a false negative that masks the production TypeError",
+      "Recent commits 69b51f7b and 09609ac2 touched alert_generator.py but NOT the problematic _get_client() methods in any node"
+    ],
+    "recent_commit_impact": "Neither commit 69b51f7b nor 09609ac2 addressed this defect. Both were focused on alert generation and DSPy signal emission in alert_generator.py, which does not use a database client. The _get_client() pattern with await get_supabase_client() remains unchanged in all four nodes since those commits were made.",
+    "fix_locations": [
+      "src/agents/experiment_monitor/nodes/health_checker.py:45",
+      "src/agents/experiment_monitor/nodes/srm_detector.py:49",
+      "src/agents/experiment_monitor/nodes/interim_analyzer.py:47",
+      "src/agents/experiment_monitor/nodes/fidelity_checker.py:41"
+    ],
+    "notes": "CRITICAL DEFECT: Every node (_get_client method) attempts to await a synchronous factory function. At runtime, each call will raise TypeError: object <sync function> can't be used in 'await' expression. This causes all DB operations to fail immediately, resulting in empty experiment lists (0 experiments checked) and terminal failure per the audit description. The correct fix is to import and call get_async_supabase_client() (line 748 in factories.py) instead of get_supabase_client() (line 674). The test suite masks this because it mocks get_supabase_client as AsyncMock, passing locally but failing in production. All four nodes share identical _get_client() pattern \u2014 fix must be applied consistently to all four locations."
+  },
+  {
+    "id": "F8",
+    "agent": "feature_analyzer",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "CURRENT CODE (lines 322-335): When X_sample is None, silently generates synthetic background via _generate_domain_aware_background() using np.random, without fail-closed skip or data_provenance marking",
+      "NO X_train_selected BRIDGING: grep confirms X_train_selected is never referenced in shap_computer.py (available in state per state.py:85 but never used)",
+      "NO data_provenance FIELD: grep confirms 'data_provenance' does not appear anywhere in shap_computer.py - return dict (lines 436-456) has no provenance marking",
+      "FAIL-OPEN PATTERN: When X_sample absent, code falls through to synthetic generation (lines 328-335) instead of fail-closed skip; returns complete SHAP results from synthetic data without any flag indicating synthetic origin",
+      "COMMIT 855af4b5 (2025-12-26) added _generate_domain_aware_background() function and comment 'In production, this would come from Feast' but DID NOT implement the three audit-required fixes",
+      "GIT LOG shows no subsequent commits on shap_computer.py that attempted to address data_provenance or X_train_selected bridging since 855af4b5"
+    ],
+    "recent_commit_impact": "Commit 855af4b5 (2025-12-26) improved synthetic background generation from uniform random to domain-aware distributions, but left the core defects unfixed: no fail-closed skip, no X_train_selected fallback, no data_provenance marking. Subsequent commits (a4be13ea, 6c000b5c, 49756776, etc.) focused on SHAP explainer robustness and error handling but did not address the data integrity issue. The defect is UNCHANGED on current HEAD.",
+    "fix_locations": [
+      "src/agents/ml_foundation/feature_analyzer/nodes/shap_computer.py:322-335 (X_sample loading logic - add X_train_selected fallback check and fail-closed skip)",
+      "src/agents/ml_foundation/feature_analyzer/nodes/shap_computer.py:436-456 (return dict - add data_provenance field to mark synthetic vs real samples)",
+      "src/agents/ml_foundation/feature_analyzer/state.py:105-164 (SHAP output state - add optional data_provenance field to track sample origin)"
+    ],
+    "notes": "The audit finding is CONFIRMED on current main HEAD (commit 3253790e, 2026-06-09 02:22:13). The defect manifests in three ways:\n\n1. **Fail-open silent synthetic fallback (lines 328-335)**: When state lacks X_sample, code generates synthetic data via np.random and proceeds to SHAP computation without alerting downstream consumers. The only skip path is when model_uri is absent (lines 247-257), not when sample data is absent.\n\n2. **No X_train_selected bridging**: X_train_selected is available in state (produced by feature_selector node, per state.py:85) but shap_computer.py never checks for it. The code should prioritize: (a) real X_sample from state, (b) X_train_selected from upstream, (c) fail-closed skip if neither available.\n\n3. **No data_provenance flag**: Return dict includes feature_names, shap_values, explainer_type, etc., but carries no indicator that the X_sample was synthetic. Downstream nodes (interaction_detector, importance_narrator) cannot distinguish whether importance values came from real training data or fabricated np.random samples.\n\nThe audit's remediation plan (P0 priority, line 140-141) specifies: \"fail-closed skip when no real sample; bridge X_train_selected; gate synthetic background behind a flag that stamps data_provenance='synthetic'.\" None of these are implemented. This is a material data-integrity defect that causes importance rankings to be silently unlabeled as synthetic when real data exists upstream.\""
+  },
+  {
+    "id": "F9",
+    "agent": "model_selector",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "MLDataLoader.execute_query does not exist in src/repositories/ml_data_loader.py (lines 78-421 define the class; no execute_query method present)",
+      "historical_analyzer.py line 90: 'result = await loader.execute_query(query, params)  # type: ignore[attr-defined]' with bare except swallowing AttributeError at lines 93-95",
+      "historical_analyzer.py line 300: 'result = await loader.execute_query(query, params)  # type: ignore[attr-defined]' with bare except swallowing AttributeError at lines 348-350",
+      "When execute_query fails, _query_historical_experiments returns empty [] (line 95), causing analyze_historical_performance to fall back to _get_default_success_rates (line 38)",
+      "Hardcoded success rates in _get_default_success_rates (lines 163-201) are static dicts with no actual historical data from ml_training_runs table",
+      "type: ignore[attr-defined] at both line 90 and 300 silences mypy error that would expose the missing method",
+      "Commit 209f9cff (Jan 17 2026) introduced these execute_query calls; commit a23f4040 (Feb 8 2026) added type: ignore; neither added the execute_query implementation to MLDataLoader"
+    ],
+    "recent_commit_impact": "Commit 38d0e963 (June 3 2026) fixed Finding #7 (benchmark_rankings consumption) but did NOT address F9. Commits a23f4040 and 209f9cff added calls to non-existent execute_query without implementing it. The defect has persisted unchanged from Jan 17 through current HEAD (June 9 2026).\"",
+    "fix_locations": [
+      "src/repositories/ml_data_loader.py - implement async execute_query(self, query: str, params: Dict[str, Any]) -> List[Dict[str, Any]] method",
+      "src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:90 - remove type: ignore[attr-defined] and improve error handling",
+      "src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:93-95 - replace bare except Exception with specific error logging",
+      "src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:300 - remove type: ignore[attr-defined]",
+      "src/agents/ml_foundation/model_selector/nodes/historical_analyzer.py:348-350 - improve error logging to expose the AttributeError instead of hiding it"
+    ],
+    "notes": "The audit finding is CONFIRMED and unchanged on current main. The defect causes ~40% of the model selection score (historical success rate weighting per candidate_ranker.py line 160: score += historical_rate * 0.4) to be frozen to hardcoded constants instead of reflecting real algorithm performance from ml_training_runs table. The root cause is the missing execute_query method on MLDataLoader which was called starting in commit 209f9cff but never implemented. The error is silenced by type: ignore[attr-defined] + bare except, preventing detection during development.\""
+  },
+  {
+    "id": "F10",
+    "agent": "experiment_designer",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "MockKnowledgeStore is defined at /home/enunez/Projects/e2i_causal_analytics/src/agents/experiment_designer/nodes/context_loader.py:38-126, containing hardcoded fabricated data for experiments, defaults, violations, and domain knowledge",
+      "ContextLoaderNode.__init__() at context_loader.py:157 unconditionally creates MockKnowledgeStore() when no knowledge_store is passed: 'self.knowledge_store = knowledge_store or MockKnowledgeStore()'",
+      "ExperimentDesignerAgent.__init__() at agent.py:281-283 calls create_experiment_designer_graph() WITHOUT passing a knowledge_store parameter, allowing it to default to None",
+      "create_experiment_designer_graph() at graph.py:174 passes None to ContextLoaderNode(knowledge_store), triggering the MockKnowledgeStore fallback",
+      "ContextLoaderNode.execute() at context_loader.py:188-193 calls self.knowledge_store methods (which are all from MockKnowledgeStore) to get similar_experiments, organizational_defaults, recent_violations, and domain_knowledge",
+      "DesignReasoningNode._build_org_context() at design_reasoning.py:282-404 builds a prompt section from state['historical_experiments'] and state['domain_knowledge'], which contain the fabricated mock data",
+      "The org_context is directly inserted into the LLM prompt at design_reasoning.py:287 with '## Organizational Learning Context\\n{org_context}'",
+      "No runtime flag-gating or conditional check prevents MockKnowledgeStore from running in production - it is the default fallback",
+      "The docstring at context_loader.py:41 explicitly states 'CRITICAL: This is a temporary mock. Replace with: from src.repositories.knowledge_store import ExperimentKnowledgeStore'",
+      "MockKnowledgeStore is unmarked (no @override, no TODO comment, no deprecation warning) - it is presented as a normal fallback mechanism"
+    ],
+    "recent_commit_impact": "No recent commits fixed this issue. Latest commit a23f4040 (Feb 8, 2026) only added type: ignore[misc, assignment] comment. Previous commit d3ba0ee6 (Dec 20, 2025) INTRODUCED this defect by adding Phase 4 Feedback Learner integration with MockKnowledgeStore as the default fallback.\"",
+    "fix_locations": [
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/experiment_designer/nodes/context_loader.py:157 - Replace 'self.knowledge_store = knowledge_store or MockKnowledgeStore()' with explicit error or flag-gating",
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/experiment_designer/nodes/context_loader.py:38-126 - Remove or disable MockKnowledgeStore class, or mark it with @override_only_for_testing decorator",
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/experiment_designer/agent.py:281-283 - Pass a real ExperimentKnowledgeStore instance when creating the graph, rather than relying on None default",
+      "/home/enunez/Projects/e2i_causal_analytics/src/agents/experiment_designer/graph.py:174 - Add validation that knowledge_store is not None before passing to ContextLoaderNode, or require explicit parameter"
+    ],
+    "notes": "CRITICAL DEFECT CONFIRMED: MockKnowledgeStore with hardcoded fabricated pharmaceutical experiments (exp_2024_001 on HCP engagement with 0.25 effect size, exp_2024_002 on prescription rates, etc.) is being used as the DEFAULT fallback in all production runs because ExperimentDesignerAgent never passes a real knowledge_store parameter. This fabricated context is directly seeded into the design LLM's prompt on every single experiment design request, biasing the LLM toward the mock effect sizes (0.25, 0.12, 0.20, 0.15, 0.30) and lessons learned that do not reflect the actual business domain. The defect has been in production since Dec 20, 2025 (commit d3ba0ee6) when Phase 4 integration was merged. The class docstring explicitly acknowledges it is a 'temporary mock' meant to be replaced, but this replacement was never completed before production deployment. No flag-gating, no deprecation warning, no @override annotation marks this as dangerous."
+  },
+  {
+    "id": "F11",
+    "agent": "drift_monitor",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "structural_drift_detector.py writes structural_drift_results to state at lines 117-133 and structural_drift_details at line 134",
+      "alert_aggregator.py _collect_all_results() method (lines 142-165) only collects data_drift_results, model_drift_results, and concept_drift_results \u2014 structural_drift_results are NOT included",
+      "alert_aggregator.py line 70 calls _collect_all_results which returns incomplete list missing structural drift",
+      "alert_aggregator.py line 73 calculates drift_score from incomplete results, excluding structural drift contribution",
+      "structural_drift_detector.py lines 90-95: when DAG input fields are missing (baseline_dag_adjacency, current_dag_adjacency), silently returns empty structural_drift_results with no error",
+      "No recent commits (since 9247e2c3 which added structural drift node) have addressed the missing aggregation",
+      "DAG input fields (baseline_dag_adjacency, current_dag_adjacency, dag_nodes) must be manually populated by caller \u2014 no automatic plumbing from prior nodes"
+    ],
+    "recent_commit_impact": "The structural drift feature was added in commit 9247e2c3 (feat: add structural drift detection for V4.4 causal discovery). The alert_aggregator was NOT updated at that time to include structural_drift_results. Subsequent commits (a23f4040, 29aa4a70, etc.) did not fix this integration gap. Current HEAD 3253790e still has the defect unfixed.",
+    "fix_locations": [
+      "src/agents/drift_monitor/nodes/alert_aggregator.py:165 \u2014 add structural_drift_results to _collect_all_results() method (similar to lines 154-155 for data, lines 158-159 for model, lines 162-163 for concept)",
+      "src/agents/drift_monitor/nodes/structural_drift_detector.py \u2014 ensure baseline_dag_adjacency and current_dag_adjacency are properly threaded into the agent state from causal discovery outputs (currently must be set by external caller)"
+    ],
+    "notes": "The audit finding is precisely correct. The V4.4 structural drift node is fully wired within its own execution (it reads DAG inputs and writes structural_drift_results), but the AGGREGATION layer (alert_aggregator) was not updated to incorporate the new drift type. Result: structural drift scores are always excluded from overall_drift_score, features_with_drift, and alerts generation. The silent failure when DAG data is missing (lines 90-95 of structural_drift_detector) makes this a fail-closed defect where drift can genuinely occur but register as 0.0. Secondary issue: DAG fields have no automatic source \u2014 they must be manually populated by the caller, creating brittleness."
+  },
+  {
+    "id": "F12",
+    "agent": "heterogeneous_optimizer",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "dispatcher.py:463-472: Input model wrapping ONLY applied when spec.input_model AND spec.input_module are both set; for heterogeneous_optimizer both are None",
+      "_agent_method_map.py:104-111: heterogeneous_optimizer AgentMethodSpec has input_model=None and input_module=None (no value supplied)",
+      "agent.py:238-259: heterogeneous_optimizer.run() validates required fields: treatment_var, outcome_var, segment_vars, effect_modifiers, data_source",
+      "dispatcher.py:712-750: _prepare_agent_input() supplies only: query, user_context, parameters, session_id, parsed_query, dispatch_id, span_id, execution_mode",
+      "router.py:58-66: Dispatch for 'segment_analysis' intent passes parameters={} (empty dict) to heterogeneous_optimizer",
+      "Current HEAD 3253790e shows no input_model/input_module added to heterogeneous_optimizer in AGENT_METHOD_MAP",
+      "git log for agent.py from cb85c553 (confounders fix) through HEAD shows no change to required field validation or input bridging"
+    ],
+    "recent_commit_impact": "\nPARTIAL: Commit a2b6f917 (F-012 mocks closure) hardened the cate_estimator node WITHIN heterogeneous_optimizer with fail-closed semantics on MockDataConnector, but did NOT address the upstream dispatcher-side input bridging defect. The agent still receives an incomplete input dict and will fail on _validate_input() before reaching the cate_estimator node.\n",
+    "fix_locations": [
+      "src/agents/orchestrator/_agent_method_map.py:104-111 \u2014 Add input_model='HeterogeneousOptimizerInput' and input_module='src.agents.heterogeneous_optimizer.agent' to heterogeneous_optimizer's AgentMethodSpec (matching pattern of drift_monitor, experiment_designer)",
+      "src/agents/heterogeneous_optimizer/agent.py:101-114 \u2014 Verify input_data dict contract via docstring (currently states 'matching HeterogeneousOptimizerInput contract' but agent.py has no Input dataclass defined)",
+      "src/agents/orchestrator/nodes/router.py:58-66 \u2014 Router must supply dispatch.parameters with treatment_var, outcome_var, segment_vars, effect_modifiers, data_source DERIVED from parsed_query intent/entities (via _coerce_to_input_model AC-3 defaults pattern or upstream AC-3 per-agent defaults like drift_monitor example at dispatcher.py:49-88)"
+    ],
+    "notes": "\nCORE ROOT CAUSE: Unlike drift_monitor (line 113-122 in _agent_method_map.py) and experiment_designer (123-134) which declare input_model + input_module, heterogeneous_optimizer was left unmapped. The dispatcher treats unmapped agents as \"pass raw dict as-is\" (backward-compat fallback to .analyze() path), but heterogeneous_optimizer.run() validates required fields that orchestrator payload never carries.\n\nSAME ROOT AS #260 (AC-3 pattern): The audit comment correctly identified this as \"Same root as #260 _coerce_to_input_model pattern, not applied here.\" The fix requires:\n1. Add input_model/input_module to heterogeneous_optimizer in AGENT_METHOD_MAP (like drift_monitor/experiment_designer)\n2. Define HeterogeneousOptimizerInput dataclass in agent.py (currently missing)\n3. Implement AC-3 per-agent defaults in dispatcher._wrapped_input_defaults() for heterogeneous_optimizer (lines 49-88 model)\n4. Router must populate dispatch.parameters with the extracted treatment_var, outcome_var, segment_vars from parsed_query.entities or fallback sensibly (fail-closed when missing required fields cannot be inferred)\n\nFAIL-CLOSED: Via exception catch at dispatcher.py:553-561, the agent dispatch returns AgentResult(success=False, error=str(e)) instead of propagating unhandled ValueError. Works via REST/tier-0 if the API caller supplies the needed fields in request body; broken via chat (orchestrator dispatcher) which never bridges them.\n"
+  },
+  {
+    "id": "F13",
+    "agent": "resource_optimizer dispatch-reachability defect",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "src/agents/orchestrator/_agent_method_map.py:168-176 shows resource_optimizer entry has method='optimize', uses_kwargs=True, but NO input_model or input_module",
+      "src/agents/orchestrator/nodes/dispatcher.py:463-484 shows input_model wrapping is SKIPPED when spec.input_model is None (which it is for resource_optimizer)",
+      "src/agents/orchestrator/nodes/dispatcher.py:517-520 shows the dispatcher splatts agent_input as **kwargs to the optimize method when uses_kwargs=True",
+      "src/agents/resource_optimizer/agent.py:147-160 shows optimize() requires positional args allocation_targets and constraints, which are NOT in the generic orchestrator payload unless routed in dispatch.parameters",
+      "src/agents/resource_optimizer/agent.py:38-50 defines ResourceOptimizerInput Pydantic model with all required fields, but this model is NOT registered in AGENT_METHOD_MAP",
+      "Recent commits db75cb33 (2026-06-08) and 9cd19d73 (2026-06-08) touched resource_optimizer but only modified dspy_integration.py and impact_projector.py, not the dispatch bridge",
+      "git log shows resource_optimizer AGENT_METHOD_MAP entry unchanged since commit 7ea771ed (2026-04-29 'feat(orchestrator): wire tier1-5 workflow end-to-end'), missing the input_model that other Tier 3+ agents have"
+    ],
+    "recent_commit_impact": "Recent commits db75cb33 and 9cd19d73 touched resource_optimizer but only in dspy_integration.py and impact_projector.py (prompt getters + recipient training signals). They did NOT touch the dispatch bridge in _agent_method_map.py or dispatcher.py, so the defect remains unfixed. The dispatch-reachability problem existed before these commits and persists after them.",
+    "fix_locations": [
+      "src/agents/orchestrator/_agent_method_map.py:168-176 \u2014 resource_optimizer AgentMethodSpec entry: add input_model='ResourceOptimizerInput' and input_module='src.agents.resource_optimizer.agent' (matching the pattern of drift_monitor, experiment_designer, etc.)",
+      "No other changes needed: ResourceOptimizerInput already exists at src/agents/resource_optimizer/agent.py:38-50 with all required and optional fields properly defaulted; dispatcher's _wrapped_input_defaults does not need resource_optimizer-specific handling"
+    ],
+    "notes": "The defect is that resource_optimizer lacks the input_model/input_module bridge in AGENT_METHOD_MAP, causing it to fail when dispatched from the orchestrator without complete dispatch.parameters. Currently, when **kwargs are splatted (line 518) and allocation_targets/constraints are missing, Python raises TypeError for missing required keyword arguments. The outer try-except catches this and returns AgentResult(success=False, error=...), so the orchestrator doesn't crash, but the resource_optimizer agent cannot be reached via chat/orchestrator flows. This is a dispatch-reachability defect (fails closed, not crashing). The fix is simple: add the input_model/input_module to the AGENT_METHOD_MAP entry, following the same pattern as drift_monitor (lines 113-122) and experiment_designer (lines 123-134)."
+  },
+  {
+    "id": "F14",
+    "agent": "F14-re-verification",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "AGENT_METHOD_MAP entry for prediction_synthesizer (src/agents/orchestrator/_agent_method_map.py:159-167) specifies method='synthesize', uses_kwargs=True, but NO input_model or input_module bridge.",
+      "PredictionSynthesizerAgent.synthesize() signature requires 'entity_id' and 'prediction_target' as mandatory positional args (src/agents/prediction_synthesizer/agent.py:166-178).",
+      "Router dispatches prediction_synthesizer with empty parameters dict (src/agents/orchestrator/nodes/router.py:78-83): parameters={}.",
+      "Dispatcher._prepare_agent_input() only populates: query, user_context, parameters, session_id, parsed_query, dispatch_id, span_id, execution_mode. No entity_id or prediction_target are added (src/agents/orchestrator/nodes/dispatcher.py:712-723).",
+      "No special handling in dispatcher._wrapped_input_defaults() for prediction_synthesizer (src/agents/orchestrator/nodes/dispatcher.py:49-88).",
+      "Dispatcher calls synthesize(**agent_input) via spec.uses_kwargs=True at line 518 (src/agents/orchestrator/nodes/dispatcher.py:516-521).",
+      "Resulting TypeError: 'synthesize() missing 2 required positional arguments: entity_id and prediction_target' is caught at line 553 and returns AgentResult with error=str(e)."
+    ],
+    "recent_commit_impact": "No recent commits have fixed this. Last touch to AGENT_METHOD_MAP was 50250721 (2 commits ago) which did not change prediction_synthesizer entry. Last touch to router.py was 487ba2ef which did not change prediction_synthesizer parameters. Last touch to dispatcher.py was a7fa162d (8 commits ago) which added fail-closed logic for missing agents but did not address prediction_synthesizer missing-required-parameters case.\"",
+    "fix_locations": [
+      "src/agents/orchestrator/nodes/router.py:78-83 \u2014 populate parameters dict with derived entity_id, prediction_target (likely from user_context or parsed_query)",
+      "src/agents/orchestrator/nodes/dispatcher.py:49-88 (_wrapped_input_defaults) \u2014 add elif agent_name == 'prediction_synthesizer' branch to supply entity_id and prediction_target defaults (similar to drift_monitor and experiment_designer pattern)",
+      "Optional: src/agents/orchestrator/_agent_method_map.py:159-167 \u2014 consider adding input_model='PredictionSynthesizerInput' and input_module='src.agents.prediction_synthesizer.agent' to enable dataclass-based wrapping (parity with drift_monitor/experiment_designer)"
+    ],
+    "notes": "The defect is a classic dispatch-reachability gap: prediction_synthesizer is registered in AGENT_METHOD_MAP with uses_kwargs=True and no input_model wrapper, but the router and dispatcher provide no mechanism to bridge the generic orchestrator payload (which lacks entity_id/prediction_target) to the synthesize() method signature. Unlike drift_monitor and experiment_designer which have wrapped input models AND defaults in _wrapped_input_defaults, prediction_synthesizer has neither. The dispatcher will catch the TypeError and return a structured error (fails closed), but the agent is unreachable from the orchestrator. The fix requires either (a) populating parameters at the router level or (b) adding defaults in _wrapped_input_defaults, or (c) both. The audit's description 'no input_model bridge -> fails closed via chat' is accurate: there is no input_model, and it does fail closed.\""
+  },
+  {
+    "id": "F15",
+    "agent": "feedback_learner",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "Production instantiation at src/tasks/dspy_optimization_tasks.py:170 creates FeedbackLearnerAgent(use_llm=True, persist_signals=True) \u2014 no feedback_store, no knowledge_stores passed",
+      "FeedbackLearnerAgent.__init__() at src/agents/feedback_learner/agent.py:94-129 defaults unspecified stores to None (feedback_store=None, knowledge_stores=None)",
+      "When graph.build_feedback_learner_graph() is called at agent.py:136-145, it passes None stores to nodes",
+      "KnowledgeUpdaterNode.__init__() at src/agents/feedback_learner/nodes/knowledge_updater.py:32 converts None to empty dict: self.stores = knowledge_stores or {}",
+      "When no feedback_store is provided, FeedbackCollectorNode._collect_user_feedback() returns [] (line 94-95 in feedback_collector.py)",
+      "With empty feedback and no stores, the entire graph produces: feedback_items=[], patterns=[], recommendations=[], proposed_updates=[], applied_updates=[]",
+      "At src/agents/feedback_learner/graph.py:298, update_effectiveness is calculated as: len(applied_updates) / max(len(proposed_updates or []), 1) = 0 / max(0, 1) = 0.0",
+      "FeedbackLearnerTrainingSignal at graph.py:305-333 receives update_effectiveness=0.0 (line 317)",
+      "compute_reward() at src/agents/feedback_learner/dspy_integration.py:176-266 includes update_effectiveness as a weighted term (lines 218-253), pulling the training reward down due to 0.0 effectiveness",
+      "Recent PR #811 commits touching feedback_learner (commits f965367d, c29a0faf, e581f505) added recipient substrate but did NOT fix the root starved-state construction issue",
+      "No defensive check or fix has been applied between the audit (June 9 2026) and HEAD (commit 3253790e, Merge PR #818)"
+    ],
+    "recent_commit_impact": "PR #811 (commits f965367d through e581f505) restructured recipient signal emission and optimization substrate but left the core defect untouched: the production FeedbackLearnerAgent construction at dspy_optimization_tasks.py:170 still passes no stores. Commit 629c3522 (fix: real latent applied_updates crash) fixed a crash in applied_updates handling but did not address the starved construction. No subsequent commits have remediated the defect.\"",
+    "fix_locations": [
+      "src/tasks/dspy_optimization_tasks.py:170 - FeedbackLearnerAgent() must be constructed with actual feedback_store + knowledge_stores instances (currently passes use_llm=True, persist_signals=True only)",
+      "src/agents/feedback_learner/agent.py:94-104 - __init__ signature should document that feedback_store and knowledge_stores are REQUIRED in production (currently Optional[Any]=None allows silent starvation)",
+      "src/agents/feedback_learner/graph.py:298 - update_effectiveness calculation should distinguish between 'no stores provided' (deployment error, should warn/fail-safe) vs 'stores provided but nothing to apply' (normal case, metric is valid)"
+    ],
+    "notes": "The audit finding F15 is correctly scoped and CONFIRMED LIVE on current main (HEAD 3253790e). The production feedback learning cycle (every 6 hours via Celery beat) constructs a starved FeedbackLearnerAgent with no feedback source and no knowledge targets. This causes update_effectiveness to be pinned at 0.0, which degrades training signals fed to GEPA/MIPROv2 prompt optimization. The self-improvement loop is not broken, but it runs on fabricated/muted signals rather than honest metrics. The audit correctly documented this as 'CONFIRMED, *known*' \u2014 indicating it was accepted as deferred. However, it remains an active defect blocking honest feedback-based learning. The fix requires wiring a real feedback_store (from user feedback/outcomes) and providing target knowledge_stores (prompt, config, threshold, baseline) so applied_updates can be non-zero and the training signal reflects actual effectiveness.\""
+  },
+  {
+    "id": "F16",
+    "agent": "data_preparer",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "src/agents/ml_foundation/data_preparer/nodes/data_loader.py:196 contains `dataset.train.append(dataset.val).append(dataset.test)` which uses removed pandas DataFrame.append() method",
+      "Repository pins pandas==2.3.3 in requirements.txt and requirements-dev.txt; DataFrame.append() was removed in pandas 2.0+",
+      "No commits have modified this file since 38d0e963 which still contains the defect",
+      "Defect is triggered when entity_column is specified in scope_spec during Supabase load path",
+      "git log confirms last change was 38d0e963 with no fixes applied after",
+      "Other files in same directory (leakage_detector.py, data_transformer.py) already use pd.concat() pattern"
+    ],
+    "recent_commit_impact": "No recent commits have touched this file since 38d0e963. The defect remains unfixed and will cause crash on entity-split path.",
+    "fix_locations": [
+      "src/agents/ml_foundation/data_preparer/nodes/data_loader.py:196"
+    ],
+    "notes": "The defect is in the _load_from_supabase() function at line 196. When an entity_column is specified in scope_spec and the Supabase data loading path is used, the code attempts to combine three DataFrames using chained .append() calls. This will raise AttributeError because pandas 2.3.3 removed the DataFrame.append() method. The fix is to replace the chained .append() calls with pd.concat([dataset.train, dataset.val, dataset.test], ignore_index=True). The defect fails closed - the exception is caught by the try/except block in load_data() which returns an error dict with blocking_issues. This is consistent with the audit's characterization as a crash that fails closed on the Supabase entity-split path."
+  },
+  {
+    "id": "F17",
+    "agent": "cohort_constructor",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "Line 24 of tier0_integration.py: 'from cohort_constructor import CohortConfig, CohortConstructor, Criterion, Operator' attempts to import from non-existent top-level package",
+      "Line 471 of tier0_integration.py: 'from cohort_constructor import compare_cohorts' has same defect",
+      "pyproject.toml line 146 configures 'packages = [\"src\"]' meaning only src/ is a package root; there is no top-level cohort_constructor package",
+      "Actual package location is src/agents/cohort_constructor/ with correct exports in __init__.py",
+      "Other files in same directory (agent.py, constructor.py) correctly use relative imports (from .constructor import ...) or from . imports",
+      "git log shows: commit 9069a486 created file with defect (Jan 16), commit 29aa4a70 fixed lint (Feb 8) without addressing imports, commit a23f4040 reduced mypy errors (Jun 6) without fixing",
+      "No commits have attempted to fix this defect"
+    ],
+    "recent_commit_impact": "Commit a23f4040 (most recent, Jun 6) fixed mypy errors but explicitly did NOT address the import defect. The problematic imports remain untouched on main HEAD 3253790e.",
+    "fix_locations": [
+      "src/agents/cohort_constructor/tier0_integration.py:24 - Change 'from cohort_constructor import...' to relative or absolute correct import",
+      "src/agents/cohort_constructor/tier0_integration.py:471 - Change 'from cohort_constructor import compare_cohorts' to correct import path"
+    ],
+    "notes": "The defect causes ModuleNotFoundError at runtime if tier0_integration.py is imported. The audit description is accurate - this is a reorganization artifact where tier0_integration.py was moved to src/agents/cohort_constructor/ but its imports were not updated to use the correct package path. The correct fix is to use either relative imports (from . import ...) consistent with other files in the package, or absolute imports (from src.agents.cohort_constructor import ...)."
+  },
+  {
+    "id": "F18",
+    "agent": "causal-impact",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "src/agents/causal_impact/agent.py:177-181 validates required fields [query, treatment_var, outcome_var, confounders, data_source] and raises ValueError when missing",
+      "src/agents/orchestrator/nodes/dispatcher.py:712-723 prepares generic orchestrator payload containing only [query, user_context, parameters, session_id, parsed_query, dispatch_id, span_id, execution_mode]",
+      "src/agents/orchestrator/_agent_method_map.py:83-95 specifies causal_impact uses method='run' with NO input_model bridge (unlike experiment_monitor, drift_monitor, experiment_designer)",
+      "The dispatcher at line 520 calls method(agent_input) without kwargs, passing the generic payload directly to agent.run()",
+      "This causes orchestrator dispatch to fail closed with ValueError 'Missing required field(s)' \u2014 correct safe behavior",
+      "src/agents/causal_impact/nodes/interpretation.py:92-102 properly handles failed sensitivity analysis by setting status='failed' and needs_review=True",
+      "interpretation.py:199-203 properly detects sensitivity_failed using state.get('sensitivity_error')",
+      "interpretation.py:235-253 properly avoids citing defaulted E-value of 1.00 when sensitivity_failed is true",
+      "interpretation.py:278-283 marks E-value as 'unavailable (sensitivity analysis failed)' instead of surfacing a defaulted value",
+      "Most recent commit 6a1c4c85 (fix: precise cyclic-identifiability gate M-fo2) only adds MORE sensitivity-failure guards to interpretation.py \u2014 does not remove existing fail-closed behavior"
+    ],
+    "recent_commit_impact": "Commit 6a1c4c85 enhanced interpretation.py by adding M-fo3 guards that STRENGTHEN the fail-closed behavior: it explicitly detects sensitivity_failed and prevents the narrative from citing the defaulted E-value. This commit reinforces, not reverses, the correct fail-closed handling. The core defect (missing causal inputs on orchestrator dispatch) remains unchanged and unfixed \u2014 agent.py still validates required fields at lines 177-181, and dispatcher still sends no input_model bridge (lines 712-750 show tool_composer receives special data-resolution but causal_impact does not). Status quo: fail-closed-correct but feature-incomplete (as audit stated).",
+    "fix_locations": [
+      "src/agents/orchestrator/_agent_method_map.py: Add causal_impact to the input_model bridge pattern (if chat routing is desired), or document why causal_impact intentionally lacks one",
+      "src/agents/orchestrator/nodes/dispatcher.py:_prepare_agent_input(): Add a special-case block similar to tool_composer (lines 737-748) to resolve causal inputs (treatment_var, outcome_var, confounders) from parsed_query entities or dispatch parameters (if chat routing is desired)"
+    ],
+    "notes": "The audit finding is ACCURATE: F18 is a feature-completeness gap, not a safety bug. The orchestrator route CORRECTLY fails closed because causal inputs are not supplied. The agent validates required fields at agent.py:177-181 and raises ValueError when input_data lacks treatment_var/outcome_var/confounders/data_source. The dispatcher has no input_model bridge for causal_impact (unlike drift_monitor/experiment_monitor/experiment_designer), so the generic orchestrator payload (query, user_context, parameters, etc.) goes straight to agent.run() and triggers validation failure. This is the intended fail-closed behavior. Recent commit 6a1c4c85 only STRENGTHENS this: interpretation.py now explicitly detects sensitivity_failed and avoids fabrication. NO remediation is required for safety; the code is safe and honest. If chat-routing to causal_impact is a desired product feature, the fix would be to add an input_model bridge and dispatcher special-case (similar to tool_composer's KPI resolution logic) to supply the missing causal inputs from the parsed_query or router parameters \u2014 but this is a feature addition, not a defect fix.\""
+  },
+  {
+    "id": "F19",
+    "agent": "model_trainer",
+    "still_live": true,
+    "status": "LIVE-CONFIRMED",
+    "evidence": [
+      "src/agents/ml_foundation/model_trainer/nodes/advanced_validation.py line 204: clone(model) called WITHOUT n_jobs=1 parameter",
+      "src/agents/ml_foundation/model_trainer/nodes/advanced_validation.py line 205: fold_model.fit() called WITHOUT threadpool_limits wrapper",
+      "src/agents/ml_foundation/model_trainer/nodes/advanced_validation.py line 1-27: threadpoolctl NOT imported despite being in requirements.txt",
+      "git log shows NO commits addressing F19 threading or threadpool_limits since audit (commit f19f090f docs audit commit is latest)",
+      "git show main:advanced_validation.py confirms identical code pattern on main HEAD (commit 3253790e)",
+      "threadpoolctl==3.6.0 is available in requirements.txt and requirements-dev.txt"
+    ],
+    "recent_commit_impact": "No recent commits have touched the compute_stratified_cv function (last 5 commits to the file: 5e53916b, 4faa7cc3, 97e6ec43, af530cc3, 7fa89785 \u2014 all addressing calibration/permutation test logic, not threading). The audit documentation was landed on f19f090f but no production code fix was applied. The defect remains unchanged from the audit's observation.",
+    "fix_locations": [
+      "src/agents/ml_foundation/model_trainer/nodes/advanced_validation.py:12-14 (add import threadpoolctl)",
+      "src/agents/ml_foundation/model_trainer/nodes/advanced_validation.py:204 (clone call: add n_jobs=1 or equivalent)",
+      "src/agents/ml_foundation/model_trainer/nodes/advanced_validation.py:205 (fit call: wrap with threadpool_limits(limits=1))"
+    ],
+    "notes": "Audit severity: LOW but real. The issue is: per-fold refit (5 folds \u00d7 model retrain) with permutation test (200 shuffles) + bootstrap (1000 samples) creates 5 concurrent or sequential subprocess workers under LOKY backend without thread capping. Observed peak RSS = 5.9 GB. Currently mitigated externally by operator-set LOKY_MAX_CPU_COUNT=1 environment variable. No user-facing harm in current deployment because env var is set. Fix is straightforward: (1) import threadpoolctl, (2) clone(model, n_jobs=1) if the model stores n_jobs param, (3) wrap fit with `with threadpool_limits(limits=1, user_api='blas'): fold_model.fit(...)`. The audit is PARTIAL because it correctly identified the spike and the mechanism, but the assessment 'no user-facing harm' hinges on the external env var being set \u2014 if an operator forgets to set LOKY_MAX_CPU_COUNT=1, the agent will spike to 5.9 GB on any cohort with training data large enough to trigger CV."
+  }
+]
