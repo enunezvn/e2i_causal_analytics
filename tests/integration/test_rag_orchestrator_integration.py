@@ -298,7 +298,10 @@ class TestAgentRAGContextUsage:
     async def test_agent_receives_rag_context(self):
         """Test that dispatched agents receive RAG context in input."""
         mock_agent = MagicMock()
-        mock_agent.analyze = AsyncMock(
+        # Dispatcher calls the mapped method (``run``), not ``analyze`` — stub the
+        # real method so the guarded assertion below actually fires (previously the
+        # ``.analyze`` stub was never called, so this test passed vacuously).
+        mock_agent.run = AsyncMock(
             return_value={
                 "narrative": "Test response with RAG context",
                 "recommendations": [],
@@ -315,13 +318,11 @@ class TestAgentRAGContextUsage:
         # Result should include RAG context field
         assert "rag_context" in result
 
-        # Agent should have been called
-        if mock_agent.analyze.called:
-            call_args = mock_agent.analyze.call_args
-            # Check that agent was invoked (either with positional or keyword args)
-            assert call_args is not None
-            # Result should be successful
-            assert result["status"] == "completed"
+        # The registered agent MUST actually be dispatched (via its mapped .run
+        # method) — assert unconditionally so this can never pass vacuously.
+        assert mock_agent.run.called, "causal_impact agent was never dispatched"
+        assert mock_agent.run.call_args is not None
+        assert result["status"] == "completed"
 
 
 class TestErrorHandling:
@@ -363,8 +364,13 @@ class TestMultiAgentWithRAG:
     @pytest.mark.asyncio
     async def test_multi_agent_receives_same_rag_context(self):
         """Test that multiple agents receive the same RAG context."""
+        # The dispatcher invokes a registered agent via its mapped method
+        # (AGENT_METHOD_MAP -> ``run``), NOT ``analyze`` — so the stub must expose
+        # an async ``run`` or the await fails with "MagicMock can't be used in
+        # 'await' expression" (a pre-existing latent bug from the #252 .analyze->.run
+        # unification, surfaced here once a registered agent is actually dispatched).
         mock_causal = MagicMock()
-        mock_causal.analyze = AsyncMock(
+        mock_causal.run = AsyncMock(
             return_value={
                 "narrative": "Causal analysis",
                 "recommendations": [],
@@ -373,7 +379,7 @@ class TestMultiAgentWithRAG:
         )
 
         mock_gap = MagicMock()
-        mock_gap.analyze = AsyncMock(
+        mock_gap.run = AsyncMock(
             return_value={
                 "narrative": "Gap analysis",
                 "recommendations": [],
@@ -381,11 +387,19 @@ class TestMultiAgentWithRAG:
             }
         )
 
+        # Partial registry: the two stubbed agents verify RAG-context propagation,
+        # but the router may also dispatch an agent absent from this 2-entry
+        # registry (e.g. explainer). Since #814 a missing agent fails CLOSED by
+        # default, which would regress this multi-agent run to status=failed; the
+        # test opts into the canned dispatcher scaffold (per the module convention,
+        # lines 10-12) so any extra-routed agent completes and the run reaches
+        # status=completed. Production never sets allow_mock -> fail-closed.
         orchestrator = OrchestratorAgent(
             agent_registry={
                 "causal_impact": mock_causal,
                 "gap_analyzer": mock_gap,
-            }
+            },
+            allow_mock=True,
         )
 
         input_data = {
