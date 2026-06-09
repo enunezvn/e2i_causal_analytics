@@ -15,7 +15,6 @@ producer actually persists a real, readable cycle record.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timezone
 
@@ -42,7 +41,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_persist_cognitive_cycle_writes_real_readable_row() -> None:
+async def test_persist_cognitive_cycle_writes_real_readable_row() -> None:
     """_persist_cognitive_cycle upserts a real cognitive_cycles row from real
     4-phase results, readable back with the cycle's actual fields."""
     from src.memory.services.factories import get_supabase_client
@@ -71,19 +70,17 @@ def test_persist_cognitive_cycle_writes_real_readable_row() -> None:
     }
 
     try:
-        asyncio.run(
-            service._persist_cognitive_cycle(
-                cycle_id=cycle_id,
-                session_id=session_id,
-                cognitive_input=cognitive_input,
-                phase1_result=phase1_result,
-                phase2_result=phase2_result,
-                phase3_result=phase3_result,
-                phases_completed=["summarizer", "investigator", "agent", "reflector_started"],
-                status="completed",
-                started_at=started_at,
-                duration_ms=1234.5,
-            )
+        await service._persist_cognitive_cycle(
+            cycle_id=cycle_id,
+            session_id=session_id,
+            cognitive_input=cognitive_input,
+            phase1_result=phase1_result,
+            phase2_result=phase2_result,
+            phase3_result=phase3_result,
+            phases_completed=["summarizer", "investigator", "agent", "reflector_started"],
+            status="completed",
+            started_at=started_at,
+            duration_ms=1234.5,
         )
 
         client = get_supabase_client()
