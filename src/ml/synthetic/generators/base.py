@@ -28,6 +28,15 @@ class GeneratorConfig:
     dgp_type: Optional[DGPType] = None
     start_date: date = field(default_factory=lambda: date(2022, 1, 1))
     end_date: date = field(default_factory=lambda: date(2024, 12, 31))
+    # Rolling-window anchoring (Shard 04): when True, _random_dates remaps the
+    # [start_date,end_date] span onto a window ending at anchor_reference (or
+    # today). Defeats migration-044 NOW()-30d staleness; regenerated per run
+    # because the reference is resolved at call time.
+    anchor_to_now: bool = False
+    anchor_reference: Optional[date] = None
+    # Share of records biased into the last 30 days of the rolling window so
+    # NOW()-30d windowed KPIs read non-zero.
+    anchor_recent_fraction: float = 0.6
     verbose: bool = False
     # Namespacing prefix prepended to every generated entity id. Keeps a synthetic
     # validation dataset's ids DISJOINT from the existing dev baseline so the loader's
@@ -112,6 +121,9 @@ class BaseGenerator(ABC, Generic[T]):
                 dgp_type=self.config.dgp_type,
                 start_date=self.config.start_date,
                 end_date=self.config.end_date,
+                anchor_to_now=self.config.anchor_to_now,
+                anchor_reference=self.config.anchor_reference,
+                anchor_recent_fraction=self.config.anchor_recent_fraction,
                 verbose=self.config.verbose,
                 id_prefix=self.config.id_prefix,
             )
@@ -188,15 +200,70 @@ class BaseGenerator(ABC, Generic[T]):
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
     ) -> List[str]:
-        """Generate random dates within range as ISO strings."""
+        """Generate random dates as ISO strings.
+
+        With config.anchor_to_now, the configured span is remapped onto a
+        rolling window ending at anchor_reference (or today), with
+        anchor_recent_fraction of rows biased into the last 30 days so
+        NOW()-30d windowed KPIs read non-zero. Regenerated per run because the
+        reference is resolved at call time. Default off = legacy [start,end] span.
+        """
         start = start_date or self.config.start_date
         end = end_date or self.config.end_date
+
+        if self.config.anchor_to_now:
+            return self._anchored_dates(n)
 
         start_ord = start.toordinal()
         end_ord = end.toordinal()
 
         random_days = self._rng.integers(start_ord, end_ord + 1, size=n)
         return [date.fromordinal(d).isoformat() for d in random_days]
+
+    def _anchored_dates(self, n: int) -> List[str]:
+        """Rolling window ending at the run-time reference date.
+
+        anchor_recent_fraction of rows land uniformly in (ref-30d, ref]; the rest
+        spread across the historical tail [ref-span, ref-30d]. The reference is
+        resolved here (anchor_reference or date.today()) so each run regenerates.
+        """
+        ref = self.config.anchor_reference or date.today()
+        span_days = (self.config.end_date - self.config.start_date).days
+        span_days = max(span_days, 90)  # floor so a tiny span still spreads
+        ref_ord = ref.toordinal()
+        recent_floor = ref_ord - 30
+
+        frac = float(np.clip(self.config.anchor_recent_fraction, 0.0, 1.0))
+        is_recent = self._rng.random(n) < frac
+        n_recent = int(is_recent.sum())
+        out = np.empty(n, dtype=np.int64)
+        # Recent rows: uniformly in (NOW()-30d, NOW()]
+        out[is_recent] = self._rng.integers(recent_floor, ref_ord + 1, size=n_recent)
+        # Older rows: uniformly across the historical tail of the window
+        n_old = n - n_recent
+        out[~is_recent] = self._rng.integers(
+            ref_ord - span_days, recent_floor, size=n_old
+        )
+        return [date.fromordinal(int(d)).isoformat() for d in out]
+
+    def _shift_dates_to_window(self, dates: List[str]) -> List[str]:
+        """Re-anchor an externally-supplied list of ISO dates onto the rolling
+        window (preserves relative ordering). Used by generators that derive
+        timestamps from another frame (e.g. trigger_timestamp = journey + offset)
+        so Shards 05/06/09 can re-anchor without re-sampling. No-op when
+        anchor_to_now is off."""
+        if not self.config.anchor_to_now or not dates:
+            return dates
+        ref = self.config.anchor_reference or date.today()
+        ords = np.array([date.fromisoformat(d).toordinal() for d in dates])
+        lo, hi = int(ords.min()), int(ords.max())
+        ref_ord = ref.toordinal()
+        if hi == lo:
+            return [date.fromordinal(ref_ord).isoformat()] * len(dates)
+        span = (self.config.end_date - self.config.start_date).days
+        span = max(span, 90)
+        scaled = ref_ord - span + (ords - lo) * span / (hi - lo)
+        return [date.fromordinal(int(round(s))).isoformat() for s in scaled]
 
     def _assign_splits(
         self,
