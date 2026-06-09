@@ -19,8 +19,8 @@ current fix locations in `21-agent-audit-20260609-repro/reverify_results.json`.
 | F1 | CRIT | health_score | LIVE (route:789 + provenance-on-import + F1b mock endpoints) | ✅ PR | #823 |
 | F2 | HIGH | gap_analyzer | LIVE (formatter:98 always "completed"; nodes ignore `errors`) | ✅ PR | #824 |
 | F6 | HIGH | tool_composer | LIVE (success=True on 0/N tools) → fail-closed gate + route | ✅ PR | #827 |
-| F8 | HIGH | feature_analyzer | LIVE (np.random SHAP bg unlabeled) | ⏳ pending | — |
-| F3 | HIGH | observability_connector | LIVE (`client=` kwarg → mock spans while 5313 real) | ⏳ pending | — |
+| F8 | HIGH | feature_analyzer | LIVE (np.random SHAP bg unlabeled) → fail-closed + provenance e2e | ✅ PR | #828 |
+| F3 | HIGH | observability_connector | RESOLVED by #826 (`client=`→`supabase_client=` at agent.py:91 + metrics_aggregator.py:30; async repo reaches 5313 real spans, proven by real-DB test) | ✅ DONE | #826 |
 | F4 | HIGH | model_deployer | LIVE (simulated→success=True, 0 rows) | ⏳ pending | — |
 | F7 | HIGH | experiment_monitor | RESOLVED by #820 (4 nodes await get_async_supabase_client) | ✅ DONE | #820 |
 | F12 | MED | heterogeneous_optimizer | LIVE (no input bridge → dead via chat, fail-closed) | ⏳ pending | — |
@@ -50,5 +50,12 @@ Decide per-table policies; do not blindly enable. Not auto-actioned here.
   behavior across ALL agents. Needs its own scoped PR (broad dispatcher/synthesizer
   change, high ripple — cf. #814); NOT bundled into F6. (Could not file as a GitHub
   issue — external-write blocked under the loop authorization.)
+- **SHAP provenance not persisted / not consumed downstream** (found in F8 codex review,
+  gpt-5.5). F8 (#828) propagates `data_provenance` through the agent output contract and
+  stops persisting skipped runs, but: (a) a `data_provenance` COLUMN on `ml_shap_analyses`
+  needs a migration (deferred under no-migration constraint); (b) `causal_ranker`,
+  `mlflow_tracker`, `memory_hooks` read/store importances without checking provenance.
+  Bounded today because `allow_synthetic_background` is NOT threaded through `agent.run`
+  (the agent path is real-or-skip, never synthetic). Own scoped follow-up.
 
 _Statuses updated as PRs land._
