@@ -23,9 +23,9 @@ current fix locations in `21-agent-audit-20260609-repro/reverify_results.json`.
 | F3 | HIGH | observability_connector | RESOLVED by #826 (`client=`→`supabase_client=` at agent.py:91 + metrics_aggregator.py:30; async repo reaches 5313 real spans, proven by real-DB test) | ✅ DONE | #826 |
 | F4 | HIGH | model_deployer | LIVE (simulated→success=True, 0 rows) → fail-closed flags + honest db_persisted; persistence rewire deferred to #829 | ✅ PR | #830 |
 | F7 | HIGH | experiment_monitor | RESOLVED by #820 (4 nodes await get_async_supabase_client) | ✅ DONE | #820 |
-| F12 | MED | heterogeneous_optimizer | LIVE (no input bridge → dead via chat, fail-closed) | ⏳ pending | — |
-| F13 | MED | resource_optimizer | LIVE (same) | ⏳ pending | — |
-| F14 | MED | prediction_synthesizer | LIVE (same) | ⏳ pending | — |
+| F12 | MED | heterogeneous_optimizer | LIVE (no input bridge → dead via chat) → generic data-driven INPUT_RESOLVERS registry; BUILDS causal spec from real KpiFrame (treatment=accepted/outcome=converted/real modifiers, leakage-guarded), else fail closed | ✅ PR | #839 |
+| F13 | MED | resource_optimizer | LIVE (kwargs leak / dead via chat) → resolver passes through real structured problem (targets+budget), else fail closed (no rep-activity allocation substrate exists) | ✅ PR | #839 |
+| F14 | MED | prediction_synthesizer | LIVE (kwargs leak / dead via chat) → resolver passes through real (entity_id,target), else fail closed (0 champion models); +domain-failure guard maps status=failed→success=False | ✅ PR | #839 |
 | F9 | MED | model_selector | LIVE (`execute_query` missing → 40% frozen) → real PostgREST queries + unmask | ✅ PR | #831 |
 | F10 | MED | experiment_designer | LIVE (MockKnowledgeStore unmarked) → EmptyKnowledgeStore prod default (honest empty); Mock kept for tests; org-defaults prompt section only when real | ✅ PR | #833 |
 | F11 | MED | drift_monitor | LIVE (structural_drift dropped) → wired end-to-end: input DAG fields threaded + aggregator/summary/recs/output/memory include structural | ✅ PR | #832 |
