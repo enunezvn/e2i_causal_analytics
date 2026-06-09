@@ -154,6 +154,10 @@ def _fetch_brand_rows(
         sb.table("business_metrics")
         .select(_METRIC_COLUMNS)
         .eq("brand", brand)
+        # Provenance (Shard 07 R12): never embed synthetic KPI prose into the prod
+        # corpus. business_metrics carries is_synthetic (default false); synthetic
+        # rows (Shard 02) are excluded so the chatbot only surfaces real metrics.
+        .eq("is_synthetic", False)
         .not_.is_("metric_name", "null")
         .order("metric_date", desc=True)
         .order("metric_id")
@@ -241,7 +245,15 @@ async def index_business_metrics(
     """
     sb = supabase_client or get_supabase_client()
     if brands is None:
-        r = sb.table("business_metrics").select("brand").not_.is_("brand", "null").execute()
+        r = (
+            sb.table("business_metrics")
+            .select("brand")
+            # Provenance (Shard 07 R12): brand discovery must not surface a brand
+            # that exists only in synthetic rows.
+            .eq("is_synthetic", False)
+            .not_.is_("brand", "null")
+            .execute()
+        )
         brands = sorted({row["brand"] for row in (r.data or []) if row.get("brand")})
 
     already = _existing_corpus_descriptions(sb, agent_name) if dedup else set()
