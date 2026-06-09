@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 
-
 _SRC_ROOT = os.path.join(
     os.path.dirname(__file__),  # tests/unit/test_agents/test_feedback_learner/
     "..",

@@ -17,7 +17,6 @@ import pytest
 
 from src.agents.feedback_learner.graph import build_feedback_learner_graph
 
-
 # ---------------------------------------------------------------------------
 # Minimal graph invocation state
 # ---------------------------------------------------------------------------
