@@ -52,6 +52,7 @@ class TestComputeSHAP:
         # is independent of the MLflow flavor resolution code.
         state = {
             "model_uri": "runs:/abc123/model",
+            "allow_synthetic_background": True,  # F8: synthetic-bg opt-in (mechanics test)
             "experiment_id": "exp_001",
             "max_samples": 100,
             "loaded_model": mock_random_forest_model,
@@ -98,6 +99,7 @@ class TestComputeSHAP:
         """Should handle legacy SHAP list return: [class_0_vals, class_1_vals]."""
         state = {
             "model_uri": "runs:/legacy123/model",
+            "allow_synthetic_background": True,  # F8: synthetic-bg opt-in (mechanics test)
             "experiment_id": "exp_legacy",
             "max_samples": 100,
             "loaded_model": mock_random_forest_model,
@@ -126,6 +128,7 @@ class TestComputeSHAP:
         """Should handle LinearExplainer returning 2-D values and length-1 base_value array."""
         state = {
             "model_uri": "runs:/lin_arr/model",
+            "allow_synthetic_background": True,  # F8: synthetic-bg opt-in (mechanics test)
             "experiment_id": "exp_lin_arr",
             "max_samples": 50,
             "loaded_model": mock_linear_model,
@@ -154,6 +157,7 @@ class TestComputeSHAP:
         # Setup
         state = {
             "model_uri": "runs:/def456/model",
+            "allow_synthetic_background": True,  # F8: synthetic-bg opt-in (mechanics test)
             "experiment_id": "exp_002",
             "max_samples": 50,
             "loaded_model": mock_linear_model,
@@ -225,6 +229,7 @@ class TestComputeSHAP:
         # Setup
         state = {
             "model_uri": "runs:/jkl012/model",
+            "allow_synthetic_background": True,  # F8: synthetic-bg opt-in (mechanics test)
             "experiment_id": "exp_005",
             "max_samples": 100,
             "loaded_model": mock_random_forest_model,
@@ -292,6 +297,7 @@ class TestComputeSHAP:
             "model_uri": "runs:/mno345/model",
             "experiment_id": "exp_006",
             "max_samples": 100,
+            "allow_synthetic_background": True,  # F8: synthetic-bg opt-in (mechanics test)
         }
 
         mock_mlflow.sklearn.load_model.return_value = mock_random_forest_model
@@ -308,3 +314,80 @@ class TestComputeSHAP:
         # Assert
         assert "shap_analysis_id" in result
         assert result["shap_analysis_id"].startswith("shap_exp_006_")
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
+    async def test_f8_fail_closed_when_no_real_sample(
+        self, mock_shap, mock_mlflow, mock_random_forest_model
+    ):
+        """F8: with no real sample data and no synthetic opt-in, SHAP must fail CLOSED
+        (skip) rather than compute importances over an np.random background."""
+        state = {
+            "model_uri": "runs:/f8nodata/model",
+            "experiment_id": "exp_f8",
+            "max_samples": 100,
+            "loaded_model": mock_random_forest_model,
+            # no X_sample / X_train_selected / X_train; allow_synthetic_background unset
+        }
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="f8nodata"), data=Mock(params={}))
+
+        result = await compute_shap(state)
+
+        assert result.get("shap_skipped") is True
+        assert result.get("status") == "skipped"
+        assert result.get("data_provenance") == "unavailable"
+        assert "shap_analysis_id" not in result
+        # No SHAP explainer should be constructed over fabricated data.
+        mock_shap.TreeExplainer.assert_not_called()
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
+    async def test_f8_bridges_x_train_selected_real_data(
+        self, mock_shap, mock_mlflow, mock_random_forest_model
+    ):
+        """F8: when X_sample is absent, real X_train_selected is bridged + used;
+        provenance is 'real'."""
+        state = {
+            "model_uri": "runs:/f8real/model",
+            "experiment_id": "exp_f8real",
+            "max_samples": 100,
+            "loaded_model": mock_random_forest_model,
+            "X_train_selected": np.random.rand(80, 5),
+        }
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="f8real"), data=Mock(params={}))
+        mock_explainer = Mock()
+        mock_explainer.shap_values.return_value = np.random.rand(80, 5, 2)
+        mock_explainer.expected_value = np.array([0.4, 0.6])
+        mock_shap.TreeExplainer.return_value = mock_explainer
+
+        result = await compute_shap(state)
+
+        assert "error" not in result
+        assert result.get("shap_skipped") is not True
+        assert result["data_provenance"] == "real"
+        assert result["samples_analyzed"] == 80
+
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
+    @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.shap")
+    async def test_f8_synthetic_opt_in_is_labeled(
+        self, mock_shap, mock_mlflow, mock_random_forest_model
+    ):
+        """F8: synthetic background, when explicitly opted into, is stamped
+        data_provenance='synthetic' (never silently presented as real)."""
+        state = {
+            "model_uri": "runs:/f8syn/model",
+            "experiment_id": "exp_f8syn",
+            "max_samples": 100,
+            "loaded_model": mock_random_forest_model,
+            "allow_synthetic_background": True,
+        }
+        mock_mlflow.get_run.return_value = Mock(info=Mock(run_id="f8syn"), data=Mock(params={}))
+        mock_explainer = Mock()
+        mock_explainer.shap_values.return_value = np.random.rand(100, 5, 2)
+        mock_explainer.expected_value = np.array([0.4, 0.6])
+        mock_shap.TreeExplainer.return_value = mock_explainer
+
+        result = await compute_shap(state)
+
+        assert "error" not in result
+        assert result["data_provenance"] == "synthetic"

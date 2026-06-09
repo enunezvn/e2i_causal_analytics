@@ -319,27 +319,66 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
         else:
             original_feature_names = feature_names
 
-        # Load sample data for SHAP computation
-        # In production, this would come from Feast or the training data
-        # For now, we'll use the data from state or generate synthetic
+        # Load sample data for SHAP computation. F8 fail-closed: prefer REAL data
+        # (caller-provided X_sample, then the selected / raw training features bridged
+        # from upstream nodes). A synthetic np.random background is gated behind an
+        # explicit opt-in and stamped data_provenance="synthetic", so importances over
+        # fabricated data are never silently presented as measured.
         X_sample = state.get("X_sample")
         y_sample = state.get("y_sample")
+        shap_data_provenance = "real"
 
         if X_sample is None:
-            # L2 Fix: Generate domain-aware synthetic sample data
-            # Uses feature name patterns to infer appropriate distributions
-            # In production, this should load from Feast or training artifacts
+            # Bridge real selected / raw training features from upstream nodes
+            # (feature_selector populates X_train_selected; X_train is the raw set).
+            bridged = state.get("X_train_selected")
+            if bridged is None:
+                bridged = state.get("X_train")
+            X_sample = bridged
+
+        if X_sample is None:
+            if not bool(state.get("allow_synthetic_background", False)):
+                # Fail closed: do NOT fabricate SHAP importances from an np.random
+                # background. Skip with an honest reason rather than returning
+                # synthetic, unlabeled importances that look measured.
+                logger.warning(
+                    "SHAP: no real sample data (X_sample / X_train_selected / X_train "
+                    "absent) and allow_synthetic_background is False; skipping SHAP "
+                    "rather than computing importances over a synthetic background."
+                )
+                return {
+                    "shap_skipped": True,
+                    "skip_reason": (
+                        "no real sample data available (X_sample/X_train_selected/"
+                        "X_train absent); SHAP skipped to avoid synthetic-background "
+                        "importances"
+                    ),
+                    "status": "skipped",
+                    "data_provenance": "unavailable",
+                    "global_importance_ranked": [],
+                    "top_features": [],
+                    "samples_analyzed": 0,
+                }
+            # Synthetic background explicitly opted into — generate and STAMP it so
+            # downstream consumers know the importances are over fabricated data.
+            shap_data_provenance = "synthetic"
+            logger.warning(
+                "SHAP: allow_synthetic_background=True; computing over a synthetic "
+                "np.random background. Results stamped data_provenance='synthetic'."
+            )
             X_sample = _generate_domain_aware_background(
                 original_feature_names,  # Use original names for distribution inference
                 min(max_samples, 1000),
             )
 
-        # Limit sample size
+        # Limit sample size (DataFrame-safe: bridged real features may be a DataFrame)
         if len(X_sample) > max_samples:
             indices = np.random.choice(len(X_sample), max_samples, replace=False)
-            X_sample = X_sample[indices]
+            X_sample = X_sample.iloc[indices] if hasattr(X_sample, "iloc") else X_sample[indices]
             if y_sample is not None:
-                y_sample = y_sample[indices]
+                y_sample = (
+                    y_sample.iloc[indices] if hasattr(y_sample, "iloc") else y_sample[indices]
+                )
 
         samples_analyzed = len(X_sample)
 
@@ -435,6 +474,7 @@ async def compute_shap(state: Dict[str, Any]) -> Dict[str, Any]:
 
         return {
             "shap_analysis_id": shap_analysis_id,
+            "data_provenance": shap_data_provenance,
             "training_run_id": training_run_id,
             "model_version": model_version,
             "loaded_model": loaded_model,

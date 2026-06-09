@@ -45,6 +45,10 @@ class TestFeatureAnalyzerAgent:
             "compute_interactions": True,
             "store_in_semantic_memory": True,
             "trained_model": mock_random_forest_model,
+            # F8: provide real caller-supplied sample data so SHAP runs on a real
+            # (not synthetic) background — matches the (100, 5) shape the mock
+            # explainer returns. Without real data the node now fails closed (skips).
+            "X_sample": np.random.rand(100, 5),
         }
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
