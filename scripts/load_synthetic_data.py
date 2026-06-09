@@ -160,6 +160,15 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
     total_records = sum(len(df) for df in datasets.values())
     logger.info(f"Total records generated: {total_records:,}")
 
+    # Provenance: tag 100% of synthetic rows so read-path enforcement (Shard 07)
+    # can default-exclude them. Central stamp guarantees coverage regardless of
+    # which generator produced the frame; the column is carried through the loader
+    # by TABLE_COLUMNS registration (batch_loader.py, Shard 02 Task 1).
+    for table_name, df in datasets.items():
+        df["is_synthetic"] = True
+        datasets[table_name] = df
+    logger.info("Stamped is_synthetic=True on all %d datasets", len(datasets))
+
     return datasets
 
 
