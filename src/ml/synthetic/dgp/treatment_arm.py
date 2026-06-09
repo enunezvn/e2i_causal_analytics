@@ -78,3 +78,47 @@ def assign_segment(disease_severity: np.ndarray) -> np.ndarray:
         SEGMENT_HIGH,
         np.where(sev > 4, SEGMENT_MEDIUM, SEGMENT_LOW),
     )
+
+
+def binary_outcome_with_cate(
+    arm: np.ndarray,
+    covariates: Dict[str, np.ndarray],
+    segment: np.ndarray,
+    cate_map: Dict[str, float],
+    rng: np.random.Generator,
+    target_prevalence: float = 0.35,
+    baseline_severity_coef: float = 0.20,
+    baseline_academic_coef: float = 0.30,
+    noise_std: float = 1.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Binary outcome Y carrying a known per-segment CATE.
+
+    Latent score = baseline(X) + T*tau_seg + N(0,noise_std); Y=1{score>=q} with
+    q = the (1-target_prevalence) sample quantile => marginal prevalence ~=
+    target_prevalence (in [0.20,0.50] INDEX band) BY CONSTRUCTION, independent
+    of effect size. tau_seg is the brand-scaled segment CATE (high>medium>low>0),
+    so the manifest risk-difference is monotone in segment => ordering survives
+    binarization. target_prevalence is clamped to [0.20,0.50] so callers cannot
+    push the outcome degenerate. Returns (y[0/1], tau_i) where tau_i ==
+    cate_map[segment_i] — persisted to ml_predictions.heterogeneous_effect.
+    """
+    if not (0.20 <= target_prevalence <= 0.50):
+        target_prevalence = float(np.clip(target_prevalence, 0.20, 0.50))
+
+    severity = np.asarray(covariates["disease_severity"], dtype=float)
+    academic = np.asarray(covariates["academic_hcp"], dtype=float)
+
+    # per-unit latent CATE from the brand-scaled segment map
+    tau_i = np.array([cate_map[str(s)] for s in segment], dtype=float)
+
+    baseline = (
+        baseline_severity_coef * (severity - 5.0)
+        + baseline_academic_coef * academic
+    )
+    noise = rng.normal(0.0, noise_std, len(arm))
+    score = baseline + arm.astype(float) * tau_i + noise
+
+    # threshold at the (1 - target_prevalence) quantile => P(Y=1)=target_prevalence
+    q = float(np.quantile(score, 1.0 - target_prevalence))
+    y = (score >= q).astype(int)
+    return y, tau_i
