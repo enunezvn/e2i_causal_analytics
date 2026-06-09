@@ -44,6 +44,7 @@ cohort-loading code path, not two divergent ones.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import pandas as pd
@@ -226,4 +227,114 @@ def resolve_cohort_frame(
         return _resolve_via_data_source(brand, region, data_source)
     return _resolve_via_patient_journeys(
         brand, region, supabase_client=supabase_client, limit=limit
+    )
+
+
+@dataclass
+class CohortOutcomeSpec:
+    """A resolved cohort with a runnable causal var-set."""
+
+    cohort: str
+    frame: pd.DataFrame
+    outcome_column: str
+    treatment_column: str
+    covariate_columns: list[str]
+
+
+# Per-cohort (outcome, treatment, covariates) on the patient_journeys grain. Treatment
+# is the canonical per-unit `treatment_arm` (Shard 03 / M2); hcp_adoption resolves a
+# DIFFERENT grain (hcp_profiles) below. Cohort is resolved by OUTCOME COLUMN — there is
+# no stored `cohort` column.
+_PJ_COHORTS = {
+    "initiation": ("treatment_initiated", "treatment_arm",
+                   ["disease_severity", "academic_hcp", "geographic_region"]),
+    "discontinuation": ("discontinued_180d", "treatment_arm",
+                        ["disease_severity", "academic_hcp", "geographic_region"]),
+    "persistence": ("persistent_180d", "treatment_arm",
+                    ["disease_severity", "academic_hcp", "geographic_region"]),
+}
+
+
+def resolve_cohort_outcome_frame(
+    cohort: str,
+    brand: Optional[str],
+    region: Optional[str],
+    *,
+    supabase_client: Optional[Any] = None,
+    limit: Optional[int] = None,
+) -> Optional[CohortOutcomeSpec]:
+    """Resolve a named cohort to a frame + runnable causal var-set.
+
+    cohort in {initiation, discontinuation, persistence, hcp_adoption}. Fails closed
+    (None) on unknown cohort, unrecognized brand/region, or empty data — never
+    fabricates (mirrors resolve_cohort_frame's contract).
+    """
+    key = str(cohort).strip().lower()
+    if key == "hcp_adoption":
+        return _resolve_hcp_adoption(brand, supabase_client=supabase_client, limit=limit)
+    if key not in _PJ_COHORTS:
+        logger.info("cohort_resolution: unknown cohort %r -> fail closed", cohort)
+        return None
+    outcome, treatment, covars = _PJ_COHORTS[key]
+    df = _resolve_via_patient_journeys(
+        brand, region, supabase_client=supabase_client, limit=limit
+    )
+    # Fail closed if the outcome or the canonical treatment_arm is absent (e.g. M2 not
+    # applied / Shard-03 arm not populated) — never hand back a frame missing its
+    # treatment column.
+    if (
+        df is None
+        or df.empty
+        or outcome not in df.columns
+        or treatment not in df.columns
+    ):
+        return None
+    df = df[df[outcome].notna()].copy()
+    if df.empty:
+        return None
+    present_covars = [c for c in covars if c in df.columns]
+    return CohortOutcomeSpec(
+        cohort=key, frame=df.reset_index(drop=True),
+        outcome_column=outcome, treatment_column=treatment,
+        covariate_columns=present_covars,
+    )
+
+
+def _resolve_hcp_adoption(
+    brand: Optional[str],
+    *,
+    supabase_client: Optional[Any] = None,
+    limit: Optional[int] = None,
+) -> Optional[CohortOutcomeSpec]:
+    """Resolve the hcp_adoption cohort from hcp_profiles (the DB grain the runtime
+    has). Outcome = the canonical adoption_category (ADOPTER/NON_ADOPTER); a binary
+    `adopted` helper is derived in-frame for estimators. treatment = the HCP arm
+    proxy (peer_influence_score, the exogenous centrality/engagement score);
+    covariate = influence_network_size."""
+    norm_brand = _normalize_brand(brand)
+    if brand and brand.strip() and norm_brand is None:
+        logger.info("cohort_resolution: unrecognized brand %r -> fail closed", brand)
+        return None
+    client = supabase_client if supabase_client is not None else _default_client()
+    q = client.table("hcp_profiles").select(
+        "hcp_id,peer_influence_score,influence_network_size,adoption_category"
+    )
+    if limit:
+        q = q.limit(limit)
+    rows = getattr(q.execute(), "data", None) or []
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    if "adoption_category" not in df.columns:
+        return None
+    # Binary helper for estimators; the canonical OUTCOME column stays adoption_category.
+    df["adopted"] = (
+        df["adoption_category"].astype(str).str.upper() == "ADOPTER"
+    ).astype(int)
+    covars = [c for c in ("influence_network_size",) if c in df.columns]
+    return CohortOutcomeSpec(
+        cohort="hcp_adoption", frame=df.reset_index(drop=True),
+        outcome_column="adoption_category",
+        treatment_column="peer_influence_score",
+        covariate_columns=covars,
     )
