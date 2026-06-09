@@ -124,6 +124,57 @@ def test_persistence_cohort_exposes_non_negative_retention_benefit():
     assert (spec.frame["retention_benefit"] >= 0).all()
 
 
+class _RecordingQuery:
+    def __init__(self, rows, eq_calls):
+        self._rows = rows
+        self._eq = eq_calls
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, col, val):
+        self._eq.append((col, val))
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        return _FakeResp(self._rows)
+
+
+class _RecordingClient:
+    def __init__(self, rows):
+        self._rows = rows
+        self.eq_calls = []
+
+    def table(self, *a, **k):
+        return _RecordingQuery(self._rows, self.eq_calls)
+
+
+def test_pj_resolver_default_excludes_synthetic():
+    # Shard 07 R11: real-mode default-excludes is_synthetic.
+    c = _RecordingClient(_PJ_ROWS)
+    cr.resolve_cohort_outcome_frame(
+        "discontinuation", brand="Kisqali", region=None, supabase_client=c)
+    assert ("is_synthetic", False) in c.eq_calls
+
+
+def test_pj_resolver_opt_in_includes_synthetic():
+    c = _RecordingClient(_PJ_ROWS)
+    cr.resolve_cohort_outcome_frame(
+        "discontinuation", brand="Kisqali", region=None, supabase_client=c,
+        include_synthetic=True)
+    assert ("is_synthetic", False) not in c.eq_calls
+
+
+def test_hcp_resolver_default_excludes_synthetic():
+    c = _RecordingClient(_HCP_ROWS)
+    cr.resolve_cohort_outcome_frame(
+        "hcp_adoption", brand="Kisqali", region=None, supabase_client=c)
+    assert ("is_synthetic", False) in c.eq_calls
+
+
 def test_discontinuation_retention_benefit_no_nan_on_null_persistent():
     # codex #06 F3 follow-up: a disc-cohort row with discontinued_180d populated but
     # persistent_180d NULL must yield retention_benefit=0 (not NaN).

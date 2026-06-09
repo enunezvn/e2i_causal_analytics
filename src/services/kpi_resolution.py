@@ -274,7 +274,9 @@ def _default_client() -> Any:
     return get_supabase_client()
 
 
-def _resolve_brand_canonical(client: Any, brand: str) -> tuple[Optional[str], bool]:
+def _resolve_brand_canonical(
+    client: Any, brand: str, *, include_synthetic: bool = False
+) -> tuple[Optional[str], bool]:
     """Resolve ``brand`` to its canonical data spelling, case-insensitively, against
     the real ``treatment_events.brand`` values.
 
@@ -290,19 +292,18 @@ def _resolve_brand_canonical(client: Any, brand: str) -> tuple[Optional[str], bo
     value = str(brand).strip()
     if not value:
         return None, False
-    rows = (
-        getattr(
-            client.table("treatment_events")
-            .select("brand")
-            .eq("event_type", "prescription")
-            .not_.is_("brand", "null")
-            .limit(_MAX_ROWS)
-            .execute(),
-            "data",
-            None,
-        )
-        or []
+    _bq = (
+        client.table("treatment_events")
+        .select("brand")
+        .eq("event_type", "prescription")
+        .not_.is_("brand", "null")
     )
+    # Shard 07 R10: the brand distinct-scan default-excludes synthetic so a real-mode
+    # resolution never canonicalizes against a synthetic-only brand value.
+    from src.repositories.provenance import apply_provenance_filter
+
+    _bq = apply_provenance_filter(_bq, include_synthetic)
+    rows = getattr(_bq.limit(_MAX_ROWS).execute(), "data", None) or []
     scan_truncated = len(rows) >= _MAX_ROWS
     if scan_truncated:
         logger.warning(
@@ -314,14 +315,33 @@ def _resolve_brand_canonical(client: Any, brand: str) -> tuple[Optional[str], bo
     return _match_against_distinct(value, distinct_brands), scan_truncated
 
 
+# Tables this module reads that carry the is_synthetic provenance column (Shard 01).
+# A read on one of these default-excludes synthetic rows unless the caller opts in.
+_PROVENANCE_TAGGABLE = frozenset(
+    {"triggers", "treatment_events", "hcp_profiles", "patient_journeys",
+     "business_metrics", "ml_predictions", "episodic_memories"}
+)
+
+
 def _fetch_df(
-    client: Any, table: str, columns: str, *, brand: Optional[str] = None
+    client: Any,
+    table: str,
+    columns: str,
+    *,
+    brand: Optional[str] = None,
+    include_synthetic: bool = False,
 ) -> pd.DataFrame:
     q = client.table(table).select(columns)
     if table == "treatment_events":
         q = q.eq("event_type", "prescription")
         if brand:
             q = q.eq("brand", brand)
+    # Shard 07 R10: default-exclude is_synthetic on taggable tables (gated so a table
+    # without the column never 42703s).
+    if table in _PROVENANCE_TAGGABLE:
+        from src.repositories.provenance import apply_provenance_filter
+
+        q = apply_provenance_filter(q, include_synthetic)
     rows = getattr(q.limit(_MAX_ROWS).execute(), "data", None) or []
     if len(rows) >= _MAX_ROWS:
         logger.warning(
@@ -338,19 +358,28 @@ def _build_conversion_frame(
     *,
     supabase_client: Optional[Any] = None,
     window_days: int = _CONVERSION_WINDOW_DAYS,
+    include_synthetic: bool = False,
 ) -> Optional[KpiFrame]:
     """Materialize the conversion substrate (triggers ⋈ treatment_events) for a
     dynamic ``(brand, region)`` from the REAL tables. Fails closed on
     unrecognized brand/region or empty data; never fabricates.
+
+    Shard 07 R10: every source read default-excludes is_synthetic; a validation run
+    opts in with ``include_synthetic=True`` so it can measure the synthetic substrate.
     """
     client = supabase_client if supabase_client is not None else _default_client()
 
-    triggers = _fetch_df(client, "triggers", ",".join(_TRIGGER_SELECT))
+    triggers = _fetch_df(
+        client, "triggers", ",".join(_TRIGGER_SELECT), include_synthetic=include_synthetic
+    )
     if triggers is None or len(triggers) == 0:
         logger.info("kpi_resolution: no triggers available -> fail closed")
         return None
 
-    hcp_regions = _fetch_df(client, "hcp_profiles", "hcp_id,geographic_region")
+    hcp_regions = _fetch_df(
+        client, "hcp_profiles", "hcp_id,geographic_region",
+        include_synthetic=include_synthetic,
+    )
 
     # Region resolved DYNAMICALLY against the real geographic_region values.
     region_canonical: Optional[str] = None
@@ -369,7 +398,9 @@ def _build_conversion_frame(
     brand_canonical: Optional[str] = None
     brand_scan_truncated = False
     if brand and str(brand).strip():
-        brand_canonical, brand_scan_truncated = _resolve_brand_canonical(client, brand)
+        brand_canonical, brand_scan_truncated = _resolve_brand_canonical(
+            client, brand, include_synthetic=include_synthetic
+        )
         if brand_canonical is None:
             logger.info(
                 "kpi_resolution: unrecognized brand %r (brand_scan_truncated=%s) -> fail closed",
@@ -379,7 +410,8 @@ def _build_conversion_frame(
             return None
 
     events = _fetch_df(
-        client, "treatment_events", "patient_id,event_date,event_type,brand", brand=brand_canonical
+        client, "treatment_events", "patient_id,event_date,event_type,brand",
+        brand=brand_canonical, include_synthetic=include_synthetic,
     )
 
     # No silent caps: if any source fetch (incl. the brand distinct-scan) hit the
@@ -423,6 +455,7 @@ def resolve_kpi_frame(
     *,
     supabase_client: Optional[Any] = None,
     window_days: int = _CONVERSION_WINDOW_DAYS,
+    include_synthetic: bool = False,
 ) -> Optional[KpiFrame]:
     """Resolve the analyzable :class:`KpiFrame` for ``kpi`` at ``(brand, region)``.
 
@@ -448,4 +481,7 @@ def resolve_kpi_frame(
             kpi.name,
         )
         return None
-    return builder(brand, region, supabase_client=supabase_client, window_days=window_days)
+    return builder(
+        brand, region, supabase_client=supabase_client,
+        window_days=window_days, include_synthetic=include_synthetic,
+    )

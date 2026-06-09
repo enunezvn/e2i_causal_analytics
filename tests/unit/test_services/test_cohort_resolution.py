@@ -119,6 +119,15 @@ def test_no_brand_no_region_queries_unfiltered():
     frame = resolve_cohort_frame(None, None, supabase_client=fake)
     assert isinstance(frame, pd.DataFrame)
     assert len(frame) == 5
+    # Shard 07 R11: no brand/region filter is applied, but the provenance predicate
+    # (default-exclude is_synthetic) IS — real-mode never blends synthetic rows.
+    assert fake.recorder["eq"] == [("is_synthetic", False)]
+
+
+def test_no_brand_no_region_include_synthetic_is_unfiltered():
+    # Validation opt-in: include_synthetic=True drops even the provenance predicate.
+    fake = _FakeSupabase(_rows(5))
+    resolve_cohort_frame(None, None, supabase_client=fake, include_synthetic=True)
     assert fake.recorder["eq"] == []
 
 

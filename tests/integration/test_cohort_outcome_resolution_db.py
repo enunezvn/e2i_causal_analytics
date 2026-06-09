@@ -53,7 +53,13 @@ def _loaded():
 @pytest.mark.parametrize("brand", _BRANDS)
 @pytest.mark.parametrize("cohort", _PJ_COHORTS)
 def test_pj_cohort_band_and_varset(brand, cohort):
-    spec = cr.resolve_cohort_outcome_frame(cohort, brand=brand, region=None)
+    # include_synthetic=True: this is the VALIDATION gate — after Shard 07 R11 the
+    # resolver default-excludes synthetic, so the validation path must opt in to see
+    # the synthetic substrate it is verifying. The is_synthetic-subset filter below
+    # still isolates the synthetic rows from the legacy untagged seed.
+    spec = cr.resolve_cohort_outcome_frame(
+        cohort, brand=brand, region=None, include_synthetic=True
+    )
     assert spec is not None, f"{cohort}/{brand} resolved None"
     assert not spec.frame.empty
     # Measure the SYNTHETIC cohort's prevalence. The dev DB also carries legacy
@@ -75,7 +81,9 @@ def test_pj_cohort_band_and_varset(brand, cohort):
 
 @pytest.mark.parametrize("brand", _BRANDS)
 def test_hcp_adoption_band_and_varset(brand):
-    spec = cr.resolve_cohort_outcome_frame("hcp_adoption", brand=brand, region=None)
+    spec = cr.resolve_cohort_outcome_frame(
+        "hcp_adoption", brand=brand, region=None, include_synthetic=True
+    )
     assert spec is not None
     assert spec.outcome_column == "adoption_category"
     prev = (spec.frame[spec.outcome_column].astype(str).str.upper() == "ADOPTER").mean()

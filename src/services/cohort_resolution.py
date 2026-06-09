@@ -129,6 +129,7 @@ def _resolve_via_patient_journeys(
     *,
     supabase_client: Optional[Any] = None,
     limit: Optional[int] = None,
+    include_synthetic: bool = False,
 ) -> Optional[pd.DataFrame]:
     """Resolve from the canonical ``patient_journeys`` table.
 
@@ -157,6 +158,11 @@ def _resolve_via_patient_journeys(
         query = query.eq("brand", norm_brand)
     if norm_region:
         query = query.eq("geographic_region", norm_region)
+    # Shard 07 R11: default-exclude is_synthetic so real-mode cohort resolution never
+    # blends synthetic rows; a validation run passes include_synthetic=True.
+    from src.repositories.provenance import apply_provenance_filter
+
+    query = apply_provenance_filter(query, include_synthetic)
     if limit:
         query = query.limit(limit)
 
@@ -194,6 +200,7 @@ def resolve_cohort_frame(
     data_source: Optional[str] = None,
     supabase_client: Optional[Any] = None,
     limit: Optional[int] = None,
+    include_synthetic: bool = False,
 ) -> Optional[pd.DataFrame]:
     """Resolve a ``(brand, region)`` pair to a real cohort DataFrame.
 
@@ -226,7 +233,8 @@ def resolve_cohort_frame(
     if data_source:
         return _resolve_via_data_source(brand, region, data_source)
     return _resolve_via_patient_journeys(
-        brand, region, supabase_client=supabase_client, limit=limit
+        brand, region, supabase_client=supabase_client, limit=limit,
+        include_synthetic=include_synthetic,
     )
 
 
@@ -262,6 +270,7 @@ def resolve_cohort_outcome_frame(
     *,
     supabase_client: Optional[Any] = None,
     limit: Optional[int] = None,
+    include_synthetic: bool = False,
 ) -> Optional[CohortOutcomeSpec]:
     """Resolve a named cohort to a frame + runnable causal var-set.
 
@@ -272,14 +281,16 @@ def resolve_cohort_outcome_frame(
     key = str(cohort).strip().lower()
     if key == "hcp_adoption":
         return _resolve_hcp_adoption(
-            brand, region, supabase_client=supabase_client, limit=limit
+            brand, region, supabase_client=supabase_client, limit=limit,
+            include_synthetic=include_synthetic,
         )
     if key not in _PJ_COHORTS:
         logger.info("cohort_resolution: unknown cohort %r -> fail closed", cohort)
         return None
     outcome, treatment, covars = _PJ_COHORTS[key]
     df = _resolve_via_patient_journeys(
-        brand, region, supabase_client=supabase_client, limit=limit
+        brand, region, supabase_client=supabase_client, limit=limit,
+        include_synthetic=include_synthetic,
     )
     # Fail closed if the outcome or the canonical treatment_arm is absent (e.g. M2 not
     # applied / Shard-03 arm not populated) — never hand back a frame missing its
@@ -332,6 +343,7 @@ def _resolve_hcp_adoption(
     *,
     supabase_client: Optional[Any] = None,
     limit: Optional[int] = None,
+    include_synthetic: bool = False,
 ) -> Optional[CohortOutcomeSpec]:
     """Resolve the hcp_adoption cohort from hcp_profiles (the DB grain the runtime
     has). Outcome = the canonical adoption_category (ADOPTER/NON_ADOPTER); a binary
@@ -361,6 +373,11 @@ def _resolve_hcp_adoption(
     # brand above (fail closed on a bogus literal) but do not filter the query by it.
     if norm_region:
         q = q.eq("geographic_region", norm_region)
+    # Shard 07 R11: default-exclude is_synthetic (hcp_profiles carries it); validation
+    # opts in with include_synthetic=True.
+    from src.repositories.provenance import apply_provenance_filter
+
+    q = apply_provenance_filter(q, include_synthetic)
     if limit:
         q = q.limit(limit)
     rows = getattr(q.execute(), "data", None) or []
