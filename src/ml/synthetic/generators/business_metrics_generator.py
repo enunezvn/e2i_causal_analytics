@@ -95,14 +95,22 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         n = self.config.n_records
         self._log(f"Generating {n} business metrics records")
 
-        # Calculate how many time points we need
+        # Canonical v1.1: lowercase gap-connector metric_name set ONLY.
+        # NO title-case alias rows (those are get_kpi_summary RPC response keys
+        # over treatment_events, not business_metrics.metric_name filters).
         brands = [b.value for b in Brand if b.value not in ("competitor", "other")]
         regions = [r.value for r in RegionEnum]
+        # METRIC_CONFIGS already carries the full lowercase set incl. nrx; the
+        # guard below is a defensive no-op so the connector key set is complete
+        # even if a future edit drops nrx from METRIC_CONFIGS.
         metric_types = list(self.METRIC_CONFIGS.keys())
+        if "nrx" not in metric_types:
+            metric_types.append("nrx")
 
-        # Number of combinations per time point
+        # Number of combinations per time point (+1 headroom so df.head(n)
+        # trimming does not clip a whole brand/region/metric combo off a date).
         combos_per_date = len(brands) * len(regions) * len(metric_types)
-        n_dates = max(1, n // combos_per_date)
+        n_dates = max(1, n // (combos_per_date + 1))
 
         # Generate date range
         dates = self._generate_date_range(n_dates)
@@ -133,9 +141,35 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         self._log(f"Generated {len(df)} business metrics records")
         return df
 
+    # The GeneratorConfig default start (base.py) — the 2022 staleness root.
+    _STALE_DEFAULT_START = date(2022, 1, 1)
+
     def _generate_date_range(self, n_months: int) -> List[date]:
-        """Generate monthly date range."""
-        start = self.config.start_date
+        """Generate monthly date range.
+
+        Recency: when the config still carries the stale 2022 default start,
+        anchor the window to end at the current run month so the KPI 30-day
+        window sees rows (full per-run rolling-window stamping is delivered by
+        Shard 04; this only guarantees the column is populated, not 2022). An
+        explicitly-provided non-default start_date is honored as-is.
+        """
+        if self.config.start_date == self._STALE_DEFAULT_START:
+            from datetime import timedelta  # noqa: F401  (kept for clarity/parity)
+
+            today = date.today()
+            anchor = date(today.year, today.month, 1)
+            # Walk back (n_months - 1) months from the current month so the
+            # forward walk below ends at the current month.
+            start = anchor
+            for _ in range(max(0, n_months - 1)):
+                start = (
+                    date(start.year - 1, 12, 1)
+                    if start.month == 1
+                    else date(start.year, start.month - 1, 1)
+                )
+        else:
+            start = self.config.start_date
+
         dates = []
         current = date(start.year, start.month, 1)
 
@@ -170,7 +204,9 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         Returns:
             Dictionary with metric data.
         """
-        config = self.METRIC_CONFIGS[metric_type]
+        # Tolerate a metric_type appended by the nrx guard but absent from
+        # METRIC_CONFIGS (defensive): fall back to the trx prescription model.
+        config = self.METRIC_CONFIGS.get(metric_type) or self.METRIC_CONFIGS["trx"]
         base_value = config["base_values"].get(brand, config["base_values"]["Kisqali"] * 0.5)
         volatility = config["volatility"]
         trend = config["trend"]
@@ -237,7 +273,10 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
             "metric_id": f"metric_{metric_id_hex}",
             "metric_date": metric_date.isoformat(),
             "metric_type": metric_type,
-            "metric_name": config["description"],
+            # Canonical v1.1: gap_analyzer queries business_metrics on
+            # metric_name == lowercase connector key (business_metric.py:79
+            # .eq("metric_name", kpi_name)). Emit the key, not the description.
+            "metric_name": metric_type,
             "brand": brand,
             "region": region,
             "value": rounded_value,

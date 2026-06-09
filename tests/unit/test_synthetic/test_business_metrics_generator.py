@@ -139,24 +139,29 @@ class TestMetricTypes:
         for metric_type in df["metric_type"].unique():
             assert metric_type in valid_types, f"Invalid metric_type: {metric_type}"
 
-    def test_metric_name_field_contains_descriptions(self):
-        """Test metric_name field contains human-readable descriptions."""
+    def test_metric_name_field_contains_connector_keys(self):
+        """Canonical v1.1: metric_name now holds the lowercase gap-connector key.
+
+        gap_analyzer queries business_metrics on metric_name == connector key
+        (business_metric.py:79 .eq("metric_name", kpi_name)); the human-readable
+        description was a 0-match value and is no longer stored in metric_name.
+        """
         config = GeneratorConfig(n_records=500, seed=42)
         gen = BusinessMetricsGenerator(config)
 
         df = gen.generate()
-        metric_names = df["metric_name"].unique()
+        metric_names = set(df["metric_name"].unique())
 
-        # metric_name contains the description
-        expected_descriptions = [
-            "Total Prescriptions",
-            "New Prescriptions",
-            "Market Share Percentage",
-            "HCP Conversion Rate",
-            "HCP Engagement Score (0-10)",
-        ]
-        for desc in expected_descriptions:
-            assert desc in metric_names, f"Missing description: {desc}"
+        expected_keys = {
+            "trx",
+            "nrx",
+            "market_share",
+            "conversion_rate",
+            "hcp_engagement_score",
+        }
+        assert expected_keys <= metric_names, f"missing keys: {expected_keys - metric_names}"
+        # No title-case alias / description rows leaked in.
+        assert metric_names <= expected_keys, f"unexpected rows: {metric_names - expected_keys}"
 
 
 class TestAchievementRateCalculations:
@@ -423,3 +428,39 @@ class TestMetricIDUniqueness:
                 int(hex_part, 16)
             except ValueError:
                 pytest.fail(f"Invalid hex in metric_id: {hex_part}")
+
+
+GAP_KEYS = {"trx", "nrx", "market_share", "conversion_rate", "hcp_engagement_score"}
+
+
+class TestMetricNameContract:
+    def test_emits_gap_connector_keys(self):
+        df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()
+        present = set(df["metric_name"].unique())
+        assert GAP_KEYS <= present, f"missing gap keys: {GAP_KEYS - present}"
+
+    def test_emits_only_lowercase_connector_keys(self):
+        # Canonical v1.1: NO title-case alias rows -- title-case tokens are
+        # get_kpi_summary response field keys (kpi_query RPC over treatment_events),
+        # not business_metrics.metric_name filters.
+        df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()
+        present = set(df["metric_name"].unique())
+        assert present <= GAP_KEYS, f"unexpected non-connector metric_name rows: {present - GAP_KEYS}"
+
+    def test_value_and_target_nonnull_and_differ(self):
+        df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()
+        sub = df[df["metric_name"] == "trx"]
+        assert sub["value"].notna().all() and sub["target"].notna().all()
+        assert (sub["value"] != sub["target"]).all(), "target must differ from value"
+
+    def test_covers_three_brands_four_regions(self):
+        df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()
+        assert set(df["brand"].unique()) == {"Remibrutinib", "Kisqali", "Fabhalta"}
+        assert set(df["region"].unique()) == {"northeast", "south", "midwest", "west"}
+
+    def test_metric_date_is_recent_not_2022(self):
+        # Column must be populated with a recent date (rolling mechanism = Shard 04);
+        # here just assert it is not the stale 2022 default start.
+        df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()
+        years = {d[:4] for d in df["metric_date"].astype(str)}
+        assert "2022" not in years, "metric_date still anchored to the 2022 staleness root"
