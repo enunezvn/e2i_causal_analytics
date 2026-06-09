@@ -43,9 +43,7 @@ async def test_entity_split_combines_frames_without_dataframe_append(
 
     def _combined_split(frame, **kwargs):
         captured["frame"] = frame
-        return SimpleNamespace(
-            train=frame, val=frame.iloc[0:0], test=frame.iloc[0:0], holdout=None
-        )
+        return SimpleNamespace(train=frame, val=frame.iloc[0:0], test=frame.iloc[0:0], holdout=None)
 
     splitter = MagicMock()
     splitter.combined_split = MagicMock(side_effect=_combined_split)
