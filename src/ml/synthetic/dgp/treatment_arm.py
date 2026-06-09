@@ -43,3 +43,38 @@ def assign_treatment_arm(
     propensity = np.clip(expit(logit), 0.01, 0.99)
     arm = (rng.random(len(propensity)) < propensity).astype(int)
     return arm, propensity
+
+
+# Per-brand multiplicative scale on the base CATE map. Distinct per brand so a
+# Kisqali probe yields a DIFFERENT structure than Remibrutinib (INDEX gate 6);
+# all > 0 so ordering high>medium>low is preserved under scaling.
+_BRAND_CATE_SCALE: Dict[Brand, float] = {
+    Brand.REMIBRUTINIB: 1.00,  # base map, unscaled
+    Brand.KISQALI: 1.40,       # stronger heterogeneity (oncology CDK4/6 responder split)
+    Brand.FABHALTA: 0.70,      # flatter (rare PNH, smaller effect spread)
+}
+
+
+def brand_scaled_cate(brand: Brand) -> Dict[str, float]:
+    """Return the per-brand CATE-by-segment map (base map x brand scale).
+
+    Base map is read from config (SSOT: DGP_CONFIGS[HETEROGENEOUS]); never
+    re-hardcoded here. Rounded to 4 dp for stable equality / persistence.
+    """
+    base = DGP_CONFIGS[DGPType.HETEROGENEOUS].cate_by_segment or {}
+    scale = _BRAND_CATE_SCALE.get(brand, 1.00)
+    return {seg: round(val * scale, 4) for seg, val in base.items()}
+
+
+def assign_segment(disease_severity: np.ndarray) -> np.ndarray:
+    """Map continuous disease_severity (0-10) to the three CATE segments.
+
+    Thresholds match the existing patient_generator logic
+    (patient_generator.py:238-242): >7 high, >4 medium, else low.
+    """
+    sev = np.asarray(disease_severity, dtype=float)
+    return np.where(
+        sev > 7,
+        SEGMENT_HIGH,
+        np.where(sev > 4, SEGMENT_MEDIUM, SEGMENT_LOW),
+    )
