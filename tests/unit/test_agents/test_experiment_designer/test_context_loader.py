@@ -8,6 +8,7 @@ import pytest
 from src.agents.experiment_designer.graph import create_initial_state
 from src.agents.experiment_designer.nodes.context_loader import (
     ContextLoaderNode,
+    EmptyKnowledgeStore,
     MockKnowledgeStore,
 )
 
@@ -20,7 +21,8 @@ class TestContextLoaderNode:
         node = ContextLoaderNode()
 
         assert node is not None
-        assert node.knowledge_store is not None  # Uses MockKnowledgeStore by default
+        # F10: default is the honest EmptyKnowledgeStore (not the fabricated mock)
+        assert isinstance(node.knowledge_store, EmptyKnowledgeStore)
 
     def test_create_node_with_store(self):
         """Test creating node with knowledge store."""
@@ -37,7 +39,8 @@ class TestContextLoaderNode:
 
         result = await node.execute(state)
 
-        # Uses MockKnowledgeStore by default which returns mock data
+        # F10: default EmptyKnowledgeStore yields honest empty context; the node
+        # still completes and populates the structural keys.
         assert result["status"] == "reasoning"  # Next status after context loading
         assert "context_loader" in result.get("node_latencies_ms", {})
         assert "domain_knowledge" in result
@@ -45,14 +48,41 @@ class TestContextLoaderNode:
 
     @pytest.mark.asyncio
     async def test_execute_loads_historical_experiments(self):
-        """Test that historical experiments are loaded."""
-        node = ContextLoaderNode()
+        """Test that historical experiments are loaded from the injected store.
+
+        F10 (audit): the prod default is now the honest EmptyKnowledgeStore, so
+        to exercise the load LOGIC with known data we inject MockKnowledgeStore
+        explicitly (its fabricated experiments are a TEST fixture, not a prod
+        fallback)."""
+        node = ContextLoaderNode(MockKnowledgeStore())
         state = create_initial_state(business_question="Test experiment question")
 
         result = await node.execute(state)
 
-        # MockKnowledgeStore returns mock experiments
+        # MockKnowledgeStore (explicitly injected) returns mock experiments
         assert len(result.get("historical_experiments", [])) > 0
+
+    @pytest.mark.asyncio
+    async def test_prod_default_does_not_fabricate_org_context(self):
+        """F10 (audit): ContextLoaderNode with no knowledge_store must default to
+        the honest EmptyKnowledgeStore (NOT MockKnowledgeStore), so production
+        never seeds the design prompt with fabricated past experiments /
+        organizational defaults / assumption violations / domain knowledge."""
+        node = ContextLoaderNode(use_validation_learnings=False)
+        assert isinstance(node.knowledge_store, EmptyKnowledgeStore)
+
+        state = create_initial_state(business_question="Test experiment question")
+        result = await node.execute(state)
+
+        assert result.get("historical_experiments", []) == [], (
+            "prod default must not fabricate historical experiments"
+        )
+        domain = result.get("domain_knowledge", {})
+        assert domain.get("organizational_defaults", {}) == {}, (
+            "prod default must not fabricate organizational defaults"
+        )
+        # No fabricated regulatory constraints / domain knowledge either.
+        assert result.get("regulatory_requirements", []) == []
 
     @pytest.mark.asyncio
     async def test_execute_with_brand(self):
@@ -67,27 +97,31 @@ class TestContextLoaderNode:
 
     @pytest.mark.asyncio
     async def test_execute_loads_defaults(self):
-        """Test that organizational defaults are loaded."""
-        node = ContextLoaderNode()
+        """Test that organizational defaults are loaded from the injected store.
+
+        F10: inject MockKnowledgeStore explicitly so this verifies the LOADING
+        logic with real (non-empty) defaults — the prod default is now empty."""
+        node = ContextLoaderNode(MockKnowledgeStore())
         state = create_initial_state(business_question="Test defaults loading")
 
         result = await node.execute(state)
 
-        # MockKnowledgeStore loads defaults into domain_knowledge
         domain = result.get("domain_knowledge", {})
-        assert "organizational_defaults" in domain
+        assert domain.get("organizational_defaults"), "injected defaults must be loaded"
 
     @pytest.mark.asyncio
     async def test_execute_loads_violations(self):
-        """Test that past violations are loaded as warnings."""
-        node = ContextLoaderNode()
+        """Test that past violations are loaded as warnings from the injected store.
+
+        F10: inject MockKnowledgeStore explicitly (its violations become
+        warnings) — the prod default is now empty and would load none."""
+        node = ContextLoaderNode(MockKnowledgeStore())
         state = create_initial_state(business_question="Test violations loading")
 
         result = await node.execute(state)
 
-        # Violations should be loaded as warnings
-        warnings = result.get("warnings", [])
         # MockKnowledgeStore returns assumption violations that become warnings
+        warnings = result.get("warnings", [])
         assert len(warnings) > 0 or "regulatory_requirements" in result
 
     @pytest.mark.asyncio
@@ -231,7 +265,7 @@ class TestContextLoaderPerformance:
     @pytest.mark.asyncio
     async def test_latency_with_store(self):
         """Test context loading latency with knowledge store."""
-        # Uses MockKnowledgeStore only, no Supabase calls
+        # F10: default EmptyKnowledgeStore, no Supabase calls (latency is store-agnostic)
         node = ContextLoaderNode(use_validation_learnings=False)
         state = create_initial_state(business_question="Test latency with store")
 
