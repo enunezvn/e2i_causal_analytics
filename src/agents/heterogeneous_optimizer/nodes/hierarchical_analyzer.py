@@ -243,6 +243,10 @@ class HierarchicalAnalyzerNode:
             + state.get("effect_modifiers", [])
             + state.get("segment_vars", [])
         )
+        # is_synthetic must never be an effect modifier / segment var (Shard 07 C2).
+        from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+        required_columns = [c for c in required_columns if c not in PROVENANCE_DROP_COLS]
 
         # Priority 1: Use tier0 passthrough data if available
         tier0_data = state.get("tier0_data")

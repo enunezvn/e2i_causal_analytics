@@ -154,16 +154,22 @@ class EstimationNode:
         treatment_col = data.get(treatment, data.iloc[:, 0]).values
         outcome_col = data.get(outcome, data.iloc[:, 1]).values
 
-        # Get covariates (use adjustment set if available, else all other columns)
+        # Get covariates (use adjustment set if available, else all other columns).
+        # PROVENANCE_DROP_COLS keeps the is_synthetic tag out of the design matrix: the
+        # all-other-columns branch would otherwise capture it as a constant covariate on
+        # an include_synthetic=True validation run (Shard 07 C1).
+        from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+        _excluded = [treatment, outcome, *PROVENANCE_DROP_COLS]
         covariate_cols = (
             adjustment_set
             if adjustment_set
-            else [c for c in data.columns if c not in [treatment, outcome]]
+            else [c for c in data.columns if c not in _excluded]
         )
         covariates = (
             data[covariate_cols]
             if covariate_cols
-            else data.drop(columns=[treatment, outcome], errors="ignore")
+            else data.drop(columns=_excluded, errors="ignore")
         )
 
         # Convert treatment to binary if continuous
