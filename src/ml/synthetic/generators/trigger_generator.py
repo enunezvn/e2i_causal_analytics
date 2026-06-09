@@ -190,6 +190,10 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
                 "event_date": event_dates,
                 "event_type": ["prescription"] * len(sel),
                 "duration_days": self._rng.integers(7, 90, size=len(sel)),
+                # data_split is NOT NULL on treatment_events; without it the concat
+                # leaves NaN -> the loader sends explicit null -> 23502 and the injected
+                # rows silently fail to load (the lift then never reaches the DB).
+                "data_split": self._assign_splits(event_dates),
                 # APPENDED to treatment_events AFTER the central is_synthetic stamp,
                 # so self-stamp here or these rows leak into real-mode KPIs.
                 "is_synthetic": True,
