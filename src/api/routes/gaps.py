@@ -661,8 +661,12 @@ async def _execute_gap_analysis(
 
         return GapAnalysisResponse(
             analysis_id="",  # Will be set by caller
+            # F2 (HIGH) belt-and-suspenders: force FAILED whenever the result
+            # carries errors, even if a stale/buggy node still reports
+            # status="completed". Never launder an upstream error into a green
+            # HTTP-200 "no significant gaps" response.
             status=AnalysisStatus.COMPLETED
-            if result.get("status") == "completed"
+            if result.get("status") == "completed" and not result.get("errors")
             else AnalysisStatus.FAILED,
             brand=request.brand,
             metrics_analyzed=request.metrics,
