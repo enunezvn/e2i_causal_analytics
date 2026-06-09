@@ -130,6 +130,53 @@ class TestSingleAndParallelStaySingleAgent:
 
 
 # ---------------------------------------------------------------------------
+# Promotion defers to the deliberate parallel pairs (Codex MED, 2026-06-09): a
+# dependency marker + EXACTLY 2 intents that form a known
+# RouterNode.MULTI_AGENT_PATTERNS pair is the pair (the marker is often an
+# incidental leading preamble — "Based on the model output, forecast … and
+# explain …"), NOT a tool_composer pipeline. >=3 intents are still promoted.
+# ---------------------------------------------------------------------------
+class TestPromotionDefersToParallelPairs:
+    def test_incidental_marker_plus_parallel_pair_routes_parallel(self):
+        q = "Based on the model output, forecast next quarter TRx and explain the forecast."
+        agents = _classify_and_route(q)
+        assert "tool_composer" not in agents
+        assert agents == ["prediction_synthesizer", "explainer"]
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "After this week's data refresh, forecast next quarter TRx and explain the forecast.",
+            "Using the results column from the model table, forecast next quarter TRx and "
+            "explain the forecast.",
+        ],
+    )
+    def test_other_incidental_marker_parallel_pairs(self, query):
+        assert "tool_composer" not in _classify_and_route(query)
+
+    def test_non_pair_pipeline_still_promotes(self):
+        # segment + experiment is NOT a parallel pair → still tool_composer
+        assert _classify_and_route("Which HCP segments responded best and then design a test.") == [
+            "tool_composer"
+        ]
+
+    def test_three_intents_still_promote_even_if_top2_are_a_pair(self):
+        # 3 distinct mapped intents (causal + segment + experiment) is genuinely
+        # multi-faceted; the pair-deference only applies to EXACTLY 2 intents.
+        q = (
+            "What was the impact, and which segments responded best, "
+            "then design a test to confirm it?"
+        )
+        assert _classify_and_route(q) == ["tool_composer"]
+
+    def test_parallel_pairs_mirror_router(self):
+        from src.agents.orchestrator.nodes.intent_classifier import PARALLEL_INTENT_PAIRS
+        from src.agents.orchestrator.nodes.router import RouterNode
+
+        assert PARALLEL_INTENT_PAIRS == {frozenset(k) for k in RouterNode.MULTI_AGENT_PATTERNS}
+
+
+# ---------------------------------------------------------------------------
 # Fix 1 — RouterNode safety net (unit)
 # ---------------------------------------------------------------------------
 class TestRouterMultiAgentFallback:

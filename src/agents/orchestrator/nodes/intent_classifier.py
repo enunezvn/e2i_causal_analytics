@@ -80,6 +80,21 @@ INTENT_PRIORITY: tuple[str, ...] = (
 )
 
 
+# Intent pairs that ``RouterNode`` deliberately routes as PARALLEL 2-agent work.
+# Mirror of ``RouterNode.MULTI_AGENT_PATTERNS`` keys (kept in sync by
+# test_multipart_tool_composer_routing.py::test_parallel_pairs_mirror_router).
+# The sequential-pipeline promotion defers to these: a dependency marker joining
+# exactly one of these pairs is treated as the parallel pair (the marker is often
+# an incidental leading preamble), not promoted to ``multi_faceted``/tool_composer.
+PARALLEL_INTENT_PAIRS: frozenset[frozenset[str]] = frozenset(
+    {
+        frozenset({"causal_effect", "segment_analysis"}),
+        frozenset({"performance_gap", "resource_allocation"}),
+        frozenset({"prediction", "explanation"}),
+    }
+)
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -289,9 +304,19 @@ class IntentClassifierNode:
         strong_components = [
             name for name, score in ranked if score >= 0.8 and name != "multi_faceted"
         ]
+        # Defer to the deliberate parallel pairs: a dependency marker + EXACTLY 2
+        # intents that RouterNode routes as a parallel pair is the pair, not a
+        # tool_composer pipeline. The marker is often an incidental leading
+        # preamble ("Based on the model output, forecast … and explain …"); the
+        # two asks themselves are the defined parallel pair. >=3 intents are
+        # genuinely multi-faceted and still promote.
+        is_parallel_pair = (
+            len(strong_components) == 2 and frozenset(strong_components) in PARALLEL_INTENT_PAIRS
+        )
         if (
             primary != "multi_faceted"
             and len(strong_components) >= 2
+            and not is_parallel_pair
             and has_sequential_composition(query)
         ):
             primary = "multi_faceted"
