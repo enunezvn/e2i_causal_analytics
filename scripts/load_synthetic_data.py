@@ -78,8 +78,15 @@ SMALL_SIZES = {
 }
 
 
-def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: bool = False):
-    """Generate synthetic datasets for tables that exist in Supabase."""
+def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: bool = False,
+                      id_prefix: str = ""):
+    """Generate synthetic datasets for tables that exist in Supabase.
+
+    id_prefix namespaces every generated entity id (Generator base prepends it) so a
+    synthetic validation dataset's ids stay DISJOINT from the existing dev baseline —
+    the loader's UPSERT then cannot clobber pre-existing rows, and cleanup by
+    is_synthetic is FK-safe. Empty prefix reproduces the legacy ids.
+    """
     datasets = {}
 
     logger.info("=" * 60)
@@ -91,21 +98,21 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 1. Generate HCPs (no dependencies)
     logger.info(f"Generating {sizes['hcp']:,} HCP profiles...")
-    hcp_config = GeneratorConfig(seed=seed, n_records=sizes["hcp"])
+    hcp_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["hcp"])
     hcp_df = HCPGenerator(hcp_config).generate()
     datasets["hcp_profiles"] = hcp_df
     logger.info(f"  Generated {len(hcp_df):,} HCPs")
 
     # 2. Generate Patients (depends on HCPs)
     logger.info(f"Generating {sizes['patient']:,} patient journeys...")
-    patient_config = GeneratorConfig(seed=seed, n_records=sizes["patient"], dgp_type=dgp_type)
+    patient_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["patient"], dgp_type=dgp_type)
     patient_df = PatientGenerator(patient_config, hcp_df=hcp_df).generate()
     datasets["patient_journeys"] = patient_df
     logger.info(f"  Generated {len(patient_df):,} patients")
 
     # 3. Generate Treatment Events (depends on patients)
     logger.info(f"Generating {sizes['treatment']:,} treatment events...")
-    treatment_config = GeneratorConfig(seed=seed, n_records=sizes["treatment"])
+    treatment_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["treatment"])
     treatment_df = TreatmentGenerator(treatment_config, patient_df=patient_df).generate()
     # Rename columns to match database schema
     if "treatment_date" in treatment_df.columns:
@@ -119,7 +126,7 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 4. Generate ML Predictions (depends on patients)
     logger.info(f"Generating {sizes['prediction']:,} ML predictions...")
-    prediction_config = GeneratorConfig(seed=seed, n_records=sizes["prediction"])
+    prediction_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["prediction"])
     prediction_df = PredictionGenerator(prediction_config, patient_df=patient_df).generate()
     # Rename columns to match database schema
     if "prediction_date" in prediction_df.columns:
@@ -129,21 +136,21 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 5. Generate Triggers (depends on patients and HCPs)
     logger.info(f"Generating {sizes['trigger']:,} triggers...")
-    trigger_config = GeneratorConfig(seed=seed, n_records=sizes["trigger"])
+    trigger_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["trigger"])
     trigger_df = TriggerGenerator(trigger_config, patient_df=patient_df, hcp_df=hcp_df).generate()
     datasets["triggers"] = trigger_df
     logger.info(f"  Generated {len(trigger_df):,} triggers")
 
     # 6. Generate Business Metrics (for Gap Analyzer)
     logger.info(f"Generating {sizes['business_metrics']:,} business metrics...")
-    bm_config = GeneratorConfig(seed=seed, n_records=sizes["business_metrics"])
+    bm_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["business_metrics"])
     bm_df = BusinessMetricsGenerator(bm_config).generate()
     datasets["business_metrics"] = bm_df
     logger.info(f"  Generated {len(bm_df):,} business metrics")
 
     # 7. Seed Feature Store (for Drift Monitor)
     logger.info("Seeding feature store (groups and features)...")
-    fs_seeder = FeatureStoreSeeder(GeneratorConfig(seed=seed))
+    fs_seeder = FeatureStoreSeeder(GeneratorConfig(id_prefix=id_prefix, seed=seed))
     feature_groups_df, features_df = fs_seeder.seed()
     datasets["feature_groups"] = feature_groups_df
     datasets["features"] = features_df
@@ -151,7 +158,7 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 8. Generate Feature Values (depends on feature store and patient data)
     logger.info(f"Generating {sizes['feature_values']:,} feature values...")
-    fv_config = GeneratorConfig(seed=seed, n_records=sizes["feature_values"])
+    fv_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=sizes["feature_values"])
     fv_generator = FeatureValueGenerator(fv_config, features_df=features_df, patient_df=patient_df)
     fv_df = fv_generator.generate()
     datasets["feature_values"] = fv_df
@@ -319,6 +326,10 @@ def main():
                        help="Also write each dataset to <dir>/<table>.parquet + manifest.json")
     parser.add_argument("--parquet-only", action="store_true",
                        help="Write parquet only; SKIP the Supabase load (pollution-free)")
+    parser.add_argument("--tag", type=str, default="scv",
+                       help="Entity-id namespace prefix (default 'scv'). Keeps synthetic "
+                            "ids disjoint from the dev baseline so UPSERT cannot clobber "
+                            "existing rows. Pass '' to reproduce legacy un-namespaced ids.")
     args = parser.parse_args()
 
     if args.verbose:
@@ -341,7 +352,7 @@ def main():
 
     try:
         # Generate datasets
-        datasets = generate_datasets(sizes, dgp_type, verbose=args.verbose)
+        datasets = generate_datasets(sizes, dgp_type, verbose=args.verbose, id_prefix=args.tag)
 
         # Parquet dual-sink (optional). --parquet-only skips the DB load entirely
         # (pollution-free: no writes to shared prod tables, no DB creds needed).

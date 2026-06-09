@@ -29,6 +29,12 @@ class GeneratorConfig:
     start_date: date = field(default_factory=lambda: date(2022, 1, 1))
     end_date: date = field(default_factory=lambda: date(2024, 12, 31))
     verbose: bool = False
+    # Namespacing prefix prepended to every generated entity id. Keeps a synthetic
+    # validation dataset's ids DISJOINT from the existing dev baseline so the loader's
+    # UPSERT cannot clobber pre-existing rows (and cleanup by is_synthetic is FK-safe).
+    # Must keep ids within varchar(20): longest is patient_journey_id 'patient_000000'
+    # (14) -> a <=3-char prefix is safe.
+    id_prefix: str = ""
 
 
 @dataclass
@@ -107,6 +113,7 @@ class BaseGenerator(ABC, Generic[T]):
                 start_date=self.config.start_date,
                 end_date=self.config.end_date,
                 verbose=self.config.verbose,
+                id_prefix=self.config.id_prefix,
             )
 
             # Create new generator instance for batch
@@ -142,7 +149,7 @@ class BaseGenerator(ABC, Generic[T]):
 
     def _generate_ids(self, prefix: str, n: int, width: int = 5) -> List[str]:
         """Generate sequential IDs with prefix."""
-        return [f"{prefix}_{i:0{width}d}" for i in range(n)]
+        return [f"{self.config.id_prefix}{prefix}_{i:0{width}d}" for i in range(n)]
 
     def _random_choice(
         self,

@@ -160,8 +160,18 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
 
     def _generate_npis(self, n: int) -> List[str]:
         """Generate unique NPI numbers (10-digit)."""
-        # NPIs are 10 digits starting with 1 or 2
-        base = self._rng.integers(1_000_000_000, 2_999_999_999, size=n)
+        # NPIs are 10 digits starting with 1 or 2. npi carries a UNIQUE constraint
+        # (hcp_profiles_npi_key), so a namespaced synthetic dataset must draw NPIs
+        # from a SEPARATE RNG stream keyed by id_prefix — otherwise a re-seed of the
+        # same data reproduces the baseline's NPIs and the insert is rejected (23505),
+        # which then cascades to triggers_hcp_id_fkey. The id prefix already keeps
+        # hcp_id disjoint; this keeps npi disjoint too.
+        if self.config.id_prefix:
+            offset = sum(ord(ch) for ch in self.config.id_prefix)
+            rng = np.random.default_rng(self.config.seed + 7919 * (offset + 1))
+            base = rng.integers(1_000_000_000, 2_999_999_999, size=n)
+        else:
+            base = self._rng.integers(1_000_000_000, 2_999_999_999, size=n)
         return [str(npi) for npi in base]
 
     def _generate_academic_flags(self, practice_types: List[str]) -> np.ndarray:
