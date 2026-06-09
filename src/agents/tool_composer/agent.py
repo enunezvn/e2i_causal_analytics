@@ -392,6 +392,11 @@ class ToolComposerAgent:
         data_source = input_data.get("data_source")
         if data_source is not None:
             merged_context["data_source"] = data_source
+        # #810: a KPI-aware dispatch carries the KPI outcome column so the planner
+        # binds the causal outcome to the KPI (only set when present).
+        kpi_outcome = input_data.get("kpi_outcome")
+        if kpi_outcome is not None:
+            merged_context["kpi_outcome"] = kpi_outcome
 
         try:
             # Ensure composer is initialized

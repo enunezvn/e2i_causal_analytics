@@ -220,3 +220,49 @@ def test_extract_brand_region_prefers_entities_over_user_context() -> None:
         "user_context": {"brand": "Fabhalta", "region": "South"},
     }
     assert disp._extract_brand_region(payload) == ("Kisqali", "West")
+
+
+def _kpi_frame(is_truncated: bool):
+    """Build a minimal real KpiFrame (no DB) for the truncation-provenance tests."""
+    from src.services.kpi_resolution import KpiFrame
+
+    return KpiFrame(
+        frame=pd.DataFrame({"accepted": [0, 1], "converted": [0, 1]}),
+        outcome_column="converted",
+        driver_columns=["accepted"],
+        kpi_id="WS3-BI-009",
+        kpi_name="Conversion Rate",
+        is_truncated=is_truncated,
+    )
+
+
+def test_tool_composer_kpi_truncation_provenance_threaded(monkeypatch) -> None:
+    """#810 / codex MED: a TRUNCATED KPI substrate must surface ``kpi_truncated``
+    on the orchestrator path (parity with the chatbot path) — never dropped."""
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: object())
+    monkeypatch.setattr(
+        "src.services.kpi_resolution.resolve_kpi_frame", lambda *a, **k: _kpi_frame(True)
+    )
+
+    node = DispatcherNode()
+    prepared = node._prepare_agent_input(
+        _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
+    )
+    assert isinstance(prepared["data"], pd.DataFrame)
+    assert prepared["kpi_outcome"] == "converted"
+    assert prepared["kpi_truncated"] is True
+
+
+def test_tool_composer_kpi_not_truncated_omits_flag(monkeypatch) -> None:
+    """A non-truncated KPI substrate must NOT add the ``kpi_truncated`` flag."""
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: object())
+    monkeypatch.setattr(
+        "src.services.kpi_resolution.resolve_kpi_frame", lambda *a, **k: _kpi_frame(False)
+    )
+
+    node = DispatcherNode()
+    prepared = node._prepare_agent_input(
+        _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
+    )
+    assert prepared["kpi_outcome"] == "converted"
+    assert "kpi_truncated" not in prepared

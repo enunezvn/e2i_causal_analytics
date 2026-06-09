@@ -46,6 +46,10 @@ _COLUMN_ARG_KEYS = frozenset(
     }
 )
 
+# #810: argument keys that name the causal OUTCOME/target. When a query targets a
+# defined KPI, these are bound deterministically to the KPI's outcome column.
+_OUTCOME_ARG_KEYS = ("outcome", "target")
+
 
 # ============================================================================
 # PLANNING PROMPT
@@ -168,6 +172,7 @@ class ToolPlanner:
         decomposition: DecompositionResult,
         available_columns: Optional[List[str]] = None,
         column_profiles: Optional[List[Dict[str, Any]]] = None,
+        outcome_hint: Optional[str] = None,
     ) -> ExecutionPlan:
         """
         Create an execution plan from decomposed sub-questions.
@@ -207,6 +212,14 @@ class ToolPlanner:
                     # Adapt cached plan to current decomposition
                     adapted_plan = self._adapt_cached_plan(cached_plan, decomposition)
                     if adapted_plan:
+                        # KPI outcome hint + treatment guard apply to cached plans
+                        # too (#810).
+                        self._apply_outcome_hint(
+                            adapted_plan.steps, outcome_hint, available_columns
+                        )
+                        self._apply_treatment_guard(
+                            adapted_plan.steps, column_profiles, outcome_hint
+                        )
                         return adapted_plan
 
             # Get available tools for planning
@@ -222,6 +235,7 @@ class ToolPlanner:
                 similar_compositions,
                 available_columns,
                 column_profiles,
+                outcome_hint,
             )
 
             # Parse response
@@ -230,6 +244,14 @@ class ToolPlanner:
             # Build plan components
             tool_mappings = self._build_tool_mappings(parsed)
             execution_steps = self._build_execution_steps(parsed, decomposition)
+
+            # #810 (KPI-aware): when the query targets a defined KPI, the causal
+            # outcome is DEFINITIONALLY the KPI's outcome column — bind it
+            # deterministically (the LLM is also prompt-hinted) so the analysis
+            # measures the KPI, not an LLM-guessed column. Then guard the
+            # treatment to a binary/numeric driver so the estimator can run.
+            self._apply_outcome_hint(execution_steps, outcome_hint, available_columns)
+            self._apply_treatment_guard(execution_steps, column_profiles, outcome_hint)
 
             # F6(b) enforcement (defense-in-depth): when the real schema is
             # available, best-effort RESOLVE column-typed args to real columns
@@ -361,6 +383,7 @@ class ToolPlanner:
         similar_compositions: Optional[List[Dict[str, Any]]] = None,
         available_columns: Optional[List[str]] = None,
         column_profiles: Optional[List[Dict[str, Any]]] = None,
+        outcome_hint: Optional[str] = None,
     ) -> str:
         """Call the LLM for planning with optional episodic + schema context."""
         # Format sub-questions
@@ -390,6 +413,17 @@ class ToolPlanner:
         columns_block = self._format_columns_block(available_columns, column_profiles)
         if columns_block:
             user_message = f"{user_message}\n\n{columns_block}"
+
+        # #810: when the query targets a defined KPI, tell the LLM the causal
+        # outcome column explicitly so it selects sensible drivers/segments.
+        if outcome_hint:
+            user_message = (
+                f"{user_message}\n\n## KPI outcome\n"
+                f"This query targets a defined KPI whose causal OUTCOME is the column "
+                f"`{outcome_hint}`. Bind every causal `outcome` (and any `target`) argument "
+                f"to `{outcome_hint}`, and choose `treatment`/`segments` from the OTHER "
+                f"available columns (the drivers)."
+            )
 
         # Using LangChain's message format (works with ChatAnthropic/ChatOpenAI)
         messages = [
@@ -738,6 +772,81 @@ class ToolPlanner:
                     f"real dataset column and could not be resolved to one. "
                     f"Available columns: {sorted(column_set)}."
                 )
+
+    def _apply_outcome_hint(
+        self,
+        steps: List[ExecutionStep],
+        outcome_hint: Optional[str],
+        available_columns: Optional[List[str]],
+    ) -> None:
+        """Bind every causal ``outcome``/``target`` arg to ``outcome_hint`` (#810).
+
+        When a query targets a defined KPI, the causal outcome is definitionally
+        the KPI's outcome column — so override any LLM-guessed ``outcome``/``target``
+        literal to it. No-op when there is no hint, or the hint is not a real
+        column (we never inject a non-existent column), or the existing value is a
+        ``$step`` reference (a real dependency, never clobbered).
+        """
+        if not outcome_hint:
+            return
+        if available_columns is None:
+            # No schema to validate against -> do NOT inject an unvalidated column.
+            logger.info(
+                "outcome-hint %r skipped: no available_columns to validate against.",
+                outcome_hint,
+            )
+            return
+        if outcome_hint not in available_columns:
+            return
+        for step in steps:
+            for key in _OUTCOME_ARG_KEYS:
+                value = step.input_mapping.get(key)
+                if isinstance(value, str) and not value.startswith("$") and value != outcome_hint:
+                    logger.info(
+                        "Plan step %s: binding '%s' -> KPI outcome %r (was %r)",
+                        step.step_id,
+                        key,
+                        outcome_hint,
+                        value,
+                    )
+                    step.input_mapping[key] = outcome_hint
+
+    def _apply_treatment_guard(
+        self,
+        steps: List[ExecutionStep],
+        column_profiles: Optional[List[Dict[str, Any]]],
+        outcome_hint: Optional[str],
+    ) -> None:
+        """Ensure KPI causal steps use a binary/numeric ``treatment`` (#810).
+
+        DoWhy/CATE estimators need a binary (or numeric) treatment; when the LLM
+        binds a categorical driver (e.g. ``trigger_type`` with 6 levels) the
+        estimate is NaN/empty. Override such a ``treatment`` to the best binary
+        (then numeric) driver from the column profile. Categorical columns remain
+        valid for ``segments``. Gated on a KPI query (``outcome_hint`` set) so
+        non-KPI plans keep the LLM's treatment choice. ``$step`` references are
+        never clobbered.
+        """
+        if not outcome_hint or not column_profiles:
+            return
+        family = {str(p["name"]): p.get("dtype_family") for p in column_profiles if p.get("name")}
+        binary = [n for n, f in family.items() if f == "binary" and n != outcome_hint]
+        numeric = [n for n, f in family.items() if f == "numeric-continuous" and n != outcome_hint]
+        candidates = binary + numeric
+        if not candidates:
+            return
+        usable = set(candidates)
+        for step in steps:
+            value = step.input_mapping.get("treatment")
+            if isinstance(value, str) and not value.startswith("$") and value not in usable:
+                logger.info(
+                    "Plan step %s: treatment %r is not binary/numeric; binding to %r "
+                    "(KPI causal analysis needs a usable treatment).",
+                    step.step_id,
+                    value,
+                    candidates[0],
+                )
+                step.input_mapping["treatment"] = candidates[0]
 
     @staticmethod
     def _normalize_name(name: str) -> str:

@@ -101,6 +101,29 @@ def test_numeric_frame_drops_sparse_columns_before_complete_case() -> None:
     assert len(out) == n
 
 
+@pytest.mark.asyncio
+async def test_rank_drivers_empty_dag_predictive_only() -> None:
+    """#810: when discover_dag finds NO edges, rank_drivers must not fail — it
+    returns a real predictive (SHAP) ranking instead of erroring on the empty
+    graph. Uses the real RandomForest+SHAP engine over a real frame."""
+    df = _linear_chain_frame()
+    res = await rank_drivers(dag_edge_list=[], target="c", estimation_data=df)
+    assert res["success"] is True
+    assert res["n_features"] >= 1
+    assert res["rankings"], "expected a predictive ranking"
+    assert all(r["predictive_rank"] >= 1 for r in res["rankings"])
+    # the empty-DAG note is surfaced (no silent cap).
+    assert any("predictive" in e.lower() for e in res.get("errors", []))
+    # Anti-mocking: with no DAG there is NO causal estimate -> causal fields are
+    # explicitly None (not a plausible-fake 0), so consumers cannot mistake an
+    # absent causal estimate for a real zero-effect value.
+    assert res["rank_correlation"] is None
+    for r in res["rankings"]:
+        assert r["causal_rank"] is None
+        assert r["causal_score"] is None
+        assert r["rank_difference"] is None
+
+
 def test_dataframe_kwargs_keys_in_lockstep() -> None:
     """MED-2 drift guard (codex review): the canonical DataFrame kwargs keys are
     defined in two modules — causal_discovery.py and tool_composer/
