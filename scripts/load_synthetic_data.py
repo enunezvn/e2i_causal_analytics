@@ -23,27 +23,28 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 from src.ml.synthetic.config import DGPType
 from src.ml.synthetic.generators import (
-    GeneratorConfig,
-    HCPGenerator,
-    PatientGenerator,
-    TreatmentGenerator,
-    EngagementGenerator,
-    OutcomeGenerator,
-    PredictionGenerator,
-    TriggerGenerator,
     BusinessMetricsGenerator,
     FeatureStoreSeeder,
     FeatureValueGenerator,
+    GeneratorConfig,
+    HCPGenerator,
+    PatientGenerator,
+    PredictionGenerator,
+    TreatmentGenerator,
+    TriggerGenerator,
 )
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
@@ -80,9 +81,15 @@ SMALL_SIZES = {
 }
 
 
-def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: bool = False,
-                      id_prefix: str = "", anchor_to_now: bool = False,
-                      anchor_reference: Optional[date] = None):
+def generate_datasets(
+    sizes: dict,
+    dgp_type: DGPType,
+    seed: int = 42,
+    verbose: bool = False,
+    id_prefix: str = "",
+    anchor_to_now: bool = False,
+    anchor_reference: Optional[date] = None,
+):
     """Generate synthetic datasets for tables that exist in Supabase.
 
     id_prefix namespaces every generated entity id (Generator base prepends it) so a
@@ -106,21 +113,40 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 1. Generate HCPs (no dependencies)
     logger.info(f"Generating {sizes['hcp']:,} HCP profiles...")
-    hcp_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["hcp"])
+    hcp_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=sizes["hcp"],
+    )
     hcp_df = HCPGenerator(hcp_config).generate()
     datasets["hcp_profiles"] = hcp_df
     logger.info(f"  Generated {len(hcp_df):,} HCPs")
 
     # 2. Generate Patients (depends on HCPs)
     logger.info(f"Generating {sizes['patient']:,} patient journeys...")
-    patient_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["patient"], dgp_type=dgp_type)
+    patient_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=sizes["patient"],
+        dgp_type=dgp_type,
+    )
     patient_df = PatientGenerator(patient_config, hcp_df=hcp_df).generate()
     datasets["patient_journeys"] = patient_df
     logger.info(f"  Generated {len(patient_df):,} patients")
 
     # 3. Generate Treatment Events (depends on patients)
     logger.info(f"Generating {sizes['treatment']:,} treatment events...")
-    treatment_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["treatment"])
+    treatment_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=sizes["treatment"],
+    )
     treatment_df = TreatmentGenerator(treatment_config, patient_df=patient_df).generate()
     # Rename columns to match database schema
     if "treatment_date" in treatment_df.columns:
@@ -134,7 +160,13 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
 
     # 4. Generate ML Predictions (depends on patients)
     logger.info(f"Generating {sizes['prediction']:,} ML predictions...")
-    prediction_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["prediction"])
+    prediction_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=sizes["prediction"],
+    )
     prediction_df = PredictionGenerator(prediction_config, patient_df=patient_df).generate()
     # Rename columns to match database schema
     if "prediction_date" in prediction_df.columns:
@@ -142,31 +174,75 @@ def generate_datasets(sizes: dict, dgp_type: DGPType, seed: int = 42, verbose: b
     datasets["ml_predictions"] = prediction_df
     logger.info(f"  Generated {len(prediction_df):,} predictions")
 
-    # 5. Generate Triggers (depends on patients and HCPs)
+    # 5. Generate Triggers (depends on patients, HCPs, and the prescription
+    #    substrate so the known trigger->rx conversion lift can be injected).
     logger.info(f"Generating {sizes['trigger']:,} triggers...")
-    trigger_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["trigger"])
-    trigger_df = TriggerGenerator(trigger_config, patient_df=patient_df, hcp_df=hcp_df).generate()
+    trigger_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=sizes["trigger"],
+    )
+    trigger_gen = TriggerGenerator(
+        trigger_config, patient_df=patient_df, hcp_df=hcp_df, treatment_df=treatment_df
+    )
+    trigger_df = trigger_gen.generate()
     datasets["triggers"] = trigger_df
     logger.info(f"  Generated {len(trigger_df):,} triggers")
 
+    # Merge the injected conversion prescriptions into treatment_events so the
+    # designed accepted-vs-rejected lift is actually loaded (else the conversion frame
+    # reads the degenerate ~0.002). The injected rows already use the post-rename
+    # schema (patient_id, brand, event_date, event_type) AND already carry
+    # is_synthetic=True (self-stamped in _inject_conversion_prescriptions, because this
+    # concat runs AFTER any per-frame stamp; the central stamp below re-affirms it).
+    injected_rx = trigger_gen.injected_prescriptions
+    if injected_rx is not None and len(injected_rx) > 0:
+        datasets["treatment_events"] = pd.concat(
+            [datasets["treatment_events"], injected_rx], ignore_index=True
+        )
+        logger.info(f"  Merged {len(injected_rx):,} conversion prescriptions into treatment_events")
+
     # 6. Generate Business Metrics (for Gap Analyzer)
     logger.info(f"Generating {sizes['business_metrics']:,} business metrics...")
-    bm_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["business_metrics"])
+    bm_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=sizes["business_metrics"],
+    )
     bm_df = BusinessMetricsGenerator(bm_config).generate()
     datasets["business_metrics"] = bm_df
     logger.info(f"  Generated {len(bm_df):,} business metrics")
 
     # 7. Seed Feature Store (for Drift Monitor)
     logger.info("Seeding feature store (groups and features)...")
-    fs_seeder = FeatureStoreSeeder(GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference))
+    fs_seeder = FeatureStoreSeeder(
+        GeneratorConfig(
+            id_prefix=id_prefix,
+            seed=seed,
+            anchor_to_now=anchor_to_now,
+            anchor_reference=anchor_reference,
+        )
+    )
     feature_groups_df, features_df = fs_seeder.seed()
     datasets["feature_groups"] = feature_groups_df
     datasets["features"] = features_df
-    logger.info(f"  Seeded {len(feature_groups_df):,} feature groups, {len(features_df):,} features")
+    logger.info(
+        f"  Seeded {len(feature_groups_df):,} feature groups, {len(features_df):,} features"
+    )
 
     # 8. Generate Feature Values (depends on feature store and patient data)
     logger.info(f"Generating {sizes['feature_values']:,} feature values...")
-    fv_config = GeneratorConfig(id_prefix=id_prefix, seed=seed, anchor_to_now=anchor_to_now, anchor_reference=anchor_reference, n_records=sizes["feature_values"])
+    fv_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=sizes["feature_values"],
+    )
     fv_generator = FeatureValueGenerator(fv_config, features_df=features_df, patient_df=patient_df)
     fv_df = fv_generator.generate()
     datasets["feature_values"] = fv_df
@@ -207,13 +283,12 @@ def write_parquet_snapshots(datasets: dict, out_dir) -> str:
         # path unblocked, byte-equivalent to the jsonb the loader upserts.
         df_out = df.copy()
         for col in df_out.columns:
-            if df_out[col].dtype == "object" and df_out[col].map(
-                lambda v: isinstance(v, (dict, list))
-            ).any():
+            if (
+                df_out[col].dtype == "object"
+                and df_out[col].map(lambda v: isinstance(v, (dict, list))).any()
+            ):
                 df_out[col] = df_out[col].map(
-                    lambda v: json.dumps(v, default=str)
-                    if isinstance(v, (dict, list))
-                    else v
+                    lambda v: json.dumps(v, default=str) if isinstance(v, (dict, list)) else v
                 )
         df_out.to_parquet(path, index=False)
         tables.append({"table": table_name, "path": str(path), "rows": int(len(df_out))})
@@ -240,8 +315,9 @@ _CF_BRANDS = ["Remibrutinib", "Kisqali", "Fabhalta"]
 def write_cohort_frames(out_dir) -> list:
     """Write the resolved per-(cohort,brand) causal frames estimators/agents consume,
     derived offline from the parquet snapshots. 9 patient cells + hcp_adoption."""
-    import pandas as pd
     from pathlib import Path
+
+    import pandas as pd
 
     out = Path(out_dir)
     cf = out / "cohort_frames"
@@ -257,9 +333,17 @@ def write_cohort_frames(out_dir) -> list:
             sub = pj[pj["brand"] == brand].copy()
             if cohort in ("discontinuation", "persistence"):
                 sub = sub[sub["treatment_initiated"] == 1]  # eligibility: only initiators
-            cols = ["treatment_arm", outcome, "disease_severity", "age_at_diagnosis",
-                    "segment_assignment", "propensity_score", "treatment_effect_estimate",
-                    "brand", "is_synthetic"]
+            cols = [
+                "treatment_arm",
+                outcome,
+                "disease_severity",
+                "age_at_diagnosis",
+                "segment_assignment",
+                "propensity_score",
+                "treatment_effect_estimate",
+                "brand",
+                "is_synthetic",
+            ]
             frame = sub[[c for c in cols if c in sub.columns]].rename(columns={outcome: "outcome"})
             path = cf / f"{cohort}__{brand}.parquet"
             frame.to_parquet(path, index=False)
@@ -273,8 +357,17 @@ def write_cohort_frames(out_dir) -> list:
             written.append(str(dest))
         elif (out / "hcp_profiles.parquet").exists():
             hp = pd.read_parquet(out / "hcp_profiles.parquet")
-            keep = [c for c in ("hcp_id", "adoption_category", "peer_influence_score",
-                                "influence_network_size", "is_synthetic") if c in hp.columns]
+            keep = [
+                c
+                for c in (
+                    "hcp_id",
+                    "adoption_category",
+                    "peer_influence_score",
+                    "influence_network_size",
+                    "is_synthetic",
+                )
+                if c in hp.columns
+            ]
             hp[keep].to_parquet(dest, index=False)
             written.append(str(dest))
     logger.info("Wrote %d cohort frames to %s", len(written), cf)
@@ -327,24 +420,46 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Validate without loading")
     parser.add_argument("--small", action="store_true", help="Generate smaller dataset")
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--dgp", type=str, default="confounded",
-                       choices=["simple_linear", "confounded", "heterogeneous", "time_series", "selection_bias"],
-                       help="DGP type to use")
-    parser.add_argument("--parquet-out", type=str, default=None,
-                       help="Also write each dataset to <dir>/<table>.parquet + manifest.json")
-    parser.add_argument("--parquet-only", action="store_true",
-                       help="Write parquet only; SKIP the Supabase load (pollution-free)")
-    parser.add_argument("--tag", type=str, default="scv",
-                       help="Entity-id namespace prefix (default 'scv'). Keeps synthetic "
-                            "ids disjoint from the dev baseline so UPSERT cannot clobber "
-                            "existing rows. Pass '' to reproduce legacy un-namespaced ids.")
-    parser.add_argument("--anchor-to-now", action="store_true",
-                       help="Remap all generated dates onto a rolling window ending today "
-                            "(bulk inside NOW()-30d) so windowed KPIs read non-zero. "
-                            "Defeats migration-044 staleness; regenerated per run.")
-    parser.add_argument("--anchor-ref", type=str, default=None,
-                       help="Reference date (YYYY-MM-DD) for --anchor-to-now. Falls back to "
-                            "$SYNTH_ANCHOR_REF, then today. Used to prove per-run regeneration.")
+    parser.add_argument(
+        "--dgp",
+        type=str,
+        default="confounded",
+        choices=["simple_linear", "confounded", "heterogeneous", "time_series", "selection_bias"],
+        help="DGP type to use",
+    )
+    parser.add_argument(
+        "--parquet-out",
+        type=str,
+        default=None,
+        help="Also write each dataset to <dir>/<table>.parquet + manifest.json",
+    )
+    parser.add_argument(
+        "--parquet-only",
+        action="store_true",
+        help="Write parquet only; SKIP the Supabase load (pollution-free)",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default="scv",
+        help="Entity-id namespace prefix (default 'scv'). Keeps synthetic "
+        "ids disjoint from the dev baseline so UPSERT cannot clobber "
+        "existing rows. Pass '' to reproduce legacy un-namespaced ids.",
+    )
+    parser.add_argument(
+        "--anchor-to-now",
+        action="store_true",
+        help="Remap all generated dates onto a rolling window ending today "
+        "(bulk inside NOW()-30d) so windowed KPIs read non-zero. "
+        "Defeats migration-044 staleness; regenerated per run.",
+    )
+    parser.add_argument(
+        "--anchor-ref",
+        type=str,
+        default=None,
+        help="Reference date (YYYY-MM-DD) for --anchor-to-now. Falls back to "
+        "$SYNTH_ANCHOR_REF, then today. Used to prove per-run regeneration.",
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -369,17 +484,19 @@ def main():
         ref_str = args.anchor_ref or os.getenv("SYNTH_ANCHOR_REF")
         if ref_str:
             anchor_reference = date.fromisoformat(ref_str)
-        logger.info(
-            f"Rolling-window anchoring ON (reference={anchor_reference or 'today'})"
-        )
+        logger.info(f"Rolling-window anchoring ON (reference={anchor_reference or 'today'})")
 
     start_time = datetime.now()
 
     try:
         # Generate datasets
         datasets = generate_datasets(
-            sizes, dgp_type, verbose=args.verbose, id_prefix=args.tag,
-            anchor_to_now=args.anchor_to_now, anchor_reference=anchor_reference,
+            sizes,
+            dgp_type,
+            verbose=args.verbose,
+            id_prefix=args.tag,
+            anchor_to_now=args.anchor_to_now,
+            anchor_reference=anchor_reference,
         )
 
         # Parquet dual-sink (optional). --parquet-only skips the DB load entirely
