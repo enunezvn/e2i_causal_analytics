@@ -83,12 +83,14 @@ async def _query_historical_experiments(
         )
         if kpi_category:
             exp_query = exp_query.eq("kpi_category", kpi_category)
-        # Bound the experiment set (newest first) to keep the experiment_id IN-list
-        # small. The original SQL applied ORDER BY ex.created_at DESC LIMIT 100 to the
-        # JOINED rows, so we do NOT cap the per-table fetches at 100 — we cap the
-        # joined result below (capping each side independently would drop valid
-        # completed runs belonging to slightly-older experiments).
-        experiments = exp_query.order("created_at", desc=True).limit(500).execute().data or []
+        # The original SQL applied ORDER BY ex.created_at DESC LIMIT 100 to the JOINED
+        # rows, so we must NOT cap the per-table fetches at 100 (capping each side
+        # independently would drop valid completed runs of slightly-older experiments).
+        # Fetch experiments newest-first with a cap of 1000 — that is >= the entire
+        # ml_experiments table (621 rows) and far exceeds any single problem_type's
+        # subset, so it is functionally unbounded for this dataset while staying bounded
+        # for safety. The 100-row cap + ordering are applied to the JOINED result below.
+        experiments = exp_query.order("created_at", desc=True).limit(1000).execute().data or []
         if not experiments:
             return []
 
