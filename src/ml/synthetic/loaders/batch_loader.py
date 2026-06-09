@@ -113,6 +113,19 @@ TABLE_COLUMNS = {
         "treatment_initiated",
         "days_to_treatment",
         "age_at_diagnosis",
+        # Shard 04 M5 eligibility columns (migration 068). primary_diagnosis_code
+        # pre-existed; the other 10 are cohort_constructor required_fields.
+        "primary_diagnosis_code",
+        "urticaria_severity_uas7",
+        "prior_antihistamine_therapy",
+        "hr_status",
+        "her2_status",
+        "disease_stage",
+        "ecog_performance_status",
+        "ldh_ratio",
+        "complement_inhibitor_status",
+        "proteinuria_g_day",
+        "egfr",
         "data_split",
         # causal substrate (Shard 01 M2 DDL; values filled by Shard 03/06).
         # Emitted as NULL placeholders by PatientGenerator so validate_datasets
