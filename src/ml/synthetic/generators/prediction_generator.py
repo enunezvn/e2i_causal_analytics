@@ -138,10 +138,14 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
         # Model version
         model_version = f"v{self._rng.integers(1, 5)}.{self._rng.integers(0, 10)}"
 
-        # Prediction date (after journey start)
+        # Prediction date (after journey start). Cap at the rolling-window reference
+        # under anchoring so a recent journey + large offset never lands in the
+        # future (Shard 04); no-op when anchor_to_now is off.
         journey_start = pd.to_datetime(patient.get("journey_start_date", "2023-01-01"))
         days_offset = self._rng.integers(0, 90)
-        prediction_date = journey_start + pd.Timedelta(days=int(days_offset))
+        prediction_date = self._anchor_cap_timestamp(
+            journey_start + pd.Timedelta(days=int(days_offset))
+        )
 
         return {
             "patient_journey_id": patient.get("patient_journey_id", ""),

@@ -247,23 +247,39 @@ class BaseGenerator(ABC, Generic[T]):
         return [date.fromordinal(int(d)).isoformat() for d in out]
 
     def _shift_dates_to_window(self, dates: List[str]) -> List[str]:
-        """Re-anchor an externally-supplied list of ISO dates onto the rolling
-        window (preserves relative ordering). Used by generators that derive
-        timestamps from another frame (e.g. trigger_timestamp = journey + offset)
-        so Shards 05/06/09 can re-anchor without re-sampling. No-op when
-        anchor_to_now is off."""
+        """Cap each ISO date/datetime string at the rolling-window reference (today)
+        when anchoring is on, so dates DERIVED from anchored source dates
+        (e.g. treatment_date = journey + offset) carry no future timestamps while
+        KEEPING the recency the source already has — the future tail collapses onto
+        the reference, the rest is left untouched (so the 60%-recent mixture from
+        _anchored_dates survives; an affine rescale would flatten it). Handles
+        'YYYY-MM-DD' and 'YYYY-MM-DD HH:MM:SS'. No-op when anchor_to_now is off or
+        the list is empty. Reused by Shards 05/06/09."""
         if not self.config.anchor_to_now or not dates:
             return dates
         ref = self.config.anchor_reference or date.today()
-        ords = np.array([date.fromisoformat(d).toordinal() for d in dates])
-        lo, hi = int(ords.min()), int(ords.max())
-        ref_ord = ref.toordinal()
-        if hi == lo:
-            return [date.fromordinal(ref_ord).isoformat()] * len(dates)
-        span = (self.config.end_date - self.config.start_date).days
-        span = max(span, 90)
-        scaled = ref_ord - span + (ords - lo) * span / (hi - lo)
-        return [date.fromordinal(int(round(s))).isoformat() for s in scaled]
+        out: List[str] = []
+        for d in dates:
+            if date.fromisoformat(d[:10]) > ref:
+                out.append(ref.isoformat() + d[10:])  # preserve any ' HH:MM:SS' tail
+            else:
+                out.append(d)
+        return out
+
+    def _anchor_cap_timestamp(self, ts: "pd.Timestamp") -> "pd.Timestamp":
+        """Cap a single derived pandas Timestamp at the rolling-window reference
+        (end of the reference day) when anchoring is on; no-op when off. Per-element
+        so it composes with per-record generation (prediction/trigger records derive
+        their timestamp from the anchored journey date + an offset that could land in
+        the future). Preserves the source recency; only the future tail is collapsed."""
+        if not self.config.anchor_to_now:
+            return ts
+        ref = self.config.anchor_reference or date.today()
+        # Cap at the START of the reference day (midnight). Derived timestamps are
+        # midnight-based (journey date + whole-day offset), so this keeps capped rows
+        # at <= today-midnight <= NOW() for any consumer that filters `<= NOW()`,
+        # rather than end-of-day which would read as a few hours in the future.
+        return min(ts, pd.Timestamp(ref))
 
     def _assign_splits(
         self,

@@ -125,10 +125,15 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         # Confidence score (higher for clear-cut cases)
         confidence = self._calculate_confidence(engagement_score, trigger_type)
 
-        # Timestamps
+        # Timestamps. Cap the trigger time at the rolling-window reference under
+        # anchoring (a recent journey + offset must not fire in the future); the
+        # expiration is derived from the capped time so it stays a future expiry,
+        # which is correct. No-op when anchor_to_now is off (Shard 04).
         journey_start = pd.to_datetime(patient.get("journey_start_date", "2023-01-01"))
         days_offset = self._rng.integers(7, 90)
-        trigger_timestamp = journey_start + pd.Timedelta(days=int(days_offset))
+        trigger_timestamp = self._anchor_cap_timestamp(
+            journey_start + pd.Timedelta(days=int(days_offset))
+        )
 
         # Lead time and expiration
         lead_time_days = self._rng.integers(3, 30)
