@@ -1,4 +1,5 @@
 """SSOT provenance helper: default-exclude predicate + covariate drop-list."""
+
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -19,8 +20,7 @@ def test_is_synthetic_in_drop_cols():
 @pytest.mark.unit
 def test_drop_provenance_cols_removes_tag_only():
     df = pd.DataFrame(
-        {"treatment": [0, 1], "outcome": [1.0, 2.0],
-         "is_synthetic": [True, True], "x1": [3, 4]}
+        {"treatment": [0, 1], "outcome": [1.0, 2.0], "is_synthetic": [True, True], "x1": [3, 4]}
     )
     out = drop_provenance_cols(df)
     assert "is_synthetic" not in out.columns

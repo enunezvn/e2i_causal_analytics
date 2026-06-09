@@ -5,6 +5,7 @@ never leak ``is_synthetic=true`` rows into real-mode results. Every estimator dr
 ``PROVENANCE_DROP_COLS`` before building its covariate matrix so the tag is never an
 effect modifier. See plan 07-provenance-readpath-enforcement.md.
 """
+
 from __future__ import annotations
 
 from typing import Any, Iterable
