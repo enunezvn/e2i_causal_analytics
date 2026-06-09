@@ -132,6 +132,16 @@ TABLE_COLUMNS = {
         "event_date",
         "event_type",
         "duration_days",
+        # Shard 04: indication-correct coding. These DB columns already exist; the
+        # loader gates anything unlisted (batch_loader.py:344), so register them or
+        # they vanish. NOTE: primary_diagnosis_code is intentionally NOT listed — it
+        # is a patient_journeys scalar, not a treatment_events column (DB carries the
+        # dx as icd_codes text[]); registering it would 42703 the insert.
+        "drug_ndc",
+        "drug_name",
+        "drug_class",
+        "event_subtype",
+        "icd_codes",
         "data_split",
         "is_synthetic",
     ],
