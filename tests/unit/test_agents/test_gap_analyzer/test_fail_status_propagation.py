@@ -100,9 +100,9 @@ async def test_real_gap_detector_failure_propagates_failed_status():
     # The error was raised and caught by gap_detector (this is the correct, pre-existing
     # behavior) -- prove the failure was real, not synthetic.
     assert final_state.get("errors"), "expected gap_detector to have accumulated an error"
-    assert any(
-        e.get("node") == "gap_detector" for e in final_state["errors"]
-    ), f"expected a gap_detector error, got {final_state.get('errors')}"
+    assert any(e.get("node") == "gap_detector" for e in final_state["errors"]), (
+        f"expected a gap_detector error, got {final_state.get('errors')}"
+    )
 
     # F2 core assertion: the terminal status must be 'failed', NOT laundered to 'completed'.
     assert final_state.get("status") == "failed", (
