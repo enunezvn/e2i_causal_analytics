@@ -25,6 +25,25 @@ class TestDesignReasoningNode:
         assert hasattr(node, "llm")
         assert hasattr(node, "fallback_llm")
 
+    def test_org_context_is_honest_when_empty(self):
+        """F10 (audit): with no real organizational context (the prod-default
+        EmptyKnowledgeStore yields empty experiments + {} org defaults), the
+        design prompt's org-context section must say so honestly and must NOT
+        emit fabricated past experiments or hardcoded 'organizational defaults'
+        (e.g. effect size 0.25)."""
+        node = DesignReasoningNode()
+        state = create_initial_state(business_question="Should we increase rep visits?")
+        # Honest empty context, as produced by ContextLoaderNode + EmptyKnowledgeStore.
+        state["historical_experiments"] = []
+        state["domain_knowledge"] = {"organizational_defaults": {}}
+        state["warnings"] = []
+
+        ctx = node._build_org_context(state)
+
+        assert ctx == "No historical context available."
+        assert "Organizational Defaults" not in ctx
+        assert "exp_2024" not in ctx
+
     @pytest.mark.asyncio
     async def test_execute_basic(self):
         """Test basic execution."""

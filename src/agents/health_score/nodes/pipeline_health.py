@@ -58,31 +58,43 @@ class PipelineHealthNode:
         """Execute pipeline health checks."""
         start_time = time.time()
 
-        # Skip if scope doesn't include pipelines
+        # Skip if scope doesn't include pipelines.
+        # Skipped == not measured (F1): do NOT emit a fail-open 1.0 score.
         if state.get("check_scope") not in ["full", "pipelines"]:
             logger.debug("Skipping pipeline health for non-pipeline scope")
             return {
                 **state,
                 "pipeline_statuses": [],
-                "pipeline_health_score": 1.0,
+                "pipeline_health_measured": False,
+            }
+
+        # F1 fail-closed: without a real pipeline_store the pipeline dimension is
+        # UNKNOWN, not "healthy by default". Mark it unmeasured so the composer
+        # excludes it rather than fabricating a 1.0 score.
+        if not self.pipeline_store:
+            logger.warning(
+                "No pipeline_store wired - pipeline health is UNKNOWN (fail-closed), "
+                "not fabricated-healthy"
+            )
+            return {
+                **state,
+                "pipeline_statuses": [],
+                "pipeline_health_measured": False,
             }
 
         try:
-            if self.pipeline_store:
-                # Fetch all pipelines
-                pipelines = await self.pipeline_store.get_all_pipelines()
+            # Fetch all pipelines from the real store
+            pipelines = await self.pipeline_store.get_all_pipelines()
 
-                # Fetch status for each pipeline in parallel
-                if pipelines:
-                    tasks = [self._get_pipeline_status(name) for name in pipelines]
-                    statuses = await asyncio.gather(*tasks)
-                else:
-                    statuses = []
+            # Fetch status for each pipeline in parallel
+            if pipelines:
+                tasks = [self._get_pipeline_status(name) for name in pipelines]
+                statuses = await asyncio.gather(*tasks)
             else:
-                # No store - return empty for testing
                 statuses = []
 
-            # Calculate overall pipeline health
+            # Calculate overall pipeline health. A real store reporting zero
+            # pipelines IS a measurement, so 1.0 here is measured, not fabricated.
             if statuses:
                 healthy = sum(1 for s in statuses if s["status"] == "healthy")
                 stale = sum(1 for s in statuses if s["status"] == "stale")
@@ -90,7 +102,7 @@ class PipelineHealthNode:
                 total_score = healthy + (stale * 0.5)
                 health_score = total_score / len(statuses)
             else:
-                health_score = 1.0  # No pipelines = healthy by default
+                health_score = 1.0  # Real store, no pipelines => measured healthy
 
             check_time = int((time.time() - start_time) * 1000)
 
@@ -103,6 +115,7 @@ class PipelineHealthNode:
                 **state,
                 "pipeline_statuses": statuses,
                 "pipeline_health_score": health_score,
+                "pipeline_health_measured": True,
                 "total_latency_ms": state.get("total_latency_ms", 0) + check_time,
             }
 
@@ -112,6 +125,7 @@ class PipelineHealthNode:
                 **state,
                 "errors": [{"node": "pipeline_health", "error": str(e)}],
                 "pipeline_health_score": 0.5,  # Unknown = degraded
+                "pipeline_health_measured": True,
                 "pipeline_statuses": [],
             }
 

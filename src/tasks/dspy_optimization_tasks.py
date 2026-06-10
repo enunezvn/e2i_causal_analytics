@@ -167,10 +167,30 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(hours=window_hours)
 
-    agent = FeedbackLearnerAgent(use_llm=True, persist_signals=True)
+    # F15 (audit): wire the REAL feedback source (chatbot_message_feedback) so
+    # the loop learns from real user ratings/comments. Previously the agent was
+    # constructed with NO feedback_store -> the collector returned [] ->
+    # update_effectiveness was pinned at 0.0 (documented starved state). The
+    # store fails closed (empty list) if the DB/client is unavailable.
+    feedback_store = None
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+        from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
+
+        client = await get_async_supabase_client()
+        feedback_store = get_chatbot_feedback_repository(supabase_client=client)
+    except Exception as exc:  # pragma: no cover - degraded path
+        logger.warning("F15: could not build real feedback_store (%s); learning from empty", exc)
+
+    # Optional scope: DSPY_LEARN_FOCUS_AGENTS="agent_a,agent_b" (default: all agents).
+    _focus_env = os.environ.get("DSPY_LEARN_FOCUS_AGENTS", "").strip()
+    focus_agents = [a.strip() for a in _focus_env.split(",") if a.strip()] or None
+
+    agent = FeedbackLearnerAgent(feedback_store=feedback_store, use_llm=True, persist_signals=True)
     output = await agent.learn(
         time_range_start=start_time.isoformat(),
         time_range_end=end_time.isoformat(),
+        focus_agents=focus_agents,
     )
     return {
         "status": output.status,

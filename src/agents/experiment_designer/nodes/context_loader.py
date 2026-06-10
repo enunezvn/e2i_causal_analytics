@@ -126,6 +126,36 @@ class MockKnowledgeStore:
         }
 
 
+class EmptyKnowledgeStore:
+    """Honest empty knowledge store — the PRODUCTION default (F10 audit).
+
+    ContextLoaderNode previously defaulted to ``MockKnowledgeStore``, which
+    seeded the experiment-design LLM prompt with FABRICATED organizational
+    context (fake past experiments, defaults, assumption violations, and domain
+    knowledge) on every prod run — an unmarked, non-flag-gated mock in a
+    user-facing path. This store returns honest EMPTY context instead: real
+    organizational learnings come from the wired ``ExperimentKnowledgeStore``
+    (validation learnings) when available; absent that, the design proceeds with
+    NO fabricated org history rather than plausible-but-fake data.
+
+    ``MockKnowledgeStore`` is retained for EXPLICIT injection in tests.
+    """
+
+    async def get_similar_experiments(
+        self, business_question: str, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        return []
+
+    async def get_organizational_defaults(self) -> dict[str, Any]:
+        return {}
+
+    async def get_recent_assumption_violations(self, limit: int = 5) -> list[dict[str, Any]]:
+        return []
+
+    async def get_domain_knowledge(self, brand: Optional[str] = None) -> dict[str, Any]:
+        return {}
+
+
 class ContextLoaderNode:
     """Loads organizational learning context for experiment design.
 
@@ -143,18 +173,21 @@ class ContextLoaderNode:
 
     def __init__(
         self,
-        knowledge_store: Optional[MockKnowledgeStore] = None,
+        knowledge_store: Optional[Any] = None,
         use_validation_learnings: bool = True,
     ):
         """Initialize context loader node.
 
         Args:
-            knowledge_store: Knowledge store for retrieving context.
-                            Uses ExperimentKnowledgeStore if available,
-                            falls back to MockKnowledgeStore.
+            knowledge_store: Knowledge store for retrieving context. When omitted,
+                            defaults to the honest ``EmptyKnowledgeStore`` (F10
+                            audit) — NOT the fabricated ``MockKnowledgeStore`` —
+                            so production never seeds the design prompt with
+                            fake org context. Real learnings still come from the
+                            wired ``ExperimentKnowledgeStore`` below.
             use_validation_learnings: Whether to query past validation failures
         """
-        self.knowledge_store = knowledge_store or MockKnowledgeStore()
+        self.knowledge_store = knowledge_store or EmptyKnowledgeStore()
         self._use_validation_learnings = use_validation_learnings
         self._experiment_knowledge_store = None
 

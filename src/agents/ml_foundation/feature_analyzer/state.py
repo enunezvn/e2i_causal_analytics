@@ -229,6 +229,10 @@ class FeatureAnalyzerState(BaseAgentSchema):
 
     shap_skipped: Optional[bool] = None
     skip_reason: Optional[str] = None
+    # F8: provenance of SHAP importances — "real" | "synthetic" | "unavailable".
+    # Declared so the graph state propagates it from compute_shap to the agent output
+    # (an undeclared key is dropped on the Pydantic state merge).
+    data_provenance: Optional[str] = None
 
     # === ERROR HANDLING ===
 

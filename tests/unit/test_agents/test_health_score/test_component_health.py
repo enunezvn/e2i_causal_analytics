@@ -38,23 +38,48 @@ class TestComponentHealthNode:
         assert status_map["vector_store"] == "degraded"
 
     @pytest.mark.asyncio
-    async def test_quick_check_skips_components(self, mock_health_client, quick_check_state):
-        """Test that quick check skips component health"""
+    async def test_quick_check_measures_components(self, mock_health_client, quick_check_state):
+        """Codex F1.2 regression: quick check IS the component-focused check
+        (graph.py quick graph = component -> compose). With a real health_client
+        the component node MUST measure components on quick scope, NOT skip them
+        (skipping made quick yield 0/F/unknown)."""
         node = ComponentHealthNode(health_client=mock_health_client)
         result = await node.execute(quick_check_state)
 
+        assert result["component_health_measured"] is True
         assert result["component_health_score"] == 1.0
+        assert len(result["component_statuses"]) == 5
+        assert mock_health_client.call_count > 0
+
+    @pytest.mark.asyncio
+    async def test_skips_components_for_models_only_scope(self, mock_health_client, initial_state):
+        """A scope that excludes components (models/pipelines/agents-only) skips
+        the component check => UNMEASURED (no fail-open 1.0 score). Quick scope is
+        explicitly NOT in this set."""
+        initial_state["check_scope"] = "models"
+        node = ComponentHealthNode(health_client=mock_health_client)
+        result = await node.execute(initial_state)
+
+        assert result["component_health_measured"] is False
+        assert result.get("component_health_score") is None
         assert result["component_statuses"] == []
         assert mock_health_client.call_count == 0
 
     @pytest.mark.asyncio
-    async def test_no_client_uses_mock_statuses(self, initial_state):
-        """Test that no client results in mock healthy statuses"""
+    async def test_no_client_fails_closed_to_unknown(self, initial_state):
+        """F1 (was test_no_client_uses_mock_statuses): with NO real health_client
+        the component dimension is UNKNOWN, not fabricated-healthy. The node must
+        emit per-component 'unknown' statuses (so the dashboard still lists them)
+        and mark the dimension unmeasured with NO fail-open 1.0 score."""
         node = ComponentHealthNode(health_client=None)
         result = await node.execute(initial_state)
 
-        assert result["component_health_score"] == 1.0
+        assert result["component_health_measured"] is False
+        assert result.get("component_health_score") is None  # no fail-open score written
+        # The per-component status list is still emitted, but as 'unknown'.
         assert len(result["component_statuses"]) == 5
+        for status in result["component_statuses"]:
+            assert status["status"] == "unknown"
 
     @pytest.mark.asyncio
     async def test_custom_components(self, mock_health_client, initial_state):

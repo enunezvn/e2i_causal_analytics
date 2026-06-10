@@ -368,6 +368,76 @@ class TestExecuteGapAnalysis:
             assert response.brand == "kisqali"
 
     @pytest.mark.asyncio
+    async def test_execute_maps_errors_to_failed_even_if_status_says_completed(
+        self, sample_gap_request
+    ):
+        """F2 belt-and-suspenders: a result carrying errors must map to FAILED.
+
+        Even if the agent graph (incorrectly) reports status='completed', the route
+        must NOT return a green HTTP-200 "no gaps" response when ``errors`` is present.
+        The route forces AnalysisStatus.FAILED whenever ``result['errors']`` is non-empty.
+        """
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke = AsyncMock(
+            return_value={
+                # Worst case: a stale/buggy node still claims completed...
+                "status": "completed",
+                # ...but a real terminal error was accumulated upstream.
+                "errors": [{"node": "gap_detector", "error": "'region'"}],
+                "segments_analyzed": 0,
+                "prioritized_opportunities": [],
+                "quick_wins": [],
+                "strategic_bets": [],
+                "total_addressable_value": 0.0,
+                "total_gap_value": 0.0,
+                "executive_summary": "No significant performance gaps.",
+                "key_insights": [],
+                "warnings": [],
+                "detection_latency_ms": 5,
+                "roi_latency_ms": 0,
+            }
+        )
+
+        with patch(
+            "src.agents.gap_analyzer.graph.create_gap_analyzer_graph", return_value=mock_graph
+        ):
+            response = await _execute_gap_analysis(sample_gap_request)
+
+            assert response.status == AnalysisStatus.FAILED, (
+                "route must force FAILED when the agent result carries errors, "
+                f"got {response.status}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_execute_clean_no_gaps_stays_completed(self, sample_gap_request):
+        """Regression guard: a clean completed result with NO errors stays COMPLETED."""
+        mock_graph = AsyncMock()
+        mock_graph.ainvoke = AsyncMock(
+            return_value={
+                "status": "completed",
+                "errors": [],
+                "segments_analyzed": 4,
+                "prioritized_opportunities": [],
+                "quick_wins": [],
+                "strategic_bets": [],
+                "total_addressable_value": 0.0,
+                "total_gap_value": 0.0,
+                "executive_summary": "No significant performance gaps.",
+                "key_insights": [],
+                "warnings": [],
+                "detection_latency_ms": 100,
+                "roi_latency_ms": 150,
+            }
+        )
+
+        with patch(
+            "src.agents.gap_analyzer.graph.create_gap_analyzer_graph", return_value=mock_graph
+        ):
+            response = await _execute_gap_analysis(sample_gap_request)
+
+            assert response.status == AnalysisStatus.COMPLETED
+
+    @pytest.mark.asyncio
     async def test_execute_falls_back_to_mock_when_explicitly_allowed(
         self, sample_gap_request, monkeypatch
     ):

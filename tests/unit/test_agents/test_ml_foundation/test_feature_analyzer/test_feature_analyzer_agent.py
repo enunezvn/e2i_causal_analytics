@@ -45,6 +45,10 @@ class TestFeatureAnalyzerAgent:
             "compute_interactions": True,
             "store_in_semantic_memory": True,
             "trained_model": mock_random_forest_model,
+            # F8: provide real caller-supplied sample data so SHAP runs on a real
+            # (not synthetic) background — matches the (100, 5) shape the mock
+            # explainer returns. Without real data the node now fails closed (skips).
+            "X_sample": np.random.rand(100, 5),
         }
 
     @patch("src.agents.ml_foundation.feature_analyzer.nodes.shap_computer.mlflow")
@@ -95,6 +99,8 @@ class TestFeatureAnalyzerAgent:
         assert "top_features" in result
         assert "top_interactions" in result
         assert result["experiment_id"] == "exp_test_001"
+        # F8: real caller-supplied sample data -> provenance surfaced as "real"
+        assert result["data_provenance"] == "real"
 
     async def test_validates_required_fields(self, agent):
         """Should validate required input fields."""
@@ -108,6 +114,24 @@ class TestFeatureAnalyzerAgent:
         # Agent should succeed but skip SHAP
         assert result is not None
         assert result.get("experiment_id") == "exp_002"
+        # F8: a skipped run surfaces honest skip status + provenance, not real importances
+        assert result.get("shap_skipped") is True
+        assert result.get("data_provenance") == "unavailable"
+
+    @patch(
+        "src.agents.ml_foundation.feature_analyzer.agent._get_shap_repository",
+        new_callable=AsyncMock,
+    )
+    async def test_f8_skipped_shap_not_persisted(self, mock_get_repo, agent):
+        """F8: a skipped SHAP run must NOT be persisted as an empty ml_shap_analyses
+        row (which would be indistinguishable from a real zero-importance result)."""
+        mock_repo = AsyncMock()
+        mock_get_repo.return_value = mock_repo
+
+        result = await agent.run({"experiment_id": "exp_skip_persist"})
+
+        assert result.get("shap_skipped") is True
+        mock_repo.store_analysis.assert_not_called()
 
     async def test_validates_experiment_id(self, agent):
         """Should validate experiment_id is provided."""

@@ -616,6 +616,8 @@ class TestToolComposerTool:
         mock_sub_question3.intent = "causal_query"
 
         mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.status.value = "COMPLETED"
         mock_result.decomposition.sub_questions = [
             mock_sub_question,
             mock_sub_question2,
@@ -656,6 +658,8 @@ class TestToolComposerTool:
         """Test that context is passed correctly to Tool Composer."""
         # Create CompositionResult-like mock structure
         mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.status.value = "COMPLETED"
         mock_result.decomposition.sub_questions = []
         mock_result.execution.tools_executed = []
         mock_result.plan.get_execution_order.return_value = []
@@ -725,6 +729,8 @@ class TestToolComposerTool:
         """Test that a session ID is generated when not provided."""
         # Create CompositionResult-like mock structure
         mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.status.value = "COMPLETED"
         mock_result.decomposition.sub_questions = []
         mock_result.execution.tools_executed = []
         mock_result.plan.get_execution_order.return_value = []
@@ -739,6 +745,30 @@ class TestToolComposerTool:
 
         assert result["success"] is True
         assert result["context"]["session_id"].startswith("composer-")
+
+    @pytest.mark.asyncio
+    @patch("src.api.routes.chatbot_tools.compose_query")
+    async def test_total_tool_failure_returns_success_false(self, mock_compose_query):
+        """F6 route fail-closed: a FAILED composition (0/N tools succeeded) must NOT
+        be re-promoted to a success=True envelope by the route wrapper. The honest
+        answer text + 0.0 confidence flow through; success/status reflect reality."""
+        mock_result = MagicMock()
+        mock_result.success = False
+        mock_result.status.value = "FAILED"
+        mock_result.decomposition.sub_questions = []
+        mock_result.execution.tools_executed = 2
+        mock_result.plan.get_execution_order.return_value = []
+        mock_result.plan.parallel_groups = []
+        mock_result.response.answer = "Unable to complete analysis: all tool(s) failed."
+        mock_result.response.confidence = 0.0
+        mock_result.execution.get_all_outputs.return_value = {}
+        mock_compose_query.return_value = mock_result
+
+        result = await tool_composer_tool.ainvoke({"query": "multi-part failing query"})
+
+        assert result["success"] is False
+        assert result["status"] == "FAILED"
+        assert result["confidence"] == 0.0
 
 
 class TestMultiFacetedQueryDetection:

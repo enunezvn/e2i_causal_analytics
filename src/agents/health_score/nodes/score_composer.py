@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from src.agents.feedback_learner.recipient_emit import emit_recipient_signal
 
@@ -69,26 +69,81 @@ class ScoreComposerNode:
         start_time = time.time()
 
         try:
-            # Collect scores (default to 1.0 if not present)
-            scores = {
-                "component": state.get("component_health_score", 1.0),
-                "model": state.get("model_health_score", 1.0),
-                "pipeline": state.get("pipeline_health_score", 1.0),
-                "agent": state.get("agent_health_score", 1.0),
+            # F1 fail-closed: build the composite ONLY from dimensions a real
+            # backend actually measured. An unmeasured dimension is excluded
+            # entirely (NOT defaulted to a fail-open 1.0). Provenance discloses
+            # how many of the four dimensions were measured.
+            score_keys: Dict[str, str] = {
+                "component": "component_health_score",
+                "model": "model_health_score",
+                "pipeline": "pipeline_health_score",
+                "agent": "agent_health_score",
+            }
+            measured_flags: Dict[str, bool] = {
+                "component": bool(state.get("component_health_measured", False)),
+                "model": bool(state.get("model_health_measured", False)),
+                "pipeline": bool(state.get("pipeline_health_measured", False)),
+                "agent": bool(state.get("agent_health_measured", False)),
+            }
+            measured_dims = [dim for dim, ok in measured_flags.items() if ok]
+
+            # `scores` is exposed to the diagnosis/analysis helpers below, which
+            # treat a missing dimension as 1.0 (healthy) and therefore raise no
+            # issues for it — correct, since an unmeasured dim has no findings.
+            # cast: TypedDict.get(<dynamic str key>) widens to object; the value
+            # is a measured float by construction (the node set it alongside the
+            # measured flag).
+            scores: Dict[str, float] = {
+                dim: cast(float, state.get(score_keys[dim], 1.0)) for dim in measured_dims
             }
 
-            # Calculate weighted average
+            measured_count = len(measured_dims)
+            data_provenance: Literal["measured", "partial", "unknown"]
+            if measured_count == 4:
+                data_provenance = "measured"
+            elif measured_count >= 1:
+                data_provenance = "partial"
+            else:
+                data_provenance = "unknown"
+
             weights_dict = self.weights.to_dict()
-            overall_score = sum(scores[dim] * weight for dim, weight in weights_dict.items())
 
-            # Convert to 0-100 scale
-            overall_score_100 = overall_score * 100
-
-            # Determine grade
-            grade: Literal["A", "B", "C", "D", "F"] = self.grades.get_grade(overall_score)  # type: ignore[assignment]
+            grade: Literal["A", "B", "C", "D", "F"]
+            if measured_count == 0:
+                # F1 anti-fabrication guard: with nothing measured we must NOT
+                # claim a healthy grade-A/100 system. Report a clearly
+                # non-healthy UNKNOWN state.
+                overall_score = 0.0
+                overall_score_100 = 0.0
+                grade = "F"
+            else:
+                # Renormalize the weights over the measured dimensions so a
+                # partial measurement is a faithful weighted average of only
+                # what was measured (not diluted by absent dims).
+                measured_weight_total = sum(weights_dict[dim] for dim in measured_dims)
+                if measured_weight_total <= 0:
+                    # Degenerate weights (e.g. all-zero) -> simple mean.
+                    overall_score = sum(scores[dim] for dim in measured_dims) / measured_count
+                else:
+                    overall_score = (
+                        sum(scores[dim] * weights_dict[dim] for dim in measured_dims)
+                        / measured_weight_total
+                    )
+                overall_score_100 = overall_score * 100
+                grade = self.grades.get_grade(overall_score)  # type: ignore[assignment]
 
             # Identify issues
             critical_issues, warnings = self._identify_issues(state)
+
+            # F1: surface the unknown state as a critical issue so consumers see
+            # WHY the score is 0 rather than mistaking it for a real F-grade.
+            if measured_count == 0:
+                critical_issues = [
+                    "No health dimensions could be measured - no real health "
+                    "backends are wired (component/model/pipeline/agent). Health "
+                    "status is UNKNOWN, not healthy.",
+                    *critical_issues,
+                ]
 
             # Generate diagnostic reasoning
             diagnosis = self._generate_diagnosis(state, scores)
@@ -127,6 +182,7 @@ class ScoreComposerNode:
                 **state,
                 "overall_health_score": overall_score_100,
                 "health_grade": grade,
+                "data_provenance": data_provenance,
                 "critical_issues": critical_issues,
                 "warnings": warnings,
                 "health_summary": summary,
@@ -144,6 +200,7 @@ class ScoreComposerNode:
                 "errors": [{"node": "score_composer", "error": str(e)}],
                 "overall_health_score": 0.0,
                 "health_grade": "F",
+                "data_provenance": "unknown",
                 "critical_issues": [f"Score composition failed: {e}"],
                 "warnings": [],
                 "health_summary": "Unable to compute health score due to an error.",

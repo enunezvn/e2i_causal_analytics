@@ -137,7 +137,10 @@ class FeedbackLearnerTrainingSignal:
     # poorly" (real signal), and `None` as "no measurement" (skip).
     pattern_accuracy: Optional[float] = None
     recommendation_actionability: float = 0.0  # Percentage implemented
-    update_effectiveness: float = 0.0  # Downstream metric improvement
+    # F15 (audit): None when the knowledge_store apply-backend is unwired (the
+    # ratio is structurally unmeasurable). compute_reward skips it like
+    # pattern_accuracy rather than anchoring on a misleading 0.0.
+    update_effectiveness: Optional[float] = None  # Downstream metric improvement
 
     # === Rubric Evaluation Metrics ===
     rubric_weighted_score: Optional[float] = None  # AI-as-judge rubric score (1-5)
@@ -215,8 +218,8 @@ class FeedbackLearnerTrainingSignal:
         # Recommendation actionability (0-1)
         actionability_score = min(1.0, self.recommendation_actionability)
 
-        # Update effectiveness (0-1, allow negative for harmful updates)
-        effectiveness_score = max(0.0, min(1.0, self.update_effectiveness))
+        # Update effectiveness (0-1). F15: None means structurally unmeasurable
+        # (no knowledge_store apply-backend) -> omitted from the reward below.
 
         # Efficiency: feedback processed per second
         # Target: 100 feedback items in <30s = 3.33 items/s
@@ -247,13 +250,17 @@ class FeedbackLearnerTrainingSignal:
         # Pattern accuracy is omitted entirely when None (F-015).
         weight_score_pairs: list[tuple[float, float]] = [
             (weights["recommendation_actionability"], actionability_score),
-            (weights["update_effectiveness"], effectiveness_score),
             (weights["efficiency"], efficiency_score),
             (weights["coverage"], coverage_score),
         ]
         if self.pattern_accuracy is not None:
             accuracy_score = min(1.0, max(0.0, self.pattern_accuracy))
             weight_score_pairs.append((weights["pattern_accuracy"], accuracy_score))
+        # F15: omit update_effectiveness entirely when None (unmeasurable),
+        # mirroring pattern_accuracy, so its weight is redistributed.
+        if self.update_effectiveness is not None:
+            effectiveness_score = max(0.0, min(1.0, self.update_effectiveness))
+            weight_score_pairs.append((weights["update_effectiveness"], effectiveness_score))
         if self.rubric_weighted_score is not None and "rubric_quality" in weights:
             weight_score_pairs.append((weights["rubric_quality"], rubric_score))
 

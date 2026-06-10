@@ -57,31 +57,43 @@ class AgentHealthNode:
         """Execute agent health checks."""
         start_time = time.time()
 
-        # Skip if scope doesn't include agents
+        # Skip if scope doesn't include agents.
+        # Skipped == not measured (F1): do NOT emit a fail-open 1.0 score.
         if state.get("check_scope") not in ["full", "agents"]:
             logger.debug("Skipping agent health for non-agent scope")
             return {
                 **state,
                 "agent_statuses": [],
-                "agent_health_score": 1.0,
+                "agent_health_measured": False,
+            }
+
+        # F1 fail-closed: without a real agent_registry the agent dimension is
+        # UNKNOWN, not "healthy by default". Mark it unmeasured so the composer
+        # excludes it rather than fabricating a 1.0 score.
+        if not self.agent_registry:
+            logger.warning(
+                "No agent_registry wired - agent health is UNKNOWN (fail-closed), "
+                "not fabricated-healthy"
+            )
+            return {
+                **state,
+                "agent_statuses": [],
+                "agent_health_measured": False,
             }
 
         try:
-            if self.agent_registry:
-                # Fetch all agents
-                agents = await self.agent_registry.get_all_agents()
+            # Fetch all agents from the real registry
+            agents = await self.agent_registry.get_all_agents()
 
-                # Fetch metrics for each agent in parallel
-                if agents:
-                    tasks = [self._get_agent_status(agent) for agent in agents]
-                    statuses = await asyncio.gather(*tasks)
-                else:
-                    statuses = []
+            # Fetch metrics for each agent in parallel
+            if agents:
+                tasks = [self._get_agent_status(agent) for agent in agents]
+                statuses = await asyncio.gather(*tasks)
             else:
-                # No registry - return empty for testing
                 statuses = []
 
-            # Calculate overall agent health
+            # Calculate overall agent health. A real registry reporting zero
+            # agents IS a measurement, so 1.0 here is measured, not fabricated.
             if statuses:
                 available_count = sum(1 for s in statuses if s["available"])
                 high_success_count = sum(
@@ -95,7 +107,7 @@ class AgentHealthNode:
                 score_sum = high_success_count + ((available_count - high_success_count) * 0.5)
                 health_score = score_sum / len(statuses)
             else:
-                health_score = 1.0  # No agents tracked = healthy by default
+                health_score = 1.0  # Real registry, no agents => measured healthy
 
             check_time = int((time.time() - start_time) * 1000)
 
@@ -108,6 +120,7 @@ class AgentHealthNode:
                 **state,
                 "agent_statuses": statuses,
                 "agent_health_score": health_score,
+                "agent_health_measured": True,
                 "total_latency_ms": state.get("total_latency_ms", 0) + check_time,
             }
 
@@ -117,6 +130,7 @@ class AgentHealthNode:
                 **state,
                 "errors": [{"node": "agent_health", "error": str(e)}],
                 "agent_health_score": 0.5,  # Unknown = degraded
+                "agent_health_measured": True,
                 "agent_statuses": [],
             }
 
