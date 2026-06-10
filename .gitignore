@@ -244,3 +244,10 @@ artifacts/dspy/cr_*_n200.json
 # produced at runtime on the droplet's shared FS — never commit them.
 optimized_modules/
 optimized_prompts/
+
+# Shard 08 synthetic build outputs (regenerable via load_synthetic_data.py
+# --parquet-only + ensemble_trainer). The deployment_manifest embeds
+# machine-absolute model_uri paths and the model pickles are large binaries —
+# never commit; regenerate locally for the faithful gates.
+data/synthetic/
+data/deployment_manifest.json
