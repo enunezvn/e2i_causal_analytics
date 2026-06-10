@@ -109,3 +109,17 @@ async def test_explicit_override_for_unapproved_target_fails_closed(base_state):
     }
     result = await node.execute(state)
     assert result["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_override_is_deduplicated(base_state):
+    """A repeated model_id in the override must NOT be scheduled twice — that
+    would let the combiner count one model as ensemble diversity and bypass the
+    single-model confidence cap (fabricated diversity)."""
+    node = ModelOrchestratorNode(
+        model_registry=_ResolvingRegistry(["m1", "m2"]),
+        model_clients={"m1": _Client(0.6), "m2": _Client(0.7)},
+    )
+    result = await node.execute({**base_state, "models_to_use": ["m1", "m1"]})
+    assert result["status"] == "combining"
+    assert result["models_succeeded"] == 1, "duplicate model_id must run once"

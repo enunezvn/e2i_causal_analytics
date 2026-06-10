@@ -86,8 +86,11 @@ class ModelOrchestratorNode:
         start_time = time.time()
 
         try:
-            # Determine which models to use.
-            explicit = state.get("models_to_use") or []
+            # Determine which models to use. dict.fromkeys deduplicates while
+            # preserving order: a repeated model_id must NOT be scheduled twice,
+            # or the combiner would count it as ensemble diversity and bypass the
+            # single-model confidence cap (a fabricated "ensemble" from one model).
+            explicit = list(dict.fromkeys(state.get("models_to_use") or []))
             if self.registry is not None:
                 # When a registry is wired, the models actually run MUST be a
                 # subset of what the registry approves for THIS target (#840).
@@ -97,16 +100,16 @@ class ModelOrchestratorNode:
                 # target's loaded clients and fabricate a target-agnostic
                 # prediction. An empty approval (no deployable model for this
                 # target) fails closed; we never fall back to all clients.
-                approved = set(
-                    await self.registry.get_models_for_target(
-                        target=state.get("prediction_target", ""),
-                        entity_type=state.get("entity_type", ""),
-                    )
+                approved_order = await self.registry.get_models_for_target(
+                    target=state.get("prediction_target", ""),
+                    entity_type=state.get("entity_type", ""),
                 )
+                approved = set(approved_order)
                 if explicit:
                     models_to_use = [m for m in explicit if m in approved]
                 else:
-                    models_to_use = list(approved)
+                    # Preserve the registry-returned order (deterministic).
+                    models_to_use = list(dict.fromkeys(approved_order))
             else:
                 # Legacy / no-registry path: honor an explicit override, else
                 # fall back to whatever clients exist.
