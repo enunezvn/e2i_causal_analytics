@@ -616,17 +616,28 @@ class CATEEstimatorNode:
 
         cate_by_segment = {}
 
+        # Encode the effect modifiers ONCE over the FULL frame, identical to how the
+        # forest's training matrix was built (``self._encode_features(df[effect_modifiers])``
+        # at fit time). The fitted CausalForest only ever saw those deterministic codes,
+        # so the per-segment design matrix MUST use the same encoding — feeding the raw
+        # string columns to ``cf.effect`` otherwise raises "could not convert string to
+        # float" for any categorical effect modifier (e.g. the conversion-KPI substrate's
+        # trigger_type/priority). We encode the full frame and POSITIONALLY mask per
+        # segment; the segment mask stays on the RAW ``segment_var`` so categorical
+        # segment values still match.
+        X_all = self._encode_features(df[effect_modifiers])
+
         for segment_var in segment_vars:
             segment_results = []
 
             for segment_value in df[segment_var].unique():
-                mask = df[segment_var] == segment_value
+                mask = (df[segment_var] == segment_value).to_numpy()
                 segment_df = df[mask]
 
                 if len(segment_df) < 10:
                     continue
 
-                X_segment = segment_df[effect_modifiers].values
+                X_segment = X_all[mask]
 
                 # Get CATE for segment
                 cate = cf.effect(X_segment)
