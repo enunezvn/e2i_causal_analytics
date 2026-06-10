@@ -164,7 +164,12 @@ class CoverageTablesGenerator(BaseGenerator[pd.DataFrame]):
                     "annotation_type": "discontinuation_label",
                     "annotator_id": f"annot_{i % 5}",
                     "annotator_role": "clinician",
-                    "annotation_value": {"label": int(self._rng.integers(0, 2))},
+                    # v_kpi_label_quality / data_quality_label_quality count the
+                    # categorical label strings 'positive'/'negative'/'uncertain'
+                    # (NOT 0/1) -> emit those so the IAA computation is non-degenerate.
+                    "annotation_value": {
+                        "label": str(self._rng.choice(["positive", "negative", "uncertain"]))
+                    },
                     "annotation_confidence": round(float(self._rng.uniform(0.7, 0.99)), 3),
                     "annotation_timestamp": self._ts(30).isoformat(),
                     "is_adjudicated": False,

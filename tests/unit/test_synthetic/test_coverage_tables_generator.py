@@ -33,8 +33,12 @@ def test_five_view_tables_fresh_and_tagged():
     assert set(out["hcp_intent_surveys"]["brand"]).issubset({"Remibrutinib", "Kisqali", "Fabhalta"})
     # etl_pipeline_metrics carries a non-null TTR (WS1-DQ-009)
     assert out["etl_pipeline_metrics"]["time_to_release_hours"].notna().all()
-    # ml_annotations carries an iaa_group_id (WS1-DQ-008)
-    assert out["ml_annotations"]["iaa_group_id"].notna().all()
+    # ml_annotations carries an iaa_group_id (WS1-DQ-008) + categorical label
+    # strings the label-quality KPI counts (positive/negative/uncertain, not 0/1).
+    ann = out["ml_annotations"]
+    assert ann["iaa_group_id"].notna().all()
+    labels = {v["label"] for v in ann["annotation_value"]}
+    assert labels.issubset({"positive", "negative", "uncertain"})
     for f in out.values():
         assert f["is_synthetic"].all()
 

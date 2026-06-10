@@ -40,7 +40,9 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
             disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
             rows.append(
                 {
-                    "path_id": str(uuid.uuid4()),
+                    # path_id is varchar(20) on the faithful DB -> a full uuid4 (36)
+                    # overflows (22001). Use a short collision-safe synthetic id.
+                    "path_id": f"scp_{uuid.uuid4().hex[:13]}",
                     "discovery_date": disc.isoformat(),
                     "causal_chain": {"nodes": ["treatment_arm", *mediators, "treatment_initiated"]},
                     "start_node": "treatment_arm",

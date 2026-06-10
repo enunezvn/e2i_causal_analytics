@@ -178,6 +178,10 @@ TABLE_COLUMNS = {
         "drug_class",
         "event_subtype",
         "icd_codes",
+        # Shard 09 WS3-BI-006 (NRx): per-(patient,brand) chronological prescription
+        # index. NRx counts sequence_number=1 prescriptions; stamped by
+        # sequence_number.stamp_sequence_number in the load script.
+        "sequence_number",
         "data_split",
         "is_synthetic",
     ],
@@ -196,6 +200,19 @@ TABLE_COLUMNS = {
         "treatment_effect_estimate",
         "heterogeneous_effect",
         "segment_assignment",
+        # Shard 09 WS1-MP-002..008 + CM-004: model-quality metrics the
+        # model-performance KPIs read. Stamped onto the synthetic frame by
+        # model_metrics.stamp_model_metrics (nullable columns, faithful-DB verified).
+        "model_auc",
+        "model_pr_auc",
+        "model_precision",
+        "model_recall",
+        "brier_score",
+        "calibration_score",
+        "rank_metrics",
+        "fairness_metrics",
+        "shap_values",
+        "counterfactual_outcome",
         "is_synthetic",
     ],
     "triggers": [
@@ -226,6 +243,12 @@ TABLE_COLUMNS = {
         "causal_chain",
         "supporting_evidence",
         "recommended_action",
+        # Shard 09 WS2-TR-008 (CFR): change-tracking substrate stamped by
+        # change_tracking.stamp_change_tracking (nullable cols, faithful-DB verified).
+        "previous_trigger_id",
+        "change_type",
+        "change_failed",
+        "change_outcome_delta",
         "data_split",
         "is_synthetic",
     ],

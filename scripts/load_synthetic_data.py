@@ -51,14 +51,19 @@ from src.ml.synthetic.generators import (
 # view-backed + data_lag + causal_paths). Imported here so generate_datasets can
 # emit the new dataset keys; the loader carries them via TABLE_COLUMNS (Task 1).
 from src.ml.synthetic.generators.causal_paths_generator import CausalPathsGenerator
+from src.ml.synthetic.generators.change_tracking import stamp_change_tracking
 from src.ml.synthetic.generators.coverage_tables_generator import CoverageTablesGenerator
-from src.ml.synthetic.generators.data_lag import stamp_data_lag_hours
+from src.ml.synthetic.generators.data_lag import (
+    stamp_data_lag_hours,
+    stamp_sequence_number,
+)
 from src.ml.synthetic.generators.experiment_generator import (
     ABExperimentGenerator,
     ExperimentGenerator,
 )
 from src.ml.synthetic.generators.feedback_generator import FeedbackGenerator
 from src.ml.synthetic.generators.mlops_generator import MLOpsGenerator
+from src.ml.synthetic.generators.model_metrics import stamp_model_metrics
 from src.ml.synthetic.generators.observability_generator import ObservabilityGenerator
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
@@ -340,6 +345,21 @@ def generate_datasets(
         datasets["patient_journeys"] = stamp_data_lag_hours(
             datasets["patient_journeys"], seed=seed + 6
         )
+
+    # WS3-BI-006 (NRx): number prescription events per (patient, brand) so NRx
+    # (sequence_number=1) counts the synthetic new prescriptions.
+    if "treatment_events" in datasets and not datasets["treatment_events"].empty:
+        datasets["treatment_events"] = stamp_sequence_number(datasets["treatment_events"])
+
+    # WS1-MP-002..008 + CM-004: stamp model-quality metrics onto synthetic
+    # ml_predictions so the model-performance KPIs return non-NULL from synthetic.
+    if "ml_predictions" in datasets and not datasets["ml_predictions"].empty:
+        datasets["ml_predictions"] = stamp_model_metrics(datasets["ml_predictions"], seed=seed + 8)
+
+    # WS2-TR-008 (CFR): stamp a change-tracking supersession chain onto a fraction
+    # of synthetic triggers so CFR has a non-zero denominator + numerator.
+    if "triggers" in datasets and not datasets["triggers"].empty:
+        datasets["triggers"] = stamp_change_tracking(datasets["triggers"], seed=seed + 9)
 
     logger.info(
         "  Shard-09 substrate: %d experiments, %d ab assignments, %d registry, "
