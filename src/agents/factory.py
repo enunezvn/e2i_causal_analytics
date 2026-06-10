@@ -310,7 +310,12 @@ def _try_load_prod_model_clients() -> Dict[str, Any]:
 
     Resolution order:
       1. ``E2I_MODEL_DEPLOYMENT_MANIFEST_PATH`` env var (JSON file path)
-      2. ``data/deployment_manifest.json`` if it exists in CWD
+      2. ``data/ml_artifacts/deployment_manifest.json`` if it exists in CWD
+
+    The default read path matches where the deploy CLI writes the manifest
+    (#857): the writable ``data/ml_artifacts/`` named volume. The legacy
+    ``data/`` root is read-only in the prod api container, so a manifest could
+    never be written there for the factory to find.
 
     Any failure (file missing, parse error, bad URI) returns ``{}`` and logs
     a warning. With ``{}`` clients and a live ``model_registry`` (see
@@ -333,7 +338,7 @@ def _try_load_prod_model_clients() -> Dict[str, Any]:
     if manifest_path_str:
         return load_clients_from_deployment_manifest_file(manifest_path_str)
 
-    default_path = Path("data/deployment_manifest.json")
+    default_path = Path("data/ml_artifacts/deployment_manifest.json")
     if default_path.exists():
         return load_clients_from_deployment_manifest_file(default_path)
 
