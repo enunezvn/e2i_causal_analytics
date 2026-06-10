@@ -172,27 +172,14 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
     # constructed with NO feedback_store -> the collector returned [] ->
     # update_effectiveness was pinned at 0.0 (documented starved state). The
     # store fails closed (empty list) if the DB/client is unavailable.
-    feedback_store = None
-    knowledge_stores = None
-    try:
-        from src.agents.feedback_learner.knowledge_stores import build_knowledge_stores
-        from src.memory.services.factories import get_async_supabase_client
-        from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
+    # F15: wire the REAL feedback source (chatbot_message_feedback). #837: wire the
+    # REAL knowledge_stores so applied updates durably persist (read-back confirmed)
+    # and update_effectiveness becomes a real measured ratio. One shared builder
+    # (used by this task, the /feedback/learn route, and process_feedback_batch)
+    # fails closed to (None, None) — the honest unwired path (F15).
+    from src.agents.feedback_learner.agent import build_production_feedback_stores
 
-        client = await get_async_supabase_client()
-        feedback_store = get_chatbot_feedback_repository(supabase_client=client)
-        # #837 (F15 follow-up): wire the REAL knowledge_stores so applied updates
-        # durably persist (read-back confirmed) and update_effectiveness becomes a
-        # real measured ratio instead of None. Same async client; fails closed
-        # below — if unavailable, knowledge_stores stays None so the updater node
-        # reports update_backend_wired=False and update_effectiveness=None (F15).
-        knowledge_stores = build_knowledge_stores(client)
-    except Exception as exc:  # pragma: no cover - degraded path
-        logger.warning(
-            "F15/#837: could not build real feedback_store/knowledge_stores (%s); "
-            "learning from empty, update_effectiveness stays None",
-            exc,
-        )
+    feedback_store, knowledge_stores = await build_production_feedback_stores()
 
     # Optional scope: DSPY_LEARN_FOCUS_AGENTS="agent_a,agent_b" (default: all agents).
     _focus_env = os.environ.get("DSPY_LEARN_FOCUS_AGENTS", "").strip()

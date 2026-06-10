@@ -181,3 +181,16 @@ async def test_node_with_real_stores_yields_positive_effectiveness():
             assert await stores[kt].get(agent) is not None
     finally:
         await _cleanup(client, keys)
+
+
+async def test_build_production_feedback_stores_wires_real_stores():
+    """The shared builder used by the Celery task, the /feedback/learn route, and
+    process_feedback_batch returns a real feedback_store + the 4 knowledge stores
+    when the async Supabase client is available — so those entry points run a
+    fully-wired cycle (update_effectiveness measurable)."""
+    from src.agents.feedback_learner.agent import build_production_feedback_stores
+
+    feedback_store, knowledge_stores = await build_production_feedback_stores()
+    assert feedback_store is not None
+    assert knowledge_stores is not None
+    assert set(knowledge_stores) == {"baseline", "agent_config", "prompt", "threshold"}

@@ -1341,10 +1341,20 @@ async def _execute_learning_cycle(
             },
         )
 
-        # Create and run graph — persist_signals=True ensures the finalize node
-        # writes the training signal to dspy_agent_training_signals so this
-        # caller is no longer a bypass of the persistence path.
-        graph = build_feedback_learner_graph(persist_signals=True)
+        # #837 (+F15): wire the REAL feedback source + knowledge stores so this
+        # route runs a FULLY real cycle — it reports updates_applied /
+        # update_effectiveness as real measured values rather than a structural
+        # 0 / None. Fail-closed → (None, None) → the honest unwired path (F15).
+        # persist_signals=True still persists the finalized training signal so this
+        # caller is not a bypass of the persistence path.
+        from src.agents.feedback_learner.agent import build_production_feedback_stores
+
+        feedback_store, knowledge_stores = await build_production_feedback_stores()
+        graph = build_feedback_learner_graph(
+            feedback_store=feedback_store,
+            knowledge_stores=knowledge_stores,
+            persist_signals=True,
+        )
         result = await graph.ainvoke(initial_state)
 
         # Convert agent output to API response

@@ -100,3 +100,23 @@ async def test_node_unwired_effectiveness_is_none():
 
     final = await _finalize_training_signal(out)  # type: ignore[arg-type]
     assert final["training_signal"].update_effectiveness is None
+
+
+@pytest.mark.asyncio
+async def test_build_production_feedback_stores_fail_closed(monkeypatch):
+    """The shared production builder used by the Celery task, the /feedback/learn
+    route, and process_feedback_batch must FAIL CLOSED to (None, None) when the
+    async Supabase client is unavailable — so every wired entry point runs the
+    honest unwired path (update_effectiveness None), never a fabricated value."""
+    import src.memory.services.factories as factories
+
+    async def _raise():
+        raise RuntimeError("SUPABASE_URL unset")
+
+    monkeypatch.setattr(factories, "get_async_supabase_client", _raise)
+
+    from src.agents.feedback_learner.agent import build_production_feedback_stores
+
+    feedback_store, knowledge_stores = await build_production_feedback_stores()
+    assert feedback_store is None
+    assert knowledge_stores is None
