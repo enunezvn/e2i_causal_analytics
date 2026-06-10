@@ -124,6 +124,24 @@ Kisqali 0.133 — exactly the designed 1.2 / 1.0 / 0.8 ordering.
 | `manifest.json` | run | table list, row counts, timestamp, `is_synthetic: true` |
 | `README.md` | run | provenance of the current dataset |
 
+### 3.1 Input file → pipeline-stage map (what feeds what)
+
+Measured values are from the current `data/rwd/synthetic_CSU/` run (Remibrutinib cells).
+
+| Input file | Pipeline stage | How it is used | Expected result | Outputs | What the outputs feed |
+|---|---|---|---|---|---|
+| `tier0/<cohort>/e2i_ml_v3_patient_journeys.parquet` + split registry (4 dirs) | **Tier0 MLOps pipeline** (`run_tier0_test.py --data-dir`) | scope → data prep → training → HPO → deployment gates on the cohort's honest features | val_AUC > 0.55 gate *(LR baselines: init 0.68 / disc 0.63 / persist 0.63 / hcp 0.78 ✓)* | trained model artifacts + val_AUC verdicts | **tier1-5 agent stages** (tier0 output is their input) |
+| `cohort_frames/initiation__<brand>.parquet` | causal recovery (offline) | IPW/DML ATE vs sidecar; naive-vs-adjusted contrast; CATE by segment | ATE within ±0.10 of +0.1718 *(IPW 0.163 ✓)*; naive more biased *(0.269 ✓)*; high>med>low *(0.294>0.191>0.074 ✓)* | recovered ATE/CATE | gate-3 verdict; causal_impact estimator certification |
+| `cohort_frames/discontinuation__<brand>.parquet` | causal recovery (initiators only) | same; treatment *reduces* discontinuation | recovered ATE **negative**, strongest in high severity | recovered ATE/CATE | disc-cohort agent validation |
+| `cohort_frames/persistence__<brand>.parquet` | causal recovery (initiators only) | same; outcome = 1 − discontinued | ATE positive, mirror of disc | recovered ATE/CATE | persistence-cohort agent validation |
+| `hcp_profiles.parquet` | tier0 modelability (HCP grain) + gate-7 ensemble training | predict ADOPTER from volume/experience/network features; `build_synthetic_ensemble_manifest.py` trains LR+GBC on it | AUC > 0.6 *(0.78 ✓)*; prevalence ~0.40 *(0.405 ✓)* | ≥2 fitted models → `models/*.pkl` + `deployment_manifest.json` | gate 7 → prediction_synthesizer (model_agreement > 0.5) |
+| `cohort_frames/hcp_adoption__<brand>.parquet` | designed-CATE validation (control-less) | ATE = mean(`cate_estimate`); cross-brand ordering | Fabhalta 0.194 > Remi 0.164 > Kisqali 0.133 *(✓ designed 1.2/1.0/0.8)* | per-brand CATE summary; `allocation_targets` (via builder) | gate-10 hcp cells; resource_optimizer (scaffolded) |
+| `patient_journeys.parquet` | substrate twin / DB load (Mode B) | loader upserts to docker-Supabase; offline source for cohort frames and tier0 exports; carries `academic_hcp` for full adjustment | 25,000 unique patients, all `is_synthetic=True` | DB rows → `cohort_resolution._PJ_COHORTS` frames | gates 3/6/10/11; dispatcher resolvers; chat-path e2e |
+| `treatment_events.parquet` | DB load → windowed KPIs | anchored event dates drive NOW()−30d KPI windows | 60.8% in last 30d, 0 future-dated; per-brand TRx > 0 | non-zero windowed KPIs | gates 1–2; `kpi_query` RPC; dashboard tiles |
+| `triggers.parquet` + `business_metrics.parquet` | DB load → KPI/uplift substrate | triggers ⋈ treatment_events conversion frame; per-region metric pivots | treatment_rate > control_rate, uplift > 0; ≥4 non-zero metrics | conversion KpiFrame; tier0_data for the het resolver | gates 2/4/5/6; heterogeneous_optimizer; gap_analyzer |
+| `ground_truth_<run>.json` | truth reference (all stages) | TRUE_ATE + `cate_by_segment` per (brand, dgp_type), tolerance 0.10 | Remi +0.1718; segments 0.294/0.191/0.074 | pass/fail verdicts | gate 3 + every lean check |
+| `manifest.json` + `README.md` | provenance check | inventory vs actual files; run config + invocations | 24 tables, 745,163 rows, `is_synthetic: true` | run audit trail | reproducibility / regeneration decisions |
+
 ---
 
 ## 4. How the platform consumes it
