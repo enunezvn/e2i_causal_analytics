@@ -60,7 +60,16 @@ class LoaderConfig:
         if not self.supabase_url:
             self.supabase_url = os.getenv("SUPABASE_URL")
         if not self.supabase_key:
-            self.supabase_key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
+            # ETL/seeding writes require the service-role grant: anon/authenticated
+            # are INSERT-denied on this stack (post-#058 grant tightening). Prefer the
+            # service-role key, mirroring src/api/dependencies/supabase_client.py:96 and
+            # src/feature_store/client.py. Fall back to anon only for read-only/dry-run.
+            self.supabase_key = (
+                os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+                or os.getenv("SUPABASE_SERVICE_KEY")
+                or os.getenv("SUPABASE_KEY")
+                or os.getenv("SUPABASE_ANON_KEY")
+            )
 
 
 # Table loading order (respects foreign key dependencies)
@@ -76,6 +85,22 @@ LOADING_ORDER = [
     "feature_groups",
     "features",
     "feature_values",
+    # --- Shard 09: experiment / MLOps / observability / feedback / view-backed ---
+    "ml_experiments",  # parent of ab_* and ml_model_registry/ml_training_runs
+    "ml_model_registry",  # parent of ml_training_runs.model_registry_id, ml_deployments.model_registry_id
+    "ml_training_runs",
+    "ml_deployments",
+    "ab_experiment_assignments",  # parent of ab_experiment_enrollments.assignment_id
+    "ab_experiment_enrollments",
+    "ab_experiment_results",
+    "ml_observability_spans",
+    "causal_paths",  # CM-003/CM-005 substrate (Task 5c)
+    "learning_signals",
+    "user_sessions",
+    "hcp_intent_surveys",
+    "data_source_tracking",
+    "etl_pipeline_metrics",
+    "ml_annotations",
 ]
 
 # Column mappings for each table (aligned with actual Supabase schema)
@@ -88,6 +113,11 @@ TABLE_COLUMNS = {
         "geographic_region",
         "years_experience",
         "total_patient_volume",
+        # Shard 06.3 adoption cohort substrate (resolver reads these from hcp_profiles).
+        "peer_influence_score",
+        "influence_network_size",
+        "adoption_category",
+        "is_synthetic",
     ],
     "patient_journeys": [
         "patient_journey_id",
@@ -103,7 +133,32 @@ TABLE_COLUMNS = {
         "treatment_initiated",
         "days_to_treatment",
         "age_at_diagnosis",
+        # Shard 04 M5 eligibility columns (migration 068). primary_diagnosis_code
+        # pre-existed; the other 10 are cohort_constructor required_fields.
+        "primary_diagnosis_code",
+        "urticaria_severity_uas7",
+        "prior_antihistamine_therapy",
+        "hr_status",
+        "her2_status",
+        "disease_stage",
+        "ecog_performance_status",
+        "ldh_ratio",
+        "complement_inhibitor_status",
+        "proteinuria_g_day",
+        "egfr",
         "data_split",
+        # causal substrate (Shard 01 M2 DDL; values filled by Shard 03/06).
+        # Emitted as NULL placeholders by PatientGenerator so validate_datasets
+        # does not flag them as critical_missing and the loader carries them.
+        "treatment_arm",
+        "propensity_score",
+        "segment_assignment",
+        "discontinued_180d",
+        "persistent_180d",
+        # Shard 09 Task 5b WS1-DQ-007: recent ingest lag (column exists on the DB,
+        # integer; stamped on the synthetic frame by data_lag.stamp_data_lag_hours).
+        "data_lag_hours",
+        "is_synthetic",
     ],
     "treatment_events": [
         "treatment_event_id",
@@ -113,7 +168,22 @@ TABLE_COLUMNS = {
         "event_date",
         "event_type",
         "duration_days",
+        # Shard 04: indication-correct coding. These DB columns already exist; the
+        # loader gates anything unlisted (batch_loader.py:344), so register them or
+        # they vanish. NOTE: primary_diagnosis_code is intentionally NOT listed — it
+        # is a patient_journeys scalar, not a treatment_events column (DB carries the
+        # dx as icd_codes text[]); registering it would 42703 the insert.
+        "drug_ndc",
+        "drug_name",
+        "drug_class",
+        "event_subtype",
+        "icd_codes",
+        # Shard 09 WS3-BI-006 (NRx): per-(patient,brand) chronological prescription
+        # index. NRx counts sequence_number=1 prescriptions; stamped by
+        # sequence_number.stamp_sequence_number in the load script.
+        "sequence_number",
         "data_split",
+        "is_synthetic",
     ],
     "ml_predictions": [
         "prediction_id",
@@ -125,11 +195,34 @@ TABLE_COLUMNS = {
         "model_version",
         "prediction_timestamp",
         "data_split",
+        # Causal substrate read by migration 044 (causal_metrics_ate / _cate);
+        # values populated by Shard 03's DGP, columns must survive the loader.
+        "treatment_effect_estimate",
+        "heterogeneous_effect",
+        "segment_assignment",
+        # Shard 09 WS1-MP-002..008 + CM-004: model-quality metrics the
+        # model-performance KPIs read. Stamped onto the synthetic frame by
+        # model_metrics.stamp_model_metrics (nullable columns, faithful-DB verified).
+        "model_auc",
+        "model_pr_auc",
+        "model_precision",
+        "model_recall",
+        "brier_score",
+        "calibration_score",
+        "rank_metrics",
+        "fairness_metrics",
+        "shap_values",
+        "counterfactual_outcome",
+        "is_synthetic",
     ],
     "triggers": [
         "trigger_id",
         "patient_id",
         "hcp_id",
+        # brand_id is text NOT NULL on the triggers table; the generator already
+        # emits it from the patient's brand (trigger_generator.py:201). Must be
+        # registered or the loader strips it -> 23502 not-null violation.
+        "brand_id",
         "trigger_timestamp",
         "trigger_type",
         "priority",
@@ -150,7 +243,14 @@ TABLE_COLUMNS = {
         "causal_chain",
         "supporting_evidence",
         "recommended_action",
+        # Shard 09 WS2-TR-008 (CFR): change-tracking substrate stamped by
+        # change_tracking.stamp_change_tracking (nullable cols, faithful-DB verified).
+        "previous_trigger_id",
+        "change_type",
+        "change_failed",
+        "change_outcome_delta",
         "data_split",
+        "is_synthetic",
     ],
     "business_metrics": [
         "metric_id",
@@ -170,6 +270,7 @@ TABLE_COLUMNS = {
         "confidence_interval_upper",
         "sample_size",
         "data_split",
+        "is_synthetic",
     ],
     "feature_groups": [
         "id",
@@ -180,6 +281,7 @@ TABLE_COLUMNS = {
         "source_table",
         "expected_update_frequency_hours",
         "max_age_hours",
+        "is_synthetic",
     ],
     "features": [
         "id",
@@ -191,6 +293,7 @@ TABLE_COLUMNS = {
         "owner",
         "tags",
         "drift_threshold",
+        "is_synthetic",
     ],
     "feature_values": [
         "id",
@@ -199,8 +302,312 @@ TABLE_COLUMNS = {
         "value",
         "event_timestamp",
         "freshness_status",
+        "is_synthetic",
+    ],
+    # --- Shard 09: columns verified against information_schema.columns on the
+    # faithful docker DB. is_synthetic on the 8 MLOps/AB/observability/feedback
+    # tables is added by migration 069 (this shard); the 5 view-backed tables +
+    # causal_paths + ab_experiment_assignments already carry it (063 / earlier).
+    "ml_experiments": [
+        "id",
+        "experiment_name",
+        "description",
+        "prediction_target",
+        "observation_window_days",
+        "prediction_horizon_days",
+        "minimum_auc",
+        "minimum_precision_at_k",
+        "maximum_fpr",
+        "brand",
+        "region",
+        "created_by",
+        "created_at",
+        "status",
+        "is_synthetic",
+    ],
+    "ml_model_registry": [
+        "id",
+        "experiment_id",
+        "model_name",
+        "model_version",
+        "algorithm",
+        "feature_count",
+        "training_samples",
+        "auc",
+        "pr_auc",
+        "brier_score",
+        "calibration_slope",
+        "stage",
+        "is_champion",
+        "trained_at",
+        "registered_at",
+        "is_synthetic",
+    ],
+    "ml_training_runs": [
+        "id",
+        "experiment_id",
+        "model_registry_id",
+        "run_name",
+        "algorithm",
+        "hyperparameters",
+        "training_samples",
+        "validation_samples",
+        "test_samples",
+        "feature_names",
+        "train_metrics",
+        "validation_metrics",
+        "test_metrics",
+        "status",
+        "started_at",
+        "completed_at",
+        "duration_seconds",
+        "is_best_trial",
+        "is_synthetic",
+    ],
+    "ml_deployments": [
+        "id",
+        "model_registry_id",
+        "deployment_name",
+        "environment",
+        "endpoint_name",
+        "status",
+        "deployed_by",
+        "deployment_config",
+        "production_metrics",
+        "created_at",
+        "deployed_at",
+        "latency_p50_ms",
+        "latency_p95_ms",
+        "error_rate",
+        "is_synthetic",
+    ],
+    "ab_experiment_assignments": [
+        "id",
+        "experiment_id",
+        "unit_id",
+        "unit_type",
+        "variant",
+        "assigned_at",
+        "randomization_method",
+        "stratification_key",
+        "assignment_hash",
+        "created_by",
+        "is_synthetic",
+    ],
+    "ab_experiment_enrollments": [
+        "id",
+        "assignment_id",
+        "enrolled_at",
+        "enrollment_status",
+        "eligibility_criteria_met",
+        "eligibility_check_timestamp",
+        "is_synthetic",
+    ],
+    "ab_experiment_results": [
+        "id",
+        "experiment_id",
+        "analysis_type",
+        "analysis_method",
+        "computed_at",
+        "primary_metric",
+        "control_mean",
+        "control_std",
+        "control_n",
+        "treatment_mean",
+        "treatment_std",
+        "treatment_n",
+        "effect_estimate",
+        "effect_type",
+        "effect_ci_lower",
+        "effect_ci_upper",
+        "confidence_level",
+        "p_value",
+        "is_significant",
+        "observed_power",
+        "is_synthetic",
+    ],
+    "ml_observability_spans": [
+        "id",
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "agent_name",
+        "agent_tier",
+        "operation_type",
+        "started_at",
+        "ended_at",
+        "duration_ms",
+        "model_name",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "status",
+        "fallback_used",
+        "attributes",
+        "is_synthetic",
+    ],
+    "causal_paths": [
+        "path_id",
+        "discovery_date",
+        "causal_chain",
+        "start_node",
+        "end_node",
+        "intermediate_nodes",
+        "path_length",
+        "causal_effect_size",
+        "confidence_level",
+        "method_used",
+        "confounders_controlled",
+        "mediators_identified",
+        "time_lag_days",
+        "validation_status",
+        "business_impact_estimate",
+        "data_split",
+        "direct_effect",
+        "indirect_effect",
+        "brand",
+        "region",
+        "confirmation_count",
+        "created_at",
+        "is_synthetic",
+    ],
+    "learning_signals": [
+        "signal_id",
+        "signal_type",
+        "signal_value",
+        "signal_details",
+        "applies_to_type",
+        "applies_to_id",
+        "brand",
+        "region",
+        "rated_agent",
+        "is_training_example",
+        "dspy_metric_name",
+        "dspy_metric_value",
+        "training_input",
+        "training_output",
+        "reward",
+        "created_at",
+        "is_synthetic",
+    ],
+    "user_sessions": [
+        "session_id",
+        "user_id",
+        "user_role",
+        "user_region",
+        "session_start",
+        "session_end",
+        "session_duration_seconds",
+        "page_views",
+        "queries_executed",
+        "actions_taken",
+        "engagement_score",
+        "created_at",
+        "is_synthetic",
+    ],
+    "hcp_intent_surveys": [
+        "survey_id",
+        "hcp_id",
+        "survey_date",
+        "survey_type",
+        "brand",
+        "intent_to_prescribe_score",
+        "intent_to_prescribe_change",
+        "awareness_score",
+        "favorability_score",
+        "previous_survey_id",
+        "days_since_last_survey",
+        "survey_source",
+        "created_at",
+        "is_synthetic",
+    ],
+    "data_source_tracking": [
+        "tracking_id",
+        "tracking_date",
+        "source_name",
+        "source_type",
+        "records_received",
+        "records_matched",
+        "records_unique",
+        "match_rate_vs_iqvia",
+        "match_rate_vs_healthverity",
+        "match_rate_vs_komodo",
+        "match_rate_vs_veeva",
+        "stacking_eligible_records",
+        "stacking_applied_records",
+        "stacking_lift_percentage",
+        "data_quality_score",
+        "created_at",
+        "is_synthetic",
+    ],
+    "etl_pipeline_metrics": [
+        "pipeline_run_id",
+        "pipeline_name",
+        "pipeline_version",
+        "run_start",
+        "run_end",
+        "duration_seconds",
+        "source_data_date",
+        "source_data_timestamp",
+        "time_to_release_hours",
+        "records_processed",
+        "records_failed",
+        "status",
+        "quality_checks_passed",
+        "quality_checks_failed",
+        "created_at",
+        "is_synthetic",
+    ],
+    "ml_annotations": [
+        "annotation_id",
+        "entity_type",
+        "entity_id",
+        "annotation_type",
+        "annotator_id",
+        "annotator_role",
+        "annotation_value",
+        "annotation_confidence",
+        "annotation_timestamp",
+        "is_adjudicated",
+        "iaa_group_id",
+        "created_at",
+        "is_synthetic",
     ],
 }
+
+
+# Registered-but-OPTIONAL columns: nullable analytical / enrichment fields that the
+# load script stamps via separate, order-independent enrichment passes (e.g.
+# data_lag.stamp_data_lag_hours, sequence_number.stamp_sequence_number) or that are
+# only populated for a subset of rows (ml_predictions quality metrics, trigger
+# change-event fields). They are column-GATED into the load when present, but their
+# ABSENCE is not a critical validation error — the DB columns are nullable, so a base
+# dataset that has not been enriched still loads cleanly. validate_datasets exempts
+# them from critical_missing, mirroring the existing ``_split`` exemption. (The core
+# causal-substrate columns — treatment_arm/propensity_score/etc. — are deliberately
+# NOT here: PatientGenerator emits them as NULL placeholders, so they remain required.)
+OPTIONAL_COLUMNS = frozenset(
+    {
+        "data_lag_hours",  # patient_journeys (Shard 09 WS1-DQ-007 enrichment stamp)
+        "sequence_number",  # treatment_events (NRx ordering enrichment stamp)
+        # ml_predictions model-quality metrics (nullable; only on evaluated predictions)
+        "model_auc",
+        "model_pr_auc",
+        "model_precision",
+        "model_recall",
+        "brier_score",
+        "calibration_score",
+        "rank_metrics",
+        "fairness_metrics",
+        "shap_values",
+        "counterfactual_outcome",
+        # triggers change-event fields (nullable; only on change-type triggers)
+        "previous_trigger_id",
+        "change_type",
+        "change_failed",
+        "change_outcome_delta",
+    }
+)
 
 
 class BatchLoader:
@@ -382,6 +789,15 @@ class BatchLoader:
 
         records = batch_df.to_dict(orient="records")
 
+        # Coerce integral floats -> int. pandas upcasts integer columns to float
+        # whenever a row carries NaN (missingness), so e.g. age_at_diagnosis renders
+        # as "13.0", which a Postgres integer/smallint column rejects (22P02). int is
+        # also accepted by double-precision columns, so this is safe for both.
+        for rec in records:
+            for k, v in rec.items():
+                if isinstance(v, float) and v.is_integer():
+                    rec[k] = int(v)
+
         for attempt in range(self.config.max_retries):
             try:
                 self.client.table(table_name).upsert(records).execute()
@@ -425,8 +841,12 @@ class BatchLoader:
             required_columns = TABLE_COLUMNS[table_name]
             missing_columns = [c for c in required_columns if c not in df.columns]
 
-            # Some columns are optional (like data_split for static entities)
-            critical_missing = [c for c in missing_columns if not c.endswith("_split")]
+            # Some columns are optional: data_split for static entities, plus the
+            # nullable analytical/enrichment columns in OPTIONAL_COLUMNS (stamped by
+            # order-independent enrichment passes or populated for a subset of rows).
+            critical_missing = [
+                c for c in missing_columns if not c.endswith("_split") and c not in OPTIONAL_COLUMNS
+            ]
             if critical_missing:
                 errors.append(f"{table_name}: Missing columns {critical_missing}")
 

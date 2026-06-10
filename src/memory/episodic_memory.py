@@ -352,6 +352,7 @@ async def search_episodic_by_e2i_entity(
     entity_id: str,
     limit: int = 20,
     event_types: Optional[List[str]] = None,
+    include_synthetic: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Search episodic memories linked to a specific E2I entity.
@@ -361,10 +362,14 @@ async def search_episodic_by_e2i_entity(
         entity_id: ID of the entity
         limit: Maximum results
         event_types: Optional filter by event types
+        include_synthetic: When False (default) synthetic episodic rows are
+            excluded (Shard 07) — this read surfaces memories to users.
 
     Returns:
         List of episodic memories linked to this entity
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
     # Map entity type to column name
@@ -393,6 +398,9 @@ async def search_episodic_by_e2i_entity(
 
     if event_types:
         query = query.in_("event_type", event_types)
+
+    # Shard 07: default-exclude synthetic rows from user-facing entity search.
+    query = apply_provenance_filter(query, include_synthetic=include_synthetic)
 
     result = query.execute()
     logger.debug(
@@ -715,7 +723,9 @@ async def get_memory_entity_context(memory_id: str) -> E2IEntityContext:
         return E2IEntityContext()
 
 
-async def get_enriched_episodic_memory(memory_id: str) -> Optional[EnrichedEpisodicMemory]:
+async def get_enriched_episodic_memory(
+    memory_id: str, include_synthetic: bool = False
+) -> Optional[EnrichedEpisodicMemory]:
     """
     Get episodic memory with full E2I data layer context attached.
 
@@ -724,16 +734,23 @@ async def get_enriched_episodic_memory(memory_id: str) -> Optional[EnrichedEpiso
 
     Args:
         memory_id: UUID of the episodic memory
+        include_synthetic: When False (default) a synthetic row is treated as
+            not-found (Shard 07) — this enriched memory is user-facing.
 
     Returns:
         EnrichedEpisodicMemory with all linked entity context, or None if not found
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
-    # Fetch the base memory
-    result = (
-        client.table("episodic_memories").select("*").eq("memory_id", memory_id).single().execute()
+    # Fetch the base memory. Shard 07: a synthetic row is invisible in real
+    # mode (the .eq predicate is appended before .single()).
+    base_query = apply_provenance_filter(
+        client.table("episodic_memories").select("*").eq("memory_id", memory_id),
+        include_synthetic=include_synthetic,
     )
+    result = base_query.single().execute()
 
     if not result.data:
         return None
@@ -847,6 +864,7 @@ async def get_recent_memories(
     event_types: Optional[List[str]] = None,
     agent_name: Optional[str] = None,
     brand: Optional[str] = None,
+    include_synthetic: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Get recent episodic memories ordered by time.
@@ -856,10 +874,14 @@ async def get_recent_memories(
         event_types: Optional filter by event types
         agent_name: Optional filter by agent
         brand: Optional filter by brand
+        include_synthetic: When False (default) synthetic rows are excluded
+            (Shard 07) — recent-memories feeds user-facing surfaces.
 
     Returns:
         List of recent memories
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
     query = (
@@ -873,25 +895,36 @@ async def get_recent_memories(
     if brand:
         query = query.eq("brand", brand)
 
+    # Shard 07: default-exclude synthetic rows.
+    query = apply_provenance_filter(query, include_synthetic=include_synthetic)
+
     result = query.execute()
     return result.data or []
 
 
-async def get_memory_by_id(memory_id: str) -> Optional[Dict[str, Any]]:
+async def get_memory_by_id(
+    memory_id: str, include_synthetic: bool = False
+) -> Optional[Dict[str, Any]]:
     """
     Get a single episodic memory by ID.
 
     Args:
         memory_id: UUID of the memory
+        include_synthetic: When False (default) a synthetic row is treated as
+            not-found (Shard 07) — a synthetic id must not resolve in real mode.
 
     Returns:
         Memory dict or None if not found
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
-    result = (
-        client.table("episodic_memories").select("*").eq("memory_id", memory_id).single().execute()
+    query = apply_provenance_filter(
+        client.table("episodic_memories").select("*").eq("memory_id", memory_id),
+        include_synthetic=include_synthetic,
     )
+    result = query.single().execute()
 
     return cast(Optional[Dict[str, Any]], result.data)
 
@@ -917,7 +950,10 @@ async def delete_memory(memory_id: str) -> bool:
 
 
 async def count_memories_by_type(
-    event_type: Optional[str] = None, brand: Optional[str] = None, days_back: int = 30
+    event_type: Optional[str] = None,
+    brand: Optional[str] = None,
+    days_back: int = 30,
+    include_synthetic: bool = False,
 ) -> int:
     """
     Count episodic memories with optional filters.
@@ -926,10 +962,15 @@ async def count_memories_by_type(
         event_type: Optional event type filter
         brand: Optional brand filter
         days_back: How many days back to count
+        include_synthetic: When False (default) synthetic rows are excluded
+            from the count (Shard 07) — a synthetic memory must not inflate a
+            real memory-volume statistic.
 
     Returns:
         Count of matching memories
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
     query = client.table("episodic_memories").select("memory_id", count="exact")
@@ -941,6 +982,9 @@ async def count_memories_by_type(
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
     query = query.gte("occurred_at", cutoff)
+
+    # Shard 07: default-exclude synthetic rows from the count.
+    query = apply_provenance_filter(query, include_synthetic=include_synthetic)
 
     result = query.execute()
     return result.count or 0

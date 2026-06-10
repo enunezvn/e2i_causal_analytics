@@ -243,6 +243,10 @@ class HierarchicalAnalyzerNode:
             + state.get("effect_modifiers", [])
             + state.get("segment_vars", [])
         )
+        # is_synthetic must never be an effect modifier / segment var (Shard 07 C2).
+        from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+        required_columns = [c for c in required_columns if c not in PROVENANCE_DROP_COLS]
 
         # Priority 1: Use tier0 passthrough data if available
         tier0_data = state.get("tier0_data")
@@ -361,14 +365,22 @@ class HierarchicalAnalyzerNode:
                 },
             )
 
-        # Prepare features (effect modifiers or all numeric columns)
-        effect_modifiers = state.get("effect_modifiers", [])
+        # Prepare features (effect modifiers or all numeric columns).
+        # Shard 07 C2: a provenance column (is_synthetic) must NEVER enter the
+        # uplift design matrix — neither via an explicit effect_modifiers list
+        # nor via the all-numeric-columns fallback. Strip PROVENANCE_DROP_COLS
+        # from both branches.
+        from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+        effect_modifiers = [
+            c for c in state.get("effect_modifiers", []) if c not in PROVENANCE_DROP_COLS
+        ]
         if effect_modifiers:
             X = df[effect_modifiers].copy()
         else:
             # Use all numeric columns except treatment/outcome
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            exclude = [state["treatment_var"], state["outcome_var"]]
+            exclude = [state["treatment_var"], state["outcome_var"], *PROVENANCE_DROP_COLS]
             X = df[[c for c in numeric_cols if c not in exclude]].copy()
 
         # Encode categorical columns

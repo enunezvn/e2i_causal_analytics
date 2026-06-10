@@ -7,6 +7,7 @@ Handles ML predictions with rank metrics and model performance tracking.
 from typing import Any, Dict, List, Optional
 
 from src.repositories.base import SplitAwareRepository
+from src.repositories.provenance import apply_provenance_filter
 
 # Issue #188 (codex pass-3 MEDIUM-1): centralize the sentinel filter.
 # Audit rows written by src/tasks/risk_score_prediction_tasks.py when a
@@ -58,12 +59,18 @@ class PredictionRepository(SplitAwareRepository):
 
     table_name = "ml_predictions"
     model_class = None  # Set to Prediction model when available
+    # ml_predictions carries the is_synthetic provenance column (migration 063).
+    # Setting this True makes the inherited get_many/get_by_id default-exclude
+    # synthetic rows; the direct-query read paths below apply the same predicate
+    # via apply_provenance_filter (Shard 07 provenance read-path enforcement).
+    HAS_PROVENANCE = True
 
     async def get_by_model(
         self,
         model_id: str,
         split: Optional[str] = None,
         limit: int = 1000,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get predictions for a specific model.
@@ -88,6 +95,7 @@ class PredictionRepository(SplitAwareRepository):
             filters={"model_version": model_id},
             split=split,
             limit=limit,
+            include_synthetic=include_synthetic,
         )
 
     async def get_top_predictions(
@@ -95,6 +103,7 @@ class PredictionRepository(SplitAwareRepository):
         model_id: str,
         top_k: int = 100,
         split: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get top predictions by score for a model.
@@ -103,6 +112,8 @@ class PredictionRepository(SplitAwareRepository):
             model_id: Model identifier (matches model_version)
             top_k: Number of top predictions
             split: Optional ML split filter
+            include_synthetic: When False (default) synthetic rows are
+                excluded (Shard 07). Validation opts in with True.
 
         Returns:
             Top predictions sorted by prediction_value descending
@@ -119,13 +130,17 @@ class PredictionRepository(SplitAwareRepository):
         # filter via _exclude_gated_rows() so every actionable read path
         # uses the same sentinel value (codex pass-3 MEDIUM-1).
         query = _exclude_gated_rows(query)
+        # Shard 07: default-exclude synthetic ml_predictions rows.
+        query = apply_provenance_filter(query, include_synthetic=include_synthetic)
 
         # Order by prediction_value descending to get top predictions
         result = await query.order("prediction_value", desc=True).limit(top_k).execute()
 
         return [self._to_model(row) for row in result.data]
 
-    async def get_model_performance(self, model_id: str) -> Dict[str, Any]:
+    async def get_model_performance(
+        self, model_id: str, include_synthetic: bool = False
+    ) -> Dict[str, Any]:
         """
         Get aggregate performance metrics for a model.
 
@@ -136,6 +151,8 @@ class PredictionRepository(SplitAwareRepository):
 
         Args:
             model_id: Model identifier (matches model_version)
+            include_synthetic: When False (default) synthetic rows are
+                excluded from the aggregate (Shard 07).
 
         Returns:
             Dict with pr_auc, avg_brier_score, recall_at_5, recall_at_10 metrics
@@ -151,11 +168,15 @@ class PredictionRepository(SplitAwareRepository):
 
         # Issue #188: exclude gated audit rows from performance aggregation
         # via the centralized sentinel filter (codex pass-3 MEDIUM-1).
+        # Shard 07: default-exclude synthetic rows from the aggregate.
         result = await (
-            _exclude_gated_rows(
-                self.client.table(self.table_name)
-                .select("model_pr_auc, brier_score, rank_metrics")
-                .eq("model_version", model_id)
+            apply_provenance_filter(
+                _exclude_gated_rows(
+                    self.client.table(self.table_name)
+                    .select("model_pr_auc, brier_score, rank_metrics")
+                    .eq("model_version", model_id)
+                ),
+                include_synthetic=include_synthetic,
             )
             .limit(10000)
             .execute()
@@ -208,6 +229,7 @@ class PredictionRepository(SplitAwareRepository):
         patient_id: str,
         prediction_type: Optional[str] = None,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get predictions for a specific patient.
@@ -216,6 +238,9 @@ class PredictionRepository(SplitAwareRepository):
             patient_id: Patient identifier
             prediction_type: Optional filter by prediction type
             limit: Maximum records
+            include_synthetic: When False (default) synthetic rows are
+                excluded (Shard 07) — a patient-facing history must never
+                surface a synthetic prediction as actionable.
 
         Returns:
             List of Prediction records ordered by timestamp descending
@@ -232,6 +257,8 @@ class PredictionRepository(SplitAwareRepository):
         # surface gated audit rows — patient-facing displays would show
         # a gated raw score as actionable.
         query = _exclude_gated_rows(query)
+        # Shard 07: default-exclude synthetic ml_predictions rows.
+        query = apply_provenance_filter(query, include_synthetic=include_synthetic)
 
         result = await query.order("prediction_timestamp", desc=True).limit(limit).execute()
 
@@ -242,6 +269,7 @@ class PredictionRepository(SplitAwareRepository):
         model_id: str,
         confidence_threshold: float = 0.8,
         limit: int = 500,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get high-confidence predictions for a model.
@@ -250,6 +278,9 @@ class PredictionRepository(SplitAwareRepository):
             model_id: Model identifier (matches model_version)
             confidence_threshold: Minimum confidence score (default 0.8)
             limit: Maximum records
+            include_synthetic: When False (default) synthetic rows are
+                excluded (Shard 07) — a synthetic prediction must not be
+                surfaced as an actionable high-confidence result.
 
         Returns:
             High-confidence predictions sorted by confidence descending
@@ -261,12 +292,16 @@ class PredictionRepository(SplitAwareRepository):
         # exclude gated audit rows. The Celery gate retains the raw
         # confidence_score so a gated row could spuriously satisfy the
         # threshold predicate.
+        # Shard 07: default-exclude synthetic rows.
         result = await (
-            _exclude_gated_rows(
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("model_version", model_id)
-                .gte("confidence_score", confidence_threshold)
+            apply_provenance_filter(
+                _exclude_gated_rows(
+                    self.client.table(self.table_name)
+                    .select("*")
+                    .eq("model_version", model_id)
+                    .gte("confidence_score", confidence_threshold)
+                ),
+                include_synthetic=include_synthetic,
             )
             .order("confidence_score", desc=True)
             .limit(limit)
@@ -278,6 +313,7 @@ class PredictionRepository(SplitAwareRepository):
     async def get_calibration_summary(
         self,
         model_id: str,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Get calibration summary for a model.
@@ -289,6 +325,8 @@ class PredictionRepository(SplitAwareRepository):
 
         Args:
             model_id: Model identifier
+            include_synthetic: When False (default) synthetic rows are
+                excluded from the calibration aggregate (Shard 07).
 
         Returns:
             Dict with calibration statistics
@@ -305,11 +343,15 @@ class PredictionRepository(SplitAwareRepository):
         # Issue #188 (codex pass-3 MEDIUM-1): calibration aggregates must
         # exclude gated audit rows — including them would average the raw
         # calibration_score of a gated model into the reported summary.
+        # Shard 07: default-exclude synthetic rows from the aggregate.
         result = await (
-            _exclude_gated_rows(
-                self.client.table(self.table_name)
-                .select("calibration_score, brier_score")
-                .eq("model_version", model_id)
+            apply_provenance_filter(
+                _exclude_gated_rows(
+                    self.client.table(self.table_name)
+                    .select("calibration_score, brier_score")
+                    .eq("model_version", model_id)
+                ),
+                include_synthetic=include_synthetic,
             )
             .limit(10000)
             .execute()

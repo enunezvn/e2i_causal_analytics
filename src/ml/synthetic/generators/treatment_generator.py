@@ -4,11 +4,12 @@ Treatment Event Generator.
 Generates synthetic treatment events linked to patient journeys.
 """
 
-from typing import List, Optional
+from typing import List, Optional, cast
 
 import numpy as np
 import pandas as pd
 
+from ..clinical_codes import brand_codes
 from ..config import Brand
 from .base import BaseGenerator, GeneratorConfig
 
@@ -136,6 +137,39 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
         adherence_scores = self._random_normal(0.75, 0.15, n_actual, clip_min=0, clip_max=1)
         efficacy_scores = self._random_normal(0.65, 0.20, n_actual, clip_min=0, clip_max=1)
 
+        # Indication-correct coding per brand (Shard 04). The DB carries the dx as
+        # `icd_codes text[]` (real column) and `drug_ndc/drug_name/drug_class/
+        # event_subtype` (real columns). `primary_diagnosis_code` is exposed on this
+        # frame as a scalar for Shard 05/06 joins + tests, but is NOT a treatment_events
+        # DB column (it lives on patient_journeys) -> the loader gates it out. Non-
+        # portfolio brands fall back to a neutral antihistamine bundle so a row never
+        # emits a mismatched indication.
+        drug_ndc, drug_name, drug_class, primary_dx, event_subtype, icd_codes = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        for b in brands[:n_actual]:
+            try:
+                codes = brand_codes(b)
+            except KeyError:
+                codes = {
+                    "icd10": ["L50.9"],
+                    "drug_class": "Antihistamine",
+                    "drug_name": "cetirizine",
+                    "ndc": "00078-0000-00",
+                }
+            dx = str(self._rng.choice(cast("list[str]", codes["icd10"])))
+            primary_dx.append(dx)
+            icd_codes.append([dx])
+            drug_ndc.append(codes["ndc"])
+            drug_name.append(codes["drug_name"])
+            drug_class.append(codes["drug_class"])
+            event_subtype.append(str(codes["drug_class"]).lower().replace(" ", "_"))
+
         # Build DataFrame
         df = pd.DataFrame(
             {
@@ -150,6 +184,12 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
                 "refill_number": refill_number,
                 "adherence_score": np.round(adherence_scores, 2),
                 "efficacy_score": np.round(efficacy_scores, 2),
+                "drug_ndc": drug_ndc,
+                "drug_name": drug_name,
+                "drug_class": drug_class,
+                "primary_diagnosis_code": primary_dx,
+                "icd_codes": icd_codes,
+                "event_subtype": event_subtype,
                 "data_split": self._assign_splits(treatment_dates),
             }
         )
@@ -187,4 +227,5 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
             treatment_date = start + pd.Timedelta(days=int(days_offset))
             treatment_dates.append(treatment_date.strftime("%Y-%m-%d"))
 
-        return treatment_dates
+        # Shard 04: re-anchor onto the rolling window (no-op when anchor_to_now off)
+        return self._shift_dates_to_window(treatment_dates)

@@ -176,6 +176,7 @@ class SupabaseDataConnector(BaseDataConnector):
         model_id: str,
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> PredictionData:
         """Query prediction data from Supabase.
 
@@ -186,6 +187,9 @@ class SupabaseDataConnector(BaseDataConnector):
             model_id: Model identifier (UUID or name)
             time_window: Time window for the query
             filters: Optional filters (segment, brand, etc.)
+            include_synthetic: When False (default) synthetic ml_predictions
+                rows are excluded from drift detection (Shard 07) — a
+                synthetic prediction must not register as real input drift.
 
         Returns:
             PredictionData containing predictions
@@ -206,6 +210,7 @@ class SupabaseDataConnector(BaseDataConnector):
             # neq.sentinel) since prediction_class is nullable and
             # historical rows may have it set to NULL.
             from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
+            from src.repositories.provenance import apply_provenance_filter
 
             query = (
                 self._client.table("ml_predictions")
@@ -217,6 +222,8 @@ class SupabaseDataConnector(BaseDataConnector):
                 .gte("created_at", time_window.start.isoformat())
                 .lte("created_at", time_window.end.isoformat())
             )
+            # Shard 07: default-exclude synthetic rows from drift monitoring.
+            query = apply_provenance_filter(query, include_synthetic=include_synthetic)
 
             # Apply filters
             if filters:
@@ -272,6 +279,7 @@ class SupabaseDataConnector(BaseDataConnector):
         model_id: str,
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> PredictionData:
         """Query predictions with actual labels for concept drift.
 
@@ -282,6 +290,8 @@ class SupabaseDataConnector(BaseDataConnector):
             model_id: Model identifier
             time_window: Time window for the query
             filters: Optional filters
+            include_synthetic: When False (default) synthetic ml_predictions
+                rows are excluded from concept-drift detection (Shard 07).
 
         Returns:
             PredictionData with both predicted and actual labels
@@ -294,6 +304,7 @@ class SupabaseDataConnector(BaseDataConnector):
             # filter (see codex pass-5 MEDIUM rationale on
             # query_predictions above).
             from src.repositories.prediction import GATED_HONEST_FAILURE_SENTINEL
+            from src.repositories.provenance import apply_provenance_filter
 
             query = (
                 self._client.table("ml_predictions")
@@ -306,6 +317,8 @@ class SupabaseDataConnector(BaseDataConnector):
                 .lte("created_at", time_window.end.isoformat())
                 .not_.is_("actual_outcome", "null")  # Only include labeled data
             )
+            # Shard 07: default-exclude synthetic rows from concept drift.
+            query = apply_provenance_filter(query, include_synthetic=include_synthetic)
 
             if filters:
                 for key, value in filters.items():

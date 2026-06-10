@@ -115,3 +115,75 @@ class TestAggregateToArrays:
         )
         assert control.tolist() == [1.0]
         assert treatment.tolist() == [2.0]
+
+
+# ----------------------------------------------------------- provenance (R6)
+class _FakeQuery:
+    """Records ``.eq`` calls against the business_metrics query builder."""
+
+    def __init__(self, data, eq_log):
+        self._data = data
+        self._eq_log = eq_log
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        self._eq_log.append(a)
+        return self
+
+    def in_(self, *a, **k):
+        return self
+
+    def execute(self):
+        class _R:
+            pass
+
+        r = _R()
+        r.data = self._data
+        return r
+
+
+class _FakeClient:
+    """Two-table fake: assignments table yields one assignment, business_metrics
+    records its ``.eq`` calls so the provenance predicate can be asserted."""
+
+    def __init__(self, bm_eq_log):
+        self._bm_eq_log = bm_eq_log
+
+    def table(self, name):
+        if name == "ab_experiment_assignments":
+            return _FakeQuery([{"unit_id": "HCP_1", "variant": "control"}], [])
+        # business_metrics
+        return _FakeQuery(
+            [{"hcp_id": "HCP_1", "trx_count": 5, "metric_date": "2025-01-01", "brand": "Kisqali"}],
+            self._bm_eq_log,
+        )
+
+
+class TestLoadArraysProvenance:
+    """R6: business_metrics join default-excludes synthetic per-HCP rollups."""
+
+    def test_load_arrays_query_default_excludes_synthetic(self):
+        import asyncio
+        from uuid import uuid4
+
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+
+        bm_eq_log: list = []
+        repo = ExperimentOutcomeRepository(supabase_client=_FakeClient(bm_eq_log))
+        asyncio.run(repo.load_arrays(uuid4(), "trx"))
+
+        assert ("is_synthetic", False) in bm_eq_log
+
+    def test_load_arrays_query_includes_synthetic_when_opted_in(self):
+        import asyncio
+        from uuid import uuid4
+
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+
+        bm_eq_log: list = []
+        repo = ExperimentOutcomeRepository(supabase_client=_FakeClient(bm_eq_log))
+        asyncio.run(repo.load_arrays(uuid4(), "trx", include_synthetic=True))
+
+        assert ("is_synthetic", False) not in bm_eq_log

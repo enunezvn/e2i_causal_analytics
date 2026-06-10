@@ -21,6 +21,8 @@ Sources:
 
 from __future__ import annotations
 
+from typing import cast
+
 # --- Brand -> primary diagnosis (ICD-10-CM) ---------------------------------------
 # Remibrutinib = chronic spontaneous urticaria (CSU); Fabhalta = paroxysmal nocturnal
 # hemoglobinuria (PNH); Kisqali = HR+ breast cancer.
@@ -45,6 +47,37 @@ BRAND_DRUG_CLASS: dict[str, str] = {
     "Fabhalta": "Complement Inhibitor",
     "Kisqali": "CDK4/6 Inhibitor",
 }
+
+# --- Brand -> NDC + INN drug_name (pharmacy-claims integration) --------------------
+# 5-4-2 NDCs on the Novartis labeler (00078). Kisqali's are the REAL labeled NDCs
+# (config/domain_vocabulary.yaml:2424-2434, ribociclib 200mg). Remibrutinib and
+# Fabhalta lacked published NDCs at authoring time (vocabulary "to be added"); these
+# are structurally-valid SYNTHETIC-DEMO placeholders on the same labeler, used ONLY
+# to make synthetic claims indication-coherent — NOT the true marketed NDC. Every row
+# carrying them is is_synthetic=true (Shard 02).
+BRAND_NDC: dict[str, dict[str, str]] = {
+    "Kisqali": {"drug_name": "ribociclib", "ndc": "00078-0903-51"},
+    "Remibrutinib": {"drug_name": "remibrutinib", "ndc": "00078-1100-30"},
+    "Fabhalta": {"drug_name": "iptacopan", "ndc": "00078-1175-66"},
+}
+
+
+def brand_codes(brand: str) -> dict[str, object]:
+    """Resolve the full indication-correct coding bundle for a brand.
+
+    Returns {icd10, desc, drug_class, drug_name, ndc}. Raises KeyError on an
+    unsupported brand so callers fail closed rather than emit a wrong indication.
+    """
+    dx = BRAND_DIAGNOSIS[brand]
+    ndc = BRAND_NDC[brand]
+    return {
+        "icd10": list(cast("list[str]", dx["icd10"])),
+        "desc": dx["desc"],
+        "drug_class": BRAND_DRUG_CLASS[brand],
+        "drug_name": ndc["drug_name"],
+        "ndc": ndc["ndc"],
+    }
+
 
 # --- H1-antihistamine baseline therapy (CSU first-line) -----------------------------
 # ATC R06A "Antihistamines for systemic use" is the drug_class anchor; RxCUIs identify

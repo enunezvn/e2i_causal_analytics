@@ -6,7 +6,7 @@ Used by Drift Monitor agent for drift detection.
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -274,9 +274,21 @@ class FeatureValueGenerator(BaseGenerator[pd.DataFrame]):
         return records
 
     def _generate_timestamps(self, n: int) -> List[datetime]:
-        """Generate timestamps across the date range."""
-        start = datetime.combine(self.config.start_date, datetime.min.time())
-        end = datetime.combine(self.config.end_date, datetime.max.time())
+        """Generate timestamps biased toward the recent end of the range.
+
+        Honors rolling-window anchoring (Shard 04): when anchor_to_now, the range
+        ends at the reference (today) instead of the static end_date, so feature
+        freshness reads current (drift_monitor windows are NOW()-relative). The
+        exponential bias toward `end` keeps the bulk recent. No-op shape otherwise
+        (legacy 2022-2024)."""
+        if self.config.anchor_to_now:
+            ref = self.config.anchor_reference or date.today()
+            span_days = max((self.config.end_date - self.config.start_date).days, 90)
+            end = datetime.combine(ref, datetime.max.time())
+            start = datetime.combine(ref - timedelta(days=span_days), datetime.min.time())
+        else:
+            start = datetime.combine(self.config.start_date, datetime.min.time())
+            end = datetime.combine(self.config.end_date, datetime.max.time())
 
         # Bias towards more recent dates (exponential distribution)
         total_seconds = (end - start).total_seconds()

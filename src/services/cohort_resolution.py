@@ -44,6 +44,7 @@ cohort-loading code path, not two divergent ones.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import pandas as pd
@@ -128,6 +129,7 @@ def _resolve_via_patient_journeys(
     *,
     supabase_client: Optional[Any] = None,
     limit: Optional[int] = None,
+    include_synthetic: bool = False,
 ) -> Optional[pd.DataFrame]:
     """Resolve from the canonical ``patient_journeys`` table.
 
@@ -156,6 +158,11 @@ def _resolve_via_patient_journeys(
         query = query.eq("brand", norm_brand)
     if norm_region:
         query = query.eq("geographic_region", norm_region)
+    # Shard 07 R11: default-exclude is_synthetic so real-mode cohort resolution never
+    # blends synthetic rows; a validation run passes include_synthetic=True.
+    from src.repositories.provenance import apply_provenance_filter
+
+    query = apply_provenance_filter(query, include_synthetic)
     if limit:
         query = query.limit(limit)
 
@@ -193,6 +200,7 @@ def resolve_cohort_frame(
     data_source: Optional[str] = None,
     supabase_client: Optional[Any] = None,
     limit: Optional[int] = None,
+    include_synthetic: bool = False,
 ) -> Optional[pd.DataFrame]:
     """Resolve a ``(brand, region)`` pair to a real cohort DataFrame.
 
@@ -225,5 +233,191 @@ def resolve_cohort_frame(
     if data_source:
         return _resolve_via_data_source(brand, region, data_source)
     return _resolve_via_patient_journeys(
-        brand, region, supabase_client=supabase_client, limit=limit
+        brand,
+        region,
+        supabase_client=supabase_client,
+        limit=limit,
+        include_synthetic=include_synthetic,
+    )
+
+
+@dataclass
+class CohortOutcomeSpec:
+    """A resolved cohort with a runnable causal var-set."""
+
+    cohort: str
+    frame: pd.DataFrame
+    outcome_column: str
+    treatment_column: str
+    covariate_columns: list[str]
+
+
+# Per-cohort (outcome, treatment, covariates) on the patient_journeys grain. Treatment
+# is the canonical per-unit `treatment_arm` (Shard 03 / M2); hcp_adoption resolves a
+# DIFFERENT grain (hcp_profiles) below. Cohort is resolved by OUTCOME COLUMN — there is
+# no stored `cohort` column.
+_PJ_COHORTS = {
+    "initiation": (
+        "treatment_initiated",
+        "treatment_arm",
+        ["disease_severity", "academic_hcp", "geographic_region"],
+    ),
+    "discontinuation": (
+        "discontinued_180d",
+        "treatment_arm",
+        ["disease_severity", "academic_hcp", "geographic_region"],
+    ),
+    "persistence": (
+        "persistent_180d",
+        "treatment_arm",
+        ["disease_severity", "academic_hcp", "geographic_region"],
+    ),
+}
+
+
+def resolve_cohort_outcome_frame(
+    cohort: str,
+    brand: Optional[str],
+    region: Optional[str],
+    *,
+    supabase_client: Optional[Any] = None,
+    limit: Optional[int] = None,
+    include_synthetic: bool = False,
+) -> Optional[CohortOutcomeSpec]:
+    """Resolve a named cohort to a frame + runnable causal var-set.
+
+    cohort in {initiation, discontinuation, persistence, hcp_adoption}. Fails closed
+    (None) on unknown cohort, unrecognized brand/region, or empty data — never
+    fabricates (mirrors resolve_cohort_frame's contract).
+    """
+    key = str(cohort).strip().lower()
+    if key == "hcp_adoption":
+        return _resolve_hcp_adoption(
+            brand,
+            region,
+            supabase_client=supabase_client,
+            limit=limit,
+            include_synthetic=include_synthetic,
+        )
+    if key not in _PJ_COHORTS:
+        logger.info("cohort_resolution: unknown cohort %r -> fail closed", cohort)
+        return None
+    outcome, treatment, covars = _PJ_COHORTS[key]
+    df = _resolve_via_patient_journeys(
+        brand,
+        region,
+        supabase_client=supabase_client,
+        limit=limit,
+        include_synthetic=include_synthetic,
+    )
+    # Fail closed if the outcome or the canonical treatment_arm is absent (e.g. M2 not
+    # applied / Shard-03 arm not populated) — never hand back a frame missing its
+    # treatment column.
+    if df is None or df.empty or outcome not in df.columns or treatment not in df.columns:
+        return None
+    df = df[df[outcome].notna()].copy()
+    if df.empty:
+        return None
+    present_covars = [c for c in covars if c in df.columns]
+    # Shard 06: retention_benefit (>=0) is RECOMPUTED at resolve time (not persisted —
+    # Task 06.2) so resource_optimizer's problem_formulator (rejects expected_response<0)
+    # can read it for the disc/persist cohorts. = per-severity scale * disease_severity *
+    # persistent_180d. Only materializes when persistent_180d is populated (synthetic);
+    # real rows have NULL persistent_180d and are dropped above, so the synthetic-DGP
+    # constant never touches a real cohort.
+    if key in ("discontinuation", "persistence") and {"disease_severity", "persistent_180d"} <= set(
+        df.columns
+    ):
+        from src.ml.synthetic.generators.cohort_outcomes import (
+            PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY,
+        )
+
+        # Coerce defensively: the discontinuation cohort filters on discontinued_180d
+        # (not persistent_180d), so a row could carry a null persistent_180d. NaN/None
+        # -> 0 keeps retention_benefit a non-negative float with no NaN (a non-persistent
+        # or unknown-persistence patient has 0 retention benefit), so resource_optimizer
+        # never sees a NaN/negative expected_response.
+        sev = pd.to_numeric(df["disease_severity"], errors="coerce").fillna(0.0)
+        pers = pd.to_numeric(df["persistent_180d"], errors="coerce").fillna(0.0)
+        df["retention_benefit"] = (PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * sev * pers).clip(
+            lower=0.0
+        )
+        present_covars = present_covars + ["retention_benefit"]
+    return CohortOutcomeSpec(
+        cohort=key,
+        frame=df.reset_index(drop=True),
+        outcome_column=outcome,
+        treatment_column=treatment,
+        covariate_columns=present_covars,
+    )
+
+
+def _resolve_hcp_adoption(
+    brand: Optional[str],
+    region: Optional[str],
+    *,
+    supabase_client: Optional[Any] = None,
+    limit: Optional[int] = None,
+    include_synthetic: bool = False,
+) -> Optional[CohortOutcomeSpec]:
+    """Resolve the hcp_adoption cohort from hcp_profiles (the DB grain the runtime
+    has). Outcome = the canonical adoption_category (ADOPTER/NON_ADOPTER); a binary
+    `adopted` helper is derived in-frame for estimators. treatment = the HCP arm
+    proxy (peer_influence_score, the exogenous centrality/engagement score);
+    covariate = influence_network_size.
+
+    Fails closed (mirroring the patient-journey branch) on an unrecognized brand or
+    region, on empty/unlabeled data, or when the treatment column (peer_influence_score)
+    is absent/all-null — never hands back a spec downstream estimators cannot run.
+    """
+    norm_brand = _normalize_brand(brand)
+    if brand and brand.strip() and norm_brand is None:
+        logger.info("cohort_resolution: unrecognized brand %r -> fail closed", brand)
+        return None
+    norm_region = _normalize_region(region)
+    if region and region.strip() and norm_region is None:
+        logger.info("cohort_resolution: unrecognized region %r -> fail closed", region)
+        return None
+    client = supabase_client if supabase_client is not None else _default_client()
+    q = client.table("hcp_profiles").select(
+        "hcp_id,peer_influence_score,influence_network_size,adoption_category,geographic_region"
+    )
+    # NOTE: hcp_profiles has NO `brand` column (HCPs are not brand-partitioned at this
+    # grain — the per-brand CATE lives in the Shard-06.3 parquet artifact). We VALIDATE
+    # brand above (fail closed on a bogus literal) but do not filter the query by it.
+    if norm_region:
+        q = q.eq("geographic_region", norm_region)
+    # Shard 07 R11: default-exclude is_synthetic (hcp_profiles carries it); validation
+    # opts in with include_synthetic=True.
+    from src.repositories.provenance import apply_provenance_filter
+
+    q = apply_provenance_filter(q, include_synthetic)
+    if limit:
+        q = q.limit(limit)
+    rows = getattr(q.execute(), "data", None) or []
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    if "adoption_category" not in df.columns:
+        return None
+    # A cohort member must carry an adoption label; drop unlabeled rows (e.g. baseline
+    # non-synthetic HCPs whose adoption_category is NULL) so the cohort is the populated
+    # adoption population, not a NULL-diluted mix.
+    df = df[df["adoption_category"].notna()].copy()
+    # The treatment column must exist and be non-null, else the spec is unrunnable —
+    # fail closed (parallel to the patient-journey branch's treatment guard).
+    if "peer_influence_score" not in df.columns:
+        return None
+    df = df[df["peer_influence_score"].notna()].copy()
+    if df.empty:
+        return None
+    # Binary helper for estimators; the canonical OUTCOME column stays adoption_category.
+    df["adopted"] = (df["adoption_category"].astype(str).str.upper() == "ADOPTER").astype(int)
+    covars = [c for c in ("influence_network_size",) if c in df.columns]
+    return CohortOutcomeSpec(
+        cohort="hcp_adoption",
+        frame=df.reset_index(drop=True),
+        outcome_column="adoption_category",
+        treatment_column="peer_influence_score",
+        covariate_columns=covars,
     )

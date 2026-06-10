@@ -96,6 +96,7 @@ class HeterogeneousOptimizerDataConnector:
         source: str,
         columns: List[str],
         filters: Optional[Dict[str, Any]] = None,
+        include_synthetic: bool = False,
     ) -> pd.DataFrame:
         """Query data from Supabase for CATE estimation.
 
@@ -106,6 +107,8 @@ class HeterogeneousOptimizerDataConnector:
             source: Table name to query (must be in SUPPORTED_TABLES)
             columns: List of columns to retrieve
             filters: Optional column-value filters
+            include_synthetic: When True, do not exclude synthetic rows. Defaults
+                to False (real mode); the validation harness opts in explicitly.
 
         Returns:
             DataFrame with requested data
@@ -130,6 +133,7 @@ class HeterogeneousOptimizerDataConnector:
                 filters=filters,
                 limit=100000,  # Large limit for CATE analysis
                 columns=columns if columns else None,
+                include_synthetic=include_synthetic,
             )
 
             if df.empty:
@@ -148,6 +152,7 @@ class HeterogeneousOptimizerDataConnector:
         columns: List[str],
         filters: Optional[Dict[str, Any]] = None,
         split: str = "train",
+        include_synthetic: bool = False,
     ) -> pd.DataFrame:
         """Query data with ML split filtering.
 
@@ -158,6 +163,8 @@ class HeterogeneousOptimizerDataConnector:
             columns: List of columns to retrieve
             filters: Optional column-value filters
             split: ML split to retrieve ("train", "validation", "test")
+            include_synthetic: When True, do not exclude synthetic rows. Defaults
+                to False (real mode); the validation harness opts in explicitly.
 
         Returns:
             DataFrame with data from specified split
@@ -171,6 +178,7 @@ class HeterogeneousOptimizerDataConnector:
                 table=source,
                 filters=filters,
                 columns=columns,
+                include_synthetic=include_synthetic,
             )
 
             if split == "train":

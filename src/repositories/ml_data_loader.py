@@ -32,6 +32,18 @@ ML_TABLES = [
     "agent_activities",
 ]
 
+# Tables in ML_TABLES that carry the is_synthetic provenance column (Shard 01) and
+# are therefore safe to default-exclude synthetic rows from. causal_paths and
+# agent_activities are NOT treated as taggable here (they are bookkeeping/derived
+# tables outside the synthetic dataset's blast radius), so filtering them is skipped
+# to avoid a 42703 if the column is absent for the resolved schema.
+PROVENANCE_TAGGED_TABLES = {
+    "business_metrics",
+    "predictions",
+    "triggers",
+    "patient_journeys",
+}
+
 
 @dataclass
 class MLDataset:
@@ -125,6 +137,7 @@ class MLDataLoader(SplitAwareRepository):
         test_days: int = 30,
         limit: int = 100000,
         columns: Optional[List[str]] = None,
+        include_synthetic: bool = False,
     ) -> MLDataset:
         """
         Load data for ML training with temporal splits.
@@ -180,6 +193,7 @@ class MLDataLoader(SplitAwareRepository):
             end_date=val_start.isoformat(),
             limit=limit,
             columns=columns,
+            include_synthetic=include_synthetic,
         )
 
         val_data = await self._load_date_range(
@@ -190,6 +204,7 @@ class MLDataLoader(SplitAwareRepository):
             end_date=test_start.isoformat(),
             limit=limit,
             columns=columns,
+            include_synthetic=include_synthetic,
         )
 
         test_data = await self._load_date_range(
@@ -200,6 +215,7 @@ class MLDataLoader(SplitAwareRepository):
             end_date=ref_date.isoformat(),
             limit=limit,
             columns=columns,
+            include_synthetic=include_synthetic,
         )
 
         # Convert to DataFrames
@@ -233,6 +249,7 @@ class MLDataLoader(SplitAwareRepository):
         end_date: Optional[str] = None,
         limit: int = 100000,
         columns: Optional[List[str]] = None,
+        include_synthetic: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Load data from a table within a date range.
@@ -245,6 +262,7 @@ class MLDataLoader(SplitAwareRepository):
             end_date: End of date range (exclusive)
             limit: Maximum records
             columns: Columns to select
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of row dictionaries
@@ -269,6 +287,12 @@ class MLDataLoader(SplitAwareRepository):
         if end_date:
             query = query.lt(date_column, end_date)
 
+        # Provenance default-exclude (taggable tables only -> avoid 42703)
+        if not include_synthetic and table in PROVENANCE_TAGGED_TABLES:
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
+
         # Order and limit
         query = query.order(date_column, desc=False).limit(limit)
 
@@ -285,6 +309,7 @@ class MLDataLoader(SplitAwareRepository):
         filters: Optional[Dict[str, Any]] = None,
         limit: int = 1000,
         columns: Optional[List[str]] = None,
+        include_synthetic: bool = False,
     ) -> pd.DataFrame:
         """
         Load a sample from a table without splits.
@@ -296,6 +321,7 @@ class MLDataLoader(SplitAwareRepository):
             filters: Optional filters
             limit: Maximum records
             columns: Columns to select
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             DataFrame with sampled data
@@ -313,6 +339,14 @@ class MLDataLoader(SplitAwareRepository):
         if filters:
             for col, val in filters.items():
                 query = query.eq(col, val)
+
+        # Provenance default-exclude (taggable tables only -> avoid 42703).
+        # NB: the predicate is a .eq filter, NOT a selected column, so an explicit
+        # `columns` list (e.g. from the heterogeneous connector) never re-leaks the tag.
+        if not include_synthetic and table in PROVENANCE_TAGGED_TABLES:
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
 
         query = query.limit(limit)
 
@@ -344,6 +378,7 @@ class MLDataLoader(SplitAwareRepository):
         table: str,
         date_column: str = "created_at",
         filters: Optional[Dict[str, Any]] = None,
+        include_synthetic: bool = False,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Get the min and max dates for a table.
@@ -352,6 +387,7 @@ class MLDataLoader(SplitAwareRepository):
             table: Table name
             date_column: Date column to check
             filters: Optional filters
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Tuple of (min_date, max_date) as ISO strings
@@ -364,6 +400,11 @@ class MLDataLoader(SplitAwareRepository):
         if filters:
             for col, val in filters.items():
                 query = query.eq(col, val)
+
+        if not include_synthetic and table in PROVENANCE_TAGGED_TABLES:
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
 
         # Get min
         min_result = query.order(date_column, desc=False).limit(1).execute()
@@ -379,6 +420,7 @@ class MLDataLoader(SplitAwareRepository):
         self,
         table: str,
         filters: Optional[Dict[str, Any]] = None,
+        include_synthetic: bool = False,
     ) -> int:
         """
         Count records in a table.
@@ -386,6 +428,7 @@ class MLDataLoader(SplitAwareRepository):
         Args:
             table: Table name
             filters: Optional filters
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Record count
@@ -398,6 +441,11 @@ class MLDataLoader(SplitAwareRepository):
         if filters:
             for col, val in filters.items():
                 query = query.eq(col, val)
+
+        if not include_synthetic and table in PROVENANCE_TAGGED_TABLES:
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
 
         try:
             result = query.execute()

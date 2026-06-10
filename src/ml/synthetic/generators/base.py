@@ -28,7 +28,22 @@ class GeneratorConfig:
     dgp_type: Optional[DGPType] = None
     start_date: date = field(default_factory=lambda: date(2022, 1, 1))
     end_date: date = field(default_factory=lambda: date(2024, 12, 31))
+    # Rolling-window anchoring (Shard 04): when True, _random_dates remaps the
+    # [start_date,end_date] span onto a window ending at anchor_reference (or
+    # today). Defeats migration-044 NOW()-30d staleness; regenerated per run
+    # because the reference is resolved at call time.
+    anchor_to_now: bool = False
+    anchor_reference: Optional[date] = None
+    # Share of records biased into the last 30 days of the rolling window so
+    # NOW()-30d windowed KPIs read non-zero.
+    anchor_recent_fraction: float = 0.6
     verbose: bool = False
+    # Namespacing prefix prepended to every generated entity id. Keeps a synthetic
+    # validation dataset's ids DISJOINT from the existing dev baseline so the loader's
+    # UPSERT cannot clobber pre-existing rows (and cleanup by is_synthetic is FK-safe).
+    # Must keep ids within varchar(20): longest is patient_journey_id 'patient_000000'
+    # (14) -> a <=3-char prefix is safe.
+    id_prefix: str = ""
 
 
 @dataclass
@@ -106,7 +121,11 @@ class BaseGenerator(ABC, Generic[T]):
                 dgp_type=self.config.dgp_type,
                 start_date=self.config.start_date,
                 end_date=self.config.end_date,
+                anchor_to_now=self.config.anchor_to_now,
+                anchor_reference=self.config.anchor_reference,
+                anchor_recent_fraction=self.config.anchor_recent_fraction,
                 verbose=self.config.verbose,
+                id_prefix=self.config.id_prefix,
             )
 
             # Create new generator instance for batch
@@ -142,7 +161,7 @@ class BaseGenerator(ABC, Generic[T]):
 
     def _generate_ids(self, prefix: str, n: int, width: int = 5) -> List[str]:
         """Generate sequential IDs with prefix."""
-        return [f"{prefix}_{i:0{width}d}" for i in range(n)]
+        return [f"{self.config.id_prefix}{prefix}_{i:0{width}d}" for i in range(n)]
 
     def _random_choice(
         self,
@@ -181,15 +200,84 @@ class BaseGenerator(ABC, Generic[T]):
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
     ) -> List[str]:
-        """Generate random dates within range as ISO strings."""
+        """Generate random dates as ISO strings.
+
+        With config.anchor_to_now, the configured span is remapped onto a
+        rolling window ending at anchor_reference (or today), with
+        anchor_recent_fraction of rows biased into the last 30 days so
+        NOW()-30d windowed KPIs read non-zero. Regenerated per run because the
+        reference is resolved at call time. Default off = legacy [start,end] span.
+        """
         start = start_date or self.config.start_date
         end = end_date or self.config.end_date
+
+        if self.config.anchor_to_now:
+            return self._anchored_dates(n)
 
         start_ord = start.toordinal()
         end_ord = end.toordinal()
 
         random_days = self._rng.integers(start_ord, end_ord + 1, size=n)
         return [date.fromordinal(d).isoformat() for d in random_days]
+
+    def _anchored_dates(self, n: int) -> List[str]:
+        """Rolling window ending at the run-time reference date.
+
+        anchor_recent_fraction of rows land uniformly in (ref-30d, ref]; the rest
+        spread across the historical tail [ref-span, ref-30d]. The reference is
+        resolved here (anchor_reference or date.today()) so each run regenerates.
+        """
+        ref = self.config.anchor_reference or date.today()
+        span_days = (self.config.end_date - self.config.start_date).days
+        span_days = max(span_days, 90)  # floor so a tiny span still spreads
+        ref_ord = ref.toordinal()
+        recent_floor = ref_ord - 30
+
+        frac = float(np.clip(self.config.anchor_recent_fraction, 0.0, 1.0))
+        is_recent = self._rng.random(n) < frac
+        n_recent = int(is_recent.sum())
+        out = np.empty(n, dtype=np.int64)
+        # Recent rows: uniformly in (NOW()-30d, NOW()]
+        out[is_recent] = self._rng.integers(recent_floor, ref_ord + 1, size=n_recent)
+        # Older rows: uniformly across the historical tail of the window
+        n_old = n - n_recent
+        out[~is_recent] = self._rng.integers(ref_ord - span_days, recent_floor, size=n_old)
+        return [date.fromordinal(int(d)).isoformat() for d in out]
+
+    def _shift_dates_to_window(self, dates: List[str]) -> List[str]:
+        """Cap each ISO date/datetime string at the rolling-window reference (today)
+        when anchoring is on, so dates DERIVED from anchored source dates
+        (e.g. treatment_date = journey + offset) carry no future timestamps while
+        KEEPING the recency the source already has — the future tail collapses onto
+        the reference, the rest is left untouched (so the 60%-recent mixture from
+        _anchored_dates survives; an affine rescale would flatten it). Handles
+        'YYYY-MM-DD' and 'YYYY-MM-DD HH:MM:SS'. No-op when anchor_to_now is off or
+        the list is empty. Reused by Shards 05/06/09."""
+        if not self.config.anchor_to_now or not dates:
+            return dates
+        ref = self.config.anchor_reference or date.today()
+        out: List[str] = []
+        for d in dates:
+            if date.fromisoformat(d[:10]) > ref:
+                out.append(ref.isoformat() + d[10:])  # preserve any ' HH:MM:SS' tail
+            else:
+                out.append(d)
+        return out
+
+    def _anchor_cap_timestamp(self, ts: "pd.Timestamp") -> "pd.Timestamp":
+        """Cap a single derived pandas Timestamp at the rolling-window reference
+        (end of the reference day) when anchoring is on; no-op when off. Per-element
+        so it composes with per-record generation (prediction/trigger records derive
+        their timestamp from the anchored journey date + an offset that could land in
+        the future). Preserves the source recency; only the future tail is collapsed."""
+        if not self.config.anchor_to_now:
+            return ts
+        ref = self.config.anchor_reference or date.today()
+        # Cap at the START of the reference day (midnight). Derived timestamps are
+        # midnight-based (journey date + whole-day offset), so this keeps capped rows
+        # at <= today-midnight <= NOW() for any consumer that filters `<= NOW()`,
+        # rather than end-of-day which would read as a few hours in the future.
+        return min(ts, pd.Timestamp(ref))
 
     def _assign_splits(
         self,

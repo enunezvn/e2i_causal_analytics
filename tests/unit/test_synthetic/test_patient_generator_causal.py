@@ -290,14 +290,17 @@ class TestTrueATEEmbedding:
         assert isinstance(df.attrs["confounders"], list)
 
     def test_true_ate_value_for_confounded_dgp(self):
-        """Test TRUE_ATE value for confounded DGP."""
+        """Test realized arm-based TRUE_ATE is in the designed band."""
         config = GeneratorConfig(n_records=100, seed=42, dgp_type=DGPType.CONFOUNDED)
         gen = PatientGenerator(config)
 
         df = gen.generate()
 
-        # Confounded DGP should have TRUE_ATE of 0.25 (from DGP_CONFIGS)
-        assert df.attrs["true_ate"] == 0.25
+        # Shard 03 wires the arm-based recoverable DGP: true_ate is the REALIZED
+        # mean of the per-unit brand-scaled CATE (mean tau_i), in the designed
+        # [0.15,0.50] band — NOT the old static config constant 0.25 (which
+        # described the pre-arm continuous-engagement degenerate path).
+        assert 0.15 <= df.attrs["true_ate"] <= 0.50
 
     def test_treatment_outcome_correlation(self):
         """Test treatment (engagement) is correlated with outcome."""

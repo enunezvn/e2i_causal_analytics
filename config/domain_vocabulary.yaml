@@ -2432,7 +2432,16 @@ brand_ndc_codes:
         - "00078-0903-51"  # 200mg tablets, 63-count
         - "00078-0903-21"  # 200mg tablets, 21-count
         - "00078-0903-42"  # 200mg tablets, 42-count
-    # Note: NDC codes for Remibrutinib and Fabhalta to be added when available
+    Remibrutinib:
+      drug_name: "remibrutinib"
+      ndc_codes:
+        - "00078-1100-30"  # SYNTHETIC-DEMO placeholder (no published NDC at authoring)
+      note: "Synthetic-demo NDC on Novartis labeler; not the true marketed NDC"
+    Fabhalta:
+      drug_name: "iptacopan"
+      ndc_codes:
+        - "00078-1175-66"  # SYNTHETIC-DEMO placeholder (no published NDC at authoring)
+      note: "Synthetic-demo NDC on Novartis labeler; not the true marketed NDC"
 
 
 # =============================================================================

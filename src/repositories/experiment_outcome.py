@@ -158,6 +158,7 @@ class ExperimentOutcomeRepository:
         window_days: Optional[int] = None,
         control_label: str = "control",
         treatment_label: str = "treatment",
+        include_synthetic: bool = False,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Real outcome feed: assignments ⋈ business_metrics → (control, treatment).
 
@@ -166,6 +167,9 @@ class ExperimentOutcomeRepository:
         for future post-assignment windowing; today the A/B schema carries no
         measurement-window columns, so when unset we read all available
         ``per_hcp_rollup`` rows for the brand (documented in the design brief).
+
+        ``include_synthetic`` defaults to False so a real experiment's pooled test
+        is never polluted by synthetic per-HCP rollups; validation runs opt in.
         """
         column, reducer = self.resolve_column(primary_metric)
 
@@ -188,12 +192,15 @@ class ExperimentOutcomeRepository:
         unit_ids = [uid for uid, _ in assignments]
 
         # 2) real per-HCP outcome rows from business_metrics
+        from src.repositories.provenance import apply_provenance_filter
+
         query = (
             self.client.table("business_metrics")
             .select(f"hcp_id,{column},metric_date,brand")
             .eq("metric_type", "per_hcp_rollup")
             .in_("hcp_id", unit_ids)
         )
+        query = apply_provenance_filter(query, include_synthetic)
         if brand:
             query = query.eq("brand", brand)
         metric_res = query.execute()

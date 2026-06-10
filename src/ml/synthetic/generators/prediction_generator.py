@@ -4,13 +4,30 @@ ML Prediction Generator.
 Generates synthetic ML predictions for patient journeys.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import numpy as np
 import pandas as pd
 
 from ..config import Brand
 from .base import BaseGenerator, GeneratorConfig
+
+
+def _opt_float(value: object) -> Optional[float]:
+    """Coerce a patient-row causal value to float, preserving NULL.
+
+    The linked patient row carries treatment_effect_estimate only when generated
+    via the Shard 03 DGP. A patient frame built without the DGP (or a standalone
+    prediction) leaves it None/NaN — which must stay NULL so migration 044's
+    IS NOT NULL filter excludes it rather than averaging a fabricated 0.0.
+    """
+    if value is None:
+        return None
+    try:
+        f = float(cast("Any", value))
+    except (TypeError, ValueError):
+        return None
+    return None if np.isnan(f) else f
 
 
 class PredictionGenerator(BaseGenerator[pd.DataFrame]):
@@ -121,10 +138,14 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
         # Model version
         model_version = f"v{self._rng.integers(1, 5)}.{self._rng.integers(0, 10)}"
 
-        # Prediction date (after journey start)
+        # Prediction date (after journey start). Cap at the rolling-window reference
+        # under anchoring so a recent journey + large offset never lands in the
+        # future (Shard 04); no-op when anchor_to_now is off.
         journey_start = pd.to_datetime(patient.get("journey_start_date", "2023-01-01"))
         days_offset = self._rng.integers(0, 90)
-        prediction_date = journey_start + pd.Timedelta(days=int(days_offset))
+        prediction_date = self._anchor_cap_timestamp(
+            journey_start + pd.Timedelta(days=int(days_offset))
+        )
 
         return {
             "patient_journey_id": patient.get("patient_journey_id", ""),
@@ -137,6 +158,13 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
             "uncertainty": round(uncertainty, 3),
             "model_version": model_version,
             "prediction_date": prediction_date.strftime("%Y-%m-%d"),
+            # Causal substrate columns carried from the linked patient row (Shard 03
+            # DGP). treatment_effect_estimate == heterogeneous_effect == per-unit tau;
+            # migration 044 reads AVG(treatment_effect_estimate) for ATE and
+            # AVG(heterogeneous_effect) GROUP BY segment_assignment for CATE.
+            "treatment_effect_estimate": _opt_float(patient.get("treatment_effect_estimate")),
+            "heterogeneous_effect": _opt_float(patient.get("treatment_effect_estimate")),
+            "segment_assignment": patient.get("segment_assignment", None),
         }
 
     def _generate_standalone_predictions(self, n: int) -> pd.DataFrame:
@@ -187,5 +215,10 @@ class PredictionGenerator(BaseGenerator[pd.DataFrame]):
                 "uncertainty": np.round(uncertainties, 3),
                 "model_version": model_versions,
                 "prediction_date": prediction_dates,
+                # Causal substrate columns (populated by Shard 03's DGP; NULL
+                # here so the loader carries them and migration 044 sees them).
+                "treatment_effect_estimate": [None] * n,
+                "heterogeneous_effect": [None] * n,
+                "segment_assignment": [None] * n,
             }
         )

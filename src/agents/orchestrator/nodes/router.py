@@ -60,7 +60,14 @@ class RouterNode:
                 agent_name="heterogeneous_optimizer",
                 priority="critical",
                 parameters={},
-                timeout_ms=25000,
+                # heterogeneous_optimizer runs a real CausalForestDML estimation +
+                # CausalML hierarchical uplift; on a few-thousand-row KPI substrate this
+                # legitimately exceeds 25s, so the old SLA timed out COMPLETING analyses
+                # (surfaced by synthetic-causal-validation gate 11, where the full
+                # CATE->segment->hierarchical pipeline finishes but the dispatch was cut
+                # at 25s). Raised to a workload-appropriate SLA, in line with the other
+                # heavy analytical agents (cohort_constructor 120s, tool_composer 180s).
+                timeout_ms=120000,
                 fallback_agent="gap_analyzer",
             )
         ],

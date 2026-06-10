@@ -24,6 +24,10 @@ class BaseRepository(ABC, Generic[T]):
 
     table_name: str
     model_class: Optional[Type[T]] = None
+    # Whether this table carries the ``is_synthetic`` provenance column (Shard 01).
+    # Subclasses whose table is taggable set this True so ``get_many`` default-excludes
+    # synthetic rows; tables without the column keep it False to avoid a 42703 error.
+    HAS_PROVENANCE: bool = False
 
     def __init__(self, supabase_client=None):
         """
@@ -38,6 +42,7 @@ class BaseRepository(ABC, Generic[T]):
         self,
         id: str,
         split: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> Optional[T]:
         """
         Get a single record by ID.
@@ -45,6 +50,11 @@ class BaseRepository(ABC, Generic[T]):
         Args:
             id: Record UUID
             split: Optional ML split filter
+            include_synthetic: When False (default), tables carrying the
+                ``is_synthetic`` provenance column (``HAS_PROVENANCE = True``)
+                default-exclude a synthetic row even when fetched by its id
+                (a synthetic id must not resolve into a real-mode result).
+                Validation runs opt in with True.
 
         Returns:
             Model instance or None
@@ -56,6 +66,11 @@ class BaseRepository(ABC, Generic[T]):
         if split:
             query = query.eq("split_assignment", split)
 
+        if not include_synthetic and getattr(self, "HAS_PROVENANCE", False):
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
+
         result = await query.execute()
         return self._to_model(parse_supabase_row(result.data[0])) if result.data else None
 
@@ -65,6 +80,7 @@ class BaseRepository(ABC, Generic[T]):
         split: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        include_synthetic: bool = False,
     ) -> List[T]:
         """
         Get multiple records with filters.
@@ -74,6 +90,9 @@ class BaseRepository(ABC, Generic[T]):
             split: Optional ML split filter
             limit: Maximum records to return
             offset: Pagination offset
+            include_synthetic: When False (default), tables carrying the
+                ``is_synthetic`` provenance column (``HAS_PROVENANCE = True``)
+                default-exclude synthetic rows. Validation runs opt in with True.
 
         Returns:
             List of model instances
@@ -88,6 +107,11 @@ class BaseRepository(ABC, Generic[T]):
 
         if split:
             query = query.eq("split_assignment", split)
+
+        if not include_synthetic and getattr(self, "HAS_PROVENANCE", False):
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
 
         query = query.limit(limit).offset(offset)
         result = await query.execute()

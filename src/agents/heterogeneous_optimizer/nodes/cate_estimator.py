@@ -209,8 +209,16 @@ class CATEEstimatorNode:
                 },
             )
 
-            # Encode effect modifiers (handle categorical)
-            X_df = df[state["effect_modifiers"]].copy()
+            # Encode effect modifiers (handle categorical).
+            # Shard 07 C2: a provenance column (is_synthetic) must NEVER enter
+            # the CATE design matrix as an effect modifier, even if a caller
+            # passed it explicitly. Sanitize against PROVENANCE_DROP_COLS.
+            from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+            effect_modifiers = [
+                c for c in state["effect_modifiers"] if c not in PROVENANCE_DROP_COLS
+            ]
+            X_df = df[effect_modifiers].copy()
             X = self._encode_features(X_df)
 
             # Phase 3 (Issue #237): route confounders into CausalForestDML's
@@ -324,25 +332,30 @@ class CATEEstimatorNode:
             # Calculate heterogeneity score
             heterogeneity = self._calculate_heterogeneity(cate_individual, ate)
 
-            # Get feature importance
+            # Get feature importance. Use the sanitized ``effect_modifiers``
+            # (PROVENANCE_DROP_COLS stripped) so the importance keys line up 1:1
+            # with the columns the forest was actually trained on (cf was fit on
+            # the sanitized X above) — Shard 07 C2.
             feature_importance = dict(
                 zip(
-                    state["effect_modifiers"],
+                    effect_modifiers,
                     (
                         cf.feature_importances_.tolist()
                         if hasattr(cf, "feature_importances_")
-                        else [0] * len(state["effect_modifiers"])
+                        else [0] * len(effect_modifiers)
                     ),
                     strict=False,
                 )
             )
 
-            # Calculate CATE by segment
+            # Calculate CATE by segment. Pass the sanitized effect_modifiers so
+            # the per-segment design matrix matches the trained forest and never
+            # includes a provenance column (Shard 07 C2).
             cate_by_segment = await self._calculate_cate_by_segment(
                 df,
                 cf,
                 state["segment_vars"],
-                state["effect_modifiers"],
+                effect_modifiers,
                 state.get("significance_level", 0.05),
             )
 
@@ -417,6 +430,10 @@ class CATEEstimatorNode:
             + state["effect_modifiers"]
             + state["segment_vars"]
         )
+        # is_synthetic must never be an effect modifier / segment var (Shard 07 C2).
+        from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+        required_columns = [c for c in required_columns if c not in PROVENANCE_DROP_COLS]
 
         # Priority 1: Use tier0 passthrough data if available
         tier0_data = state.get("tier0_data")
@@ -523,7 +540,12 @@ class CATEEstimatorNode:
 
         # De-duplicate while preserving first-seen order. ``dict.fromkeys``
         # is the canonical Py3.7+ idiom for order-preserving uniqueness.
-        deduped = list(dict.fromkeys(resolved))
+        # Shard 07 C2: a provenance column (is_synthetic) must NEVER be routed
+        # into the nuisance ``W`` matrix as a confounder, even if a caller
+        # passed it explicitly. Strip PROVENANCE_DROP_COLS here.
+        from src.repositories.provenance import PROVENANCE_DROP_COLS
+
+        deduped = [c for c in dict.fromkeys(resolved) if c not in PROVENANCE_DROP_COLS]
 
         # Drop any column not present on the fetched DataFrame. This
         # tolerates schema drift between the manifest / role-attribution
@@ -594,17 +616,28 @@ class CATEEstimatorNode:
 
         cate_by_segment = {}
 
+        # Encode the effect modifiers ONCE over the FULL frame, identical to how the
+        # forest's training matrix was built (``self._encode_features(df[effect_modifiers])``
+        # at fit time). The fitted CausalForest only ever saw those deterministic codes,
+        # so the per-segment design matrix MUST use the same encoding — feeding the raw
+        # string columns to ``cf.effect`` otherwise raises "could not convert string to
+        # float" for any categorical effect modifier (e.g. the conversion-KPI substrate's
+        # trigger_type/priority). We encode the full frame and POSITIONALLY mask per
+        # segment; the segment mask stays on the RAW ``segment_var`` so categorical
+        # segment values still match.
+        X_all = self._encode_features(df[effect_modifiers])
+
         for segment_var in segment_vars:
             segment_results = []
 
             for segment_value in df[segment_var].unique():
-                mask = df[segment_var] == segment_value
+                mask = (df[segment_var] == segment_value).to_numpy()
                 segment_df = df[mask]
 
                 if len(segment_df) < 10:
                     continue
 
-                X_segment = segment_df[effect_modifiers].values
+                X_segment = X_all[mask]
 
                 # Get CATE for segment
                 cate = cf.effect(X_segment)

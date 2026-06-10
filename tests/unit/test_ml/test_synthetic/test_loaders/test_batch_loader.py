@@ -226,13 +226,19 @@ class TestBatchLoader:
             trigger_config, patient_df=patient_df, hcp_df=hcp_df
         ).generate()
 
-        return {
+        datasets = {
             "hcp_profiles": hcp_df,
             "patient_journeys": patient_df,
             "treatment_events": treatment_df,
             "ml_predictions": prediction_df,
             "triggers": trigger_df,
         }
+        # Mirror the real pipeline's central provenance stamp (Shard 02 Task 2):
+        # generate_datasets tags every frame is_synthetic=True; TABLE_COLUMNS now
+        # requires it, so validate_datasets needs it present here too.
+        for _t, _df in datasets.items():
+            _df["is_synthetic"] = True
+        return datasets
 
     def test_loader_initialization(self, loader):
         """Test loader initialization."""
@@ -399,13 +405,17 @@ class TestBatchLoaderIntegration:
             GeneratorConfig(seed=42, n_records=80), patient_df=patient_df, hcp_df=hcp_df
         ).generate()
 
-        return {
+        datasets = {
             "hcp_profiles": hcp_df,
             "patient_journeys": patient_df,
             "treatment_events": treatment_df,
             "ml_predictions": prediction_df,
             "triggers": trigger_df,
         }
+        # Mirror the real pipeline's central provenance stamp (Shard 02 Task 2).
+        for _t, _df in datasets.items():
+            _df["is_synthetic"] = True
+        return datasets
 
     def test_full_pipeline_dry_run(self, full_pipeline_datasets):
         """Test full pipeline loading in dry run mode."""
@@ -435,3 +445,58 @@ class TestBatchLoaderIntegration:
         total_input = sum(len(df) for df in full_pipeline_datasets.values())
 
         assert total_loaded == total_input
+
+
+class TestProvenanceColumnRegistration:
+    """is_synthetic must be registered for every table so the loader does not strip it."""
+
+    def test_every_existing_table_lists_is_synthetic(self):
+        from src.ml.synthetic.loaders import TABLE_COLUMNS
+
+        existing = [
+            "hcp_profiles",
+            "patient_journeys",
+            "treatment_events",
+            "ml_predictions",
+            "triggers",
+            "business_metrics",
+            "feature_groups",
+            "features",
+            "feature_values",
+        ]
+        for table in existing:
+            assert "is_synthetic" in TABLE_COLUMNS[table], (
+                f"{table} missing is_synthetic -> loader will strip it at batch_loader.py:309"
+            )
+
+    def test_patient_journeys_lists_new_causal_columns(self):
+        """The 5 Shard-01 M2 causal columns must be registered or the loader strips them."""
+        from src.ml.synthetic.loaders import TABLE_COLUMNS
+
+        for col in (
+            "treatment_arm",
+            "propensity_score",
+            "segment_assignment",
+            "discontinued_180d",
+            "persistent_180d",
+        ):
+            assert col in TABLE_COLUMNS["patient_journeys"], (
+                f"patient_journeys missing {col} -> loader strips it at batch_loader.py:309"
+            )
+
+    def test_loader_keeps_is_synthetic_column(self):
+        """A DataFrame carrying is_synthetic must keep it after column gating."""
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {"hcp_id": ["hcp_1"], "npi": ["1"], "specialty": ["onc"], "is_synthetic": [True]}
+        )
+        # load_table selects TABLE_COLUMNS ∩ df.columns; assert is_synthetic survives
+        available = [c for c in loader_columns("hcp_profiles") if c in df.columns]
+        assert "is_synthetic" in available
+
+
+def loader_columns(table: str):
+    from src.ml.synthetic.loaders import TABLE_COLUMNS
+
+    return TABLE_COLUMNS[table]

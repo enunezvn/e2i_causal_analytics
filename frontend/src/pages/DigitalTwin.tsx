@@ -269,6 +269,14 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
         <div>
           <div className="flex items-center gap-3 mb-2">
             <RecommendationBadge recommendation={simulation.recommendation} />
+            {simulation.data_provenance?.startsWith('synthetic') && (
+              <span
+                className="inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-900/30 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-300"
+                title="This estimate comes from synthetic data, not a real-world feed."
+              >
+                SYNTHETIC
+              </span>
+            )}
             <span className="text-xs text-[var(--color-text-tertiary)]">
               Confidence: {(simulation.simulation_confidence * 100).toFixed(0)}%
             </span>

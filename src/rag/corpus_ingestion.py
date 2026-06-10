@@ -154,6 +154,10 @@ def _fetch_brand_rows(
         sb.table("business_metrics")
         .select(_METRIC_COLUMNS)
         .eq("brand", brand)
+        # Provenance (Shard 07 R12): never embed synthetic KPI prose into the prod
+        # corpus. business_metrics carries is_synthetic (default false); synthetic
+        # rows (Shard 02) are excluded so the chatbot only surfaces real metrics.
+        .eq("is_synthetic", False)
         .not_.is_("metric_name", "null")
         .order("metric_date", desc=True)
         .order("metric_id")
@@ -190,6 +194,11 @@ def _existing_corpus_descriptions(sb: Any, agent_name: str) -> set[str]:
             sb.table("episodic_memories")
             .select("description")
             .eq("agent_name", agent_name)
+            # Provenance (Shard 07 R12/R15): the dedup set must contain ONLY real
+            # corpus rows. A synthetic episodic description must never suppress
+            # ingesting a real business_metrics row (which would leave the real
+            # KPI unsearchable while the synthetic prose silently stands in).
+            .eq("is_synthetic", False)
             .range(page * page_size, page * page_size + page_size - 1)
             .execute()
         )
@@ -241,7 +250,15 @@ async def index_business_metrics(
     """
     sb = supabase_client or get_supabase_client()
     if brands is None:
-        r = sb.table("business_metrics").select("brand").not_.is_("brand", "null").execute()
+        r = (
+            sb.table("business_metrics")
+            .select("brand")
+            # Provenance (Shard 07 R12): brand discovery must not surface a brand
+            # that exists only in synthetic rows.
+            .eq("is_synthetic", False)
+            .not_.is_("brand", "null")
+            .execute()
+        )
         brands = sorted({row["brand"] for row in (r.data or []) if row.get("brand")})
 
     already = _existing_corpus_descriptions(sb, agent_name) if dedup else set()

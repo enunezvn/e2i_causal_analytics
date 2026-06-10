@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
+from ..clinical_codes import brand_codes
 from ..config import (
     DGP_CONFIGS,
     Brand,
@@ -18,7 +19,16 @@ from ..config import (
     InsuranceTypeEnum,
     RegionEnum,
 )
+from ..dgp.treatment_arm import (
+    _BRAND_CATE_SCALE,
+    assign_segment,
+    assign_treatment_arm,
+    binary_outcome_with_cate,
+    brand_scaled_cate,
+    rd_map_from_tau,
+)
 from .base import BaseGenerator, GeneratorConfig
+from .cohort_outcomes import generate_discontinuation_outcomes
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):
@@ -86,15 +96,48 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # Generate confounders FIRST (they affect both treatment and outcome)
         confounders = self._generate_confounders(n, dgp_type)
 
-        # Generate treatment (engagement) based on confounders
+        # Generate treatment (engagement) based on confounders. engagement_score is
+        # retained as an EMITTED covariate (continuous), but the causal treatment for
+        # arm-based estimators is now the confounded BINARY arm below (Task 03.1).
         engagement_scores = self._generate_treatment(confounders, dgp_type)
 
-        # Generate outcome with TRUE causal effect
-        outcomes = self._generate_outcome(
-            engagement_scores,
-            confounders,
-            true_ate,
-            dgp_type,
+        # Confounded binary treatment ARM + estimable propensity with overlap
+        # (Task 03.1). Confounders carry disease_severity + academic_hcp.
+        treatment_arm, propensity = assign_treatment_arm(confounders, self._rng)
+
+        # Per-unit segment + brand-scaled latent CATE (Task 03.2). Distinct per
+        # brand so a Kisqali probe yields a different structure than Remibrutinib.
+        brand_enum = self.config.brand or Brand.REMIBRUTINIB
+        segment = assign_segment(confounders["disease_severity"])
+        latent_cate_map = brand_scaled_cate(brand_enum)
+
+        # Prevalence-banded binary outcome carrying E[tau]=TRUE_ATE (Task 03.3).
+        # REPLACES the expit(...)>0.5 outcome for treatment_initiated so the label
+        # is recoverable (in-band [0.20,0.50]) rather than degenerate. tau_i is the
+        # per-unit RD-scale (de-confounded, recoverable) segment CATE.
+        treatment_initiated, tau_i = binary_outcome_with_cate(
+            treatment_arm, confounders, segment, latent_cate_map, self._rng
+        )
+        # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
+        cate_map = rd_map_from_tau(segment, tau_i)
+
+        # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
+        # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses
+        # Shard 03's _BRAND_CATE_SCALE so a Kisqali probe differs from a Remibrutinib one.
+        _coh = generate_discontinuation_outcomes(
+            rng=self._rng,
+            treatment_arm=np.asarray(treatment_arm, dtype=int),
+            disease_severity=confounders["disease_severity"],
+            academic_hcp=confounders["academic_hcp"],
+            segment=np.asarray(segment),
+            brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
+        )
+
+        # days_to_treatment only for initiators (preserve prior shape)
+        days_to_treatment: Any = np.where(
+            treatment_initiated == 1,
+            self._random_int(7, 90, n),
+            np.nan,
         )
 
         # Generate dates and assign splits
@@ -114,6 +157,45 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         else:
             brands = self._random_choice([b.value for b in Brand], n).tolist()
 
+        # Brand-specific eligibility (Shard 04 M5). Generated to pass the
+        # cohort_constructor inclusion gates (configs.py required_fields) so each
+        # brand's cohort is populated (non-empty); the OUTCOME prevalence within the
+        # cohort is the DGP's banded treatment_initiated (Shard 03). All 10 columns
+        # are populated on every row (nullable in DB) — cohort_constructor only reads
+        # the brand-relevant subset. primary_diagnosis_code is brand-correct per row.
+        primary_dx: List[str] = []
+        uas7: List[int] = []
+        prior_ah: List[bool] = []
+        hr_status: List[str] = []
+        her2_status: List[str] = []
+        stage: List[str] = []
+        ecog: List[int] = []
+        ldh: List[float] = []
+        comp_inh: List[str] = []
+        proteinuria: List[float] = []
+        egfr: List[float] = []
+        _stage_pool = ["advanced", "metastatic", "locally_advanced", "stage_iv"]
+        for b in brands:
+            codes = (
+                brand_codes(b)
+                if b in ("Remibrutinib", "Kisqali", "Fabhalta")
+                else {"icd10": ["L50.9"]}
+            )
+            primary_dx.append(str(self._rng.choice(cast("list[str]", codes["icd10"]))))
+            # Remi: UAS7 16-42 (inclusion >=16); prior antihistamine always present
+            uas7.append(int(self._rng.integers(16, 43)))
+            prior_ah.append(True)
+            # Kisqali: HR+/HER2- gates
+            hr_status.append("positive")
+            her2_status.append("negative")
+            stage.append(str(self._rng.choice(_stage_pool)))
+            ecog.append(int(self._rng.integers(0, 2)))
+            # Fabhalta: PNH/C3G gates
+            ldh.append(round(float(self._rng.uniform(1.5, 5.0)), 2))
+            comp_inh.append(str(self._rng.choice(["current", "prior"])))
+            proteinuria.append(round(float(self._rng.uniform(1.0, 6.0)), 2))
+            egfr.append(round(float(self._rng.uniform(30.0, 110.0)), 2))
+
         # Build DataFrame
         df = pd.DataFrame(
             {
@@ -126,8 +208,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "disease_severity": confounders["disease_severity"],
                 "academic_hcp": confounders["academic_hcp"],
                 "engagement_score": engagement_scores,
-                "treatment_initiated": outcomes["treatment_initiated"],
-                "days_to_treatment": outcomes["days_to_treatment"],
+                "treatment_initiated": treatment_initiated,
+                "days_to_treatment": days_to_treatment,
                 "geographic_region": self._random_choice(
                     [r.value for r in RegionEnum],
                     n,
@@ -138,12 +220,40 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                     p=[self.INSURANCE_DIST[i] for i in InsuranceTypeEnum],
                 ),
                 "age_at_diagnosis": self._random_int(18, 85, n),
+                # Brand eligibility columns (Shard 04 M5). primary_diagnosis_code is
+                # an existing column; the other 10 are added by migration 068.
+                "primary_diagnosis_code": primary_dx,
+                "urticaria_severity_uas7": uas7,
+                "prior_antihistamine_therapy": prior_ah,
+                "hr_status": hr_status,
+                "her2_status": her2_status,
+                "disease_stage": stage,
+                "ecog_performance_status": ecog,
+                "ldh_ratio": ldh,
+                "complement_inhibitor_status": comp_inh,
+                "proteinuria_g_day": proteinuria,
+                "egfr": egfr,
+                # Causal substrate columns (Shard 01 M2 DDL). Populated by Shard
+                # 03's DGP: treatment_arm/propensity_score/segment_assignment are
+                # the confounded arm + estimable propensity + per-unit CATE segment;
+                # treatment_effect_estimate is the per-unit brand-scaled tau (the
+                # recoverable ground truth). discontinued_180d/persistent_180d stay
+                # NULL here — Shard 06's outcome builders own those.
+                "treatment_arm": treatment_arm,
+                "propensity_score": np.round(propensity, 4),
+                "segment_assignment": segment,
+                "treatment_effect_estimate": np.round(tau_i, 4),
+                "discontinued_180d": _coh["discontinued_180d"],
+                "persistent_180d": _coh["persistent_180d"],
             }
         )
 
-        # Store ground truth metadata
-        df.attrs["true_ate"] = true_ate
+        # Store ground truth metadata (realized values from the wired DGP)
+        df.attrs["true_ate"] = float(np.mean(tau_i))
+        df.attrs["cate_by_segment"] = cate_map
+        df.attrs["brand"] = brand_enum.value
         df.attrs["dgp_type"] = dgp_type.value
+        df.attrs["prevalence"] = float(np.mean(treatment_initiated))
         df.attrs["confounders"] = dgp_config.confounders if dgp_config else []
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
@@ -211,7 +321,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             )
             engagement = expit(propensity / 3) * 10
 
-        return np.clip(engagement, 0, 10)
+        return np.asarray(np.clip(engagement, 0, 10))
 
     def _generate_outcome(
         self,

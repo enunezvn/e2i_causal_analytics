@@ -125,7 +125,13 @@ class OutcomeGenerator(BaseGenerator[pd.DataFrame]):
             disease_severity,
         )
 
-        # Generate outcome date (after journey start)
+        # Generate outcome date (after journey start).
+        # NOTE (Shard 04): this generator is currently INACTIVE — business_outcomes is
+        # absent from the schema and OutcomeGenerator is not called by
+        # generate_datasets (batch_loader.py LOADING_ORDER omits it). If it is ever
+        # reactivated under rolling-window anchoring, wrap the derived date with
+        # self._anchor_cap_timestamp(...) like prediction/trigger so a recent journey +
+        # 30-180d offset never lands in the future.
         journey_start = pd.to_datetime(patient.get("journey_start_date", "2023-01-01"))
         days_offset = self._rng.integers(30, 180)  # 1-6 months after start
         outcome_date = journey_start + pd.Timedelta(days=int(days_offset))

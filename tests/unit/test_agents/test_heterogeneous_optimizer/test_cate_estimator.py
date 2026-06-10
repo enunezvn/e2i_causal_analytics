@@ -105,6 +105,54 @@ class TestCATEEstimatorNode:
             assert segment_var in result["cate_by_segment"]
 
     @pytest.mark.asyncio
+    async def test_cate_by_segment_encodes_string_effect_modifiers(self):
+        """Regression: per-segment CATE must encode STRING effect modifiers the SAME
+        way the training matrix was built. ``_calculate_cate_by_segment`` previously
+        fed the RAW ``segment_df[effect_modifiers].values`` to ``cf.effect`` while
+        training label-encoded them, so any categorical-string modifier crashed econml
+        with "could not convert string to float". Surfaced by the
+        synthetic-causal-validation Shard 11 gate 11: the #839 het resolver binds the
+        conversion-KPI substrate whose effect modifiers include string columns
+        (trigger_type / delivery_channel / priority). The fix encodes the modifiers
+        over the full frame and positionally masks per segment.
+        """
+        import numpy as np
+        import pandas as pd
+
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
+        n = 60
+        df = pd.DataFrame(
+            {
+                "severity": ["high", "low"] * (n // 2),  # string segment_var
+                "channel": ["email", "call", "visit"] * (n // 3),  # STRING modifier
+                "tenure": np.linspace(1.0, 30.0, n),  # numeric modifier
+            }
+        )
+
+        class _FakeForest:
+            # CausalForestDML stand-in: effect() requires a NUMERIC design matrix.
+            # np.asarray(dtype=float) raises on any residual string -> proves the node
+            # encoded the modifiers before calling effect() (RED before the fix).
+            def effect(self, X):
+                return np.asarray(X, dtype=float).sum(axis=1)
+
+            def effect_interval(self, X, alpha):
+                e = self.effect(X)
+                return (e - 0.1, e + 0.1)
+
+        result = await node._calculate_cate_by_segment(
+            df,
+            _FakeForest(),
+            segment_vars=["severity"],
+            effect_modifiers=["channel", "tenure"],
+            alpha=0.05,
+        )
+
+        # Both severity segments computed without a string->float crash.
+        assert "severity" in result
+        assert len(result["severity"]) == 2
+
+    @pytest.mark.asyncio
     async def test_cate_result_structure(self):
         """Test structure of CATE results."""
         node = CATEEstimatorNode(data_connector=MockDataConnector())
