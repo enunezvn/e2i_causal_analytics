@@ -10,7 +10,10 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-# Note: Great Expectations is optional - graceful degradation if not installed
+# Note: Great Expectations is optional - graceful degradation if not installed.
+# ExpectationSuite is used only as an availability marker (re-bound to None on the
+# absent-GE fallback path), so it is typed Any to let mypy accept both bindings.
+ExpectationSuite: Any
 try:
     import great_expectations as gx  # noqa: F401
     from great_expectations.core import ExpectationSuite

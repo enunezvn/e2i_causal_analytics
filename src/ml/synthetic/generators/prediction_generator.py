@@ -4,7 +4,7 @@ ML Prediction Generator.
 Generates synthetic ML predictions for patient journeys.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -24,7 +24,7 @@ def _opt_float(value: object) -> Optional[float]:
     if value is None:
         return None
     try:
-        f = float(value)
+        f = float(cast("Any", value))
     except (TypeError, ValueError):
         return None
     return None if np.isnan(f) else f

@@ -73,7 +73,7 @@ def emit_medication(
     """Emit medication claims (prior therapy + biologic initiation/sequence)."""
     n = len(pats)
     n_hcps = cfg.n_hcps if cfg.n_hcps else max(8, n // 10)
-    default_pool = None
+    default_pool: np.ndarray | None = None
     if npi_for is None:
         default_pool = _default_npi_pool(rng, n, n_hcps)
 
@@ -81,7 +81,11 @@ def emit_medication(
     for pos, (_, p) in enumerate(pats.iterrows()):
         pid = int(p["patid"])
         idx = p["claim_index"]
-        npi = npi_for(pid) if npi_for is not None else str(default_pool[pos])
+        if npi_for is not None:
+            npi = npi_for(pid)
+        else:
+            assert default_pool is not None
+            npi = str(default_pool[pos])
 
         # Pre-index prior therapy (non-biologic) -> NON_TARGET_DRUG_CLASSES
         # *_fill_count / *_days_supply_total features. Log-linear rate in the
@@ -199,7 +203,7 @@ def emit_procedure(
     """Emit procedure (office-visit) claims feeding office_visits + HCP graph."""
     n = len(pats)
     n_hcps = cfg.n_hcps if cfg.n_hcps else max(8, n // 10)
-    default_pool = None
+    default_pool: np.ndarray | None = None
     if npi_for is None:
         default_pool = _default_npi_pool(rng, n, n_hcps)
 
@@ -207,7 +211,11 @@ def emit_procedure(
     for pos, (_, p) in enumerate(pats.iterrows()):
         pid = int(p["patid"])
         idx = p["claim_index"]
-        npi = npi_for(pid) if npi_for is not None else str(default_pool[pos])
+        if npi_for is not None:
+            npi = npi_for(pid)
+        else:
+            assert default_pool is not None
+            npi = str(default_pool[pos])
         # Pre-index office visits (E&M 99213/99214), log-linear rate in severity.
         # These feed office_visits_* + unique_providers + the shared-patient graph.
         rate_visits = float(np.exp(np.log(2.5) + cfg.feature_log_rate_coef * float(p["severity"])))

@@ -181,7 +181,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 if b in ("Remibrutinib", "Kisqali", "Fabhalta")
                 else {"icd10": ["L50.9"]}
             )
-            primary_dx.append(str(self._rng.choice(codes["icd10"])))
+            primary_dx.append(str(self._rng.choice(cast("list[str]", codes["icd10"]))))
             # Remi: UAS7 16-42 (inclusion >=16); prior antihistamine always present
             uas7.append(int(self._rng.integers(16, 43)))
             prior_ah.append(True)
@@ -321,7 +321,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             )
             engagement = expit(propensity / 3) * 10
 
-        return np.clip(engagement, 0, 10)
+        return np.asarray(np.clip(engagement, 0, 10))
 
     def _generate_outcome(
         self,

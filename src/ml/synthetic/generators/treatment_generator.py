@@ -4,7 +4,7 @@ Treatment Event Generator.
 Generates synthetic treatment events linked to patient journeys.
 """
 
-from typing import List, Optional
+from typing import List, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -162,7 +162,7 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
                     "drug_name": "cetirizine",
                     "ndc": "00078-0000-00",
                 }
-            dx = str(self._rng.choice(codes["icd10"]))
+            dx = str(self._rng.choice(cast("list[str]", codes["icd10"])))
             primary_dx.append(dx)
             icd_codes.append([dx])
             drug_ndc.append(codes["ndc"])

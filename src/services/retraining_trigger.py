@@ -130,14 +130,19 @@ class RetrainingTriggerService:
         Returns:
             Retraining decision with details
         """
+        from src.memory.services.factories import ServiceConnectionError
         from src.repositories.drift_monitoring import (
             DriftHistoryRepository,
             RetrainingHistoryRepository,
+            get_drift_monitoring_client,
         )
         from src.services.performance_tracking import get_performance_tracker
 
-        # Get drift status
-        drift_repo = DriftHistoryRepository()
+        # Get drift status. Fail-closed (#845): resolve the client once and wire
+        # it into the repositories; an unconfigured Supabase raises here instead
+        # of the repos silently no-op'ing into a fabricated "no drift" decision.
+        client = await get_drift_monitoring_client()
+        drift_repo = DriftHistoryRepository(client)
         drift_records = await drift_repo.get_latest_drift_status(model_version, limit=50)
 
         # Calculate drift scores by type
@@ -185,13 +190,20 @@ class RetrainingTriggerService:
                 if baseline_performance > 0
                 else 0.0
             )
+        except ServiceConnectionError:
+            # Fail-closed (#845): never fabricate a healthy performance baseline
+            # when the backend is unconfigured/unreachable — surface it so the
+            # retraining decision is not made on invented metrics. (Belt-and-
+            # suspenders: the client is already resolved above for drift_repo, so
+            # this also keeps the contract explicit if that ordering changes.)
+            raise
         except Exception:
             current_performance = 1.0
             baseline_performance = 1.0
             performance_drop = 0.0
 
         # Check cooldown period
-        retrain_repo = RetrainingHistoryRepository()
+        retrain_repo = RetrainingHistoryRepository(client)
         recent_retraining = await self._check_cooldown(model_version, retrain_repo)
         if recent_retraining:
             return RetrainingDecision(
@@ -294,14 +306,18 @@ class RetrainingTriggerService:
             Created retraining job
         """
 
+        from src.memory.services.factories import ServiceConnectionError
         from src.repositories.drift_monitoring import (
             DriftHistoryRepository,
             RetrainingHistoryRepository,
+            get_drift_monitoring_client,
         )
         from src.services.performance_tracking import get_performance_tracker
 
-        # Get current metrics
-        drift_repo = DriftHistoryRepository()
+        # Get current metrics. Fail-closed (#845): resolve the client once and
+        # wire it into the repositories (unconfigured Supabase raises here).
+        client = await get_drift_monitoring_client()
+        drift_repo = DriftHistoryRepository(client)
         drift_records = await drift_repo.get_latest_drift_status(model_version, limit=20)
         drift_score = max((self._severity_to_score(r.severity) for r in drift_records), default=0.0)
 
@@ -309,6 +325,11 @@ class RetrainingTriggerService:
         try:
             perf_trend = await tracker.get_performance_trend(model_version, "accuracy")
             performance_before = perf_trend.current_value
+        except ServiceConnectionError:
+            # Fail-closed (#845): do not retrain against a fabricated 0.0 baseline
+            # when the backend is unreachable. (Belt-and-suspenders: the client is
+            # already resolved above for drift_repo.)
+            raise
         except Exception:
             performance_before = 0.0
 
@@ -327,7 +348,7 @@ class RetrainingTriggerService:
         training_config["approved_by"] = approved_by
 
         # Record retraining trigger
-        retrain_repo = RetrainingHistoryRepository()
+        retrain_repo = RetrainingHistoryRepository(client)
         record = await retrain_repo.trigger_retraining(
             old_model_version=model_version,
             new_model_version=new_version,
@@ -415,9 +436,12 @@ class RetrainingTriggerService:
         Returns:
             Job details or None if not found
         """
-        from src.repositories.drift_monitoring import RetrainingHistoryRepository
+        from src.repositories.drift_monitoring import (
+            RetrainingHistoryRepository,
+            get_drift_monitoring_client,
+        )
 
-        repo = RetrainingHistoryRepository()
+        repo = RetrainingHistoryRepository(await get_drift_monitoring_client())
         record = await repo.get_by_id(job_id)
 
         if not record:
@@ -474,9 +498,12 @@ class RetrainingTriggerService:
         Returns:
             Updated job or None
         """
-        from src.repositories.drift_monitoring import RetrainingHistoryRepository
+        from src.repositories.drift_monitoring import (
+            RetrainingHistoryRepository,
+            get_drift_monitoring_client,
+        )
 
-        repo = RetrainingHistoryRepository()
+        repo = RetrainingHistoryRepository(await get_drift_monitoring_client())
         record = await repo.complete_retraining(
             job_id, performance_after, success, mlflow_run_id=mlflow_run_id
         )
@@ -501,9 +528,12 @@ class RetrainingTriggerService:
         Returns:
             Updated job or None
         """
-        from src.repositories.drift_monitoring import RetrainingHistoryRepository
+        from src.repositories.drift_monitoring import (
+            RetrainingHistoryRepository,
+            get_drift_monitoring_client,
+        )
 
-        repo = RetrainingHistoryRepository()
+        repo = RetrainingHistoryRepository(await get_drift_monitoring_client())
         record = await repo.rollback_retraining(job_id)
 
         if not record:

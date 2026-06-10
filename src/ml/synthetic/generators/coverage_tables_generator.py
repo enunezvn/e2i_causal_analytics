@@ -12,7 +12,7 @@ Enum-exact (22P02 landmine): user_region (region_type), brand (brand_type).
 
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -149,7 +149,7 @@ class CoverageTablesGenerator(BaseGenerator[pd.DataFrame]):
             )
 
         # --- ml_annotations: WS1-DQ-008 IAA (v_kpi_label_quality) ---
-        ann = []
+        ann: list[dict[str, Any]] = []
         for i in range(n):
             group = (
                 str(uuid.uuid4())

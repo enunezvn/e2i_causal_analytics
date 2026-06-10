@@ -93,7 +93,8 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
         for _, exp in self.experiments_df.iterrows():
             eid = exp["id"]
             base_rate = float(self._rng.uniform(0.20, 0.45))  # control mean in recoverable band
-            control_outcomes, treatment_outcomes = [], []
+            control_outcomes: list[float] = []
+            treatment_outcomes: list[float] = []
             for u in range(self.units_per_experiment):
                 variant = "treatment" if u % 2 == 0 else "control"
                 aid = str(uuid.uuid4())

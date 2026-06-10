@@ -24,7 +24,7 @@ from .config import COMORBIDITY_DX, CSU_DX_CODES, ClaimsDGPConfig
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-x))
+    return np.asarray(1.0 / (1.0 + np.exp(-x)))
 
 
 def generate_patients(rng: np.random.Generator, cfg: ClaimsDGPConfig) -> pd.DataFrame:

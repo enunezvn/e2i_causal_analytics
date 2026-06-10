@@ -132,6 +132,7 @@ def run_drift_detection(
         DriftHistoryRepository,
         MonitoringAlertRepository,
         MonitoringRunRepository,
+        get_drift_monitoring_client,
     )
 
     logger.info(f"Starting drift detection for model {model_id}: task {self.request.id}")
@@ -168,11 +169,17 @@ def run_drift_detection(
     }
 
     async def execute_detection():
+        # Resolve the Supabase client up front. Fail-closed (#845): if Supabase
+        # is unconfigured this raises before any monitoring work, so the task
+        # fails loudly instead of running a "successful" sweep that silently
+        # persisted nothing.
+        client = await get_drift_monitoring_client()
+
         # Initialize connector
         connector = get_connector()
 
         # Start monitoring run
-        run_repo = MonitoringRunRepository()
+        run_repo = MonitoringRunRepository(client)
         run_record = await run_repo.start_run(
             model_version=model_id,
             run_type="scheduled",
@@ -211,8 +218,8 @@ def run_drift_detection(
             state.update(await alert_node.execute(state))
 
             # Persist results
-            drift_repo = DriftHistoryRepository()
-            alert_repo = MonitoringAlertRepository()
+            drift_repo = DriftHistoryRepository(client)
+            alert_repo = MonitoringAlertRepository(client)
 
             # Collect all results
             all_results = (
@@ -607,9 +614,12 @@ def send_drift_alert_notifications(
     alert_config = config.get("alerts", {})
 
     async def send_notifications():
-        from src.repositories.drift_monitoring import MonitoringAlertRepository
+        from src.repositories.drift_monitoring import (
+            MonitoringAlertRepository,
+            get_drift_monitoring_client,
+        )
 
-        alert_repo = MonitoringAlertRepository()
+        alert_repo = MonitoringAlertRepository(await get_drift_monitoring_client())
         notifications_sent = []
         errors = []
 
@@ -781,10 +791,13 @@ async def _execute_real_retraining(
     API that surfaces it). The deploy/gate decision (incl. the Layer-4 leakage /
     AUC gates) is enforced inside the pipeline's model_deployer stage.
     """
-    from src.repositories.drift_monitoring import RetrainingHistoryRepository
+    from src.repositories.drift_monitoring import (
+        RetrainingHistoryRepository,
+        get_drift_monitoring_client,
+    )
     from src.services.retraining_trigger import get_retraining_trigger_service
 
-    repo = RetrainingHistoryRepository()
+    repo = RetrainingHistoryRepository(await get_drift_monitoring_client())
     service = get_retraining_trigger_service()
 
     async def _mark_failed(reason: str) -> Dict[str, Any]:
