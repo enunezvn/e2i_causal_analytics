@@ -308,6 +308,29 @@ class ToolComposer:
             )
 
             # ================================================================
+            # F6 FAIL-CLOSED GATE: total tool failure (0/N succeeded)
+            # ================================================================
+            # If EVERY executed tool failed, the composition has no successful
+            # tool output to synthesize. Do NOT invoke the LLM to fabricate a
+            # confident answer over nothing — fail CLOSED with an honest FAILED
+            # result. (A PARTIAL success — at least one tool — still synthesizes
+            # below over the results that DID succeed.)
+            if execution_trace.tools_executed > 0 and execution_trace.tools_succeeded == 0:
+                logger.warning(
+                    "All %d executed tool(s) failed; failing closed without synthesis "
+                    "(no fabricated response).",
+                    execution_trace.tools_executed,
+                )
+                return self._create_total_failure_result(
+                    query,
+                    decomposition,
+                    plan,
+                    execution_trace,
+                    started_at,
+                    phase_durations,
+                )
+
+            # ================================================================
             # PHASE 4: SYNTHESIZE
             # ================================================================
             phase_start = datetime.now(timezone.utc)
@@ -832,6 +855,57 @@ class ToolComposer:
             success=False,
             errors=[error],
             error=error,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+    def _create_total_failure_result(
+        self,
+        query: str,
+        decomposition: Any,
+        plan: Any,
+        execution_trace: Any,
+        started_at: datetime,
+        phase_durations: Dict[str, int],
+    ) -> CompositionResult:
+        """Build a FAILED result when every executed tool failed (F6 fail-closed).
+
+        Unlike ``_create_error_result`` (which uses placeholder phase objects for
+        an exception), this preserves the REAL decomposition / plan / execution
+        trace and returns an honest, zero-confidence response instead of a
+        synthesized answer fabricated over zero successful tool outputs.
+        """
+        from .models.composition_models import ComposedResponse
+
+        failed_tools = [
+            getattr(r, "tool_name", "unknown")
+            for r in getattr(execution_trace, "step_results", [])
+            if not getattr(r, "success", False)
+        ]
+        msg = (
+            f"All {execution_trace.tools_executed} tool(s) failed; no analysis could "
+            "be completed. Returning a failed result rather than a fabricated answer."
+        )
+        response = ComposedResponse(
+            answer=f"Unable to complete analysis: {msg}",
+            confidence=0.0,
+            caveats=[msg],
+            failed_components=failed_tools or ["execute"],
+        )
+        completed_at = datetime.now(timezone.utc)
+
+        return CompositionResult(
+            query=query,
+            decomposition=decomposition,
+            plan=plan,
+            execution=execution_trace,
+            response=response,
+            total_duration_ms=int((completed_at - started_at).total_seconds() * 1000),
+            phase_durations=phase_durations,
+            status=CompositionStatus.FAILED,
+            success=False,
+            errors=[msg],
+            error=msg,
             started_at=started_at,
             completed_at=completed_at,
         )

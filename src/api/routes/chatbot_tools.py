@@ -1247,7 +1247,12 @@ async def tool_composer_tool(
         # result.decomposition contains sub_questions, result.plan has execution info,
         # result.execution has tool outputs, result.response has synthesized answer
         return {
-            "success": True,
+            # F6 fail-closed: surface the REAL composition outcome. A total tool
+            # failure (0/N succeeded) yields result.success=False / status=FAILED;
+            # do NOT re-promote it to a hardcoded success envelope. The honest
+            # synthesized_response + confidence (0.0) already flow through below.
+            "success": result.success,
+            "status": result.status.value,
             "query": query,
             "sub_questions": [
                 {"id": sq.id, "question": sq.question, "intent": sq.intent}
