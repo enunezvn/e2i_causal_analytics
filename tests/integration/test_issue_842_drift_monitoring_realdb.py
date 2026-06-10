@@ -124,8 +124,10 @@ async def test_drift_history_write_read_roundtrip(client):
             "drift_score": 0.42,
         },
         {
+            # invalid drift_type (not in drift_type_enum) must be coerced, not
+            # written verbatim -> would 22P02 on the real enum column.
             "feature": "risk_score",
-            "drift_type": "data",
+            "drift_type": "covariate",
             "test_statistic": 0.04,
             "p_value": 0.8,
             "drift_detected": False,
@@ -135,13 +137,14 @@ async def test_drift_history_write_read_roundtrip(client):
     drift_ids = []
     try:
         created = await repo.record_drift_results(mv, drift_results, _BASELINE, _CURRENT)
-        assert len(created) == 2  # no 42703
+        assert len(created) == 2  # no 42703 / no 22P02 on the coerced drift_type
         drift_ids = [r.id for r in created]
 
         latest = await repo.get_latest_drift_status(mv, limit=10)
         assert {r.feature_name for r in latest} == {"age", "risk_score"}
         assert all(r.model_version == mv for r in latest)  # handle reconstructed
         assert all(r.created_at is not None for r in latest)
+        assert all(r.drift_type in {"data", "model", "concept"} for r in latest)
 
         trend = await repo.get_drift_trend(mv, "age", days=30)
         assert len(trend) == 1

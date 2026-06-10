@@ -27,6 +27,7 @@ from src.repositories.drift_monitoring import (
     RetrainingHistoryRecord,
     _derive_trigger_type,
     _ms_to_seconds,
+    _normalize_drift_type,
     _normalize_severity,
     _normalize_test_type,
 )
@@ -223,6 +224,15 @@ def test_ms_to_seconds():
     assert _ms_to_seconds(0) == 0.0
 
 
+def test_normalize_drift_type_coerces_to_valid_enum():
+    # drift_type_enum = data/model/concept — an unknown literal would 22P02
+    assert _normalize_drift_type("data") == "data"
+    assert _normalize_drift_type("MODEL") == "model"
+    assert _normalize_drift_type("covariate") == "data"  # unknown -> NOT-NULL default
+    assert _normalize_drift_type("covariate", default=None) is None  # nullable column
+    assert _normalize_drift_type(None, default=None) is None
+
+
 # ---------------------------------------------------------------------------
 # DriftHistoryRecord -> ml_drift_history
 # ---------------------------------------------------------------------------
@@ -290,6 +300,20 @@ def test_drift_history_from_db_row_reconstructs_model_version():
     assert rec.created_at is not None
 
 
+def test_drift_history_invalid_drift_type_coerced_to_valid_enum():
+    """drift_type is a NOT-NULL drift_type_enum (data/model/concept); an unknown
+    value passed through verbatim would 22P02 the insert."""
+    rec = DriftHistoryRecord(
+        drift_type="covariate",  # not a valid drift_type_enum value
+        feature_name="age",
+        baseline_start=_T0,
+        baseline_end=_T1,
+        current_start=_T2,
+        current_end=_T3,
+    )
+    assert rec.to_db_row()["drift_type"] in {"data", "model", "concept"}
+
+
 # ---------------------------------------------------------------------------
 # MonitoringAlertRecord -> ml_monitoring_alerts
 # ---------------------------------------------------------------------------
@@ -319,6 +343,21 @@ def test_alert_severity_warning_maps_to_valid_enum():
         recommended_action="Monitor",
     )
     assert rec.to_db_row()["severity"] == "high"
+
+
+def test_alert_invalid_drift_type_coerced_to_valid_or_none():
+    """ml_monitoring_alerts.drift_type is a nullable drift_type_enum; an unknown
+    value must be coerced (to None here, since the column is nullable) rather
+    than written verbatim and 22P02'ing."""
+    rec = MonitoringAlertRecord(
+        model_version="m",
+        alert_type="covariate_drift",
+        severity="high",
+        drift_type="covariate",
+        message="HIGH covariate drift",
+    )
+    dt = rec.to_db_row()["drift_type"]
+    assert dt is None or dt in {"data", "model", "concept"}
 
 
 # ---------------------------------------------------------------------------

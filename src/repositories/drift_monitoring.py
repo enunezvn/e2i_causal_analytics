@@ -52,6 +52,9 @@ _VALID_SEVERITY = {"none", "low", "medium", "high", "critical"}
 # nearest valid value rather than silently dropped.
 _SEVERITY_ALIASES = {"warning": "high", "warn": "high", "info": "low", "ok": "none"}
 
+# drift_type_enum
+_VALID_DRIFT_TYPE = {"data", "model", "concept"}
+
 # statistical_test_enum
 _VALID_TEST_TYPE = {
     "psi",
@@ -94,6 +97,19 @@ def _normalize_test_type(test_type: Optional[str], drift_type: Optional[str] = N
     if t in _VALID_TEST_TYPE:
         return t
     return _DEFAULT_TEST_BY_DRIFT.get((drift_type or "").lower(), "psi")
+
+
+def _normalize_drift_type(
+    drift_type: Optional[str], *, default: Optional[str] = "data"
+) -> Optional[str]:
+    """Coerce to a valid ``drift_type_enum`` value (data/model/concept).
+
+    ``default`` is returned for an unknown/empty value: ``"data"`` for the
+    NOT-NULL ml_drift_history column, ``None`` for the nullable
+    ml_monitoring_alerts column. An unknown literal would 22P02 the insert.
+    """
+    d = (drift_type or "").strip().lower()
+    return d if d in _VALID_DRIFT_TYPE else default
 
 
 def _derive_trigger_type(trigger_reason: Optional[str]) -> str:
@@ -211,7 +227,7 @@ class DriftHistoryRecord(BaseModel):
             "model_id": self.model_id,
             "experiment_id": self.experiment_id,
             "deployment_id": self.deployment_id,
-            "drift_type": self.drift_type,
+            "drift_type": _normalize_drift_type(self.drift_type),
             "feature_name": self.feature_name,
             "test_type": _normalize_test_type(self.test_type, self.drift_type),
             "test_statistic": self.test_statistic,
@@ -291,7 +307,7 @@ class MonitoringAlertRecord(BaseModel):
             "status": self.status,
             "message": self.message,
             "affected_features": list(self.affected_features or []),
-            "drift_type": self.drift_type,
+            "drift_type": _normalize_drift_type(self.drift_type, default=None),
             "composite_drift_score": self.composite_drift_score,
             "recommended_action": self.recommended_action,
             "recommended_priority": self.recommended_priority,
