@@ -38,6 +38,7 @@ class GapDetectorNode:
         self,
         use_mock: bool = False,
         config_path: Optional[str] = None,
+        include_synthetic: bool = False,
     ):
         """Initialize gap detector with configurable connectors.
 
@@ -46,9 +47,12 @@ class GapDetectorNode:
                      If False (default), use production Supabase connectors.
             config_path: Path to YAML config file. Defaults to
                         'config/agents/gap_analyzer.yaml'.
+            include_synthetic: When True, the production connector/benchmark store opt
+                in to reading synthetic rows (the validation layer; #851). Default
+                False keeps the production read path real-mode isolated.
         """
-        self.data_connector = get_data_connector(use_mock)
-        self.benchmark_store = get_benchmark_store(use_mock)
+        self.data_connector = get_data_connector(use_mock, include_synthetic=include_synthetic)
+        self.benchmark_store = get_benchmark_store(use_mock, include_synthetic=include_synthetic)
         self.config = self._load_config(config_path)
 
     def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
@@ -496,6 +500,13 @@ class GapDetectorNode:
         """
         gaps: List[PerformanceGap] = []
 
+        # If the current-performance frame doesn't carry this segment column (e.g. the
+        # substrate has no `specialty`/`hcp_tier` dimension), there are NO gaps to
+        # compute for it — return empty rather than KeyError-crashing the whole node
+        # (#851 MED). A missing segment is "unsupported", not a failure.
+        if current_data.empty or segment not in current_data.columns:
+            return (segment, gaps)
+
         # Get unique segment values
         segment_values = current_data[segment].unique()
 
@@ -545,6 +556,14 @@ class GapDetectorNode:
             PerformanceGap or None if data missing
         """
         if comparison_data is None:
+            return None
+
+        # Guard against empty / misaligned frames (e.g. a temporal comparison whose
+        # prior period predates the data, or a connector that returned no rows): both
+        # frames must carry the segment column before we can align on it. Without this,
+        # an empty comparison frame raises KeyError(segment) and fails the WHOLE node
+        # (the gap_analyzer production path's silent 0-gap symptom; #851).
+        if segment not in current_data.columns or segment not in comparison_data.columns:
             return None
 
         # Get current value

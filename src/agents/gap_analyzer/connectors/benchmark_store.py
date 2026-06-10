@@ -12,6 +12,8 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
+from src.memory.services.factories import ServiceConnectionError
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,24 +25,154 @@ class BenchmarkStore:
     Provides targets, peer benchmarks, and top decile metrics.
     """
 
-    def __init__(self, supabase_client=None):
+    def __init__(self, supabase_client=None, include_synthetic: bool = False):
         """
         Initialize store with optional Supabase client.
 
         Args:
-            supabase_client: Optional Supabase client
+            supabase_client: Optional Supabase client. When absent it is resolved
+                lazily and fail-closed via ``get_async_supabase_client()`` (#845
+                family — a client-less repo silently no-ops; we resolve a real one).
+            include_synthetic: When True, repository reads opt in to synthetic rows
+                (the validation layer; #851). Default False keeps real-mode isolation.
         """
         self._repository = None
         self._client = supabase_client
+        self._client_resolved = supabase_client is not None
+        self.include_synthetic = include_synthetic
+
+    async def _ensure_repository(self):
+        """Resolve a real async Supabase client (fail-closed) and build the repo.
+
+        Mirrors ``SupabaseDataConnector._ensure_repository`` — the factory builds this
+        store without a client, and a client-less repository silently returns no
+        benchmarks. ``get_async_supabase_client()`` RAISES when Supabase is
+        unconfigured (fail-closed), surfaced as an error rather than fabricated zeros.
+        """
+        from src.repositories.business_metric import BusinessMetricRepository
+
+        if self._repository is not None:
+            return self._repository
+
+        if not self._client_resolved:
+            from src.memory.services.factories import get_async_supabase_client
+
+            self._client = await get_async_supabase_client()
+            self._client_resolved = True
+
+        self._repository = BusinessMetricRepository(self._client)
+        return self._repository
 
     @property
     def repository(self):
-        """Lazy-load BusinessMetricRepository."""
-        if self._repository is None:
-            from src.repositories.business_metric import BusinessMetricRepository
+        """Return a BusinessMetricRepository bound to an ALREADY-RESOLVED client.
 
-            self._repository = BusinessMetricRepository(self._client)
+        FAIL-CLOSED: never construct ``Repository(None)`` here — that would cache a
+        silent-no-op repo and re-open the #845 fail-OPEN hole. Async callers must use
+        ``await self._ensure_repository()`` (resolves the client fail-closed).
+        """
+        if self._repository is not None:
+            return self._repository
+        if self._client is None:
+            raise ServiceConnectionError(
+                "Supabase",
+                "BenchmarkStore.repository accessed before a client was resolved; use "
+                "the async path so the client is resolved fail-closed",
+            )
+        from src.repositories.business_metric import BusinessMetricRepository
+
+        self._repository = BusinessMetricRepository(self._client)
         return self._repository
+
+    async def _resolve_segment(self, brand: str, segments: List[str]) -> tuple:
+        """Resolve which requested segment column actually exists in the data.
+
+        ``business_metrics`` carries ``region`` as its queryable segment dimension.
+        For each requested segment we probe its distinct values; the first segment
+        with real values wins. Segments the table does not carry (``specialty``/
+        ``hcp_tier``) yield no values → returns ``(None, [])`` so the caller emits an
+        empty frame and ``_calculate_gap`` produces NO gaps for them (no fabrication),
+        rather than crashing or inventing data (#851 MED follow-up).
+
+        Returns:
+            (segment_name, distinct_values) or (None, []) if none are supported.
+        """
+        repository = await self._ensure_repository()
+        for segment in segments:
+            values = await repository.get_distinct_values(
+                segment, brand=brand, include_synthetic=self.include_synthetic
+            )
+            if values:
+                return segment, values
+        return None, []
+
+    async def _fetch_segment_metric_frame(
+        self,
+        brand: str,
+        metrics: List[str],
+        segments: List[str],
+        value_field: str = "value",
+    ) -> pd.DataFrame:
+        """Fetch a per-segment wide frame of mean metric values from business_metrics.
+
+        Returns a DataFrame with the resolved segment column (e.g. ``region``) plus one
+        column per requested metric (the mean of ``value_field`` for that metric in
+        that segment value). This is the SAME per-segment wide shape
+        ``GapDetectorNode._calculate_gap`` consumes for ``current_data`` and that
+        ``MockBenchmarkStore`` returns — the production store previously returned a flat
+        row / metric-stat long frame that ``_calculate_gap`` could not align (the
+        gap_analyzer production path was therefore non-functional; #851). Segment values
+        are discovered from the data (lowercase enum), not hardcoded (#851 block 3).
+
+        Args:
+            value_field: "value" for performance/peer frames, "target" for target frames.
+        """
+        repository = await self._ensure_repository()
+
+        segment, seg_values = await self._resolve_segment(brand, segments)
+        if not segment:
+            logger.warning(
+                f"No supported segment among {segments} for brand={brand} "
+                f"(business_metrics carries 'region')"
+            )
+            return pd.DataFrame()
+
+        rows: List[Dict[str, Any]] = []
+        for seg_value in seg_values:
+            records = await repository.get_by_region(
+                region=seg_value,
+                brand=brand,
+                limit=5000,
+                include_synthetic=self.include_synthetic,
+            )
+            # Collect per-metric values for this segment value, then average.
+            metric_values: Dict[str, List[float]] = {m: [] for m in metrics}
+            for record in records:
+                metric_name = (
+                    record.get("metric_name")
+                    if isinstance(record, dict)
+                    else getattr(record, "metric_name", None)
+                )
+                if metric_name in metric_values:
+                    val = (
+                        record.get(value_field)
+                        if isinstance(record, dict)
+                        else getattr(record, value_field, None)
+                    )
+                    if val is not None:
+                        metric_values[metric_name].append(float(val))
+
+            row: Dict[str, Any] = {segment: seg_value}
+            has_any = False
+            for metric in metrics:
+                vals = metric_values[metric]
+                if vals:
+                    row[metric] = sum(vals) / len(vals)
+                    has_any = True
+            if has_any:
+                rows.append(row)
+
+        return pd.DataFrame(rows)
 
     async def get_targets(
         self,
@@ -49,7 +181,7 @@ class BenchmarkStore:
         segments: List[str],
     ) -> pd.DataFrame:
         """
-        Get target values from business_metrics.target column.
+        Get per-segment target values from the business_metrics.target column.
 
         Args:
             brand: Brand name
@@ -57,50 +189,18 @@ class BenchmarkStore:
             segments: List of segment dimensions
 
         Returns:
-            DataFrame with target values indexed by segment
+            Per-segment wide DataFrame (segment column + one column per metric),
+            aligned with the connector's ``fetch_performance_data`` output so
+            ``_calculate_gap`` can compare current vs target per segment value.
         """
-        try:
-            # Get latest snapshot which includes targets
-            snapshot = await self.repository.get_latest_snapshot(brand)
-
-            if not snapshot:
-                logger.warning(f"No targets found for brand={brand}")
-                return pd.DataFrame()
-
-            # Build target data for requested metrics
-            data = []
-            for metric in metrics:
-                if metric in snapshot:
-                    metric_data = snapshot[metric]
-                    row = {
-                        "metric": metric,
-                        "target": metric_data.get("target", 0),
-                        "current_value": metric_data.get("value", 0),
-                        "achievement_rate": metric_data.get("achievement_rate", 0),
-                    }
-                    data.append(row)
-
-            if not data:
-                return pd.DataFrame()
-
-            df = pd.DataFrame(data)
-
-            # Pivot to get metrics as columns for target values
-            if not df.empty and "metric" in df.columns:
-                df_pivot = df.pivot_table(
-                    columns="metric",
-                    values="target",
-                    aggfunc="first",
-                )
-                # Flatten to single row DataFrame
-                result = pd.DataFrame([df_pivot.to_dict()])
-                return result
-
-            return df
-
-        except Exception as e:
-            logger.error(f"Failed to get targets: {e}")
-            return pd.DataFrame()
+        # Targets come from the per-row `target` column (value_field='target').
+        # Operational failures propagate (NOT swallowed into an empty frame) — the
+        # gap_detector node records them as errors and the run fails closed. An empty
+        # frame here means genuinely no data (unsupported segment / no rows), which
+        # _fetch_segment_metric_frame returns explicitly.
+        return await self._fetch_segment_metric_frame(
+            brand, metrics, segments, value_field="target"
+        )
 
     async def get_peer_benchmarks(
         self,
@@ -109,10 +209,11 @@ class BenchmarkStore:
         segments: List[str],
     ) -> pd.DataFrame:
         """
-        Get peer benchmark data aggregated across regions.
+        Get peer benchmark data as a per-region comparison frame.
 
-        Calculates mean, median, P75, and P90 across all regions
-        for each metric to provide peer comparison benchmarks.
+        Each region is compared against the cross-region peer benchmark (P75 of the
+        per-region means) for each metric — a "best peers" bar broadcast to every
+        region. Returned in the per-region wide shape ``_calculate_gap`` consumes.
 
         Args:
             brand: Brand name
@@ -120,69 +221,16 @@ class BenchmarkStore:
             segments: List of segment dimensions
 
         Returns:
-            DataFrame with peer benchmark statistics
+            Per-segment wide DataFrame (segment column + one column per metric).
         """
-        try:
-            # Get all data across regions for comparison
-            all_data = []
-            regions = ["Northeast", "Southeast", "Midwest", "West", "National"]
-
-            for region in regions:
-                records = await self.repository.get_by_region(
-                    region=region,
-                    brand=brand,
-                    limit=500,
-                )
-
-                for record in records:
-                    metric_name = (
-                        record.get("metric_name")
-                        if isinstance(record, dict)
-                        else getattr(record, "metric_name", None)
-                    )
-                    if metric_name in metrics:
-                        value = (
-                            record.get("value")
-                            if isinstance(record, dict)
-                            else getattr(record, "value", None)
-                        )
-                        if value is not None:
-                            all_data.append(
-                                {
-                                    "metric": metric_name,
-                                    "region": region,
-                                    "value": value,
-                                }
-                            )
-
-            if not all_data:
-                logger.warning(f"No peer benchmark data found for brand={brand}")
-                return pd.DataFrame()
-
-            df = pd.DataFrame(all_data)
-
-            # Calculate peer statistics per metric
-            benchmarks = []
-            for metric in metrics:
-                metric_values = df[df["metric"] == metric]["value"]
-                if not metric_values.empty:
-                    benchmarks.append(
-                        {
-                            "metric": metric,
-                            "mean": metric_values.mean(),
-                            "median": metric_values.median(),
-                            "p75": metric_values.quantile(0.75),
-                            "p90": metric_values.quantile(0.90),
-                            "min": metric_values.min(),
-                            "max": metric_values.max(),
-                        }
-                    )
-
-            return pd.DataFrame(benchmarks)
-
-        except Exception as e:
-            logger.error(f"Failed to get peer benchmarks: {e}")
+        # Operational failures propagate (see get_targets). Empty == no real data.
+        seg_frame = await self._fetch_segment_metric_frame(brand, metrics, segments)
+        if seg_frame.empty:
+            logger.warning(f"No peer benchmark data found for brand={brand}")
             return pd.DataFrame()
+
+        # Peer benchmark = P75 across the per-segment-value means (top quartile).
+        return self._broadcast_cross_segment_stat(seg_frame, metrics, quantile=0.75)
 
     async def get_top_decile(
         self,
@@ -191,9 +239,10 @@ class BenchmarkStore:
         segments: List[str],
     ) -> pd.DataFrame:
         """
-        Calculate top decile (P90) performance across all regions.
+        Calculate top decile (P90) performance across segment values as a comparison.
 
-        Top decile represents best-in-class performance benchmarks.
+        Top decile represents best-in-class performance, broadcast to every segment
+        value in the per-segment wide shape ``_calculate_gap`` consumes.
 
         Args:
             brand: Brand name
@@ -201,32 +250,41 @@ class BenchmarkStore:
             segments: List of segment dimensions
 
         Returns:
-            DataFrame with top decile values
+            Per-segment wide DataFrame (segment column + one column per metric).
         """
-        try:
-            # Get peer benchmarks which already calculate P90
-            peer_df = await self.get_peer_benchmarks(brand, metrics, segments)
-
-            if peer_df.empty:
-                return pd.DataFrame()
-
-            # Extract P90 values as top decile
-            top_decile = []
-            for _, row in peer_df.iterrows():
-                top_decile.append(
-                    {
-                        "metric": row["metric"],
-                        "top_decile_value": row.get("p90", 0),
-                        "peer_mean": row.get("mean", 0),
-                        "gap_to_top": row.get("p90", 0) - row.get("mean", 0),
-                    }
-                )
-
-            return pd.DataFrame(top_decile)
-
-        except Exception as e:
-            logger.error(f"Failed to get top decile: {e}")
+        # Operational failures propagate (see get_targets). Empty == no real data.
+        seg_frame = await self._fetch_segment_metric_frame(brand, metrics, segments)
+        if seg_frame.empty:
             return pd.DataFrame()
+
+        # Top decile = P90 across the per-segment-value means (best-in-class).
+        return self._broadcast_cross_segment_stat(seg_frame, metrics, quantile=0.90)
+
+    @staticmethod
+    def _broadcast_cross_segment_stat(
+        seg_frame: pd.DataFrame,
+        metrics: List[str],
+        quantile: float,
+    ) -> pd.DataFrame:
+        """Broadcast a cross-segment quantile per metric back onto every segment value.
+
+        Takes a per-segment wide frame (segment column + metric columns), computes the
+        cross-segment quantile for each metric, and returns a frame with the SAME
+        segment rows where every segment value carries that single peer/best-in-class
+        bar. This keeps the per-segment shape ``_calculate_gap`` requires while encoding
+        a cross-segment comparison standard. The segment column is whatever the frame
+        carries (e.g. ``region``) — discovered, not hardcoded.
+        """
+        if seg_frame.empty:
+            return pd.DataFrame()
+        # The segment column is the single non-metric column in the frame.
+        seg_cols = [c for c in seg_frame.columns if c not in metrics]
+        result = seg_frame[seg_cols].copy()
+        for metric in metrics:
+            if metric in seg_frame.columns:
+                bar = float(seg_frame[metric].quantile(quantile))
+                result[metric] = bar
+        return result
 
     async def get_benchmark_summary(
         self,
@@ -242,9 +300,14 @@ class BenchmarkStore:
             Dict with benchmark summary info
         """
         try:
-            snapshot = await self.repository.get_latest_snapshot(brand)
-            achievement = await self.repository.get_achievement_summary(brand)
-            roi = await self.repository.get_roi_summary(brand)
+            repository = await self._ensure_repository()
+            snapshot = await repository.get_latest_snapshot(
+                brand, include_synthetic=self.include_synthetic
+            )
+            achievement = await repository.get_achievement_summary(
+                brand, include_synthetic=self.include_synthetic
+            )
+            roi = await repository.get_roi_summary(brand, include_synthetic=self.include_synthetic)
 
             return {
                 "brand": brand,
@@ -258,6 +321,8 @@ class BenchmarkStore:
                 "avg_roi": roi.get("avg_roi", 0),
             }
 
+        except ServiceConnectionError:
+            raise  # FAIL-CLOSED — see get_targets.
         except Exception as e:
             logger.error(f"Failed to get benchmark summary: {e}")
             return {"brand": brand, "error": str(e)}

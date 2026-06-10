@@ -42,6 +42,7 @@ def create_gap_analyzer_graph(
     use_bootstrap: bool = True,
     n_simulations: int = 1000,
     use_mock: bool = False,
+    include_synthetic: bool = False,
 ) -> CompiledStateGraph:
     """Create the Gap Analyzer LangGraph workflow.
 
@@ -58,12 +59,15 @@ def create_gap_analyzer_graph(
         n_simulations: Number of Monte Carlo simulations for bootstrap
         use_mock: If True, use mock data connectors (for explicit testing only).
                  Default is False to use real Supabase data.
+        include_synthetic: When True, the production connector opts in to reading
+                 synthetic rows (the validation layer; #851). Default False keeps the
+                 production read path real-mode isolated.
 
     Returns:
         Compiled StateGraph ready for execution
     """
     # Initialize nodes
-    gap_detector = GapDetectorNode(use_mock=use_mock)
+    gap_detector = GapDetectorNode(use_mock=use_mock, include_synthetic=include_synthetic)
     roi_calculator = ROICalculatorNode(
         roi_service=roi_service,
         use_bootstrap=use_bootstrap,

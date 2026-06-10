@@ -25,23 +25,20 @@ from src.agents.gap_analyzer.graph import create_gap_analyzer_graph
 from src.agents.gap_analyzer.state import GapAnalyzerState
 
 
-def _tier0_frame_missing_segment(n: int = 60) -> pd.DataFrame:
-    """Build a small tier0 passthrough frame that lacks the requested segment column.
+def _tier0_malformed_passthrough(n: int = 60):
+    """Build a tier0 passthrough payload that triggers a REAL gap_detector failure.
 
-    >= 50 rows so gap_detector takes the tier0 passthrough path. The frame has NO
-    'region' column, so when the graph is asked to segment by 'region',
-    ``_derive_performance_from_tier0`` falls back to a single 'all' segment and the
-    derived current_data has no 'region' column. ``_detect_segment_gaps`` then does
-    ``current_data['region'].unique()`` -> a REAL KeyError (segment/column mismatch).
+    >= 50 entries so gap_detector takes the tier0 passthrough path, but it is a list
+    (not a DataFrame), so ``_derive_performance_from_tier0`` calls ``.select_dtypes``
+    on a list -> a REAL ``AttributeError`` inside gap_detector. This drives the genuine
+    failure path (gap_detector accumulates an error) without monkeypatching.
+
+    NOTE (#851): a frame that merely LACKS the requested segment column is now handled
+    GRACEFULLY (no gaps, status 'completed') — a missing dimension is an unsupported
+    segment, not a failure. So this test uses a different, unambiguously-real error to
+    exercise the F2 fail-closed principle (errors -> 'failed', never laundered).
     """
-    rng = np.random.default_rng(0)
-    return pd.DataFrame(
-        {
-            "discontinuation_flag": rng.integers(0, 2, size=n),
-            "tenure_months": rng.integers(1, 48, size=n),
-            "some_numeric": rng.normal(size=n),
-        }
-    )
+    return [{"discontinuation_flag": 0, "tenure_months": 12}] * n
 
 
 def _initial_state(segments, tier0_data=None) -> GapAnalyzerState:
@@ -88,11 +85,11 @@ async def test_real_gap_detector_failure_propagates_failed_status():
     """
     graph = create_gap_analyzer_graph()
 
-    # Drive the REAL gap_detector failure: tier0 passthrough frame lacks 'region',
-    # but we ask to segment by 'region' -> KeyError inside _detect_segment_gaps.
+    # Drive a REAL gap_detector failure: a malformed (non-DataFrame) tier0 passthrough
+    # payload makes _derive_performance_from_tier0 raise inside gap_detector.
     state = _initial_state(
         segments=["region"],
-        tier0_data=_tier0_frame_missing_segment(),
+        tier0_data=_tier0_malformed_passthrough(),
     )
 
     final_state = await graph.ainvoke(state)
@@ -145,3 +142,34 @@ async def test_clean_run_with_no_gaps_stays_completed():
     assert final_state.get("status") == "completed", (
         f"clean no-gaps run should stay 'completed', got {final_state.get('status')!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_missing_segment_column_is_graceful_not_a_crash():
+    """#851: a requested segment the data does not carry yields NO gaps and stays
+    'completed' (unsupported segment), instead of KeyError-crashing the whole node.
+
+    The tier0 frame has >= 50 rows but no 'region' column; the derived current_data
+    therefore lacks 'region'. _detect_segment_gaps must short-circuit to no gaps.
+    """
+    graph = create_gap_analyzer_graph()
+
+    n = 60
+    rng = np.random.default_rng(2)
+    tier0 = pd.DataFrame(
+        {
+            "discontinuation_flag": rng.integers(0, 2, size=n),
+            "tenure_months": rng.integers(1, 48, size=n),
+        }
+    )
+    state = _initial_state(segments=["region"], tier0_data=tier0)
+
+    final_state = await graph.ainvoke(state)
+
+    assert not final_state.get("errors"), (
+        f"missing-segment is unsupported, not an error; got {final_state.get('errors')}"
+    )
+    assert final_state.get("status") == "completed", (
+        f"missing-segment run should stay 'completed', got {final_state.get('status')!r}"
+    )
+    assert not (final_state.get("gaps_detected") or []), "no gaps for an unsupported segment"

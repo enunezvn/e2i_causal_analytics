@@ -182,12 +182,84 @@ class BusinessMetricRepository(BaseRepository):
             filters=filters, limit=limit, include_synthetic=include_synthetic
         )
 
+    async def get_distinct_values(
+        self,
+        column: str,
+        brand: Optional[str] = None,
+        include_synthetic: bool = False,
+        limit: int = 5000,
+    ) -> List[str]:
+        """
+        Discover the distinct values of a column present in the data (data-driven).
+
+        Replaces hardcoded value lists (e.g. title-case regions) in the benchmark
+        store. The live ``region`` enum is lowercase (``northeast``/``south``/…), so a
+        hardcoded ``Northeast`` matches nothing; discovering actual values makes the
+        store case- and value-agnostic for ANY segment column (#851). If ``column`` is
+        not a real column on ``business_metrics`` (e.g. ``specialty``/``hcp_tier``,
+        which this table does not carry), the query returns no rows → ``[]``, and the
+        gap math then yields no gaps for that segment rather than fabricating any.
+
+        Args:
+            column: The column to extract distinct values from (e.g. "region").
+            brand: Optional brand filter.
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
+            limit: Cap on scanned rows for distinct extraction.
+
+        Returns:
+            Sorted list of distinct non-null values as strings.
+        """
+        if not self.client:
+            return []
+
+        from src.repositories.provenance import apply_provenance_filter
+
+        try:
+            query = self.client.table(self.table_name).select(column)
+            if brand:
+                query = query.eq("brand", brand)
+            query = apply_provenance_filter(query, include_synthetic)
+            result = await query.limit(limit).execute()
+        except Exception as e:
+            # ONLY swallow the specific "undefined column" case (PostgREST 42703):
+            # a requested segment like specialty/hcp_tier that this table does not
+            # carry → fail soft to [] so the caller treats it as an unsupported
+            # segment. EVERY OTHER failure (connection, auth, provenance-filter, any
+            # operational error) MUST surface — laundering it into [] would re-open
+            # the #845/#851 fail-OPEN hole ("no benchmark data" == "DB is down").
+            if getattr(e, "code", None) == "42703":
+                return []
+            raise
+
+        values = set()
+        for row in result.data or []:
+            val = row.get(column) if isinstance(row, dict) else getattr(row, column, None)
+            if val:
+                values.add(str(val))
+        return sorted(values)
+
+    async def get_distinct_regions(
+        self,
+        brand: Optional[str] = None,
+        include_synthetic: bool = False,
+        limit: int = 5000,
+    ) -> List[str]:
+        """Convenience wrapper: distinct ``region`` values (see get_distinct_values)."""
+        return await self.get_distinct_values(
+            "region", brand=brand, include_synthetic=include_synthetic, limit=limit
+        )
+
     async def get_achievement_summary(
         self,
         brand: str,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Get achievement rate summary for a brand.
+
+        Args:
+            brand: Brand name
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict with summary statistics:
@@ -205,7 +277,7 @@ class BusinessMetricRepository(BaseRepository):
             }
 
         # Get latest snapshot first
-        snapshot = await self.get_latest_snapshot(brand)
+        snapshot = await self.get_latest_snapshot(brand, include_synthetic=include_synthetic)
 
         if not snapshot:
             return {
@@ -235,9 +307,14 @@ class BusinessMetricRepository(BaseRepository):
     async def get_roi_summary(
         self,
         brand: str,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Get ROI summary for a brand across all metrics.
+
+        Args:
+            brand: Brand name
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict with ROI statistics
@@ -245,7 +322,7 @@ class BusinessMetricRepository(BaseRepository):
         if not self.client:
             return {"avg_roi": 0, "max_roi": 0, "min_roi": 0, "total_value": 0}
 
-        snapshot = await self.get_latest_snapshot(brand)
+        snapshot = await self.get_latest_snapshot(brand, include_synthetic=include_synthetic)
 
         if not snapshot:
             return {"avg_roi": 0, "max_roi": 0, "min_roi": 0, "total_value": 0}

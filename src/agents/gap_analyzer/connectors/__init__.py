@@ -16,12 +16,18 @@ if TYPE_CHECKING:
 
 def get_data_connector(
     use_mock: bool = False,
+    include_synthetic: bool = False,
 ) -> Union["SupabaseDataConnector", "MockDataConnector"]:
     """
     Factory to get appropriate data connector.
 
     Args:
-        use_mock: If True, return MockDataConnector for testing
+        use_mock: If True, return MockDataConnector for testing.
+        include_synthetic: When True, the production connector opts in to reading
+            ``is_synthetic=true`` rows (the validation layer; #851). Default False
+            keeps the production read path real-mode isolated — synthetic rows are
+            excluded by the default-exclude provenance predicate. No effect on the
+            mock connector.
 
     Returns:
         Data connector instance
@@ -33,15 +39,22 @@ def get_data_connector(
 
     from .supabase_connector import SupabaseDataConnector
 
-    return SupabaseDataConnector()
+    return SupabaseDataConnector(include_synthetic=include_synthetic)
 
 
-def get_benchmark_store(use_mock: bool = False) -> Union["BenchmarkStore", "MockBenchmarkStore"]:
+def get_benchmark_store(
+    use_mock: bool = False,
+    include_synthetic: bool = False,
+) -> Union["BenchmarkStore", "MockBenchmarkStore"]:
     """
     Factory to get appropriate benchmark store.
 
     Args:
-        use_mock: If True, return MockBenchmarkStore for testing
+        use_mock: If True, return MockBenchmarkStore for testing.
+        include_synthetic: When True, the production benchmark store opts in to
+            reading ``is_synthetic=true`` rows (the validation layer; #851). Default
+            False keeps the production read path real-mode isolated. No effect on the
+            mock store.
 
     Returns:
         Benchmark store instance
@@ -53,7 +66,7 @@ def get_benchmark_store(use_mock: bool = False) -> Union["BenchmarkStore", "Mock
 
     from .benchmark_store import BenchmarkStore
 
-    return BenchmarkStore()
+    return BenchmarkStore(include_synthetic=include_synthetic)
 
 
 __all__ = ["get_data_connector", "get_benchmark_store"]
