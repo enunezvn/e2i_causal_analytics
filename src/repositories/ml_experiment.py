@@ -847,7 +847,8 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         membership test.
 
         ``ml_model_registry`` has no ``prediction_target`` column, so the
-        target is resolved through ``ml_experiments.prediction_target``.
+        target is resolved through ``ml_experiments.prediction_target`` via a
+        single server-side FK-embedded inner join (see below).
 
         ``entity_type`` is accepted for Protocol compatibility; the registry
         is keyed by disease-specific target, not entity_type, so it does not
@@ -859,26 +860,34 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return []
 
-        exp_result = await (
-            self.client.table("ml_experiments")
-            .select("id")
-            .eq("prediction_target", target)
-            .execute()
-        )
-        experiment_ids = [row["id"] for row in (exp_result.data or []) if row.get("id")]
-        if not experiment_ids:
-            return []
-
+        # Resolve the target through a SINGLE server-side FK-embedded inner join
+        # rather than fetching every experiment id for the target and then
+        # filtering the registry with ``.in_("experiment_id", [...])``. A
+        # high-cardinality target (#857: ``csu_treatment_initiation`` carries 253
+        # experiments from the #850 synthetic load) would otherwise materialize
+        # ~10KB of UUIDs into the PostgREST GET URL and return ``414 URI too
+        # long`` — breaking live model resolution for the orchestrator, not just
+        # the deploy --verify. ``ml_experiments!inner(prediction_target)`` plus
+        # an embedded-column equality keeps the URL size independent of the
+        # experiment count, and the serving-stage / loadable-artifact filters are
+        # pushed server-side.
         reg_result = await (
             self.client.table(self.table_name)
-            .select("model_name, stage, artifact_path, experiment_id")
-            .in_("experiment_id", experiment_ids)
+            .select("model_name, stage, artifact_path, ml_experiments!inner(prediction_target)")
+            .eq("ml_experiments.prediction_target", target)
+            .in_("stage", list(self._SERVING_STAGES))
+            .not_.is_("artifact_path", "null")
             .execute()
         )
 
         names: List[str] = []
         seen: set[str] = set()
         for row in reg_result.data or []:
+            # Defense-in-depth: the query already constrained serving stage and
+            # non-null artifact server-side, but re-checking preserves the exact
+            # membership semantics (e.g. an empty-string ``artifact_path``, which
+            # PostgREST ``is null`` does NOT catch) and is robust to any
+            # client-side quirk.
             if row.get("stage") not in self._SERVING_STAGES:
                 continue
             if not row.get("artifact_path"):

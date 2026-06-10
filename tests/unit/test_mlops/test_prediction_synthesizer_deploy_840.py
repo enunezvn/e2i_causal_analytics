@@ -19,6 +19,8 @@ from src.agents.prediction_synthesizer.clients.inproc_model_client import (
     load_clients_from_deployment_manifest_file,
 )
 from src.mlops.prediction_synthesizer_deploy import (
+    DEFAULT_ARTIFACT_DIR,
+    DEFAULT_MANIFEST_PATH,
     TrainedModel,
     serialize_and_write_manifest,
     train_target_models,
@@ -26,6 +28,28 @@ from src.mlops.prediction_synthesizer_deploy import (
 
 # Small cohort keeps the unit test fast + low-memory; the CLI deploy uses 6000.
 _SMALL_N = 800
+
+
+def test_default_paths_target_writable_ml_artifacts_volume():
+    """#857 Gap 2: deploy-CLI defaults must write under ``data/ml_artifacts/``.
+
+    In the prod api container ``/app/data`` is a READ-ONLY image dir; only named
+    volumes mounted under it (e.g. ``data/ml_artifacts``, the ``e2i_ml_artifacts``
+    volume) are writable. The old defaults (``data/model_artifacts`` and
+    ``data/deployment_manifest.json``) live at the read-only ``data/`` root, so
+    the documented runbook ``python -m src.mlops.prediction_synthesizer_deploy``
+    failed with ``OSError: Read-only file system``. The manifest must also share
+    the artifact volume so it persists across redeploys and the factory can read
+    it back.
+    """
+    assert DEFAULT_ARTIFACT_DIR.parts[:2] == ("data", "ml_artifacts"), (
+        f"artifact dir must be under the writable data/ml_artifacts volume, "
+        f"got {DEFAULT_ARTIFACT_DIR}"
+    )
+    assert DEFAULT_MANIFEST_PATH.parts[:2] == ("data", "ml_artifacts"), (
+        f"manifest must be under the writable data/ml_artifacts volume, "
+        f"got {DEFAULT_MANIFEST_PATH}"
+    )
 
 
 def test_train_target_models_returns_distinct_real_models():
