@@ -76,6 +76,30 @@ class DriftMonitorInput(BaseModel):
     check_data_drift: bool = Field(True, description="Whether to check data drift")
     check_model_drift: bool = Field(True, description="Whether to check model drift")
     check_concept_drift: bool = Field(True, description="Whether to check concept drift")
+    check_structural_drift: bool = Field(
+        True, description="Whether to check causal-DAG structural drift (V4.4)"
+    )
+
+    # V4.4 causal-DAG structural drift inputs (optional; structural drift is
+    # skipped when these are absent). F11 (audit): these MUST live on the Input
+    # model + be threaded into state, otherwise DriftMonitorInput strips them and
+    # the structural_drift detector is dead on the agent/orchestrator path (it
+    # only ever sees None DAG fields and always "skips").
+    baseline_dag_adjacency: Optional[list[list[int]]] = Field(
+        None, description="Baseline DAG binary adjacency matrix (historical discovery)"
+    )
+    current_dag_adjacency: Optional[list[list[int]]] = Field(
+        None, description="Current DAG binary adjacency matrix (recent discovery)"
+    )
+    dag_nodes: Optional[list[str]] = Field(
+        None, description="DAG variable/node names shared by baseline + current"
+    )
+    baseline_dag_edge_types: Optional[dict[str, str]] = Field(
+        None, description="Baseline DAG edge types (DIRECTED/BIDIRECTED)"
+    )
+    current_dag_edge_types: Optional[dict[str, str]] = Field(
+        None, description="Current DAG edge types"
+    )
 
     # Tier0 data passthrough for testing
     tier0_data: Optional[Any] = Field(
@@ -107,6 +131,11 @@ class DriftMonitorOutput(BaseModel):
     data_drift_results: list[dict] = Field(..., description="Data drift detection results")
     model_drift_results: list[dict] = Field(..., description="Model drift detection results")
     concept_drift_results: list[dict] = Field(..., description="Concept drift detection results")
+    # F11 (audit): surface V4.4 structural (causal-DAG) drift in the output
+    # contract too. Default [] keeps existing callers/constructions valid.
+    structural_drift_results: list[dict] = Field(
+        default_factory=list, description="Structural (causal-DAG) drift detection results"
+    )
 
     # Aggregated outputs
     overall_drift_score: float = Field(..., ge=0.0, le=1.0, description="Composite drift score")
@@ -337,11 +366,27 @@ class DriftMonitorAgent:
             "check_data_drift": input_data.check_data_drift,
             "check_model_drift": input_data.check_model_drift,
             "check_concept_drift": input_data.check_concept_drift,
+            "check_structural_drift": input_data.check_structural_drift,
             # Error handling
             "errors": [],
             "warnings": [],
             "status": "pending",
         }
+
+        # F11 (audit): thread the V4.4 DAG fields into state so the structural
+        # drift detector is reachable on the agent/orchestrator path. Only set
+        # them when supplied (the keys are NotRequired and the detector treats
+        # absent/None DAG data as "skip structural drift").
+        if input_data.baseline_dag_adjacency is not None:
+            state["baseline_dag_adjacency"] = input_data.baseline_dag_adjacency
+        if input_data.current_dag_adjacency is not None:
+            state["current_dag_adjacency"] = input_data.current_dag_adjacency
+        if input_data.dag_nodes is not None:
+            state["dag_nodes"] = input_data.dag_nodes
+        if input_data.baseline_dag_edge_types is not None:
+            state["baseline_dag_edge_types"] = input_data.baseline_dag_edge_types
+        if input_data.current_dag_edge_types is not None:
+            state["current_dag_edge_types"] = input_data.current_dag_edge_types
 
         return state
 
@@ -365,6 +410,7 @@ class DriftMonitorAgent:
             data_drift_results=[dict(r) for r in state.get("data_drift_results", [])],
             model_drift_results=[dict(r) for r in state.get("model_drift_results", [])],
             concept_drift_results=[dict(r) for r in state.get("concept_drift_results", [])],
+            structural_drift_results=[dict(r) for r in state.get("structural_drift_results", [])],
             # Aggregated outputs
             overall_drift_score=state.get("overall_drift_score", 0.0),
             features_with_drift=state.get("features_with_drift", []),
