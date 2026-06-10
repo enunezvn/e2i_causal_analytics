@@ -38,6 +38,33 @@ class FormatterNode:
         """
         start_time = time.time()
 
+        # F2 (HIGH) fail-closed guard: if any upstream node accumulated a terminal
+        # error in state["errors"], the formatter must NOT launder it back into a green
+        # "completed" / "No significant performance gaps." result. Propagate FAILED.
+        # NOTE: state["errors"] uses an additive reducer (operator.add) -- those errors
+        # are already accumulated in state, so we deliberately do NOT re-emit them here
+        # (re-emitting would double them). We only flip the terminal status.
+        existing_errors = state.get("errors") or []
+        if existing_errors:
+            error_nodes = ", ".join(
+                sorted({str(e.get("node", "unknown")) for e in existing_errors})
+            )
+            logger.warning(
+                "Gap analysis terminating as FAILED: %d upstream error(s) accumulated "
+                "(nodes: %s); not laundering into 'completed'.",
+                len(existing_errors),
+                error_nodes,
+            )
+            return {
+                "executive_summary": (
+                    "Gap analysis failed before completion; results are not available. "
+                    f"Errors occurred in: {error_nodes}."
+                ),
+                "key_insights": [],
+                "total_latency_ms": int((time.time() - start_time) * 1000),
+                "status": "failed",
+            }
+
         try:
             prioritized_opportunities = state.get("prioritized_opportunities", [])
             quick_wins = state.get("quick_wins", [])
