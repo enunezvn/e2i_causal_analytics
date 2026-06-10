@@ -28,6 +28,21 @@ class _Client:
         return {"model_type": "logistic_regression", "prediction": self._p, "confidence": 0.8}
 
 
+class _ErroringClient:
+    """A client that swallows an inference failure into a synthetic neutral
+    result (the InProcessModelClient on-error contract)."""
+
+    async def predict(
+        self, entity_id: str, features: Dict[str, Any], time_horizon: str
+    ) -> Dict[str, Any]:
+        return {
+            "model_type": "logistic_regression",
+            "prediction": 0.5,
+            "confidence": 0.3,
+            "error": "boom",
+        }
+
+
 class _EmptyRegistry:
     async def get_models_for_target(self, target: str, entity_type: str) -> List[str]:
         return []
@@ -123,3 +138,17 @@ async def test_duplicate_override_is_deduplicated(base_state):
     result = await node.execute({**base_state, "models_to_use": ["m1", "m1"]})
     assert result["status"] == "combining"
     assert result["models_succeeded"] == 1, "duplicate model_id must run once"
+
+
+@pytest.mark.asyncio
+async def test_error_flagged_prediction_is_not_counted_success(base_state):
+    """A client that returns an error-flagged synthetic 0.5 (swallowed inference
+    failure) must be counted as FAILED, not a real ensemble member — otherwise a
+    broken model fabricates a prediction."""
+    node = ModelOrchestratorNode(
+        model_registry=_ResolvingRegistry(["m1", "m2"]),
+        model_clients={"m1": _ErroringClient(), "m2": _ErroringClient()},
+    )
+    result = await node.execute({**base_state, "models_to_use": None})
+    assert result["status"] == "failed"
+    assert result["models_succeeded"] == 0

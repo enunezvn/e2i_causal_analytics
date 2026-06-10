@@ -313,7 +313,10 @@ def _try_load_prod_model_clients() -> Dict[str, Any]:
       2. ``data/deployment_manifest.json`` if it exists in CWD
 
     Any failure (file missing, parse error, bad URI) returns ``{}`` and logs
-    a warning. The agent then runs in UNVALIDATED mode.
+    a warning. With ``{}`` clients and a live ``model_registry`` (see
+    ``_prediction_synthesizer_kwargs``), the orchestrator resolves the target's
+    deployable models from the registry and then finds no matching client, so it
+    FAILS CLOSED (status="failed") rather than fabricating a prediction.
     """
     import os
     from pathlib import Path

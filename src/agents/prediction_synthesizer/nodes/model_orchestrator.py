@@ -223,6 +223,14 @@ class ModelOrchestratorNode:
                 timeout=self.timeout_per_model,
             )
 
+            # A client that swallows an inference failure into a synthetic
+            # neutral result (e.g. InProcessModelClient returns
+            # ``{"prediction": 0.5, "error": ...}``) must NOT be counted as a
+            # successful model: that fabricates ensemble diversity from a broken
+            # model. Treat any error-flagged response as a failure (#840).
+            if result.get("error"):
+                raise RuntimeError(f"Model '{model_id}' inference failed: {result['error']}")
+
             latency = int((time.time() - start) * 1000)
 
             return ModelPrediction(

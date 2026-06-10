@@ -341,6 +341,10 @@ async def verify(manifest_path: Path = DEFAULT_MANIFEST_PATH) -> Dict[str, Any]:
     for name, client in clients.items():
         feats = dict.fromkeys(client.feature_names, 1.0)
         out = await client.predict("VERIFY_ENTITY", feats, "30d")
+        # A client that swallows an inference failure into a synthetic neutral
+        # result must NOT pass verification as a real prediction.
+        if out.get("error"):
+            raise RuntimeError(f"model {name} failed inference during verify: {out['error']}")
         checked[name] = float(out["prediction"])
 
     return {
