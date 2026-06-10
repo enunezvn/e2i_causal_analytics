@@ -448,10 +448,19 @@ def write_cohort_frames(out_dir) -> list:
     cf = out / "cohort_frames"
     cf.mkdir(parents=True, exist_ok=True)
     pj = pd.read_parquet(out / "patient_journeys.parquet")
-    mlp = pd.read_parquet(out / "ml_predictions.parquet")[
-        ["patient_id", "treatment_effect_estimate"]
-    ]
-    pj = pj.merge(mlp, on="patient_id", how="left")
+    if "treatment_effect_estimate" not in pj.columns:
+        # Legacy snapshots only: pj now carries per-unit tau natively; merging
+        # ml_predictions (~1.5 preds/patient) on a frame that already has the
+        # column would fan out rows (duplicate causal units) and suffix-drop
+        # the column. Aggregate per patient so the fallback merge stays 1:1.
+        mlp = (
+            pd.read_parquet(out / "ml_predictions.parquet")[
+                ["patient_id", "treatment_effect_estimate"]
+            ]
+            .groupby("patient_id", as_index=False)
+            .mean()
+        )
+        pj = pj.merge(mlp, on="patient_id", how="left")
     written = []
     for cohort, outcome in _COHORT_OUTCOME.items():
         for brand in _CF_BRANDS:
