@@ -198,6 +198,9 @@ class FeedbackLearnerState(TypedDict):
     # === KNOWLEDGE UPDATES ===
     proposed_updates: NotRequired[List[KnowledgeUpdate]]
     applied_updates: NotRequired[List[str]]
+    # F15 (audit): whether a real knowledge-store apply-backend is wired. When
+    # False, update_effectiveness is reported as None (not a misleading 0.0).
+    update_backend_wired: NotRequired[bool]
 
     # === RUBRIC EVALUATION ===
     rubric_evaluation_context: NotRequired[Dict[str, Any]]
