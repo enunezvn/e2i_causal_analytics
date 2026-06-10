@@ -195,3 +195,15 @@ def test_other_17_agents_smoke():
 
     crashed = _smoke_other_agents()
     assert not crashed, f"agents crashed on smoke: {crashed}"
+
+
+# =============================================================================
+# Gate 11 — CHAT-PATH e2e (decision §3 proof)
+# =============================================================================
+
+
+def test_gate_11_chat_path_e2e(client):
+    from scripts.validate_synthetic_causal import gate_11_chat_path
+
+    res = gate_11_chat_path(client)
+    assert res.ok, res.measured  # measured -> {dispatched, ordered_cate}
