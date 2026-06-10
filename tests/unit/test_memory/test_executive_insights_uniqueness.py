@@ -120,7 +120,12 @@ class _UniqueViolationQuery:
         # select
         rows = list(self.store.rows.get(self.table_name, []))
         for c, want in self.filters.items():
-            rows = [r for r in rows if r.get(c) == want]
+            # Schema default: is_synthetic is NOT NULL DEFAULT false (migration
+            # 063), so a seeded row that omits it reads as False.
+            if c == "is_synthetic":
+                rows = [r for r in rows if r.get(c, False) == want]
+            else:
+                rows = [r for r in rows if r.get(c) == want]
         for c, t in self.gte_filters.items():
             rows = [r for r in rows if (r.get(c) or "") >= t]
         for c, vs in self.in_filters.items():

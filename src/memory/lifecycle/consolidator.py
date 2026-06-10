@@ -697,6 +697,10 @@ class Consolidator:
                 q = q.eq("brand", brand)
             if region:
                 q = q.eq("region", region)
+            # provenance (Shard 07): a synthetic row must not merge into a real
+            # canonical and inflate its dedup_counter (which drives semantic
+            # promotion). Keep synthetic rows out of the real dedup pipeline.
+            q = q.eq("is_synthetic", False)
             # IS NULL filter: only candidates without a signature yet.
             return q.is_("dedup_signature", "null")
 
@@ -905,6 +909,9 @@ class Consolidator:
                 # COALESCE(brand, '') so the application layer must match.
                 query = query.is_("brand", "null")
             query = query.eq("dedup_signature", signature)
+            # provenance (Shard 07): mirror the dedup-candidate filter so a real
+            # candidate never resolves to a synthetic canonical (and vice versa).
+            query = query.eq("is_synthetic", False)
             data = (query.execute().data) or []
         except Exception as exc:
             logger.warning(
@@ -1318,6 +1325,9 @@ class Consolidator:
                 client.table("episodic_memories")
                 .select("memory_id, dedup_counter, causal_path_id")
                 .in_("causal_path_id", path_ids)
+                # provenance (Shard 07): a synthetic memory must NOT count as a
+                # real confirmation that promotes a causal_path to semantic.
+                .eq("is_synthetic", False)
                 .execute()
             )
             for r in rows_result.data or []:
@@ -1439,6 +1449,10 @@ class Consolidator:
             )
             if brand:
                 q = q.eq("brand", brand)
+            # provenance (Shard 07): procedural templates (playbooks) derived
+            # here are user-facing/actionable — a synthetic row must not seed
+            # a real procedural template.
+            q = q.eq("is_synthetic", False)
             return q
 
         try:

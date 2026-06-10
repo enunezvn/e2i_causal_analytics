@@ -92,7 +92,12 @@ class _FakeQuery:
     def _match(self) -> List[Dict[str, Any]]:
         rows = list(self.store.rows.get(self.table_name, []))
         for col, want in self._filters.items():
-            rows = [r for r in rows if r.get(col) == want]
+            # Model the schema default: is_synthetic is NOT NULL DEFAULT false
+            # (migration 063), so a seeded row that omits it reads as False.
+            if col == "is_synthetic":
+                rows = [r for r in rows if r.get(col, False) == want]
+            else:
+                rows = [r for r in rows if r.get(col) == want]
         for col, threshold in self._gte.items():
             rows = [r for r in rows if (r.get(col) or 0) >= threshold]
         for col in self._is_null_cols:

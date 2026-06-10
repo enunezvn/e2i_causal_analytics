@@ -341,7 +341,11 @@ class TestSearchEpisodicMemory:
             )
 
             mock_supabase.table.assert_called_with("episodic_memories")
-            mock_supabase.table.return_value.eq.assert_called_with("hcp_id", "hcp_123")
+            # assert_any_call (not assert_called_with): the Shard 07 provenance
+            # predicate .eq("is_synthetic", False) is now appended after the
+            # entity-column eq, so the entity eq is no longer the LAST call.
+            mock_supabase.table.return_value.eq.assert_any_call("hcp_id", "hcp_123")
+            mock_supabase.table.return_value.eq.assert_any_call("is_synthetic", False)
             assert len(results) == 1
 
     @pytest.mark.asyncio
@@ -395,7 +399,10 @@ class TestSearchEpisodicMemory:
 
                 await search_episodic_by_e2i_entity(entity_type, "id_123")
 
-                mock_supabase.table.return_value.eq.assert_called_with(expected_column, "id_123")
+                # assert_any_call: the entity-column eq is followed by the
+                # Shard 07 provenance .eq("is_synthetic", False).
+                mock_supabase.table.return_value.eq.assert_any_call(expected_column, "id_123")
+                mock_supabase.table.return_value.eq.assert_any_call("is_synthetic", False)
 
 
 # ============================================================================
@@ -721,7 +728,10 @@ class TestUtilityFunctions:
 
             memory = await get_memory_by_id("mem_12345678")
 
-            mock_supabase.table.return_value.eq.assert_called_with("memory_id", "mem_12345678")
+            # assert_any_call: the Shard 07 provenance .eq("is_synthetic", False)
+            # is appended after the memory_id eq.
+            mock_supabase.table.return_value.eq.assert_any_call("memory_id", "mem_12345678")
+            mock_supabase.table.return_value.eq.assert_any_call("is_synthetic", False)
             assert memory is not None
 
     @pytest.mark.asyncio
@@ -1010,3 +1020,113 @@ class TestInsertEpisodicMemoryLegacyCompat:
     async def test_missing_both_memory_and_event_type_raises(self):
         with pytest.raises(TypeError):
             await insert_episodic_memory(session_id="x")
+
+
+# ============================================================================
+# SHARD 07 — PROVENANCE: user-facing episodic reads default-exclude synthetic
+# ============================================================================
+
+
+class _RecordingQuery:
+    """supabase-style fluent builder recording ``.eq()`` predicates."""
+
+    def __init__(self, data):
+        self.eq_calls = []
+        self._data = data
+        self.not_ = self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        self.eq_calls.append(a)
+        return self
+
+    def in_(self, *a, **k):
+        return self
+
+    def gte(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def single(self, *a, **k):
+        return self
+
+    def execute(self):
+        result = MagicMock()
+        result.data = self._data
+        result.count = len(self._data) if isinstance(self._data, list) else 0
+        return result
+
+
+def _recording_client(data):
+    query = _RecordingQuery(data)
+    client = MagicMock()
+    client.table = MagicMock(return_value=query)
+    return client, query
+
+
+@pytest.mark.unit
+class TestEpisodicReadProvenance:
+    """Each user-facing episodic read default-excludes is_synthetic and opts out."""
+
+    @pytest.mark.asyncio
+    async def test_search_by_entity_default_excludes(self):
+        client, query = _recording_client([])
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await search_episodic_by_e2i_entity(E2IEntityType.HCP, "hcp_1")
+        assert ("is_synthetic", False) in query.eq_calls
+
+    @pytest.mark.asyncio
+    async def test_search_by_entity_opt_in(self):
+        client, query = _recording_client([])
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await search_episodic_by_e2i_entity(E2IEntityType.HCP, "hcp_1", include_synthetic=True)
+        assert ("is_synthetic", False) not in query.eq_calls
+
+    @pytest.mark.asyncio
+    async def test_get_recent_memories_default_excludes(self):
+        client, query = _recording_client([])
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await get_recent_memories()
+        assert ("is_synthetic", False) in query.eq_calls
+
+    @pytest.mark.asyncio
+    async def test_get_recent_memories_opt_in(self):
+        client, query = _recording_client([])
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await get_recent_memories(include_synthetic=True)
+        assert ("is_synthetic", False) not in query.eq_calls
+
+    @pytest.mark.asyncio
+    async def test_get_memory_by_id_default_excludes(self):
+        client, query = _recording_client(None)
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await get_memory_by_id("mem_1")
+        assert ("is_synthetic", False) in query.eq_calls
+
+    @pytest.mark.asyncio
+    async def test_get_enriched_default_excludes(self):
+        client, query = _recording_client(None)
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await get_enriched_episodic_memory("mem_1")
+        assert ("is_synthetic", False) in query.eq_calls
+
+    @pytest.mark.asyncio
+    async def test_count_memories_default_excludes(self):
+        client, query = _recording_client([])
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await count_memories_by_type()
+        assert ("is_synthetic", False) in query.eq_calls
+
+    @pytest.mark.asyncio
+    async def test_count_memories_opt_in(self):
+        client, query = _recording_client([])
+        with patch("src.memory.episodic_memory.get_supabase_client", return_value=client):
+            await count_memories_by_type(include_synthetic=True)
+        assert ("is_synthetic", False) not in query.eq_calls

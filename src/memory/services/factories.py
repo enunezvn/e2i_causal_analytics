@@ -1219,7 +1219,11 @@ async def test_supabase_connection() -> bool:
     """
     try:
         supabase = get_supabase_client()
-        # Try a simple query to verify connection
+        # Try a simple query to verify connection.
+        # provenance: deliberate include_synthetic — this is a pure connectivity
+        # probe (the row content is discarded; only that .execute() succeeds
+        # matters). It must succeed even on a DB that holds only synthetic rows,
+        # so NO is_synthetic predicate is applied here (Shard 07).
         supabase.table("episodic_memories").select("id").limit(1).execute()
         logger.info("Supabase connection: OK")
         return True

@@ -183,6 +183,10 @@ class Crystallizer:
                 .eq("brand", brand)
                 .gte("occurred_at", cutoff)
                 .in_("event_type", ["agent_action", "causal_discovery", "experiment_completed"])
+                # provenance (Shard 07): crystallization emits user-facing
+                # "findings" (crystals) derived from these rows, so a synthetic
+                # memory must NOT be crystallized into a real crystal.
+                .eq("is_synthetic", False)
             )
             if region:
                 page_query = page_query.eq("region", region)

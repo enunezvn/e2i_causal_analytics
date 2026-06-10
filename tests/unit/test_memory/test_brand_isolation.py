@@ -116,6 +116,10 @@ class _Q:
         for c, want in self.filters.items():
             if isinstance(want, tuple) and want[0] == "!=":
                 rows = [r for r in rows if r.get(c) != want[1]]
+            elif c == "is_synthetic":
+                # Schema default: is_synthetic is NOT NULL DEFAULT false
+                # (migration 063), so a seeded row that omits it reads as False.
+                rows = [r for r in rows if r.get(c, False) == want]
             else:
                 rows = [r for r in rows if r.get(c) == want]
         for c, vs in self.in_filters.items():
