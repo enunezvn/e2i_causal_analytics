@@ -194,10 +194,51 @@ def _calibration_slope_deviation_of(result: dict | None) -> float:
 # overfit) is preferred over a raw-AUC winner that would be BLOCKED by those
 # gates. The raw-AUC winner is often an overfit gradient booster whose train-
 # inflated AUC edges out a cleaner linear model that actually deploys — picking
-# it strands the cohort. ``calibration_slope_deviation`` mirrors the v3
-# ``maximum_calibration_slope_deviation`` gate; ``overfitting_severity=="none"``
-# (train-val AUC delta <= ~0.03) mirrors ``maximum_train_val_delta``.
+# it strands the cohort.
+#
+# Synthetic-CSU persistence finding (2026-06-10): the original implementation
+# read ``overfitting_severity`` — a key NO producer ever sets on trainer result
+# dicts — so the deployable pool was always empty, the partition silently fell
+# back to the full pool, and the calibration tiebreak picked a severely overfit
+# XGBoost (train→val Δ 0.1873) over a deployable LR 0.002 AUC below it. The
+# history entries now carry the candidate's own EVALUATED v3 gate results
+# (``success_criteria_results['maximum_train_val_delta'/'maximum_calibration_
+# slope_deviation']``, which respect the #866 split-size-scaled caps); the
+# legacy fields remain as fallback for entries that lack them.
 _DEPLOY_MAX_SLOPE_DEV: float = 0.15
+
+
+def _candidate_history_entry(
+    algorithm: str,
+    result: dict | None,
+    *,
+    is_primary: bool,
+    model_usefulness: "str | None" = None,
+) -> dict:
+    """Build a Step 5b comparison-history entry from a trained candidate's
+    result dict, carrying the EVALUATED deployability gate outcomes
+    (``_select_champion`` consumes them; see the module comment above)."""
+    result = result if isinstance(result, dict) else {}
+    criteria_results = result.get("success_criteria_results")
+    criteria_results = criteria_results if isinstance(criteria_results, dict) else {}
+    return {
+        "algorithm": algorithm,
+        "auc_roc": result.get("auc_roc", 0) or 0,
+        # Deploy-calibrated |slope-1| for the calibration-aware tiebreak
+        # among discrimination-ties (see _select_champion).
+        "calibration_slope_deviation": _calibration_slope_deviation_of(result),
+        "model_usefulness": (
+            model_usefulness
+            if model_usefulness is not None
+            else result.get("model_usefulness", "unknown")
+        ),
+        # Evaluated v3 gate outcomes (True/False; None = not evaluated).
+        "overfit_gate_met": criteria_results.get("maximum_train_val_delta"),
+        "slope_gate_met": criteria_results.get("maximum_calibration_slope_deviation"),
+        # Legacy field kept for fallback semantics in _is_deployable.
+        "overfitting_severity": result.get("overfitting_severity"),
+        "is_primary": is_primary,
+    }
 
 
 def _select_champion(comparison_history: list[dict]) -> dict:
@@ -226,12 +267,24 @@ def _select_champion(comparison_history: list[dict]) -> dict:
         raise ValueError("comparison_history is empty; no champion to select")
 
     def _is_deployable(h: dict) -> bool:
-        slope_dev = h.get("calibration_slope_deviation")
-        cal_ok = isinstance(slope_dev, (int, float)) and slope_dev <= _DEPLOY_MAX_SLOPE_DEV
-        # overfitting_severity is "none" only when train-val AUC delta is within
-        # the overfit gate band. Absent (legacy candidate dicts) → unknown →
-        # NOT deployable, which makes the pool fall back to all candidates.
-        overfit_ok = h.get("overfitting_severity") == "none"
+        # Prefer the candidate's own EVALUATED v3 gate outcomes (set by
+        # _candidate_history_entry from success_criteria_results — these
+        # respect the #866 split-size-scaled caps). The legacy fields are
+        # the fallback for entries that lack them: overfitting_severity is
+        # "none" only when train-val AUC delta is within the overfit gate
+        # band; absent (legacy candidate dicts) → unknown → NOT deployable,
+        # which makes the pool fall back to all candidates.
+        slope_gate = h.get("slope_gate_met")
+        if slope_gate is not None:
+            cal_ok = bool(slope_gate)
+        else:
+            slope_dev = h.get("calibration_slope_deviation")
+            cal_ok = isinstance(slope_dev, (int, float)) and slope_dev <= _DEPLOY_MAX_SLOPE_DEV
+        overfit_gate = h.get("overfit_gate_met")
+        if overfit_gate is not None:
+            overfit_ok = bool(overfit_gate)
+        else:
+            overfit_ok = h.get("overfitting_severity") == "none"
         return cal_ok and overfit_ok
 
     pool = [h for h in comparison_history if _is_deployable(h)] or comparison_history
@@ -6761,21 +6814,16 @@ async def run_pipeline(
                     if isinstance(state.get("model_candidate"), dict)
                     else ""
                 )
-                primary_auc = result.get("auc_roc", 0) or 0
                 candidate_results[primary_algo] = result
+                # Entry carries the candidate's EVALUATED deployability gate
+                # outcomes for _select_champion (see _candidate_history_entry).
                 comparison_history.append(
-                    {
-                        "algorithm": primary_algo,
-                        "auc_roc": primary_auc,
-                        # Deploy-calibrated |slope-1| for the calibration-aware
-                        # tiebreak among discrimination-ties (see _select_champion).
-                        "calibration_slope_deviation": _calibration_slope_deviation_of(result),
-                        "model_usefulness": model_usefulness,
-                        # Deployability-aware selection (see _select_champion):
-                        # overfit severity mirrors the maximum_train_val_delta gate.
-                        "overfitting_severity": result.get("overfitting_severity"),
-                        "is_primary": True,
-                    }
+                    _candidate_history_entry(
+                        primary_algo,
+                        result,
+                        is_primary=True,
+                        model_usefulness=model_usefulness,
+                    )
                 )
 
                 alternatives = list(state.get("alternative_candidates", []))
@@ -6884,21 +6932,9 @@ async def run_pipeline(
                             cost_matrix=_scope_spec.get("cost_matrix"),
                         )
 
-                        alt_auc = alt_result.get("auc_roc", 0) or 0
                         candidate_results[alt["name"]] = alt_result
                         comparison_history.append(
-                            {
-                                "algorithm": alt["name"],
-                                "auc_roc": alt_auc,
-                                # Deploy-calibrated |slope-1| for the calibration-aware
-                                # tiebreak among discrimination-ties (see _select_champion).
-                                "calibration_slope_deviation": _calibration_slope_deviation_of(
-                                    alt_result
-                                ),
-                                "model_usefulness": alt_result.get("model_usefulness", "unknown"),
-                                "overfitting_severity": alt_result.get("overfitting_severity"),
-                                "is_primary": False,
-                            }
+                            _candidate_history_entry(alt["name"], alt_result, is_primary=False)
                         )
 
                     # Pick best model across all candidates: highest AUC, with a
@@ -7012,6 +7048,16 @@ async def run_pipeline(
                             interpretation=[
                                 f"Trained {len(comparison_history)} candidate algorithms: {', '.join(h['algorithm'] for h in comparison_history)}",
                                 f"Ranking by AUC: {_ranking}",
+                                # Deployability gate evidence per candidate (the
+                                # pool _select_champion partitions on).
+                                "Deployability gates: "
+                                + "; ".join(
+                                    f"{h['algorithm']}(overfit_gate={h.get('overfit_gate_met')}, "
+                                    f"slope_gate={h.get('slope_gate_met')}, "
+                                    f"slope_dev={h.get('calibration_slope_deviation'):.4f}, "
+                                    f"severity={h.get('overfitting_severity')})"
+                                    for h in comparison_history
+                                ),
                                 f"Selected {_best['algorithm']} as best model (AUC={_best['auc_roc']:.3f})",
                             ],
                             result_message=f"Algorithm comparison: {_best['algorithm']} wins ({_ranking})",
