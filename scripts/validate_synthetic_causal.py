@@ -13,6 +13,7 @@ source (2026-06-10). Where the plan's sketch diverged from reality the harness a
 to reality with an inline ``RECONCILED:`` note. A gate that cannot recover a real
 value FAILS (ok=False) — it never papers over absent substrate with a fabricated pass.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +22,13 @@ import sys
 from dataclasses import dataclass
 
 os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")  # OOM discipline (INDEX §SHARED)
+# HARNESS-ONLY auth bypass for gate 8's in-process TestClient(app) POST. The global
+# JWTAuthMiddleware reads E2I_TESTING_MODE at module-import time (auth_middleware.py:34)
+# and bypasses auth ONLY when ENVIRONMENT != production — exactly the integration-test
+# bypass the conftest uses. This validation harness is a test tool (never prod-reachable),
+# so we set it BEFORE any src.api.main import so the standalone CLI driver (Task 7) hits
+# the solver path instead of a 401. Faithful to how tests drive the same route.
+os.environ.setdefault("E2I_TESTING_MODE", "true")
 
 from src.api.dependencies.supabase_client import get_supabase  # noqa: E402
 
@@ -43,9 +51,7 @@ def _kpi(client, query_id: str, params: list) -> list:
     json (database/migrations/044_kpi_query_allowlist.sql:49). supabase-py JSON-encodes
     the ``params`` list into the jsonb arg; ``.data`` is the row list of json objects.
     """
-    return (
-        client.rpc("kpi_query", {"query_id": query_id, "params": params}).execute().data
-    ) or []
+    return (client.rpc("kpi_query", {"query_id": query_id, "params": params}).execute().data) or []
 
 
 def _banner(r: GateResult) -> str:
@@ -74,7 +80,9 @@ def gate_1_date_freshness(client) -> GateResult:
     measured["conversion_rate"] = cv
     ok = ok and cv > 0
     return GateResult(
-        "1 DATE-FRESHNESS", ok, measured,
+        "1 DATE-FRESHNESS",
+        ok,
+        measured,
         "per-brand TRx>0 and conversion_rate>0 over NOW()-30d",
     )
 
@@ -93,7 +101,8 @@ def gate_2_kpi_dashboard(client) -> GateResult:
     nonnull = [v for v in metrics.values() if v not in (None, 0)]
     ok = data_source == "database" and len(nonnull) >= 4
     return GateResult(
-        "2 KPI->DASHBOARD", ok,
+        "2 KPI->DASHBOARD",
+        ok,
         {"data_source": data_source, "non_zero_metrics": len(nonnull)},
         "data_source='database' with >=4 non-zero metrics",
     )
@@ -165,7 +174,9 @@ def _resolve_synthetic_frame(client, cohort: str, brand: str):
                 f"hcp_adoption/{brand} artifact missing cate_estimate col: {list(df.columns)}"
             )
         # Binary adopter outcome from the per-HCP CATE sign (positive effect -> adopter).
-        df["outcome"] = (df["cate_estimate"].astype(float) > df["cate_estimate"].astype(float).median()).astype(int)
+        df["outcome"] = (
+            df["cate_estimate"].astype(float) > df["cate_estimate"].astype(float).median()
+        ).astype(int)
         df["treatment"] = 1  # HCP-grain artifact is the treated/exposed analytic frame
         conf = [c for c in ("cate_estimate",) if c in df.columns]
         return df, conf
@@ -221,7 +232,9 @@ def _true_ate(client, cohort: str, brand: str) -> float:
         )
     with open(paths[-1]) as fh:  # most recent run
         truth = json.load(fh)
-    entries = truth if isinstance(truth, list) else (truth.get("effects") or truth.get("cells") or [])
+    entries = (
+        truth if isinstance(truth, list) else (truth.get("effects") or truth.get("cells") or [])
+    )
     if isinstance(entries, dict):  # tolerate a {key: entry} mapping shape
         entries = list(entries.values())
     for e in entries:
@@ -229,7 +242,11 @@ def _true_ate(client, cohort: str, brand: str) -> float:
             continue
         e_brand = e.get("brand")
         e_dgp = e.get("dgp_type")
-        if e_brand == brand and (e_dgp in (cohort, _DEFAULT_DGP, _COHORT_DGP.get(cohort))) and "true_ate" in e:
+        if (
+            e_brand == brand
+            and (e_dgp in (cohort, _DEFAULT_DGP, _COHORT_DGP.get(cohort)))
+            and "true_ate" in e
+        ):
             return float(e["true_ate"])
     raise AssertionError(
         f"no designed TRUE_ATE for brand={brand!r} cohort={cohort!r} in {paths[-1]} "
@@ -259,7 +276,9 @@ def gate_3_ate_cate(client) -> GateResult:
     ate = _extract_ate(out)
     ok = ate is not None and abs(ate - true_ate) < 0.10
     return GateResult(
-        "3 ATE/CATE RECOVERY", ok, {"recovered": ate, "true": true_ate},
+        "3 ATE/CATE RECOVERY",
+        ok,
+        {"recovered": ate, "true": true_ate},
         "CausalImpactAgent recovers TRUE_ATE within 0.10 (no seed-42 fall-through)",
     )
 
@@ -290,7 +309,9 @@ def gate_4_trigger(client) -> GateResult:
         and (row.get("action_rate_uplift") or 0) > 0
     )
     return GateResult(
-        "4 TRIGGER EFFECTIVENESS", ok, row,
+        "4 TRIGGER EFFECTIVENESS",
+        ok,
+        row,
         "treatment_rate>control_rate and action_rate_uplift>0",
     )
 
@@ -334,7 +355,8 @@ def gate_5_gap(client) -> GateResult:
         and len(strategic_bets) >= 1
     )
     return GateResult(
-        "5 gap_analyzer", ok,
+        "5 gap_analyzer",
+        ok,
         {
             "n_opps": len(opps),
             "n_quick_wins": len(quick_wins),
@@ -366,7 +388,8 @@ def gate_6_hetero(client) -> GateResult:
     cate_seg = out.get("cate_by_segment") or {}
     ok = hscore > 0.4 and len(highs) > 0 and len(lows) > 0 and bool(cate_seg)
     return GateResult(
-        "6 heterogeneous_optimizer", ok,
+        "6 heterogeneous_optimizer",
+        ok,
         {
             "heterogeneity_score": hscore,
             "n_high": len(highs),
@@ -393,7 +416,9 @@ def gate_7_pred_synth(client) -> GateResult:
     ) or []
     if not hcp_rows:
         return GateResult(
-            "7 prediction_synthesizer", False, {"error": "no synthetic hcp_profiles row"},
+            "7 prediction_synthesizer",
+            False,
+            {"error": "no synthetic hcp_profiles row"},
             ">=2 models -> model_agreement>0.5, risk_level!=CANNOT_ASSESS",
         )
     entity_id = hcp_rows[0]["hcp_id"]
@@ -407,13 +432,22 @@ def gate_7_pred_synth(client) -> GateResult:
     # RECONCILED: model_agreement lives on ensemble_prediction (state.py:36); risk_level
     # lives on prediction_interpretation, = "CANNOT_ASSESS" when <2 models
     # (ensemble_combiner.py:401). PredictionSynthesizerOutput is a TypedDict (dict).
-    ensemble = (out.get("ensemble_prediction") if isinstance(out, dict) else getattr(out, "ensemble_prediction", None)) or {}
-    interp = (out.get("prediction_interpretation") if isinstance(out, dict) else getattr(out, "prediction_interpretation", None)) or {}
+    ensemble = (
+        out.get("ensemble_prediction")
+        if isinstance(out, dict)
+        else getattr(out, "ensemble_prediction", None)
+    ) or {}
+    interp = (
+        out.get("prediction_interpretation")
+        if isinstance(out, dict)
+        else getattr(out, "prediction_interpretation", None)
+    ) or {}
     agreement = ensemble.get("model_agreement") if isinstance(ensemble, dict) else None
     risk_level = interp.get("risk_level") if isinstance(interp, dict) else None
     ok = (agreement or 0) > 0.5 and risk_level not in (None, "", "CANNOT_ASSESS")
     return GateResult(
-        "7 prediction_synthesizer", ok,
+        "7 prediction_synthesizer",
+        ok,
         {"model_agreement": agreement, "risk_level": risk_level},
         ">=2 models -> model_agreement>0.5, risk_level!=CANNOT_ASSESS",
     )
@@ -458,7 +492,8 @@ def gate_8_resource(_client) -> GateResult:
     data = r.json() if r.status_code == 200 else {}
     ok = r.status_code == 200 and data.get("solver_status") == "optimal"
     return GateResult(
-        "8 resource_optimizer", ok,
+        "8 resource_optimizer",
+        ok,
         {"status": r.status_code, "solver": data.get("solver_status")},
         "POST /api/resources/optimize?async_mode=false -> solver_status='optimal'",
     )
@@ -526,7 +561,9 @@ def gate_9_provenance(client) -> GateResult:
         rpc_trx = None
     ok = not failures
     return GateResult(
-        "9 PROVENANCE", ok, {"failures": failures, "trx_real_mode": rpc_trx},
+        "9 PROVENANCE",
+        ok,
+        {"failures": failures, "trx_real_mode": rpc_trx},
         "0 untagged on every taggable table; real KPI excludes synthetic by default",
     )
 
@@ -572,7 +609,9 @@ def gate_10_cohort_brand_e2e(client) -> GateResult:
             measured[cell] = {"label_rate": round(rate, 3), "ate": ate}
             ok = ok and cell_ok
     return GateResult(
-        "10 4-COHORT x 3-BRAND x AGENT", ok, measured,
+        "10 4-COHORT x 3-BRAND x AGENT",
+        ok,
+        measured,
         "each cell: label 5-60%, runnable var-set, >=1 agent non-empty useful output",
     )
 
@@ -636,14 +675,12 @@ def _ordered_cate(seg: dict) -> tuple[list, bool]:
 def gate_11_chat_path(client) -> GateResult:
     import asyncio
 
-    from src.agents.orchestrator import create_orchestrator_graph  # the live chat entrypoint
     from src.agents.factory import create_agent_registry
+    from src.agents.orchestrator import create_orchestrator_graph  # the live chat entrypoint
 
     # The chat path needs the real agent registry wired so the dispatcher can reach a
     # named agent (allow_mock=False -> fail closed, NO fabricated dispatch, #814).
-    graph = create_orchestrator_graph(
-        agent_registry=create_agent_registry(), allow_mock=False
-    )
+    graph = create_orchestrator_graph(agent_registry=create_agent_registry(), allow_mock=False)
     # RECONCILED query: a LIVE one-shot routing probe (2026-06-10) showed the plan's
     # "What's the uplift for Kisqali initiation by severity?" routes to gap_analyzer —
     # the segment_analysis intent (intent_classifier.py:133) keys on
@@ -653,9 +690,7 @@ def gate_11_chat_path(client) -> GateResult:
     # regression — the router maps segment_analysis -> heterogeneous_optimizer correctly.
     query = "What is the CATE for Kisqali initiation across severity segments?"
     state = asyncio.run(
-        graph.ainvoke(
-            {"query": query, "user_query": query, "filters": {"brand": "Kisqali"}}
-        )
+        graph.ainvoke({"query": query, "user_query": query, "filters": {"brand": "Kisqali"}})
     )
     # RECONCILED to the REAL OrchestratorState (state.py:91-287): there is NO
     # selected_agent / agent_outputs / segment_effects / result key. The routed agent
@@ -674,8 +709,103 @@ def gate_11_chat_path(client) -> GateResult:
     cate, ordered = _ordered_cate(seg) if isinstance(seg, dict) else ([], False)
     ok = routed and ordered
     return GateResult(
-        "11 CHAT-PATH e2e", ok,
+        "11 CHAT-PATH e2e",
+        ok,
         {"dispatched": dispatched, "ordered_cate": cate},
         "chat query -> orchestrator -> dispatcher -> heterogeneous_optimizer -> "
         "ordered per-segment CATE (high>=med>=low)",
     )
+
+
+# =============================================================================
+# --all / --gate N driver (exit non-zero on any FAIL)
+# =============================================================================
+GATES = {
+    1: gate_1_date_freshness,
+    2: gate_2_kpi_dashboard,
+    3: gate_3_ate_cate,
+    4: gate_4_trigger,
+    5: gate_5_gap,
+    6: gate_6_hetero,
+    7: gate_7_pred_synth,
+    8: gate_8_resource,
+    9: gate_9_provenance,
+    10: gate_10_cohort_brand_e2e,
+    11: gate_11_chat_path,
+}
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--gate", type=int, choices=sorted(GATES))
+    p.add_argument("--all", action="store_true")
+    args = p.parse_args()
+    client = get_supabase()
+    if client is None:
+        print("FATAL: no Supabase client (SUPABASE_URL/ANON_KEY unset)")
+        return 2
+    chosen = [args.gate] if args.gate else sorted(GATES)
+    all_ok = True
+    for g in chosen:
+        try:
+            r = GATES[g](client)
+        except Exception as e:  # a crashing gate is a FAIL, never a silent pass
+            r = GateResult(f"{g} (crashed)", False, repr(e), "no exception")
+        print(_banner(r))
+        all_ok = all_ok and r.ok
+    return 0 if all_ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+# =============================================================================
+# RUNBOOK — reproduce the convergence proof from a clean docker-Supabase load
+# =============================================================================
+# Exact order, real commands, expected outputs, OOM/no-pollution guardrails. The
+# convergence proof is THIS harness's --all output (no separate doc artifact).
+#
+#   cd /home/enunez/Projects/e2i_causal_analytics
+#   export LOKY_MAX_CPU_COUNT=1            # OOM discipline (INDEX §SHARED)
+#   export E2I_DB_INTEGRATION=1            # faithful-DB opt-in
+#
+#   # 1) Apply migrations (idempotent, tracked) — Shards 01,05,07,09 DDL + kpi_query
+#   bash scripts/run_migrations.sh        # Expected: "applied / already tracked", 0 drift
+#
+#   # 2) Verify the provenance column landed on every taggable table (Shard 01/07)
+#   docker exec supabase-db psql -U postgres -d postgres -c \
+#     "SELECT table_name FROM information_schema.columns \
+#      WHERE column_name='is_synthetic' AND table_schema='public' ORDER BY 1;"
+#   #   Expected (READ_PATHS taggable_tables): business_metrics, episodic_memories,
+#   #   ml_predictions, patient_journeys, treatment_events, triggers (+others)
+#
+#   # 3) Run the generator (Shards 02-06). --anchor-to-now re-anchors rolling dates so
+#   #    the NOW()-30d KPIs (gates 1,2,4) read non-zero. Writes the cohort_frames +
+#   #    per-HCP CATE artifacts (gates 3,6,10,11) AND must write the Shard-03
+#   #    ground-truth sidecar data/synthetic/ground_truth_<run>.json (gates 3,10).
+#   python scripts/load_synthetic_data.py --anchor-to-now
+#   #   Expected: "Loaded N synthetic rows ... is_synthetic=true"
+#
+#   # 4) Run the full gate ladder (this shard)
+#   python scripts/validate_synthetic_causal.py --all
+#   #   Expected: eleven "[PASS] ..." lines, exit 0
+#
+#   # 5) STALENESS RE-CHECK (gate 1, "solved not shifted") — re-run the generator on a
+#   #    LATER date, then re-run gate 1; it must STILL be >0 (dates re-anchored, not
+#   #    shifted), proving freshness is regenerated per run, not a one-off backfill:
+#   python scripts/load_synthetic_data.py --anchor-to-now \
+#     && python scripts/validate_synthetic_causal.py --gate 1
+#   #   Expected: "[PASS] 1 DATE-FRESHNESS ..."
+#
+# Guardrails: NEVER run a full-tree mypy/pytest on the droplet (CI is arbiter). The
+# harness reads only synthetic-tagged rows and creates no untagged rows; the 17-agent
+# smoke instantiates agents but does not persist. Synthetic rows are is_synthetic=true
+# and excluded from every real read by Shard 07 — safe to leave; remove cleanly with
+# `DELETE FROM <table> WHERE is_synthetic=true;` per READ_PATHS taggable table.
+#
+# KNOWN PRODUCER GAP (flagged by Shard 11, 2026-06-10): scripts/load_synthetic_data.py
+# does NOT currently write the ground-truth sidecar — patient_generator sets
+# df.attrs["true_ate"]/cate_by_segment but parquet drops .attrs, and the loader never
+# calls GroundTruthStore.to_json_file. Gates 3 & 10 FAIL-LOUD on the missing sidecar
+# (no fabricated TRUE_ATE) until Step 3 is extended to persist it. See the report.

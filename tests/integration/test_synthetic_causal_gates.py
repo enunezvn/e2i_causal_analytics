@@ -8,6 +8,7 @@ input_model dispatcher bridges, the ground-truth sidecar). Before that load they
 RED for the RIGHT reason — no-substrate / stale-window / missing-artifact — never on a
 typo. The harness binds only to columns/RPCs/signatures verified to exist (2026-06-10).
 """
+
 from __future__ import annotations
 
 import os
@@ -207,3 +208,23 @@ def test_gate_11_chat_path_e2e(client):
 
     res = gate_11_chat_path(client)
     assert res.ok, res.measured  # measured -> {dispatched, ordered_cate}
+
+
+# =============================================================================
+# --all driver — exits 0 only when all 11 gates pass
+# =============================================================================
+
+
+def test_main_all_exits_zero(client):
+    import subprocess
+    import sys
+
+    env = {**os.environ, "E2I_DB_INTEGRATION": "1", "LOKY_MAX_CPU_COUNT": "1"}
+    r = subprocess.run(
+        [sys.executable, "scripts/validate_synthetic_causal.py", "--all"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count("[PASS]") == 11, r.stdout
