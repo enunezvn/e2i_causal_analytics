@@ -27,7 +27,6 @@ through the distinct ``prompt_bundles`` mechanism).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -38,6 +37,24 @@ logger = logging.getLogger(__name__)
 KNOWLEDGE_TYPES = ("baseline", "agent_config", "prompt", "threshold")
 
 _TABLE = "agent_knowledge_store"
+
+
+def _is_meaningless(value: Any) -> bool:
+    """A value carrying no real recorded learning to persist.
+
+    ``proposed_change`` is ``Optional[str]`` in practice, so this rejects ``None``
+    and blank/whitespace strings — an empty learning must NEVER be counted
+    "applied", or it would inflate ``update_effectiveness`` with a false positive.
+    Empty collections are also rejected; scalars like ``0``/``False`` are kept
+    (they are meaningful values).
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (dict, list, tuple, set)):
+        return len(value) == 0
+    return False
 
 
 class SupabaseKnowledgeStore:
@@ -54,39 +71,34 @@ class SupabaseKnowledgeStore:
         self._client = client
         self._knowledge_type = knowledge_type
 
-    async def update(
-        self, key: str, value: Any, justification: Optional[str] = None
-    ) -> bool:
+    async def update(self, key: str, value: Any, justification: Optional[str] = None) -> bool:
         """Persist ``value`` for ``key`` and confirm via read-back.
 
         Returns ``True`` only when the value is durably persisted and reads back
         equal. A ``None`` value is not a real recorded learning, so it returns
         ``False`` WITHOUT touching the DB (it can never inflate effectiveness).
         """
-        if value is None:
+        if _is_meaningless(value):
             logger.debug(
-                "knowledge_store[%s]: no update for %s — empty value",
+                "knowledge_store[%s]: no update for %s — empty/meaningless value",
                 self._knowledge_type,
                 key,
             )
             return False
 
         try:
-            existing = await self._get_row(key)
-            version = int(existing.get("version", 0)) + 1 if existing else 1
+            # version + updated_at are bumped ATOMICALLY by the DB trigger
+            # (migration 065) — the store never read-then-bumps (which would race
+            # two concurrent writers onto the same version). Upsert only the real
+            # columns; on INSERT the defaults apply, on ON CONFLICT DO UPDATE the
+            # trigger increments version and refreshes updated_at.
             row = {
                 "knowledge_type": self._knowledge_type,
                 "key": key,
                 "value": value,
                 "justification": justification,
-                "version": version,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
-            await (
-                self._client.table(_TABLE)
-                .upsert(row, on_conflict="knowledge_type,key")
-                .execute()
-            )
+            await self._client.table(_TABLE).upsert(row, on_conflict="knowledge_type,key").execute()
 
             # Read back: a truthy upsert response is not proof the row is durable
             # and correct. Confirm the persisted value equals what we wrote.

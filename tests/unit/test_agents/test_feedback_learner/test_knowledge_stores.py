@@ -35,32 +35,44 @@ def test_build_knowledge_stores_none_is_empty():
 def test_build_knowledge_stores_builds_all_four_typed_stores():
     sentinel_client = object()
     stores = build_knowledge_stores(sentinel_client)
-    assert set(stores) == set(KNOWLEDGE_TYPES) == {
-        "baseline",
-        "agent_config",
-        "prompt",
-        "threshold",
-    }
+    assert (
+        set(stores)
+        == set(KNOWLEDGE_TYPES)
+        == {
+            "baseline",
+            "agent_config",
+            "prompt",
+            "threshold",
+        }
+    )
     for kt, store in stores.items():
         assert isinstance(store, SupabaseKnowledgeStore)
         assert store._knowledge_type == kt
 
 
+class _DBTouched(BaseException):
+    """Raised if a code path reaches the DB. A BaseException subclass so the
+    store's ``except Exception`` cannot swallow it — proving the short-circuit
+    happened BEFORE any persistence call (decisive; cf. the #825 pattern)."""
+
+
 class _ExplodingClient:
-    """A client whose .table() raises — proves a code path never touched the DB."""
+    """A client whose .table() raises _DBTouched — proves no DB access."""
 
     def table(self, *args, **kwargs):  # noqa: ANN002, ANN003
-        raise AssertionError("DB must not be touched")
+        raise _DBTouched("DB must not be touched for a meaningless value")
 
 
 @pytest.mark.asyncio
-async def test_update_with_none_value_returns_false_without_db_access():
-    """A None/empty proposed_change is not a real recorded learning: update()
-    must return False (not applied) WITHOUT any persistence call — so it can
-    never be counted toward update_effectiveness."""
+@pytest.mark.parametrize("empty", [None, "", "   ", {}, []])
+async def test_update_with_meaningless_value_returns_false_without_db_access(empty):
+    """A None / blank string / empty collection is not a real recorded learning:
+    update() must return False (not applied) WITHOUT any persistence call — so an
+    empty learning can never be counted toward update_effectiveness. _DBTouched
+    (BaseException) propagates if the store reaches the client, making this
+    decisive rather than a happens-to-return-False via swallowed exception."""
     store = SupabaseKnowledgeStore(_ExplodingClient(), "baseline")
-    result = await store.update(key="agent_x", value=None, justification="n/a")
-    assert result is False
+    assert await store.update(key="agent_x", value=empty, justification="n/a") is False
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,27 @@ CREATE TABLE IF NOT EXISTS public.agent_knowledge_store (
 CREATE INDEX IF NOT EXISTS idx_agent_knowledge_store_type
     ON public.agent_knowledge_store (knowledge_type);
 
+-- Version + updated_at are managed ATOMICALLY by a BEFORE UPDATE trigger so the
+-- store never does a read-then-bump (which would race two concurrent writers to
+-- the same (knowledge_type, key) onto the same version). On INSERT the column
+-- DEFAULTs apply (version=1, updated_at=now()); on the upsert's ON CONFLICT DO
+-- UPDATE path this trigger fires and bumps. The store therefore upserts only
+-- (knowledge_type, key, value, justification).
+CREATE OR REPLACE FUNCTION public.agent_knowledge_store_bump_version()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.version := OLD.version + 1;
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_agent_knowledge_store_bump_version
+    ON public.agent_knowledge_store;
+CREATE TRIGGER trg_agent_knowledge_store_bump_version
+    BEFORE UPDATE ON public.agent_knowledge_store
+    FOR EACH ROW EXECUTE FUNCTION public.agent_knowledge_store_bump_version();
+
 -- The backend reaches this as the service role (bypasses RLS); server-side-only,
 -- no anon/authenticated grants (consistent with migrations 058/059). RLS left
 -- disabled.

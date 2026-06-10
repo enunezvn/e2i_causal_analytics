@@ -89,7 +89,9 @@ async def test_store_update_persists_reads_back_and_bumps_version():
         assert rows[0]["justification"] == "why"
 
         # Re-update: same (type,key) reused, version bumps to 2, new value read back.
-        assert await store.update(key=key, value="raise baseline X v2", justification="why2") is True
+        assert (
+            await store.update(key=key, value="raise baseline X v2", justification="why2") is True
+        )
         assert await store.get(key) == "raise baseline X v2"
         rows2 = (
             await client.table(_TABLE)
