@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 
 load_dotenv(project_root / ".env")
 
-from src.ml.synthetic.config import DGPType
+from src.ml.synthetic.config import Brand, DGPType
 from src.ml.synthetic.generators import (
     BusinessMetricsGenerator,
     FeatureStoreSeeder,
@@ -46,6 +46,20 @@ from src.ml.synthetic.generators import (
     TreatmentGenerator,
     TriggerGenerator,
 )
+
+# Shard 09 breadth substrate (experiment / MLOps / observability / feedback /
+# view-backed + data_lag + causal_paths). Imported here so generate_datasets can
+# emit the new dataset keys; the loader carries them via TABLE_COLUMNS (Task 1).
+from src.ml.synthetic.generators.causal_paths_generator import CausalPathsGenerator
+from src.ml.synthetic.generators.coverage_tables_generator import CoverageTablesGenerator
+from src.ml.synthetic.generators.data_lag import stamp_data_lag_hours
+from src.ml.synthetic.generators.experiment_generator import (
+    ABExperimentGenerator,
+    ExperimentGenerator,
+)
+from src.ml.synthetic.generators.feedback_generator import FeedbackGenerator
+from src.ml.synthetic.generators.mlops_generator import MLOpsGenerator
+from src.ml.synthetic.generators.observability_generator import ObservabilityGenerator
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
 logging.basicConfig(
@@ -247,6 +261,97 @@ def generate_datasets(
     fv_df = fv_generator.generate()
     datasets["feature_values"] = fv_df
     logger.info(f"  Generated {len(fv_df):,} feature values")
+
+    # 9. Shard 09 breadth substrate — experiment / MLOps / observability / feedback /
+    #    view-backed tables + data_lag stamp + causal_paths. Sized off the existing
+    #    `sizes` dict so a --small run stays small. Each frame is is_synthetic-tagged
+    #    by its generator; the central stamp below re-affirms it.
+    #
+    #    The 5 view-backed tables are STALE not empty (max date 2025-11-28): we INSERT
+    #    fresh rolling-window rows here; the loader UPSERTs (does not delete the real
+    #    stale rows). run_date follows the rolling-window reference so MAU/WAU/TTR/etc.
+    #    land inside NOW()-30d.
+    logger.info("Generating Shard-09 breadth substrate...")
+    run_date = anchor_reference or date.today()
+
+    # Per-brand running experiments (mirror the 621 real running shape).
+    exp_n = max(10, sizes.get("trigger", 1200) // 100)
+    exp_frames = []
+    for b in (Brand.REMIBRUTINIB, Brand.KISQALI, Brand.FABHALTA):
+        exp_frames.append(
+            ExperimentGenerator(
+                GeneratorConfig(id_prefix=id_prefix, seed=seed, n_records=exp_n, brand=b)
+            ).generate()
+        )
+    experiments = pd.concat(exp_frames, ignore_index=True)
+    datasets["ml_experiments"] = experiments
+
+    # A/B assignments/enrollments/results with a recoverable +0.15 uplift. 600 units
+    # per experiment (300/arm) keeps the empirical uplift within +/-0.05 of the truth.
+    ab = ABExperimentGenerator(
+        GeneratorConfig(id_prefix=id_prefix, seed=seed + 1),
+        experiments_df=experiments,
+        units_per_experiment=600,
+        true_uplift=0.15,
+    ).generate()
+    datasets.update(ab)  # ab_experiment_assignments / enrollments / results
+
+    # MLOps registry / runs / deployments consistent with the experiments frame.
+    mlops = MLOpsGenerator(
+        GeneratorConfig(id_prefix=id_prefix, seed=seed + 2),
+        experiments_df=experiments,
+        models_per_experiment=2,
+    ).generate()
+    datasets.update(mlops)  # ml_model_registry / ml_training_runs / ml_deployments
+
+    # Observability span slice (leakage-test substrate) + learning_signals fuel.
+    datasets["ml_observability_spans"] = ObservabilityGenerator(
+        GeneratorConfig(
+            id_prefix=id_prefix, seed=seed + 3, n_records=max(40, sizes.get("trigger", 1200) // 20)
+        )
+    ).generate()
+    datasets["learning_signals"] = FeedbackGenerator(
+        GeneratorConfig(
+            id_prefix=id_prefix, seed=seed + 4, n_records=max(30, sizes.get("trigger", 1200) // 40)
+        )
+    ).generate()
+
+    # 5 view-backed tables anchored to the rolling window.
+    datasets.update(
+        CoverageTablesGenerator(
+            GeneratorConfig(
+                id_prefix=id_prefix,
+                seed=seed + 5,
+                n_records=max(50, sizes.get("business_metrics", 1000)),
+            ),
+            run_date=run_date,
+        ).generate()
+    )
+
+    # causal_paths (CM-003/CM-005).
+    datasets["causal_paths"] = CausalPathsGenerator(
+        GeneratorConfig(
+            id_prefix=id_prefix, seed=seed + 7, n_records=max(12, sizes.get("patient", 2500) // 100)
+        )
+    ).generate()
+
+    # WS1-DQ-007: stamp recent data_lag_hours onto the synthetic patient_journeys.
+    if "patient_journeys" in datasets and not datasets["patient_journeys"].empty:
+        datasets["patient_journeys"] = stamp_data_lag_hours(
+            datasets["patient_journeys"], seed=seed + 6
+        )
+
+    logger.info(
+        "  Shard-09 substrate: %d experiments, %d ab assignments, %d registry, "
+        "%d spans, %d signals, %d sessions, %d causal_paths",
+        len(experiments),
+        len(datasets["ab_experiment_assignments"]),
+        len(datasets["ml_model_registry"]),
+        len(datasets["ml_observability_spans"]),
+        len(datasets["learning_signals"]),
+        len(datasets["user_sessions"]),
+        len(datasets["causal_paths"]),
+    )
 
     logger.info("")
     total_records = sum(len(df) for df in datasets.values())
