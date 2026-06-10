@@ -330,12 +330,18 @@ async def build_production_feedback_stores() -> tuple[Optional[Any], Optional[Di
     ``update_backend_wired`` False, ``update_effectiveness`` None (the F15
     contract), never a fabricated 0.0.
 
-    NOTE: the orchestrator-DISPATCHED path constructs ``FeedbackLearnerAgent``
-    synchronously at startup via the generic agent factory, which cannot build an
-    async Supabase client, so that path stays unwired (update_effectiveness
-    honestly None — not fabricated). The measurable triggers are the async entry
-    points wired here. Wiring the dispatch path would require an async agent
-    registry (out of scope for #837).
+    NOTE on the orchestrator-DISPATCHED path: it never reaches this builder OR the
+    learning cycle. The agent registry holds a pre-built ``FeedbackLearnerAgent``
+    (constructed synchronously at startup via the generic factory), and the
+    dispatcher splats the generic dispatch payload into ``learn(**kwargs)``.
+    ``learn`` has a narrow signature (``time_range_start``/``end``, ``batch_id``,
+    ``focus_agents``) and there is NO ``feedback_learner`` ``INPUT_RESOLVER``, so
+    that call FAILS CLOSED with a kwargs-mismatch ``TypeError`` (success=False)
+    BEFORE ``KnowledgeUpdaterNode`` runs — ``update_effectiveness`` is never
+    computed, never fabricated. That is a PRE-EXISTING dispatch-wiring gap (a real
+    ``feedback_learner`` input resolver belongs to the resolver registry, #839),
+    not something #837 introduces or worsens. The measurable learning-cycle
+    triggers are the async entry points wired through this builder.
     """
     try:
         from src.memory.services.factories import get_async_supabase_client
