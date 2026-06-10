@@ -68,10 +68,14 @@ def mock_alert_record():
     record.model_version = "propensity_v2.1.0"
     record.alert_type = "drift"
     record.severity = "high"
+    record.title = "High Drift Detected"
     record.message = "High Drift Detected"
     record.recommended_action = "Significant drift in feature X"
     record.status = "active"
-    record.triggered_at = datetime.now(timezone.utc)
+    # #842: ml_monitoring_alerts has no triggered_at; created_at is the fire time.
+    record.created_at = datetime.now(timezone.utc)
+    record.acknowledged_at = None
+    record.acknowledged_by = None
     record.resolved_at = None
     record.resolved_by = None
     return record
@@ -83,13 +87,15 @@ def mock_run_record():
     record = MagicMock()
     record.id = "run-789"
     record.model_version = "propensity_v2.1.0"
-    record.run_type = "scheduled"
+    record.run_type = "full"  # DB run_type = monitoring kind
+    record.trigger_type = "scheduled"  # #842: API surfaces trigger as run_type
     record.started_at = datetime.now(timezone.utc) - timedelta(hours=1)
     record.completed_at = datetime.now(timezone.utc)
-    record.features_checked = 25
+    # #842: real ml_monitoring_runs columns are total_checks + duration_seconds.
+    record.total_checks = 25
     record.drift_detected_count = 2
     record.alerts_generated = 1
-    record.duration_ms = 1250
+    record.duration_seconds = 1.25  # API surfaces duration_ms = 1250
     record.error_message = None
     return record
 
