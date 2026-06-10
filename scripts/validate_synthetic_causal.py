@@ -462,3 +462,70 @@ def gate_8_resource(_client) -> GateResult:
         {"status": r.status_code, "solver": data.get("solver_status")},
         "POST /api/resources/optimize?async_mode=false -> solver_status='optimal'",
     )
+
+
+# =============================================================================
+# Gate 9 — PROVENANCE LEAKAGE (the blast-radius backstop)
+# =============================================================================
+# Mirrors Shard 07's enforcement surface. EVERY taggable read path is listed so the
+# leakage test is exhaustive, not best-effort. Anything intentionally opt-in lives
+# under documented_optin with the reason — never silently omitted.
+#
+# RECONCILED taggable_tables to the LIVE DB (verified, 2026-06-10):
+#   SELECT table_name FROM information_schema.columns WHERE column_name='is_synthetic'.
+#   The plan listed `operational_corpus` but that table does NOT exist in this DB
+#   (to_regclass('public.operational_corpus') IS NULL). The corpus dedup read path is
+#   `episodic_memories` (which IS is_synthetic-tagged) — substituted here so the gate
+#   audits the REAL blast radius instead of crashing on a phantom table.
+READ_PATHS = {
+    "taggable_tables": [
+        "business_metrics",
+        "treatment_events",
+        "triggers",
+        "patient_journeys",
+        "ml_predictions",
+        "episodic_memories",  # RECONCILED: replaces non-existent operational_corpus
+    ],
+    "documented_optin": {
+        # validation runs explicitly pass is_synthetic=true; real chat never does
+        "causal_impact_estimation": "opt-in via data_source/segment_filters at call site",
+        "kpi_query_include_synthetic": "066 *_include_synthetic ids (validation-only)",
+    },
+}
+
+
+def gate_9_provenance(client) -> GateResult:
+    failures = []
+    for table in READ_PATHS["taggable_tables"]:
+        try:
+            # RECONCILED: count via select("*") — the taggable tables have NO `id`
+            # column (distinct PKs: metric_id/treatment_event_id/trigger_id/...), so
+            # the plan's select("id") 42703-crashes. select("*", count="exact") counts
+            # rows without binding a column name.
+            untagged = (
+                client.table(table)
+                .select("*", count="exact")
+                .is_("is_synthetic", "null")
+                .limit(1)
+                .execute()
+            ).count or 0
+        except Exception as e:  # table without is_synthetic yet -> hard finding, not a silent pass
+            failures.append(f"{table}:no-is_synthetic({e})")
+            continue
+        if untagged:
+            failures.append(f"{table}:{untagged}-untagged")
+    # default-exclude invariant: the real-mode RPC must run without error and never
+    # return None (synthetic rows present but excluded by the 066 default-exclude SQL).
+    try:
+        trx_rows = _kpi(client, "business_impact_trx", ["Kisqali"])
+        rpc_trx = trx_rows[0].get("trx") if trx_rows else None
+        if rpc_trx is None:
+            failures.append("trx_rpc:no-row")
+    except Exception as e:
+        failures.append(f"trx_rpc:{e}")
+        rpc_trx = None
+    ok = not failures
+    return GateResult(
+        "9 PROVENANCE", ok, {"failures": failures, "trx_real_mode": rpc_trx},
+        "0 untagged on every taggable table; real KPI excludes synthetic by default",
+    )

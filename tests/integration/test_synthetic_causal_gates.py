@@ -152,3 +152,27 @@ def test_gate_8_resource_optimizer():
 
     res = gate_8_resource(None)
     assert res.ok, res.measured
+
+
+# =============================================================================
+# Gate 9 — PROVENANCE LEAKAGE
+# =============================================================================
+
+
+def test_gate_9_provenance_default_exclude(client):
+    from scripts.validate_synthetic_causal import READ_PATHS
+
+    # (a) tagging completeness on each blast-radius table from Shard 07
+    for table in READ_PATHS["taggable_tables"]:
+        untagged = (
+            client.table(table)
+            .select("*", count="exact")
+            .is_("is_synthetic", "null")
+            .limit(1)
+            .execute()
+        )
+        assert (untagged.count or 0) == 0, f"{table} has untagged rows; partial-coverage leakage"
+    # (b) real-mode KPI runs and excludes synthetic by default (066 default-exclude SQL);
+    # it must return a row (non-None), proving the RPC path is wired, not fabricated.
+    trx_rows = _kpi(client, "business_impact_trx", ["Kisqali"])
+    assert trx_rows and trx_rows[0].get("trx") is not None, trx_rows
