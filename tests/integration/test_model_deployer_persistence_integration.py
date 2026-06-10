@@ -1,0 +1,395 @@
+"""Faithful real-DB integration tests for model_deployer persistence (#829).
+
+Proves, against the REAL Supabase, that the F4 follow-up wiring actually writes
+rows:
+
+* ``_persist_model_registry_row`` writes a real ``ml_model_registry`` row whose
+  ``experiment_id`` FK + ``algorithm`` + ``hyperparameters`` are sourced from
+  real seeded ``ml_experiments`` / ``ml_training_runs`` substrate (no
+  fabrication), is idempotent on re-run (UNIQUE(model_name, model_version)), and
+  FAILS CLOSED (returns ``None``, writes nothing) when the experiment cannot be
+  resolved;
+* ``ModelDeployerAgent._store_to_database`` writes a real ``ml_deployments`` row
+  FK-linked to that registry row and flips ``db_persisted=True`` ONLY when the
+  row is confirmed — and, with a real client but NO ``model_registry_id``,
+  writes nothing and keeps ``db_persisted=False`` (the #830 honesty contract,
+  now proven the client's mere presence does not fabricate a row).
+
+Run gate
+--------
+``E2I_DB_INTEGRATION=1`` plus a reachable async Supabase client (``SUPABASE_URL``
++ key in the process env). Mirrors the ``E2I_DB_INTEGRATION`` opt-in used by the
+other ``tests/integration`` suites so unit-only CI lanes stay green and never
+touch prod. NO mocks; every row is isolated by a unique tag and torn down
+deterministically in a ``finally`` block.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("E2I_DB_INTEGRATION") != "1",
+    reason=(
+        "E2I_DB_INTEGRATION!=1; integration test requires a real Supabase client "
+        "and explicit opt-in. Run with E2I_DB_INTEGRATION=1 and SUPABASE_URL set."
+    ),
+)
+
+from src.agents.ml_foundation.model_deployer.agent import ModelDeployerAgent  # noqa: E402
+from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (  # noqa: E402
+    _persist_model_registry_row,
+)
+from src.agents.ml_foundation.model_trainer.schemas import MetricsSchema  # noqa: E402
+from src.memory.services.factories import get_async_supabase_client  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_async_supabase_client():
+    """Reset the cached async client so each test builds a fresh one on its OWN
+    event loop. The global cache binds ``httpx.AsyncClient`` to the creating
+    loop; pytest-asyncio's per-test loops would otherwise reuse a client from a
+    closed loop and raise ``RuntimeError: Event loop is closed``. Test-only
+    isolation (prod has one long-lived loop). Mirrors the fixture in
+    ``test_async_supabase_client_realdb.py``.
+    """
+    import src.memory.services.factories as factories
+
+    factories._async_supabase_client = None
+    yield
+    factories._async_supabase_client = None
+
+
+async def _seed_exp_and_run(client, *, mlflow_exp: str, run_id: str, algorithm: str):
+    """Seed a real ml_experiments + ml_training_runs pair; return (exp, run) rows."""
+    exp = (
+        await client.table("ml_experiments")
+        .insert(
+            {
+                "experiment_name": f"f4_829_test_{mlflow_exp}",
+                "prediction_target": "treatment_initiated",
+                "mlflow_experiment_id": mlflow_exp,
+                "created_by": "f4_829_integration_test",
+            }
+        )
+        .execute()
+    ).data[0]
+    run = (
+        await client.table("ml_training_runs")
+        .insert(
+            {
+                "experiment_id": exp["id"],
+                "run_name": f"run_{run_id}",
+                "mlflow_run_id": run_id,
+                "algorithm": algorithm,
+                "hyperparameters": {"max_depth": 5, "n_estimators": 200},
+                "training_samples": 1234,
+                "status": "finished",
+                "is_best_trial": True,
+                "test_metrics": {"auc": 0.8},
+            }
+        )
+        .execute()
+    ).data[0]
+    return exp, run
+
+
+async def _cleanup(
+    client,
+    *,
+    deployment_names=(),
+    registry_ids=(),
+    run_ids=(),
+    exp_ids=(),
+):
+    """Delete child-first to respect FKs. Best-effort; never raises."""
+    for name in deployment_names:
+        try:
+            await client.table("ml_deployments").delete().eq("deployment_name", name).execute()
+        except Exception:
+            pass
+    for rid in registry_ids:
+        try:
+            await client.table("ml_model_registry").delete().eq("id", rid).execute()
+        except Exception:
+            pass
+    for rid in run_ids:
+        try:
+            await client.table("ml_training_runs").delete().eq("id", rid).execute()
+        except Exception:
+            pass
+    for eid in exp_ids:
+        try:
+            await client.table("ml_experiments").delete().eq("id", eid).execute()
+        except Exception:
+            pass
+
+
+async def test_persist_model_registry_row_writes_real_row_and_is_idempotent():
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    mlflow_exp = f"exp_f4test_{tag}"
+    run_id = f"run_f4test_{tag}"
+    model_name = f"f4_829_model_{tag}"
+    registry_ids: list[str] = []
+    exp = run = None
+    try:
+        exp, run = await _seed_exp_and_run(
+            client, mlflow_exp=mlflow_exp, run_id=run_id, algorithm="xgboost"
+        )
+
+        rid = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/{run_id}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=MetricsSchema(
+                roc_auc=0.81, pr_auc=0.42, brier_score=0.15, calibration_slope=0.97
+            ),
+        )
+        assert rid is not None, "registry row must be written and confirmed"
+        registry_ids.append(rid)
+
+        # The row really exists with the experiment FK + the seeded algorithm
+        # (sourced from ml_training_runs, NOT fabricated) + mapped metrics.
+        rows = (
+            await client.table("ml_model_registry").select("*").eq("id", rid).limit(1).execute()
+        ).data
+        assert rows, "registry row must be readable from the DB"
+        row = rows[0]
+        assert row["experiment_id"] == exp["id"]
+        assert row["model_name"] == model_name
+        assert row["algorithm"] == "xgboost"
+        assert row["hyperparameters"] == {"max_depth": 5, "n_estimators": 200}
+        assert float(row["auc"]) == pytest.approx(0.81)
+        assert float(row["pr_auc"]) == pytest.approx(0.42)
+
+        # Idempotent re-run (UNIQUE(model_name, model_version)): same id, one row.
+        rid2 = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/{run_id}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid2 == rid
+        cnt = (
+            await client.table("ml_model_registry")
+            .select("id", count="exact")
+            .eq("model_name", model_name)
+            .execute()
+        ).count
+        assert cnt == 1
+    finally:
+        await _cleanup(
+            client,
+            registry_ids=registry_ids,
+            run_ids=[run["id"]] if run else [],
+            exp_ids=[exp["id"]] if exp else [],
+        )
+
+
+async def test_persist_model_registry_row_fails_closed_on_unresolvable_experiment():
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    model_name = f"f4_829_noexp_{tag}"
+    rid = await _persist_model_registry_row(
+        client,
+        experiment_id_str=f"exp_does_not_exist_{tag}",
+        model_uri="runs:/whatever/model",
+        registered_model_name=model_name,
+        model_version=1,
+        validation_metrics=None,
+    )
+    assert rid is None, "unresolvable experiment must fail closed (no fabricated FK)"
+    # And nothing was written under that model name.
+    cnt = (
+        await client.table("ml_model_registry")
+        .select("id", count="exact")
+        .eq("model_name", model_name)
+        .execute()
+    ).count
+    assert cnt == 0
+
+
+async def test_store_to_database_writes_deployment_and_flips_db_persisted():
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    mlflow_exp = f"exp_f4dep_{tag}"
+    run_id = f"run_f4dep_{tag}"
+    model_name = f"f4_829_depmodel_{tag}"
+    deployment_name = f"f4_829_deploy_{tag}"
+    registry_ids: list[str] = []
+    exp = run = None
+    try:
+        exp, run = await _seed_exp_and_run(
+            client, mlflow_exp=mlflow_exp, run_id=run_id, algorithm="lightgbm"
+        )
+        rid = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/{run_id}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid is not None
+        registry_ids.append(rid)
+
+        agent = ModelDeployerAgent()
+        output: dict = {"deployment_successful": True}
+        state = {
+            "model_registry_id": rid,
+            "deployment_name": deployment_name,
+            "target_environment": "staging",
+            "deployed_by": "f4_829_integration_test",
+            "resources": {"cpu": "2", "memory": "4Gi"},
+        }
+        await agent._store_to_database(output, state)
+
+        assert output.get("db_persisted") is True, (
+            "db_persisted must flip True only after a confirmed ml_deployments write; "
+            f"reason={output.get('db_persist_skipped_reason')!r}"
+        )
+        dep_rows = (
+            await client.table("ml_deployments")
+            .select("*")
+            .eq("deployment_name", deployment_name)
+            .execute()
+        ).data
+        assert len(dep_rows) == 1
+        assert dep_rows[0]["model_registry_id"] == rid
+    finally:
+        await _cleanup(
+            client,
+            deployment_names=[deployment_name],
+            registry_ids=registry_ids,
+            run_ids=[run["id"]] if run else [],
+            exp_ids=[exp["id"]] if exp else [],
+        )
+
+
+def _mlflow_server_reachable(tracking_uri: str) -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{tracking_uri.rstrip('/')}/health", timeout=5) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+async def test_register_model_node_end_to_end_real_mlflow_writes_registry():
+    """GOLD-STANDARD faithful path: log a REAL model to MLflow, drive the REAL
+    ``register_model`` node, and prove it writes a real ``ml_model_registry``
+    row (experiment FK + algorithm sourced from the seeded training run, metrics
+    mapped from validation_metrics) and surfaces ``model_registry_id``.
+
+    Skipped when the local MLflow server is unreachable (environmental); the
+    other tests still cover the DB-persistence path without MLflow.
+    """
+    mlflow = pytest.importorskip("mlflow")
+    pytest.importorskip("mlflow.sklearn")
+    pytest.importorskip("sklearn")
+    np = pytest.importorskip("numpy")
+    from sklearn.linear_model import LogisticRegression
+
+    tracking_uri = "http://localhost:5000"
+    if not _mlflow_server_reachable(tracking_uri):
+        pytest.skip(f"MLflow server not reachable at {tracking_uri}")
+
+    from src.agents.ml_foundation.model_deployer.nodes.registry_manager import register_model
+
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    mlflow_exp = f"exp_node_e2e_{tag}"
+    model_name = f"f4_829_nodee2e_{tag}"
+    registry_ids: list[str] = []
+    exp = run = None
+    try:
+        # 1) Log a real model to MLflow -> runs:/<run_id>/model
+        mlflow.set_tracking_uri(tracking_uri)
+        mlflow.set_experiment(f"f4_829_probe_{tag}")
+        rng = np.random.RandomState(0)
+        X = rng.rand(40, 3)
+        y = (X[:, 0] > 0.5).astype(int)
+        with mlflow.start_run() as mlrun:
+            model = LogisticRegression().fit(X, y)
+            mlflow.sklearn.log_model(model, name="model")
+            run_id = mlrun.info.run_id
+        model_uri = f"runs:/{run_id}/model"
+
+        # 2) Seed the experiment + the training run referenced by run_id
+        exp, run = await _seed_exp_and_run(
+            client, mlflow_exp=mlflow_exp, run_id=run_id, algorithm="logistic_regression"
+        )
+
+        # 3) Drive the REAL node (real MLflow registration)
+        result = await register_model(
+            {
+                "model_uri": model_uri,
+                "experiment_id": mlflow_exp,
+                "deployment_name": model_name,
+                "validation_metrics": {"roc_auc": 0.77, "pr_auc": 0.30},
+            }
+        )
+
+        assert result.get("registration_successful") is True, (
+            "real MLflow registration must succeed"
+        )
+        rid = result.get("model_registry_id")
+        assert rid, "node must surface a real model_registry_id after a real registration"
+        registry_ids.append(rid)
+
+        row = (
+            await client.table("ml_model_registry").select("*").eq("id", rid).limit(1).execute()
+        ).data[0]
+        assert row["experiment_id"] == exp["id"]
+        assert row["algorithm"] == "logistic_regression"
+        assert float(row["auc"]) == pytest.approx(0.77)
+    finally:
+        await _cleanup(
+            client,
+            registry_ids=registry_ids,
+            run_ids=[run["id"]] if run else [],
+            exp_ids=[exp["id"]] if exp else [],
+        )
+        try:
+            from mlflow.tracking import MlflowClient
+
+            MlflowClient(tracking_uri=tracking_uri).delete_registered_model(model_name)
+        except Exception:
+            pass
+
+
+async def test_store_to_database_without_registry_id_is_fail_closed_with_real_client():
+    """A real client present but NO model_registry_id must write nothing and keep
+    db_persisted=False — the client's presence alone never fabricates a row."""
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    deployment_name = f"f4_829_noreg_{tag}"
+    try:
+        agent = ModelDeployerAgent()
+        output: dict = {"deployment_successful": True}
+        state = {
+            "deployment_name": deployment_name,
+            "target_environment": "staging",
+        }
+        await agent._store_to_database(output, state)
+
+        assert output.get("db_persisted") is False
+        assert output.get("db_persist_skipped_reason")
+        cnt = (
+            await client.table("ml_deployments")
+            .select("id", count="exact")
+            .eq("deployment_name", deployment_name)
+            .execute()
+        ).count
+        assert cnt == 0
+    finally:
+        await _cleanup(client, deployment_names=[deployment_name])

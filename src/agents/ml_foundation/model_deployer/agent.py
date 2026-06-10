@@ -348,8 +348,25 @@ class ModelDeployerAgent:
             from src.repositories.deployment import MLDeploymentRepository
             from src.repositories.ml_experiment import MLModelRegistryRepository
 
-            deployment_repo = MLDeploymentRepository()
-            registry_repo = MLModelRegistryRepository()
+            # F4 follow-up (#829): inject a REAL async Supabase client. Built with
+            # no client (the prior code), the repos only ever returned in-memory
+            # fallbacks and wrote 0 rows. ``get_async_supabase_client`` RAISES when
+            # ``SUPABASE_URL`` is unset (CI / offline) — catch it so the deployment
+            # still completes and the #830 "no Supabase client" branch records the
+            # honest ``db_persist_skipped_reason`` (db_persisted=False).
+            client = None
+            try:
+                from src.memory.services.factories import get_async_supabase_client
+
+                client = await get_async_supabase_client()
+            except Exception as client_err:
+                logger.warning(
+                    "Async Supabase client unavailable for deployment persistence: %s",
+                    client_err,
+                )
+
+            deployment_repo = MLDeploymentRepository(supabase_client=client)
+            registry_repo = MLModelRegistryRepository(supabase_client=client)
 
             # Parse model_registry_id from state if available
             model_registry_id: Optional[UUID] = None
