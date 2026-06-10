@@ -12,6 +12,12 @@ numpy>=1.26.0
 pandas>=2.0.0
 scikit-learn>=1.5.0
 
+# Claim-level CSU generator (Shard 10) generation-time causal gates import
+# scipy + statsmodels at module top with NO silent numpy fallback — a missing
+# stats dependency must be a hard ImportError, not a degraded estimator.
+scipy>=1.11.0
+statsmodels>=0.14.0
+
 # tests/conftest.py imports `from dotenv import load_dotenv` at module top,
 # so even the synthetic-only test path needs python-dotenv to import.
 python-dotenv>=1.0.0
