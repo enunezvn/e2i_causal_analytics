@@ -1360,6 +1360,23 @@ async def _execute_learning_cycle(
         # Convert agent output to API response
         total_latency = int((time.time() - start_time) * 1000)
 
+        # #837: state ``applied_updates`` is a list of applied update_id STRINGS
+        # (KnowledgeUpdaterNode); the full update dicts live in
+        # ``proposed_updates`` (``_finalize_training_signal`` does NOT write the
+        # records back into state). Re-hydrate the applied IDs to their proposed
+        # dicts — mirroring ``graph.py`` — so the response's ``applied_updates``
+        # LIST agrees with ``updates_applied``. Feeding the raw strings straight
+        # into ``_convert_updates`` (a dict API) silently produced ``[]`` while
+        # the count stayed ``N`` — a self-contradicting response on the exact
+        # field this path makes real.
+        _proposed_updates = result.get("proposed_updates", []) or []
+        _applied_ids = set(result.get("applied_updates", []) or [])
+        _applied_records = [
+            u
+            for u in _proposed_updates
+            if isinstance(u, dict) and u.get("update_id") in _applied_ids
+        ]
+
         return LearningResponse(
             batch_id="",  # Will be set by caller
             status=LearningStatus.COMPLETED
@@ -1370,8 +1387,8 @@ async def _execute_learning_cycle(
                 result.get("learning_recommendations", [])
             ),
             priority_improvements=result.get("priority_improvements", []),
-            proposed_updates=_convert_updates(result.get("proposed_updates", [])),
-            applied_updates=_convert_updates(result.get("applied_updates", [])),
+            proposed_updates=_convert_updates(_proposed_updates),
+            applied_updates=_convert_updates(_applied_records),
             learning_summary=result.get("learning_summary", ""),
             patterns_detected=len(result.get("detected_patterns", [])),
             recommendations_generated=len(result.get("learning_recommendations", [])),
