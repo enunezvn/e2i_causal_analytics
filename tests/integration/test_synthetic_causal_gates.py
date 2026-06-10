@@ -176,3 +176,22 @@ def test_gate_9_provenance_default_exclude(client):
     # it must return a row (non-None), proving the RPC path is wired, not fabricated.
     trx_rows = _kpi(client, "business_impact_trx", ["Kisqali"])
     assert trx_rows and trx_rows[0].get("trx") is not None, trx_rows
+
+
+# =============================================================================
+# Gate 10 — 4-cohort x 3-brand x agent e2e + 17-agent crash-free smoke
+# =============================================================================
+
+
+def test_gate_10_cohort_brand_agent_e2e(client):
+    from scripts.validate_synthetic_causal import gate_10_cohort_brand_e2e
+
+    res = gate_10_cohort_brand_e2e(client)
+    assert res.ok, res.measured  # measured maps each cell -> {label_rate, ate}
+
+
+def test_other_17_agents_smoke():
+    from scripts.validate_synthetic_causal import _smoke_other_agents
+
+    crashed = _smoke_other_agents()
+    assert not crashed, f"agents crashed on smoke: {crashed}"

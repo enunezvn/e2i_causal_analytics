@@ -529,3 +529,80 @@ def gate_9_provenance(client) -> GateResult:
         "9 PROVENANCE", ok, {"failures": failures, "trx_real_mode": rpc_trx},
         "0 untagged on every taggable table; real KPI excludes synthetic by default",
     )
+
+
+# =============================================================================
+# Gate 10 — 4-cohort x 3-brand x agent e2e + 17-agent crash-free smoke
+# =============================================================================
+COHORTS = ["initiation", "discontinuation", "persistence", "hcp_adoption"]
+BRANDS3 = ["Remibrutinib", "Kisqali", "Fabhalta"]
+
+
+def gate_10_cohort_brand_e2e(client) -> GateResult:
+    import asyncio
+
+    from src.agents.causal_impact.agent import CausalImpactAgent
+
+    measured = {}
+    ok = True
+    for cohort in COHORTS:
+        for brand in BRANDS3:
+            cell = f"{cohort}/{brand}"
+            try:
+                frame, conf = _resolve_synthetic_frame(client, cohort, brand)
+            except AssertionError as e:
+                measured[cell] = f"no-substrate:{e}"
+                ok = False
+                continue
+            rate = float(frame["outcome"].mean())
+            agent_out = asyncio.run(
+                CausalImpactAgent().run(
+                    {
+                        "query": cell,
+                        "treatment_var": "treatment",
+                        "outcome_var": "outcome",
+                        "confounders": conf,
+                        "data_source": "database",  # no seed-42 fall-through
+                        "data": frame,
+                    }
+                )
+            )
+            ate = _extract_ate(agent_out)
+            cell_ok = 0.05 <= rate <= 0.60 and ate is not None
+            measured[cell] = {"label_rate": round(rate, 3), "ate": ate}
+            ok = ok and cell_ok
+    return GateResult(
+        "10 4-COHORT x 3-BRAND x AGENT", ok, measured,
+        "each cell: label 5-60%, runnable var-set, >=1 agent non-empty useful output",
+    )
+
+
+# The 4 named agents proven by gates 5-8, plus causal_impact (gate 3/10's
+# representative) — the smoke covers the REMAINING enabled agents.
+_GATED_AGENTS = {
+    "gap_analyzer",
+    "heterogeneous_optimizer",
+    "prediction_synthesizer",
+    "resource_optimizer",
+    "causal_impact",
+}
+
+
+def _smoke_other_agents() -> list:
+    """Crash-free smoke of the remaining enabled agents (NOT a correctness gate).
+
+    Uses the production factory (src/agents/factory.py) to INSTANTIATE every enabled
+    agent. An agent that fails to construct is a real finding (returned in the crashed
+    list); the factory logs but swallows drops, so we detect them by diffing the
+    enabled-and-selected set against the registry it returns. Construction-level only —
+    we do NOT call .run (no substrate dependency, no heavy compute)."""
+    from src.agents.factory import AGENT_REGISTRY_CONFIG, create_agent_registry
+
+    other = [
+        name
+        for name, cfg in AGENT_REGISTRY_CONFIG.items()
+        if cfg.get("enabled", False) and name not in _GATED_AGENTS
+    ]
+    registry = create_agent_registry(include_agents=other, fail_on_import_error=False)
+    crashed = sorted(set(other) - set(registry.keys()))
+    return crashed
