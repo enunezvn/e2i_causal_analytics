@@ -190,6 +190,52 @@ class TestTimestampGeneration:
         assert dates.min() >= start
         assert dates.max() <= end
 
+    def test_anchor_to_now_never_emits_future_timestamp(self, features_df):
+        """#852: feature_values has a DB CHECK (event_timestamp <= now()). With
+        anchor_to_now the upper bound was end-of-day TODAY (future), so a chunk of
+        rows exceeded now() -> 23514 -> the whole batch failed -> 0 loaded. Every
+        generated timestamp must be <= the wall clock at generation time."""
+        config = GeneratorConfig(
+            n_records=2000,
+            seed=7,
+            anchor_to_now=True,
+            anchor_reference=date.today(),
+        )
+        gen = FeatureValueGenerator(config, features_df=features_df)
+
+        before = datetime.now()
+        df = gen.generate()
+        after = datetime.now()
+
+        timestamps = pd.to_datetime(df["event_timestamp"], format="ISO8601")
+        # No timestamp may exceed the wall clock observed during generation.
+        assert timestamps.max() <= after, (
+            f"future event_timestamp {timestamps.max()} > now {after} violates "
+            "CHECK (event_timestamp <= now())"
+        )
+        # And the window should still reach near 'now' (rolling-window intent intact).
+        assert timestamps.max() >= before - timedelta(days=2)
+
+    def test_anchor_to_future_reference_does_not_invert_range(self, features_df):
+        """#852 follow-up: clamping only `end` to now() for a FUTURE anchor_reference
+        could push start past end (exponential scale < 0 ValueError). Deriving start
+        from the clamped end keeps the span valid and never emits a future timestamp."""
+        config = GeneratorConfig(
+            n_records=500,
+            seed=11,
+            anchor_to_now=True,
+            anchor_reference=date.today() + timedelta(days=400),  # far future
+        )
+        gen = FeatureValueGenerator(config, features_df=features_df)
+
+        # Must not raise (no inverted range) ...
+        df = gen.generate()
+        after = datetime.now()
+        timestamps = pd.to_datetime(df["event_timestamp"], format="ISO8601")
+        # ... and still must not emit any future timestamp.
+        assert timestamps.max() <= after
+        assert len(df) > 0
+
     def test_timestamps_are_iso_format(self, features_df):
         """Test timestamps are in ISO format."""
         config = GeneratorConfig(n_records=100, seed=42)
