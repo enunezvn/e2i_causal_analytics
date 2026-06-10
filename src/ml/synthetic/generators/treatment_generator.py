@@ -145,7 +145,12 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
         # portfolio brands fall back to a neutral antihistamine bundle so a row never
         # emits a mismatched indication.
         drug_ndc, drug_name, drug_class, primary_dx, event_subtype, icd_codes = (
-            [], [], [], [], [], []
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
         )
         for b in brands[:n_actual]:
             try:

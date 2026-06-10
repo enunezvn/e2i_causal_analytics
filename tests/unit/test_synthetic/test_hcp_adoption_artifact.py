@@ -1,5 +1,6 @@
 """HCP adoption CAUSAL cohort: treatment arm + exogenous centrality -> adoption,
 leak-safe, in-band, with a recoverable per-HCP CATE artifact."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -15,9 +16,17 @@ from src.ml.synthetic.generators.hcp_adoption_artifact import (
 
 def test_adoption_frame_shape_and_band():
     df = generate_hcp_adoption_frame(seed=3, n_hcps=4000, brand="Kisqali")
-    assert {"hcp_id", "entity_type", "centrality_score",
-            "influence_network_size", "treatment_arm", "hcp_segment",
-            "adoption_category", "cate_estimate", "is_synthetic"} <= set(df.columns)
+    assert {
+        "hcp_id",
+        "entity_type",
+        "centrality_score",
+        "influence_network_size",
+        "treatment_arm",
+        "hcp_segment",
+        "adoption_category",
+        "cate_estimate",
+        "is_synthetic",
+    } <= set(df.columns)
     assert (df["entity_type"] == "optum_hcp").all()
     assert df["adoption_category"].isin([ADOPTER_VALUE, "NON_ADOPTER"]).all()
     adopted = (df["adoption_category"] == ADOPTER_VALUE).astype(int)
@@ -45,8 +54,7 @@ def test_centrality_drives_adoption_not_reverse():
 
 def test_no_leaky_columns_present():
     df = generate_hcp_adoption_frame(seed=3, n_hcps=1000, brand="Fabhalta")
-    for leak in ("days_to_first", "first_adoption_dt", "adopter_rank",
-                 "adoption_cumulative_share"):
+    for leak in ("days_to_first", "first_adoption_dt", "adopter_rank", "adoption_cumulative_share"):
         assert leak not in df.columns
 
 
@@ -55,9 +63,7 @@ def test_hcp_generator_emits_adoption_cohort_columns():
     from src.ml.synthetic.generators.base import GeneratorConfig
     from src.ml.synthetic.generators.hcp_generator import HCPGenerator
 
-    df = HCPGenerator(
-        GeneratorConfig(seed=4, n_records=2000, brand=Brand.KISQALI)
-    ).generate()
+    df = HCPGenerator(GeneratorConfig(seed=4, n_records=2000, brand=Brand.KISQALI)).generate()
     for c in ("peer_influence_score", "influence_network_size", "adoption_category"):
         assert c in df.columns
     assert df["adoption_category"].isin([ADOPTER_VALUE, "NON_ADOPTER"]).all()

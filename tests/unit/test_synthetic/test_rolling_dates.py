@@ -6,9 +6,7 @@ from src.ml.synthetic.generators.patient_generator import PatientGenerator
 
 def test_anchor_to_now_pulls_max_date_within_30d_and_bulk_recent():
     ref = date(2026, 6, 9)
-    cfg = GeneratorConfig(
-        seed=7, n_records=500, anchor_to_now=True, anchor_reference=ref
-    )
+    cfg = GeneratorConfig(seed=7, n_records=500, anchor_to_now=True, anchor_reference=ref)
     df = PatientGenerator(cfg).generate()
     dates = df["journey_start_date"].map(date.fromisoformat)
     assert dates.max() <= ref
@@ -19,12 +17,14 @@ def test_anchor_to_now_pulls_max_date_within_30d_and_bulk_recent():
 
 def test_anchor_regenerates_per_run_on_later_reference():
     early = PatientGenerator(
-        GeneratorConfig(seed=7, n_records=200, anchor_to_now=True,
-                        anchor_reference=date(2026, 6, 9))
+        GeneratorConfig(
+            seed=7, n_records=200, anchor_to_now=True, anchor_reference=date(2026, 6, 9)
+        )
     ).generate()
     later = PatientGenerator(
-        GeneratorConfig(seed=7, n_records=200, anchor_to_now=True,
-                        anchor_reference=date(2026, 9, 1))
+        GeneratorConfig(
+            seed=7, n_records=200, anchor_to_now=True, anchor_reference=date(2026, 9, 1)
+        )
     ).generate()
     e_max = early["journey_start_date"].map(date.fromisoformat).max()
     l_max = later["journey_start_date"].map(date.fromisoformat).max()

@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
+
 import pandas as pd
-from src.ml.synthetic.config import DGPType
+
 from scripts.load_synthetic_data import SMALL_SIZES, generate_datasets, write_parquet_snapshots
+from src.ml.synthetic.config import DGPType
 
 
 def test_writes_one_parquet_per_table_plus_manifest(tmp_path):

@@ -11,11 +11,22 @@ pytestmark = pytest.mark.skipif(
 
 def _enum_labels(type_name: str) -> set[str]:
     out = subprocess.run(
-        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres",
-         "-tAc",
-         "SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid "
-         f"WHERE t.typname='{type_name}';"],
-        capture_output=True, text=True, check=True,
+        [
+            "docker",
+            "exec",
+            "supabase-db",
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-tAc",
+            "SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid "
+            f"WHERE t.typname='{type_name}';",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return set(out.stdout.split())
 

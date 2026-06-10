@@ -11,9 +11,14 @@ pytestmark = pytest.mark.skipif(
 # KPI views that read a taggable table and must default-exclude synthetic rows
 # (codex Shard-01 HIGH: view-backed KPIs bypass the migration-066 FROM/JOIN rewrite).
 PATCHED_VIEWS = [
-    "v_patient_eligibility", "v_kpi_active_users", "v_kpi_intent_to_prescribe",
-    "v_kpi_data_lag", "v_kpi_cross_source_match", "v_kpi_stacking_lift",
-    "v_kpi_time_to_release", "v_kpi_change_fail_rate",
+    "v_patient_eligibility",
+    "v_kpi_active_users",
+    "v_kpi_intent_to_prescribe",
+    "v_kpi_data_lag",
+    "v_kpi_cross_source_match",
+    "v_kpi_stacking_lift",
+    "v_kpi_time_to_release",
+    "v_kpi_change_fail_rate",
 ]
 
 # view-backed tables M1 missed; needed so Shard 09's synthetic loads are excludable.
@@ -23,7 +28,9 @@ NEW_TAGGED_TABLES = ["data_source_tracking", "etl_pipeline_metrics", "ml_annotat
 def _psql(sql: str) -> str:
     out = subprocess.run(
         ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return out.stdout.strip()
 
@@ -31,8 +38,7 @@ def _psql(sql: str) -> str:
 def test_every_kpi_view_default_excludes_synthetic():
     for v in PATCHED_VIEWS:
         defn = _psql(
-            "SELECT definition FROM pg_views WHERE schemaname='public' "
-            f"AND viewname='{v}';"
+            f"SELECT definition FROM pg_views WHERE schemaname='public' AND viewname='{v}';"
         )
         assert defn, f"{v} missing"
         assert "is_synthetic = false" in defn, f"{v} does not default-exclude synthetic"

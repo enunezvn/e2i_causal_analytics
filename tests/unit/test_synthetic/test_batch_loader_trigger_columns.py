@@ -4,6 +4,7 @@ columns must stay in the loader allowlist, or the loader strips them at load
 
 These were registered by Shard 02; this test locks them so a future edit cannot
 silently drop brand_id (the INDEX "loader silently drops columns" landmine)."""
+
 from src.ml.synthetic.loaders.batch_loader import TABLE_COLUMNS
 
 

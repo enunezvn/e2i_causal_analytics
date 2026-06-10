@@ -18,6 +18,7 @@ Sign convention (resource_optimizer-safe): treatment LOWERS discontinuation
 (src/agents/resource_optimizer/nodes/problem_formulator.py, which appends an error
 on expected_response < 0) never rejects this cohort.
 """
+
 from __future__ import annotations
 
 from typing import Dict
@@ -66,9 +67,7 @@ def generate_discontinuation_outcomes(
             Kisqali probe differs from a Remibrutinib probe (INDEX CATE-by-brand).
     """
     n = len(treatment_arm)
-    seg_treat = np.array(
-        [_DISC_TREATMENT_LOGIT.get(str(s), -0.70) for s in segment], dtype=float
-    )
+    seg_treat = np.array([_DISC_TREATMENT_LOGIT.get(str(s), -0.70) for s in segment], dtype=float)
     logit = (
         _DISC_INTERCEPT
         + brand_cate_scale * seg_treat * treatment_arm
@@ -81,9 +80,7 @@ def generate_discontinuation_outcomes(
     persistent = 1 - discontinued
     # Non-negative retention benefit: scales with severity (high-severity persisters
     # are the most valuable to retain) and is ALWAYS >= 0.
-    retention_benefit = (
-        PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * disease_severity * persistent
-    )
+    retention_benefit = PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * disease_severity * persistent
     return {
         "discontinued_180d": discontinued,
         "persistent_180d": persistent,

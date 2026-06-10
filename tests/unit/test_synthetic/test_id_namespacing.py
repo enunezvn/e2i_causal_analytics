@@ -1,6 +1,7 @@
 """Synthetic entity ids must be namespaceable so a validation dataset never
 collides with (and UPSERT-clobbers) the existing dev baseline. Ids must also fit
 the varchar(20) id columns."""
+
 from src.ml.synthetic.generators import GeneratorConfig, HCPGenerator, PatientGenerator
 
 

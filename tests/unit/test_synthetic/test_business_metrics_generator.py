@@ -445,7 +445,9 @@ class TestMetricNameContract:
         # not business_metrics.metric_name filters.
         df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()
         present = set(df["metric_name"].unique())
-        assert present <= GAP_KEYS, f"unexpected non-connector metric_name rows: {present - GAP_KEYS}"
+        assert present <= GAP_KEYS, (
+            f"unexpected non-connector metric_name rows: {present - GAP_KEYS}"
+        )
 
     def test_value_and_target_nonnull_and_differ(self):
         df = BusinessMetricsGenerator(GeneratorConfig(n_records=2000, seed=42)).generate()

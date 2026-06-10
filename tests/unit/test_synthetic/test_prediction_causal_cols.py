@@ -1,7 +1,10 @@
 """ml_predictions must carry the 3 causal columns and they must be loader-registered."""
-import pandas as pd
+
 from src.ml.synthetic.generators import (
-    GeneratorConfig, HCPGenerator, PatientGenerator, PredictionGenerator,
+    GeneratorConfig,
+    HCPGenerator,
+    PatientGenerator,
+    PredictionGenerator,
 )
 from src.ml.synthetic.loaders import TABLE_COLUMNS
 

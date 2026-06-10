@@ -845,9 +845,7 @@ class BatchLoader:
             # nullable analytical/enrichment columns in OPTIONAL_COLUMNS (stamped by
             # order-independent enrichment passes or populated for a subset of rows).
             critical_missing = [
-                c
-                for c in missing_columns
-                if not c.endswith("_split") and c not in OPTIONAL_COLUMNS
+                c for c in missing_columns if not c.endswith("_split") and c not in OPTIONAL_COLUMNS
             ]
             if critical_missing:
                 errors.append(f"{table_name}: Missing columns {critical_missing}")

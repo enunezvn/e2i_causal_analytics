@@ -8,6 +8,7 @@ expose the scalar `primary_diagnosis_code` on the generator frame for Shard 05/0
 joins + these tests, and intentionally do NOT register the scalar (registering it
 would make the loader send it -> 42703 undefined_column on insert).
 """
+
 import pandas as pd
 
 from src.ml.synthetic.config import Brand
@@ -43,9 +44,7 @@ def test_treatment_events_carry_brand_correct_codes():
 
 def test_remi_and_fabhalta_get_distinct_indications():
     cfg = GeneratorConfig(seed=3, n_records=60)
-    remi = TreatmentGenerator(
-        cfg, patient_df=_patients(Brand.REMIBRUTINIB.value)
-    ).generate()
+    remi = TreatmentGenerator(cfg, patient_df=_patients(Brand.REMIBRUTINIB.value)).generate()
     fab = TreatmentGenerator(cfg, patient_df=_patients(Brand.FABHALTA.value)).generate()
     assert (remi["drug_class"] == "BTK Inhibitor").all()
     assert remi["primary_diagnosis_code"].str.startswith("L50").all()

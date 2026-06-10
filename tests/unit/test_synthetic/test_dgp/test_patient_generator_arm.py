@@ -1,4 +1,5 @@
 """Task 03.4 — wire treatment arm + per-unit tau into patient_journeys + ml_predictions."""
+
 import numpy as np
 
 from src.ml.synthetic.config import Brand, DGPType
@@ -41,9 +42,7 @@ def test_predictions_inherit_causal_cols():
         seed=11, n_records=300, brand=Brand.KISQALI, dgp_type=DGPType.HETEROGENEOUS
     )
     pdf = PatientGenerator(cfg).generate()
-    preds = PredictionGenerator(
-        GeneratorConfig(seed=11, n_records=300), patient_df=pdf
-    ).generate()
+    preds = PredictionGenerator(GeneratorConfig(seed=11, n_records=300), patient_df=pdf).generate()
     for col in ("treatment_effect_estimate", "heterogeneous_effect", "segment_assignment"):
         assert col in preds.columns
     assert preds["heterogeneous_effect"].notna().all()

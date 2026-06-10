@@ -27,6 +27,7 @@ do not encode the label.
 The _compute_adoption core is SHARED with hcp_generator (which populates the
 hcp_profiles DB grain) so both grains use the identical DGP (single SSOT).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -69,7 +70,8 @@ def _compute_adoption(
     (hcp_profiles grain) so the two grains share one DGP."""
     n = len(centrality_z)
     hcp_segment = np.where(
-        centrality_z > 0.5, "high_influence",
+        centrality_z > 0.5,
+        "high_influence",
         np.where(centrality_z > -0.5, "medium_influence", "low_influence"),
     )
     # treatment_arm ~ rep/trigger engagement intensity, CONFOUNDED by centrality
@@ -78,9 +80,7 @@ def _compute_adoption(
     treatment_arm = (rng.random(n) < p_treat).astype(int)
 
     scale = _BRAND_ADOPT_SCALE.get(brand, 1.0)
-    seg_treat = np.array(
-        [_ADOPT_TREATMENT_LOGIT[s] for s in hcp_segment], dtype=float
-    )
+    seg_treat = np.array([_ADOPT_TREATMENT_LOGIT[s] for s in hcp_segment], dtype=float)
     logit = (
         _ADOPT_INTERCEPT
         + _ADOPT_CENTRALITY_SLOPE * centrality_z
@@ -117,9 +117,7 @@ def generate_hcp_adoption_frame(*, seed: int, n_hcps: int, brand: str) -> pd.Dat
             "influence_network_size": network_size.round().astype(int),
             "hcp_segment": dgp["hcp_segment"],
             "treatment_arm": dgp["treatment_arm"],
-            "adoption_category": np.where(
-                adopted == 1, ADOPTER_VALUE, _NON_ADOPTER_VALUE
-            ),
+            "adoption_category": np.where(adopted == 1, ADOPTER_VALUE, _NON_ADOPTER_VALUE),
             "cate_estimate": dgp["cate_estimate"],
             "is_synthetic": True,
         }

@@ -1,6 +1,7 @@
 """Shard 05 Task 3 (regression lock) — triggers.brand_id must be an EXACT brand_type
 enum label. kisqali_oncologist_reach (migration 044) filters `t.brand_id = 'Kisqali'`
 with no ::text cast, so a wrong literal silently reads 0."""
+
 import pandas as pd
 
 from src.ml.synthetic.config import Brand

@@ -2,6 +2,7 @@
 conversion lift (accepted-arm minus rejected-arm, +10-20pp) so the conversion KPI
 is non-degenerate. The frame/registry COMPUTES the realized rate; the generator only
 seeds the data."""
+
 import pandas as pd
 
 from src.ml.synthetic.generators.base import GeneratorConfig
@@ -45,8 +46,8 @@ def test_accepted_minus_rejected_lift_matches_design():
     # dilute the lift back down — is the Task 5 DB gate, not this unit test.
     # Mechanism lower bound anchored to the fixed-seed injected-only lift (~0.30), so a
     # mechanism regression (e.g. 0.30 -> 0.10) FAILS rather than slipping past a loose 0.08.
-    assert lift > 0.20, lift          # strong sign-stable injected-only lift
-    assert lift < 0.40, lift          # bounded — not a degenerate all-accepted artifact
+    assert lift > 0.20, lift  # strong sign-stable injected-only lift
+    assert lift < 0.40, lift  # bounded — not a degenerate all-accepted artifact
     assert DESIGNED_CONVERSION_LIFT == 0.15  # the seed constant is the documented target
 
 

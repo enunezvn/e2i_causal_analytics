@@ -4,6 +4,7 @@ The cheapest-disproof made permanent: generate one (cohort,brand) frame, recover
 TRUE_ATE with LinearDML, recover per-segment CATE ordering with CausalForestDML,
 and prove the propensity is estimable with both arms populated. In-process, no DB.
 """
+
 import pytest
 
 from src.ml.synthetic.config import Brand, DGPType

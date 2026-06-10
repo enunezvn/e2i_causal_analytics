@@ -7,6 +7,7 @@ Gated E2I_DB_INTEGRATION=1, -n0. Mirrors the Shard-04 gate's subprocess + docker
 psql pattern. Migrations 044/050/051 are already applied (verified in schema_migrations).
 The KPI registry default-excludes synthetic (Shard 01 M4), so the action-uplift RPC uses
 the *_include_synthetic twin to see the synthetic data."""
+
 import os
 import subprocess
 import sys
@@ -15,9 +16,7 @@ from pathlib import Path
 import pytest
 
 pytestmark = [
-    pytest.mark.skipif(
-        os.getenv("E2I_DB_INTEGRATION") != "1", reason="faithful DB only"
-    ),
+    pytest.mark.skipif(os.getenv("E2I_DB_INTEGRATION") != "1", reason="faithful DB only"),
     pytest.mark.timeout(600),
 ]
 
@@ -26,8 +25,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def _psql(sql: str) -> str:
     return subprocess.check_output(
-        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d",
-         "postgres", "-tAc", sql],
+        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
         text=True,
     ).strip()
 
@@ -36,12 +34,18 @@ def _psql(sql: str) -> str:
 def _anchored_load():
     proc = subprocess.run(
         [sys.executable, "scripts/load_synthetic_data.py", "--small", "--anchor-to-now"],
-        cwd=REPO, capture_output=True, text=True, timeout=600,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=600,
         env={**os.environ, "LOKY_MAX_CPU_COUNT": "1"},
     )
     if "permission denied" in (proc.stdout + proc.stderr):
         pytest.skip("loader write path not authorized here (permission denied / 42501)")
-    if int(_psql("SELECT count(*) FROM treatment_events WHERE treatment_event_id LIKE '%trxc%';")) == 0:
+    if (
+        int(_psql("SELECT count(*) FROM treatment_events WHERE treatment_event_id LIKE '%trxc%';"))
+        == 0
+    ):
         pytest.skip("no injected conversion prescriptions loaded here")
     yield
 

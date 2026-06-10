@@ -233,7 +233,10 @@ def resolve_cohort_frame(
     if data_source:
         return _resolve_via_data_source(brand, region, data_source)
     return _resolve_via_patient_journeys(
-        brand, region, supabase_client=supabase_client, limit=limit,
+        brand,
+        region,
+        supabase_client=supabase_client,
+        limit=limit,
         include_synthetic=include_synthetic,
     )
 
@@ -254,12 +257,21 @@ class CohortOutcomeSpec:
 # DIFFERENT grain (hcp_profiles) below. Cohort is resolved by OUTCOME COLUMN — there is
 # no stored `cohort` column.
 _PJ_COHORTS = {
-    "initiation": ("treatment_initiated", "treatment_arm",
-                   ["disease_severity", "academic_hcp", "geographic_region"]),
-    "discontinuation": ("discontinued_180d", "treatment_arm",
-                        ["disease_severity", "academic_hcp", "geographic_region"]),
-    "persistence": ("persistent_180d", "treatment_arm",
-                    ["disease_severity", "academic_hcp", "geographic_region"]),
+    "initiation": (
+        "treatment_initiated",
+        "treatment_arm",
+        ["disease_severity", "academic_hcp", "geographic_region"],
+    ),
+    "discontinuation": (
+        "discontinued_180d",
+        "treatment_arm",
+        ["disease_severity", "academic_hcp", "geographic_region"],
+    ),
+    "persistence": (
+        "persistent_180d",
+        "treatment_arm",
+        ["disease_severity", "academic_hcp", "geographic_region"],
+    ),
 }
 
 
@@ -281,7 +293,10 @@ def resolve_cohort_outcome_frame(
     key = str(cohort).strip().lower()
     if key == "hcp_adoption":
         return _resolve_hcp_adoption(
-            brand, region, supabase_client=supabase_client, limit=limit,
+            brand,
+            region,
+            supabase_client=supabase_client,
+            limit=limit,
             include_synthetic=include_synthetic,
         )
     if key not in _PJ_COHORTS:
@@ -289,18 +304,16 @@ def resolve_cohort_outcome_frame(
         return None
     outcome, treatment, covars = _PJ_COHORTS[key]
     df = _resolve_via_patient_journeys(
-        brand, region, supabase_client=supabase_client, limit=limit,
+        brand,
+        region,
+        supabase_client=supabase_client,
+        limit=limit,
         include_synthetic=include_synthetic,
     )
     # Fail closed if the outcome or the canonical treatment_arm is absent (e.g. M2 not
     # applied / Shard-03 arm not populated) — never hand back a frame missing its
     # treatment column.
-    if (
-        df is None
-        or df.empty
-        or outcome not in df.columns
-        or treatment not in df.columns
-    ):
+    if df is None or df.empty or outcome not in df.columns or treatment not in df.columns:
         return None
     df = df[df[outcome].notna()].copy()
     if df.empty:
@@ -312,9 +325,9 @@ def resolve_cohort_outcome_frame(
     # persistent_180d. Only materializes when persistent_180d is populated (synthetic);
     # real rows have NULL persistent_180d and are dropped above, so the synthetic-DGP
     # constant never touches a real cohort.
-    if key in ("discontinuation", "persistence") and {
-        "disease_severity", "persistent_180d"
-    } <= set(df.columns):
+    if key in ("discontinuation", "persistence") and {"disease_severity", "persistent_180d"} <= set(
+        df.columns
+    ):
         from src.ml.synthetic.generators.cohort_outcomes import (
             PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY,
         )
@@ -326,13 +339,15 @@ def resolve_cohort_outcome_frame(
         # never sees a NaN/negative expected_response.
         sev = pd.to_numeric(df["disease_severity"], errors="coerce").fillna(0.0)
         pers = pd.to_numeric(df["persistent_180d"], errors="coerce").fillna(0.0)
-        df["retention_benefit"] = (
-            PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * sev * pers
-        ).clip(lower=0.0)
+        df["retention_benefit"] = (PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY * sev * pers).clip(
+            lower=0.0
+        )
         present_covars = present_covars + ["retention_benefit"]
     return CohortOutcomeSpec(
-        cohort=key, frame=df.reset_index(drop=True),
-        outcome_column=outcome, treatment_column=treatment,
+        cohort=key,
+        frame=df.reset_index(drop=True),
+        outcome_column=outcome,
+        treatment_column=treatment,
         covariate_columns=present_covars,
     )
 
@@ -365,8 +380,7 @@ def _resolve_hcp_adoption(
         return None
     client = supabase_client if supabase_client is not None else _default_client()
     q = client.table("hcp_profiles").select(
-        "hcp_id,peer_influence_score,influence_network_size,"
-        "adoption_category,geographic_region"
+        "hcp_id,peer_influence_score,influence_network_size,adoption_category,geographic_region"
     )
     # NOTE: hcp_profiles has NO `brand` column (HCPs are not brand-partitioned at this
     # grain — the per-brand CATE lives in the Shard-06.3 parquet artifact). We VALIDATE
@@ -398,12 +412,11 @@ def _resolve_hcp_adoption(
     if df.empty:
         return None
     # Binary helper for estimators; the canonical OUTCOME column stays adoption_category.
-    df["adopted"] = (
-        df["adoption_category"].astype(str).str.upper() == "ADOPTER"
-    ).astype(int)
+    df["adopted"] = (df["adoption_category"].astype(str).str.upper() == "ADOPTER").astype(int)
     covars = [c for c in ("influence_network_size",) if c in df.columns]
     return CohortOutcomeSpec(
-        cohort="hcp_adoption", frame=df.reset_index(drop=True),
+        cohort="hcp_adoption",
+        frame=df.reset_index(drop=True),
         outcome_column="adoption_category",
         treatment_column="peer_influence_score",
         covariate_columns=covars,

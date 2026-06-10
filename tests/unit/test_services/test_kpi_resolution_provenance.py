@@ -1,6 +1,7 @@
 """Shard 07 R10: kpi_resolution._fetch_df default-excludes is_synthetic on taggable
 tables (treatment_events/triggers/hcp_profiles), opts in on include_synthetic=True, and
 never adds the predicate on a non-taggable table (no 42703)."""
+
 from src.services import kpi_resolution as kr
 
 

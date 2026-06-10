@@ -108,9 +108,7 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
             self.config.brand.value if self.config.brand else Brand.REMIBRUTINIB.value
         )
         _adopt = _compute_adoption(self._rng, centrality_z, _brand_for_scale)
-        adoption_category = np.where(
-            _adopt["adopted"] == 1, ADOPTER_VALUE, "NON_ADOPTER"
-        )
+        adoption_category = np.where(_adopt["adopted"] == 1, ADOPTER_VALUE, "NON_ADOPTER")
 
         # Generate base data
         df = pd.DataFrame(

@@ -1,4 +1,5 @@
 """Task 03.3 — prevalence-banded binary outcome carrying per-segment CATE."""
+
 import numpy as np
 
 from src.ml.synthetic.config import Brand

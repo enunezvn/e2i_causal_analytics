@@ -5,6 +5,7 @@ Gated E2I_DB_INTEGRATION=1, -n0. A module fixture loads --small --anchor-to-now 
 so disc/persist + hcp_profiles adoption are populated, then the resolver is exercised
 against the live DB via the production supabase client.
 """
+
 from __future__ import annotations
 
 import os
@@ -17,9 +18,7 @@ import pytest
 from src.services import cohort_resolution as cr
 
 pytestmark = [
-    pytest.mark.skipif(
-        os.getenv("E2I_DB_INTEGRATION") != "1", reason="faithful DB only"
-    ),
+    pytest.mark.skipif(os.getenv("E2I_DB_INTEGRATION") != "1", reason="faithful DB only"),
     pytest.mark.timeout(600),
 ]
 
@@ -30,8 +29,7 @@ _PJ_COHORTS = ["initiation", "discontinuation", "persistence"]
 
 def _psql(sql: str) -> str:
     return subprocess.check_output(
-        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d",
-         "postgres", "-tAc", sql],
+        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
         text=True,
     ).strip()
 
@@ -40,12 +38,22 @@ def _psql(sql: str) -> str:
 def _loaded():
     proc = subprocess.run(
         [sys.executable, "scripts/load_synthetic_data.py", "--small", "--anchor-to-now"],
-        cwd=REPO, capture_output=True, text=True, timeout=600,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=600,
         env={**os.environ, "LOKY_MAX_CPU_COUNT": "1"},
     )
     if "permission denied" in (proc.stdout + proc.stderr):
         pytest.skip("loader write path not authorized here (permission denied / 42501)")
-    if int(_psql("SELECT count(*) FROM patient_journeys WHERE is_synthetic AND discontinued_180d IS NOT NULL;")) == 0:
+    if (
+        int(
+            _psql(
+                "SELECT count(*) FROM patient_journeys WHERE is_synthetic AND discontinued_180d IS NOT NULL;"
+            )
+        )
+        == 0
+    ):
         pytest.skip("disc/persist not populated here")
     yield
 
@@ -57,9 +65,7 @@ def test_pj_cohort_band_and_varset(brand, cohort):
     # resolver default-excludes synthetic, so the validation path must opt in to see
     # the synthetic substrate it is verifying. The is_synthetic-subset filter below
     # still isolates the synthetic rows from the legacy untagged seed.
-    spec = cr.resolve_cohort_outcome_frame(
-        cohort, brand=brand, region=None, include_synthetic=True
-    )
+    spec = cr.resolve_cohort_outcome_frame(cohort, brand=brand, region=None, include_synthetic=True)
     assert spec is not None, f"{cohort}/{brand} resolved None"
     assert not spec.frame.empty
     # Measure the SYNTHETIC cohort's prevalence. The dev DB also carries legacy

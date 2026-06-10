@@ -1,6 +1,7 @@
 """Every synthetic dataset must be stamped is_synthetic=True before load."""
-from src.ml.synthetic.config import DGPType
+
 from scripts.load_synthetic_data import SMALL_SIZES, generate_datasets
+from src.ml.synthetic.config import DGPType
 
 
 def test_all_datasets_stamped_is_synthetic():

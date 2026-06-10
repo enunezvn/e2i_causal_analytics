@@ -344,8 +344,15 @@ def _resolve_brand_canonical(
 # Tables this module reads that carry the is_synthetic provenance column (Shard 01).
 # A read on one of these default-excludes synthetic rows unless the caller opts in.
 _PROVENANCE_TAGGABLE = frozenset(
-    {"triggers", "treatment_events", "hcp_profiles", "patient_journeys",
-     "business_metrics", "ml_predictions", "episodic_memories"}
+    {
+        "triggers",
+        "treatment_events",
+        "hcp_profiles",
+        "patient_journeys",
+        "business_metrics",
+        "ml_predictions",
+        "episodic_memories",
+    }
 )
 
 
@@ -403,7 +410,9 @@ def _build_conversion_frame(
         return None
 
     hcp_regions = _fetch_df(
-        client, "hcp_profiles", "hcp_id,geographic_region",
+        client,
+        "hcp_profiles",
+        "hcp_id,geographic_region",
         include_synthetic=include_synthetic,
     )
 
@@ -436,8 +445,11 @@ def _build_conversion_frame(
             return None
 
     events = _fetch_df(
-        client, "treatment_events", "patient_id,event_date,event_type,brand",
-        brand=brand_canonical, include_synthetic=include_synthetic,
+        client,
+        "treatment_events",
+        "patient_id,event_date,event_type,brand",
+        brand=brand_canonical,
+        include_synthetic=include_synthetic,
     )
 
     # No silent caps: if any source fetch (incl. the brand distinct-scan) hit the
@@ -508,6 +520,9 @@ def resolve_kpi_frame(
         )
         return None
     return builder(
-        brand, region, supabase_client=supabase_client,
-        window_days=window_days, include_synthetic=include_synthetic,
+        brand,
+        region,
+        supabase_client=supabase_client,
+        window_days=window_days,
+        include_synthetic=include_synthetic,
     )

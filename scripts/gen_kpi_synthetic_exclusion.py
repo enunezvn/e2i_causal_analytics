@@ -7,33 +7,73 @@ Deterministic subquery-wrap transform: each `FROM/JOIN <taggable> [alias]` becom
 Using the table name as the subquery alias when none is given preserves every
 qualified (`te.col` / `treatment_events.col`) and unqualified column reference.
 """
+
 import json
 import re
 import subprocess
 import sys
 
 TAGGABLE = [
-    "triggers", "business_metrics", "ml_predictions", "agent_activities",
-    "causal_paths", "patient_journeys", "treatment_events", "hcp_profiles",
-    "user_sessions", "hcp_intent_surveys", "episodic_memories",
+    "triggers",
+    "business_metrics",
+    "ml_predictions",
+    "agent_activities",
+    "causal_paths",
+    "patient_journeys",
+    "treatment_events",
+    "hcp_profiles",
+    "user_sessions",
+    "hcp_intent_surveys",
+    "episodic_memories",
     "ab_experiment_assignments",
 ]
 
 KEYWORDS = {
-    "where", "group", "order", "inner", "left", "right", "full", "cross",
-    "join", "on", "using", "limit", "union", "except", "intersect", "having",
-    "window", "offset", "fetch", "for", "returning", "as", "natural",
+    "where",
+    "group",
+    "order",
+    "inner",
+    "left",
+    "right",
+    "full",
+    "cross",
+    "join",
+    "on",
+    "using",
+    "limit",
+    "union",
+    "except",
+    "intersect",
+    "having",
+    "window",
+    "offset",
+    "fetch",
+    "for",
+    "returning",
+    "as",
+    "natural",
 }
 
 
 def dump_registry():
     out = subprocess.run(
-        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres",
-         "-tAc",
-         "SELECT coalesce(json_agg(json_build_object("
-         "'query_id', query_id, 'sql', sql, 'max_params', max_params)), '[]') "
-         "FROM kpi_query_registry;"],
-        capture_output=True, text=True, check=True,
+        [
+            "docker",
+            "exec",
+            "supabase-db",
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-tAc",
+            "SELECT coalesce(json_agg(json_build_object("
+            "'query_id', query_id, 'sql', sql, 'max_params', max_params)), '[]') "
+            "FROM kpi_query_registry;",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return {r["query_id"]: r for r in json.loads(out.stdout)}
 
@@ -41,7 +81,8 @@ def dump_registry():
 def wrap_table(sql: str, table: str) -> tuple[str, bool]:
     """Wrap each FROM/JOIN <table> [alias] with a synthetic-excluding subquery."""
     pattern = re.compile(
-        r"\b(FROM|JOIN)\s+(?:public\.)?" + re.escape(table)
+        r"\b(FROM|JOIN)\s+(?:public\.)?"
+        + re.escape(table)
         + r"\b(\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?",
         re.IGNORECASE,
     )
@@ -62,18 +103,18 @@ def wrap_table(sql: str, table: str) -> tuple[str, bool]:
     return pattern.sub(repl, sql), changed
 
 
-_UNWRAP = re.compile(
-    r"\(SELECT \* FROM (?:public\.)?(\w+) WHERE is_synthetic = false\)(\s+)(\w+)"
-)
+_UNWRAP = re.compile(r"\(SELECT \* FROM (?:public\.)?(\w+) WHERE is_synthetic = false\)(\s+)(\w+)")
 
 
 def unwrap(sql: str) -> str:
     """Reverse a prior subquery-wrap so the generator is idempotent (self-heals a
     registry that was already wrapped, even multiply/nested). Iterates to a
     fixpoint: a double-wrap collapses to single on pass 1, to pristine on pass 2."""
+
     def r(m):
         table, ws, alias = m.group(1), m.group(2), m.group(3)
         return table if alias == table else f"{table}{ws}{alias}"
+
     prev = None
     while prev != sql:
         prev, sql = sql, _UNWRAP.sub(r, sql)
@@ -108,8 +149,11 @@ def main():
     def fmt(rows):
         parts = []
         for qid, sql, mp in rows:
-            note = "M4: default-exclude synthetic" if not qid.endswith("_include_synthetic") \
+            note = (
+                "M4: default-exclude synthetic"
+                if not qid.endswith("_include_synthetic")
                 else "M4 opt-in: INCLUDES synthetic (validation runs only)"
+            )
             parts.append(f"    ('{qid}', $kpi${sql}$kpi$, {mp}, $note${note}$note$)")
         return ",\n".join(parts)
 
@@ -130,11 +174,11 @@ def main():
         + "INSERT INTO public.kpi_query_registry (query_id, sql, max_params, note) VALUES\n"
         + fmt(base_rows)
         + "\nON CONFLICT (query_id) DO UPDATE SET sql = EXCLUDED.sql, "
-          "max_params = EXCLUDED.max_params, note = EXCLUDED.note;\n\n"
+        "max_params = EXCLUDED.max_params, note = EXCLUDED.note;\n\n"
         + "INSERT INTO public.kpi_query_registry (query_id, sql, max_params, note) VALUES\n"
         + fmt(optin_rows)
         + "\nON CONFLICT (query_id) DO UPDATE SET sql = EXCLUDED.sql, "
-          "max_params = EXCLUDED.max_params, note = EXCLUDED.note;\n\n"
+        "max_params = EXCLUDED.max_params, note = EXCLUDED.note;\n\n"
         + "NOTIFY pgrst, 'reload schema';\n"
     )
     dest = sys.argv[1]

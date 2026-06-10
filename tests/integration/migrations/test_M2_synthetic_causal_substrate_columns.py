@@ -20,9 +20,10 @@ EXPECTED = {
 
 def _psql(sql: str) -> str:
     out = subprocess.run(
-        ["docker", "exec", "supabase-db", "psql", "-U", "postgres",
-         "-d", "postgres", "-tAc", sql],
-        capture_output=True, text=True, check=True,
+        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return out.stdout.strip()
 

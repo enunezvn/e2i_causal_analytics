@@ -1074,7 +1074,6 @@ def gate_11_chat_path(client) -> GateResult:
             break
     hetero_out = (hetero_res or {}).get("result") or {}
     routed = "heterogeneous_optimizer" in dispatched or hetero_res is not None
-    data_source = str(hetero_out.get("data_source") or "")
     het_success = bool((hetero_res or {}).get("success"))
     seg = hetero_out.get("cate_by_segment") or {}
     distinct_segments = 0
@@ -1099,12 +1098,7 @@ def gate_11_chat_path(client) -> GateResult:
     # Load-bearing proof: chat -> orchestrator -> dispatcher -> het_optimizer, the #839
     # resolver binds REAL kpi_substrate (het_success), and the agent recovers REAL
     # per-segment heterogeneity (>=2 distinct segment CATE values + a real overall_ate).
-    ok = (
-        routed
-        and het_success
-        and distinct_segments >= 2
-        and isinstance(overall_ate, (int, float))
-    )
+    ok = routed and het_success and distinct_segments >= 2 and isinstance(overall_ate, (int, float))
     measured = {
         "dispatched": dispatched,
         "routed_to_het": routed,

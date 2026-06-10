@@ -27,8 +27,8 @@ from ..dgp.treatment_arm import (
     brand_scaled_cate,
     rd_map_from_tau,
 )
-from .cohort_outcomes import generate_discontinuation_outcomes
 from .base import BaseGenerator, GeneratorConfig
+from .cohort_outcomes import generate_discontinuation_outcomes
 
 
 class PatientGenerator(BaseGenerator[pd.DataFrame]):

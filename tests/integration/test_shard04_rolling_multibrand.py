@@ -8,6 +8,7 @@ pattern (no supabase_client fixture exists in this repo). The load is idempotent
 --tag namespace, so re-running overwrites the scv rows with fresh anchored dates
 rather than accumulating, and the baseline is never clobbered.
 """
+
 import os
 import subprocess
 import sys
@@ -16,9 +17,7 @@ from pathlib import Path
 import pytest
 
 pytestmark = [
-    pytest.mark.skipif(
-        os.getenv("E2I_DB_INTEGRATION") != "1", reason="faithful DB only"
-    ),
+    pytest.mark.skipif(os.getenv("E2I_DB_INTEGRATION") != "1", reason="faithful DB only"),
     # The module-scoped fixture runs a real --small load (~90s); override the
     # project's per-test pytest-timeout default so setup is not killed mid-load.
     pytest.mark.timeout(600),
@@ -29,8 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def _psql(sql: str) -> str:
     return subprocess.check_output(
-        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d",
-         "postgres", "-tAc", sql],
+        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
         text=True,
     ).strip()
 
@@ -49,15 +47,17 @@ def _anchored_load():
     gate asserts on."""
     proc = subprocess.run(
         [sys.executable, "scripts/load_synthetic_data.py", "--small", "--anchor-to-now"],
-        cwd=REPO, capture_output=True, text=True, timeout=600,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=600,
         env={**os.environ, "LOKY_MAX_CPU_COUNT": "1"},
     )
     combined = proc.stdout + proc.stderr
     if "permission denied" in combined:
         pytest.skip("loader write path not authorized here (permission denied / 42501)")
     core = _psql(
-        "SELECT count(*) FROM treatment_events WHERE is_synthetic = true "
-        "AND drug_ndc IS NOT NULL;"
+        "SELECT count(*) FROM treatment_events WHERE is_synthetic = true AND drug_ndc IS NOT NULL;"
     )
     if int(core) == 0:
         pytest.skip("loader did not write core synthetic treatment_events here")
@@ -66,10 +66,13 @@ def _anchored_load():
 
 def test_synthetic_treatment_dates_within_30d():
     # max synthetic event_date must be inside the NOW()-30d window
-    assert _psql(
-        "SELECT (max(event_date) >= CURRENT_DATE - INTERVAL '30 days')::int "
-        "FROM treatment_events WHERE is_synthetic = true;"
-    ) == "1", "synthetic treatment_events are stale (max event_date >30d old)"
+    assert (
+        _psql(
+            "SELECT (max(event_date) >= CURRENT_DATE - INTERVAL '30 days')::int "
+            "FROM treatment_events WHERE is_synthetic = true;"
+        )
+        == "1"
+    ), "synthetic treatment_events are stale (max event_date >30d old)"
 
 
 def test_three_brands_with_brand_correct_ndc():
@@ -89,7 +92,10 @@ def test_three_brands_with_brand_correct_ndc():
 
 
 def test_four_regions_present():
-    assert _psql(
-        "SELECT count(DISTINCT geographic_region) FROM patient_journeys "
-        "WHERE is_synthetic = true;"
-    ) == "4", "expected all 4 region labels among synthetic patient_journeys"
+    assert (
+        _psql(
+            "SELECT count(DISTINCT geographic_region) FROM patient_journeys "
+            "WHERE is_synthetic = true;"
+        )
+        == "4"
+    ), "expected all 4 region labels among synthetic patient_journeys"

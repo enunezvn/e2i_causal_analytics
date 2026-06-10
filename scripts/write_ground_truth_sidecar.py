@@ -12,6 +12,7 @@ agent recovers (Shard 03: within ~0.01). NOT the config base coefficient, NOT a 
 Usage (from the worktree, PYTHONPATH=worktree):
     python scripts/write_ground_truth_sidecar.py [--n 8000] [--seed 42]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,14 +21,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.ml.synthetic.config import DGP_CONFIGS, DGPType
+from src.ml.synthetic.config import DGP_CONFIGS, Brand, DGPType
 from src.ml.synthetic.generators.base import GeneratorConfig
 from src.ml.synthetic.generators.patient_generator import PatientGenerator
 from src.ml.synthetic.ground_truth.causal_effects import (
     GroundTruthEffect,
     GroundTruthStore,
 )
-from src.ml.synthetic.config import Brand
 
 # The harness maps each cohort -> the dgp label its sidecar entry is keyed under
 # (scripts/validate_synthetic_causal.py::_COHORT_DGP). initiation is the only cohort
@@ -60,8 +60,7 @@ def _per_brand_effects(df: pd.DataFrame, dgp_type: DGPType) -> list[GroundTruthE
         cate_by_segment = None
         if "segment_assignment" in g.columns:
             cate_by_segment = {
-                str(seg): float(sub["_tau"].mean())
-                for seg, sub in g.groupby("segment_assignment")
+                str(seg): float(sub["_tau"].mean()) for seg, sub in g.groupby("segment_assignment")
             }
         split_counts = (
             {str(k): int(v) for k, v in g["data_split"].value_counts().items()}
@@ -87,7 +86,9 @@ def _per_brand_effects(df: pd.DataFrame, dgp_type: DGPType) -> list[GroundTruthE
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--n", type=int, default=8000, help="patients to regenerate for the realized ATE")
+    p.add_argument(
+        "--n", type=int, default=8000, help="patients to regenerate for the realized ATE"
+    )
     p.add_argument("--seed", type=int, default=42, help="MUST match the loader's seed (default 42)")
     p.add_argument("--out-dir", default="data/synthetic")
     args = p.parse_args()
@@ -120,7 +121,9 @@ def main() -> int:
     ]
     for e in [*effects, *hetero_aliases]:
         store.store(e)
-        print(f"  {e.brand.value:<14} {e.dgp_type.value:<13} true_ate={e.true_ate:+.4f} n={e.n_samples}")
+        print(
+            f"  {e.brand.value:<14} {e.dgp_type.value:<13} true_ate={e.true_ate:+.4f} n={e.n_samples}"
+        )
 
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")

@@ -4,6 +4,7 @@ Shard 11 reads TRUE_ATE/CATE from data/synthetic/ground_truth_<run>.json
 (INDEX §CANONICAL v1.1) rather than filtering ml_predictions on a non-existent
 cohort/brand column.
 """
+
 import json
 
 from src.ml.synthetic.config import Brand, DGPType
@@ -24,7 +25,11 @@ def test_to_json_file_writes_all_effects(tmp_path):
             confounders=["disease_severity", "academic_hcp"],
             treatment_variable="treatment_arm",
             outcome_variable="treatment_initiated",
-            cate_by_segment={"high_severity": 0.376, "medium_severity": 0.215, "low_severity": 0.161},
+            cate_by_segment={
+                "high_severity": 0.376,
+                "medium_severity": 0.215,
+                "low_severity": 0.161,
+            },
             n_samples=3000,
         )
     )
@@ -37,7 +42,11 @@ def test_to_json_file_writes_all_effects(tmp_path):
             confounders=["disease_severity", "academic_hcp"],
             treatment_variable="treatment_arm",
             outcome_variable="treatment_initiated",
-            cate_by_segment={"high_severity": 0.277, "medium_severity": 0.149, "low_severity": 0.117},
+            cate_by_segment={
+                "high_severity": 0.277,
+                "medium_severity": 0.149,
+                "low_severity": 0.117,
+            },
             n_samples=3000,
         )
     )

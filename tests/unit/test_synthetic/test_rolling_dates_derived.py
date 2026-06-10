@@ -2,6 +2,7 @@
 from the anchored journey date must honor rolling-window anchoring too: no future
 timestamps, bulk recent. Covers prediction_generator, trigger_generator (linked
 paths) and feature_value_generator (which previously ignored anchoring entirely)."""
+
 from datetime import date, timedelta
 
 import pandas as pd
@@ -19,8 +20,11 @@ REF = date(2026, 6, 9)
 
 def _anchored_patients(n: int = 300) -> pd.DataFrame:
     cfg = GeneratorConfig(
-        seed=11, n_records=n, brand=Brand.KISQALI,
-        anchor_to_now=True, anchor_reference=REF,
+        seed=11,
+        n_records=n,
+        brand=Brand.KISQALI,
+        anchor_to_now=True,
+        anchor_reference=REF,
     )
     return PatientGenerator(cfg).generate()
 
@@ -36,9 +40,7 @@ def test_prediction_dates_fresh_and_not_future_under_anchor():
 
 def test_trigger_timestamps_fresh_and_not_future_under_anchor():
     patients = _anchored_patients()
-    hcp = HCPGenerator(
-        GeneratorConfig(seed=11, n_records=50, brand=Brand.KISQALI)
-    ).generate()
+    hcp = HCPGenerator(GeneratorConfig(seed=11, n_records=50, brand=Brand.KISQALI)).generate()
     cfg = GeneratorConfig(seed=11, n_records=600, anchor_to_now=True, anchor_reference=REF)
     df = TriggerGenerator(cfg, patient_df=patients, hcp_df=hcp).generate()
     ts = pd.to_datetime(df["trigger_timestamp"]).dt.date
@@ -63,10 +65,10 @@ def test_shift_dates_to_window_clips_future_preserves_past():
     cfg = GeneratorConfig(seed=1, anchor_to_now=True, anchor_reference=REF)
     gen = PatientGenerator(cfg)
     dates = [
-        "2026-05-01",            # past -> untouched
-        "2026-06-09",            # == ref -> untouched
-        "2026-08-15",            # future -> clipped to ref
-        "2026-12-31 14:30:00",   # future w/ time -> clipped to ref, time tail kept
+        "2026-05-01",  # past -> untouched
+        "2026-06-09",  # == ref -> untouched
+        "2026-08-15",  # future -> clipped to ref
+        "2026-12-31 14:30:00",  # future w/ time -> clipped to ref, time tail kept
     ]
     out = gen._shift_dates_to_window(dates)
     assert out[0] == "2026-05-01"

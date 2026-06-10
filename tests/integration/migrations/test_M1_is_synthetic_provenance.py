@@ -9,18 +9,27 @@ pytestmark = pytest.mark.skipif(
 )
 
 TAGGABLE = [
-    "triggers", "business_metrics", "ml_predictions", "agent_activities",
-    "causal_paths", "patient_journeys", "treatment_events", "hcp_profiles",
-    "user_sessions", "hcp_intent_surveys", "episodic_memories",
+    "triggers",
+    "business_metrics",
+    "ml_predictions",
+    "agent_activities",
+    "causal_paths",
+    "patient_journeys",
+    "treatment_events",
+    "hcp_profiles",
+    "user_sessions",
+    "hcp_intent_surveys",
+    "episodic_memories",
     "ab_experiment_assignments",
 ]
 
 
 def _psql(sql: str) -> str:
     out = subprocess.run(
-        ["docker", "exec", "supabase-db", "psql", "-U", "postgres",
-         "-d", "postgres", "-tAc", sql],
-        capture_output=True, text=True, check=True,
+        ["docker", "exec", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-tAc", sql],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return out.stdout.strip()
 
@@ -41,8 +50,14 @@ def test_every_taggable_table_has_is_synthetic_boolean_default_false():
 
 
 def test_high_fanout_tables_have_is_synthetic_index():
-    for tbl in ["treatment_events", "triggers", "ml_predictions",
-                "business_metrics", "patient_journeys", "episodic_memories"]:
+    for tbl in [
+        "treatment_events",
+        "triggers",
+        "ml_predictions",
+        "business_metrics",
+        "patient_journeys",
+        "episodic_memories",
+    ]:
         idx = _psql(
             "SELECT indexname FROM pg_indexes WHERE schemaname='public' "
             f"AND tablename='{tbl}' AND indexname='idx_{tbl}_is_synthetic';"

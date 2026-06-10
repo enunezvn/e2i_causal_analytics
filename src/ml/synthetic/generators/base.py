@@ -241,9 +241,7 @@ class BaseGenerator(ABC, Generic[T]):
         out[is_recent] = self._rng.integers(recent_floor, ref_ord + 1, size=n_recent)
         # Older rows: uniformly across the historical tail of the window
         n_old = n - n_recent
-        out[~is_recent] = self._rng.integers(
-            ref_ord - span_days, recent_floor, size=n_old
-        )
+        out[~is_recent] = self._rng.integers(ref_ord - span_days, recent_floor, size=n_old)
         return [date.fromordinal(int(d)).isoformat() for d in out]
 
     def _shift_dates_to_window(self, dates: List[str]) -> List[str]:

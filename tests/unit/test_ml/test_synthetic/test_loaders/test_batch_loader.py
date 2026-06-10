@@ -454,9 +454,15 @@ class TestProvenanceColumnRegistration:
         from src.ml.synthetic.loaders import TABLE_COLUMNS
 
         existing = [
-            "hcp_profiles", "patient_journeys", "treatment_events",
-            "ml_predictions", "triggers", "business_metrics",
-            "feature_groups", "features", "feature_values",
+            "hcp_profiles",
+            "patient_journeys",
+            "treatment_events",
+            "ml_predictions",
+            "triggers",
+            "business_metrics",
+            "feature_groups",
+            "features",
+            "feature_values",
         ]
         for table in existing:
             assert "is_synthetic" in TABLE_COLUMNS[table], (
@@ -468,8 +474,11 @@ class TestProvenanceColumnRegistration:
         from src.ml.synthetic.loaders import TABLE_COLUMNS
 
         for col in (
-            "treatment_arm", "propensity_score", "segment_assignment",
-            "discontinued_180d", "persistent_180d",
+            "treatment_arm",
+            "propensity_score",
+            "segment_assignment",
+            "discontinued_180d",
+            "persistent_180d",
         ):
             assert col in TABLE_COLUMNS["patient_journeys"], (
                 f"patient_journeys missing {col} -> loader strips it at batch_loader.py:309"
@@ -478,12 +487,9 @@ class TestProvenanceColumnRegistration:
     def test_loader_keeps_is_synthetic_column(self):
         """A DataFrame carrying is_synthetic must keep it after column gating."""
         import pandas as pd
-        from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
-        loader = BatchLoader(LoaderConfig(dry_run=True))
         df = pd.DataFrame(
-            {"hcp_id": ["hcp_1"], "npi": ["1"], "specialty": ["onc"],
-             "is_synthetic": [True]}
+            {"hcp_id": ["hcp_1"], "npi": ["1"], "specialty": ["onc"], "is_synthetic": [True]}
         )
         # load_table selects TABLE_COLUMNS ∩ df.columns; assert is_synthetic survives
         available = [c for c in loader_columns("hcp_profiles") if c in df.columns]
@@ -492,4 +498,5 @@ class TestProvenanceColumnRegistration:
 
 def loader_columns(table: str):
     from src.ml.synthetic.loaders import TABLE_COLUMNS
+
     return TABLE_COLUMNS[table]

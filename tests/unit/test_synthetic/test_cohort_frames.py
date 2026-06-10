@@ -1,12 +1,20 @@
 from pathlib import Path
-import pandas as pd
-from src.ml.synthetic.config import DGPType
-from scripts.load_synthetic_data import (
-    SMALL_SIZES, generate_datasets, write_parquet_snapshots, write_cohort_frames,
-)
 
-PATIENT_CELLS = [f"{c}__{b}" for c in ("initiation", "discontinuation", "persistence")
-                 for b in ("Remibrutinib", "Kisqali", "Fabhalta")]
+import pandas as pd
+
+from scripts.load_synthetic_data import (
+    SMALL_SIZES,
+    generate_datasets,
+    write_cohort_frames,
+    write_parquet_snapshots,
+)
+from src.ml.synthetic.config import DGPType
+
+PATIENT_CELLS = [
+    f"{c}__{b}"
+    for c in ("initiation", "discontinuation", "persistence")
+    for b in ("Remibrutinib", "Kisqali", "Fabhalta")
+]
 
 
 def test_writes_9_patient_cohort_frames(tmp_path):

@@ -4,6 +4,7 @@ designed lift is generated but never loaded (gate reads the degenerate ~0.002).
 
 Uses the real builder entrypoint generate_datasets(sizes, dgp_type, ...) (hermetic,
 no DB)."""
+
 import importlib
 
 from src.ml.synthetic.config import DGPType
@@ -14,8 +15,12 @@ load_mod = importlib.import_module("scripts.load_synthetic_data")
 def test_injected_prescriptions_merged_into_treatment_events():
     datasets = load_mod.generate_datasets(
         sizes={
-            "hcp": 50, "patient": 200, "treatment": 200,
-            "prediction": 50, "trigger": 400, "business_metrics": 30,
+            "hcp": 50,
+            "patient": 200,
+            "treatment": 200,
+            "prediction": 50,
+            "trigger": 400,
+            "business_metrics": 30,
             "feature_values": 50,
         },
         dgp_type=DGPType.CONFOUNDED,

@@ -1,6 +1,7 @@
 """Shard 04 Task 5 — patient_journeys must carry the brand-specific eligibility
 columns cohort_constructor reads (configs.py required_fields), populated to pass
 each brand's inclusion gate so the cohort is non-degenerate."""
+
 from src.ml.synthetic.config import Brand
 from src.ml.synthetic.generators.base import GeneratorConfig
 from src.ml.synthetic.generators.patient_generator import PatientGenerator
@@ -26,9 +27,9 @@ def test_kisqali_patients_get_breast_eligibility_fields():
         assert c in df.columns, f"{c} missing"
     assert (df["hr_status"] == "positive").all()
     assert (df["her2_status"] == "negative").all()
-    assert df["disease_stage"].isin(
-        ["advanced", "metastatic", "locally_advanced", "stage_iv"]
-    ).all()
+    assert (
+        df["disease_stage"].isin(["advanced", "metastatic", "locally_advanced", "stage_iv"]).all()
+    )
     assert df["ecog_performance_status"].isin([0, 1]).all()
     assert df["primary_diagnosis_code"].str.startswith("C50").all()
 

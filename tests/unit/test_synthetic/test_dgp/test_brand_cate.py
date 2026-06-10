@@ -1,4 +1,5 @@
 """Task 03.2 — per-brand-scaled CATE map (Kisqali != Remibrutinib) + segment assignment."""
+
 import numpy as np
 
 from src.ml.synthetic.config import DGP_CONFIGS, Brand, DGPType
