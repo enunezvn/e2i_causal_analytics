@@ -44,18 +44,27 @@ def _emit_calls_by_field(mock_emit: AsyncMock) -> Dict[str, Dict[str, Any]]:
 
 @pytest.fixture
 def healthy_state() -> Dict[str, Any]:
-    """A fully-populated healthy state (grade A, no issues)."""
+    """A fully-populated, fully-MEASURED healthy state (grade A, no issues).
+
+    F1: all four dimensions carry ``<dim>_health_measured = True`` so the
+    composer treats this as a complete measurement (the emit contract only fires
+    when every dimension score is populated).
+    """
     return {
         "query": "",
         "check_scope": "full",
         "component_statuses": [],
         "component_health_score": 1.0,
+        "component_health_measured": True,
         "model_metrics": [],
         "model_health_score": 1.0,
+        "model_health_measured": True,
         "pipeline_statuses": [],
         "pipeline_health_score": 1.0,
+        "pipeline_health_measured": True,
         "agent_statuses": [],
         "agent_health_score": 1.0,
+        "agent_health_measured": True,
         "total_latency_ms": 0,
         "errors": [],
         "status": "checking",
@@ -64,7 +73,7 @@ def healthy_state() -> Dict[str, Any]:
 
 @pytest.fixture
 def degraded_state() -> Dict[str, Any]:
-    """A state with a critical issue (unhealthy component)."""
+    """A fully-MEASURED state with a critical issue (unhealthy component)."""
     return {
         "query": "",
         "check_scope": "full",
@@ -72,12 +81,16 @@ def degraded_state() -> Dict[str, Any]:
             {"component_name": "db", "status": "unhealthy"},
         ],
         "component_health_score": 0.3,
+        "component_health_measured": True,
         "model_metrics": [],
         "model_health_score": 0.3,
+        "model_health_measured": True,
         "pipeline_statuses": [],
         "pipeline_health_score": 0.3,
+        "pipeline_health_measured": True,
         "agent_statuses": [],
         "agent_health_score": 0.3,
+        "agent_health_measured": True,
         "total_latency_ms": 0,
         "errors": [],
         "status": "checking",

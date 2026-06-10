@@ -15,18 +15,28 @@ class TestScoreComposerNode:
 
     @pytest.fixture
     def full_state(self):
-        """State with all health scores"""
+        """State with all health scores.
+
+        F1: all four dimensions carry ``<dim>_health_measured = True`` because
+        these tests exercise the weighting/grade math for a fully-MEASURED
+        result. The composer now ignores any score whose measured flag is not
+        True, so the flags are required here (a score alone is no longer enough).
+        """
         return {
             "query": "",
             "check_scope": "full",
             "component_statuses": [],
             "component_health_score": 0.9,
+            "component_health_measured": True,
             "model_metrics": [],
             "model_health_score": 0.8,
+            "model_health_measured": True,
             "pipeline_statuses": [],
             "pipeline_health_score": 0.85,
+            "pipeline_health_measured": True,
             "agent_statuses": [],
             "agent_health_score": 0.95,
+            "agent_health_measured": True,
             "overall_health_score": None,
             "health_grade": None,
             "critical_issues": None,
@@ -134,8 +144,11 @@ class TestScoreComposerNode:
         datetime.fromisoformat(result["timestamp"])
 
     @pytest.mark.asyncio
-    async def test_missing_scores_default_to_healthy(self):
-        """Test that missing scores default to 1.0"""
+    async def test_missing_scores_fail_closed_to_unknown(self):
+        """F1 (was test_missing_scores_default_to_healthy): missing scores with
+        NO measured flags must NOT default to a fabricated healthy 100/grade-A.
+        With zero measured dimensions the composer fails closed to an UNKNOWN
+        state (score 0.0, provenance 'unknown', grade not 'A')."""
         minimal_state = {
             "query": "",
             "check_scope": "full",
@@ -147,9 +160,87 @@ class TestScoreComposerNode:
         node = ScoreComposerNode()
         result = await node.execute(minimal_state)
 
-        # All default to 1.0, so should be grade A
-        assert result["health_grade"] == "A"
-        assert result["overall_health_score"] == 100.0
+        # Fail-closed: nothing measured => unknown, not a fabricated grade A.
+        assert result["data_provenance"] == "unknown"
+        assert result["overall_health_score"] == 0.0
+        assert result["health_grade"] != "A"
+
+
+class TestComposerProvenance:
+    """F1: composer must build the overall score ONLY from measured dimensions
+    and tag the result with honest provenance (measured/partial/unknown)."""
+
+    @pytest.mark.asyncio
+    async def test_all_measured_is_measured_provenance(self):
+        """All 4 dimensions measured => provenance 'measured'."""
+        state = {
+            "component_health_score": 0.9,
+            "component_health_measured": True,
+            "model_health_score": 0.8,
+            "model_health_measured": True,
+            "pipeline_health_score": 0.85,
+            "pipeline_health_measured": True,
+            "agent_health_score": 0.95,
+            "agent_health_measured": True,
+            "component_statuses": [],
+            "model_metrics": [],
+            "pipeline_statuses": [],
+            "agent_statuses": [],
+            "total_latency_ms": 0,
+            "errors": [],
+            "status": "checking",
+        }
+        node = ScoreComposerNode()
+        result = await node.execute(state)
+        assert result["data_provenance"] == "measured"
+
+    @pytest.mark.asyncio
+    async def test_only_component_measured_is_partial(self):
+        """Only the component dimension measured => 'partial', and the overall
+        score is computed over the component dimension ALONE (renormalized),
+        not diluted by fail-open 1.0 defaults for the unmeasured dims."""
+        state = {
+            "component_health_score": 0.6,
+            "component_health_measured": True,
+            # model/pipeline/agent NOT measured (no real backend)
+            "component_statuses": [],
+            "model_metrics": [],
+            "pipeline_statuses": [],
+            "agent_statuses": [],
+            "total_latency_ms": 0,
+            "errors": [],
+            "status": "checking",
+        }
+        node = ScoreComposerNode()
+        result = await node.execute(state)
+
+        assert result["data_provenance"] == "partial"
+        # Renormalized over the single measured dim => 0.6 * 100 = 60.0.
+        # (If the bug were present, unmeasured dims would default to 1.0 and
+        # inflate this well above 60.)
+        assert abs(result["overall_health_score"] - 60.0) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_zero_measured_is_unknown_not_grade_a(self):
+        """No dimension measured => provenance 'unknown', score 0.0, grade not
+        'A', and a critical issue explaining the gap. This is the core
+        anti-fabrication guard at the composer level."""
+        state = {
+            "component_statuses": [],
+            "model_metrics": [],
+            "pipeline_statuses": [],
+            "agent_statuses": [],
+            "total_latency_ms": 0,
+            "errors": [],
+            "status": "checking",
+        }
+        node = ScoreComposerNode()
+        result = await node.execute(state)
+
+        assert result["data_provenance"] == "unknown"
+        assert result["overall_health_score"] == 0.0
+        assert result["health_grade"] != "A"
+        assert any("could be measured" in c.lower() for c in result["critical_issues"])
 
 
 class TestIssueIdentification:
@@ -282,12 +373,16 @@ class TestSummaryGeneration:
 
     @pytest.mark.asyncio
     async def test_excellent_summary(self):
-        """Test excellent health summary"""
+        """Test excellent health summary (all four dimensions measured)"""
         state = {
             "component_health_score": 1.0,
+            "component_health_measured": True,
             "model_health_score": 1.0,
+            "model_health_measured": True,
             "pipeline_health_score": 1.0,
+            "pipeline_health_measured": True,
             "agent_health_score": 1.0,
+            "agent_health_measured": True,
             "component_statuses": [],
             "model_metrics": [],
             "pipeline_statuses": [],
@@ -306,12 +401,16 @@ class TestSummaryGeneration:
 
     @pytest.mark.asyncio
     async def test_critical_summary(self):
-        """Test critical health summary"""
+        """Test critical health summary (all four dimensions measured)"""
         state = {
             "component_health_score": 0.3,
+            "component_health_measured": True,
             "model_health_score": 0.3,
+            "model_health_measured": True,
             "pipeline_health_score": 0.3,
+            "pipeline_health_measured": True,
             "agent_health_score": 0.3,
+            "agent_health_measured": True,
             "component_statuses": [
                 {"component_name": "db", "status": "unhealthy"},
             ],
@@ -336,12 +435,16 @@ class TestCustomWeightsAndGrades:
 
     @pytest.mark.asyncio
     async def test_custom_weights(self):
-        """Test with custom score weights"""
+        """Test with custom score weights (all four dimensions measured)"""
         state = {
             "component_health_score": 1.0,
+            "component_health_measured": True,
             "model_health_score": 0.5,
+            "model_health_measured": True,
             "pipeline_health_score": 0.5,
+            "pipeline_health_measured": True,
             "agent_health_score": 0.5,
+            "agent_health_measured": True,
             "component_statuses": [],
             "model_metrics": [],
             "pipeline_statuses": [],
