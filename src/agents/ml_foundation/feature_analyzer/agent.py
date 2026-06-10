@@ -288,6 +288,10 @@ class FeatureAnalyzerAgent:
                 # SHAP skip status
                 "shap_skipped": shap_skipped,
                 "shap_skip_reason": final_state.get("skip_reason") if shap_skipped else None,
+                # F8: surface SHAP data provenance end-to-end so API / chatbot /
+                # tool_composer consumers can tell real importances from a
+                # synthetic-background (opt-in) or unavailable (skipped) run.
+                "data_provenance": final_state.get("data_provenance", "unknown"),
                 # Status
                 "status": "completed" if not shap_skipped else "completed_without_shap",
             }
@@ -324,6 +328,9 @@ class FeatureAnalyzerAgent:
             "experiment_id": state["experiment_id"],
             "model_version": state.get("model_version", "unknown"),
             "shap_analysis_id": state.get("shap_analysis_id"),
+            # F8: carry SHAP data provenance ('real' | 'synthetic' | 'unavailable')
+            # into the contract dict so it is never silently dropped.
+            "data_provenance": state.get("data_provenance", "unknown"),
             "feature_importance": self._build_feature_importance_list(state),
             "interactions": self._build_interaction_list(state),
             "samples_analyzed": state.get("samples_analyzed", 0),
@@ -562,6 +569,16 @@ class FeatureAnalyzerAgent:
             output: Agent output to store
         """
         try:
+            # F8: do not persist a skipped run — it has no importances, and an empty
+            # global_importance row in ml_shap_analyses is indistinguishable from a
+            # genuine real-zero result. Skip persistence (fail closed on lineage too).
+            if output.get("shap_skipped"):
+                logger.info(
+                    "SHAP skipped (%s); not persisting an empty ml_shap_analyses row.",
+                    output.get("shap_skip_reason") or "no reason",
+                )
+                return
+
             repo = await _get_shap_repository()
             if repo is None:
                 logger.debug("Skipping SHAP analysis persistence (no repository)")
@@ -578,6 +595,10 @@ class FeatureAnalyzerAgent:
                 "computation_time_seconds": output.get("computation_time_seconds"),
                 "explainer_type": output.get("explainer_type"),
                 "model_version": output.get("model_version"),
+                # F8: provenance of the persisted importances. The repo currently
+                # whitelists columns (drops this until a lineage column is added via
+                # migration — tracked follow-up), but we pass it through the contract.
+                "data_provenance": output.get("data_provenance"),
             }
 
             # Get model_registry_id from input (passed by upstream agent or test)
