@@ -105,6 +105,22 @@ def load_config() -> Dict[str, Any]:
     return DEFAULT_CONFIG
 
 
+def _expected_ratio_for_variants(variant_counts: Dict[str, int]) -> Dict[str, float]:
+    """Uniform expected allocation across the observed variants.
+
+    This is the correct SRM null hypothesis for equal-allocation designs.
+    ``ml_experiments`` does not persist a per-experiment allocation ratio (the
+    ``allocation_ratio`` is a request-time randomization parameter only; issue
+    #825 removed the read of a phantom ``config`` column), so the expected ratio
+    is derived from the real variants present in the assignments.
+    """
+    n = len(variant_counts)
+    if n == 0:
+        return {}
+    share = 1.0 / n
+    return dict.fromkeys(variant_counts, share)
+
+
 def run_async(coro):
     """Helper to run async coroutine in sync context.
 
@@ -363,7 +379,7 @@ def enrollment_health_check(
             # Get all active experiments
             result = await (
                 client.table("ml_experiments")
-                .select("id, name, config")
+                .select("id, experiment_name")
                 .eq("status", "running")
                 .execute()
             )
@@ -393,7 +409,7 @@ def enrollment_health_check(
                         health_results.append(
                             {
                                 "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
+                                "name": exp.get("experiment_name", "Unknown"),
                                 "status": "no_data",
                             }
                         )
@@ -415,7 +431,7 @@ def enrollment_health_check(
                             alerts.append(
                                 {
                                     "experiment_id": str(exp_id),
-                                    "name": exp.get("name", "Unknown"),
+                                    "name": exp.get("experiment_name", "Unknown"),
                                     "severity": "critical",
                                     "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
                                     "daily_rate": daily_rate,
@@ -427,7 +443,7 @@ def enrollment_health_check(
                             alerts.append(
                                 {
                                     "experiment_id": str(exp_id),
-                                    "name": exp.get("name", "Unknown"),
+                                    "name": exp.get("experiment_name", "Unknown"),
                                     "severity": "warning",
                                     "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
                                     "daily_rate": daily_rate,
@@ -438,7 +454,7 @@ def enrollment_health_check(
                     health_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "status": health_status,
                             "total_enrolled": stats.total_enrolled,
                             "daily_rate": daily_rate,
@@ -452,7 +468,7 @@ def enrollment_health_check(
                     health_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "status": "error",
                             "error": str(e),
                         }
@@ -541,7 +557,7 @@ def srm_detection_sweep(
             # Get all running experiments
             result = await (
                 client.table("ml_experiments")
-                .select("id, name, config")
+                .select("id, experiment_name")
                 .eq("status", "running")
                 .execute()
             )
@@ -563,7 +579,6 @@ def srm_detection_sweep(
 
             for exp in result.data:
                 exp_id = UUID(exp["id"])
-                exp_config = exp.get("config", {})
 
                 try:
                     # Get current assignment counts
@@ -573,7 +588,7 @@ def srm_detection_sweep(
                         srm_results.append(
                             {
                                 "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
+                                "name": exp.get("experiment_name", "Unknown"),
                                 "status": "insufficient_data",
                                 "sample_size": len(assignments),
                                 "min_required": min_sample_size,
@@ -587,10 +602,13 @@ def srm_detection_sweep(
                         variant = a.variant
                         variant_counts[variant] = variant_counts.get(variant, 0) + 1
 
-                    # Get expected ratio from config
-                    expected_ratio = exp_config.get(
-                        "allocation_ratio", {"control": 0.5, "treatment": 0.5}
-                    )
+                    # Expected allocation is uniform across the observed
+                    # variants — the correct SRM null for equal-allocation
+                    # designs. ml_experiments does not persist a per-experiment
+                    # allocation ratio (allocation_ratio is a request-time
+                    # randomization parameter only), so it is derived from the
+                    # real variants rather than a phantom config column (#825).
+                    expected_ratio = _expected_ratio_for_variants(variant_counts)
 
                     # Check SRM
                     srm_result = await results_service.check_sample_ratio_mismatch(
@@ -605,7 +623,7 @@ def srm_detection_sweep(
                         srm_detected.append(
                             {
                                 "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
+                                "name": exp.get("experiment_name", "Unknown"),
                                 "p_value": srm_result.p_value,
                                 "expected_ratio": expected_ratio,
                                 "actual_counts": variant_counts,
@@ -616,7 +634,7 @@ def srm_detection_sweep(
                     srm_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "status": status,
                             "p_value": srm_result.p_value,
                             "chi_squared": srm_result.chi_squared_statistic,
@@ -629,7 +647,7 @@ def srm_detection_sweep(
                     srm_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "status": "error",
                             "error": str(e),
                         }
@@ -952,7 +970,10 @@ def check_all_active_experiments(
 
             # Get all running experiments
             result = await (
-                client.table("ml_experiments").select("id, name").eq("status", "running").execute()
+                client.table("ml_experiments")
+                .select("id, experiment_name")
+                .eq("status", "running")
+                .execute()
             )
 
             if not result.data:
@@ -975,7 +996,7 @@ def check_all_active_experiments(
                     tasks_queued.append(
                         {
                             "experiment_id": exp["id"],
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "task_id": task.id,
                         }
                     )

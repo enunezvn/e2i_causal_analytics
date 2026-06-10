@@ -8,6 +8,28 @@ from typing import Any, Dict, List, Optional, cast
 
 from src.repositories.base import BaseRepository
 
+# Canonical mapping between the numeric agent tier (0-5) and the real
+# ``agent_registry.agent_tier`` text-category enum (``agent_tier_type``). The DB
+# has NO int ``tier`` column — ``agent_tier`` holds these text categories — so a
+# numeric tier must be translated to its category before filtering (issue #825;
+# the phantom ``{"tier": int}`` filter raised 42703). Numbering matches
+# ``src/agents/factory.py`` AGENT_REGISTRY_CONFIG (the roster source of truth).
+TIER_CATEGORY_BY_NUMBER: Dict[int, str] = {
+    0: "ml_foundation",
+    1: "coordination",
+    2: "causal_analytics",
+    3: "monitoring",
+    4: "ml_predictions",
+    5: "self_improvement",
+}
+TIER_NUMBER_BY_CATEGORY: Dict[str, int] = {v: k for k, v in TIER_CATEGORY_BY_NUMBER.items()}
+
+
+def tier_number_for_category(category: Optional[str]) -> int:
+    """Numeric tier (0-5) for an ``agent_tier`` text category; 99 if unknown
+    (sorts unknown agents last)."""
+    return TIER_NUMBER_BY_CATEGORY.get(category or "", 99)
+
 
 class AgentRegistryRepository(BaseRepository):
     """
@@ -48,16 +70,24 @@ class AgentRegistryRepository(BaseRepository):
 
     async def get_by_tier(self, tier: int) -> List:
         """
-        Get all agents in a specific tier.
+        Get all active agents in a specific tier.
+
+        The real ``agent_registry`` schema stores the tier as the
+        ``agent_tier`` text-category enum (NOT an int ``tier`` column), so the
+        numeric tier is translated to its category before filtering (issue
+        #825). An out-of-range tier yields no category and returns ``[]``.
 
         Args:
-            tier: Agent tier (1-5)
+            tier: Agent tier (0-5)
 
         Returns:
             List of AgentRegistry records
         """
+        category = TIER_CATEGORY_BY_NUMBER.get(tier)
+        if category is None:
+            return []
         return await self.get_many(
-            filters={"tier": tier, "is_active": True},
+            filters={"agent_tier": category, "is_active": True},
         )
 
     async def get_by_intent(self, intent: str) -> List:
@@ -131,8 +161,10 @@ class AgentRegistryRepository(BaseRepository):
         if not agents:
             return None
 
-        # Sort by tier (lower is higher priority)
-        sorted_agents = sorted(agents, key=lambda a: a.get("tier", 99))
+        # Sort by tier (lower is higher priority). The real schema stores the
+        # tier as the ``agent_tier`` text category, so derive the numeric tier
+        # from it rather than the non-existent ``tier`` column (issue #825).
+        sorted_agents = sorted(agents, key=lambda a: tier_number_for_category(a.get("agent_tier")))
         return cast(Dict[Any, Any], sorted_agents[0])
 
     async def get_active_agents(self) -> List:

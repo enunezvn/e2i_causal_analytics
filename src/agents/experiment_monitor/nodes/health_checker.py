@@ -85,10 +85,11 @@ class HealthCheckerNode:
                 summary = await self._check_experiment_health(exp, client)
                 experiment_summaries.append(summary)
 
-                # Check for enrollment issues
-                issue = self._check_enrollment_rate(exp, summary, state)
-                if issue:
-                    enrollment_issues.append(issue)
+                # Check for enrollment issues (skip if disabled; FE selective-check flag, #825)
+                if state.get("check_enrollment", True):
+                    issue = self._check_enrollment_rate(exp, summary, state)
+                    if issue:
+                        enrollment_issues.append(issue)
 
                 # Check for stale data
                 stale_issue = await self._check_stale_data(exp, client, state)

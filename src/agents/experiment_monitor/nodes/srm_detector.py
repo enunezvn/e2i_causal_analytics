@@ -60,6 +60,11 @@ class SRMDetectorNode:
         """
         start_time = time.time()
 
+        # Skip if SRM detection is disabled (FE selective-check flag; #825).
+        if not state.get("check_srm", True):
+            state["srm_issues"] = []
+            return state
+
         try:
             # Get experiments to check
             experiments = state.get("experiments", [])

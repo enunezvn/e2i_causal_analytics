@@ -52,6 +52,11 @@ class FidelityCheckerNode:
         """
         start_time = time.time()
 
+        # Skip if the fidelity check is disabled (FE selective-check flag; #825).
+        if not state.get("check_fidelity", True):
+            state["fidelity_issues"] = []
+            return state
+
         try:
             # Get client
             client = await self._get_client()

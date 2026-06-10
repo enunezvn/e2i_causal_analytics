@@ -109,12 +109,13 @@ class ErrorDetails(TypedDict):
 class ExperimentMonitorState(TypedDict):
     """Complete state for Experiment Monitor Agent.
 
-    Total Fields: 22
+    Total Fields: 25
 
     Field Groups:
     - Input (3): query, experiment_ids, check_all_active
-    - Configuration (5): srm_threshold, enrollment_threshold, fidelity_threshold,
-                        stale_data_threshold_hours, check_interim
+    - Configuration (8): srm_threshold, enrollment_threshold, fidelity_threshold,
+                        stale_data_threshold_hours, check_interim, check_srm,
+                        check_enrollment, check_fidelity
     - Monitoring outputs (5): experiments, srm_issues, enrollment_issues,
                              stale_data_issues, fidelity_issues
     - Trigger outputs (1): interim_triggers
@@ -129,12 +130,17 @@ class ExperimentMonitorState(TypedDict):
     experiment_ids: NotRequired[list[str]]
     check_all_active: bool
 
-    # ===== Configuration (5) =====
+    # ===== Configuration (8) =====
     srm_threshold: float  # P-value threshold for SRM detection (default: 0.001)
     enrollment_threshold: float  # Min daily enrollment rate
     fidelity_threshold: float  # Max acceptable prediction error
     stale_data_threshold_hours: float  # Hours after which data is considered stale (default: 24)
     check_interim: bool  # Whether to check for interim analysis triggers
+    check_srm: NotRequired[bool]  # Whether to run SRM detection (default: True)
+    check_enrollment: NotRequired[bool]  # Whether to run the enrollment-rate check (default: True)
+    check_fidelity: NotRequired[
+        bool
+    ]  # Whether to run the Digital Twin fidelity check (default: True)
 
     # ===== Monitoring Outputs (5) =====
     experiments: NotRequired[list[ExperimentSummary]]

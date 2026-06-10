@@ -246,22 +246,13 @@ async def test_agent_registry_repository_reaches_real_agents():
     assert len(agents) > 0, f"expected real active agents, got {agents}"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Exposed pre-existing schema drift (NOT #821): agent_registry has no "
-        "'tier' column (real: 'agent_tier' text categories), but "
-        "AgentRegistryRepository.get_by_tier filters {'tier': int} and "
-        "_fetch_agents_from_db loops get_by_tier(range(1,6)). The #821 "
-        "client-wiring fix is proven by "
-        "test_agent_registry_repository_reaches_real_agents; this end-to-end "
-        "path will xpass once the schema-drift follow-up (#825) lands."
-    ),
-    strict=False,
-)
-async def test_fetch_agents_from_db_end_to_end_blocked_by_tier_schema_drift():
-    """Documents that the full ``_fetch_agents_from_db`` path remains blocked
-    by the ``agent_registry.tier`` schema-drift bug AFTER the #821 client-wiring
-    fix — surfaced loudly so it is tracked, not silently fallen-back."""
+async def test_fetch_agents_from_db_end_to_end_reaches_real_agents():
+    """The full ``_fetch_agents_from_db`` path now reaches the real
+    agent_registry roster end-to-end. This was the #821-exposed ``agent_registry``
+    tier schema-drift bug (no int ``tier`` column; real: ``agent_tier`` text
+    categories), closed by #825 — the prior xfail now passes. See
+    tests/integration/test_issue_825_schema_drift_realdb.py for the full #825
+    coverage."""
     from src.api.routes.copilotkit import _fetch_agents_from_db
 
     agents = await _fetch_agents_from_db()
