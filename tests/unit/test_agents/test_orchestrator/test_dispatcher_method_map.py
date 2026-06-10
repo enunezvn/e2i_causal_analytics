@@ -60,11 +60,23 @@ async def test_dispatcher_calls_check_health_for_health_score_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatcher_calls_optimize_for_resource_optimizer() -> None:
-    """resource_optimizer uses ``optimize`` and ``uses_kwargs=True``."""
+    """resource_optimizer uses ``optimize`` and ``uses_kwargs=True``.
+
+    With a REAL allocation problem supplied via ``dispatch.parameters`` (an
+    API/router-driven call), the F13 input resolver passes it through as a CLEAN
+    kwarg set and ``optimize(**kwargs)`` is called — with NONE of the generic
+    payload leak (``user_context``/``parsed_query``/``span_id``/...) that used to
+    crash the splat. (A bare chat dispatch with empty parameters now fails closed;
+    see test_dispatcher_input_resolver.py.)
+    """
+    captured: dict = {}
+
+    async def fake_optimize(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return {"optimization_summary": "shift 20% to channel A", "status": "completed"}
+
     agent = MagicMock()
-    agent.optimize = AsyncMock(
-        return_value={"optimization_summary": "shift 20% to channel A", "status": "completed"}
-    )
+    agent.optimize = fake_optimize
     del agent.analyze
 
     dispatcher = DispatcherNode(agent_registry={"resource_optimizer": agent})
@@ -74,7 +86,17 @@ async def test_dispatcher_calls_optimize_for_resource_optimizer() -> None:
             {
                 "agent_name": "resource_optimizer",
                 "priority": "critical",
-                "parameters": {},
+                "parameters": {
+                    "allocation_targets": [
+                        {
+                            "entity_id": "ch_a",
+                            "entity_type": "territory",
+                            "current_allocation": 40000.0,
+                            "expected_response": 1.2,
+                        }
+                    ],
+                    "constraints": [{"constraint_type": "budget", "value": 40000.0}],
+                },
                 "timeout_ms": 20000,
                 "fallback_agent": None,
             }
@@ -84,9 +106,12 @@ async def test_dispatcher_calls_optimize_for_resource_optimizer() -> None:
 
     result = await dispatcher.execute(state)
 
-    assert agent.optimize.called
-    assert result["agent_results"][0]["success"] is True
+    assert result["agent_results"][0]["success"] is True, result["agent_results"][0].get("error")
     assert "optimization_summary" in result["agent_results"][0]["result"]
+    # Real structured inputs reached optimize(); the generic-payload leak did not.
+    assert captured["allocation_targets"][0]["entity_id"] == "ch_a"
+    for leaked in ("user_context", "parsed_query", "span_id", "dispatch_id", "execution_mode"):
+        assert leaked not in captured, f"{leaked} leaked into optimize(): {sorted(captured)}"
 
 
 @pytest.mark.asyncio

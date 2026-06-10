@@ -40,12 +40,16 @@ class TestAgentHealthNode:
 
     @pytest.mark.asyncio
     async def test_skips_for_non_agent_scope(self, mock_agent_registry, initial_state):
-        """Test that non-agent scope skips agent check"""
+        """Test that non-agent scope skips agent check.
+
+        F1: a skipped dimension is UNMEASURED (no fail-open 1.0 score).
+        """
         initial_state["check_scope"] = "models"
         node = AgentHealthNode(agent_registry=mock_agent_registry)
         result = await node.execute(initial_state)
 
-        assert result["agent_health_score"] == 1.0
+        assert result["agent_health_measured"] is False
+        assert result.get("agent_health_score") is None  # no fail-open score written
         assert result["agent_statuses"] == []
 
     @pytest.mark.asyncio
@@ -58,12 +62,15 @@ class TestAgentHealthNode:
         assert len(result["agent_statuses"]) == 2
 
     @pytest.mark.asyncio
-    async def test_no_registry_returns_healthy(self, initial_state):
-        """Test that no registry returns healthy by default"""
+    async def test_no_registry_fails_closed_to_unmeasured(self, initial_state):
+        """F1 (was test_no_registry_returns_healthy): with NO real agent_registry
+        the agent dimension is UNKNOWN, not 'healthy by default'. The node must
+        mark it unmeasured and emit NO fail-open 1.0 score."""
         node = AgentHealthNode(agent_registry=None)
         result = await node.execute(initial_state)
 
-        assert result["agent_health_score"] == 1.0
+        assert result["agent_health_measured"] is False
+        assert result.get("agent_health_score") is None  # no fail-open score written
         assert result["agent_statuses"] == []
 
     @pytest.mark.asyncio

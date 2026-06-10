@@ -239,9 +239,9 @@ class TestGraphWithRealNodes:
     @pytest.mark.asyncio
     async def test_graph_handles_node_errors_gracefully(self, base_monitor_state):
         """Test that errors in nodes are handled."""
-        # Patch the Supabase client to return None (triggering mock data)
+        # Patch the Supabase client to return None (fail closed)
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_client:
             mock_client.return_value = None
@@ -249,14 +249,14 @@ class TestGraphWithRealNodes:
             graph = experiment_monitor_graph
             final_state = await graph.ainvoke(base_monitor_state)
 
-            # Graph should complete even with mock data
+            # Graph should complete even when nodes fail closed
             assert final_state["status"] in ["completed", "failed"]
 
     @pytest.mark.asyncio
     async def test_graph_returns_valid_final_state(self, base_monitor_state):
         """Test that graph returns a valid final state."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_client:
             mock_client.return_value = None

@@ -9,107 +9,512 @@ This repository handles CRUD operations for:
 - ml_retraining_history: Model retraining events
 
 Tables: database/ml/017_model_monitoring_tables.sql
+
+Schema realignment (#842)
+-------------------------
+The Pydantic record models below mirror the **live** ``ml_*`` schema column for
+column. Earlier the models had drifted from the database (``model_version`` vs
+the real ``model_id`` uuid FK, ``detected_at`` vs ``created_at``,
+``sample_size_*`` vs ``baseline_count``/``current_count``, ``metadata`` vs
+``raw_results``, ``training_config`` vs ``config``, missing NOT-NULL columns
+``test_type``/``title``/``trigger_type`` …). Because inserts serialised the whole
+model, a write/read 42703'd on the *first* mismatched column, so the monitoring
+API and Celery tasks could not persist or read drift at all.
+
+Key reconciliation: the application speaks in **model_version strings** (e.g.
+``"propensity_v2.1.0"``) but the DB links via **``model_id`` uuid FK** to
+``ml_model_registry``. The repositories resolve the handle to a uuid when the
+model is registered (or when the handle already *is* a uuid); otherwise
+``model_id`` is left NULL — exactly how the live seed rows are stored — and the
+original handle is **preserved** inside the table's jsonb column under
+``_model_version`` so it is never lost and remains queryable (PostgREST
+``<jsonb>->>_model_version`` filter, verified against the live DB). No value is
+fabricated: an unresolved/empty model yields NULL + a recoverable handle, and a
+hard query failure surfaces honestly to the caller.
 """
 
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from src.repositories.base import BaseRepository
 
+# ---------------------------------------------------------------------------
+# Enum domains (mirrors the live Postgres enums) + pure mapping helpers
+# ---------------------------------------------------------------------------
+# drift_severity_enum
+_VALID_SEVERITY = {"none", "low", "medium", "high", "critical"}
+# Legacy/loose severities the agent code historically emitted that are NOT valid
+# drift_severity_enum values (a literal insert would 22P02). Mapped to the
+# nearest valid value rather than silently dropped.
+_SEVERITY_ALIASES = {"warning": "high", "warn": "high", "info": "low", "ok": "none"}
 
-# Pydantic models for type safety
+# drift_type_enum
+_VALID_DRIFT_TYPE = {"data", "model", "concept"}
+
+# alert_status_enum
+_VALID_ALERT_STATUS = {"active", "acknowledged", "investigating", "resolved", "dismissed"}
+
+# statistical_test_enum
+_VALID_TEST_TYPE = {
+    "psi",
+    "ks",
+    "chi_square",
+    "wasserstein",
+    "js_divergence",
+    "importance_correlation",
+}
+# Faithful default test per drift kind when the drift result does not name one.
+_DEFAULT_TEST_BY_DRIFT = {"data": "psi", "model": "ks", "concept": "js_divergence"}
+
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+# Reserved jsonb key used to preserve the app-level model handle when there is
+# no registered model_id to point at.
+_MV_KEY = "_model_version"
+
+
+def _iso(value: Any) -> Any:
+    """Serialise datetimes to ISO-8601 for the PostgREST/JSON boundary."""
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
+def _normalize_severity(severity: Optional[str]) -> str:
+    """Coerce a severity string to a valid ``drift_severity_enum`` value."""
+    s = (severity or "").strip().lower()
+    if s in _VALID_SEVERITY:
+        return s
+    if s in _SEVERITY_ALIASES:
+        return _SEVERITY_ALIASES[s]
+    return "medium"  # unknown -> visible, valid (never an invalid enum literal)
+
+
+def _normalize_test_type(test_type: Optional[str], drift_type: Optional[str] = None) -> str:
+    """Coerce to a valid ``statistical_test_enum`` value (NOT NULL column)."""
+    t = (test_type or "").strip().lower()
+    if t in _VALID_TEST_TYPE:
+        return t
+    return _DEFAULT_TEST_BY_DRIFT.get((drift_type or "").lower(), "psi")
+
+
+def _normalize_drift_type(
+    drift_type: Optional[str], *, default: Optional[str] = "data"
+) -> Optional[str]:
+    """Coerce to a valid ``drift_type_enum`` value (data/model/concept).
+
+    ``default`` is returned for an unknown/empty value: ``"data"`` for the
+    NOT-NULL ml_drift_history column, ``None`` for the nullable
+    ml_monitoring_alerts column. An unknown literal would 22P02 the insert.
+    """
+    d = (drift_type or "").strip().lower()
+    return d if d in _VALID_DRIFT_TYPE else default
+
+
+def _normalize_alert_status(status: Optional[str]) -> str:
+    """Coerce to a valid ``alert_status_enum`` value (NOT NULL column).
+
+    Unknown/empty -> ``"active"`` (the column + record default); an unknown
+    literal would 22P02 the insert.
+    """
+    s = (status or "").strip().lower()
+    return s if s in _VALID_ALERT_STATUS else "active"
+
+
+def _derive_trigger_type(trigger_reason: Optional[str]) -> str:
+    """Map a (free-text) trigger reason to the ``trigger_type`` NOT-NULL column
+    domain: 'drift' / 'performance' / 'scheduled' / 'manual'."""
+    r = (trigger_reason or "").strip().lower()
+    if "drift" in r:
+        return "drift"
+    if "perf" in r:
+        return "performance"
+    if "sched" in r:
+        return "scheduled"
+    if r == "manual":
+        return "manual"
+    return "manual"
+
+
+def _ms_to_seconds(duration_ms: Optional[int]) -> float:
+    """Convert milliseconds (app vocabulary) to the DB ``duration_seconds`` unit."""
+    return round((duration_ms or 0) / 1000.0, 2)
+
+
+def _is_uuid(value: Optional[str]) -> bool:
+    return bool(value and _UUID_RE.match(value))
+
+
+async def _resolve_model_id(client: Any, model_version: Optional[str]) -> Optional[str]:
+    """Resolve an app-level model handle to a ``model_id`` uuid.
+
+    - If the handle already *is* a uuid, use it directly.
+    - Else look it up in ``ml_model_registry`` (by ``model_version`` then
+      ``model_name``).
+    - Else return ``None`` (unregistered model -> NULL FK; the handle is
+      preserved in the row's jsonb so it is never lost). Never fabricated.
+    """
+    if not model_version:
+        return None
+    if _is_uuid(model_version):
+        return model_version
+    if not client:
+        return None
+    try:
+        for col in ("model_version", "model_name"):
+            res = await (
+                client.table("ml_model_registry")
+                .select("id")
+                .eq(col, model_version)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                return str(res.data[0]["id"])
+    except Exception:
+        # A registry lookup failure must not block recording drift — fall back
+        # to the preserved-handle path rather than raising.
+        return None
+    return None
+
+
+def _apply_model_filter(query: Any, model_id: Optional[str], model_version: str, jsonb_col: str):
+    """Filter a query by model: by ``model_id`` when the handle resolved to a
+    uuid, else by the preserved handle in the table's jsonb column."""
+    if model_id is not None:
+        return query.eq("model_id", model_id)
+    return query.eq(f"{jsonb_col}->>{_MV_KEY}", model_version)
+
+
+# ===========================================================================
+# Record models — fields mirror the live DB columns 1:1.
+# The only non-column field is ``model_version`` (the app handle, preserved in
+# the row's jsonb; excluded from ``to_db_row``, reconstructed by ``from_db_row``).
+# ===========================================================================
 class DriftHistoryRecord(BaseModel):
     """Record for ml_drift_history table."""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    model_version: str
-    feature_name: str
-    drift_type: str  # data, model, concept
-    test_statistic: float
-    p_value: float
-    drift_detected: bool
-    severity: str  # none, low, medium, high, critical
+    model_id: Optional[str] = None
+    model_version: Optional[str] = None  # app handle (no column; preserved in raw_results)
+    experiment_id: Optional[str] = None
+    deployment_id: Optional[str] = None
+    drift_type: str = "data"  # data, model, concept
+    feature_name: Optional[str] = None
+    test_type: str = "psi"
+    test_statistic: Optional[float] = None
+    p_value: Optional[float] = None
+    threshold: float = 0.05
+    drift_detected: bool = False
+    severity: str = "none"
+    # NOT NULL on ml_drift_history (CHECK baseline_end<=current_start). Always
+    # supplied on write (record_drift_results) and present on read (base table),
+    # so kept required — the API renders them as non-optional datetimes.
     baseline_start: datetime
     baseline_end: datetime
     current_start: datetime
     current_end: datetime
-    sample_size_baseline: int = 0
-    sample_size_current: int = 0
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    baseline_mean: Optional[float] = None
+    baseline_std: Optional[float] = None
+    baseline_min: Optional[float] = None
+    baseline_max: Optional[float] = None
+    baseline_count: Optional[int] = None
+    current_mean: Optional[float] = None
+    current_std: Optional[float] = None
+    current_min: Optional[float] = None
+    current_max: Optional[float] = None
+    current_count: Optional[int] = None
+    drift_score: Optional[float] = None
+    contribution_to_overall: Optional[float] = None
+    raw_results: Dict[str, Any] = Field(default_factory=dict)
+    detected_by: str = "drift_monitor_agent"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_db_row(self) -> Dict[str, Any]:
+        raw = dict(self.raw_results or {})
+        if self.model_version:
+            raw[_MV_KEY] = self.model_version
+        return {
+            "id": self.id,
+            "model_id": self.model_id,
+            "experiment_id": self.experiment_id,
+            "deployment_id": self.deployment_id,
+            "drift_type": _normalize_drift_type(self.drift_type),
+            "feature_name": self.feature_name,
+            "test_type": _normalize_test_type(self.test_type, self.drift_type),
+            "test_statistic": self.test_statistic,
+            "p_value": self.p_value,
+            "threshold": self.threshold,
+            "drift_detected": self.drift_detected,
+            "severity": _normalize_severity(self.severity),
+            "baseline_start": _iso(self.baseline_start),
+            "baseline_end": _iso(self.baseline_end),
+            "current_start": _iso(self.current_start),
+            "current_end": _iso(self.current_end),
+            "baseline_mean": self.baseline_mean,
+            "baseline_std": self.baseline_std,
+            "baseline_min": self.baseline_min,
+            "baseline_max": self.baseline_max,
+            "baseline_count": self.baseline_count,
+            "current_mean": self.current_mean,
+            "current_std": self.current_std,
+            "current_min": self.current_min,
+            "current_max": self.current_max,
+            "current_count": self.current_count,
+            "drift_score": self.drift_score,
+            "contribution_to_overall": self.contribution_to_overall,
+            "raw_results": raw,
+            "detected_by": self.detected_by,
+            "created_at": _iso(self.created_at),
+        }
+
+    @classmethod
+    def from_db_row(cls, row: Dict[str, Any]) -> "DriftHistoryRecord":
+        data = dict(row)
+        raw = data.get("raw_results") or {}
+        mv = raw.get(_MV_KEY) if isinstance(raw, dict) else None
+        rec = cls.model_validate(data)
+        rec.model_version = mv
+        return rec
 
 
 class MonitoringAlertRecord(BaseModel):
     """Record for ml_monitoring_alerts table."""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    model_version: str
-    alert_type: str  # data_drift, model_drift, concept_drift, performance_degradation
-    severity: str  # warning, critical
-    message: str
+    model_id: Optional[str] = None
+    model_version: Optional[str] = None  # app handle (preserved in metadata)
+    alert_type: str = "drift"
+    title: Optional[str] = None  # NOT NULL — derived from message when absent
+    severity: str = "medium"
+    status: str = "active"
+    message: str = ""
     affected_features: List[str] = Field(default_factory=list)
-    recommended_action: str
-    status: str = "active"  # active, acknowledged, investigating, resolved, dismissed
-    triggered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    drift_type: Optional[str] = None
+    composite_drift_score: Optional[float] = None
+    recommended_action: Optional[str] = None
+    recommended_priority: Optional[str] = None
+    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
     resolved_at: Optional[datetime] = None
     resolved_by: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def _resolved_title(self) -> str:
+        if self.title:
+            return self.title[:500]
+        return (self.message or f"{self.alert_type} alert")[:500]
+
+    def to_db_row(self) -> Dict[str, Any]:
+        meta = dict(self.metadata or {})
+        if self.model_version:
+            meta[_MV_KEY] = self.model_version
+        return {
+            "id": self.id,
+            "model_id": self.model_id,
+            "alert_type": self.alert_type,
+            "title": self._resolved_title(),
+            "severity": _normalize_severity(self.severity),
+            "status": _normalize_alert_status(self.status),
+            "message": self.message,
+            "affected_features": list(self.affected_features or []),
+            "drift_type": _normalize_drift_type(self.drift_type, default=None),
+            "composite_drift_score": self.composite_drift_score,
+            "recommended_action": self.recommended_action,
+            "recommended_priority": self.recommended_priority,
+            "acknowledged_at": _iso(self.acknowledged_at),
+            "acknowledged_by": self.acknowledged_by,
+            "resolved_at": _iso(self.resolved_at),
+            "resolved_by": self.resolved_by,
+            "metadata": meta,
+            "created_at": _iso(self.created_at),
+        }
+
+    @classmethod
+    def from_db_row(cls, row: Dict[str, Any]) -> "MonitoringAlertRecord":
+        data = dict(row)
+        meta = data.get("metadata") or {}
+        mv = meta.get(_MV_KEY) if isinstance(meta, dict) else None
+        rec = cls.model_validate(data)
+        rec.model_version = mv
+        return rec
 
 
 class MonitoringRunRecord(BaseModel):
     """Record for ml_monitoring_runs table."""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    model_version: str
-    run_type: str = "scheduled"  # scheduled, manual, triggered
-    status: str = "running"  # running, completed, failed
-    features_checked: int = 0
+    model_version: Optional[str] = None  # app handle (preserved in config)
+    model_ids: Optional[List[str]] = None
+    run_type: str = "full"
+    trigger_type: str = "scheduled"
+    status: str = "running"
+    total_checks: int = 0
     drift_detected_count: int = 0
     alerts_generated: int = 0
-    duration_ms: int = 0
+    duration_seconds: Optional[float] = None
     config: Dict[str, Any] = Field(default_factory=dict)
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
+
+    def to_db_row(self) -> Dict[str, Any]:
+        cfg = dict(self.config or {})
+        if self.model_version:
+            cfg[_MV_KEY] = self.model_version
+        return {
+            "id": self.id,
+            "model_ids": self.model_ids,
+            "run_type": self.run_type,
+            "trigger_type": self.trigger_type,
+            "status": self.status,
+            "total_checks": self.total_checks,
+            "drift_detected_count": self.drift_detected_count,
+            "alerts_generated": self.alerts_generated,
+            "duration_seconds": self.duration_seconds,
+            "config": cfg,
+            "started_at": _iso(self.started_at),
+            "completed_at": _iso(self.completed_at),
+            "error_message": self.error_message,
+        }
+
+    @classmethod
+    def from_db_row(cls, row: Dict[str, Any]) -> "MonitoringRunRecord":
+        data = dict(row)
+        cfg = data.get("config") or {}
+        mv = cfg.get(_MV_KEY) if isinstance(cfg, dict) else None
+        rec = cls.model_validate(data)
+        rec.model_version = mv
+        return rec
 
 
 class PerformanceMetricRecord(BaseModel):
     """Record for ml_performance_metrics table."""
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    model_version: str
-    metric_name: str
-    metric_value: float
-    sample_size: int
-    window_start: datetime
-    window_end: datetime
+    model_id: Optional[str] = None
+    model_version: Optional[str] = None  # app handle (preserved in metadata)
+    metric_name: str = ""
+    metric_value: float = 0.0
+    sample_size: Optional[int] = None
+    measurement_window_start: Optional[datetime] = None
+    measurement_window_end: Optional[datetime] = None
+    measured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_db_row(self) -> Dict[str, Any]:
+        meta = dict(self.metadata or {})
+        if self.model_version:
+            meta[_MV_KEY] = self.model_version
+        return {
+            "id": self.id,
+            "model_id": self.model_id,
+            "metric_name": self.metric_name,
+            "metric_value": self.metric_value,
+            "sample_size": self.sample_size,
+            "measurement_window_start": _iso(self.measurement_window_start),
+            "measurement_window_end": _iso(self.measurement_window_end),
+            "measured_at": _iso(self.measured_at),
+            "metadata": meta,
+        }
+
+    @classmethod
+    def from_db_row(cls, row: Dict[str, Any]) -> "PerformanceMetricRecord":
+        data = dict(row)
+        meta = data.get("metadata") or {}
+        mv = meta.get(_MV_KEY) if isinstance(meta, dict) else None
+        rec = cls.model_validate(data)
+        rec.model_version = mv
+        return rec
 
 
 class RetrainingHistoryRecord(BaseModel):
-    """Record for ml_retraining_history table."""
+    """Record for ml_retraining_history table.
+
+    Backward-compat read accessors (``performance_before``/``performance_after``/
+    ``drift_score_before``/``training_config``) derive from the real columns so
+    ``src/services/retraining_trigger.py`` reads unchanged.
+    """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    old_model_version: str
-    new_model_version: str
-    trigger_reason: str
-    drift_score_before: float
-    performance_before: float
-    performance_after: Optional[float] = None
-    training_config: Dict[str, Any] = Field(default_factory=dict)
-    status: str = "pending"  # pending, training, completed, failed, rolled_back
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    model_id: Optional[str] = None
+    trigger_type: str = "manual"
+    old_model_version: Optional[str] = None
+    new_model_version: Optional[str] = None
+    trigger_reason: str = ""
+    drift_severity: Optional[str] = None
+    status: str = "pending"
+    old_metric_value: Optional[float] = None
+    new_metric_value: Optional[float] = None
+    improvement: Optional[float] = None
+    performance_delta: Optional[float] = None
+    config: Dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = None
+    triggered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # --- backward-compat accessors (no DB columns of their own) ---
+    @property
+    def performance_before(self) -> Optional[float]:
+        return self.old_metric_value
+
+    @property
+    def performance_after(self) -> Optional[float]:
+        return self.new_metric_value
+
+    @property
+    def drift_score_before(self) -> float:
+        val = (self.config or {}).get("drift_score_before")
+        return float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) else 0.0
+
+    @property
+    def training_config(self) -> Dict[str, Any]:
+        return dict(self.config or {})
+
+    def to_db_row(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "model_id": self.model_id,
+            "trigger_type": _derive_trigger_type(self.trigger_type or self.trigger_reason),
+            "old_model_version": self.old_model_version,
+            "new_model_version": self.new_model_version,
+            "trigger_reason": self.trigger_reason,
+            "drift_severity": (
+                _normalize_severity(self.drift_severity) if self.drift_severity else None
+            ),
+            "status": self.status,
+            "old_metric_value": self.old_metric_value,
+            "new_metric_value": self.new_metric_value,
+            "improvement": self.improvement,
+            "performance_delta": self.performance_delta,
+            "config": dict(self.config or {}),
+            "notes": self.notes,
+            "triggered_at": _iso(self.triggered_at),
+            "completed_at": _iso(self.completed_at),
+        }
+
+    @classmethod
+    def from_db_row(cls, row: Dict[str, Any]) -> "RetrainingHistoryRecord":
+        return cls.model_validate(dict(row))
 
 
+# ===========================================================================
+# Repositories
+# ===========================================================================
 class DriftHistoryRepository(BaseRepository[DriftHistoryRecord]):
     """Repository for drift detection history."""
 
     table_name = "ml_drift_history"
     model_class = DriftHistoryRecord
+
+    def _to_model(self, data: Dict[str, Any]) -> DriftHistoryRecord:
+        return DriftHistoryRecord.from_db_row(data)
 
     async def record_drift_results(
         self,
@@ -118,11 +523,10 @@ class DriftHistoryRepository(BaseRepository[DriftHistoryRecord]):
         baseline_window: Dict[str, datetime],
         current_window: Dict[str, datetime],
     ) -> List[DriftHistoryRecord]:
-        """
-        Record multiple drift detection results.
+        """Record multiple drift detection results.
 
         Args:
-            model_version: Model version being monitored
+            model_version: Model version/handle being monitored
             drift_results: List of drift detection results
             baseline_window: Baseline period timestamps
             current_window: Current period timestamps
@@ -133,33 +537,38 @@ class DriftHistoryRepository(BaseRepository[DriftHistoryRecord]):
         if not self.client or not drift_results:
             return []
 
-        records = []
+        model_id = await _resolve_model_id(self.client, model_version)
+        now = datetime.now(timezone.utc)
+
+        records: List[DriftHistoryRecord] = []
         for result in drift_results:
+            drift_type = result.get("drift_type", "data")
             record = DriftHistoryRecord(
+                model_id=model_id,
                 model_version=model_version,
-                feature_name=result.get("feature", "unknown"),
-                drift_type=result.get("drift_type", "data"),
-                test_statistic=result.get("test_statistic", 0.0),
-                p_value=result.get("p_value", 1.0),
-                drift_detected=result.get("drift_detected", False),
+                feature_name=result.get("feature", result.get("feature_name")),
+                drift_type=drift_type,
+                test_type=_normalize_test_type(result.get("test_type"), drift_type),
+                test_statistic=result.get("test_statistic"),
+                p_value=result.get("p_value"),
+                drift_detected=bool(result.get("drift_detected", False)),
                 severity=result.get("severity", "none"),
-                baseline_start=baseline_window.get("start", datetime.now(timezone.utc)),
-                baseline_end=baseline_window.get("end", datetime.now(timezone.utc)),
-                current_start=current_window.get("start", datetime.now(timezone.utc)),
-                current_end=current_window.get("end", datetime.now(timezone.utc)),
-                metadata=result.get("metadata", {}),
+                baseline_start=baseline_window.get("start", now),
+                baseline_end=baseline_window.get("end", now),
+                current_start=current_window.get("start", now),
+                current_end=current_window.get("end", now),
+                baseline_count=result.get("baseline_count", result.get("sample_size_baseline")),
+                current_count=result.get("current_count", result.get("sample_size_current")),
+                baseline_mean=result.get("baseline_mean"),
+                current_mean=result.get("current_mean"),
+                drift_score=result.get("drift_score"),
+                contribution_to_overall=result.get("contribution_to_overall"),
+                raw_results=result.get("metadata", result.get("raw_results", {})) or {},
             )
             records.append(record)
 
-        # Batch insert
-        data = [r.model_dump() for r in records]
-        for item in data:
-            for key, value in item.items():
-                if isinstance(value, datetime):
-                    item[key] = value.isoformat()
-
+        data = [r.to_db_row() for r in records]
         await self.client.table(self.table_name).insert(data).execute()
-
         return records
 
     async def get_latest_drift_status(
@@ -167,30 +576,33 @@ class DriftHistoryRepository(BaseRepository[DriftHistoryRecord]):
         model_version: str,
         limit: int = 50,
     ) -> List[DriftHistoryRecord]:
-        """
-        Get latest drift status for a model.
+        """Get the latest drift status per (drift_type, feature) for a model.
 
-        Uses the ml_drift_status_latest view for efficient retrieval.
-
-        Args:
-            model_version: Model version to check
-            limit: Maximum records to return
-
-        Returns:
-            List of latest drift records per feature
+        Reads the base ``ml_drift_history`` table (rather than the
+        ``ml_drift_status_latest`` view, which exposes neither the period
+        columns the API renders nor the preserved model handle) and keeps the
+        most-recent row per (drift_type, feature_name).
         """
         if not self.client:
             return []
 
-        result = await (
-            self.client.table("ml_drift_status_latest")
-            .select("*")
-            .eq("model_version", model_version)
-            .limit(limit)
-            .execute()
-        )
+        model_id = await _resolve_model_id(self.client, model_version)
+        query = self.client.table(self.table_name).select("*")
+        query = _apply_model_filter(query, model_id, model_version, "raw_results")
+        query = query.order("created_at", desc=True).limit(max(limit * 5, limit))
+        result = await query.execute()
 
-        return [self._to_model(row) for row in result.data]
+        seen: set = set()
+        latest: List[DriftHistoryRecord] = []
+        for row in result.data or []:
+            key = (row.get("drift_type"), row.get("feature_name"))
+            if key in seen:
+                continue
+            seen.add(key)
+            latest.append(self._to_model(row))
+            if len(latest) >= limit:
+                break
+        return latest
 
     async def get_drift_trend(
         self,
@@ -198,31 +610,22 @@ class DriftHistoryRepository(BaseRepository[DriftHistoryRecord]):
         feature_name: str,
         days: int = 7,
     ) -> List[DriftHistoryRecord]:
-        """
-        Get drift trend for a specific feature.
-
-        Args:
-            model_version: Model version
-            feature_name: Feature to analyze
-            days: Number of days to look back
-
-        Returns:
-            List of drift records for trend analysis
-        """
+        """Get drift trend for a specific feature over the last ``days`` days."""
         if not self.client:
             return []
 
-        result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("model_version", model_version)
-            .eq("feature_name", feature_name)
-            .gte("detected_at", f"now() - interval '{days} days'")
-            .order("detected_at", desc=True)
-            .execute()
-        )
+        model_id = await _resolve_model_id(self.client, model_version)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-        return [self._to_model(row) for row in result.data]
+        query = self.client.table(self.table_name).select("*")
+        query = _apply_model_filter(query, model_id, model_version, "raw_results")
+        query = (
+            query.eq("feature_name", feature_name)
+            .gte("created_at", cutoff)
+            .order("created_at", desc=True)
+        )
+        result = await query.execute()
+        return [self._to_model(row) for row in (result.data or [])]
 
 
 class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
@@ -231,79 +634,74 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
     table_name = "ml_monitoring_alerts"
     model_class = MonitoringAlertRecord
 
+    def _to_model(self, data: Dict[str, Any]) -> MonitoringAlertRecord:
+        return MonitoringAlertRecord.from_db_row(data)
+
     async def create_alerts_from_drift(
         self,
         model_version: str,
         drift_results: List[Dict[str, Any]],
     ) -> List[MonitoringAlertRecord]:
-        """
-        Create alerts from drift detection results.
+        """Create alerts from drift detection results.
 
-        Generates alerts for critical and high severity drifts.
-
-        Args:
-            model_version: Model version
-            drift_results: Drift detection results
-
-        Returns:
-            List of created alerts
+        Generates alerts for critical and high severity drifts. Alert severity
+        is the ``drift_severity_enum`` value ('critical'/'high'); the prior code
+        emitted 'warning', which is not a valid enum value and would 22P02.
         """
         if not self.client:
             return []
 
-        # Group by drift type and severity
+        model_id = await _resolve_model_id(self.client, model_version)
+
         critical_by_type: Dict[str, List[str]] = {}
         high_by_type: Dict[str, List[str]] = {}
 
         for result in drift_results:
             drift_type = result.get("drift_type", "data")
             severity = result.get("severity", "none")
-            feature = result.get("feature", "unknown")
+            feature = result.get("feature", result.get("feature_name", "unknown"))
 
             if severity == "critical":
-                if drift_type not in critical_by_type:
-                    critical_by_type[drift_type] = []
-                critical_by_type[drift_type].append(feature)
+                critical_by_type.setdefault(drift_type, []).append(feature)
             elif severity == "high":
-                if drift_type not in high_by_type:
-                    high_by_type[drift_type] = []
-                high_by_type[drift_type].append(feature)
+                high_by_type.setdefault(drift_type, []).append(feature)
 
-        alerts = []
+        alerts: List[MonitoringAlertRecord] = []
 
-        # Create critical alerts
         for drift_type, features in critical_by_type.items():
-            alert = MonitoringAlertRecord(
-                model_version=model_version,
-                alert_type=f"{drift_type}_drift",
-                severity="critical",
-                message=f"CRITICAL {drift_type} drift detected in: {', '.join(features[:5])}",
-                affected_features=features,
-                recommended_action=self._get_recommendation(drift_type, "critical"),
+            alerts.append(
+                MonitoringAlertRecord(
+                    model_id=model_id,
+                    model_version=model_version,
+                    alert_type=f"{drift_type}_drift",
+                    severity="critical",
+                    drift_type=drift_type,
+                    title=f"CRITICAL {drift_type} drift",
+                    message=f"CRITICAL {drift_type} drift detected in: {', '.join(features[:5])}",
+                    affected_features=features,
+                    recommended_action=self._get_recommendation(drift_type, "critical"),
+                    recommended_priority="immediate",
+                )
             )
-            alerts.append(alert)
 
-        # Create warning alerts
         for drift_type, features in high_by_type.items():
-            alert = MonitoringAlertRecord(
-                model_version=model_version,
-                alert_type=f"{drift_type}_drift",
-                severity="warning",
-                message=f"HIGH {drift_type} drift detected in: {', '.join(features[:5])}",
-                affected_features=features,
-                recommended_action=self._get_recommendation(drift_type, "warning"),
+            alerts.append(
+                MonitoringAlertRecord(
+                    model_id=model_id,
+                    model_version=model_version,
+                    alert_type=f"{drift_type}_drift",
+                    severity="high",
+                    drift_type=drift_type,
+                    title=f"HIGH {drift_type} drift",
+                    message=f"HIGH {drift_type} drift detected in: {', '.join(features[:5])}",
+                    affected_features=features,
+                    recommended_action=self._get_recommendation(drift_type, "high"),
+                    recommended_priority="high",
+                )
             )
-            alerts.append(alert)
 
         if alerts:
-            data = [a.model_dump() for a in alerts]
-            for item in data:
-                for key, value in item.items():
-                    if isinstance(value, datetime):
-                        item[key] = value.isoformat()
-                    elif value is None:
-                        item[key] = None
-
+            data = [a.to_db_row() for a in alerts]
             await self.client.table(self.table_name).insert(data).execute()
 
         return alerts
@@ -313,16 +711,7 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
         model_version: Optional[str] = None,
         limit: int = 100,
     ) -> List[MonitoringAlertRecord]:
-        """
-        Get all active (unresolved) alerts.
-
-        Args:
-            model_version: Optional filter by model
-            limit: Maximum records
-
-        Returns:
-            List of active alerts
-        """
+        """Get all active (unresolved) alerts, optionally filtered by model."""
         if not self.client:
             return []
 
@@ -330,36 +719,29 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
             self.client.table(self.table_name)
             .select("*")
             .eq("status", "active")
-            .order("triggered_at", desc=True)
+            .order("created_at", desc=True)
             .limit(limit)
         )
 
         if model_version:
-            query = query.eq("model_version", model_version)
+            model_id = await _resolve_model_id(self.client, model_version)
+            query = _apply_model_filter(query, model_id, model_version, "metadata")
 
         result = await query.execute()
-
-        return [self._to_model(row) for row in result.data]
+        return [self._to_model(row) for row in (result.data or [])]
 
     async def acknowledge_alert(
         self,
         alert_id: str,
         acknowledged_by: str,
     ) -> Optional[MonitoringAlertRecord]:
-        """
-        Acknowledge an alert.
-
-        Args:
-            alert_id: Alert UUID
-            acknowledged_by: User who acknowledged
-
-        Returns:
-            Updated alert or None
-        """
+        """Acknowledge an alert (records who/when on the real columns)."""
         return await self.update(
             alert_id,
             {
                 "status": "acknowledged",
+                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                "acknowledged_by": acknowledged_by,
             },
         )
 
@@ -368,16 +750,7 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
         alert_id: str,
         resolved_by: str,
     ) -> Optional[MonitoringAlertRecord]:
-        """
-        Resolve an alert.
-
-        Args:
-            alert_id: Alert UUID
-            resolved_by: User who resolved
-
-        Returns:
-            Updated alert or None
-        """
+        """Resolve an alert."""
         return await self.update(
             alert_id,
             {
@@ -391,14 +764,14 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
         """Get recommended action based on drift type and severity."""
         recommendations = {
             ("data", "critical"): "Immediate action required: Retrain model with recent data",
-            ("data", "warning"): "Monitor closely: Schedule retraining if drift persists",
+            ("data", "high"): "Monitor closely: Schedule retraining if drift persists",
             ("model", "critical"): "Immediate action required: Investigate model degradation",
-            ("model", "warning"): "Monitor closely: Check prediction accuracy",
+            ("model", "high"): "Monitor closely: Check prediction accuracy",
             (
                 "concept",
                 "critical",
             ): "Immediate action required: Review feature-target relationships",
-            ("concept", "warning"): "Monitor closely: Validate model on current data",
+            ("concept", "high"): "Monitor closely: Validate model on current data",
         }
         return recommendations.get((drift_type, severity), "Review drift detection results")
 
@@ -409,38 +782,32 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
     table_name = "ml_monitoring_runs"
     model_class = MonitoringRunRecord
 
+    def _to_model(self, data: Dict[str, Any]) -> MonitoringRunRecord:
+        return MonitoringRunRecord.from_db_row(data)
+
     async def start_run(
         self,
         model_version: str,
         run_type: str = "scheduled",
         config: Optional[Dict[str, Any]] = None,
     ) -> MonitoringRunRecord:
-        """
-        Start a new monitoring run.
+        """Start a new monitoring run.
 
-        Args:
-            model_version: Model being monitored
-            run_type: Type of run (scheduled, manual, triggered)
-            config: Run configuration
-
-        Returns:
-            Created run record
+        ``run_type`` here is the app's notion of *why* the run fired (scheduled/
+        manual/triggered) — it maps to the DB ``trigger_type`` column. The DB
+        ``run_type`` (what kind of monitoring) is recorded as 'full'.
         """
+        model_id = await _resolve_model_id(self.client, model_version) if self.client else None
         record = MonitoringRunRecord(
             model_version=model_version,
-            run_type=run_type,
+            model_ids=[model_id] if model_id else None,
+            run_type="full",
+            trigger_type=run_type,
             config=config or {},
         )
 
         if self.client:
-            data = record.model_dump()
-            for key, value in data.items():
-                if isinstance(value, datetime):
-                    data[key] = value.isoformat()
-                elif value is None:
-                    data[key] = None
-
-            await self.client.table(self.table_name).insert(data).execute()
+            await self.client.table(self.table_name).insert(record.to_db_row()).execute()
 
         return record
 
@@ -453,30 +820,18 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
         duration_ms: int,
         error_message: Optional[str] = None,
     ) -> Optional[MonitoringRunRecord]:
-        """
-        Complete a monitoring run.
-
-        Args:
-            run_id: Run UUID
-            features_checked: Number of features checked
-            drift_detected_count: Number of features with drift
-            alerts_generated: Number of alerts created
-            duration_ms: Run duration in milliseconds
-            error_message: Optional error message if failed
-
-        Returns:
-            Updated run record
-        """
+        """Complete a monitoring run (maps features_checked -> total_checks and
+        duration_ms -> duration_seconds)."""
         status = "completed" if error_message is None else "failed"
 
         return await self.update(
             run_id,
             {
                 "status": status,
-                "features_checked": features_checked,
+                "total_checks": features_checked,
                 "drift_detected_count": drift_detected_count,
                 "alerts_generated": alerts_generated,
-                "duration_ms": duration_ms,
+                "duration_seconds": _ms_to_seconds(duration_ms),
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "error_message": error_message,
             },
@@ -488,17 +843,7 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
         limit: int = 10,
         since: Optional[datetime] = None,
     ) -> List[MonitoringRunRecord]:
-        """
-        Get recent monitoring runs.
-
-        Args:
-            model_version: Optional filter by model
-            limit: Maximum records
-            since: If provided, only return runs with ``started_at >= since``.
-
-        Returns:
-            List of recent runs
-        """
+        """Get recent monitoring runs."""
         if not self.client:
             return []
 
@@ -510,14 +855,14 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
         )
 
         if model_version:
-            query = query.eq("model_version", model_version)
+            model_id = await _resolve_model_id(self.client, model_version)
+            query = _apply_model_filter(query, model_id, model_version, "config")
 
         if since is not None:
             query = query.gte("started_at", since.isoformat())
 
         result = await query.execute()
-
-        return [self._to_model(row) for row in result.data]
+        return [self._to_model(row) for row in (result.data or [])]
 
 
 class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
@@ -525,6 +870,9 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
 
     table_name = "ml_performance_metrics"
     model_class = PerformanceMetricRecord
+
+    def _to_model(self, data: Dict[str, Any]) -> PerformanceMetricRecord:
+        return PerformanceMetricRecord.from_db_row(data)
 
     async def record_metrics(
         self,
@@ -534,42 +882,28 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
         window_start: datetime,
         window_end: datetime,
     ) -> List[PerformanceMetricRecord]:
-        """
-        Record performance metrics for a model.
-
-        Args:
-            model_version: Model version
-            metrics: Metric name -> value mapping
-            sample_size: Number of samples used
-            window_start: Evaluation window start
-            window_end: Evaluation window end
-
-        Returns:
-            List of created records
-        """
+        """Record performance metrics for a model."""
         if not self.client or not metrics:
             return []
 
-        records = []
+        model_id = await _resolve_model_id(self.client, model_version)
+
+        records: List[PerformanceMetricRecord] = []
         for metric_name, metric_value in metrics.items():
-            record = PerformanceMetricRecord(
-                model_version=model_version,
-                metric_name=metric_name,
-                metric_value=metric_value,
-                sample_size=sample_size,
-                window_start=window_start,
-                window_end=window_end,
+            records.append(
+                PerformanceMetricRecord(
+                    model_id=model_id,
+                    model_version=model_version,
+                    metric_name=metric_name,
+                    metric_value=metric_value,
+                    sample_size=sample_size,
+                    measurement_window_start=window_start,
+                    measurement_window_end=window_end,
+                )
             )
-            records.append(record)
 
-        data = [r.model_dump() for r in records]
-        for item in data:
-            for key, value in item.items():
-                if isinstance(value, datetime):
-                    item[key] = value.isoformat()
-
+        data = [r.to_db_row() for r in records]
         await self.client.table(self.table_name).insert(data).execute()
-
         return records
 
     async def get_metric_trend(
@@ -578,31 +912,22 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
         metric_name: str,
         days: int = 30,
     ) -> List[PerformanceMetricRecord]:
-        """
-        Get metric trend over time.
-
-        Args:
-            model_version: Model version
-            metric_name: Metric to retrieve
-            days: Number of days to look back
-
-        Returns:
-            List of metric records
-        """
+        """Get metric trend over time."""
         if not self.client:
             return []
 
-        result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("model_version", model_version)
-            .eq("metric_name", metric_name)
-            .gte("recorded_at", f"now() - interval '{days} days'")
-            .order("recorded_at", desc=True)
-            .execute()
-        )
+        model_id = await _resolve_model_id(self.client, model_version)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-        return [self._to_model(row) for row in result.data]
+        query = self.client.table(self.table_name).select("*")
+        query = _apply_model_filter(query, model_id, model_version, "metadata")
+        query = (
+            query.eq("metric_name", metric_name)
+            .gte("measured_at", cutoff)
+            .order("measured_at", desc=True)
+        )
+        result = await query.execute()
+        return [self._to_model(row) for row in (result.data or [])]
 
 
 class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
@@ -610,6 +935,9 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
 
     table_name = "ml_retraining_history"
     model_class = RetrainingHistoryRecord
+
+    def _to_model(self, data: Dict[str, Any]) -> RetrainingHistoryRecord:
+        return RetrainingHistoryRecord.from_db_row(data)
 
     async def trigger_retraining(
         self,
@@ -620,39 +948,27 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
         performance_before: float,
         training_config: Optional[Dict[str, Any]] = None,
     ) -> RetrainingHistoryRecord:
-        """
-        Record a retraining trigger.
+        """Record a retraining trigger.
 
-        Args:
-            old_model_version: Current model version
-            new_model_version: New model version being trained
-            trigger_reason: Why retraining was triggered
-            drift_score_before: Drift score before retraining
-            performance_before: Performance metric before retraining
-            training_config: Training configuration
-
-        Returns:
-            Created retraining record
+        ``drift_score_before`` has no dedicated column on ml_retraining_history;
+        it is preserved inside ``config`` (alongside the training contract).
+        ``performance_before`` maps to ``old_metric_value``.
         """
+        config = dict(training_config or {})
+        config.setdefault("drift_score_before", drift_score_before)
+
         record = RetrainingHistoryRecord(
             old_model_version=old_model_version,
             new_model_version=new_model_version,
             trigger_reason=trigger_reason,
-            drift_score_before=drift_score_before,
-            performance_before=performance_before,
-            training_config=training_config or {},
+            trigger_type=_derive_trigger_type(trigger_reason),
+            old_metric_value=performance_before,
+            config=config,
             status="pending",
         )
 
         if self.client:
-            data = record.model_dump()
-            for key, value in data.items():
-                if isinstance(value, datetime):
-                    data[key] = value.isoformat()
-                elif value is None:
-                    data[key] = None
-
-            await self.client.table(self.table_name).insert(data).execute()
+            await self.client.table(self.table_name).insert(record.to_db_row()).execute()
 
         return record
 
@@ -664,18 +980,16 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
         *,
         mlflow_run_id: Optional[str] = None,
     ) -> Optional[RetrainingHistoryRecord]:
-        """
-        Complete a retraining run.
+        """Complete a retraining run.
 
         Args:
             record_id: Retraining record UUID
-            performance_after: Performance after retraining
+            performance_after: Performance after retraining (-> new_metric_value)
             success: Whether retraining was successful
             mlflow_run_id: Provenance pointer to the MLflow run that produced
                 ``performance_after`` (#546). When supplied it is merged into the
-                record's ``training_config`` (under ``mlflow_run_id``) so a
-                completed metric remains auditable back to its run; the existing
-                config is preserved.
+                record's ``config`` (under ``mlflow_run_id``) so a completed
+                metric remains auditable back to its run.
 
         Returns:
             Updated record
@@ -684,7 +998,7 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
 
         updates: Dict[str, Any] = {
             "status": status,
-            "performance_after": performance_after,
+            "new_metric_value": performance_after,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -692,25 +1006,36 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
             existing = await self.get_by_id(record_id)
             if not existing:
                 return None
-            training_config = dict(existing.training_config or {})
-            training_config["mlflow_run_id"] = mlflow_run_id
-            updates["training_config"] = training_config
+            config = dict(existing.config or {})
+            config["mlflow_run_id"] = mlflow_run_id
+            updates["config"] = config
 
         return await self.update(record_id, updates)
+
+    async def mark_failed(
+        self,
+        record_id: str,
+        reason: str,
+    ) -> Optional[RetrainingHistoryRecord]:
+        """Mark a retraining record failed, recording the reason in ``notes``.
+
+        ml_retraining_history has no ``error_message`` column (the failure
+        reason lives in ``notes``); writing ``error_message`` would 42703.
+        """
+        return await self.update(
+            record_id,
+            {
+                "status": "failed",
+                "notes": reason,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     async def rollback_retraining(
         self,
         record_id: str,
     ) -> Optional[RetrainingHistoryRecord]:
-        """
-        Mark retraining as rolled back.
-
-        Args:
-            record_id: Retraining record UUID
-
-        Returns:
-            Updated record
-        """
+        """Mark retraining as rolled back."""
         return await self.update(
             record_id,
             {

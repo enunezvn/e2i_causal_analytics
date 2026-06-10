@@ -348,8 +348,25 @@ class ModelDeployerAgent:
             from src.repositories.deployment import MLDeploymentRepository
             from src.repositories.ml_experiment import MLModelRegistryRepository
 
-            deployment_repo = MLDeploymentRepository()
-            registry_repo = MLModelRegistryRepository()
+            # F4 follow-up (#829): inject a REAL async Supabase client. Built with
+            # no client (the prior code), the repos only ever returned in-memory
+            # fallbacks and wrote 0 rows. ``get_async_supabase_client`` RAISES when
+            # ``SUPABASE_URL`` is unset (CI / offline) — catch it so the deployment
+            # still completes and the #830 "no Supabase client" branch records the
+            # honest ``db_persist_skipped_reason`` (db_persisted=False).
+            client = None
+            try:
+                from src.memory.services.factories import get_async_supabase_client
+
+                client = await get_async_supabase_client()
+            except Exception as client_err:
+                logger.warning(
+                    "Async Supabase client unavailable for deployment persistence: %s",
+                    client_err,
+                )
+
+            deployment_repo = MLDeploymentRepository(supabase_client=client)
+            registry_repo = MLModelRegistryRepository(supabase_client=client)
 
             # Parse model_registry_id from state if available
             model_registry_id: Optional[UUID] = None
@@ -358,6 +375,12 @@ class ModelDeployerAgent:
                     model_registry_id = UUID(str(state["model_registry_id"]))
                 except ValueError:
                     logger.warning(f"Invalid model_registry_id: {state.get('model_registry_id')}")
+
+            # F4 (audit, codex round-2): default to NOT-persisted. db_persisted
+            # flips to True only after a row is CONFIRMED written below — never
+            # before — so a swallowed write failure (the outer except logs but
+            # does not fail the deployment) can't leave a fabricated True.
+            output["db_persisted"] = False
 
             # 1. Write to ml_deployments table
             output.get("deployment_manifest", {})
@@ -371,7 +394,42 @@ class ModelDeployerAgent:
 
             # Create deployment record
             if model_registry_id is None:
-                logger.warning("No model_registry_id available for deployment record")
+                # F4 (audit, codex round-1): do NOT silently drop the deployment
+                # record. ``model_registry_id`` is not yet produced by any node
+                # (register_model writes to MLflow, not to ml_model_registry),
+                # so the ml_deployments row cannot be FK-linked and is skipped.
+                # Surface it loudly + on the output so this is NOT silent data
+                # loss (the audit's "handle gracefully without silent data
+                # loss"). Producing model_registry_id requires a real
+                # ml_model_registry write — which needs a valid experiment_id
+                # UUID FK + algorithm/metrics — a distinct persistence feature
+                # tracked as an F4 follow-up.
+                logger.error(
+                    "Deployment '%s' (status=%s) completed but its ml_deployments "
+                    "record was NOT persisted: no model_registry_id "
+                    "(ml_model_registry write is unwired). See F4 follow-up.",
+                    state.get("deployment_name", ""),
+                    output.get("status"),
+                )
+                output["db_persisted"] = False
+                output["db_persist_skipped_reason"] = (
+                    "no model_registry_id — ml_model_registry write unwired (F4 follow-up)"
+                )
+                return
+
+            # F4 (audit, codex round-3): create_deployment() builds an in-memory
+            # MLDeployment(id=uuid4()) and returns it EVEN WITH NO DB CLIENT (it
+            # only inserts when self.client is set). So a truthy deployment.id is
+            # NOT proof of a write. Require a real client before trusting it.
+            if not getattr(deployment_repo, "client", None):
+                output["db_persist_skipped_reason"] = (
+                    "no Supabase client — ml_deployments row not written"
+                )
+                logger.error(
+                    "Deployment '%s' completed but ml_deployments was NOT written "
+                    "(no Supabase client) — db_persisted=False",
+                    state.get("deployment_name", ""),
+                )
                 return
 
             deployment = await deployment_repo.create_deployment(
@@ -383,6 +441,31 @@ class ModelDeployerAgent:
                 deployed_by=state.get("deployed_by", "model_deployer_agent"),
                 deployment_config=deployment_config,
             )
+
+            # F4 (audit, codex round-4): create_deployment() falls through to a
+            # prebuilt in-memory MLDeployment(id=uuid4()) when the insert returns
+            # no rows, so a truthy deployment.id is NOT proof of a DB write.
+            # Verify the row is actually DB-backed by re-reading it (get_by_id
+            # returns None with no client / no row), so db_persisted can never
+            # be a fabricated True.
+            persisted_row = (
+                await deployment_repo.get_by_id(str(deployment.id))
+                if deployment and deployment.id
+                else None
+            )
+            if persisted_row is None:
+                output["db_persist_skipped_reason"] = (
+                    "ml_deployments row not confirmed in DB after create_deployment"
+                )
+                logger.error(
+                    "Deployment '%s' completed but its ml_deployments row was not "
+                    "confirmed in the DB — db_persisted=False",
+                    state.get("deployment_name", ""),
+                )
+                return
+
+            # Row CONFIRMED present in the DB -> honest to mark persisted.
+            output["db_persisted"] = True
 
             # Update deployment status based on outcome
             if deployment and deployment.id:
@@ -415,9 +498,16 @@ class ModelDeployerAgent:
                 logger.info(f"Updated model {model_registry_id} stage to {new_stage}")
 
         except ImportError as e:
+            # Repos unavailable (e.g. offline test env) — no row written.
+            output["db_persisted"] = False
+            output["db_persist_skipped_reason"] = f"repository import failed: {e}"
             logger.warning(f"Repository import failed (expected in testing): {e}")
         except Exception as e:
-            # Log error but don't fail the deployment
+            # F4 (audit, codex round-2): a swallowed write failure must NOT leave
+            # a fabricated db_persisted=True. Log error but don't fail the
+            # deployment; persistence is honestly marked False.
+            output["db_persisted"] = False
+            output["db_persist_skipped_reason"] = f"database storage failed: {e}"
             logger.error(f"Database storage failed: {e}")
 
     async def _update_procedural_memory(

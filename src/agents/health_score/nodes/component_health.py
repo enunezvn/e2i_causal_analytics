@@ -63,24 +63,41 @@ class ComponentHealthNode:
         """Execute component health checks."""
         start_time = time.time()
 
-        # Skip if quick check that doesn't need components
-        if state.get("check_scope") == "quick":
-            logger.debug("Skipping component health for quick check")
+        # Codex F1.2: the QUICK check IS the component-focused check (the quick
+        # graph is component -> compose), so components MUST be measured on quick
+        # scope. Skip ONLY for scopes that explicitly exclude components
+        # (models/pipelines/agents-only). Skipped == not measured (F1): do NOT
+        # emit a fail-open 1.0 score.
+        if state.get("check_scope") in ("models", "pipelines", "agents"):
+            logger.debug("Skipping component health for non-component scope")
             return {
                 **state,
                 "component_statuses": [],
-                "component_health_score": 1.0,
+                "component_health_measured": False,
+                "status": "checking",
+            }
+
+        # F1 fail-closed: without a real health backend the component dimension
+        # is UNKNOWN, not healthy. Emit per-component "unknown" statuses and mark
+        # the dimension unmeasured so the composer excludes it (never defaults to
+        # a fabricated 1.0 score).
+        if not self.health_client:
+            logger.warning(
+                "No health_client wired - component health is UNKNOWN (fail-closed), "
+                "not fabricated-healthy"
+            )
+            unknown_statuses = [self._create_unknown_status(comp) for comp in self.components]
+            return {
+                **state,
+                "component_statuses": unknown_statuses,
+                "component_health_measured": False,
                 "status": "checking",
             }
 
         try:
-            # Run parallel health checks
-            if self.health_client:
-                tasks = [self._check_component(comp) for comp in self.components]
-                statuses = await asyncio.gather(*tasks, return_exceptions=True)
-            else:
-                # No client - simulate healthy for testing
-                statuses = [self._create_mock_status(comp) for comp in self.components]
+            # Run parallel health checks against the real backend.
+            tasks = [self._check_component(comp) for comp in self.components]
+            statuses = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Process results
             component_statuses = []
@@ -119,6 +136,7 @@ class ComponentHealthNode:
                 **state,
                 "component_statuses": component_statuses,
                 "component_health_score": health_score,
+                "component_health_measured": True,
                 "total_latency_ms": check_time,
                 "status": "checking",
             }
@@ -129,6 +147,7 @@ class ComponentHealthNode:
                 **state,
                 "errors": [{"node": "component_health", "error": str(e)}],
                 "component_health_score": 0.0,
+                "component_health_measured": True,
                 "component_statuses": [],
                 "status": "checking",
             }
@@ -181,11 +200,32 @@ class ComponentHealthNode:
             )
 
     def _create_mock_status(self, component: Dict[str, str]) -> ComponentStatus:
-        """Create mock healthy status for testing."""
+        """Create mock healthy status for testing.
+
+        Intentionally retained: this is a TEST scaffold (used by unit tests and
+        ``get_health_client_for_testing``). It is NO LONGER on the production
+        fail-open path — when no real health backend is wired the node now emits
+        ``_create_unknown_status`` and marks the dimension unmeasured (F1).
+        """
         return ComponentStatus(
             component_name=component["name"],
             status="healthy",
             latency_ms=10,
             last_check=datetime.now(timezone.utc).isoformat(),
             error_message=None,
+        )
+
+    def _create_unknown_status(self, component: Dict[str, str]) -> ComponentStatus:
+        """Create an UNKNOWN status when there is no real health backend.
+
+        F1 fail-closed: the per-component status list is still emitted (so the
+        dashboard shows the components), but each is honestly marked ``unknown``
+        with no fabricated latency, and the dimension is excluded from scoring.
+        """
+        return ComponentStatus(
+            component_name=component["name"],
+            status="unknown",
+            latency_ms=None,
+            last_check=datetime.now(timezone.utc).isoformat(),
+            error_message="No health backend wired - status unknown",
         )

@@ -425,14 +425,16 @@ class RetrainingTriggerService:
 
         return RetrainingJob(
             job_id=record.id,
-            model_version=record.old_model_version,
-            new_model_version=record.new_model_version,
+            # #842: record fields mirror the (nullable) DB columns; the domain
+            # RetrainingJob expects non-optional values — coerce at the boundary.
+            model_version=record.old_model_version or "",
+            new_model_version=record.new_model_version or "",
             trigger_reason=TriggerReason(record.trigger_reason),
             status=RetrainingStatus(record.status),
             created_at=record.created_at,
             completed_at=record.completed_at,
             drift_score_before=record.drift_score_before,
-            performance_before=record.performance_before,
+            performance_before=record.performance_before or 0.0,
             performance_after=record.performance_after,
             training_config=record.training_config,
         )

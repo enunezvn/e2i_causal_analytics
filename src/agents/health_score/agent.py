@@ -49,10 +49,21 @@ class HealthScoreOutput(BaseModel):
 
     overall_health_score: float = Field(description="Overall health score (0-100)")
     health_grade: str = Field(description="Letter grade (A-F)")
-    component_health_score: float = Field(description="Component health score (0-1)")
-    model_health_score: float = Field(description="Model health score (0-1)")
-    pipeline_health_score: float = Field(description="Pipeline health score (0-1)")
-    agent_health_score: float = Field(description="Agent health score (0-1)")
+    # F1 (Codex #1): per-dimension scores are Optional — None means the dimension
+    # was NOT measured (no real backend wired). They must NEVER fabricate a
+    # healthy 1.0 for an unmeasured dimension.
+    component_health_score: Optional[float] = Field(
+        default=None, description="Component health score (0-1), None if unmeasured"
+    )
+    model_health_score: Optional[float] = Field(
+        default=None, description="Model health score (0-1), None if unmeasured"
+    )
+    pipeline_health_score: Optional[float] = Field(
+        default=None, description="Pipeline health score (0-1), None if unmeasured"
+    )
+    agent_health_score: Optional[float] = Field(
+        default=None, description="Agent health score (0-1), None if unmeasured"
+    )
     critical_issues: List[str] = Field(default_factory=list, description="List of critical issues")
     warnings: List[str] = Field(default_factory=list, description="List of warnings")
     recommendations: List[str] = Field(
@@ -61,6 +72,15 @@ class HealthScoreOutput(BaseModel):
     health_summary: str = Field(description="Human-readable health summary")
     total_latency_ms: int = Field(description="Total check latency in ms")
     timestamp: str = Field(description="Timestamp of health check")
+
+    # F1 fail-closed: provenance of the composite score so the route/dashboard
+    # never presents an unmeasured score as a real measurement. "measured" (all
+    # 4 dims measured), "partial" (1-3), or "unknown" (0). Defaults to "unknown"
+    # so any path that forgets to set it fails closed, not open.
+    data_provenance: str = Field(
+        default="unknown",
+        description="Provenance of the score: measured | partial | unknown",
+    )
 
     # Contract-required fields (v4.3 fix: must be in output model for contract validation)
     errors: List[dict] = Field(default_factory=list, description="Error details from workflow")
@@ -228,24 +248,39 @@ class HealthScoreAgent:
                     raw_errors = result.get("errors", [])
                     errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
 
+                    # F1: resolve per-dim scores honoring the measured flags
+                    # (None == unmeasured, never a fabricated 1.0).
+                    comp_s = HealthScoreAgent._resolve_dim_score(
+                        result, "component_health_score", "component_health_measured"
+                    )
+                    model_s = HealthScoreAgent._resolve_dim_score(
+                        result, "model_health_score", "model_health_measured"
+                    )
+                    pipe_s = HealthScoreAgent._resolve_dim_score(
+                        result, "pipeline_health_score", "pipeline_health_measured"
+                    )
+                    agent_s = HealthScoreAgent._resolve_dim_score(
+                        result, "agent_health_score", "agent_health_measured"
+                    )
                     output = HealthScoreOutput(
                         overall_health_score=result.get("overall_health_score", 0.0),
                         health_grade=result.get("health_grade", "F"),
-                        component_health_score=result.get("component_health_score", 0.0),
-                        model_health_score=result.get("model_health_score", 1.0),
-                        pipeline_health_score=result.get("pipeline_health_score", 1.0),
-                        agent_health_score=result.get("agent_health_score", 1.0),
+                        component_health_score=comp_s,
+                        model_health_score=model_s,
+                        pipeline_health_score=pipe_s,
+                        agent_health_score=agent_s,
                         critical_issues=result.get("critical_issues", []),
                         warnings=result.get("warnings", []),
                         recommendations=HealthScoreAgent._recommendations_from_scores(
-                            component=result.get("component_health_score", 0.0),
-                            model=result.get("model_health_score", 1.0),
-                            pipeline=result.get("pipeline_health_score", 1.0),
-                            agent=result.get("agent_health_score", 1.0),
+                            component=comp_s,
+                            model=model_s,
+                            pipeline=pipe_s,
+                            agent=agent_s,
                         ),
                         health_summary=result.get("health_summary", "Health check completed"),
                         total_latency_ms=result.get("total_latency_ms", 0),
                         timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                        data_provenance=result.get("data_provenance", "unknown"),
                         # Contract-required fields (v4.3 fix)
                         errors=errors,
                         status=result.get("status", "completed"),
@@ -264,24 +299,39 @@ class HealthScoreAgent:
                 raw_errors = result.get("errors", [])
                 errors = [dict(e) if hasattr(e, "keys") else e for e in raw_errors]
 
+                # F1: resolve per-dim scores honoring the measured flags
+                # (None == unmeasured, never a fabricated 1.0).
+                comp_s = HealthScoreAgent._resolve_dim_score(
+                    result, "component_health_score", "component_health_measured"
+                )
+                model_s = HealthScoreAgent._resolve_dim_score(
+                    result, "model_health_score", "model_health_measured"
+                )
+                pipe_s = HealthScoreAgent._resolve_dim_score(
+                    result, "pipeline_health_score", "pipeline_health_measured"
+                )
+                agent_s = HealthScoreAgent._resolve_dim_score(
+                    result, "agent_health_score", "agent_health_measured"
+                )
                 return HealthScoreOutput(
                     overall_health_score=result.get("overall_health_score", 0.0),
                     health_grade=result.get("health_grade", "F"),
-                    component_health_score=result.get("component_health_score", 0.0),
-                    model_health_score=result.get("model_health_score", 1.0),
-                    pipeline_health_score=result.get("pipeline_health_score", 1.0),
-                    agent_health_score=result.get("agent_health_score", 1.0),
+                    component_health_score=comp_s,
+                    model_health_score=model_s,
+                    pipeline_health_score=pipe_s,
+                    agent_health_score=agent_s,
                     critical_issues=result.get("critical_issues", []),
                     warnings=result.get("warnings", []),
                     recommendations=HealthScoreAgent._recommendations_from_scores(
-                        component=result.get("component_health_score", 0.0),
-                        model=result.get("model_health_score", 1.0),
-                        pipeline=result.get("pipeline_health_score", 1.0),
-                        agent=result.get("agent_health_score", 1.0),
+                        component=comp_s,
+                        model=model_s,
+                        pipeline=pipe_s,
+                        agent=agent_s,
                     ),
                     health_summary=result.get("health_summary", "Health check completed"),
                     total_latency_ms=result.get("total_latency_ms", 0),
                     timestamp=result.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    data_provenance=result.get("data_provenance", "unknown"),
                     # Contract-required fields (v4.3 fix)
                     errors=errors,
                     status=result.get("status", "completed"),
@@ -336,24 +386,27 @@ class HealthScoreAgent:
         except Exception as e:
             logger.error(f"Health check failed: {e}")
             elapsed = int((time.time() - start_time) * 1000)
+            # F1: a hard failure means NOTHING was measured -> all dims None
+            # (unmeasured), never a fabricated 0.0/1.0.
             return HealthScoreOutput(
                 overall_health_score=0.0,
                 health_grade="F",
-                component_health_score=0.0,
-                model_health_score=0.0,
-                pipeline_health_score=0.0,
-                agent_health_score=0.0,
+                component_health_score=None,
+                model_health_score=None,
+                pipeline_health_score=None,
+                agent_health_score=None,
                 critical_issues=[f"Health check failed: {e}"],
                 warnings=[],
                 recommendations=HealthScoreAgent._recommendations_from_scores(
-                    component=0.0,
-                    model=0.0,
-                    pipeline=0.0,
-                    agent=0.0,
+                    component=None,
+                    model=None,
+                    pipeline=None,
+                    agent=None,
                 ),
                 health_summary="Health check failed due to an error.",
                 total_latency_ms=elapsed,
                 timestamp=datetime.now(timezone.utc).isoformat(),
+                data_provenance="unknown",
                 # Contract-required fields (v4.3 fix)
                 errors=[
                     {
@@ -411,42 +464,75 @@ class HealthScoreAgent:
             "warnings": output.warnings,
             "recommendations": self._generate_recommendations(output),
             "requires_further_analysis": output.health_grade in ["D", "F"],
-            "suggested_next_agent": ("drift_monitor" if output.model_health_score < 0.8 else None),
+            # F1: guard against None (unmeasured) — an unmeasured model is NOT a
+            # measured-degraded model, so it must not auto-route to drift_monitor.
+            "suggested_next_agent": (
+                "drift_monitor"
+                if output.model_health_score is not None and output.model_health_score < 0.8
+                else None
+            ),
         }
 
     @staticmethod
+    def _resolve_dim_score(
+        result: Dict[str, Any], score_key: str, measured_key: str
+    ) -> Optional[float]:
+        """Resolve a per-dimension score from the workflow result.
+
+        F1 (Codex #1): return the float ONLY when the dimension was actually
+        measured (its ``<dim>_health_measured`` flag is True). Otherwise return
+        ``None`` (unmeasured) — NEVER a fabricated healthy 1.0/0.0. This keeps
+        the output honest end-to-end (the composer already excludes unmeasured
+        dims; the OUTPUT must not re-expose them as healthy).
+        """
+        if not result.get(measured_key, False):
+            return None
+        raw = result.get(score_key)
+        return float(raw) if raw is not None else None
+
+    @staticmethod
     def _recommendations_from_scores(
-        component: float = 1.0,
-        model: float = 1.0,
-        pipeline: float = 1.0,
-        agent: float = 1.0,
+        component: Optional[float] = None,
+        model: Optional[float] = None,
+        pipeline: Optional[float] = None,
+        agent: Optional[float] = None,
     ) -> List[str]:
-        """Generate recommendations from component health scores.
+        """Generate recommendations from per-dimension health scores.
+
+        F1 (Codex #1): a ``None`` dimension is UNMEASURED (no real backend
+        wired). It must produce a "wire a real backend" recommendation and must
+        NOT count toward the "system is healthy" message — only genuinely
+        measured-and-healthy dimensions may yield that.
 
         Args:
-            component: Component health score (0-1)
-            model: Model health score (0-1)
-            pipeline: Pipeline health score (0-1)
-            agent: Agent health score (0-1)
+            component: Component health score (0-1), or None if unmeasured
+            model: Model health score (0-1), or None if unmeasured
+            pipeline: Pipeline health score (0-1), or None if unmeasured
+            agent: Agent health score (0-1), or None if unmeasured
 
         Returns:
             List of actionable recommendation strings
         """
         recommendations = []
+        # Track whether any dimension is unmeasured so we never claim "healthy".
+        any_unmeasured = False
 
-        if component < 0.8:
-            recommendations.append("Investigate unhealthy components and restore services")
+        for name, score, low_msg in (
+            ("component", component, "Investigate unhealthy components and restore services"),
+            ("model", model, "Review model performance metrics and consider retraining"),
+            ("pipeline", pipeline, "Check data pipeline freshness and resolve any failures"),
+            ("agent", agent, "Verify agent availability and address any connectivity issues"),
+        ):
+            if score is None:
+                any_unmeasured = True
+                recommendations.append(
+                    f"Wire a real {name} health backend — {name} health is UNMEASURED"
+                )
+            elif score < 0.8:
+                recommendations.append(low_msg)
 
-        if model < 0.8:
-            recommendations.append("Review model performance metrics and consider retraining")
-
-        if pipeline < 0.8:
-            recommendations.append("Check data pipeline freshness and resolve any failures")
-
-        if agent < 0.8:
-            recommendations.append("Verify agent availability and address any connectivity issues")
-
-        if not recommendations:
+        # Only claim "healthy" when EVERY dimension was measured AND none flagged.
+        if not recommendations and not any_unmeasured:
             recommendations.append("Continue monitoring - system is healthy")
 
         return recommendations

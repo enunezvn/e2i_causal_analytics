@@ -9,7 +9,7 @@ Performance Target: <2s per experiment
 """
 
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from src.agents.experiment_monitor.state import (
@@ -40,9 +40,9 @@ class HealthCheckerNode:
     async def _get_client(self):
         """Lazy load Supabase client."""
         if self._client is None:
-            from src.memory.services.factories import get_supabase_client
+            from src.memory.services.factories import get_async_supabase_client
 
-            self._client = await get_supabase_client()
+            self._client = await get_async_supabase_client()
         return self._client
 
     async def execute(self, state: ExperimentMonitorState) -> ExperimentMonitorState:
@@ -62,11 +62,17 @@ class HealthCheckerNode:
             # Get client
             client = await self._get_client()
             if not client:
-                state["warnings"] = state.get("warnings", []) + [
-                    "No database client available, using mock data"
+                # Fail closed: NO mock data in a production path. A missing client
+                # is recorded as an error (surfaced via the route's `errors`),
+                # never fabricated into plausible experiments.
+                state["errors"] = state.get("errors", []) + [
+                    {
+                        "node": "health_checker",
+                        "error": "database client unavailable",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
                 ]
-                # Use mock data for testing
-                experiments = await self._get_mock_experiments(state)
+                experiments: List[Dict] = []
             else:
                 experiments = await self._get_experiments(client, state)
 
@@ -79,10 +85,11 @@ class HealthCheckerNode:
                 summary = await self._check_experiment_health(exp, client)
                 experiment_summaries.append(summary)
 
-                # Check for enrollment issues
-                issue = self._check_enrollment_rate(exp, summary, state)
-                if issue:
-                    enrollment_issues.append(issue)
+                # Check for enrollment issues (skip if disabled; FE selective-check flag, #825)
+                if state.get("check_enrollment", True):
+                    issue = self._check_enrollment_rate(exp, summary, state)
+                    if issue:
+                        enrollment_issues.append(issue)
 
                 # Check for stale data
                 stale_issue = await self._check_stale_data(exp, client, state)
@@ -146,39 +153,6 @@ class HealthCheckerNode:
 
         except Exception:
             return []
-
-    async def _get_mock_experiments(self, state: ExperimentMonitorState) -> List[Dict]:
-        """Get mock experiments for testing.
-
-        Args:
-            state: Current state
-
-        Returns:
-            List of mock experiment dictionaries
-        """
-        now = datetime.now(timezone.utc)
-        return [
-            {
-                "id": "exp-001",
-                "name": "Test Experiment 1",
-                "status": "running",
-                "config": {
-                    "target_sample_size": 1000,
-                    "allocation_ratio": {"control": 0.5, "treatment": 0.5},
-                },
-                "created_at": (now - timedelta(days=14)).isoformat(),
-            },
-            {
-                "id": "exp-002",
-                "name": "Test Experiment 2",
-                "status": "running",
-                "config": {
-                    "target_sample_size": 500,
-                    "allocation_ratio": {"control": 0.5, "treatment": 0.5},
-                },
-                "created_at": (now - timedelta(days=7)).isoformat(),
-            },
-        ]
 
     async def _check_experiment_health(
         self, experiment: Dict, client: Optional[Any]

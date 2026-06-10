@@ -126,7 +126,7 @@ async def _execute_feedback_loop(
     Returns:
         Aggregated results from all prediction types
     """
-    from src.memory.services.factories import get_supabase_client
+    from src.memory.services.factories import get_async_supabase_client
 
     config = load_config()
     processing_config = config.get("feedback_loop", {}).get("processing", {})
@@ -145,7 +145,7 @@ async def _execute_feedback_loop(
     total_skipped = 0
 
     try:
-        client = await get_supabase_client()
+        client = await get_async_supabase_client()
         if not client:
             return {
                 "status": "skipped",
@@ -408,14 +408,14 @@ def analyze_concept_drift_from_truth(
     effective_current = current_days or comparison_windows.get("current_days", 30)
 
     async def execute_analysis():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
         start_time = time.time()
         alerts_triggered = []
         drift_results = []
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {
                     "status": "skipped",

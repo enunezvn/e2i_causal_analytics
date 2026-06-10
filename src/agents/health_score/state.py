@@ -69,22 +69,32 @@ class HealthScoreState(TypedDict):
     # === COMPONENT HEALTH ===
     component_statuses: NotRequired[List[ComponentStatus]]
     component_health_score: NotRequired[float]
+    # True only when a real health backend produced the score (F1 fail-closed).
+    # Absent/False => the dimension is UNKNOWN, never fail-open "healthy".
+    component_health_measured: NotRequired[bool]
 
     # === MODEL HEALTH ===
     model_metrics: NotRequired[List[ModelMetrics]]
     model_health_score: NotRequired[float]
+    model_health_measured: NotRequired[bool]
 
     # === PIPELINE HEALTH ===
     pipeline_statuses: NotRequired[List[PipelineStatus]]
     pipeline_health_score: NotRequired[float]
+    pipeline_health_measured: NotRequired[bool]
 
     # === AGENT HEALTH ===
     agent_statuses: NotRequired[List[AgentStatus]]
     agent_health_score: NotRequired[float]
+    agent_health_measured: NotRequired[bool]
 
     # === COMPOSITE SCORE (Required outputs) ===
     overall_health_score: float  # 0-100
     health_grade: Literal["A", "B", "C", "D", "F"]
+    # Provenance of the composite score: "measured" (all 4 dims measured),
+    # "partial" (1-3 measured), or "unknown" (0 measured). Surfaced so the
+    # dashboard/API never presents an unmeasured score as a real measurement.
+    data_provenance: NotRequired[Literal["measured", "partial", "unknown"]]
 
     # === ISSUES ===
     critical_issues: NotRequired[List[str]]

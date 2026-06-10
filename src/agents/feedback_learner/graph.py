@@ -295,7 +295,19 @@ async def _finalize_training_signal(state: FeedbackLearnerState) -> FeedbackLear
     # constant like 0.85 would silently bias the self-improvement loop.
     pattern_accuracy: float | None = None
     recommendation_actionability = min(len(recommendations) / 5.0, 1.0) if recommendations else 0.0
-    update_effectiveness = len(applied_updates) / max(len(state.get("proposed_updates") or []), 1)
+    # F15 (audit): update_effectiveness is only measurable when a real
+    # knowledge_store apply-backend is wired AND updates were proposed.
+    # Otherwise applied_updates is structurally empty regardless of feedback, so
+    # we emit None (cf. pattern_accuracy above) — compute_reward then SKIPS the
+    # term and redistributes its weight, rather than anchoring the
+    # self-improvement reward on a misleading 0.0. A real knowledge_stores
+    # backend is a separate feature (see F15 follow-up).
+    _proposed = state.get("proposed_updates") or []
+    update_effectiveness: float | None
+    if state.get("update_backend_wired") and _proposed:
+        update_effectiveness = len(applied_updates) / len(_proposed)
+    else:
+        update_effectiveness = None
 
     # Get rubric evaluation metrics if available
     rubric_weighted_score = state.get("rubric_weighted_score")
@@ -372,7 +384,8 @@ async def _error_handler_node(state: FeedbackLearnerState) -> FeedbackLearnerSta
         # See dspy_integration.FeedbackLearnerTrainingSignal.pattern_accuracy.
         pattern_accuracy=None,
         recommendation_actionability=0.0,
-        update_effectiveness=0.0,
+        # F15: unmeasurable on the error/empty path -> None (skipped in reward).
+        update_effectiveness=None,
         collection_latency_ms=state.get("collection_latency_ms", 0),
         analysis_latency_ms=state.get("analysis_latency_ms", 0),
         extraction_latency_ms=state.get("extraction_latency_ms", 0),

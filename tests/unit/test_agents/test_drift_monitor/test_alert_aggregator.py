@@ -66,6 +66,32 @@ class TestAlertAggregatorNode:
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
+    async def test_structural_drift_results_are_aggregated(self):
+        """F11 (audit): the V4.4 structural_drift_detector writes
+        structural_drift_results (DriftResult format), but _collect_all_results
+        dropped them — so DAG/causal-structure drift was computed yet read as
+        0.0 / 'NO DRIFT' in the score, features, and alerts. They must be folded
+        into the aggregation like the other detectors."""
+        node = AlertAggregatorNode()
+        # Only structural drift is present (high severity) — everything else clean.
+        state = self._create_test_state(
+            structural_drift_results=[
+                self._create_drift_result("causal_structure", "structural", "high")
+            ],
+        )
+
+        result = await node.execute(state)
+
+        assert result["status"] == "completed"
+        assert result["overall_drift_score"] > 0.0, (
+            "structural drift was dropped from the composite score"
+        )
+        assert "causal_structure" in result["features_with_drift"], (
+            "structural drift feature must surface in features_with_drift"
+        )
+        assert len(result["alerts"]) > 0, "a high-severity structural drift must generate an alert"
+
+    @pytest.mark.asyncio
     async def test_latency_measurement(self):
         """Test latency measurement."""
         node = AlertAggregatorNode()

@@ -23,14 +23,15 @@ from src.repositories.drift_monitoring import (
 async def test_complete_with_provenance_merges_into_training_config():
     """An mlflow_run_id is merged into training_config, preserving existing keys."""
     repo = RetrainingHistoryRepository()
+    # #842: the record mirrors the live ml_retraining_history columns —
+    # config (was training_config) + old_metric_value (was performance_before).
     existing = RetrainingHistoryRecord(
         id="rec-1",
         old_model_version="v1",
         new_model_version="v2",
         trigger_reason="manual",
-        drift_score_before=0.0,
-        performance_before=0.80,
-        training_config={"data_source": "optum_batch_42", "target_outcome": "y"},
+        old_metric_value=0.80,
+        config={"data_source": "optum_batch_42", "target_outcome": "y", "drift_score_before": 0.0},
         status="training",
     )
 
@@ -51,12 +52,12 @@ async def test_complete_with_provenance_merges_into_training_config():
 
     updates = captured["updates"]
     assert updates["status"] == "completed"
-    assert updates["performance_after"] == 0.91
-    # provenance merged in...
-    assert updates["training_config"]["mlflow_run_id"] == "run-xyz"
+    assert updates["new_metric_value"] == 0.91  # was performance_after
+    # provenance merged into config (was training_config)...
+    assert updates["config"]["mlflow_run_id"] == "run-xyz"
     # ...without losing the existing cohort identity.
-    assert updates["training_config"]["data_source"] == "optum_batch_42"
-    assert updates["training_config"]["target_outcome"] == "y"
+    assert updates["config"]["data_source"] == "optum_batch_42"
+    assert updates["config"]["target_outcome"] == "y"
 
 
 @pytest.mark.asyncio
@@ -79,7 +80,7 @@ async def test_complete_without_provenance_leaves_training_config_untouched():
 
     updates = captured["updates"]
     assert updates["status"] == "failed"
-    assert "training_config" not in updates
+    assert "config" not in updates
     # No need to read the existing record when there's no provenance to merge.
     mock_get.assert_not_called()
 
@@ -108,8 +109,7 @@ def test_record_created_at_default_is_tz_aware():
         old_model_version="v1",
         new_model_version="v2",
         trigger_reason="manual",
-        drift_score_before=0.0,
-        performance_before=0.8,
+        old_metric_value=0.8,
     )
     assert rec.created_at.tzinfo is not None
     assert rec.created_at <= datetime.now(timezone.utc)

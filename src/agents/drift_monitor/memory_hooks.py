@@ -763,6 +763,9 @@ class DriftMonitorMemoryHooks:
                 drift_results = result.get("model_drift_results", [])
             elif drift_type == "concept":
                 drift_results = result.get("concept_drift_results", [])
+            elif drift_type == "structural":
+                # F11 (audit): structural (V4.4 causal-DAG) drift result details.
+                drift_results = result.get("structural_drift_results", [])
 
             feature_result: Dict[str, Any] = next(
                 (r for r in drift_results if r.get("feature") == feature), {}
@@ -851,11 +854,14 @@ class DriftMonitorMemoryHooks:
         if not features_with_drift:
             return 0
 
-        # Process each drift type
+        # Process each drift type. F11 (audit): include "structural" so V4.4
+        # causal-DAG drift patterns are persisted to semantic memory too (they
+        # were silently dropped here).
         for drift_type, results_key in [
             ("data", "data_drift_results"),
             ("model", "model_drift_results"),
             ("concept", "concept_drift_results"),
+            ("structural", "structural_drift_results"),
         ]:
             drift_results = result.get(results_key, [])
             for drift_result in drift_results:

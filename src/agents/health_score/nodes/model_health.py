@@ -60,38 +60,51 @@ class ModelHealthNode:
         """Execute model health checks."""
         start_time = time.time()
 
-        # Skip if scope doesn't include models
+        # Skip if scope doesn't include models.
+        # Skipped == not measured (F1): do NOT emit a fail-open 1.0 score.
         if state.get("check_scope") not in ["full", "models"]:
             logger.debug("Skipping model health for non-model scope")
             return {
                 **state,
                 "model_metrics": [],
-                "model_health_score": 1.0,
+                "model_health_measured": False,
+            }
+
+        # F1 fail-closed: without a real metrics_store the model dimension is
+        # UNKNOWN, not "healthy by default". Mark it unmeasured so the composer
+        # excludes it rather than fabricating a 1.0 score.
+        if not self.metrics_store:
+            logger.warning(
+                "No metrics_store wired - model health is UNKNOWN (fail-closed), "
+                "not fabricated-healthy"
+            )
+            return {
+                **state,
+                "model_metrics": [],
+                "model_health_measured": False,
             }
 
         try:
-            if self.metrics_store:
-                # Fetch all active models
-                active_models = await self.metrics_store.get_active_models()
+            # Fetch all active models from the real store
+            active_models = await self.metrics_store.get_active_models()
 
-                # Fetch metrics for each model in parallel
-                if active_models:
-                    tasks = [self._get_model_metrics(model_id) for model_id in active_models]
-                    metrics_list = await asyncio.gather(*tasks)
-                else:
-                    metrics_list = []
+            # Fetch metrics for each model in parallel
+            if active_models:
+                tasks = [self._get_model_metrics(model_id) for model_id in active_models]
+                metrics_list = await asyncio.gather(*tasks)
             else:
-                # No store - return empty for testing
                 metrics_list = []
 
-            # Calculate overall model health
+            # Calculate overall model health. A real store reporting zero active
+            # models IS a measurement of a healthy (idle) fleet, so 1.0 here is
+            # measured, not fabricated.
             if metrics_list:
                 healthy = sum(1 for m in metrics_list if m["status"] == "healthy")
                 degraded = sum(1 for m in metrics_list if m["status"] == "degraded")
                 total_score = healthy + (degraded * 0.5)
                 health_score = total_score / len(metrics_list)
             else:
-                health_score = 1.0  # No models = healthy by default
+                health_score = 1.0  # Real store, no active models => measured healthy
 
             check_time = int((time.time() - start_time) * 1000)
 
@@ -104,6 +117,7 @@ class ModelHealthNode:
                 **state,
                 "model_metrics": metrics_list,
                 "model_health_score": health_score,
+                "model_health_measured": True,
                 "total_latency_ms": state.get("total_latency_ms", 0) + check_time,
             }
 
@@ -113,6 +127,7 @@ class ModelHealthNode:
                 **state,
                 "errors": [{"node": "model_health", "error": str(e)}],
                 "model_health_score": 0.5,  # Unknown = degraded
+                "model_health_measured": True,
                 "model_metrics": [],
             }
 

@@ -114,6 +114,18 @@ class KpiFrame:
         outcome_column: the causal outcome column name (e.g. ``"converted"``).
         driver_columns: candidate causal driver/segment columns present in the
             frame.
+        treatment_column: the KPI's DEFINED causal treatment/intervention column
+            when the KPI defines one (e.g. ``"accepted"`` for Conversion Rate,
+            derived from real ``acceptance_status``). ``None`` when the KPI has no
+            single defined treatment — consumers that require an explicit
+            treatment (e.g. heterogeneous_optimizer) then fail closed rather than
+            guess. Always a real column present in ``frame`` when set.
+        treatment_source_column: the RAW column the derived ``treatment_column``
+            was computed from (e.g. ``"acceptance_status"`` for ``"accepted"``).
+            ``None`` when the treatment is itself a raw column. Consumers must
+            EXCLUDE this from effect-modifier/driver sets — it is a deterministic
+            function of the treatment, so using it as a modifier leaks the
+            treatment into itself.
         kpi_id: the resolved KPI id (e.g. ``"WS3-BI-009"``).
         kpi_name: the human-readable KPI name (e.g. ``"Conversion Rate"``).
         is_truncated: ``True`` when a source fetch hit the ``_MAX_ROWS`` cap, so the
@@ -126,6 +138,8 @@ class KpiFrame:
     driver_columns: List[str]
     kpi_id: str
     kpi_name: str
+    treatment_column: Optional[str] = None
+    treatment_source_column: Optional[str] = None
     is_truncated: bool = False
 
 
@@ -238,16 +252,28 @@ def _assemble_conversion_frame(
 
     drivers = [c for c in _DRIVER_COLUMNS if c in df.columns]
     # Derived clean binary treatment from acceptance_status (real, not fabricated).
+    treatment_column: Optional[str] = None
+    treatment_source_column: Optional[str] = None
     if "acceptance_status" in df.columns:
         df["accepted"] = (
             df["acceptance_status"].astype(str).str.strip().str.lower() == "accepted"
         ).astype(int)
         drivers.append("accepted")
+        # The Conversion Rate KPI's DEFINED treatment is trigger acceptance — a
+        # real, derived binary intervention. Exposing it lets the heterogeneous
+        # optimizer bind a real treatment_var without guessing.
+        treatment_column = "accepted"
+        # ``acceptance_status`` is the raw source of the derived treatment — it is
+        # a deterministic function of it, so consumers must NOT use it as a driver/
+        # effect-modifier (that would leak the treatment into itself).
+        treatment_source_column = "acceptance_status"
 
     return KpiFrame(
         frame=df.reset_index(drop=True),
         outcome_column="converted",
         driver_columns=drivers,
+        treatment_column=treatment_column,
+        treatment_source_column=treatment_source_column,
         kpi_id=CONVERSION_KPI_ID,
         kpi_name="Conversion Rate",
     )

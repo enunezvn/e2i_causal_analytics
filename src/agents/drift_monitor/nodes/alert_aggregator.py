@@ -16,6 +16,7 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 
 import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -162,6 +163,15 @@ class AlertAggregatorNode:
         if "concept_drift_results" in state:
             all_results.extend(state["concept_drift_results"])
 
+        # Add structural (causal-DAG) drift results.
+        # F11 (audit): the V4.4 structural_drift_detector writes
+        # ``structural_drift_results`` in DriftResult format, but they were
+        # omitted here — so DAG/causal-structure drift was computed yet dropped
+        # from the composite score, features_with_drift, alerts, and summary
+        # (the monitor read "NO DRIFT" while structural drift was present).
+        if "structural_drift_results" in state:
+            all_results.extend(state["structural_drift_results"])
+
         return all_results
 
     def _calculate_drift_score(self, results: list[DriftResult]) -> float:
@@ -221,9 +231,12 @@ class AlertAggregatorNode:
         """
         alerts: list[DriftAlert] = []
 
-        # Group by drift_type and severity
-        critical_by_type: dict[str, list[str]] = {"data": [], "model": [], "concept": []}
-        high_by_type: dict[str, list[str]] = {"data": [], "model": [], "concept": []}
+        # Group by drift_type and severity. F11 (audit): use defaultdict so a
+        # new drift_type (e.g. V4.4 "structural") never KeyErrors here — the
+        # prior hardcoded {"data","model","concept"} dropped structural drift
+        # into a swallowed exception (status="failed").
+        critical_by_type: dict[str, list[str]] = defaultdict(list)
+        high_by_type: dict[str, list[str]] = defaultdict(list)
 
         for result in results:
             if result["severity"] == "critical":
@@ -267,16 +280,21 @@ class AlertAggregatorNode:
         if len(affected_features) > 5:
             feature_list += f" and {len(affected_features) - 5} more"
 
+        # F11 (audit): include "structural" (V4.4 causal-DAG) drift, and fall
+        # back to a generic message/action for any unmapped drift_type so a new
+        # type can never KeyError this alert builder.
         messages = {
             "critical": {
                 "data": f"CRITICAL data drift detected in features: {feature_list}",
                 "model": f"CRITICAL model drift detected in predictions: {feature_list}",
                 "concept": f"CRITICAL concept drift detected in features: {feature_list}",
+                "structural": f"CRITICAL causal-structure (DAG) drift detected in: {feature_list}",
             },
             "warning": {
                 "data": f"HIGH data drift detected in features: {feature_list}",
                 "model": f"HIGH model drift detected in predictions: {feature_list}",
                 "concept": f"HIGH concept drift detected in features: {feature_list}",
+                "structural": f"HIGH causal-structure (DAG) drift detected in: {feature_list}",
             },
         }
 
@@ -286,21 +304,27 @@ class AlertAggregatorNode:
                 "data": "Immediate action required: Retrain model with recent data and investigate feature distribution changes",
                 "model": "Immediate action required: Investigate model degradation and consider retraining or recalibration",
                 "concept": "Immediate action required: Review ground truth labels and feature-target relationships",
+                "structural": "Immediate action required: Re-run causal discovery and review the changed DAG edges before trusting downstream causal estimates",
             },
             "warning": {
                 "data": "Monitor closely: Schedule model retraining if drift persists",
                 "model": "Monitor closely: Check prediction accuracy on recent data",
                 "concept": "Monitor closely: Validate model performance on current data",
+                "structural": "Monitor closely: Validate the causal DAG against recent data and re-discover if the structure keeps shifting",
             },
         }
+
+        severity_key = severity if severity in messages else "warning"
+        generic_message = f"{severity.upper()} {drift_type} drift detected in: {feature_list}"
+        generic_action = "Monitor closely and investigate the drifting signal"
 
         alert: DriftAlert = {
             "alert_id": str(uuid.uuid4()),
             "severity": severity,  # type: ignore
             "drift_type": drift_type,  # type: ignore
             "affected_features": affected_features,
-            "message": messages[severity][drift_type],
-            "recommended_action": actions[severity][drift_type],
+            "message": messages[severity_key].get(drift_type, generic_message),
+            "recommended_action": actions[severity_key].get(drift_type, generic_action),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -331,12 +355,16 @@ class AlertAggregatorNode:
             "none": sum(1 for r in results if r["severity"] == "none"),
         }
 
-        # Count by drift type
+        # Count by drift type. F11 (audit): include "structural" so V4.4
+        # causal-DAG drift appears in the summary's drift-type breakdown.
         type_counts = {
             "data": sum(1 for r in results if r["drift_type"] == "data" and r["drift_detected"]),
             "model": sum(1 for r in results if r["drift_type"] == "model" and r["drift_detected"]),
             "concept": sum(
                 1 for r in results if r["drift_type"] == "concept" and r["drift_detected"]
+            ),
+            "structural": sum(
+                1 for r in results if r["drift_type"] == "structural" and r["drift_detected"]
             ),
         }
 
@@ -370,7 +398,7 @@ class AlertAggregatorNode:
 
         # Add drift type breakdown
         type_breakdown = []
-        for dtype in ["data", "model", "concept"]:
+        for dtype in ["data", "model", "concept", "structural"]:
             if type_counts[dtype] > 0:
                 type_breakdown.append(f"{dtype}: {type_counts[dtype]}")
         if type_breakdown:
@@ -464,6 +492,17 @@ class AlertAggregatorNode:
         )
         if model_drift_count > 0:
             recommendations.append("Check model prediction quality on recent data")
+
+        # Structural (causal-DAG) drift specific. F11 (audit): the prior
+        # recommendations omitted structural drift entirely.
+        structural_drift_count = sum(
+            1 for r in results if r["drift_type"] == "structural" and r["drift_detected"]
+        )
+        if structural_drift_count > 0:
+            recommendations.append(
+                "Re-run causal discovery and review the changed DAG edges before "
+                "trusting downstream causal estimates"
+            )
 
         return recommendations
 

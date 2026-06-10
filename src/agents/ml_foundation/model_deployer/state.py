@@ -105,6 +105,16 @@ class ModelDeployerState(BaseAgentSchema):
     registration_timestamp: Optional[str] = None  # ISO timestamp of registration
     registration_error: Optional[str] = None
 
+    # F4 follow-up (#829): the ``ml_model_registry.id`` (UUID, as str) produced
+    # by the ``register_model`` node when it writes a REAL registry row. This is
+    # the FK target ``_store_to_database`` needs to write the ``ml_deployments``
+    # row. Declared here (not just returned by the node) because
+    # ``StateGraph(ModelDeployerState)`` uses ``extra="ignore"`` — an undeclared
+    # key returned by a node is silently dropped by the channel reducer and
+    # never reaches ``_store_to_database``. ``None`` => no real registry write
+    # happened (fail-closed), so the deployment row is honestly skipped.
+    model_registry_id: Optional[str] = None
+
     # === STAGE PROMOTION ===
 
     # Promotion validation

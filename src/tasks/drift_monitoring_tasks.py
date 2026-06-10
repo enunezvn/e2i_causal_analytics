@@ -398,27 +398,31 @@ def cleanup_old_drift_history(
     effective_retention = retention_days or schedule_config.get("retention_days", 90)
 
     async def run_cleanup():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {"status": "skipped", "reason": "No database client available"}
 
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=effective_retention)
             cutoff_iso = cutoff_date.isoformat()
 
-            # Delete old drift history records
+            # Delete old drift history records. The real ml_drift_history
+            # timestamp column is created_at (there is no detected_at; #825).
             drift_result = await (
-                client.table("ml_drift_history").delete().lt("detected_at", cutoff_iso).execute()
+                client.table("ml_drift_history").delete().lt("created_at", cutoff_iso).execute()
             )
             drift_deleted = len(drift_result.data) if drift_result.data else 0
 
-            # Delete old resolved alerts (keep active ones)
+            # Delete old resolved alerts (keep active ones). The real
+            # ml_monitoring_alerts schema has no triggered_at column; created_at
+            # is when the alert fired (#825). The status=resolved filter ensures
+            # active alerts are retained regardless of age.
             alert_result = await (
                 client.table("ml_monitoring_alerts")
                 .delete()
-                .lt("triggered_at", cutoff_iso)
+                .lt("created_at", cutoff_iso)
                 .eq("status", "resolved")
                 .execute()
             )
@@ -786,7 +790,9 @@ async def _execute_real_retraining(
     async def _mark_failed(reason: str) -> Dict[str, Any]:
         logger.error(f"Retraining {retraining_id} failed closed: {reason}")
         try:
-            await repo.update(retraining_id, {"status": "failed", "error_message": reason})
+            # ml_retraining_history has no error_message column; the failure
+            # reason is recorded in `notes` via mark_failed (#842).
+            await repo.mark_failed(retraining_id, reason)
         except Exception as e:  # noqa: BLE001 — never mask the original failure
             logger.error(f"Also failed to mark retraining {retraining_id} failed: {e}")
         return {

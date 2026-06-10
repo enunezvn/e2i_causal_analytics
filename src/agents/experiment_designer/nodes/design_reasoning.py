@@ -383,7 +383,11 @@ Based on trade-offs, recommend ONE design with full specification.
 
         if state.get("domain_knowledge"):
             domain = state["domain_knowledge"]
-            if "organizational_defaults" in domain:
+            # F10 (audit): only surface organizational defaults when REAL
+            # (non-empty) ones exist — the honest EmptyKnowledgeStore yields
+            # {}, and we must not present hardcoded .get() fallbacks (0.25/0.05)
+            # as if they were organizational history.
+            if domain.get("organizational_defaults"):
                 defaults = domain["organizational_defaults"]
                 parts.append(
                     f"""### Organizational Defaults

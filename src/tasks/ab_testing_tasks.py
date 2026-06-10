@@ -349,11 +349,11 @@ def enrollment_health_check(
     start_time = time.time()
 
     async def execute_check():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
         from src.services.enrollment import EnrollmentService
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {
                     "status": "skipped",
@@ -363,7 +363,7 @@ def enrollment_health_check(
             # Get all active experiments
             result = await (
                 client.table("ml_experiments")
-                .select("id, name, config")
+                .select("id, experiment_name")
                 .eq("status", "running")
                 .execute()
             )
@@ -393,7 +393,7 @@ def enrollment_health_check(
                         health_results.append(
                             {
                                 "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
+                                "name": exp.get("experiment_name", "Unknown"),
                                 "status": "no_data",
                             }
                         )
@@ -415,7 +415,7 @@ def enrollment_health_check(
                             alerts.append(
                                 {
                                     "experiment_id": str(exp_id),
-                                    "name": exp.get("name", "Unknown"),
+                                    "name": exp.get("experiment_name", "Unknown"),
                                     "severity": "critical",
                                     "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
                                     "daily_rate": daily_rate,
@@ -427,7 +427,7 @@ def enrollment_health_check(
                             alerts.append(
                                 {
                                     "experiment_id": str(exp_id),
-                                    "name": exp.get("name", "Unknown"),
+                                    "name": exp.get("experiment_name", "Unknown"),
                                     "severity": "warning",
                                     "message": f"Enrollment rate ({daily_rate:.1f}/day) below minimum for {days_running} days",
                                     "daily_rate": daily_rate,
@@ -438,7 +438,7 @@ def enrollment_health_check(
                     health_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "status": health_status,
                             "total_enrolled": stats.total_enrolled,
                             "daily_rate": daily_rate,
@@ -452,7 +452,7 @@ def enrollment_health_check(
                     health_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "status": "error",
                             "error": str(e),
                         }
@@ -526,12 +526,11 @@ def srm_detection_sweep(
     start_time = time.time()
 
     async def execute_sweep():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
         from src.repositories.ab_experiment import ABExperimentRepository
-        from src.services.results_analysis import ResultsAnalysisService
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {
                     "status": "skipped",
@@ -541,7 +540,7 @@ def srm_detection_sweep(
             # Get all running experiments
             result = await (
                 client.table("ml_experiments")
-                .select("id, name, config")
+                .select("id, experiment_name")
                 .eq("status", "running")
                 .execute()
             )
@@ -553,17 +552,14 @@ def srm_detection_sweep(
                     "message": "No active experiments found",
                 }
 
-            results_service = ResultsAnalysisService()
             exp_repo = ABExperimentRepository()
             min_sample_size = srm_config.get("min_sample_size", 100)
-            srm_config.get("detection_threshold", 0.001)
 
             srm_results = []
             srm_detected = []
 
             for exp in result.data:
                 exp_id = UUID(exp["id"])
-                exp_config = exp.get("config", {})
 
                 try:
                     # Get current assignment counts
@@ -573,7 +569,7 @@ def srm_detection_sweep(
                         srm_results.append(
                             {
                                 "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
+                                "name": exp.get("experiment_name", "Unknown"),
                                 "status": "insufficient_data",
                                 "sample_size": len(assignments),
                                 "min_required": min_sample_size,
@@ -587,39 +583,21 @@ def srm_detection_sweep(
                         variant = a.variant
                         variant_counts[variant] = variant_counts.get(variant, 0) + 1
 
-                    # Get expected ratio from config
-                    expected_ratio = exp_config.get(
-                        "allocation_ratio", {"control": 0.5, "treatment": 0.5}
-                    )
-
-                    # Check SRM
-                    srm_result = await results_service.check_sample_ratio_mismatch(
-                        experiment_id=exp_id,
-                        expected_ratio=expected_ratio,
-                        actual_counts=variant_counts,
-                    )
-
-                    status = "ok"
-                    if srm_result.is_srm_detected:
-                        status = "srm_detected"
-                        srm_detected.append(
-                            {
-                                "experiment_id": str(exp_id),
-                                "name": exp.get("name", "Unknown"),
-                                "p_value": srm_result.p_value,
-                                "expected_ratio": expected_ratio,
-                                "actual_counts": variant_counts,
-                                "chi_squared": srm_result.chi_squared_statistic,
-                            }
-                        )
-
+                    # SRM tests the OBSERVED allocation against the experiment's
+                    # DESIGNED allocation ratio. That ratio is not persisted on
+                    # ml_experiments (allocation_ratio is a request-time
+                    # randomization parameter only; #825 removed the read of a
+                    # phantom `config` column). Rather than fabricate a uniform
+                    # null — which would false-alarm on unequal-allocation designs
+                    # and cannot detect a fully-missing arm — SRM is skipped
+                    # fail-closed until the designed ratio is persisted (tracked
+                    # as a follow-up). variant_counts is retained for observability.
                     srm_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
-                            "status": status,
-                            "p_value": srm_result.p_value,
-                            "chi_squared": srm_result.chi_squared_statistic,
+                            "name": exp.get("experiment_name", "Unknown"),
+                            "status": "skipped",
+                            "reason": "no_persisted_expected_allocation_ratio",
                             "actual_counts": variant_counts,
                         }
                     )
@@ -629,7 +607,7 @@ def srm_detection_sweep(
                     srm_results.append(
                         {
                             "experiment_id": str(exp_id),
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "status": "error",
                             "error": str(e),
                         }
@@ -940,10 +918,10 @@ def check_all_active_experiments(
     logger.info(f"Checking all active experiments: task {self.request.id}")
 
     async def execute_check():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {
                     "status": "skipped",
@@ -952,7 +930,10 @@ def check_all_active_experiments(
 
             # Get all running experiments
             result = await (
-                client.table("ml_experiments").select("id, name").eq("status", "running").execute()
+                client.table("ml_experiments")
+                .select("id, experiment_name")
+                .eq("status", "running")
+                .execute()
             )
 
             if not result.data:
@@ -975,7 +956,7 @@ def check_all_active_experiments(
                     tasks_queued.append(
                         {
                             "experiment_id": exp["id"],
-                            "name": exp.get("name", "Unknown"),
+                            "name": exp.get("experiment_name", "Unknown"),
                             "task_id": task.id,
                         }
                     )
@@ -1027,10 +1008,10 @@ def cleanup_old_ab_results(
     effective_retention = retention_days or schedule_config.get("retention_days", 365)
 
     async def execute_cleanup():
-        from src.memory.services.factories import get_supabase_client
+        from src.memory.services.factories import get_async_supabase_client
 
         try:
-            client = await get_supabase_client()
+            client = await get_async_supabase_client()
             if not client:
                 return {"status": "skipped", "reason": "No database client available"}
 

@@ -43,7 +43,7 @@ class TestHealthCheckerGetClient:
     async def test_get_client_lazy_loads(self):
         """Test that client is lazily loaded."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get_client:
             mock_client = MagicMock()
@@ -62,7 +62,7 @@ class TestHealthCheckerGetClient:
     async def test_get_client_caches_result(self):
         """Test that client is cached after first load."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get_client:
             mock_client = MagicMock()
@@ -129,7 +129,7 @@ class TestHealthCheckerExecute:
     async def test_execute_sets_status_to_checking(self, base_monitor_state):
         """Test that execute sets status to 'checking'."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None  # Trigger mock data path
@@ -141,10 +141,11 @@ class TestHealthCheckerExecute:
             assert result["status"] == "checking"
 
     @pytest.mark.asyncio
-    async def test_execute_with_mock_data_when_no_client(self, base_monitor_state):
-        """Test that mock data is used when no client available."""
+    async def test_execute_fails_closed_when_no_client(self, base_monitor_state):
+        """No-mocking: when no DB client is available the node fails CLOSED --
+        empty experiments + a recorded error -- never fabricated mock data."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -152,8 +153,11 @@ class TestHealthCheckerExecute:
             node = HealthCheckerNode()
             result = await node.execute(base_monitor_state)
 
-            assert len(result["experiments"]) == 2  # Mock returns 2 experiments
-            assert "No database client available" in str(result.get("warnings", []))
+            assert result["experiments"] == []
+            errors = result.get("errors", [])
+            assert any("client unavailable" in str(e.get("error", "")).lower() for e in errors), (
+                errors
+            )
 
     @pytest.mark.asyncio
     async def test_execute_with_real_client(self, base_monitor_state, mock_supabase_client):
@@ -171,7 +175,7 @@ class TestHealthCheckerExecute:
     async def test_execute_calculates_latency(self, base_monitor_state):
         """Test that latency is calculated."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -201,7 +205,7 @@ class TestHealthCheckerExecute:
     async def test_execute_populates_experiments_list(self, base_monitor_state):
         """Test that experiments list is populated."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -340,42 +344,6 @@ class TestGetExperiments:
         result = await node._get_experiments(mock_client, state)
 
         assert result == []
-
-
-class TestGetMockExperiments:
-    """Tests for _get_mock_experiments method."""
-
-    @pytest.mark.asyncio
-    async def test_mock_experiments_returns_two(self, base_monitor_state):
-        """Test that mock experiments returns 2 experiments."""
-        node = HealthCheckerNode()
-        result = await node._get_mock_experiments(base_monitor_state)
-
-        assert len(result) == 2
-
-    @pytest.mark.asyncio
-    async def test_mock_experiments_have_required_fields(self, base_monitor_state):
-        """Test that mock experiments have required fields."""
-        node = HealthCheckerNode()
-        result = await node._get_mock_experiments(base_monitor_state)
-
-        for exp in result:
-            assert "id" in exp
-            assert "name" in exp
-            assert "status" in exp
-            assert "config" in exp
-            assert "created_at" in exp
-
-    @pytest.mark.asyncio
-    async def test_mock_experiments_have_valid_config(self, base_monitor_state):
-        """Test that mock experiments have valid config."""
-        node = HealthCheckerNode()
-        result = await node._get_mock_experiments(base_monitor_state)
-
-        for exp in result:
-            config = exp["config"]
-            assert "target_sample_size" in config
-            assert "allocation_ratio" in config
 
 
 class TestCheckExperimentHealth:

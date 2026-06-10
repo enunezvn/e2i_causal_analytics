@@ -40,7 +40,7 @@ class TestFidelityCheckerGetClient:
     async def test_get_client_lazy_loads(self):
         """Test that client is lazily loaded."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get_client:
             mock_client = MagicMock()
@@ -56,7 +56,7 @@ class TestFidelityCheckerGetClient:
     async def test_get_client_caches_result(self):
         """Test that client is cached after first load."""
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get_client:
             mock_client = MagicMock()
@@ -116,7 +116,7 @@ class TestFidelityCheckerExecute:
         node = FidelityCheckerNode()
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_client = MagicMock()
@@ -132,7 +132,7 @@ class TestFidelityCheckerExecute:
         node = FidelityCheckerNode()
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -149,7 +149,7 @@ class TestFidelityCheckerExecute:
         state_with_experiments["check_latency_ms"] = 100
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -198,7 +198,7 @@ class TestFidelityCheckerExecute:
         mock_client.table = MagicMock(return_value=mock_query)
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = mock_client
@@ -236,7 +236,7 @@ class TestFidelityCheckerExecute:
         mock_client.table = MagicMock(return_value=mock_query)
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = mock_client
@@ -643,7 +643,7 @@ class TestEdgeCases:
             return None
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_client = MagicMock()
@@ -876,7 +876,7 @@ class TestStateUpdates:
         }
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None
@@ -919,7 +919,7 @@ class TestStateUpdates:
         }
 
         with patch(
-            "src.memory.services.factories.get_supabase_client",
+            "src.memory.services.factories.get_async_supabase_client",
             new_callable=AsyncMock,
         ) as mock_get:
             mock_get.return_value = None

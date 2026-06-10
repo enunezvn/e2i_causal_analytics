@@ -1,10 +1,34 @@
 """Tests for metrics_aggregator node (aggregate_metrics)."""
 
+from unittest.mock import patch
+
 import pytest
 
 from src.agents.ml_foundation.observability_connector.nodes.metrics_aggregator import (
     aggregate_metrics,
 )
+
+
+@pytest.fixture(autouse=True)
+def _force_mock_span_path():
+    """Keep these aggregation-math unit tests HERMETIC on the deterministic
+    ``_get_mock_spans`` substrate.
+
+    Issue #821 fixed the ``ObservabilitySpanRepository(client=...)`` kwarg bug,
+    so ``_get_span_repository`` now builds a REAL repo and ``aggregate_metrics``
+    serves live spans when the repository is reachable (non-deterministic for a
+    unit test, and DB-dependent). These tests previously passed only because the
+    kwarg TypeError forced the documented 'repository unavailable -> mock data'
+    fallback. Force that fallback explicitly so the tests stay deterministic.
+    Faithful real-span coverage lives in
+    tests/integration/test_async_supabase_client_realdb.py.
+    """
+    with patch(
+        "src.agents.ml_foundation.observability_connector.nodes."
+        "metrics_aggregator._get_span_repository",
+        return_value=None,
+    ):
+        yield
 
 
 class TestAggregateMetrics:

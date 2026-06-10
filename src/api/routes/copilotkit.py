@@ -898,27 +898,21 @@ class LangGraphAgent(_LangGraphAGUIAgent):
 # =============================================================================
 
 
-def _get_business_metric_repository():
-    """Get BusinessMetricRepository instance with Supabase client."""
+async def _get_agent_registry_repository():
+    """Get AgentRegistryRepository instance with an ASYNC Supabase client.
+
+    AgentRegistryRepository.get_by_tier -> BaseRepository.get_many awaits
+    ``query.execute()``, so the repo requires the ASYNC client (the sync
+    ``get_supabase()`` client raised ``TypeError`` on ``await execute()``).
+    The base constructor takes ``supabase_client=`` (issue #821; the prior
+    ``client=`` kwarg raised TypeError -> None -> silent sample-agent fallback).
+    """
     try:
-        from src.api.dependencies.supabase_client import get_supabase
-        from src.repositories.business_metric import BusinessMetricRepository
-
-        client = get_supabase()
-        return BusinessMetricRepository(client=client) if client else None
-    except Exception as e:
-        logger.warning(f"Failed to get BusinessMetricRepository: {e}")
-        return None
-
-
-def _get_agent_registry_repository():
-    """Get AgentRegistryRepository instance with Supabase client."""
-    try:
-        from src.api.dependencies.supabase_client import get_supabase
+        from src.memory.services.factories import get_async_supabase_client
         from src.repositories.agent_registry import AgentRegistryRepository
 
-        client = get_supabase()
-        return AgentRegistryRepository(client=client) if client else None
+        client = await get_async_supabase_client()
+        return AgentRegistryRepository(supabase_client=client) if client else None
     except Exception as e:
         logger.warning(f"Failed to get AgentRegistryRepository: {e}")
         return None
@@ -1183,31 +1177,26 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
 # =============================================================================
 
 # Fallback sample data when database is unavailable
-_FALLBACK_KPIS = {
-    "Remibrutinib": {
-        "trx_volume": 15420,
-        "nrx_volume": 3250,
-        "market_share": 12.5,
-        "conversion_rate": 0.68,
-        "hcp_reach": 2450,
-        "patient_starts": 890,
-    },
-    "Fabhalta": {
-        "trx_volume": 8920,
-        "nrx_volume": 1850,
-        "market_share": 8.2,
-        "conversion_rate": 0.72,
-        "hcp_reach": 1820,
-        "patient_starts": 560,
-    },
-    "Kisqali": {
-        "trx_volume": 22100,
-        "nrx_volume": 4200,
-        "market_share": 18.5,
-        "conversion_rate": 0.65,
-        "hcp_reach": 3200,
-        "patient_starts": 1250,
-    },
+# Real KPI substrate for the Home landing tiles. Each metric field maps to a
+# vetted allowlisted query in `public.kpi_query_registry` (migrations 044 + 063),
+# run via the `kpi_query` RPC against REAL tables (treatment_events). This replaces
+# the former synthetic `business_metrics` rollup AND the hardcoded `_FALLBACK_KPIS`
+# sample (an intentional sample fallback, commits 96e2ca24e / 2662a2c04 -- now
+# superseded: showing fabricated/synthetic values as real on the landing page is
+# the exact harm the H1 fix removes).
+#
+# field -> (kpi_query registry id, json result key, brand-scoped?, defined-for-"All"?)
+# `defined_for_all=False` marks an inherently per-brand metric (TRx share filters
+# `brand = $1` with no NULL guard, unlike the other queries' `$1 IS NULL OR ...`):
+# for the aggregate "All" view it is N/A, so we return honest None instead of the
+# misleading 0 that a NULL brand would yield from the share SQL.
+_KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
+    "trx_volume": ("business_impact_trx", "trx", True, True),
+    "nrx_volume": ("business_impact_nrx", "nrx", True, True),
+    "market_share": ("business_impact_trx_share", "share", True, False),
+    "conversion_rate": ("business_impact_conversion_rate", "conversion_rate", False, True),
+    "hcp_reach": ("business_impact_hcp_reach", "hcp_reach", True, True),
+    "patient_starts": ("business_impact_nbrx", "nbrx", True, True),
 }
 
 _FALLBACK_AGENTS = [
@@ -1220,101 +1209,116 @@ _FALLBACK_AGENTS = [
 ]
 
 
-async def _fetch_kpis_from_db(brand: str) -> Optional[Dict[str, Any]]:
-    """
-    Fetch KPI data from database for a brand.
-
-    Returns:
-        KPI metrics dict or None if unavailable
-    """
-    repo = _get_business_metric_repository()
-    if not repo:
+def _coerce_metric(value: Any) -> Optional[float]:
+    """Coerce a kpi_query JSON value to a number, or None when absent."""
+    if value is None:
         return None
-
     try:
-        # Define KPI mappings to the REAL metric_name values present in
-        # business_metrics. Verified against the live table (4667 rows, brands
-        # Kisqali/Fabhalta/Remibrutinib): the canonical metric_name strings are
-        #   TRx, NBRx, "Market Share Percentage", Conversion_Rate, HCP_Coverage,
-        #   Patient_Touch_Rate (among others).
-        # The previous mapping pointed at metric_names that do NOT exist in the
-        # table (NRx, market_share, conversion_rate, hcp_reach, patient_starts),
-        # so get_by_kpi returned [] for all but TRx and the summary degraded to
-        # the fallback. These corrected names make the rollup read REAL DB values.
-        kpi_mappings = {
-            "trx_volume": "TRx",
-            "nrx_volume": "NBRx",
-            "market_share": "Market Share Percentage",
-            "conversion_rate": "Conversion_Rate",
-            "hcp_reach": "HCP_Coverage",
-            "patient_starts": "Patient_Touch_Rate",
-        }
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    # COUNT-based metrics arrive as integral floats; keep ints integral so the
+    # FE renders "HCPs Reached" / "TRx" as whole numbers, not "0.0".
+    return int(num) if num.is_integer() else num
 
-        metrics = {}
-        for metric_key, db_metric_name in kpi_mappings.items():
-            results = await repo.get_by_kpi(
-                kpi_name=db_metric_name,
-                brand=brand if brand != "All" else None,
-                limit=1,
-            )
-            if results:
-                # Get most recent value
-                metrics[metric_key] = results[0].get("value", 0)
-            else:
-                metrics[metric_key] = 0
 
-        return metrics if any(metrics.values()) else None
-
+def _fetch_data_through(client: Any) -> Optional[str]:
+    """Latest prescription event_date in treatment_events (the data-coverage end),
+    via the vetted kpi_query allowlist. None when unavailable. Lets the FE render a
+    DYNAMIC "data through <date>" label on empty tiles instead of a bare 0."""
+    if client is None:
+        return None
+    try:
+        response = client.rpc(
+            "kpi_query", {"query_id": "business_impact_data_through", "params": []}
+        ).execute()
+        rows = response.data or []
+        value = rows[0].get("data_through") if rows else None
+        return str(value) if value is not None else None
     except Exception as e:
-        logger.warning(f"Failed to fetch KPIs from database: {e}")
+        logger.warning(f"[CopilotKit] KPI summary data_through query failed: {e}")
         return None
 
 
 async def get_kpi_summary(brand: str) -> Dict[str, Any]:
     """
-    Get KPI summary for a specific brand.
+    Get the REAL KPI summary for a brand for the Home landing tiles.
 
-    Attempts to fetch real data from database, falls back to sample data if unavailable.
+    Reads the vetted allowlisted KPI queries (treatment_events via the `kpi_query`
+    RPC) -- the same real substrate the KPI grid uses -- NOT the synthetic
+    `business_metrics` table and NOT a hardcoded sample. When the source data is
+    stale/empty the values are honest zeros with ``data_source="database"``; when
+    the DB is unreachable or every query fails the result is fail-closed with
+    ``data_source="unavailable"`` and ``None`` metrics. Values are NEVER fabricated.
+
+    NOTE (data freshness, not a code bug): prod ``treatment_events`` currently ends
+    2025-12-22, so the 30-day-window KPIs read 0 until fresh data lands.
 
     Args:
         brand: Brand name (Remibrutinib, Fabhalta, Kisqali, or All)
 
     Returns:
-        Dictionary with KPI metrics
+        ``{brand, period, metrics, data_source}`` -- always this shape, even on
+        an unknown brand (honest ``data_source="unavailable"``).
     """
-    logger.info(f"[CopilotKit] Fetching KPI summary for brand: {brand}")
+    logger.info(f"[CopilotKit] Fetching real KPI summary for brand: {brand}")
 
+    metric_fields = list(_KPI_SUMMARY_QUERIES.keys())
     valid_brands = ["Remibrutinib", "Fabhalta", "Kisqali", "All"]
+
     if brand not in valid_brands:
-        return {"error": f"Unknown brand: {brand}. Available: {valid_brands[:-1]}"}
+        return {
+            "brand": brand,
+            "period": "Last 30 days",
+            "metrics": dict.fromkeys(metric_fields),
+            "data_source": "unavailable",
+            "data_through": None,
+            "error": f"Unknown brand: {brand}. Available: {valid_brands[:-1]}",
+        }
 
-    # Try to fetch from database first
-    db_metrics = await _fetch_kpis_from_db(brand)
-    data_source = "database"
+    from src.api.dependencies.supabase_client import get_supabase
 
-    if db_metrics:
-        metrics = db_metrics
+    client = get_supabase()
+    metrics: Dict[str, Any] = {}
+    any_ok = False
+
+    if client is not None:
+        brand_param = None if brand == "All" else brand
+        for field, (
+            query_id,
+            result_key,
+            brand_scoped,
+            defined_for_all,
+        ) in _KPI_SUMMARY_QUERIES.items():
+            if brand == "All" and not defined_for_all:
+                # Inherently per-brand (e.g. TRx share) -> N/A for the aggregate
+                # view; honest None rather than a misleading 0.
+                metrics[field] = None
+                continue
+            params = [brand_param] if brand_scoped else []
+            try:
+                response = client.rpc(
+                    "kpi_query", {"query_id": query_id, "params": params}
+                ).execute()
+                rows = response.data or []
+                metrics[field] = _coerce_metric(rows[0].get(result_key)) if rows else None
+                any_ok = True
+            except Exception as e:  # fail-closed for this metric, never fabricate
+                logger.warning(f"[CopilotKit] KPI summary query {query_id} failed: {e}")
+                metrics[field] = None
     else:
-        # Fall back to sample data
-        data_source = "fallback"
-        if brand == "All":
-            metrics = {
-                "trx_volume": sum(b["trx_volume"] for b in _FALLBACK_KPIS.values()),
-                "nrx_volume": sum(b["nrx_volume"] for b in _FALLBACK_KPIS.values()),
-                "market_share": sum(b["market_share"] for b in _FALLBACK_KPIS.values()) / 3,
-                "conversion_rate": sum(b["conversion_rate"] for b in _FALLBACK_KPIS.values()) / 3,
-                "hcp_reach": sum(b["hcp_reach"] for b in _FALLBACK_KPIS.values()),
-                "patient_starts": sum(b["patient_starts"] for b in _FALLBACK_KPIS.values()),
-                "brands_included": list(_FALLBACK_KPIS.keys()),
-            }
-        else:
-            metrics = _FALLBACK_KPIS.get(brand, {})
+        logger.warning("[CopilotKit] No Supabase client; KPI summary unavailable")
+        metrics = dict.fromkeys(metric_fields)
 
     return {
         "brand": brand,
-        "period": "Last 90 days",
+        "period": "Last 30 days",
         "metrics": metrics,
-        "data_source": data_source,
+        "data_source": "database" if any_ok else "unavailable",
+        # Data-coverage end (latest treatment_events prescription date) so the FE
+        # renders a 0/null tile as "No recent activity -- data through <date>" with
+        # a DYNAMIC date, not a bare 0. None when unavailable.
+        "data_through": _fetch_data_through(client),
     }
 
 
@@ -1325,25 +1329,28 @@ async def _fetch_agents_from_db() -> Optional[List[Dict[str, Any]]]:
     Returns:
         List of agent dicts or None if unavailable
     """
-    repo = _get_agent_registry_repository()
+    repo = await _get_agent_registry_repository()
     if not repo:
         return None
 
     try:
-        # Fetch all active agents
-        all_agents = []
-        for tier in range(1, 6):  # Tiers 1-5
-            tier_agents = await repo.get_by_tier(tier)
-            for agent in tier_agents:
-                all_agents.append(
-                    {
-                        "id": agent.get("agent_name", "unknown"),
-                        "name": agent.get("display_name", agent.get("agent_name", "Unknown")),
-                        "tier": agent.get("tier", tier),
-                        "status": "active" if agent.get("is_active", True) else "idle",
-                        "description": agent.get("description", ""),
-                    }
-                )
+        from src.repositories.agent_registry import tier_number_for_category
+
+        # Fetch all active agents in one schema-clean query. The real schema
+        # stores the tier as the ``agent_tier`` text category (NOT an int
+        # ``tier`` column), so the numeric tier is derived from that category
+        # rather than looping a phantom int tier (issue #825).
+        active_agents = await repo.get_active_agents()
+        all_agents = [
+            {
+                "id": agent.get("agent_name", "unknown"),
+                "name": agent.get("display_name", agent.get("agent_name", "Unknown")),
+                "tier": tier_number_for_category(agent.get("agent_tier")),
+                "status": "active" if agent.get("is_active", True) else "idle",
+                "description": agent.get("description", ""),
+            }
+            for agent in active_agents
+        ]
 
         return all_agents if all_agents else None
 
