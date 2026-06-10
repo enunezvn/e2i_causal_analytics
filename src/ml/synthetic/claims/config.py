@@ -81,9 +81,9 @@ class ClaimsDGPConfig:
     # the target so the band can be re-centred without regenerating the table.
     feature_log_rate_coef: float = 0.70  # latent -> log(count rate) slope
     # Initiation logit = init_severity_coef*severity + init_tx_coef*tx_burden + noise.
-    init_severity_coef: float = 1.15  # severity (comorbidity axis) -> init logit
-    init_tx_coef: float = 1.15  # tx_burden (prior-therapy axis) -> init logit
-    init_noise_sd: float = 1.80  # initiation logit noise (sets AUC ceiling)
+    init_severity_coef: float = 1.10  # severity (comorbidity axis) -> init logit
+    init_tx_coef: float = 1.10  # tx_burden (prior-therapy axis) -> init logit
+    init_noise_sd: float = 1.95  # initiation logit noise (centres AUC in band)
     # (Non-)adherence logit = -(adh_severity*severity + adh_tx*tx_burden) + noise.
     # tx_burden is weighted HIGHER than severity so the disc/persistence margin
     # is carried by the prior-therapy fill features the comorbidity-only baseline
@@ -91,6 +91,6 @@ class ClaimsDGPConfig:
     # WITHOUT any post-index leakage (the leaky P1c is therefore NOT needed).
     # The noise is raised so disc/persistence land IN the [0.62, 0.68] band
     # rather than above it.
-    adherence_severity_coef: float = 0.75  # severity -> non-adherence logit
-    adherence_tx_coef: float = 1.55  # tx_burden -> non-adherence logit
-    adherence_noise_sd: float = 1.80  # adherence logit noise
+    adherence_severity_coef: float = 0.65  # severity -> non-adherence logit
+    adherence_tx_coef: float = 1.40  # tx_burden -> non-adherence logit
+    adherence_noise_sd: float = 2.10  # adherence logit noise (centres disc in band)

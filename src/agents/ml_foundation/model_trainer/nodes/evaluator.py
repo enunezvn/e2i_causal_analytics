@@ -12,6 +12,11 @@ import math
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, cast
 
 import numpy as np
+
+# numpy>=2.0 removed the long-deprecated ``np.trapz`` in favour of
+# ``np.trapezoid`` (identical semantics). Resolve once so the net-benefit
+# integration works on both numpy 1.x and 2.x.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz  # type: ignore[attr-defined]
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
@@ -1650,8 +1655,8 @@ def _compute_net_benefit_area(
         # Don't integrate over partial NaN — emit NaN for the area.
         area_model = float("nan")
     else:
-        area_model = float(np.trapz(nb_model, taus))
-    area_treat_all = float(np.trapz(nb_treat_all, taus))
+        area_model = float(_trapezoid(nb_model, taus))
+    area_treat_all = float(_trapezoid(nb_treat_all, taus))
     area_relative = area_model - area_treat_all if not math.isnan(area_model) else float("nan")
     return {
         "net_benefit_area": area_model,
