@@ -27,6 +27,7 @@ from src.repositories.drift_monitoring import (
     RetrainingHistoryRecord,
     _derive_trigger_type,
     _ms_to_seconds,
+    _normalize_alert_status,
     _normalize_drift_type,
     _normalize_severity,
     _normalize_test_type,
@@ -228,9 +229,19 @@ def test_normalize_drift_type_coerces_to_valid_enum():
     # drift_type_enum = data/model/concept — an unknown literal would 22P02
     assert _normalize_drift_type("data") == "data"
     assert _normalize_drift_type("MODEL") == "model"
+    assert _normalize_drift_type("concept") == "concept"
     assert _normalize_drift_type("covariate") == "data"  # unknown -> NOT-NULL default
     assert _normalize_drift_type("covariate", default=None) is None  # nullable column
     assert _normalize_drift_type(None, default=None) is None
+
+
+def test_normalize_alert_status_coerces_to_valid_enum():
+    # alert_status_enum = active/acknowledged/investigating/resolved/dismissed
+    for valid in ("active", "acknowledged", "investigating", "resolved", "dismissed"):
+        assert _normalize_alert_status(valid) == valid
+    assert _normalize_alert_status("ACKNOWLEDGED") == "acknowledged"
+    assert _normalize_alert_status("closed") == "active"  # unknown -> safe default
+    assert _normalize_alert_status(None) == "active"
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +369,21 @@ def test_alert_invalid_drift_type_coerced_to_valid_or_none():
     )
     dt = rec.to_db_row()["drift_type"]
     assert dt is None or dt in {"data", "model", "concept"}
+
+
+def test_alert_invalid_status_coerced_to_valid_enum():
+    """ml_monitoring_alerts.status is alert_status_enum; an unknown status must
+    be coerced (to the safe 'active' default) rather than 22P02'ing."""
+    rec = MonitoringAlertRecord(
+        alert_type="data_drift", severity="high", message="x", status="closed"
+    )
+    assert rec.to_db_row()["status"] in {
+        "active",
+        "acknowledged",
+        "investigating",
+        "resolved",
+        "dismissed",
+    }
 
 
 # ---------------------------------------------------------------------------

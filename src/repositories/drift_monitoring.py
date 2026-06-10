@@ -55,6 +55,9 @@ _SEVERITY_ALIASES = {"warning": "high", "warn": "high", "info": "low", "ok": "no
 # drift_type_enum
 _VALID_DRIFT_TYPE = {"data", "model", "concept"}
 
+# alert_status_enum
+_VALID_ALERT_STATUS = {"active", "acknowledged", "investigating", "resolved", "dismissed"}
+
 # statistical_test_enum
 _VALID_TEST_TYPE = {
     "psi",
@@ -110,6 +113,16 @@ def _normalize_drift_type(
     """
     d = (drift_type or "").strip().lower()
     return d if d in _VALID_DRIFT_TYPE else default
+
+
+def _normalize_alert_status(status: Optional[str]) -> str:
+    """Coerce to a valid ``alert_status_enum`` value (NOT NULL column).
+
+    Unknown/empty -> ``"active"`` (the column + record default); an unknown
+    literal would 22P02 the insert.
+    """
+    s = (status or "").strip().lower()
+    return s if s in _VALID_ALERT_STATUS else "active"
 
 
 def _derive_trigger_type(trigger_reason: Optional[str]) -> str:
@@ -304,7 +317,7 @@ class MonitoringAlertRecord(BaseModel):
             "alert_type": self.alert_type,
             "title": self._resolved_title(),
             "severity": _normalize_severity(self.severity),
-            "status": self.status,
+            "status": _normalize_alert_status(self.status),
             "message": self.message,
             "affected_features": list(self.affected_features or []),
             "drift_type": _normalize_drift_type(self.drift_type, default=None),
