@@ -113,6 +113,7 @@ from src.data.manifests import (
     OPTUM_HCP_FEATURES,
     OPTUM_HCP_FORBIDDEN_AS_FEATURES,
     OPTUM_MART_FEATURES,
+    SYNTHETIC_CSU_FEATURES,
     SYNTHETIC_CSU_FORBIDDEN_AS_FEATURES,
     SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
@@ -2477,6 +2478,9 @@ def _resolve_manifest_features(
         "optum_mart": list(OPTUM_MART_FEATURES),
         "optum_hcp": list(OPTUM_HCP_FEATURES),
         "synthetic": list(SYNTHETIC_FEATURES.values()),
+        # synthetic_csu: the synthetic causal-validation dataset's tier0
+        # exports — dict-shaped like SYNTHETIC_FEATURES, materialized here.
+        "synthetic_csu": list(SYNTHETIC_CSU_FEATURES.values()),
     }
     return registries.get(manifest_source)
 
