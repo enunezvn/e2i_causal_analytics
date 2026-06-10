@@ -26,6 +26,8 @@ unit sweep with network I/O.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 
@@ -74,3 +76,32 @@ def _reset_service_client_singletons() -> None:
     except ImportError:
         return
     reset_all_clients()
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_drift_monitoring_client(request, monkeypatch):
+    """Autouse (#845): the drift / monitoring / retraining call sites now resolve
+    a real async Supabase client via
+    ``src.repositories.drift_monitoring.get_drift_monitoring_client`` and wire it
+    into the repositories (replacing the old client-less, silently-no-op'ing
+    construction). Unit tests must stay hermetic: CI's unit job sets a
+    ``SUPABASE_URL`` but has no reachable Supabase and no usable service key
+    (``_resolve_supabase_key`` ignores ``SUPABASE_KEY``), so a live resolve raises
+    ``ServiceConnectionError`` -> wired endpoints/tasks would 5xx/fail where they
+    previously read empty.
+
+    Stub the resolver to return ``None`` so every call site falls back to the
+    EXACT pre-#845 client-less no-op (mocked-repo tests ignore the value; tests
+    that relied on the no-op still get empty results). The real wiring and
+    fail-closed behavior are covered by
+    ``tests/unit/test_repositories/test_drift_monitoring_client_wiring_845.py``,
+    which opts OUT below (it must exercise the real resolver)."""
+    if "test_drift_monitoring_client_wiring_845" in request.node.nodeid:
+        return
+    try:
+        import src.repositories.drift_monitoring as _dm
+    except Exception:  # pragma: no cover - module always importable in unit env
+        return
+    monkeypatch.setattr(
+        _dm, "get_drift_monitoring_client", AsyncMock(return_value=None), raising=False
+    )
