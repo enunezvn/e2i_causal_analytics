@@ -576,6 +576,40 @@ TABLE_COLUMNS = {
 }
 
 
+# Registered-but-OPTIONAL columns: nullable analytical / enrichment fields that the
+# load script stamps via separate, order-independent enrichment passes (e.g.
+# data_lag.stamp_data_lag_hours, sequence_number.stamp_sequence_number) or that are
+# only populated for a subset of rows (ml_predictions quality metrics, trigger
+# change-event fields). They are column-GATED into the load when present, but their
+# ABSENCE is not a critical validation error — the DB columns are nullable, so a base
+# dataset that has not been enriched still loads cleanly. validate_datasets exempts
+# them from critical_missing, mirroring the existing ``_split`` exemption. (The core
+# causal-substrate columns — treatment_arm/propensity_score/etc. — are deliberately
+# NOT here: PatientGenerator emits them as NULL placeholders, so they remain required.)
+OPTIONAL_COLUMNS = frozenset(
+    {
+        "data_lag_hours",  # patient_journeys (Shard 09 WS1-DQ-007 enrichment stamp)
+        "sequence_number",  # treatment_events (NRx ordering enrichment stamp)
+        # ml_predictions model-quality metrics (nullable; only on evaluated predictions)
+        "model_auc",
+        "model_pr_auc",
+        "model_precision",
+        "model_recall",
+        "brier_score",
+        "calibration_score",
+        "rank_metrics",
+        "fairness_metrics",
+        "shap_values",
+        "counterfactual_outcome",
+        # triggers change-event fields (nullable; only on change-type triggers)
+        "previous_trigger_id",
+        "change_type",
+        "change_failed",
+        "change_outcome_delta",
+    }
+)
+
+
 class BatchLoader:
     """
     Batch loader for synthetic data to Supabase.
@@ -807,8 +841,14 @@ class BatchLoader:
             required_columns = TABLE_COLUMNS[table_name]
             missing_columns = [c for c in required_columns if c not in df.columns]
 
-            # Some columns are optional (like data_split for static entities)
-            critical_missing = [c for c in missing_columns if not c.endswith("_split")]
+            # Some columns are optional: data_split for static entities, plus the
+            # nullable analytical/enrichment columns in OPTIONAL_COLUMNS (stamped by
+            # order-independent enrichment passes or populated for a subset of rows).
+            critical_missing = [
+                c
+                for c in missing_columns
+                if not c.endswith("_split") and c not in OPTIONAL_COLUMNS
+            ]
             if critical_missing:
                 errors.append(f"{table_name}: Missing columns {critical_missing}")
 
