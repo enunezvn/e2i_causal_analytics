@@ -135,6 +135,69 @@ class TestGetById(TestBaseRepository):
         assert result is None
 
 
+class _RecordingQuery:
+    """supabase-style fluent builder that records ``.eq()`` predicates."""
+
+    def __init__(self) -> None:
+        self.eq_calls: list[tuple] = []
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        self.eq_calls.append(a)
+        return self
+
+    def execute(self):
+        result = MagicMock()
+        result.data = []
+        return AsyncMock(return_value=result)()
+
+
+def _provenance_repo(has_provenance: bool):
+    """Concrete repo over a recording query; HAS_PROVENANCE configurable."""
+    from src.repositories.base import BaseRepository
+
+    class ProvRepo(BaseRepository[MockModel]):
+        table_name = "taggable_table"
+        model_class = MockModel
+        HAS_PROVENANCE = has_provenance
+
+    query = _RecordingQuery()
+    client = MagicMock()
+    client.table = MagicMock(return_value=query)
+    return ProvRepo(supabase_client=client), query
+
+
+@pytest.mark.unit
+class TestGetByIdProvenance:
+    """Shard 07: get_by_id default-excludes is_synthetic on taggable tables."""
+
+    @pytest.mark.asyncio
+    async def test_default_excludes_synthetic_when_has_provenance(self):
+        repo, query = _provenance_repo(has_provenance=True)
+        await repo.get_by_id("some-id")
+        assert ("is_synthetic", False) in query.eq_calls, (
+            f"get_by_id did not default-exclude synthetic rows: {query.eq_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_opt_in_does_not_filter(self):
+        repo, query = _provenance_repo(has_provenance=True)
+        await repo.get_by_id("some-id", include_synthetic=True)
+        assert ("is_synthetic", False) not in query.eq_calls, (
+            f"include_synthetic=True still applied the provenance predicate: {query.eq_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_untagged_table_is_untouched(self):
+        repo, query = _provenance_repo(has_provenance=False)
+        await repo.get_by_id("some-id")
+        assert ("is_synthetic", False) not in query.eq_calls, (
+            "non-taggable table must not get the is_synthetic predicate (would 42703)"
+        )
+
+
 @pytest.mark.unit
 class TestGetMany(TestBaseRepository):
     """Tests for get_many method."""

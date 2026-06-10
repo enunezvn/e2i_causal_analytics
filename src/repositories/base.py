@@ -42,6 +42,7 @@ class BaseRepository(ABC, Generic[T]):
         self,
         id: str,
         split: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> Optional[T]:
         """
         Get a single record by ID.
@@ -49,6 +50,11 @@ class BaseRepository(ABC, Generic[T]):
         Args:
             id: Record UUID
             split: Optional ML split filter
+            include_synthetic: When False (default), tables carrying the
+                ``is_synthetic`` provenance column (``HAS_PROVENANCE = True``)
+                default-exclude a synthetic row even when fetched by its id
+                (a synthetic id must not resolve into a real-mode result).
+                Validation runs opt in with True.
 
         Returns:
             Model instance or None
@@ -59,6 +65,11 @@ class BaseRepository(ABC, Generic[T]):
         query = self.client.table(self.table_name).select("*").eq("id", id)
         if split:
             query = query.eq("split_assignment", split)
+
+        if not include_synthetic and getattr(self, "HAS_PROVENANCE", False):
+            from src.repositories.provenance import apply_provenance_filter
+
+            query = apply_provenance_filter(query, include_synthetic=False)
 
         result = await query.execute()
         return self._to_model(parse_supabase_row(result.data[0])) if result.data else None
