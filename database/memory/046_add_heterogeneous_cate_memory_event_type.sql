@@ -1,0 +1,28 @@
+-- ============================================================================
+-- Migration 046: Add heterogeneous_optimizer CATE memory event type
+-- ============================================================================
+-- Purpose: The heterogeneous_optimizer episodic write/read path emits the event
+--          type ``cate_analysis_completed`` (memory_hooks.py: store_cate_analysis /
+--          get_context), which was never added to the ``memory_event_type`` enum.
+--          Every het episodic search AND write therefore failed with
+--          ``invalid input value for enum memory_event_type: "cate_analysis_completed"``
+--          (code 22P02). Because the het agent sets ``status = "failed" if
+--          final_state.errors`` (agent.py:423) and the dispatcher fails the dispatch
+--          CLOSED on a het ``status == "failed"`` (#F12/F13/F14 _agent_failed), this
+--          non-fatal memory-persistence error silently fail-closed the ENTIRE
+--          heterogeneous_optimizer analysis when reached via the live chat path —
+--          surfaced by the synthetic-causal-validation Shard 11 gate 11 (CHAT-PATH
+--          e2e), where the full CATE → segment → hierarchical pipeline completes but
+--          the result is dropped to success=False/result=None.
+--
+--          This is the heterogeneous_optimizer analog of migration 040
+--          (causal_impact ``causal_analysis_completed``) and migration 039 (Tier-0).
+--          ``cate_analysis_completed`` is a distinct, legitimate het event type
+--          (Conditional Average Treatment Effect analysis), not a duplicate of the
+--          causal_impact ``causal_analysis_completed``.
+--
+-- Reference: synthetic-causal-validation Shard 11 gate 11; mirrors migration 040.
+-- Safety: additive only (ADD VALUE IF NOT EXISTS) — cannot break existing rows.
+-- ============================================================================
+
+ALTER TYPE memory_event_type ADD VALUE IF NOT EXISTS 'cate_analysis_completed';
