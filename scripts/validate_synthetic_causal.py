@@ -1075,7 +1075,7 @@ def gate_11_chat_path(client) -> GateResult:
     hetero_out = (hetero_res or {}).get("result") or {}
     routed = "heterogeneous_optimizer" in dispatched or hetero_res is not None
     data_source = str(hetero_out.get("data_source") or "")
-    bound_real = "kpi_substrate" in data_source
+    het_success = bool((hetero_res or {}).get("success"))
     seg = hetero_out.get("cate_by_segment") or {}
     distinct_segments = 0
     if isinstance(seg, dict):
@@ -1084,43 +1084,41 @@ def gate_11_chat_path(client) -> GateResult:
                 distinct_segments += len({str(x) for x in v if x is not None}) and len(v) >= 1
             elif v is not None:
                 distinct_segments += 1
-    # Load-bearing proof: chat -> orchestrator -> dispatcher -> het_optimizer with the
-    # resolver binding REAL kpi_substrate data, and the agent recovering REAL per-segment
-    # heterogeneity (>=2 distinct segment CATE values).
-    ok = routed and bound_real and distinct_segments >= 2
+    overall_ate = hetero_out.get("overall_ate")
+    # RECONCILED bound-real signal: the het AGENT OUTPUT does not echo ``data_source``
+    # (verified — it is an INPUT the #839 resolver sets on the dispatch spec, not an
+    # output field; gate 6 can read it because gate 6 builds that spec itself). The
+    # faithful in-OUTPUT proof that the chat path bound REAL kpi_substrate is
+    # ``het_success`` itself: the #839 resolver returns ``NeedsStructuredInput`` and the
+    # dispatcher FAILS CLOSED (het never runs, success=False) whenever it cannot bind a
+    # recognized KPI with a defined treatment AND >=100 real rows. So het_success=True
+    # is logically EQUIVALENT to "bound real kpi_substrate", and a real per-segment CATE
+    # (>=2 distinct values + a real overall_ate) is STRONGER evidence than the input
+    # string — a fail-closed/mock het cannot produce them.
+    #
+    # Load-bearing proof: chat -> orchestrator -> dispatcher -> het_optimizer, the #839
+    # resolver binds REAL kpi_substrate (het_success), and the agent recovers REAL
+    # per-segment heterogeneity (>=2 distinct segment CATE values + a real overall_ate).
+    ok = (
+        routed
+        and het_success
+        and distinct_segments >= 2
+        and isinstance(overall_ate, (int, float))
+    )
     measured = {
         "dispatched": dispatched,
         "routed_to_het": routed,
-        "data_source": data_source or None,
+        "het_success": het_success,
         "n_cate_segments": distinct_segments,
-        "het_success": (hetero_res or {}).get("success"),
+        "overall_ate": overall_ate,
     }
-    # DOCUMENTED LIMITATION (surfaced when the live CATE pipeline crashes): the #839
-    # resolver binds the conversion substrate's driver columns as effect_modifiers,
-    # several of which are categorical strings (trigger_type/delivery_channel/priority).
-    # The CATE estimator label-encodes for TRAINING but feeds the RAW string columns at
-    # per-segment prediction time (heterogeneous_optimizer/nodes/cate_estimator.py:629:
-    # ``X_segment = segment_df[effect_modifiers].values``), so econml raises
-    # "could not convert string to float" and the agent returns success=False with an
-    # empty cate_by_segment. Gate 6 (which controls the input) encodes those modifiers
-    # before the agent and PASSES; the LIVE chat path runs the resolver internally with
-    # un-encoded modifiers, so it cannot be made green without a PRODUCTION fix to
-    # cate_estimator.py (encode X_segment the same way training does). That src change
-    # is out of this shard's harness-only scope. When that crash occurs the gate FAILS
-    # LOUD (HARD RULE 4) and records the exact production root cause below.
-    if not ok and routed and not distinct_segments:
-        measured["limitation"] = (
-            "chat->het routing + kpi_substrate binding WORK; CATE estimation crashes on "
-            "the resolver's string effect_modifiers (cate_estimator.py:629 feeds raw "
-            "strings to econml) -> success=False, empty cate_by_segment. Production fix "
-            "required (encode X_segment); out of harness scope."
-        )
     return GateResult(
         "11 CHAT-PATH e2e",
         ok,
         measured,
         "chat (conversion query) -> orchestrator -> dispatcher -> heterogeneous_optimizer "
-        "bound to REAL kpi_substrate -> >=2 distinct per-segment CATE values",
+        "(het_success == resolver bound REAL kpi_substrate, fail-closed otherwise) -> "
+        ">=2 distinct per-segment CATE values + real overall_ate",
     )
 
 
