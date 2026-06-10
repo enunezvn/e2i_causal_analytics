@@ -105,22 +105,6 @@ def load_config() -> Dict[str, Any]:
     return DEFAULT_CONFIG
 
 
-def _expected_ratio_for_variants(variant_counts: Dict[str, int]) -> Dict[str, float]:
-    """Uniform expected allocation across the observed variants.
-
-    This is the correct SRM null hypothesis for equal-allocation designs.
-    ``ml_experiments`` does not persist a per-experiment allocation ratio (the
-    ``allocation_ratio`` is a request-time randomization parameter only; issue
-    #825 removed the read of a phantom ``config`` column), so the expected ratio
-    is derived from the real variants present in the assignments.
-    """
-    n = len(variant_counts)
-    if n == 0:
-        return {}
-    share = 1.0 / n
-    return dict.fromkeys(variant_counts, share)
-
-
 def run_async(coro):
     """Helper to run async coroutine in sync context.
 
@@ -544,7 +528,6 @@ def srm_detection_sweep(
     async def execute_sweep():
         from src.memory.services.factories import get_async_supabase_client
         from src.repositories.ab_experiment import ABExperimentRepository
-        from src.services.results_analysis import ResultsAnalysisService
 
         try:
             client = await get_async_supabase_client()
@@ -569,10 +552,8 @@ def srm_detection_sweep(
                     "message": "No active experiments found",
                 }
 
-            results_service = ResultsAnalysisService()
             exp_repo = ABExperimentRepository()
             min_sample_size = srm_config.get("min_sample_size", 100)
-            srm_config.get("detection_threshold", 0.001)
 
             srm_results = []
             srm_detected = []
@@ -602,42 +583,21 @@ def srm_detection_sweep(
                         variant = a.variant
                         variant_counts[variant] = variant_counts.get(variant, 0) + 1
 
-                    # Expected allocation is uniform across the observed
-                    # variants — the correct SRM null for equal-allocation
-                    # designs. ml_experiments does not persist a per-experiment
-                    # allocation ratio (allocation_ratio is a request-time
-                    # randomization parameter only), so it is derived from the
-                    # real variants rather than a phantom config column (#825).
-                    expected_ratio = _expected_ratio_for_variants(variant_counts)
-
-                    # Check SRM
-                    srm_result = await results_service.check_sample_ratio_mismatch(
-                        experiment_id=exp_id,
-                        expected_ratio=expected_ratio,
-                        actual_counts=variant_counts,
-                    )
-
-                    status = "ok"
-                    if srm_result.is_srm_detected:
-                        status = "srm_detected"
-                        srm_detected.append(
-                            {
-                                "experiment_id": str(exp_id),
-                                "name": exp.get("experiment_name", "Unknown"),
-                                "p_value": srm_result.p_value,
-                                "expected_ratio": expected_ratio,
-                                "actual_counts": variant_counts,
-                                "chi_squared": srm_result.chi_squared_statistic,
-                            }
-                        )
-
+                    # SRM tests the OBSERVED allocation against the experiment's
+                    # DESIGNED allocation ratio. That ratio is not persisted on
+                    # ml_experiments (allocation_ratio is a request-time
+                    # randomization parameter only; #825 removed the read of a
+                    # phantom `config` column). Rather than fabricate a uniform
+                    # null — which would false-alarm on unequal-allocation designs
+                    # and cannot detect a fully-missing arm — SRM is skipped
+                    # fail-closed until the designed ratio is persisted (tracked
+                    # as a follow-up). variant_counts is retained for observability.
                     srm_results.append(
                         {
                             "experiment_id": str(exp_id),
                             "name": exp.get("experiment_name", "Unknown"),
-                            "status": status,
-                            "p_value": srm_result.p_value,
-                            "chi_squared": srm_result.chi_squared_statistic,
+                            "status": "skipped",
+                            "reason": "no_persisted_expected_allocation_ratio",
                             "actual_counts": variant_counts,
                         }
                     )

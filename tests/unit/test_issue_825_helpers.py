@@ -1,8 +1,6 @@
 """Unit tests for the pure helpers introduced by issue #825 (no DB).
 
-* agent_registry tier text-category <-> numeric mapping (real agent_tier enum).
-* SRM uniform expected-allocation derivation (ml_experiments persists no
-  per-experiment allocation ratio; equal allocation is the correct SRM null).
+agent_registry tier text-category <-> numeric mapping (real agent_tier enum).
 """
 
 
@@ -27,25 +25,10 @@ def test_tier_number_by_category_matches_real_enum():
         assert TIER_NUMBER_BY_CATEGORY[category] == number
 
 
-def test_uniform_expected_ratio_two_variants():
-    from src.tasks.ab_testing_tasks import _expected_ratio_for_variants
+def test_tier_number_for_category_unknown_sorts_last():
+    """An unknown/None category maps to 99 so unknown agents sort last."""
+    from src.repositories.agent_registry import tier_number_for_category
 
-    assert _expected_ratio_for_variants({"control": 10, "treatment": 12}) == {
-        "control": 0.5,
-        "treatment": 0.5,
-    }
-
-
-def test_uniform_expected_ratio_three_variants():
-    from src.tasks.ab_testing_tasks import _expected_ratio_for_variants
-
-    ratio = _expected_ratio_for_variants({"a": 1, "b": 2, "c": 3})
-    assert set(ratio) == {"a", "b", "c"}
-    assert all(abs(v - 1 / 3) < 1e-9 for v in ratio.values())
-    assert abs(sum(ratio.values()) - 1.0) < 1e-9
-
-
-def test_uniform_expected_ratio_empty():
-    from src.tasks.ab_testing_tasks import _expected_ratio_for_variants
-
-    assert _expected_ratio_for_variants({}) == {}
+    assert tier_number_for_category(None) == 99
+    assert tier_number_for_category("not_a_real_tier") == 99
+    assert tier_number_for_category("causal_analytics") == 2
