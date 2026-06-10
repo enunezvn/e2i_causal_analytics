@@ -931,9 +931,23 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             model_uri, deployment_name
         )
 
+        # F4 (audit): capture whether the REAL MLflow registration succeeded
+        # BEFORE the simulation fallback overwrites ``registered_model_name``.
+        # The prior code computed ``mlflow_available`` after the fallback (so it
+        # was always True) and hardcoded ``registration_successful=True`` even
+        # when simulated — fabricating success while ``ml_model_registry`` stayed
+        # empty. The simulation fallback is an intentional dev pattern (commit
+        # 214890aa); we KEEP its values for dev inspection but report the truth.
+        mlflow_succeeded = registered_model_name is not None
+
         # Fall back to simulation if MLflow unavailable
-        if registered_model_name is None:
-            logger.info("Using simulated MLflow registration")
+        if not mlflow_succeeded:
+            logger.warning(
+                "MLflow registration unavailable/failed for model_uri=%s — using "
+                "SIMULATED registration values; registration_successful=False "
+                "(not a real registry write)",
+                model_uri,
+            )
             registered_model_name = deployment_name
             model_version = 1
             current_stage = "None"
@@ -943,11 +957,13 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "model_version": model_version,
             "current_stage": current_stage,
             "deployment_id": f"{registered_model_name}:v{model_version}",
-            "deployment_status": "healthy",
+            "deployment_status": "healthy" if mlflow_succeeded else "degraded",
             "deployed_at": datetime.now(tz=None).isoformat(),
-            "registration_successful": True,
+            # Fail CLOSED: only a real MLflow registration counts as success.
+            "registration_successful": mlflow_succeeded,
+            "registration_simulated": not mlflow_succeeded,
             "registration_timestamp": datetime.now(tz=None).isoformat(),
-            "mlflow_available": registered_model_name is not None,
+            "mlflow_available": mlflow_succeeded,
         }
 
     except Exception as e:
@@ -1232,9 +1248,18 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
 
         return {
             "previous_stage": previous_stage,
-            "current_stage": promotion_target_stage,
+            # F4 (audit, codex round-1): do NOT advance current_stage when the
+            # MLflow transition failed/was simulated — otherwise the
+            # version_record (agent.py builds stage from current_stage) would
+            # claim the promoted stage despite promotion_successful=False.
+            "current_stage": promotion_target_stage if mlflow_success else previous_stage,
             "metrics_at_promotion": metrics_at_promotion,
-            "promotion_successful": True,
+            # F4 (audit): fail CLOSED — a simulated/failed MLflow stage
+            # transition (``mlflow_success=False``) must NOT report success.
+            # The prior hardcoded ``True`` fabricated a promotion that never
+            # happened in the registry.
+            "promotion_successful": mlflow_success,
+            "promotion_simulated": not mlflow_success,
             "promotion_reason": promotion_reason,
             "promotion_timestamp": datetime.now(tz=None).isoformat(),
             "mlflow_transition_success": mlflow_success,

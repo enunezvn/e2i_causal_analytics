@@ -10,7 +10,16 @@ from src.agents.ml_foundation.model_deployer.agent import ModelDeployerAgent
 # Use module-level autouse fixture to mock external dependencies for all tests
 @pytest.fixture(autouse=True)
 def mock_external_dependencies():
-    """Mock external dependencies (BentoML, MLflow, HTTP) to use simulated mode."""
+    """Mock external dependencies (BentoML, HTTP) and MLflow as AVAILABLE +
+    SUCCEEDING so these workflow tests exercise the real-success deployment path.
+
+    F4 (audit): the prior fixture forced MLflow to the simulation fallback
+    (``(None,None,None)`` / ``False``) AND the agent then fabricated
+    ``registration_successful/promotion_successful=True`` — the exact fail-OPEN
+    bug. Now that the agent fails CLOSED on simulated MLflow, these workflow
+    tests mock MLflow to genuinely succeed (a real registration tuple / True
+    transition). The fail-closed-on-simulation behavior is covered by
+    tests/.../test_f4_fail_closed_simulation.py (which hits the REAL boundary)."""
     with (
         patch(
             "src.agents.ml_foundation.model_deployer.nodes.deployment_orchestrator.BENTOML_AVAILABLE",
@@ -18,11 +27,11 @@ def mock_external_dependencies():
         ),
         patch(
             "src.agents.ml_foundation.model_deployer.nodes.registry_manager._register_model_mlflow",
-            return_value=(None, None, None),  # Force simulation fallback
+            return_value=("test_model", 1, "None"),  # real MLflow registration success
         ),
         patch(
             "src.agents.ml_foundation.model_deployer.nodes.registry_manager._transition_stage_mlflow",
-            return_value=False,  # Force simulation fallback
+            return_value=True,  # real MLflow stage transition success
         ),
         patch(
             "src.agents.ml_foundation.model_deployer.nodes.health_checker._perform_http_health_check",
@@ -35,6 +44,32 @@ def mock_external_dependencies():
 
 class TestModelDeployerAgent:
     """Integration tests for complete model_deployer workflow."""
+
+    @pytest.mark.asyncio
+    async def test_completed_deployment_honestly_reports_persistence(self):
+        """F4 (audit, codex round-2): a completed deployment whose
+        ml_deployments row could NOT be written (no model_registry_id is
+        produced by any node yet) must honestly report ``db_persisted=False``
+        with a reason — never silently lose the record, and never fabricate a
+        ``db_persisted=True`` it did not earn."""
+        agent = ModelDeployerAgent()
+
+        input_data = {
+            "model_uri": "mlflow://models/test_model/1",
+            "experiment_id": "exp_persist",
+            "validation_metrics": {"accuracy": 0.92},
+            "success_criteria_met": True,
+            "deployment_name": "persist_test",
+            "target_environment": "staging",
+        }
+
+        result = await agent.run(input_data)
+
+        assert result["status"] == "completed"
+        # No model_registry_id is produced -> the row is NOT persisted, and the
+        # agent says so honestly rather than fabricating success.
+        assert result.get("db_persisted") is False
+        assert result.get("db_persist_skipped_reason")
 
     @pytest.mark.asyncio
     async def test_full_deployment_to_staging(self):
@@ -219,8 +254,13 @@ class TestModelDeployerAgent:
         assert "shadow" in manifest["endpoint_url"]
 
     @pytest.mark.asyncio
-    async def test_rollback_availability_production(self):
-        """Test rollback availability for production deployment."""
+    async def test_rollback_not_fabricated_for_fresh_production_deployment(self):
+        """F4 (audit): a FRESH production deployment has no prior deployment to
+        roll back to, so ``rollback_available`` must be False — the prior code
+        fabricated a random ``deploy_prev_<uuid>`` and reported True. (The
+        "rollback available when a REAL previous_deployment_id exists" case is
+        covered at the node level in
+        test_deployment_orchestrator.py::test_rollback_available_production_stage.)"""
         agent = ModelDeployerAgent()
 
         input_data = {
@@ -239,7 +279,7 @@ class TestModelDeployerAgent:
         result = await agent.run(input_data)
 
         assert result["status"] == "completed"
-        assert result["rollback_available"] is True
+        assert result["rollback_available"] is False
 
     @pytest.mark.asyncio
     async def test_rollback_not_available_staging(self):

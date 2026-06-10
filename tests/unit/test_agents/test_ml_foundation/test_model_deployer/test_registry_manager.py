@@ -274,6 +274,24 @@ class TestValidatePromotion:
 class TestPromoteStage:
     """Test promote_stage node."""
 
+    @pytest.fixture(autouse=True)
+    def _mlflow_transition_succeeds(self):
+        """These tests verify promotion LOGIC (stage, reason, metrics) on the
+        success path, so mock the real MLflow stage transition to succeed.
+
+        F4 (audit): the prior tests called promote_stage with no MLflow mock —
+        the real transition fails for a non-registered model, and the code USED
+        to hardcode ``promotion_successful=True`` (the fail-OPEN bug). Now that
+        promotion fails closed on a failed transition, the logic tests mock the
+        MLflow boundary to genuinely succeed. (Fail-closed-on-simulation is
+        covered by test_f4_fail_closed_simulation.py.)"""
+        with patch(
+            "src.agents.ml_foundation.model_deployer.nodes."
+            "registry_manager._transition_stage_mlflow",
+            return_value=True,
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_promote_stage_success(self):
         """Test successful stage promotion."""

@@ -392,9 +392,14 @@ async def contribute_to_memory(
         "working_cached": 0,
     }
 
-    # Skip if failed
-    if result.get("overall_status") == "failed":
-        logger.info("Skipping memory storage for failed deployment")
+    # Skip if the deployment did not complete. F4 (audit, codex round-1): the
+    # agent emits its outcome under ``status`` (agent.py finalize), not
+    # ``overall_status`` — the prior gate read the wrong key, so a failed/
+    # partial deployer result would be persisted as a completed deployment
+    # memory. Honor both keys and skip any non-completed outcome.
+    status = result.get("status", result.get("overall_status"))
+    if status in ("failed", "partial"):
+        logger.info("Skipping memory storage for non-completed deployment (status=%s)", status)
         return counts
 
     # 1. Cache in working memory

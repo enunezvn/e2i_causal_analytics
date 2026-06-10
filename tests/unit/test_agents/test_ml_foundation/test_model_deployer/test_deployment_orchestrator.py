@@ -217,31 +217,36 @@ class TestCheckRollbackAvailability:
 
     @pytest.mark.asyncio
     async def test_rollback_available_production_stage(self):
-        """Test rollback availability for Production stage."""
+        """Test rollback availability for Production stage when a REAL previous
+        deployment exists (F4: the id must be the real one, never a fabricated
+        ``deploy_prev_<uuid>``)."""
         state = {
             "experiment_id": "exp_123",
             "current_stage": "Production",
+            "previous_deployment_id": "deploy_realprev_001",
         }
 
         result = await check_rollback_availability(state)
 
         assert result["rollback_available"] is True
-        assert result["previous_deployment_id"] is not None
+        assert result["previous_deployment_id"] == "deploy_realprev_001"
         assert result["previous_deployment_url"] is not None
-        assert "deploy_prev_" in result["previous_deployment_id"]
+        assert not result["previous_deployment_id"].startswith("deploy_prev_")
 
     @pytest.mark.asyncio
     async def test_rollback_available_shadow_stage(self):
-        """Test rollback availability for Shadow stage."""
+        """Test rollback availability for Shadow stage when a REAL previous
+        deployment exists."""
         state = {
             "experiment_id": "exp_123",
             "current_stage": "Shadow",
+            "previous_deployment_id": "deploy_realprev_002",
         }
 
         result = await check_rollback_availability(state)
 
         assert result["rollback_available"] is True
-        assert result["previous_deployment_id"] is not None
+        assert result["previous_deployment_id"] == "deploy_realprev_002"
         assert result["previous_deployment_url"] is not None
 
     @pytest.mark.asyncio
@@ -289,6 +294,7 @@ class TestCheckRollbackAvailability:
         state = {
             "experiment_id": "exp_123",
             "current_stage": "Production",
+            "previous_deployment_id": "deploy_realprev_003",
             "rollback_config": {"automatic": True, "error_threshold": 0.05},
         }
 
