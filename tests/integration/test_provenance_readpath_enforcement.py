@@ -147,14 +147,21 @@ def _enforced_readers():
     Each MUST accept an include_synthetic kwarg (default-exclude with opt-in).
     A forgotten/renamed reader -> ImportError/AttributeError here = test FAILS.
     """
+    from src.agents.drift_monitor.connectors.supabase_connector import SupabaseDataConnector
+    from src.memory import episodic_memory
+    from src.repositories.base import BaseRepository
     from src.repositories.business_metric import BusinessMetricRepository
     from src.repositories.experiment_outcome import ExperimentOutcomeRepository
     from src.repositories.ml_data_loader import MLDataLoader
     from src.repositories.patient_journey import PatientJourneyRepository
+    from src.repositories.prediction import PredictionRepository
     from src.repositories.trigger import TriggerRepository
     from src.services import cohort_resolution, kpi_resolution
 
     return [
+        # BaseRepository id-path reader (gates on HAS_PROVENANCE; inherited by
+        # every taggable repo).
+        ("BaseRepository.get_by_id", BaseRepository.get_by_id),
         ("BusinessMetricRepository.get_time_series", BusinessMetricRepository.get_time_series),
         (
             "BusinessMetricRepository.get_latest_snapshot",
@@ -183,12 +190,44 @@ def _enforced_readers():
             "cohort_resolution._resolve_via_patient_journeys",
             cohort_resolution._resolve_via_patient_journeys,
         ),
+        # PredictionRepository over ml_predictions (Shard 07 HIGH-2): every
+        # actionable read default-excludes synthetic with an opt-in kwarg.
+        ("PredictionRepository.get_by_model", PredictionRepository.get_by_model),
+        ("PredictionRepository.get_top_predictions", PredictionRepository.get_top_predictions),
+        ("PredictionRepository.get_model_performance", PredictionRepository.get_model_performance),
+        ("PredictionRepository.get_by_patient", PredictionRepository.get_by_patient),
+        (
+            "PredictionRepository.get_high_confidence_predictions",
+            PredictionRepository.get_high_confidence_predictions,
+        ),
+        (
+            "PredictionRepository.get_calibration_summary",
+            PredictionRepository.get_calibration_summary,
+        ),
+        # drift_monitor Supabase connector ml_predictions reads (Shard 07 HIGH-3).
+        ("SupabaseDataConnector.query_predictions", SupabaseDataConnector.query_predictions),
+        (
+            "SupabaseDataConnector.query_labeled_predictions",
+            SupabaseDataConnector.query_labeled_predictions,
+        ),
+        # User-facing episodic_memories ORM reads (Shard 07 HIGH-4).
+        (
+            "episodic_memory.search_episodic_by_e2i_entity",
+            episodic_memory.search_episodic_by_e2i_entity,
+        ),
+        (
+            "episodic_memory.get_enriched_episodic_memory",
+            episodic_memory.get_enriched_episodic_memory,
+        ),
+        ("episodic_memory.get_recent_memories", episodic_memory.get_recent_memories),
+        ("episodic_memory.get_memory_by_id", episodic_memory.get_memory_by_id),
+        ("episodic_memory.count_memories_by_type", episodic_memory.count_memories_by_type),
     ]
 
 
 def test_every_blast_radius_reader_accepts_include_synthetic():
     readers = _enforced_readers()
-    assert len(readers) >= 12, "enumeration shrank — a reader was dropped"
+    assert len(readers) >= 27, "enumeration shrank — a reader was dropped"
     missing = []
     for name, fn in readers:
         params = inspect.signature(fn).parameters
