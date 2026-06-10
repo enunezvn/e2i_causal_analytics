@@ -610,6 +610,23 @@ OPTIONAL_COLUMNS = frozenset(
 )
 
 
+# Per-table conflict targets for the upsert (#852). The default PostgREST upsert
+# conflicts on the PRIMARY KEY (``id``). For the feature-store tables that is WRONG:
+# the seeder mints fresh random ids every run, but the four canonical group names
+# (and their features) already exist in the DB with DIFFERENT ids. An upsert-by-id
+# therefore INSERTs and collides with the *secondary* UNIQUE constraints
+# (feature_groups_name_key, unique_feature_per_group, feature_entity_timestamp_unique)
+# -> 23505 -> the whole batch fails -> 0 loaded -> children orphaned. Declaring the
+# NATURAL KEY as the conflict target makes the upsert idempotent (INSERT-or-UPDATE on
+# the business key), mirroring src/feature_store/client.py:285. Tables absent from this
+# map keep the default (conflict-on-PK) behaviour.
+TABLE_ON_CONFLICT = {
+    "feature_groups": "name",  # feature_groups_name_key UNIQUE(name)
+    "features": "feature_group_id,name",  # unique_feature_per_group
+    "feature_values": "feature_id,entity_values,event_timestamp",  # feature_entity_timestamp_unique
+}
+
+
 class BatchLoader:
     """
     Batch loader for synthetic data to Supabase.
@@ -649,6 +666,104 @@ class BatchLoader:
                 logger.error(f"Failed to create Supabase client: {e}")
         return self._client
 
+    def reconcile_feature_store_ids(self, datasets: Dict[str, pd.DataFrame]) -> None:
+        """Remap generated feature-store ids onto the EXISTING DB ids by natural key,
+        in place, so a re-load is idempotent AND FK-coherent (#852).
+
+        The seeder mints fresh random UUIDs every run, but the four canonical feature
+        groups and their 15 features already exist in the DB (registered out-of-band).
+        Upserting on the natural key (see TABLE_ON_CONFLICT) is necessary but NOT
+        sufficient: if the payload still carries a *fresh* ``id``, the ``ON CONFLICT
+        (name) DO UPDATE`` tries to rewrite the existing row's PRIMARY KEY, which the
+        ``features_feature_group_id_fkey`` constraint rejects (23503 — the old id is
+        still referenced). So before loading we look up the existing ids and rewrite:
+
+          * ``feature_groups.id`` for any group whose ``name`` already exists,
+          * ``features.feature_group_id`` (to the reconciled group id) and
+            ``features.id`` for any (group, name) that already exists,
+          * ``feature_values.feature_id`` to the reconciled feature id.
+
+        Genuinely-new rows keep their fresh ids. Mirrors the production feature-store
+        client (src/feature_store/client.py), which looks up the parent group id before
+        upserting features. No-op when the client is unavailable (dry-run/offline) or
+        none of the three frames are present.
+        """
+        if self.config.dry_run or self.client is None:
+            return
+        if not any(t in datasets for t in ("feature_groups", "features", "feature_values")):
+            return
+
+        # 1) feature_groups: name -> existing id
+        existing_group_id_by_name: Dict[str, str] = {}
+        try:
+            resp = self.client.table("feature_groups").select("id,name").execute()
+            for row in resp.data or []:
+                existing_group_id_by_name[row["name"]] = row["id"]
+        except Exception as e:  # pragma: no cover - network/permission edge
+            logger.warning(f"feature-store reconcile: could not read feature_groups: {e}")
+            return
+
+        # group_id remap: generated group id -> reconciled (existing-or-fresh) id
+        group_id_remap: Dict[str, str] = {}
+        if "feature_groups" in datasets:
+            fg = datasets["feature_groups"]
+            if "id" in fg.columns and "name" in fg.columns:
+                for idx, row in fg.iterrows():
+                    existing = existing_group_id_by_name.get(row["name"])
+                    if existing and existing != row["id"]:
+                        group_id_remap[row["id"]] = existing
+                        fg.at[idx, "id"] = existing
+                # Refresh the name->id map so child features resolve against the
+                # reconciled (now authoritative) group ids, including new groups.
+                for _, row in fg.iterrows():
+                    existing_group_id_by_name.setdefault(row["name"], row["id"])
+                    existing_group_id_by_name[row["name"]] = row["id"]
+
+        # 2) features: re-point feature_group_id to reconciled group ids, then map
+        #    (feature_group_id, name) -> existing feature id.
+        #
+        # FAIL-CLOSED: if this lookup fails AFTER the group-id remap above, we cannot
+        # reconcile feature ids and would silently fall back to the buggy "fresh
+        # feature id on a natural-key upsert" path (-> 23503/23505 -> 0 loaded). Raise
+        # so the caller fails loudly instead of fabricating a partial, FK-incoherent
+        # load. (The earlier feature_groups read returns before any mutation on error.)
+        existing_feature_id_by_key: Dict[Tuple[str, str], str] = {}
+        try:
+            resp = self.client.table("features").select("id,feature_group_id,name").execute()
+            for row in resp.data or []:
+                existing_feature_id_by_key[(row["feature_group_id"], row["name"])] = row["id"]
+        except Exception as e:  # pragma: no cover - network/permission edge
+            logger.error(f"feature-store reconcile: could not read features: {e}")
+            raise
+
+        feature_id_remap: Dict[str, str] = {}
+        if "features" in datasets:
+            ft = datasets["features"]
+            if {"id", "feature_group_id", "name"}.issubset(ft.columns):
+                for idx, row in ft.iterrows():
+                    # repoint FK to reconciled group id first
+                    gid = group_id_remap.get(row["feature_group_id"], row["feature_group_id"])
+                    if gid != row["feature_group_id"]:
+                        ft.at[idx, "feature_group_id"] = gid
+                    existing = existing_feature_id_by_key.get((gid, row["name"]))
+                    if existing and existing != row["id"]:
+                        feature_id_remap[row["id"]] = existing
+                        ft.at[idx, "id"] = existing
+
+        # 3) feature_values: re-point feature_id to reconciled feature ids.
+        if "feature_values" in datasets and feature_id_remap:
+            fv = datasets["feature_values"]
+            if "feature_id" in fv.columns:
+                fv["feature_id"] = fv["feature_id"].map(lambda fid: feature_id_remap.get(fid, fid))
+
+        if group_id_remap or feature_id_remap:
+            logger.info(
+                "feature-store reconcile: remapped %d group ids, %d feature ids to "
+                "existing DB rows (idempotent, FK-coherent)",
+                len(group_id_remap),
+                len(feature_id_remap),
+            )
+
     def load_all(
         self,
         datasets: Dict[str, pd.DataFrame],
@@ -665,6 +780,11 @@ class BatchLoader:
             Dictionary of table_name -> LoadResult.
         """
         results = {}
+
+        # #852: reconcile feature-store ids against existing DB rows BEFORE loading so
+        # a re-run upserts idempotently instead of colliding (23505) or rewriting a
+        # referenced PK (23503). No-op in dry-run/offline.
+        self.reconcile_feature_store_ids(datasets)
 
         # Determine tables to load
         tables_to_load = [t for t in LOADING_ORDER if t in datasets]
@@ -798,9 +918,18 @@ class BatchLoader:
                 if isinstance(v, float) and v.is_integer():
                     rec[k] = int(v)
 
+        # #852: feature-store tables must conflict on their NATURAL key (name /
+        # feature_group_id,name / feature_id,entity_values,event_timestamp), not the
+        # default PK, or a re-load collides with the existing canonical rows -> 23505.
+        on_conflict = TABLE_ON_CONFLICT.get(table_name)
+
         for attempt in range(self.config.max_retries):
             try:
-                self.client.table(table_name).upsert(records).execute()
+                table = self.client.table(table_name)
+                if on_conflict is not None:
+                    table.upsert(records, on_conflict=on_conflict).execute()
+                else:
+                    table.upsert(records).execute()
                 return True, None
             except Exception as e:
                 error_msg = str(e)

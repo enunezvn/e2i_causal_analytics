@@ -280,12 +280,28 @@ class FeatureValueGenerator(BaseGenerator[pd.DataFrame]):
         ends at the reference (today) instead of the static end_date, so feature
         freshness reads current (drift_monitor windows are NOW()-relative). The
         exponential bias toward `end` keeps the bulk recent. No-op shape otherwise
-        (legacy 2022-2024)."""
+        (legacy 2022-2024).
+
+        #852: the DB enforces ``CHECK (event_timestamp <= now())`` on feature_values.
+        ``datetime.combine(today, datetime.max.time())`` is end-of-day — i.e. in the
+        FUTURE relative to the wall clock — so the exponential bias placed a chunk of
+        rows after now() -> 23514. Clamp ``end`` to the current wall clock so no
+        generated timestamp can exceed now()."""
         if self.config.anchor_to_now:
             ref = self.config.anchor_reference or date.today()
             span_days = max((self.config.end_date - self.config.start_date).days, 90)
             end = datetime.combine(ref, datetime.max.time())
-            start = datetime.combine(ref - timedelta(days=span_days), datetime.min.time())
+            # Never emit a future event_timestamp (DB CHECK event_timestamp <= now()).
+            # Pull the upper bound back to the wall clock when the reference is today
+            # (or a future date — a misconfigured anchor must not produce future rows).
+            now = datetime.now()
+            if end > now:
+                end = now
+            # Derive start from the (clamped) end so the span stays valid: anchoring
+            # to a future reference would otherwise push start past end and invert the
+            # range (exponential scale < 0). Clamping end first, then start = end -
+            # span, keeps the rolling window intact and ordered.
+            start = end - timedelta(days=span_days)
         else:
             start = datetime.combine(self.config.start_date, datetime.min.time())
             end = datetime.combine(self.config.end_date, datetime.max.time())
