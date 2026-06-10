@@ -46,6 +46,7 @@ class GapAnalyzerAgent(SkillsMixin):
         enable_mlflow: bool = True,
         enable_opik: bool = True,
         use_mock: bool = False,
+        include_synthetic: bool = False,
     ):
         """Initialize Gap Analyzer Agent.
 
@@ -54,13 +55,20 @@ class GapAnalyzerAgent(SkillsMixin):
             enable_opik: Whether to enable Opik distributed tracing (default: True)
             use_mock: Whether to use mock data connectors for testing (default: False).
                      When True, uses MockDataConnector instead of Supabase.
+            include_synthetic: When True, the production connector opts in to reading
+                     synthetic rows (the validation layer; #851). Default False keeps
+                     the production read path real-mode isolated — synthetic data is
+                     never silently read in production.
         """
-        self.graph = create_gap_analyzer_graph(use_mock=use_mock)
+        self.graph = create_gap_analyzer_graph(
+            use_mock=use_mock, include_synthetic=include_synthetic
+        )
         self.agent_name = "gap_analyzer"
         self.agent_tier = 2
         self.enable_mlflow = enable_mlflow
         self.enable_opik = enable_opik
         self.use_mock = use_mock
+        self.include_synthetic = include_synthetic
 
         # MLflow tracker (lazy initialization)
         self._mlflow_tracker: Optional["GapAnalyzerMLflowTracker"] = None
@@ -162,10 +170,14 @@ class GapAnalyzerAgent(SkillsMixin):
                         final_state = cast(GapAnalyzerState, await self.graph.ainvoke(state))
                         output = self._build_output(final_state)
 
-                    # Log analysis results to Opik
+                    # Log analysis results to Opik with the REAL status — never
+                    # hardcode success. A failed graph (e.g. a fail-closed connector
+                    # raise) must be observable as a failure, not laundered into a
+                    # success trace (#845/#851 fail-OPEN family).
+                    _failed = output.get("status") == "failed" or bool(output.get("errors"))
                     trace_ctx.log_analysis_complete(
-                        status="success",
-                        success=True,
+                        status="failed" if _failed else "success",
+                        success=not _failed,
                         total_duration_ms=output.get("total_latency_ms", 0),
                         gaps_detected=len(final_state.get("gaps_detected") or []),
                         opportunities_count=len(output.get("prioritized_opportunities", [])),
@@ -351,6 +363,14 @@ class GapAnalyzerAgent(SkillsMixin):
         # Suggest next agent if needed
         suggested_next_agent = self._suggest_next_agent(state)
 
+        # Surface the workflow status and any accumulated errors. A failed graph
+        # (e.g. a fail-closed connector raise in gap_detector) must NOT be laundered
+        # into a normal-shaped empty-but-"successful" response — callers and
+        # observability need to see status='failed' + the errors (#845/#851 fail-OPEN
+        # family). The formatter already refuses to relabel a failed run as completed.
+        status = state.get("status") or "completed"
+        errors = state.get("errors") or []
+
         output = {
             "prioritized_opportunities": state.get("prioritized_opportunities") or [],
             "quick_wins": state.get("quick_wins") or [],
@@ -365,6 +385,8 @@ class GapAnalyzerAgent(SkillsMixin):
             "total_latency_ms": state.get("total_latency_ms") or 0,
             "confidence": confidence,
             "warnings": state.get("warnings", []),
+            "status": status,
+            "errors": errors,
             "requires_further_analysis": requires_further_analysis,
             "suggested_next_agent": suggested_next_agent,
         }
@@ -496,6 +518,8 @@ class GapAnalyzerAgent(SkillsMixin):
             "total_latency_ms": total_latency_ms,
             "confidence": 0.0,
             "warnings": [f"Gap analysis failed: {error}"],
+            "status": "failed",
+            "errors": [{"node": "agent", "error": error}],
             "requires_further_analysis": False,
             "suggested_next_agent": None,
         }
