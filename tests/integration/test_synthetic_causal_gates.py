@@ -119,3 +119,36 @@ def test_gate_4_trigger_effectiveness(client):
     row = rows[0]
     assert (row.get("treatment_rate") or 0) > (row.get("control_rate") or 0), row
     assert (row.get("action_rate_uplift") or 0) > 0, row
+
+
+# =============================================================================
+# Gates 5, 6, 7, 8 — the 4 named agents
+# =============================================================================
+
+
+def test_gate_5_gap_analyzer(client):
+    from scripts.validate_synthetic_causal import gate_5_gap
+
+    res = gate_5_gap(client)
+    assert res.ok, res.measured
+
+
+def test_gate_6_heterogeneous_optimizer(client):
+    from scripts.validate_synthetic_causal import gate_6_hetero
+
+    res = gate_6_hetero(client)
+    assert res.ok, res.measured
+
+
+def test_gate_7_prediction_synthesizer(client):
+    from scripts.validate_synthetic_causal import gate_7_pred_synth
+
+    res = gate_7_pred_synth(client)
+    assert res.ok, res.measured
+
+
+def test_gate_8_resource_optimizer():
+    from scripts.validate_synthetic_causal import gate_8_resource
+
+    res = gate_8_resource(None)
+    assert res.ok, res.measured

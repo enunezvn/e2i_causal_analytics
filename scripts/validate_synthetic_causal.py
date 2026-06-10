@@ -293,3 +293,172 @@ def gate_4_trigger(client) -> GateResult:
         "4 TRIGGER EFFECTIVENESS", ok, row,
         "treatment_rate>control_rate and action_rate_uplift>0",
     )
+
+
+# =============================================================================
+# Gates 5, 6, 7, 8 — the 4 named agents (via .run / .synthesize / REST)
+# =============================================================================
+# VERIFIED entrypoints (2026-06-10):
+#   GapAnalyzerAgent.run(input_data) -> Dict           (gap_analyzer/agent.py:102)
+#   HeterogeneousOptimizerAgent.run(input_data) -> Dict (heterogeneous_optimizer/agent.py:101)
+#   PredictionSynthesizerAgent.synthesize(entity_id, prediction_target, ...,
+#       entity_type='hcp') -> PredictionSynthesizerOutput (prediction_synthesizer/agent.py:166)
+#   POST /api/resources/optimize (resource_optimizer.py prefix=/resources, main.py
+#       mount prefix=/api); RunOptimizationRequest schema + async_mode=False for solver.
+
+
+def gate_5_gap(client) -> GateResult:
+    import asyncio
+
+    from src.agents.gap_analyzer.agent import GapAnalyzerAgent
+
+    out = asyncio.run(
+        GapAnalyzerAgent().run(
+            {
+                "query": "gaps",
+                "metrics": ["trx", "conversion_rate"],
+                "segments": ["region"],
+                "brand": "Kisqali",
+            }
+        )
+    )
+    # RECONCILED: gap output exposes quick_wins/strategic_bets as SEPARATE lists
+    # (gap_analyzer/agent.py:355-357), NOT an `opportunity_type` field on each opp.
+    opps = out.get("prioritized_opportunities") or []
+    quick_wins = out.get("quick_wins") or []
+    strategic_bets = out.get("strategic_bets") or []
+    ok = (
+        len(opps) >= 3
+        and (out.get("total_addressable_value") or 0) > 0
+        and len(quick_wins) >= 1
+        and len(strategic_bets) >= 1
+    )
+    return GateResult(
+        "5 gap_analyzer", ok,
+        {
+            "n_opps": len(opps),
+            "n_quick_wins": len(quick_wins),
+            "n_strategic_bets": len(strategic_bets),
+            "tav": out.get("total_addressable_value"),
+        },
+        ">=3 opportunities, TAV>0, >=1 quick_win AND >=1 strategic_bet",
+    )
+
+
+def gate_6_hetero(client) -> GateResult:
+    import asyncio
+
+    from src.agents.heterogeneous_optimizer.agent import HeterogeneousOptimizerAgent
+
+    out = asyncio.run(
+        HeterogeneousOptimizerAgent().run(
+            {
+                "query": "uplift for Kisqali initiation by severity",
+                "filters": {"brand": "Kisqali"},
+            }
+        )
+    )
+    # VERIFIED output keys: heterogeneity_score, high_responders, low_responders,
+    # cate_by_segment (heterogeneous_optimizer/agent.py:397-401).
+    hscore = out.get("heterogeneity_score") or 0
+    highs = out.get("high_responders") or []
+    lows = out.get("low_responders") or []
+    cate_seg = out.get("cate_by_segment") or {}
+    ok = hscore > 0.4 and len(highs) > 0 and len(lows) > 0 and bool(cate_seg)
+    return GateResult(
+        "6 heterogeneous_optimizer", ok,
+        {
+            "heterogeneity_score": hscore,
+            "n_high": len(highs),
+            "n_low": len(lows),
+            "has_cate_by_segment": bool(cate_seg),
+        },
+        "heterogeneity_score>0.4, non-empty high+low responders, cate_by_segment present",
+    )
+
+
+def gate_7_pred_synth(client) -> GateResult:
+    import asyncio
+
+    from src.agents.prediction_synthesizer.agent import PredictionSynthesizerAgent
+
+    # Resolve a real synthetic HCP id (entity-bound; fail loud if none).
+    hcp_rows = (
+        client.table("hcp_profiles")
+        .select("hcp_id")
+        .eq("is_synthetic", True)
+        .limit(1)
+        .execute()
+        .data
+    ) or []
+    if not hcp_rows:
+        return GateResult(
+            "7 prediction_synthesizer", False, {"error": "no synthetic hcp_profiles row"},
+            ">=2 models -> model_agreement>0.5, risk_level!=CANNOT_ASSESS",
+        )
+    entity_id = hcp_rows[0]["hcp_id"]
+    out = asyncio.run(
+        PredictionSynthesizerAgent().synthesize(
+            entity_id=entity_id,
+            prediction_target="conversion",
+            entity_type="hcp",
+        )
+    )
+    # RECONCILED: model_agreement lives on ensemble_prediction (state.py:36); risk_level
+    # lives on prediction_interpretation, = "CANNOT_ASSESS" when <2 models
+    # (ensemble_combiner.py:401). PredictionSynthesizerOutput is a TypedDict (dict).
+    ensemble = (out.get("ensemble_prediction") if isinstance(out, dict) else getattr(out, "ensemble_prediction", None)) or {}
+    interp = (out.get("prediction_interpretation") if isinstance(out, dict) else getattr(out, "prediction_interpretation", None)) or {}
+    agreement = ensemble.get("model_agreement") if isinstance(ensemble, dict) else None
+    risk_level = interp.get("risk_level") if isinstance(interp, dict) else None
+    ok = (agreement or 0) > 0.5 and risk_level not in (None, "", "CANNOT_ASSESS")
+    return GateResult(
+        "7 prediction_synthesizer", ok,
+        {"model_agreement": agreement, "risk_level": risk_level},
+        ">=2 models -> model_agreement>0.5, risk_level!=CANNOT_ASSESS",
+    )
+
+
+def gate_8_resource(_client) -> GateResult:
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+
+    # RECONCILED to the REAL RunOptimizationRequest schema (resource_optimizer.py:132):
+    #   required query + resource_type + allocation_targets[{entity_id, entity_type,
+    #   current_allocation, expected_response}]; budget is a Constraint, NOT a
+    #   top-level total_budget; the plan's segment_id/total_budget body 422s.
+    # CRITICAL: the route defaults async_mode=True -> returns PENDING with no
+    #   solver_status; the SYNCHRONOUS solver path needs ?async_mode=false (line 311).
+    body = {
+        "query": "optimize budget across two HCP segments",
+        "resource_type": "budget",
+        "allocation_targets": [
+            {
+                "entity_id": "high",
+                "entity_type": "hcp",
+                "current_allocation": 100.0,
+                "min_allocation": 0.0,
+                "max_allocation": 1000.0,
+                "expected_response": 0.50,
+            },
+            {
+                "entity_id": "low",
+                "entity_type": "hcp",
+                "current_allocation": 100.0,
+                "min_allocation": 0.0,
+                "max_allocation": 1000.0,
+                "expected_response": 0.15,
+            },
+        ],
+        "constraints": [{"constraint_type": "budget", "value": 200.0, "scope": "global"}],
+        "objective": "maximize_outcome",
+    }
+    r = TestClient(app).post("/api/resources/optimize?async_mode=false", json=body)
+    data = r.json() if r.status_code == 200 else {}
+    ok = r.status_code == 200 and data.get("solver_status") == "optimal"
+    return GateResult(
+        "8 resource_optimizer", ok,
+        {"status": r.status_code, "solver": data.get("solver_status")},
+        "POST /api/resources/optimize?async_mode=false -> solver_status='optimal'",
+    )
