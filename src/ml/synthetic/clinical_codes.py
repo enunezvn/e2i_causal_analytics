@@ -21,6 +21,8 @@ Sources:
 
 from __future__ import annotations
 
+from typing import cast
+
 # --- Brand -> primary diagnosis (ICD-10-CM) ---------------------------------------
 # Remibrutinib = chronic spontaneous urticaria (CSU); Fabhalta = paroxysmal nocturnal
 # hemoglobinuria (PNH); Kisqali = HR+ breast cancer.
@@ -69,7 +71,7 @@ def brand_codes(brand: str) -> dict[str, object]:
     dx = BRAND_DIAGNOSIS[brand]
     ndc = BRAND_NDC[brand]
     return {
-        "icd10": list(dx["icd10"]),  # type: ignore[arg-type]
+        "icd10": list(cast("list[str]", dx["icd10"])),
         "desc": dx["desc"],
         "drug_class": BRAND_DRUG_CLASS[brand],
         "drug_name": ndc["drug_name"],
