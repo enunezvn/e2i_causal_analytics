@@ -73,11 +73,13 @@ def generate_patients(rng: np.random.Generator, cfg: ClaimsDGPConfig) -> pd.Data
     )
     adherence = _sigmoid(adh_logit)
 
-    # Rolling claim index in the past ~7–18 months. Far enough back that the
-    # synthetic eligend (index + post + slack) is plausible and the converter's
-    # 360/180 windows are satisfiable on real, parseable dates.
+    # Rolling claim index spread over the past ~7–30 months. A WIDE temporal
+    # span is required so the tier-0 ENTITY+TEMPORAL split can form balanced
+    # time buckets (a narrow span collapses the temporal split and discards most
+    # rows). Still far enough back that the synthetic eligend (index + post +
+    # slack) is plausible and the converter's 360/180 windows are satisfiable.
     base = np.datetime64("today")
-    claim_index = base - rng.integers(210, 540, n).astype("timedelta64[D]")
+    claim_index = base - rng.integers(210, 930, n).astype("timedelta64[D]")
 
     # DGP item 2 — enrollment window. Non-fragmented patients clear the strict
     # gate (eligeff <= index - pre AND eligend >= index + post).
