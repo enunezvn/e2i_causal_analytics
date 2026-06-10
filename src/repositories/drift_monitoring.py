@@ -174,7 +174,7 @@ async def _resolve_model_id(client: Any, model_version: Optional[str]) -> Option
                 .execute()
             )
             if res.data:
-                return res.data[0]["id"]
+                return str(res.data[0]["id"])
     except Exception:
         # A registry lookup failure must not block recording drift — fall back
         # to the preserved-handle path rather than raising.
@@ -211,10 +211,13 @@ class DriftHistoryRecord(BaseModel):
     threshold: float = 0.05
     drift_detected: bool = False
     severity: str = "none"
-    baseline_start: Optional[datetime] = None
-    baseline_end: Optional[datetime] = None
-    current_start: Optional[datetime] = None
-    current_end: Optional[datetime] = None
+    # NOT NULL on ml_drift_history (CHECK baseline_end<=current_start). Always
+    # supplied on write (record_drift_results) and present on read (base table),
+    # so kept required — the API renders them as non-optional datetimes.
+    baseline_start: datetime
+    baseline_end: datetime
+    current_start: datetime
+    current_end: datetime
     baseline_mean: Optional[float] = None
     baseline_std: Optional[float] = None
     baseline_min: Optional[float] = None

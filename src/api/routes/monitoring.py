@@ -467,7 +467,7 @@ async def get_latest_drift_status(
 
         for record in records:
             if record.severity in ("high", "critical"):
-                features_with_drift.append(record.feature_name)
+                features_with_drift.append(record.feature_name or "")
             # Map severity to drift score
             severity_to_score = {
                 "none": 0.0,
@@ -481,7 +481,7 @@ async def get_latest_drift_status(
 
             results.append(
                 DriftResult(
-                    feature=record.feature_name,
+                    feature=record.feature_name or "",
                     drift_type=DriftType(record.drift_type),
                     test_statistic=record.test_statistic or 0.0,
                     p_value=record.p_value or 0.0,
