@@ -99,9 +99,7 @@ class _FakeNot:
 class _FakeClient:
     """Fake async Supabase client backed by per-table canned rows."""
 
-    def __init__(
-        self, tables: Dict[str, List[Dict[str, Any]]], rec: Optional[_Recorder] = None
-    ):
+    def __init__(self, tables: Dict[str, List[Dict[str, Any]]], rec: Optional[_Recorder] = None):
         self._tables = tables
         self.rec = rec or _Recorder()
 
@@ -132,20 +130,55 @@ def _registry_rows() -> List[Dict[str, Any]]:
     pnh = {"prediction_target": "pnh_persistence"}
     return [
         # production + artifact for csu -> RETURN
-        {"model_name": "csu_model_a", "stage": "production", "artifact_path": "/a.pkl", "ml_experiments": _csu()},
+        {
+            "model_name": "csu_model_a",
+            "stage": "production",
+            "artifact_path": "/a.pkl",
+            "ml_experiments": _csu(),
+        },
         # production + artifact, demoted-by-trigger (not champion) -> RETURN
-        {"model_name": "csu_model_b", "stage": "production", "artifact_path": "/b.pkl", "ml_experiments": _csu()},
+        {
+            "model_name": "csu_model_b",
+            "stage": "production",
+            "artifact_path": "/b.pkl",
+            "ml_experiments": _csu(),
+        },
         # staging + artifact -> EXCLUDE (production is the operator gate)
-        {"model_name": "csu_staging", "stage": "staging", "artifact_path": "/c.pkl", "ml_experiments": _csu()},
+        {
+            "model_name": "csu_staging",
+            "stage": "staging",
+            "artifact_path": "/c.pkl",
+            "ml_experiments": _csu(),
+        },
         # NULL artifact (the metadata-only synthetic rows) -> EXCLUDE
-        {"model_name": "csu_noart", "stage": "production", "artifact_path": None, "ml_experiments": _csu()},
+        {
+            "model_name": "csu_noart",
+            "stage": "production",
+            "artifact_path": None,
+            "ml_experiments": _csu(),
+        },
         # dev stage -> EXCLUDE
-        {"model_name": "csu_dev", "stage": "development", "artifact_path": "/d.pkl", "ml_experiments": _csu()},
+        {
+            "model_name": "csu_dev",
+            "stage": "development",
+            "artifact_path": "/d.pkl",
+            "ml_experiments": _csu(),
+        },
         # production + artifact for a DIFFERENT target -> EXCLUDE
-        {"model_name": "pnh_model", "stage": "production", "artifact_path": "/e.pkl", "ml_experiments": pnh},
+        {
+            "model_name": "pnh_model",
+            "stage": "production",
+            "artifact_path": "/e.pkl",
+            "ml_experiments": pnh,
+        },
         # EMPTY-STRING artifact -> EXCLUDE (server `is null` does not catch ""
         # so the in-code defensive filter must)
-        {"model_name": "csu_emptyart", "stage": "production", "artifact_path": "", "ml_experiments": _csu()},
+        {
+            "model_name": "csu_emptyart",
+            "stage": "production",
+            "artifact_path": "",
+            "ml_experiments": _csu(),
+        },
     ]
 
 
@@ -185,8 +218,18 @@ async def test_unknown_target_fails_closed():
 async def test_dedup_model_names():
     """Duplicate deployable model_name rows (e.g. across experiments) returned once."""
     rows = [
-        {"model_name": "csu_model_a", "stage": "production", "artifact_path": "/a.pkl", "ml_experiments": _csu()},
-        {"model_name": "csu_model_a", "stage": "production", "artifact_path": "/a2.pkl", "ml_experiments": _csu()},
+        {
+            "model_name": "csu_model_a",
+            "stage": "production",
+            "artifact_path": "/a.pkl",
+            "ml_experiments": _csu(),
+        },
+        {
+            "model_name": "csu_model_a",
+            "stage": "production",
+            "artifact_path": "/a2.pkl",
+            "ml_experiments": _csu(),
+        },
     ]
     client = _FakeClient({"ml_experiments": _EXPERIMENTS, "ml_model_registry": rows})
     repo = MLModelRegistryRepository(supabase_client=client)

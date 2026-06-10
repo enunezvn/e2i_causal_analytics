@@ -31,8 +31,8 @@ _TARGET = "csu_treatment_initiation"
 _EXPERIMENT = "csu_treatment_initiation_itest857"
 _VERSION = "857test"
 _DEPLOYABLE = "csu_itest857_deployable"  # production + artifact  -> resolved
-_STAGING = "csu_itest857_staging"        # staging               -> excluded
-_NOART = "csu_itest857_noart"            # production, null art   -> excluded
+_STAGING = "csu_itest857_staging"  # staging               -> excluded
+_NOART = "csu_itest857_noart"  # production, null art   -> excluded
 
 
 @pytest.mark.asyncio
@@ -100,15 +100,17 @@ async def test_get_models_for_target_resolves_at_scale_no_414():
         }
 
     try:
-        await client.table("ml_model_registry").insert(
-            _row(_DEPLOYABLE, "production", "/tmp/itest857_deployable.pkl")
-        ).execute()
-        await client.table("ml_model_registry").insert(
-            _row(_STAGING, "staging", "/tmp/itest857_staging.pkl")
-        ).execute()
-        await client.table("ml_model_registry").insert(
-            _row(_NOART, "production", None)
-        ).execute()
+        await (
+            client.table("ml_model_registry")
+            .insert(_row(_DEPLOYABLE, "production", "/tmp/itest857_deployable.pkl"))
+            .execute()
+        )
+        await (
+            client.table("ml_model_registry")
+            .insert(_row(_STAGING, "staging", "/tmp/itest857_staging.pkl"))
+            .execute()
+        )
+        await client.table("ml_model_registry").insert(_row(_NOART, "production", None)).execute()
 
         # THE DISPROOF: at 253+ experiments, the old query 414'd here. The fixed
         # FK-embed query must return the deployable model and not raise.
@@ -126,9 +128,4 @@ async def test_get_models_for_target_resolves_at_scale_no_414():
                 .eq("model_version", _VERSION)
                 .execute()
             )
-        await (
-            client.table("ml_experiments")
-            .delete()
-            .eq("experiment_name", _EXPERIMENT)
-            .execute()
-        )
+        await client.table("ml_experiments").delete().eq("experiment_name", _EXPERIMENT).execute()

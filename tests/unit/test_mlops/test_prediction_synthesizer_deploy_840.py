@@ -47,8 +47,7 @@ def test_default_paths_target_writable_ml_artifacts_volume():
         f"got {DEFAULT_ARTIFACT_DIR}"
     )
     assert DEFAULT_MANIFEST_PATH.parts[:2] == ("data", "ml_artifacts"), (
-        f"manifest must be under the writable data/ml_artifacts volume, "
-        f"got {DEFAULT_MANIFEST_PATH}"
+        f"manifest must be under the writable data/ml_artifacts volume, got {DEFAULT_MANIFEST_PATH}"
     )
 
 
