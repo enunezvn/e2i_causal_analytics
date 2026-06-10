@@ -553,12 +553,12 @@ async def get_drift_history(
         items = [
             DriftHistoryItem(
                 id=str(r.id),
-                model_version=r.model_version,
-                feature_name=r.feature_name,
+                model_version=r.model_version or model_id,
+                feature_name=r.feature_name or "",
                 drift_type=r.drift_type,
                 drift_score=severity_to_score.get(r.severity, 0.0),
                 severity=r.severity,
-                detected_at=r.detected_at,
+                detected_at=r.created_at,
                 baseline_start=r.baseline_start,
                 baseline_end=r.baseline_end,
                 current_start=r.current_start,
@@ -629,15 +629,15 @@ async def list_alerts(
         items = [
             AlertItem(
                 id=str(r.id),
-                model_version=r.model_version,
+                model_version=r.model_version or (model_id or ""),
                 alert_type=r.alert_type,
                 severity=r.severity,
-                title=r.message,  # MonitoringAlertRecord uses 'message' not 'title'
+                title=r.title or r.message,
                 description=r.recommended_action or "",  # Use recommended_action as description
                 status=AlertStatus(r.status),
-                triggered_at=r.triggered_at,
-                acknowledged_at=None,  # MonitoringAlertRecord doesn't have acknowledged_at
-                acknowledged_by=None,  # MonitoringAlertRecord doesn't have acknowledged_by
+                triggered_at=r.created_at,  # ml_monitoring_alerts has no triggered_at; created_at is fire time
+                acknowledged_at=r.acknowledged_at,
+                acknowledged_by=r.acknowledged_by,
                 resolved_at=r.resolved_at,
                 resolved_by=r.resolved_by,
             )
@@ -683,15 +683,15 @@ async def get_alert(alert_id: str) -> AlertItem:
 
         return AlertItem(
             id=str(record.id),
-            model_version=record.model_version,
+            model_version=record.model_version or "",
             alert_type=record.alert_type,
             severity=record.severity,
-            title=record.message,  # MonitoringAlertRecord uses 'message' not 'title'
+            title=record.title or record.message,
             description=record.recommended_action or "",
             status=AlertStatus(record.status),
-            triggered_at=record.triggered_at,
-            acknowledged_at=None,  # MonitoringAlertRecord doesn't have acknowledged_at
-            acknowledged_by=None,  # MonitoringAlertRecord doesn't have acknowledged_by
+            triggered_at=record.created_at,  # ml_monitoring_alerts has no triggered_at; created_at is fire time
+            acknowledged_at=record.acknowledged_at,
+            acknowledged_by=record.acknowledged_by,
             resolved_at=record.resolved_at,
             resolved_by=record.resolved_by,
         )
@@ -762,15 +762,15 @@ async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
 
         return AlertItem(
             id=str(record.id),
-            model_version=record.model_version,
+            model_version=record.model_version or "",
             alert_type=record.alert_type,
             severity=record.severity,
-            title=record.message,  # MonitoringAlertRecord uses 'message' not 'title'
+            title=record.title or record.message,
             description=record.recommended_action or "",
             status=AlertStatus(record.status),
-            triggered_at=record.triggered_at,
-            acknowledged_at=None,  # MonitoringAlertRecord doesn't have acknowledged_at
-            acknowledged_by=None,  # MonitoringAlertRecord doesn't have acknowledged_by
+            triggered_at=record.created_at,  # ml_monitoring_alerts has no triggered_at; created_at is fire time
+            acknowledged_at=record.acknowledged_at,
+            acknowledged_by=record.acknowledged_by,
             resolved_at=record.resolved_at,
             resolved_by=record.resolved_by,
         )
@@ -825,14 +825,18 @@ async def list_monitoring_runs(
         items = [
             MonitoringRunItem(
                 id=str(r.id),
-                model_version=r.model_version,
-                run_type=r.run_type,
+                model_version=r.model_version or (model_id or ""),
+                # #842: the app's "run_type" (scheduled/manual/triggered) is the
+                # trigger, stored in the DB trigger_type column; DB run_type holds
+                # the monitoring kind ("full"). Surface the trigger here to keep
+                # the historical API semantics.
+                run_type=r.trigger_type or r.run_type,
                 started_at=r.started_at,
                 completed_at=r.completed_at,
-                features_checked=r.features_checked or 0,
+                features_checked=r.total_checks or 0,
                 drift_detected_count=r.drift_detected_count or 0,
                 alerts_generated=r.alerts_generated or 0,
-                duration_ms=r.duration_ms or 0,
+                duration_ms=int((r.duration_seconds or 0) * 1000),
                 error_message=r.error_message,
             )
             for r in all_records[:limit]
@@ -1121,7 +1125,7 @@ async def get_performance_trend(
             PerformanceMetricItem(
                 metric_name=r.metric_name,
                 metric_value=r.metric_value,
-                recorded_at=r.recorded_at,
+                recorded_at=r.measured_at,
             )
             for r in records
         ]

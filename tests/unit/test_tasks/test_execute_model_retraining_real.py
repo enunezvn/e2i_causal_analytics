@@ -119,6 +119,7 @@ async def test_real_retraining_success_writes_real_metric() -> None:
 
     repo = MagicMock()
     repo.update = AsyncMock()
+    repo.mark_failed = AsyncMock()  # #842: fail-closed path records reason in notes
     service = MagicMock()
     service.complete_retraining = AsyncMock()
 
@@ -154,6 +155,7 @@ async def test_real_retraining_pipeline_failure_fails_closed() -> None:
 
     repo = MagicMock()
     repo.update = AsyncMock()
+    repo.mark_failed = AsyncMock()  # #842: fail-closed path records reason in notes
     service = MagicMock()
     service.complete_retraining = AsyncMock()
 
@@ -169,12 +171,10 @@ async def test_real_retraining_pipeline_failure_fails_closed() -> None:
     assert out["status"] == "failed"
     # Anti-mocking: no fake metric written, complete_retraining never called.
     service.complete_retraining.assert_not_awaited()
-    # The job was marked failed.
-    statuses = [c.args[1].get("status") for c in repo.update.await_args_list if len(c.args) > 1]
-    statuses += [c.kwargs.get("updates", {}).get("status") for c in repo.update.await_args_list]
-    assert "failed" in [s for s in statuses if s] or any(
-        "failed" in str(c) for c in repo.update.await_args_list
-    )
+    # The job was marked failed via mark_failed (#842: writes the reason to the
+    # real `notes` column — ml_retraining_history has no error_message column).
+    repo.mark_failed.assert_awaited_once()
+    assert repo.mark_failed.await_args.args[0] == "rt-2"
 
 
 @pytest.mark.asyncio
@@ -190,6 +190,7 @@ async def test_real_retraining_completed_but_no_metric_fails_closed() -> None:
 
     repo = MagicMock()
     repo.update = AsyncMock()
+    repo.mark_failed = AsyncMock()  # #842: fail-closed path records reason in notes
     service = MagicMock()
     service.complete_retraining = AsyncMock()
 
@@ -221,6 +222,7 @@ async def test_real_retraining_completed_but_criteria_not_met_fails_closed() -> 
 
     repo = MagicMock()
     repo.update = AsyncMock()
+    repo.mark_failed = AsyncMock()  # #842: fail-closed path records reason in notes
     service = MagicMock()
     service.complete_retraining = AsyncMock()
 
@@ -245,6 +247,7 @@ async def test_real_retraining_missing_cohort_fails_closed() -> None:
 
     repo = MagicMock()
     repo.update = AsyncMock()
+    repo.mark_failed = AsyncMock()  # #842: fail-closed path records reason in notes
     service = MagicMock()
     service.complete_retraining = AsyncMock()
 
@@ -275,6 +278,7 @@ async def test_real_retraining_never_writes_simulated_085() -> None:
     pipe_patch, _ = _patch_pipeline(result)
     repo = MagicMock()
     repo.update = AsyncMock()
+    repo.mark_failed = AsyncMock()  # #842: fail-closed path records reason in notes
     service = MagicMock()
     service.complete_retraining = AsyncMock()
     with (

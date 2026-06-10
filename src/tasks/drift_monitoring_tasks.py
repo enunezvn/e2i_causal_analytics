@@ -790,7 +790,9 @@ async def _execute_real_retraining(
     async def _mark_failed(reason: str) -> Dict[str, Any]:
         logger.error(f"Retraining {retraining_id} failed closed: {reason}")
         try:
-            await repo.update(retraining_id, {"status": "failed", "error_message": reason})
+            # ml_retraining_history has no error_message column; the failure
+            # reason is recorded in `notes` via mark_failed (#842).
+            await repo.mark_failed(retraining_id, reason)
         except Exception as e:  # noqa: BLE001 — never mask the original failure
             logger.error(f"Also failed to mark retraining {retraining_id} failed: {e}")
         return {
