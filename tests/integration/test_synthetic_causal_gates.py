@@ -48,3 +48,31 @@ def test_disproof_synthetic_substrate_present(client):
         "no synthetic business_metrics rows tagged is_synthetic=true; "
         "run scripts/load_synthetic_data.py (Shard 02) before the gates"
     )
+
+
+# =============================================================================
+# Gates 1 & 2 — DATE-FRESHNESS + KPI->DASHBOARD
+# =============================================================================
+
+
+def test_gate_1_date_freshness(client):
+    for brand in ("Remibrutinib", "Kisqali", "Fabhalta"):
+        trx = _kpi(client, "business_impact_trx", [brand])
+        assert trx and (trx[0].get("trx") or 0) > 0, (
+            f"{brand} TRx==0 over NOW()-30d (staleness; load with --anchor-to-now)"
+        )
+    conv = _kpi(client, "business_impact_conversion_rate", [])
+    assert conv and (conv[0].get("conversion_rate") or 0) > 0, (
+        "conversion_rate==0 over NOW()-30d window"
+    )
+
+
+def test_gate_2_kpi_dashboard(client):
+    import asyncio
+
+    from src.api.routes.copilotkit import get_kpi_summary
+
+    summary = asyncio.run(get_kpi_summary("Kisqali"))
+    assert summary.get("data_source") == "database", summary  # NOT 'unavailable'/'fallback'
+    nonnull = [v for v in (summary.get("metrics") or {}).values() if v not in (None, 0)]
+    assert len(nonnull) >= 4, f"too few non-zero metrics: {summary.get('metrics')}"
