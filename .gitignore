@@ -251,3 +251,5 @@ optimized_prompts/
 # never commit; regenerate locally for the faithful gates.
 data/synthetic/
 data/deployment_manifest.json
+# #840 prediction_synthesizer deploy outputs (env-specific, regenerated)
+data/model_artifacts/

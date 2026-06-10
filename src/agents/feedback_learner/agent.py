@@ -320,6 +320,49 @@ class FeedbackLearnerAgent:
 # ============================================================================
 
 
+async def build_production_feedback_stores() -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
+    """Build the REAL ``(feedback_store, knowledge_stores)`` for every production
+    learning-cycle trigger (the Celery task, the ``/feedback/learn`` route, and
+    :func:`process_feedback_batch`) from one async Supabase client.
+
+    FAIL-CLOSED: returns ``(None, None)`` when the client is unavailable
+    (SUPABASE_URL unset, CI / offline) so the cycle runs the HONEST unwired path —
+    ``update_backend_wired`` False, ``update_effectiveness`` None (the F15
+    contract), never a fabricated 0.0.
+
+    NOTE on the orchestrator-DISPATCHED path: it never reaches this builder OR the
+    learning cycle. The agent registry holds a pre-built ``FeedbackLearnerAgent``
+    (constructed synchronously at startup via the generic factory), and the
+    dispatcher splats the generic dispatch payload into ``learn(**kwargs)``.
+    ``learn`` has a narrow signature (``time_range_start``/``end``, ``batch_id``,
+    ``focus_agents``) and there is NO ``feedback_learner`` ``INPUT_RESOLVER``, so
+    that call FAILS CLOSED with a kwargs-mismatch ``TypeError`` (success=False)
+    BEFORE ``KnowledgeUpdaterNode`` runs — ``update_effectiveness`` is never
+    computed, never fabricated. That is a PRE-EXISTING dispatch-wiring gap (a real
+    ``feedback_learner`` input resolver belongs to the resolver registry, #839),
+    not something #837 introduces or worsens. The measurable learning-cycle
+    triggers are the async entry points wired through this builder.
+    """
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+        from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
+
+        from .knowledge_stores import build_knowledge_stores
+
+        client = await get_async_supabase_client()
+        return (
+            get_chatbot_feedback_repository(supabase_client=client),
+            build_knowledge_stores(client),
+        )
+    except Exception as exc:  # pragma: no cover - degraded path
+        logger.warning(
+            "feedback_learner: could not build production feedback/knowledge stores "
+            "(%s); learning from empty, update_effectiveness stays None",
+            exc,
+        )
+        return None, None
+
+
 async def process_feedback_batch(
     time_range_start: str,
     time_range_end: str,
@@ -336,7 +379,13 @@ async def process_feedback_batch(
     Returns:
         FeedbackLearnerOutput
     """
-    agent = FeedbackLearnerAgent()
+    # #837: wire the real feedback + knowledge stores so update_effectiveness is
+    # measurable on this public convenience path too (fail-closed → unwired/None).
+    feedback_store, knowledge_stores = await build_production_feedback_stores()
+    agent = FeedbackLearnerAgent(
+        feedback_store=feedback_store,
+        knowledge_stores=knowledge_stores,
+    )
     return await agent.learn(
         time_range_start=time_range_start,
         time_range_end=time_range_end,
