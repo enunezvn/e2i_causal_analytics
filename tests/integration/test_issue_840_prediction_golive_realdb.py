@@ -116,6 +116,25 @@ async def test_chat_prediction_returns_real_ensemble(tmp_path: Path, monkeypatch
             f"target-agnostic fabrication: unrelated target returned {bogus.status} "
             "instead of failing closed"
         )
+
+        # 6. OVERRIDE-BYPASS GUARD (codex round-2 HIGH): the dispatcher forwards
+        #    models_to_use from external params. Explicitly naming a deployed csu
+        #    model for an unrelated target must STILL fail closed — the registry
+        #    intersection denies it (the model is not approved for that target).
+        override = await agent.synthesize(
+            entity_id="HCP_INT_840",
+            entity_type="hcp",
+            prediction_target="nonexistent_target_840",
+            features=features,
+            time_horizon="30d",
+            ensemble_method="weighted",
+            include_context=False,
+            models_to_use=list(result["registered"]),
+        )
+        assert override.status == "failed", (
+            f"override bypass: naming csu models for an unrelated target returned "
+            f"{override.status} instead of failing closed"
+        )
     finally:
         # FK-safe cleanup: registry rows first, then the test experiment.
         for name in result["registered"]:

@@ -86,21 +86,31 @@ class ModelOrchestratorNode:
         start_time = time.time()
 
         try:
-            # Determine which models to use
-            models_to_use = state.get("models_to_use")
-            if not models_to_use and self.registry:
-                models_to_use = await self.registry.get_models_for_target(
-                    target=state.get("prediction_target", ""),
-                    entity_type=state.get("entity_type", ""),
+            # Determine which models to use.
+            explicit = state.get("models_to_use") or []
+            if self.registry is not None:
+                # When a registry is wired, the models actually run MUST be a
+                # subset of what the registry approves for THIS target (#840).
+                # The orchestrator input (incl. an explicit ``models_to_use``
+                # forwarded from dispatch params) may only NARROW within that
+                # set — never escape it. Otherwise a request could name another
+                # target's loaded clients and fabricate a target-agnostic
+                # prediction. An empty approval (no deployable model for this
+                # target) fails closed; we never fall back to all clients.
+                approved = set(
+                    await self.registry.get_models_for_target(
+                        target=state.get("prediction_target", ""),
+                        entity_type=state.get("entity_type", ""),
+                    )
                 )
-
-            if not models_to_use and self.registry is None:
-                # Legacy / no-registry path: fall back to whatever clients exist.
-                models_to_use = list(self.clients.keys()) if self.clients else []
-            # When a registry IS wired but resolved no model for this target, we
-            # intentionally do NOT fall back to all clients (#840): serving another
-            # target's loaded models would be a target-agnostic fabrication. Leave
-            # models_to_use empty so we fail closed below.
+                if explicit:
+                    models_to_use = [m for m in explicit if m in approved]
+                else:
+                    models_to_use = list(approved)
+            else:
+                # Legacy / no-registry path: honor an explicit override, else
+                # fall back to whatever clients exist.
+                models_to_use = explicit or (list(self.clients.keys()) if self.clients else [])
 
             if not models_to_use:
                 logger.warning("No models available for prediction")

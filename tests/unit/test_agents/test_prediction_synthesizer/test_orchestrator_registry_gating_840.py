@@ -77,3 +77,35 @@ async def test_no_registry_legacy_fallback_to_clients(base_state):
     result = await node.execute({**base_state, "models_to_use": None})
     assert result["status"] == "combining"
     assert result["models_succeeded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_override_narrows_within_registry_approval(base_state):
+    """An explicit models_to_use may only NARROW within registry-approved models;
+    names not approved for the target are dropped."""
+    node = ModelOrchestratorNode(
+        model_registry=_ResolvingRegistry(["m1", "m2"]),
+        model_clients={"m1": _Client(0.6), "m2": _Client(0.7)},
+    )
+    # override asks for m1 + a non-approved name -> only m1 runs
+    result = await node.execute({**base_state, "models_to_use": ["m1", "not_approved"]})
+    assert result["status"] == "combining"
+    assert result["models_succeeded"] == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_override_for_unapproved_target_fails_closed(base_state):
+    """The dispatcher forwards models_to_use from external params (#840 HIGH):
+    naming a loaded client for a target the registry does not approve must FAIL
+    CLOSED, not run that client as a target-agnostic prediction."""
+    node = ModelOrchestratorNode(
+        model_registry=_EmptyRegistry(),  # no deployable model for this target
+        model_clients={"csu_model_a": _Client(0.7)},
+    )
+    state = {
+        **base_state,
+        "prediction_target": "nonexistent_target",
+        "models_to_use": ["csu_model_a"],
+    }
+    result = await node.execute(state)
+    assert result["status"] == "failed"

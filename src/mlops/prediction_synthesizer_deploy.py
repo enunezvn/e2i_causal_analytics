@@ -244,7 +244,8 @@ async def register_deployed_models(
         }
         await client.table("ml_model_registry").insert(row).execute()
 
-        # Confirm the row actually landed with the artifact (no silent no-op).
+        # Confirm the row actually landed as a PRODUCTION row with the artifact
+        # (no silent no-op, and not demoted to a non-serving stage by a trigger).
         check = await (
             client.table("ml_model_registry")
             .select("model_name, stage, artifact_path")
@@ -252,11 +253,16 @@ async def register_deployed_models(
             .eq("model_version", MODEL_VERSION)
             .execute()
         )
-        landed = [r for r in (check.data or []) if r.get("artifact_path") == artifact_path]
+        landed = [
+            r
+            for r in (check.data or [])
+            if r.get("artifact_path") == artifact_path and r.get("stage") == "production"
+        ]
         if not landed:
             raise RuntimeError(
-                f"registration of {m.model_name} did not persist (read-back found no "
-                "matching row) — refusing to report it as deployed"
+                f"registration of {m.model_name} did not persist as a production row "
+                "(read-back found no matching production row) — refusing to report it "
+                "as deployed"
             )
         registered.append(m.model_name)
         logger.info("Registered production model %s (auc=%.4f)", m.model_name, m.auc)
@@ -315,10 +321,20 @@ async def verify(manifest_path: Path = DEFAULT_MANIFEST_PATH) -> Dict[str, Any]:
 
     registry = LiveChampionModelRegistry()
     resolved = set(await registry.get_models_for_target(PREDICTION_TARGET, "hcp"))
-    missing = set(clients) - resolved
-    if missing:
+    # Traffic eligibility requires EXACT agreement: the agent resolves model
+    # names from the registry at runtime and then looks them up in the loaded
+    # clients, so any mismatch in either direction is a serving defect.
+    missing_in_registry = set(clients) - resolved
+    if missing_in_registry:
         raise RuntimeError(
-            f"registry does not resolve manifest models for {PREDICTION_TARGET}: {sorted(missing)}"
+            f"registry does not resolve manifest models for {PREDICTION_TARGET}: "
+            f"{sorted(missing_in_registry)}"
+        )
+    missing_in_manifest = resolved - set(clients)
+    if missing_in_manifest:
+        raise RuntimeError(
+            f"registry has production models with no manifest client (the agent would "
+            f"request them and fail): {sorted(missing_in_manifest)}"
         )
 
     checked: Dict[str, float] = {}
