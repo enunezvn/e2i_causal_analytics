@@ -244,3 +244,7 @@ artifacts/dspy/cr_*_n200.json
 # produced at runtime on the droplet's shared FS — never commit them.
 optimized_modules/
 optimized_prompts/
+
+# #840 prediction_synthesizer deploy outputs (env-specific, regenerated)
+data/deployment_manifest.json
+data/model_artifacts/

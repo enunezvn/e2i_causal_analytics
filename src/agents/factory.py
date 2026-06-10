@@ -269,12 +269,14 @@ def _create_agent(module_path: str, class_name: str) -> Optional[Any]:
     try:
         module = importlib.import_module(module_path)
         agent_class = getattr(module, class_name)
-        # Phase 3 / G5: prediction_synthesizer needs production model clients
-        # loaded from a deployment manifest when available. Falls back to {}
-        # so the agent enters UNVALIDATED mode rather than crashing on import.
+        # Phase 3 / G5 + #840: prediction_synthesizer needs BOTH production model
+        # clients (loaded from a deployment manifest) AND a live model_registry
+        # (so the orchestrator can resolve deployable champions for a target).
+        # Both fall back to a fail-closed empty/no-op state (no manifest -> {}
+        # clients; no DB client -> registry returns []), so the agent reports
+        # status="failed" honestly rather than fabricating a prediction.
         if class_name == "PredictionSynthesizerAgent":
-            clients = _try_load_prod_model_clients()
-            return agent_class(model_clients=clients)
+            return agent_class(**_prediction_synthesizer_kwargs())
         return agent_class()
     except ImportError as e:
         logger.warning(f"Import error for {module_path}.{class_name}: {e}")
@@ -282,6 +284,25 @@ def _create_agent(module_path: str, class_name: str) -> Optional[Any]:
     except AttributeError as e:
         logger.warning(f"Class not found: {class_name} in {module_path}: {e}")
         return None
+
+
+def _prediction_synthesizer_kwargs() -> Dict[str, Any]:
+    """Build the prediction_synthesizer constructor kwargs (#840).
+
+    Injects BOTH the deployment-manifest-loaded ``model_clients`` and a
+    ``LiveChampionModelRegistry`` so the orchestrator can resolve the deployable
+    champion model names for a target and drive their clients. Both are
+    fail-closed: an absent manifest yields ``{}`` clients and an unavailable DB
+    yields an empty registry result, so the agent fails closed honestly.
+    """
+    from src.agents.prediction_synthesizer.registry_adapter import (
+        LiveChampionModelRegistry,
+    )
+
+    return {
+        "model_clients": _try_load_prod_model_clients(),
+        "model_registry": LiveChampionModelRegistry(),
+    }
 
 
 def _try_load_prod_model_clients() -> Dict[str, Any]:
