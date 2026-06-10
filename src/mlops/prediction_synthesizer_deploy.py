@@ -55,10 +55,15 @@ BRAND = "Remibrutinib"
 MODEL_VERSION = "1.0"
 DEPLOY_EXPERIMENT_NAME = "csu_treatment_initiation_live_v1"
 
-# Default on-box locations the factory's ``_try_load_prod_model_clients`` finds
-# (``data/deployment_manifest.json`` relative to the app CWD).
-DEFAULT_ARTIFACT_DIR = Path("data/model_artifacts/csu_treatment_initiation")
-DEFAULT_MANIFEST_PATH = Path("data/deployment_manifest.json")
+# Default on-box locations the factory's ``_try_load_prod_model_clients`` reads
+# (kept in sync with ``src.agents.factory.DEFAULT_DEPLOYMENT_MANIFEST_PATH``).
+# #857: ``data/ml_artifacts/`` is a WRITABLE named volume in the prod api
+# container — ``/app/data`` itself is read-only, so the old ``data/`` defaults
+# made the bare runbook ``python -m src.mlops.prediction_synthesizer_deploy``
+# fail with ``OSError: Read-only file system``. The volume also persists the
+# manifest + artifacts across container recreations on redeploy.
+DEFAULT_ARTIFACT_DIR = Path("data/ml_artifacts/csu_treatment_initiation")
+DEFAULT_MANIFEST_PATH = Path("data/ml_artifacts/deployment_manifest.json")
 
 
 @dataclass

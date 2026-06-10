@@ -17,9 +17,17 @@ Example:
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, cast
 
 logger = logging.getLogger(__name__)
+
+# #857: the prod api container's ``/app/data`` is read-only; only named-volume
+# subdirs like ``data/ml_artifacts`` are writable, and that is where the deploy
+# CLI writes the manifest. The factory must read the SAME path or the live agent
+# never loads ``model_clients``. Kept in sync with
+# ``src.mlops.prediction_synthesizer_deploy.DEFAULT_MANIFEST_PATH``.
+DEFAULT_DEPLOYMENT_MANIFEST_PATH = Path("data/ml_artifacts/deployment_manifest.json")
 
 
 # Agent metadata for lazy instantiation
@@ -310,7 +318,7 @@ def _try_load_prod_model_clients() -> Dict[str, Any]:
 
     Resolution order:
       1. ``E2I_MODEL_DEPLOYMENT_MANIFEST_PATH`` env var (JSON file path)
-      2. ``data/deployment_manifest.json`` if it exists in CWD
+      2. ``DEFAULT_DEPLOYMENT_MANIFEST_PATH`` (``data/ml_artifacts/...``) in CWD
 
     Any failure (file missing, parse error, bad URI) returns ``{}`` and logs
     a warning. With ``{}`` clients and a live ``model_registry`` (see
@@ -319,7 +327,6 @@ def _try_load_prod_model_clients() -> Dict[str, Any]:
     FAILS CLOSED (status="failed") rather than fabricating a prediction.
     """
     import os
-    from pathlib import Path
 
     try:
         from src.agents.prediction_synthesizer.clients.inproc_model_client import (
@@ -333,7 +340,7 @@ def _try_load_prod_model_clients() -> Dict[str, Any]:
     if manifest_path_str:
         return load_clients_from_deployment_manifest_file(manifest_path_str)
 
-    default_path = Path("data/deployment_manifest.json")
+    default_path = DEFAULT_DEPLOYMENT_MANIFEST_PATH
     if default_path.exists():
         return load_clients_from_deployment_manifest_file(default_path)
 

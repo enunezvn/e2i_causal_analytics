@@ -859,26 +859,35 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return []
 
-        exp_result = await (
-            self.client.table("ml_experiments")
-            .select("id")
-            .eq("prediction_target", target)
-            .execute()
-        )
-        experiment_ids = [row["id"] for row in (exp_result.data or []) if row.get("id")]
-        if not experiment_ids:
-            return []
-
+        # #857: resolve the target via a SERVER-SIDE FK-embedded inner join on
+        # ``ml_experiments`` rather than fetching every experiment id for the
+        # target and passing them to ``.in_("experiment_id", [...])``. At prod
+        # scale a single target can own hundreds of experiments (the synthetic
+        # validation load gave ``csu_treatment_initiation`` 253), and that id
+        # list blew the PostgREST GET URL past its limit -> ``414 URI too long``
+        # -> the live orchestrator could resolve NO model at all. The embedded
+        # filter runs entirely server-side, so the URL stays short and only the
+        # few production + loadable rows come back. ``ml_model_registry`` has no
+        # ``prediction_target`` column, hence the join through
+        # ``ml_model_registry_experiment_id_fkey``.
         reg_result = await (
             self.client.table(self.table_name)
-            .select("model_name, stage, artifact_path, experiment_id")
-            .in_("experiment_id", experiment_ids)
+            .select(
+                "model_name, stage, artifact_path, experiment_id, "
+                "ml_experiments!inner(prediction_target)"
+            )
+            .eq("ml_experiments.prediction_target", target)
+            .in_("stage", list(self._SERVING_STAGES))
+            .not_.is_("artifact_path", "null")
             .execute()
         )
 
         names: List[str] = []
         seen: set[str] = set()
         for row in reg_result.data or []:
+            # Server-side filters already scope to target + serving stage +
+            # loadable artifact; re-check defensively (cheap) and dedup
+            # ``model_name`` (a name can recur across versions/experiments).
             if row.get("stage") not in self._SERVING_STAGES:
                 continue
             if not row.get("artifact_path"):
