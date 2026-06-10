@@ -165,12 +165,16 @@ class KnowledgeUpdaterNode:
         store = self.stores[knowledge_type]
 
         try:
-            await store.update(
+            # #837: RESPECT the store's return value. The store reports True only
+            # when the update durably persisted (read-back confirmed); a False
+            # (e.g. empty value, DB error, read-back mismatch) must NOT be counted
+            # as applied, or update_effectiveness would be a false-positive ratio.
+            applied = await store.update(
                 key=update["key"],
                 value=update["new_value"],
                 justification=update["justification"],
             )
-            return True
+            return bool(applied)
         except Exception as e:
             logger.warning(f"Failed to apply update {update['update_id']}: {e}")
             return False

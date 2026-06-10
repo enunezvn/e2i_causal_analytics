@@ -140,7 +140,11 @@ class FeedbackLearnerTrainingSignal:
     # F15 (audit): None when the knowledge_store apply-backend is unwired (the
     # ratio is structurally unmeasurable). compute_reward skips it like
     # pattern_accuracy rather than anchoring on a misleading 0.0.
-    update_effectiveness: Optional[float] = None  # Downstream metric improvement
+    # #837: when a real knowledge_stores backend IS wired, this is the fraction
+    # of proposed updates DURABLY PERSISTED to the store (read-back confirmed) —
+    # a real measure of update application, NOT of downstream behavioural impact
+    # (agent-side consumption of the recorded learning is a separate loop).
+    update_effectiveness: Optional[float] = None  # applied(persisted)/proposed; None when unwired
 
     # === Rubric Evaluation Metrics ===
     rubric_weighted_score: Optional[float] = None  # AI-as-judge rubric score (1-5)

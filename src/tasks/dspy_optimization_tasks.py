@@ -173,20 +173,37 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
     # update_effectiveness was pinned at 0.0 (documented starved state). The
     # store fails closed (empty list) if the DB/client is unavailable.
     feedback_store = None
+    knowledge_stores = None
     try:
+        from src.agents.feedback_learner.knowledge_stores import build_knowledge_stores
         from src.memory.services.factories import get_async_supabase_client
         from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
 
         client = await get_async_supabase_client()
         feedback_store = get_chatbot_feedback_repository(supabase_client=client)
+        # #837 (F15 follow-up): wire the REAL knowledge_stores so applied updates
+        # durably persist (read-back confirmed) and update_effectiveness becomes a
+        # real measured ratio instead of None. Same async client; fails closed
+        # below — if unavailable, knowledge_stores stays None so the updater node
+        # reports update_backend_wired=False and update_effectiveness=None (F15).
+        knowledge_stores = build_knowledge_stores(client)
     except Exception as exc:  # pragma: no cover - degraded path
-        logger.warning("F15: could not build real feedback_store (%s); learning from empty", exc)
+        logger.warning(
+            "F15/#837: could not build real feedback_store/knowledge_stores (%s); "
+            "learning from empty, update_effectiveness stays None",
+            exc,
+        )
 
     # Optional scope: DSPY_LEARN_FOCUS_AGENTS="agent_a,agent_b" (default: all agents).
     _focus_env = os.environ.get("DSPY_LEARN_FOCUS_AGENTS", "").strip()
     focus_agents = [a.strip() for a in _focus_env.split(",") if a.strip()] or None
 
-    agent = FeedbackLearnerAgent(feedback_store=feedback_store, use_llm=True, persist_signals=True)
+    agent = FeedbackLearnerAgent(
+        feedback_store=feedback_store,
+        knowledge_stores=knowledge_stores,
+        use_llm=True,
+        persist_signals=True,
+    )
     output = await agent.learn(
         time_range_start=start_time.isoformat(),
         time_range_end=end_time.isoformat(),
