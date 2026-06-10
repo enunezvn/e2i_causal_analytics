@@ -160,6 +160,7 @@ class PredictionSynthesizerAgent:
         if self._simple_graph is None:
             self._simple_graph = build_simple_prediction_graph(
                 model_clients=self.model_clients,
+                model_registry=self.model_registry,
             )
         return self._simple_graph
 
