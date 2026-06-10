@@ -817,8 +817,10 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         result = await query.limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
 
-    # Serving stages whose champions are eligible to back live predictions.
-    _SERVING_STAGES = ("production", "staging")
+    # Only PRODUCTION models back live predictions. Promotion to production is
+    # the explicit operator gate (``transition_stage``); staging/shadow/dev
+    # models must NOT auto-serve chat traffic.
+    _SERVING_STAGES = ("production",)
 
     async def get_models_for_target(self, target: str, entity_type: str = "") -> List[str]:
         """Resolve DEPLOYABLE serving model names for a prediction target.
@@ -830,11 +832,12 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         which MUST match both the deployment-manifest keys and the
         ``model_clients`` dict keys the factory injects.
 
-        A model is returned when it is (a) in a serving stage
-        (production/staging) and (b) carries a non-null ``artifact_path`` —
-        i.e. an artifact a client can actually load. The 72 metadata-only
-        synthetic rows (NULL ``artifact_path``) are therefore excluded:
-        surfacing them would name models the agent cannot load.
+        A model is returned when it is (a) at ``stage='production'`` and (b)
+        carries a non-null ``artifact_path`` — i.e. an artifact a client can
+        actually load. Staging/shadow/dev models are excluded (promotion to
+        production is the explicit operator gate). The 72 metadata-only
+        synthetic rows (NULL ``artifact_path``) are also excluded: surfacing
+        them would name models the agent cannot load.
 
         ``is_champion`` is intentionally NOT required: a prediction ENSEMBLE
         draws on ALL serving models for the target, but the

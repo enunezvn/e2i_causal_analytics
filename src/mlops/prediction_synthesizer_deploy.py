@@ -157,15 +157,25 @@ def serialize_and_write_manifest(
 async def _get_or_create_experiment(
     client: Any, experiment_name: str = DEPLOY_EXPERIMENT_NAME
 ) -> str:
-    """Resolve (or create) the dedicated real deploy experiment id."""
+    """Resolve (or create) the dedicated real deploy experiment id.
+
+    Matches on ``(experiment_name, prediction_target)`` — ``experiment_name``
+    alone is not unique in the schema, and resolving the wrong target's row
+    would register models that ``get_models_for_target`` could never surface.
+    """
     existing = await (
         client.table("ml_experiments")
         .select("id")
         .eq("experiment_name", experiment_name)
-        .limit(1)
+        .eq("prediction_target", PREDICTION_TARGET)
         .execute()
     )
     if existing.data:
+        if len(existing.data) > 1:
+            raise RuntimeError(
+                f"ambiguous experiment '{experiment_name}' for target "
+                f"'{PREDICTION_TARGET}' ({len(existing.data)} rows) — refusing to guess"
+            )
         return str(existing.data[0]["id"])
 
     row = {
@@ -177,6 +187,8 @@ async def _get_or_create_experiment(
         "description": "Real deployable models backing live chat predictions (#840).",
     }
     created = await client.table("ml_experiments").insert(row).execute()
+    if not created.data:
+        raise RuntimeError(f"failed to create experiment '{experiment_name}' (no row returned)")
     return str(created.data[0]["id"])
 
 
@@ -186,17 +198,34 @@ async def register_deployed_models(
     uri_map: Dict[str, str],
     experiment_name: str = DEPLOY_EXPERIMENT_NAME,
 ) -> List[str]:
-    """Upsert champion ``ml_model_registry`` rows for the deployed models.
+    """Register production ``ml_model_registry`` rows for the deployed models.
 
-    Idempotent: deletes any prior row with the same ``model_name`` first.
-    Returns the registered model_names.
+    Idempotent at the ``(model_name, model_version)`` grain (the schema unique
+    key) — replaces only the matching version, preserving other versions and
+    avoiding FK fallout from a name-wide delete. Verifies the artifact exists
+    before writing, and reads the row back to confirm it actually landed
+    (a trigger/RLS no-op must not be reported as success).
     """
     experiment_id = await _get_or_create_experiment(client, experiment_name)
     now = datetime.now(timezone.utc).isoformat()
 
     registered: List[str] = []
     for m in models:
-        await client.table("ml_model_registry").delete().eq("model_name", m.model_name).execute()
+        artifact_path = uri_map[m.model_name]
+        if not Path(artifact_path).is_file():
+            raise RuntimeError(
+                f"artifact for {m.model_name} missing at {artifact_path} — refusing to "
+                "register an unloadable model"
+            )
+
+        # Replace only this exact (model_name, model_version) — not all versions.
+        await (
+            client.table("ml_model_registry")
+            .delete()
+            .eq("model_name", m.model_name)
+            .eq("model_version", MODEL_VERSION)
+            .execute()
+        )
         row = {
             "experiment_id": experiment_id,
             "model_name": m.model_name,
@@ -205,7 +234,7 @@ async def register_deployed_models(
             "stage": "production",
             "is_champion": True,
             "is_synthetic": False,
-            "artifact_path": uri_map[m.model_name],
+            "artifact_path": artifact_path,
             "auc": m.auc,
             "feature_count": m.n_features,
             "training_samples": m.training_samples,
@@ -214,8 +243,23 @@ async def register_deployed_models(
             "promoted_at": now,
         }
         await client.table("ml_model_registry").insert(row).execute()
+
+        # Confirm the row actually landed with the artifact (no silent no-op).
+        check = await (
+            client.table("ml_model_registry")
+            .select("model_name, stage, artifact_path")
+            .eq("model_name", m.model_name)
+            .eq("model_version", MODEL_VERSION)
+            .execute()
+        )
+        landed = [r for r in (check.data or []) if r.get("artifact_path") == artifact_path]
+        if not landed:
+            raise RuntimeError(
+                f"registration of {m.model_name} did not persist (read-back found no "
+                "matching row) — refusing to report it as deployed"
+            )
         registered.append(m.model_name)
-        logger.info("Registered champion %s (auc=%.4f)", m.model_name, m.auc)
+        logger.info("Registered production model %s (auc=%.4f)", m.model_name, m.auc)
     return registered
 
 
@@ -251,6 +295,45 @@ async def deploy(
     }
 
 
+async def verify(manifest_path: Path = DEFAULT_MANIFEST_PATH) -> Dict[str, Any]:
+    """Post-deploy consistency check before enabling live chat traffic.
+
+    Confirms the three pieces agree end-to-end: (1) the manifest loads into
+    clients, (2) the live registry resolves the deployed model names for the
+    target, and (3) each loaded client returns a real prediction. Returns a
+    report and raises if the wiring is inconsistent. Run before treating the
+    agent as traffic-eligible.
+    """
+    from src.agents.prediction_synthesizer.clients.inproc_model_client import (
+        load_clients_from_deployment_manifest_file,
+    )
+    from src.agents.prediction_synthesizer.registry_adapter import LiveChampionModelRegistry
+
+    clients = load_clients_from_deployment_manifest_file(str(manifest_path))
+    if not clients:
+        raise RuntimeError(f"manifest {manifest_path} loaded no clients")
+
+    registry = LiveChampionModelRegistry()
+    resolved = set(await registry.get_models_for_target(PREDICTION_TARGET, "hcp"))
+    missing = set(clients) - resolved
+    if missing:
+        raise RuntimeError(
+            f"registry does not resolve manifest models for {PREDICTION_TARGET}: {sorted(missing)}"
+        )
+
+    checked: Dict[str, float] = {}
+    for name, client in clients.items():
+        feats = dict.fromkeys(client.feature_names, 1.0)
+        out = await client.predict("VERIFY_ENTITY", feats, "30d")
+        checked[name] = float(out["prediction"])
+
+    return {
+        "manifest_models": sorted(clients),
+        "resolved_by_registry": sorted(resolved),
+        "predictions": checked,
+    }
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Deploy real prediction_synthesizer models (#840)")
@@ -263,7 +346,17 @@ def main() -> None:
         action="store_true",
         help="write artifacts+manifest but skip DB registration",
     )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="verify an existing deploy (manifest <-> registry <-> live prediction) and exit",
+    )
     args = parser.parse_args()
+
+    if args.verify:
+        report = asyncio.run(verify(manifest_path=args.manifest_path))
+        print(json.dumps(report, indent=2))
+        return
 
     result = asyncio.run(
         deploy(

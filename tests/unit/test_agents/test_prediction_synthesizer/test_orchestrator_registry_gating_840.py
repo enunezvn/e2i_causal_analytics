@@ -1,0 +1,79 @@
+"""Orchestrator registry-gating regression (#840, codex HIGH-2).
+
+When a model_registry IS wired but resolves NO model for the requested target,
+the orchestrator must FAIL CLOSED — it must NOT fall back to running every
+loaded manifest client, which would serve another target's models (a
+target-agnostic fabrication). The legacy no-registry path still falls back to
+the loaded clients.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+import pytest
+
+from src.agents.prediction_synthesizer.nodes.model_orchestrator import ModelOrchestratorNode
+
+
+class _Client:
+    """Minimal real async prediction client."""
+
+    def __init__(self, prediction: float = 0.7):
+        self._p = prediction
+
+    async def predict(
+        self, entity_id: str, features: Dict[str, Any], time_horizon: str
+    ) -> Dict[str, Any]:
+        return {"model_type": "logistic_regression", "prediction": self._p, "confidence": 0.8}
+
+
+class _EmptyRegistry:
+    async def get_models_for_target(self, target: str, entity_type: str) -> List[str]:
+        return []
+
+
+class _ResolvingRegistry:
+    def __init__(self, names: List[str]):
+        self._names = names
+
+    async def get_models_for_target(self, target: str, entity_type: str) -> List[str]:
+        return list(self._names)
+
+
+@pytest.mark.asyncio
+async def test_registry_present_but_empty_fails_closed(base_state):
+    """csu-only clients loaded, but registry resolves nothing for the requested
+    target -> status=failed, NOT a prediction from the wrong target's clients."""
+    node = ModelOrchestratorNode(
+        model_registry=_EmptyRegistry(),
+        model_clients={"csu_model_a": _Client(0.7), "csu_model_b": _Client(0.6)},
+    )
+    state = {**base_state, "prediction_target": "pnh_persistence", "models_to_use": None}
+    result = await node.execute(state)
+    assert result["status"] == "failed"
+    assert "No models available" in result["errors"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_registry_resolves_models_and_runs_them(base_state):
+    """Registry resolves models that exist in clients -> they run -> success."""
+    node = ModelOrchestratorNode(
+        model_registry=_ResolvingRegistry(["m1", "m2"]),
+        model_clients={"m1": _Client(0.6), "m2": _Client(0.7)},
+    )
+    result = await node.execute({**base_state, "models_to_use": None})
+    assert result["status"] == "combining"
+    assert result["models_succeeded"] == 2
+
+
+@pytest.mark.asyncio
+async def test_no_registry_legacy_fallback_to_clients(base_state):
+    """No registry wired -> legacy fallback to loaded clients is preserved."""
+    node = ModelOrchestratorNode(
+        model_registry=None,
+        model_clients={"m1": _Client(0.6)},
+    )
+    result = await node.execute({**base_state, "models_to_use": None})
+    assert result["status"] == "combining"
+    assert result["models_succeeded"] == 1

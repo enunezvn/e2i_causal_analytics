@@ -127,6 +127,7 @@ async def _error_handler_node(
 
 def build_simple_prediction_graph(
     model_clients: Optional[Dict[str, Any]] = None,
+    model_registry: Optional[Any] = None,
 ) -> CompiledStateGraph:
     """
     Build a simplified prediction graph without context enrichment.
@@ -136,6 +137,11 @@ def build_simple_prediction_graph(
 
     Args:
         model_clients: Dict mapping model_id to prediction client
+        model_registry: Registry resolving deployable models per target (#840).
+            Must be threaded through here too — the convenience entrypoints
+            default to ``include_context=False`` (this graph), so omitting the
+            registry would let the orchestrator serve any target's loaded
+            clients (target-agnostic).
 
     Returns:
         Compiled LangGraph workflow
@@ -145,7 +151,7 @@ def build_simple_prediction_graph(
         "prediction_synthesizer_simple", AgentTier.ML_PREDICTIONS
     )
 
-    orchestrator = ModelOrchestratorNode(model_clients=model_clients)
+    orchestrator = ModelOrchestratorNode(model_registry=model_registry, model_clients=model_clients)
     combiner = EnsembleCombinerNode()
 
     workflow = StateGraph(PredictionSynthesizerState)

@@ -97,6 +97,25 @@ async def test_chat_prediction_returns_real_ensemble(tmp_path: Path, monkeypatch
         assert out.ensemble_prediction is not None
         point = out.ensemble_prediction["point_estimate"]
         assert 0.0 <= float(point) <= 1.0, f"point_estimate out of range: {point}"
+
+        # 5. TARGET-AGNOSTIC GUARD (codex HIGH-2): the SAME csu manifest is
+        #    loaded, but a request for an unrelated target (no deployable model)
+        #    must FAIL CLOSED via the registry — NOT fabricate a prediction from
+        #    the csu clients. This exercises the simple-graph path the chat
+        #    entrypoints default to (include_context=False).
+        bogus = await agent.synthesize(
+            entity_id="HCP_INT_840",
+            entity_type="hcp",
+            prediction_target="nonexistent_target_840",
+            features=features,
+            time_horizon="30d",
+            ensemble_method="weighted",
+            include_context=False,
+        )
+        assert bogus.status == "failed", (
+            f"target-agnostic fabrication: unrelated target returned {bogus.status} "
+            "instead of failing closed"
+        )
     finally:
         # FK-safe cleanup: registry rows first, then the test experiment.
         for name in result["registered"]:

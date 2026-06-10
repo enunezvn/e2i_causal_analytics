@@ -82,10 +82,10 @@ def _registry_rows() -> List[Dict[str, Any]]:
             "is_champion": False,
             "artifact_path": "/b.pkl",
         },
-        # staging + artifact -> SHOULD return
+        # STAGING + artifact -> EXCLUDE (production is the explicit operator gate)
         {
             "experiment_id": "exp-csu",
-            "model_name": "csu_model_c",
+            "model_name": "csu_staging",
             "stage": "staging",
             "is_champion": False,
             "artifact_path": "/c.pkl",
@@ -125,16 +125,17 @@ async def test_no_client_fails_closed_returns_empty():
 
 
 @pytest.mark.asyncio
-async def test_returns_only_deployable_serving_models_for_target():
-    """All serving-stage (production/staging) + non-null artifact, scoped to target."""
+async def test_returns_only_production_models_with_artifact_for_target():
+    """Only stage='production' + non-null artifact, scoped to target (is_champion irrelevant)."""
     client = _FakeClient({"ml_experiments": _EXPERIMENTS, "ml_model_registry": _registry_rows()})
     repo = MLModelRegistryRepository(supabase_client=client)
     names = await repo.get_models_for_target("csu_treatment_initiation", "hcp")
-    # all 3 serving+artifact csu models (champion status irrelevant for ensemble)
-    assert sorted(names) == ["csu_model_a", "csu_model_b", "csu_model_c"]
+    # both production+artifact csu models (champion status irrelevant for ensemble)
+    assert sorted(names) == ["csu_model_a", "csu_model_b"]
     # the metadata-only (NULL artifact) synthetic row must NOT leak
     assert "csu_synthetic_noart" not in names
-    # wrong stage / different target excluded
+    # staging (not yet promoted), dev stage, and a different target excluded
+    assert "csu_staging" not in names
     assert "csu_dev" not in names
     assert "pnh_model" not in names
 

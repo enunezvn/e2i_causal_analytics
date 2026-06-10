@@ -94,9 +94,13 @@ class ModelOrchestratorNode:
                     entity_type=state.get("entity_type", ""),
                 )
 
-            if not models_to_use:
-                # No registry or no models - return mock predictions for testing
+            if not models_to_use and self.registry is None:
+                # Legacy / no-registry path: fall back to whatever clients exist.
                 models_to_use = list(self.clients.keys()) if self.clients else []
+            # When a registry IS wired but resolved no model for this target, we
+            # intentionally do NOT fall back to all clients (#840): serving another
+            # target's loaded models would be a target-agnostic fabrication. Leave
+            # models_to_use empty so we fail closed below.
 
             if not models_to_use:
                 logger.warning("No models available for prediction")

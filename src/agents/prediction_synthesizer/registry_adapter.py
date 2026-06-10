@@ -23,6 +23,7 @@ what distinguishes this from the dormant #845 repos.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, List, Optional
 
 from src.memory.services.factories import get_async_supabase_client
@@ -30,22 +31,28 @@ from src.repositories.ml_experiment import MLModelRegistryRepository
 
 
 class LiveChampionModelRegistry:
-    """Resolve deployable champion model names for a target from the live DB."""
+    """Resolve deployable production model names for a target from the live DB."""
 
     def __init__(self, repo: Optional[Any] = None) -> None:
         # ``repo`` is an injection seam for tests; production leaves it None and
         # the real repo (with the async client) is resolved lazily.
         self._repo = repo
         self._resolved = repo is not None
+        self._lock = asyncio.Lock()
 
     async def _ensure_repo(self) -> Any:
         if self._resolved:
             return self._repo
-        client = await get_async_supabase_client()
-        # A None client yields a repo whose methods fail closed (return []).
-        self._repo = MLModelRegistryRepository(supabase_client=client)
-        self._resolved = True
-        return self._repo
+        # Serialize the first-call resolution so concurrent callers acquire the
+        # async client exactly once (double-checked under the lock).
+        async with self._lock:
+            if self._resolved:
+                return self._repo
+            client = await get_async_supabase_client()
+            # A None client yields a repo whose methods fail closed (return []).
+            self._repo = MLModelRegistryRepository(supabase_client=client)
+            self._resolved = True
+            return self._repo
 
     async def get_models_for_target(self, target: str, entity_type: str = "") -> List[str]:
         repo = await self._ensure_repo()
