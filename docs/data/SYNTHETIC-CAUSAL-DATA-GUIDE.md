@@ -1,9 +1,10 @@
 # Synthetic Causal Data — How It Works and How to Validate With It
 
-**Audience:** anyone running e2e validation of the causal pipeline (cohorts, estimators,
-agents) against data with *known* ground-truth effects.
-**Current dataset:** `data/rwd/synthetic/` (generated 2026-06-10, parquet-only, seed 42,
-`confounded` DGP, FULL_SIZES; see its `README.md` for provenance).
+**Audience:** anyone running e2e validation of the causal pipeline (tier0 modelability,
+cohorts, estimators, agents) against data with *known* ground-truth effects.
+**Current dataset:** `data/rwd/synthetic_CSU/` (generated 2026-06-10, parquet-only,
+seed 42, `confounded` DGP, FULL_SIZES; the `_CSU` suffix marks the Remibrutinib (CSU)
+e2e set — future datasets get their own suffix; see its `README.md` for provenance).
 **Generator stack:** `src/ml/synthetic/generators/` → `scripts/load_synthetic_data.py`
 (plan: `.claude/plans/synthetic-causal-validation/`, merged via PR #850; cohort-frame
 fan-out fix in PR #860).
@@ -21,7 +22,8 @@ It exists in two consumption modes:
 
 | Mode | Produced by | Consumed by | Use for |
 |---|---|---|---|
-| **Parquet snapshots** (`data/rwd/synthetic/`) | `load_synthetic_data.py --parquet-only --parquet-out <dir>` | offline cohort/estimator checks; gate 10's hcp_adoption cells | estimator validation without touching the DB |
+| **Parquet snapshots** (`data/rwd/synthetic_CSU/`) | `load_synthetic_data.py --parquet-only --parquet-out <dir>` | offline cohort/estimator checks; gate 10's hcp_adoption cells | estimator validation without touching the DB |
+| **Tier0 contract dirs** (`data/rwd/synthetic_CSU/tier0/<cohort>/`) | `scripts/export_synthetic_tier0.py` | `run_tier0_test.py --data-dir ...` (the tier0 MLOps pipeline) | modelability gate; tier0 output (trained artifacts + val_AUC) feeds tier1-5 |
 | **DB substrate** (docker-Supabase tables) | `load_synthetic_data.py --anchor-to-now` (no `--parquet-only`) | the runtime: KPIs, dispatcher, agents, the 11-gate harness | full e2e pipeline validation |
 
 > The runtime in `src/` **never reads the patient-cell cohort-frame parquets** — its
@@ -110,13 +112,14 @@ Kisqali 0.133 — exactly the designed 1.2 / 1.0 / 0.8 ordering.
 
 ---
 
-## 3. File inventory (`data/rwd/synthetic/`)
+## 3. File inventory (`data/rwd/synthetic_CSU/`)
 
 | File | Grain | What it is |
 |---|---|---|
 | `<table>.parquet` × 24 | per table | snapshots of every loader table (hcp_profiles, patient_journeys, treatment_events, ml_predictions, triggers, business_metrics, feature_values, ml_experiments, …) |
 | `cohort_frames/<cohort>__<brand>.parquet` (12) | patient (or HCP) | the resolved causal frame per (cohort, brand): `treatment_arm, outcome, disease_severity, age_at_diagnosis, segment_assignment, propensity_score, treatment_effect_estimate, brand, is_synthetic`; disc/persist cells filter `treatment_initiated==1`; hcp_adoption cells are `[hcp_id, cate_estimate, is_synthetic]` |
 | `per_hcp_cate_hcp_adoption_<brand>.parquet` (3) | HCP | Shard-08 allocation-builder input (same content as the hcp_adoption cohort frames) |
+| `tier0/<cohort>/e2i_ml_v3_patient_journeys.parquet` + `e2i_ml_v3_split_registry.json` (4 dirs) | patient (or HCP) | tier0-contract inputs per cohort, written by `scripts/export_synthetic_tier0.py` — brand-filtered, answer-key/cross-outcome leak columns excluded, off-indication covariate panels pruned, fresh stratified 60/20/15/5 splits |
 | `ground_truth_<run>.json` | (brand, dgp_type) | TRUE_ATE + `cate_by_segment` + split counts; tolerance 0.10; written by `scripts/write_ground_truth_sidecar.py` (the loader itself does NOT write it) |
 | `manifest.json` | run | table list, row counts, timestamp, `is_synthetic: true` |
 | `README.md` | run | provenance of the current dataset |
@@ -157,8 +160,9 @@ to an estimator as covariates (they'd leak the answer).
 
 ### 5.0 The lean ground-truth core (run these first, always)
 
-Six checks carry almost all the information. 1–4 run **offline from the parquet**; 5–6
-need the DB substrate. Expected values are from the current `data/rwd/synthetic/` run.
+Seven checks carry almost all the information. 1–5 run **offline from the parquet**;
+6–7 need the DB substrate. Expected values are from the current
+`data/rwd/synthetic_CSU/` run.
 
 | # | Check | Pass criterion | Measured (Remibrutinib) |
 |---|---|---|---|
@@ -166,8 +170,9 @@ need the DB substrate. Expected values are from the current `data/rwd/synthetic/
 | 2 | **Confounding contrast** — naive diff-in-means must be *more* biased than the adjusted estimate | adjusted abs err < naive abs err | naive 0.2690 (err +0.097) vs IPW err −0.008 ✓ |
 | 3 | **CATE segment ordering** — recovered CATE high > medium > low, vs sidecar `cate_by_segment` | strict ordering preserved | 0.294 > 0.191 > 0.074 ✓ |
 | 4 | **Propensity & overlap** — AUC of arm ~ (severity, academic); stored `propensity_score` strictly inside (0,1) | 0.55 < AUC < 0.95; e ∈ [0.01, 0.99] | AUC 0.682; e ∈ [0.029, 0.574] ✓ |
-| 5 | **Provenance leakage zero** (DB) — gate 9: no untagged synthetic rows; real-mode reads exclude them | 0 untagged + real-mode RPC returns | gate 9 |
-| 6 | **Date freshness** (DB) — windowed KPIs non-zero after `--anchor-to-now` load | per-brand TRx>0 in NOW()−30d | gate 1 |
+| 5 | **Tier0 modelability** — CV-AUC of simple learners (LR/GBC) on the tier0 frames' honest features, per cohort | AUC > 0.55 (tier0 gate default), nothing near 1.0 (leak signature) | init 0.68 / disc 0.63 / persist 0.63 / hcp 0.78 ✓ |
+| 6 | **Provenance leakage zero** (DB) — gate 9: no untagged synthetic rows; real-mode reads exclude them | 0 untagged + real-mode RPC returns | gate 9 |
+| 7 | **Date freshness** (DB) — windowed KPIs non-zero after `--anchor-to-now` load | per-brand TRx>0 in NOW()−30d | gate 1 |
 
 > **Why #2 is non-negotiable:** on this draw the naive estimate (0.2690) is 0.0972 from
 > truth — *just inside* the ±0.10 tolerance. Tolerance alone (check #1) cannot
@@ -184,7 +189,7 @@ Offline snippet for checks 1–4 (memory-safe, <1 GB):
 
 ```python
 import pandas as pd, numpy as np, json, glob
-base = "data/rwd/synthetic"
+base = "data/rwd/synthetic_CSU"
 f = pd.read_parquet(f"{base}/cohort_frames/initiation__Remibrutinib.parquet")
 y, t, e = f["outcome"].values, f["treatment_arm"].values, f["propensity_score"].values
 
@@ -206,7 +211,50 @@ To validate *your* estimator instead of IPW: fit it on
 **only** (never feed it `propensity_score` or `treatment_effect_estimate` — those are
 the answer key), then apply checks 1–3 to its estimates.
 
-### 5.1 Mode A — offline validation from the parquet (no DB, droplet-safe)
+### 5.1 Tier0 stage — modelability gate; its output feeds tier1-5
+
+The tier0 MLOps pipeline (`scripts/run_tier0_test.py`: scope → data prep → training →
+HPO → deployment gates) proves each cohort's label is *learnable* before any agent
+work; its trained artifacts and val_AUC verdicts are the inputs the tier1-5 agent
+stages build on. The synthetic set ships tier0-contract inputs for **all four cohorts**:
+
+```bash
+# (already generated; re-run after any regeneration of the snapshot dir)
+python scripts/export_synthetic_tier0.py --src data/rwd/synthetic_CSU
+
+# then per cohort (the e2e session's tier0 step):
+python scripts/run_tier0_test.py --data-dir data/rwd/synthetic_CSU/tier0/initiation \
+  --target treatment_initiated --brand Remibrutinib \
+  --indication "Chronic Spontaneous Urticaria (CSU)"
+# discontinuation -> --target discontinued_180d    persistence -> --target persistent_180d
+# hcp_adoption    -> --target adopted_target_brand
+```
+
+| Cohort | Rows | Target (prevalence) | LR baseline CV-AUC | vs gate (0.55) |
+|---|---|---|---|---|
+| initiation | 8,420 | treatment_initiated (0.351) | 0.682 | ✓ (HPO will exceed) |
+| discontinuation | 2,952 | discontinued_180d (0.467) | 0.633 | ✓ |
+| persistence | 2,952 | persistent_180d (0.533) | 0.633 | ✓ |
+| hcp_adoption | 1,688 | adopted_target_brand (0.400) | 0.777 | ✓ |
+
+What the exporter guarantees (verified by `tests/unit/test_synthetic/test_tier0_export.py`
+and a load through the real `load_rwd_data` entry point):
+
+- **Answer-key columns excluded** — `propensity_score`, `treatment_effect_estimate`,
+  `days_to_treatment` (initiator-only ⇒ outcome-derived) never reach tier0 features.
+- **Cross-outcome leak excluded** — each cell keeps only its own target
+  (`persistent_180d` is the exact complement of `discontinued_180d`).
+- **Clinically coherent panels** — off-indication covariates (oncology/PNH markers on
+  CSU patients) are pruned per brand.
+- **Usable splits** — the snapshot's `data_split` is scrambled by the `--anchor-to-now`
+  date remap (observed: holdout 61%/train 25%), so the exporter reassigns stratified
+  60/20/15/5 splits, recorded in `e2i_ml_v3_split_registry.json`.
+
+AUCs are *intentionally* moderate (the DGP's latent noise keeps labels stochastic —
+required for the prevalence band and realistic causal recovery); anything near 1.0
+would be a leak signature.
+
+### 5.2 Mode A — offline validation from the parquet (no DB, droplet-safe)
 
 1. `export LOKY_MAX_CPU_COUNT=1` (OOM discipline — econml/sklearn CV will otherwise
    fork per core).
@@ -220,7 +268,7 @@ the answer key), then apply checks 1–3 to its estimates.
    the sidecar — `scripts/validate_synthetic_causal.py` gate 3 is the reference
    implementation of exactly this (`_resolve_synthetic_frame` + tolerance 0.10).
 
-### 5.2 Mode B — full pipeline validation (DB substrate + 11-gate ladder)
+### 5.3 Mode B — full pipeline validation (DB substrate + 11-gate ladder)
 
 From a clean docker-Supabase (the prod DB is the **local docker stack**, not the cloud
 mirror). Canonical runbook (`scripts/validate_synthetic_causal.py:1159-1220`):
@@ -285,6 +333,9 @@ safety, full chat-path reachability).
 - **Cohort-frame writer fix (PR #860)** — frames written before it carry duplicated
   patient rows and no `treatment_effect_estimate`; regenerate rather than reuse old
   `cohort_frames/` output.
+- **Snapshot `data_split` is scrambled** when generated with `--anchor-to-now` (the
+  chronological split assignment doesn't survive the date remap — observed holdout
+  61%/train 25%). Don't train on it; the tier0 exporter reassigns proper splits.
 - **OOM discipline** (droplet) — `LOKY_MAX_CPU_COUNT=1`; read parquet with explicit
   `columns=`; never full-tree mypy/pytest; gate 11 takes ~96s serialized (inside the
   120s heterogeneous_optimizer SLA).
