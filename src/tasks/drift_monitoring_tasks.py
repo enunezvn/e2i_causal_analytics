@@ -408,17 +408,21 @@ def cleanup_old_drift_history(
             cutoff_date = datetime.now(timezone.utc) - timedelta(days=effective_retention)
             cutoff_iso = cutoff_date.isoformat()
 
-            # Delete old drift history records
+            # Delete old drift history records. The real ml_drift_history
+            # timestamp column is created_at (there is no detected_at; #825).
             drift_result = await (
-                client.table("ml_drift_history").delete().lt("detected_at", cutoff_iso).execute()
+                client.table("ml_drift_history").delete().lt("created_at", cutoff_iso).execute()
             )
             drift_deleted = len(drift_result.data) if drift_result.data else 0
 
-            # Delete old resolved alerts (keep active ones)
+            # Delete old resolved alerts (keep active ones). The real
+            # ml_monitoring_alerts schema has no triggered_at column; created_at
+            # is when the alert fired (#825). The status=resolved filter ensures
+            # active alerts are retained regardless of age.
             alert_result = await (
                 client.table("ml_monitoring_alerts")
                 .delete()
-                .lt("triggered_at", cutoff_iso)
+                .lt("created_at", cutoff_iso)
                 .eq("status", "resolved")
                 .execute()
             )

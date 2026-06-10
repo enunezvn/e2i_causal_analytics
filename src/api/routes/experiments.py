@@ -1244,9 +1244,11 @@ async def trigger_experiment_monitoring(
     if async_mode:
         from src.tasks.ab_testing_tasks import check_all_active_experiments
 
-        task = check_all_active_experiments.delay(
-            srm_threshold=request.srm_threshold,
-        )
+        # check_all_active_experiments takes no arguments — it scans all running
+        # experiments and enqueues an interim-analysis check per experiment. The
+        # prior srm_threshold kwarg was a copy-paste error that raised a TypeError
+        # in the worker (#825).
+        task = check_all_active_experiments.delay()
         return MonitorResponse(
             experiments_checked=0,
             healthy_count=0,
@@ -1268,6 +1270,9 @@ async def trigger_experiment_monitoring(
                 check_all_active=request.experiment_ids is None,
                 srm_threshold=request.srm_threshold,
                 check_interim=True,
+                check_srm=request.check_srm,
+                check_enrollment=request.check_enrollment,
+                check_fidelity=request.check_fidelity,
             )
         )
 

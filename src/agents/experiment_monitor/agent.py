@@ -39,6 +39,9 @@ class ExperimentMonitorInput:
         fidelity_threshold: Maximum acceptable prediction error (default: 0.2)
         stale_data_threshold_hours: Hours after which data is stale (default: 24.0)
         check_interim: Whether to check for interim analysis triggers
+        check_srm: Whether to run Sample Ratio Mismatch detection
+        check_enrollment: Whether to run the enrollment-rate health check
+        check_fidelity: Whether to run the Digital Twin fidelity check
     """
 
     query: str = ""
@@ -49,6 +52,9 @@ class ExperimentMonitorInput:
     fidelity_threshold: float = 0.2
     stale_data_threshold_hours: float = 24.0
     check_interim: bool = True
+    check_srm: bool = True
+    check_enrollment: bool = True
+    check_fidelity: bool = True
 
 
 @dataclass
@@ -150,6 +156,9 @@ class ExperimentMonitorAgent:
             "fidelity_threshold": input_data.fidelity_threshold,
             "stale_data_threshold_hours": input_data.stale_data_threshold_hours,
             "check_interim": input_data.check_interim,
+            "check_srm": input_data.check_srm,
+            "check_enrollment": input_data.check_enrollment,
+            "check_fidelity": input_data.check_fidelity,
             "experiments": [],
             "srm_issues": [],
             "enrollment_issues": [],

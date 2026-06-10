@@ -1334,20 +1334,23 @@ async def _fetch_agents_from_db() -> Optional[List[Dict[str, Any]]]:
         return None
 
     try:
-        # Fetch all active agents
-        all_agents = []
-        for tier in range(1, 6):  # Tiers 1-5
-            tier_agents = await repo.get_by_tier(tier)
-            for agent in tier_agents:
-                all_agents.append(
-                    {
-                        "id": agent.get("agent_name", "unknown"),
-                        "name": agent.get("display_name", agent.get("agent_name", "Unknown")),
-                        "tier": agent.get("tier", tier),
-                        "status": "active" if agent.get("is_active", True) else "idle",
-                        "description": agent.get("description", ""),
-                    }
-                )
+        from src.repositories.agent_registry import tier_number_for_category
+
+        # Fetch all active agents in one schema-clean query. The real schema
+        # stores the tier as the ``agent_tier`` text category (NOT an int
+        # ``tier`` column), so the numeric tier is derived from that category
+        # rather than looping a phantom int tier (issue #825).
+        active_agents = await repo.get_active_agents()
+        all_agents = [
+            {
+                "id": agent.get("agent_name", "unknown"),
+                "name": agent.get("display_name", agent.get("agent_name", "Unknown")),
+                "tier": tier_number_for_category(agent.get("agent_tier")),
+                "status": "active" if agent.get("is_active", True) else "idle",
+                "description": agent.get("description", ""),
+            }
+            for agent in active_agents
+        ]
 
         return all_agents if all_agents else None
 
