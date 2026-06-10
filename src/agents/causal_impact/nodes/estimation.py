@@ -161,11 +161,13 @@ class EstimationNode:
         from src.repositories.provenance import PROVENANCE_DROP_COLS
 
         _excluded = [treatment, outcome, *PROVENANCE_DROP_COLS]
-        covariate_cols = (
-            adjustment_set
-            if adjustment_set
-            else [c for c in data.columns if c not in _excluded]
-        )
+        # Shard 07 C1: a provenance column (is_synthetic) must NEVER enter the
+        # design matrix — even when a caller passes it explicitly in the
+        # adjustment_set. Sanitize BOTH branches against PROVENANCE_DROP_COLS.
+        if adjustment_set:
+            covariate_cols = [c for c in adjustment_set if c not in PROVENANCE_DROP_COLS]
+        else:
+            covariate_cols = [c for c in data.columns if c not in _excluded]
         covariates = (
             data[covariate_cols]
             if covariate_cols
