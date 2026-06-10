@@ -217,6 +217,105 @@ async def test_persist_model_registry_row_fails_closed_on_unresolvable_experimen
     assert cnt == 0
 
 
+async def test_persist_fails_closed_when_run_belongs_to_a_different_experiment():
+    """Provenance guard (codex HIGH): a model_uri run id that belongs to a
+    DIFFERENT experiment than the resolved one must NOT source algorithm /
+    hyperparameters from that foreign run — fail closed, write nothing."""
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    model_name = f"f4_829_xexp_{tag}"
+    expA = runA = expB = runB = None
+    try:
+        # Experiment A (the resolved experiment) + Experiment B (owns the run).
+        expA, runA = await _seed_exp_and_run(
+            client, mlflow_exp=f"expA_{tag}", run_id=f"runA_{tag}", algorithm="xgboost"
+        )
+        expB, runB = await _seed_exp_and_run(
+            client, mlflow_exp=f"expB_{tag}", run_id=f"runB_{tag}", algorithm="lightgbm"
+        )
+
+        rid = await _persist_model_registry_row(
+            client,
+            experiment_id_str=f"expA_{tag}",  # resolves to experiment A
+            model_uri=f"runs:/runB_{tag}/model",  # but the run belongs to B
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid is None, "cross-experiment run provenance must fail closed"
+        cnt = (
+            await client.table("ml_model_registry")
+            .select("id", count="exact")
+            .eq("model_name", model_name)
+            .execute()
+        ).count
+        assert cnt == 0
+    finally:
+        await _cleanup(
+            client,
+            run_ids=[r["id"] for r in (runA, runB) if r],
+            exp_ids=[e["id"] for e in (expA, expB) if e],
+        )
+
+
+async def test_persist_fails_closed_on_name_version_collision_from_foreign_experiment():
+    """Idempotency provenance guard (codex HIGH): an existing
+    (model_name, model_version) row that belongs to a DIFFERENT experiment is a
+    real collision, NOT our row — fail closed instead of mis-linking the
+    deployment to foreign provenance. The pre-existing row is untouched."""
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    model_name = f"f4_829_coll_{tag}"
+    expA = runA = expB = runB = None
+    registry_ids: list[str] = []
+    try:
+        expA, runA = await _seed_exp_and_run(
+            client, mlflow_exp=f"cexpA_{tag}", run_id=f"crunA_{tag}", algorithm="xgboost"
+        )
+        # First write the row under experiment A.
+        rid_a = await _persist_model_registry_row(
+            client,
+            experiment_id_str=f"cexpA_{tag}",
+            model_uri=f"runs:/crunA_{tag}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid_a is not None
+        registry_ids.append(rid_a)
+
+        # Now experiment B tries to claim the SAME (model_name, version).
+        expB, runB = await _seed_exp_and_run(
+            client, mlflow_exp=f"cexpB_{tag}", run_id=f"crunB_{tag}", algorithm="lightgbm"
+        )
+        rid_b = await _persist_model_registry_row(
+            client,
+            experiment_id_str=f"cexpB_{tag}",
+            model_uri=f"runs:/crunB_{tag}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid_b is None, "foreign-experiment name+version collision must fail closed"
+        # Exactly one row remains, and it is experiment A's original row.
+        rows = (
+            await client.table("ml_model_registry")
+            .select("id,experiment_id")
+            .eq("model_name", model_name)
+            .execute()
+        ).data
+        assert len(rows) == 1
+        assert rows[0]["id"] == rid_a
+        assert rows[0]["experiment_id"] == expA["id"]
+    finally:
+        await _cleanup(
+            client,
+            registry_ids=registry_ids,
+            run_ids=[r["id"] for r in (runA, runB) if r],
+            exp_ids=[e["id"] for e in (expA, expB) if e],
+        )
+
+
 async def test_store_to_database_writes_deployment_and_flips_db_persisted():
     client = await get_async_supabase_client()
     tag = uuid.uuid4().hex[:10]

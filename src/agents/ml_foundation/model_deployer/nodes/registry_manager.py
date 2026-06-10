@@ -1006,14 +1006,62 @@ async def _persist_model_registry_row(
         )
         return None
 
-    # 2. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
-    #    training run that produced this model. Prefer the exact run referenced
-    #    by model_uri (runs:/<run_id>/...); fall back to the experiment's best
-    #    run (models:/ URIs carry no run id). No run / no algorithm => fail
-    #    closed (refuse to invent an algorithm for a NOT-NULL column).
+    # 2. Idempotency FIRST: ml_model_registry has UNIQUE(model_name,
+    #    model_version). A re-deploy of the SAME model must reuse the existing
+    #    row, not crash on the unique violation. Provenance guard: only reuse a
+    #    row that belongs to THIS resolved experiment — a same-name+version row
+    #    from a DIFFERENT experiment is a real collision (NOT our row), so fail
+    #    closed rather than mis-link the deployment to foreign provenance.
+    registry_repo = MLModelRegistryRepository(supabase_client=client)
+    existing = await registry_repo.get_by_name_version(registered_model_name, str(model_version))
+    if existing and existing.id:
+        if str(existing.experiment_id) == str(experiment.id):
+            logger.info(
+                "ml_model_registry row already present for %s v%s (experiment %s) — reusing %s",
+                registered_model_name,
+                model_version,
+                experiment.id,
+                existing.id,
+            )
+            return str(existing.id)
+        logger.error(
+            "ml_model_registry NOT written for '%s' v%s: an existing row belongs to "
+            "experiment %s, not the resolved experiment %s — name+version collision "
+            "(db_persisted=False)",
+            registered_model_name,
+            model_version,
+            existing.experiment_id,
+            experiment.id,
+        )
+        return None
+
+    # 3. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
+    #    training run that produced this model. Prefer the EXACT run referenced
+    #    by model_uri (runs:/<run_id>/...) — and REQUIRE it to belong to the
+    #    resolved experiment, else the inputs (experiment_id vs model_uri)
+    #    disagree and we must not source provenance from a foreign experiment.
+    #    Fall back to the experiment's best run only when model_uri carries no
+    #    run id (models:/) or the exact run is absent; that run is still
+    #    experiment-scoped (same modeling problem). No run / no algorithm =>
+    #    fail closed (refuse to invent an algorithm for a NOT-NULL column).
     run_repo = MLTrainingRunRepository(supabase_client=client)
     run_id = _parse_mlflow_run_id(model_uri)
-    run = await run_repo.get_by_mlflow_run_id(run_id) if run_id else None
+    run = None
+    if run_id:
+        candidate = await run_repo.get_by_mlflow_run_id(run_id)
+        if candidate is not None and str(candidate.experiment_id) == str(experiment.id):
+            run = candidate
+        elif candidate is not None:
+            logger.error(
+                "ml_model_registry NOT written for '%s': training run %s belongs to "
+                "experiment %s, not the resolved experiment %s — provenance mismatch "
+                "(db_persisted=False)",
+                registered_model_name,
+                run_id,
+                candidate.experiment_id,
+                experiment.id,
+            )
+            return None
     if run is None:
         run = await run_repo.get_best_run(experiment.id)
     if run is None or not run.algorithm:
@@ -1025,21 +1073,13 @@ async def _persist_model_registry_row(
         )
         return None
 
-    registry_repo = MLModelRegistryRepository(supabase_client=client)
-
-    # 3. Idempotency: ml_model_registry has UNIQUE(model_name, model_version).
-    #    A re-deploy of the same version must reuse the existing row, not crash
-    #    on the unique violation.
-    existing = await registry_repo.get_by_name_version(registered_model_name, str(model_version))
-    if existing and existing.id:
-        logger.info(
-            "ml_model_registry row already present for %s v%s — reusing %s",
-            registered_model_name,
-            model_version,
-            existing.id,
-        )
-        return str(existing.id)
-
+    # 4. Write the row. ``metrics`` filtered to present values: the registry
+    #    metric columns are nullable and ``register_model`` reads
+    #    ``metrics.get(key)`` so omitted keys become NULL — this keeps the type a
+    #    clean ``dict[str, float]`` and never fabricates a metric.
+    metrics = {
+        k: v for k, v in _metrics_to_registry_dict(validation_metrics).items() if v is not None
+    }
     try:
         model = await registry_repo.register_model(
             experiment_id=experiment.id,
@@ -1049,21 +1089,43 @@ async def _persist_model_registry_row(
             mlflow_model_uri=model_uri,
             algorithm=run.algorithm,
             hyperparameters=run.hyperparameters or {},
-            metrics=_metrics_to_registry_dict(validation_metrics),
+            metrics=metrics,
         )
     except Exception as e:
-        # UNIQUE(model_name, model_version) race (or other insert error): the
-        # pre-check missed a concurrent writer. Re-resolve rather than fail.
-        logger.warning(
-            "register_model insert failed for %s v%s (%s); re-resolving by name+version",
+        # Only a genuine UNIQUE(model_name, model_version) violation is a benign
+        # race (the pre-check missed a concurrent writer). Re-resolve and reuse
+        # ONLY if the now-existing row belongs to THIS experiment. Any other
+        # insert error — or a foreign-provenance collision — fails closed; we
+        # never return a foreign row's id as success.
+        err = str(e).lower()
+        is_unique = "23505" in err or "unique" in err or "duplicate key" in err
+        if is_unique:
+            raced = await registry_repo.get_by_name_version(
+                registered_model_name, str(model_version)
+            )
+            if raced and raced.id and str(raced.experiment_id) == str(experiment.id):
+                logger.info(
+                    "ml_model_registry insert raced for %s v%s — reusing "
+                    "concurrently written row %s",
+                    registered_model_name,
+                    model_version,
+                    raced.id,
+                )
+                return str(raced.id)
+            logger.error(
+                "ml_model_registry NOT written for '%s' v%s: unique violation but the "
+                "existing row is missing or foreign-provenance (db_persisted=False)",
+                registered_model_name,
+                model_version,
+            )
+            return None
+        logger.error(
+            "ml_model_registry NOT written for '%s' v%s: insert failed (%s) (db_persisted=False)",
             registered_model_name,
             model_version,
             e,
         )
-        existing = await registry_repo.get_by_name_version(
-            registered_model_name, str(model_version)
-        )
-        return str(existing.id) if existing and existing.id else None
+        return None
 
     # 4. Confirm DB-backed: register_model() returns a prebuilt in-memory
     #    MLModelRegistry(id=uuid4()) when no row was inserted (no client / no
@@ -1149,7 +1211,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
         # (``model_registry_id=None``) and never fail the node — the deployment
         # row is then honestly skipped and ``db_persisted`` stays False.
         model_registry_id: Optional[str] = None
-        if mlflow_succeeded:
+        if mlflow_succeeded and registered_model_name:
             try:
                 client = await _get_async_supabase_client_or_none()
                 model_registry_id = await _persist_model_registry_row(
