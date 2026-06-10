@@ -24,6 +24,21 @@ pyarrow>=16.0.0
 scipy>=1.11.0
 statsmodels>=0.14.0
 
+# Real-converter round-trip (test_claims_roundtrip.py) runs the ~4.6k-line
+# scripts/convert_optum_rwd.py end-to-end. Two transitive runtime deps the
+# minimal env otherwise lacks (surfaced only after pyarrow let the GENERATE
+# step succeed):
+#   - httpx: convert_optum_rwd -> src.data.manifests.optum_feature_manifest ->
+#     src.data.feature_contract computes _KG_KNOWN_SYSTEMS at import, which loads
+#     src.data.kg/__init__ -> chembl.py `import httpx`. The KG clients are only
+#     imported (to read the CodeSystem literal), never CALLED during a synthetic
+#     conversion — but the eager package import is a hard dependency.
+#   - networkx: the converter builds the HCP shared-patient graph and computes
+#     eigenvector centrality; without it, influence_network features degrade to
+#     None and the honest-band recovery loses real pre-index signal.
+httpx>=0.27.0
+networkx>=3.0
+
 # tests/conftest.py imports `from dotenv import load_dotenv` at module top,
 # so even the synthetic-only test path needs python-dotenv to import.
 python-dotenv>=1.0.0
