@@ -172,21 +172,25 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
     # constructed with NO feedback_store -> the collector returned [] ->
     # update_effectiveness was pinned at 0.0 (documented starved state). The
     # store fails closed (empty list) if the DB/client is unavailable.
-    feedback_store = None
-    try:
-        from src.memory.services.factories import get_async_supabase_client
-        from src.repositories.chatbot_feedback import get_chatbot_feedback_repository
+    # F15: wire the REAL feedback source (chatbot_message_feedback). #837: wire the
+    # REAL knowledge_stores so applied updates durably persist (read-back confirmed)
+    # and update_effectiveness becomes a real measured ratio. One shared builder
+    # (used by this task, the /feedback/learn route, and process_feedback_batch)
+    # fails closed to (None, None) — the honest unwired path (F15).
+    from src.agents.feedback_learner.agent import build_production_feedback_stores
 
-        client = await get_async_supabase_client()
-        feedback_store = get_chatbot_feedback_repository(supabase_client=client)
-    except Exception as exc:  # pragma: no cover - degraded path
-        logger.warning("F15: could not build real feedback_store (%s); learning from empty", exc)
+    feedback_store, knowledge_stores = await build_production_feedback_stores()
 
     # Optional scope: DSPY_LEARN_FOCUS_AGENTS="agent_a,agent_b" (default: all agents).
     _focus_env = os.environ.get("DSPY_LEARN_FOCUS_AGENTS", "").strip()
     focus_agents = [a.strip() for a in _focus_env.split(",") if a.strip()] or None
 
-    agent = FeedbackLearnerAgent(feedback_store=feedback_store, use_llm=True, persist_signals=True)
+    agent = FeedbackLearnerAgent(
+        feedback_store=feedback_store,
+        knowledge_stores=knowledge_stores,
+        use_llm=True,
+        persist_signals=True,
+    )
     output = await agent.learn(
         time_range_start=start_time.isoformat(),
         time_range_end=end_time.isoformat(),
