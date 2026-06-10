@@ -76,3 +76,46 @@ def test_gate_2_kpi_dashboard(client):
     assert summary.get("data_source") == "database", summary  # NOT 'unavailable'/'fallback'
     nonnull = [v for v in (summary.get("metrics") or {}).values() if v not in (None, 0)]
     assert len(nonnull) >= 4, f"too few non-zero metrics: {summary.get('metrics')}"
+
+
+# =============================================================================
+# Gates 3 & 4 — ATE/CATE RECOVERY + TRIGGER EFFECTIVENESS
+# =============================================================================
+
+
+def test_gate_3_ate_cate_recovery(client):
+    import asyncio
+
+    from scripts.validate_synthetic_causal import (
+        _extract_ate,
+        _resolve_synthetic_frame,
+        _true_ate,
+    )
+    from src.agents.causal_impact.agent import CausalImpactAgent
+
+    frame, conf = _resolve_synthetic_frame(client, cohort="initiation", brand="Kisqali")
+    true_ate = _true_ate(client, "initiation", "Kisqali")  # RED here pre-sidecar
+    out = asyncio.run(
+        CausalImpactAgent().run(
+            {
+                "query": "recover ATE for Kisqali initiation",
+                "treatment_var": "treatment",
+                "outcome_var": "outcome",
+                "confounders": conf,
+                "data_source": "database",  # NOT 'synthetic' -> no seed-42 fall-through
+                "data": frame,
+            }
+        )
+    )
+    assert out.get("status") != "failed", out
+    ate = _extract_ate(out)
+    assert ate is not None, "recovered ATE is None"
+    assert abs(ate - true_ate) < 0.10, f"ATE {ate} off TRUE_ATE {true_ate}"
+
+
+def test_gate_4_trigger_effectiveness(client):
+    rows = _kpi(client, "trigger_performance_action_rate_uplift", [])
+    assert rows, "trigger_performance_action_rate_uplift returned no rows (no two-arm data)"
+    row = rows[0]
+    assert (row.get("treatment_rate") or 0) > (row.get("control_rate") or 0), row
+    assert (row.get("action_rate_uplift") or 0) > 0, row
