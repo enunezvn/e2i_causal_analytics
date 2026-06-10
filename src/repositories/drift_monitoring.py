@@ -42,6 +42,44 @@ from pydantic import BaseModel, Field
 
 from src.repositories.base import BaseRepository
 
+
+# ---------------------------------------------------------------------------
+# Client resolution (#845)
+# ---------------------------------------------------------------------------
+async def get_drift_monitoring_client() -> Any:
+    """Resolve the async Supabase client for the drift-monitoring repositories.
+
+    The five drift/monitoring/retraining repositories were historically
+    constructed *without* a client at every call site, so ``BaseRepository``'s
+    ``if not self.client`` guards silently turned every read and write into a
+    no-op: the Celery drift sweep wrote no ``ml_drift_history`` rows, the
+    monitoring API read empty, performance metrics were dropped, and retraining
+    history was never persisted (FAILS-OPEN-on-missing-backend, #845 — the same
+    family as #820 / #821 / #829 / #840). Sibling repositories in the same
+    modules already injected a client, so the bare construction was an oversight.
+
+    Call sites resolve the client through this helper and wire it into the
+    repositories so those paths actually persist. **Fail-closed:** when Supabase
+    is not configured (no ``SUPABASE_URL``/key) ``get_async_supabase_client``
+    raises ``ServiceConnectionError``; we propagate it (and likewise refuse a
+    ``None`` client) rather than hand back a client-less repository. The caller
+    then surfaces the error (HTTP 5xx / failed Celery run) instead of fabricating
+    an empty success — no silent no-op.
+    """
+    from src.memory.services.factories import (
+        ServiceConnectionError,
+        get_async_supabase_client,
+    )
+
+    client = await get_async_supabase_client()
+    if client is None:  # defensive: never silently degrade back to a no-op repo
+        raise ServiceConnectionError(
+            "Supabase",
+            "async Supabase client resolved to None for drift monitoring",
+        )
+    return client
+
+
 # ---------------------------------------------------------------------------
 # Enum domains (mirrors the live Postgres enums) + pure mapping helpers
 # ---------------------------------------------------------------------------

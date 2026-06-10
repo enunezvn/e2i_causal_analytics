@@ -454,10 +454,13 @@ async def get_latest_drift_status(
     Returns:
         Latest drift detection results
     """
-    from src.repositories.drift_monitoring import DriftHistoryRepository
+    from src.repositories.drift_monitoring import (
+        DriftHistoryRepository,
+        get_drift_monitoring_client,
+    )
 
     try:
-        repo = DriftHistoryRepository()
+        repo = DriftHistoryRepository(await get_drift_monitoring_client())
         records = await repo.get_latest_drift_status(model_id, limit=limit)
 
         # Aggregate results
@@ -531,10 +534,13 @@ async def get_drift_history(
     Returns:
         Historical drift records
     """
-    from src.repositories.drift_monitoring import DriftHistoryRepository
+    from src.repositories.drift_monitoring import (
+        DriftHistoryRepository,
+        get_drift_monitoring_client,
+    )
 
     try:
-        repo = DriftHistoryRepository()
+        repo = DriftHistoryRepository(await get_drift_monitoring_client())
 
         if feature_name:
             records = await repo.get_drift_trend(model_id, feature_name, days=days)
@@ -606,10 +612,13 @@ async def list_alerts(
     Returns:
         List of alerts matching criteria
     """
-    from src.repositories.drift_monitoring import MonitoringAlertRepository
+    from src.repositories.drift_monitoring import (
+        MonitoringAlertRepository,
+        get_drift_monitoring_client,
+    )
 
     try:
-        repo = MonitoringAlertRepository()
+        repo = MonitoringAlertRepository(await get_drift_monitoring_client())
 
         if model_id:
             records = await repo.get_active_alerts(model_id, limit=limit)
@@ -672,10 +681,13 @@ async def get_alert(alert_id: str) -> AlertItem:
     Returns:
         Alert details
     """
-    from src.repositories.drift_monitoring import MonitoringAlertRepository
+    from src.repositories.drift_monitoring import (
+        MonitoringAlertRepository,
+        get_drift_monitoring_client,
+    )
 
     try:
-        repo = MonitoringAlertRepository()
+        repo = MonitoringAlertRepository(await get_drift_monitoring_client())
         record = await repo.get_by_id(alert_id)
 
         if not record:
@@ -719,10 +731,13 @@ async def update_alert(alert_id: str, request: AlertActionRequest) -> AlertItem:
     Returns:
         Updated alert
     """
-    from src.repositories.drift_monitoring import MonitoringAlertRepository
+    from src.repositories.drift_monitoring import (
+        MonitoringAlertRepository,
+        get_drift_monitoring_client,
+    )
 
     try:
-        repo = MonitoringAlertRepository()
+        repo = MonitoringAlertRepository(await get_drift_monitoring_client())
 
         if request.action == AlertAction.ACKNOWLEDGE:
             record = await repo.acknowledge_alert(
@@ -810,10 +825,13 @@ async def list_monitoring_runs(
     """
     from datetime import timedelta
 
-    from src.repositories.drift_monitoring import MonitoringRunRepository
+    from src.repositories.drift_monitoring import (
+        MonitoringRunRepository,
+        get_drift_monitoring_client,
+    )
 
     try:
-        repo = MonitoringRunRepository()
+        repo = MonitoringRunRepository(await get_drift_monitoring_client())
         # Issue #321 MED — honor the `days` query param by passing the cutoff
         # through to the repository. Previously this datetime was computed and
         # discarded, so the endpoint silently ignored the time-window request.
@@ -879,12 +897,14 @@ async def get_model_health(model_id: str) -> ModelHealthSummary:
         DriftHistoryRepository,
         MonitoringAlertRepository,
         MonitoringRunRepository,
+        get_drift_monitoring_client,
     )
 
     try:
-        drift_repo = DriftHistoryRepository()
-        alert_repo = MonitoringAlertRepository()
-        run_repo = MonitoringRunRepository()
+        client = await get_drift_monitoring_client()
+        drift_repo = DriftHistoryRepository(client)
+        alert_repo = MonitoringAlertRepository(client)
+        run_repo = MonitoringRunRepository(client)
 
         # Get latest drift status
         drift_records = await drift_repo.get_latest_drift_status(model_id, limit=20)
@@ -1110,7 +1130,10 @@ async def get_performance_trend(
     Returns:
         Performance trend analysis
     """
-    from src.repositories.drift_monitoring import PerformanceMetricRepository
+    from src.repositories.drift_monitoring import (
+        PerformanceMetricRepository,
+        get_drift_monitoring_client,
+    )
     from src.services.performance_tracking import get_performance_tracker
 
     try:
@@ -1118,7 +1141,7 @@ async def get_performance_trend(
         trend = await tracker.get_performance_trend(model_id, metric_name)
 
         # Get historical values
-        repo = PerformanceMetricRepository()
+        repo = PerformanceMetricRepository(await get_drift_monitoring_client())
         records = await repo.get_metric_trend(model_id, metric_name, days=days)
 
         history = [

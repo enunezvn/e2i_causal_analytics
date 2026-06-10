@@ -169,7 +169,7 @@ def _counterfactual_rd(
     """
     p1 = 1.0 - norm.cdf((q - baseline - tau_latent) / noise_std)
     p0 = 1.0 - norm.cdf((q - baseline) / noise_std)
-    return p1 - p0
+    return np.asarray(p1 - p0)
 
 
 def rd_map_from_tau(segment: np.ndarray, tau_i: np.ndarray) -> Dict[str, float]:

@@ -86,17 +86,34 @@ class ModelOrchestratorNode:
         start_time = time.time()
 
         try:
-            # Determine which models to use
-            models_to_use = state.get("models_to_use")
-            if not models_to_use and self.registry:
-                models_to_use = await self.registry.get_models_for_target(
+            # Determine which models to use. dict.fromkeys deduplicates while
+            # preserving order: a repeated model_id must NOT be scheduled twice,
+            # or the combiner would count it as ensemble diversity and bypass the
+            # single-model confidence cap (a fabricated "ensemble" from one model).
+            explicit = list(dict.fromkeys(state.get("models_to_use") or []))
+            if self.registry is not None:
+                # When a registry is wired, the models actually run MUST be a
+                # subset of what the registry approves for THIS target (#840).
+                # The orchestrator input (incl. an explicit ``models_to_use``
+                # forwarded from dispatch params) may only NARROW within that
+                # set — never escape it. Otherwise a request could name another
+                # target's loaded clients and fabricate a target-agnostic
+                # prediction. An empty approval (no deployable model for this
+                # target) fails closed; we never fall back to all clients.
+                approved_order = await self.registry.get_models_for_target(
                     target=state.get("prediction_target", ""),
                     entity_type=state.get("entity_type", ""),
                 )
-
-            if not models_to_use:
-                # No registry or no models - return mock predictions for testing
-                models_to_use = list(self.clients.keys()) if self.clients else []
+                approved = set(approved_order)
+                if explicit:
+                    models_to_use = [m for m in explicit if m in approved]
+                else:
+                    # Preserve the registry-returned order (deterministic).
+                    models_to_use = list(dict.fromkeys(approved_order))
+            else:
+                # Legacy / no-registry path: honor an explicit override, else
+                # fall back to whatever clients exist.
+                models_to_use = explicit or (list(self.clients.keys()) if self.clients else [])
 
             if not models_to_use:
                 logger.warning("No models available for prediction")
@@ -205,6 +222,14 @@ class ModelOrchestratorNode:
                 ),
                 timeout=self.timeout_per_model,
             )
+
+            # A client that swallows an inference failure into a synthetic
+            # neutral result (e.g. InProcessModelClient returns
+            # ``{"prediction": 0.5, "error": ...}``) must NOT be counted as a
+            # successful model: that fabricates ensemble diversity from a broken
+            # model. Treat any error-flagged response as a failure (#840).
+            if result.get("error"):
+                raise RuntimeError(f"Model '{model_id}' inference failed: {result['error']}")
 
             latency = int((time.time() - start) * 1000)
 

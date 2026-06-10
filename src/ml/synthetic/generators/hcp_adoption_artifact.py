@@ -58,7 +58,7 @@ _BRAND_ADOPT_SCALE = {"Remibrutinib": 1.0, "Kisqali": 0.8, "Fabhalta": 1.2}
 
 
 def _sigmoid(z: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-z))
+    return np.asarray(1.0 / (1.0 + np.exp(-z)))
 
 
 def _compute_adoption(

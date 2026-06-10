@@ -817,6 +817,78 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         result = await query.limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
 
+    # Only PRODUCTION models back live predictions. Promotion to production is
+    # the explicit operator gate (``transition_stage``); staging/shadow/dev
+    # models must NOT auto-serve chat traffic.
+    _SERVING_STAGES = ("production",)
+
+    async def get_models_for_target(self, target: str, entity_type: str = "") -> List[str]:
+        """Resolve DEPLOYABLE serving model names for a prediction target.
+
+        Implements the ``ModelRegistry`` Protocol consumed by the
+        ``prediction_synthesizer`` orchestrator
+        (``src/agents/prediction_synthesizer/nodes/model_orchestrator.py``):
+        it returns the ``model_name`` strings the orchestrator should drive,
+        which MUST match both the deployment-manifest keys and the
+        ``model_clients`` dict keys the factory injects.
+
+        A model is returned when it is (a) at ``stage='production'`` and (b)
+        carries a non-null ``artifact_path`` — i.e. an artifact a client can
+        actually load. Staging/shadow/dev models are excluded (promotion to
+        production is the explicit operator gate). The 72 metadata-only
+        synthetic rows (NULL ``artifact_path``) are also excluded: surfacing
+        them would name models the agent cannot load.
+
+        ``is_champion`` is intentionally NOT required: a prediction ENSEMBLE
+        draws on ALL serving models for the target, but the
+        ``tr_single_champion`` DB trigger enforces one champion per experiment
+        — so filtering on ``is_champion`` would silently cap every ensemble at
+        a single model. Serving stage + loadable artifact is the correct
+        membership test.
+
+        ``ml_model_registry`` has no ``prediction_target`` column, so the
+        target is resolved through ``ml_experiments.prediction_target``.
+
+        ``entity_type`` is accepted for Protocol compatibility; the registry
+        is keyed by disease-specific target, not entity_type, so it does not
+        further constrain the result today.
+
+        Fails closed: no client, no matching experiment, or no deployable
+        serving model -> ``[]`` (never fabricates a model name).
+        """
+        if not self.client:
+            return []
+
+        exp_result = await (
+            self.client.table("ml_experiments")
+            .select("id")
+            .eq("prediction_target", target)
+            .execute()
+        )
+        experiment_ids = [row["id"] for row in (exp_result.data or []) if row.get("id")]
+        if not experiment_ids:
+            return []
+
+        reg_result = await (
+            self.client.table(self.table_name)
+            .select("model_name, stage, artifact_path, experiment_id")
+            .in_("experiment_id", experiment_ids)
+            .execute()
+        )
+
+        names: List[str] = []
+        seen: set[str] = set()
+        for row in reg_result.data or []:
+            if row.get("stage") not in self._SERVING_STAGES:
+                continue
+            if not row.get("artifact_path"):
+                continue
+            name = row.get("model_name")
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        return names
+
     async def register_model(
         self,
         experiment_id: UUID,

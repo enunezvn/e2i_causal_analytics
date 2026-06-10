@@ -3,8 +3,8 @@
 -- (src/agents/cohort_constructor/configs.py required_fields). Nullable so pre-existing
 -- real rows are unaffected; synthetic rows populate them per brand. Idempotent:
 -- ADD COLUMN IF NOT EXISTS. primary_diagnosis_code already exists on the table.
-BEGIN;
-
+-- No script-level BEGIN/COMMIT — scripts/run_migrations.sh owns the outer txn via
+-- psql --single-transaction (test_migrations_no_inner_txn).
 ALTER TABLE patient_journeys
     ADD COLUMN IF NOT EXISTS urticaria_severity_uas7     integer,
     ADD COLUMN IF NOT EXISTS prior_antihistamine_therapy boolean,
@@ -16,5 +16,3 @@ ALTER TABLE patient_journeys
     ADD COLUMN IF NOT EXISTS complement_inhibitor_status varchar(10),
     ADD COLUMN IF NOT EXISTS proteinuria_g_day           numeric(5,2),
     ADD COLUMN IF NOT EXISTS egfr                        numeric(6,2);
-
-COMMIT;

@@ -103,7 +103,10 @@ class PerformanceTracker:
         Returns:
             Performance snapshot
         """
-        from src.repositories.drift_monitoring import PerformanceMetricRepository
+        from src.repositories.drift_monitoring import (
+            PerformanceMetricRepository,
+            get_drift_monitoring_client,
+        )
 
         now = datetime.now(timezone.utc)
         window_end = window_end or now
@@ -128,7 +131,7 @@ class PerformanceTracker:
                     )
 
         # Persist metrics
-        repo = PerformanceMetricRepository()
+        repo = PerformanceMetricRepository(await get_drift_monitoring_client())
         await repo.record_metrics(
             model_version=model_version,
             metrics=metrics,
@@ -222,9 +225,12 @@ class PerformanceTracker:
         Returns:
             Performance trend analysis
         """
-        from src.repositories.drift_monitoring import PerformanceMetricRepository
+        from src.repositories.drift_monitoring import (
+            PerformanceMetricRepository,
+            get_drift_monitoring_client,
+        )
 
-        repo = PerformanceMetricRepository()
+        repo = PerformanceMetricRepository(await get_drift_monitoring_client())
 
         # Get historical metrics
         records = await repo.get_metric_trend(
@@ -298,6 +304,8 @@ class PerformanceTracker:
         Returns:
             List of alert dictionaries
         """
+        from src.memory.services.factories import ServiceConnectionError
+
         alerts = []
 
         for metric_name in self.config.tracked_metrics:
@@ -317,6 +325,11 @@ class PerformanceTracker:
                             "message": f"{metric_name} degraded by {abs(trend.change_percent):.1f}%",
                         }
                     )
+            except ServiceConnectionError:
+                # Fail-closed (#845): get_performance_trend resolves the Supabase
+                # client; an unconfigured/unreachable backend must SURFACE here,
+                # not be swallowed into an empty "no alerts" that reads as healthy.
+                raise
             except Exception as e:
                 logger.warning(f"Failed to check performance for {metric_name}: {e}")
 

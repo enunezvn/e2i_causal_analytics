@@ -227,6 +227,86 @@ async def test_run_learning_cycle_error(sample_run_learning_request):
 
 
 @pytest.mark.asyncio
+async def test_execute_learning_cycle_applied_updates_consistent_with_count():
+    """#837: the response's applied_updates LIST must agree with updates_applied.
+
+    KnowledgeUpdaterNode writes ``applied_updates`` into state as a list of
+    update_id STRINGS (the IDs that durably persisted); the full update dicts
+    live in ``proposed_updates`` (graph.py:_finalize_training_signal does NOT
+    write the records back into state). Before the fix the route fed those
+    strings straight into ``_convert_updates`` (which calls ``u.get(...)`` — a
+    dict API), so every element raised ``AttributeError``, was swallowed, and the
+    response reported ``updates_applied=N`` while ``applied_updates=[]`` — a
+    self-contradicting response on the exact field this PR makes real. The route
+    must re-hydrate the applied IDs to their proposed dicts (mirroring
+    graph.py) so the list agrees with the count.
+    """
+    from src.api.routes.feedback import RunLearningRequest, _execute_learning_cycle
+
+    proposed = [
+        {
+            "update_id": "U_R1",
+            "knowledge_type": "baseline",
+            "key": "causal_impact",
+            "old_value": None,
+            "new_value": "new baseline",
+            "justification": "low ratings",
+            "effective_date": "2024-01-01T00:00:00+00:00",
+        },
+        {
+            "update_id": "U_R2",
+            "knowledge_type": "threshold",
+            "key": "gap_analyzer",
+            "old_value": None,
+            "new_value": "0.2",
+            "justification": "drift",
+            "effective_date": "2024-01-01T00:00:00+00:00",
+        },
+    ]
+    # KnowledgeUpdaterNode emits applied_updates as a list of update_id STRINGS;
+    # only U_R1 durably persisted (read-back confirmed), U_R2 did not.
+    result_state = {
+        "status": "completed",
+        "detected_patterns": [],
+        "learning_recommendations": [],
+        "priority_improvements": [],
+        "proposed_updates": proposed,
+        "applied_updates": ["U_R1"],
+        "learning_summary": "ok",
+        "collection_latency_ms": 0,
+        "analysis_latency_ms": 0,
+        "errors": [],
+        "warnings": [],
+    }
+
+    fake_graph = AsyncMock()
+    fake_graph.ainvoke.return_value = result_state
+
+    request = RunLearningRequest(
+        time_range_start="2024-01-01T00:00:00Z",
+        time_range_end="2024-01-07T23:59:59Z",
+        focus_agents=[],
+    )
+
+    with patch(
+        "src.agents.feedback_learner.graph.build_feedback_learner_graph",
+        return_value=fake_graph,
+    ):
+        with patch(
+            "src.agents.feedback_learner.agent.build_production_feedback_stores",
+            new=AsyncMock(return_value=(None, None)),
+        ):
+            response = await _execute_learning_cycle(request)
+
+    # The count was always honest; the LIST must now match it (was [] before fix).
+    assert response.updates_applied == 1
+    assert len(response.applied_updates) == 1
+    assert response.applied_updates[0].update_id == "U_R1"
+    # The non-applied proposed update must NOT appear among applied_updates.
+    assert all(u.update_id != "U_R2" for u in response.applied_updates)
+
+
+@pytest.mark.asyncio
 async def test_get_learning_results_success():
     """Test getting learning results by batch ID."""
     from src.api.routes.feedback import (
