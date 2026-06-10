@@ -21,6 +21,7 @@ Hops 3 and 4 are covered by ``tests/integration/test_adaptive_criteria_e2e.py``
 """
 
 import asyncio
+import math
 from typing import Any, Dict
 
 import numpy as np
@@ -113,8 +114,14 @@ def test_evaluate_model_returns_overlaid_success_criteria() -> None:
     # v3 active gates inserted by overlay.
     assert sc["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
     assert sc["minimum_mcc"] == pytest.approx(0.45, abs=1e-6)
-    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
-    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
+    # Issue #866: evaluate_model threads the materialized split sizes into
+    # the overlay, so the calibration caps reflect the TEST-split noise floor
+    # (n_test=20 here → sqrt(1000/20) scale), not the fixed 0.15/0.30 floors.
+    _cal_scale = math.sqrt(1000 / N_TEST_SAMPLES)
+    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15 * _cal_scale, abs=1e-9)
+    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(
+        0.30 * _cal_scale, abs=1e-9
+    )
 
     # Regime-keyed AUC override (clean: max(0.75, baseline_auc + 0.20)).
     assert sc["minimum_auc"] >= 0.75
@@ -152,6 +159,36 @@ def test_evaluate_model_fixed_mode_passes_criteria_through() -> None:
     # No v3 active gates inserted.
     assert "minimum_net_benefit_at_p_t" not in out_sc
     assert "minimum_mcc" not in out_sc
+
+
+def test_evaluate_model_threads_split_sizes_into_overlay() -> None:
+    """Issue #866: the overlay must receive the materialized train/val/test
+    split sizes so the overfit cap scales with the splits the train→val AUC
+    delta is actually measured on (n_train=100, n_val=30 here — far noisier
+    than the stashed full-frame n_samples=900 implies).
+
+    FAILS before the fix: the overlay recomputes from the stash alone, so
+    ``maximum_train_val_delta`` stays at the fixed 0.03 floor.
+    """
+    from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+        _SE_AUC_ANCHOR,
+        _hanley_mcneil_se_auc,
+    )
+
+    state = _build_evaluation_state(_build_stash_success_criteria(regime="clean"))
+    result = asyncio.run(evaluate_model(state))
+
+    sc = result["success_criteria"]
+    expected_cap = max(
+        0.03,
+        2.0
+        * math.hypot(
+            _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, N_VAL_SAMPLES, 0.50),
+            _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, N_TRAIN_SAMPLES, 0.50),
+        ),
+    )
+    assert sc["maximum_train_val_delta"] == pytest.approx(expected_cap, abs=1e-9)
+    assert sc["maximum_train_val_delta"] > 0.03  # tiny splits ⇒ cap widened
 
 
 # ---------------------------------------------------------------------------

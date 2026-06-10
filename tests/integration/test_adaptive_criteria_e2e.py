@@ -208,16 +208,21 @@ def test_clean_regime_with_adaptive_flag_on_v3() -> None:
     assert sc["minimum_lift_over_baseline"] == pytest.approx(0.10, abs=1e-6)
     assert sc["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
     assert sc["minimum_mcc"] == pytest.approx(0.45, abs=1e-6)
-    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
-    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
-    # ECE threshold is N-dependent: 0.05 at N >= 1000 (the clean regime
-    # generates N=4000 per #633's _REGIME_N_SAMPLES), not the 0.10 from the
-    # v3 worked-example table at N=900.
-    assert sc["maximum_calibration_error"] == pytest.approx(0.05, abs=0.01)
-    # train_val_delta stays on the strict 0.03 tier: fpr = feature_count / N
-    # is even smaller at N=4000 than at 1500, so the bar does NOT move — the
-    # larger cohort reduces ACTUAL overfit (#633).
-    assert sc["maximum_train_val_delta"] == pytest.approx(0.03, abs=1e-6)
+    # Issue #866: the overfit/calibration caps are scaled at evaluation time
+    # to the sampling-noise floor of the materialized splits (clean regime:
+    # N=4000 → test split ≈ 600 → slope cap ≈ 0.15·sqrt(1000/600) ≈ 0.19).
+    # The v3 floors are hard lower bounds; the upper bounds below allow the
+    # noise-scaled value for these split sizes with headroom for eligibility
+    # filtering. Exact-value pins live in the unit suites where split sizes
+    # are controlled (test_adaptive_criteria.py::TestEvalSplitScaledCaps).
+    assert 0.15 <= sc["maximum_calibration_slope_deviation"] <= 0.25
+    assert 0.30 <= sc["maximum_calibration_intercept_magnitude"] <= 0.50
+    # ECE: floor 0.05 at N >= 1000; the 10-bin noise floor at n_test ≈ 600
+    # raises it to ≈ 0.076 (#866).
+    assert 0.05 <= sc["maximum_calibration_error"] <= 0.10
+    # train_val_delta: floor stays the strict 0.03 fpr tier; the SE term at
+    # n_val ≈ 800 raises it to ≈ 0.042 (#866).
+    assert 0.03 <= sc["maximum_train_val_delta"] <= 0.06
     # v3: precision and F1 are DROPPED entirely.
     assert "minimum_precision" not in sc
     assert "minimum_f1" not in sc
@@ -280,8 +285,12 @@ def test_default_regime_with_adaptive_flag_on_skips_auc() -> None:
     assert sc["minimum_recall"] == pytest.approx(0.65, abs=0.01)
     assert sc["minimum_mcc"] == pytest.approx(0.35, abs=1e-6)
     assert sc["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
-    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
-    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
+    # Issue #866: caps are noise-scaled to the materialized splits (default
+    # regime N=900 → test split ≈ 135 → slope cap ≈ 0.15·sqrt(1000/135) ≈
+    # 0.41). Floors are hard lower bounds; see TestEvalSplitScaledCaps for
+    # the exact-value pins.
+    assert 0.15 <= sc["maximum_calibration_slope_deviation"] <= 0.55
+    assert 0.30 <= sc["maximum_calibration_intercept_magnitude"] <= 1.10
     # v3 drops precision/F1.
     assert "minimum_precision" not in sc
     assert "minimum_f1" not in sc
@@ -311,15 +320,20 @@ def test_adverse_regime_with_adaptive_flag_on_v3() -> None:
     # v3 adverse-regime gates fire.
     assert sc["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
     assert sc["minimum_mcc"] == pytest.approx(0.20, abs=1e-6)
-    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
-    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
+    # Issue #866: caps are noise-scaled to the materialized splits (adverse
+    # regime N=1500 → test split ≈ 225 → slope cap ≈ 0.15·sqrt(1000/225) ≈
+    # 0.32). Floors are hard lower bounds; see TestEvalSplitScaledCaps for
+    # the exact-value pins.
+    assert 0.15 <= sc["maximum_calibration_slope_deviation"] <= 0.45
+    assert 0.30 <= sc["maximum_calibration_intercept_magnitude"] <= 0.90
     # v3 drops precision/F1 — neither in success_criteria nor in skipped.
     assert "minimum_precision" not in sc
     assert "minimum_f1" not in sc
     # Lift skipped at n_pos=18 (2*SE ≈ 0.236 > 0.10).
     assert "minimum_lift_over_baseline" not in sc
-    # ECE always fires; threshold 0.05 at N=1500 (runner-hardcoded).
-    assert sc["maximum_calibration_error"] == pytest.approx(0.05, abs=0.01)
+    # ECE always fires; floor 0.05 at N=1500, raised by the 10-bin noise
+    # floor at n_test ≈ 225 to ≈ 0.127 (#866).
+    assert 0.05 <= sc["maximum_calibration_error"] <= 0.16
 
     # Pipeline did not halt — skipped names recorded as met=None.
     res = out["success_criteria_results"]

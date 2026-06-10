@@ -32,6 +32,12 @@ def test_adaptive_success_criteria_function_exists_and_signature_matches() -> No
         "feature_count",
         "regime",
         "deployment_intent",
+        # Issue #866: evaluation-split sizes (optional; None preserves the
+        # fixed floors) so the overfit/calibration caps scale with the
+        # sampling noise of the split they are measured on.
+        "n_train",
+        "n_val",
+        "n_test",
     ], f"Signature drifted: got {params}"
 
 
@@ -276,3 +282,148 @@ def test_v3_calibration_gates_always_fire() -> None:
         assert thresholds["maximum_calibration_intercept_magnitude"] == pytest.approx(
             0.30, abs=1e-6
         ), regime
+
+
+# --------------------------------------------------------------------------- #
+# Issue #866 — overfit/calibration caps must scale with evaluation-split size #
+# --------------------------------------------------------------------------- #
+# Evidence (synthetic-CSU gold-standard run, 2026-06-10): at validation splits
+# of ~590/337 rows the sampling noise of a validation AUC alone is ±0.023–0.027
+# (Hanley-McNeil), so the fixed 0.03 train→val cap sat at ~1.3σ of pure noise
+# and blocked known-clean cohorts (measured deltas 0.0397 / 0.0317); the fixed
+# ECE cap 0.05 sat BELOW the n_test=254 perfect-calibration noise floor
+# (measured clean ECE 0.0708). The caps must widen to the noise floor of the
+# split they are measured on, and keep their floors at large n.
+
+
+class TestEvalSplitScaledCaps:
+    def _criteria(self, **kwargs):
+        from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+            adaptive_success_criteria,
+        )
+
+        defaults = {
+            "n_samples": 2952,
+            "prevalence": 0.467,
+            "baseline_auc": 0.50,
+            "feature_count": 20,
+            "regime": "clean",
+        }
+        defaults.update(kwargs)
+        thresholds, _ = adaptive_success_criteria(**defaults)
+        return thresholds
+
+    def test_no_split_sizes_keeps_fixed_floors(self) -> None:
+        """Backward compatibility: without n_train/n_val/n_test the caps are
+        the v3 floors exactly (scope-time eager path, legacy callers)."""
+        t = self._criteria()
+        assert t["maximum_train_val_delta"] == pytest.approx(0.03, abs=1e-6)
+        assert t["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
+        assert t["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
+        assert t["maximum_calibration_error"] == pytest.approx(0.05, abs=1e-6)
+
+    def test_train_val_delta_cap_scales_with_small_n_val(self) -> None:
+        """The discontinuation cohort case: n_train=1770, n_val=591,
+        prev=0.467 → cap = 2·sqrt(SE²(n_train)+SE²(n_val)) ≈ 0.050, clearing
+        the measured known-clean delta 0.0397 the fixed 0.03 cap blocked."""
+        import math
+
+        from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+            _SE_AUC_ANCHOR,
+            _hanley_mcneil_se_auc,
+        )
+
+        t = self._criteria(n_train=1770, n_val=591, n_test=443)
+        expected = 2.0 * math.hypot(
+            _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, 591, 0.467),
+            _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, 1770, 0.467),
+        )
+        assert t["maximum_train_val_delta"] == pytest.approx(expected, abs=1e-9)
+        assert 0.045 < t["maximum_train_val_delta"] < 0.06
+        assert t["maximum_train_val_delta"] > 0.0397  # the measured clean delta deploys
+
+    def test_train_val_delta_cap_keeps_floor_at_large_n(self) -> None:
+        """At large splits the SE term shrinks below the feature-density floor:
+        the cap must stay exactly at the strict 0.03 tier."""
+        t = self._criteria(
+            n_samples=60_000, feature_count=20, n_train=36_000, n_val=12_000, n_test=9_000
+        )
+        assert t["maximum_train_val_delta"] == pytest.approx(0.03, abs=1e-6)
+
+    def test_ece_cap_scales_with_small_n_test(self) -> None:
+        """The hcp_adoption case: n_test=254 → the 10-bin perfect-calibration
+        ECE noise floor (mean + 2σ ≈ 0.117) replaces the fixed 0.05 cap, which
+        sat BELOW the noise mean (≈0.079). Measured clean ECE 0.0708 deploys."""
+        import math
+
+        t = self._criteria(
+            n_samples=1688, prevalence=0.40, feature_count=16, n_train=1012, n_val=337, n_test=254
+        )
+        se_bin = 0.5 * math.sqrt(10 / 254)
+        mean_noise = math.sqrt(2.0 / math.pi) * se_bin
+        sd_noise = se_bin * math.sqrt(1.0 - 2.0 / math.pi) / math.sqrt(10)
+        assert t["maximum_calibration_error"] == pytest.approx(
+            mean_noise + 2.0 * sd_noise, abs=1e-9
+        )
+        assert t["maximum_calibration_error"] > 0.0708
+
+    def test_ece_cap_keeps_step_floor_at_large_n_test(self) -> None:
+        """Large n_test: the n_samples-keyed step floor (0.05 at N≥1000) wins."""
+        t = self._criteria(n_samples=8420, prevalence=0.35, n_train=5051, n_val=1684, n_test=5000)
+        assert t["maximum_calibration_error"] == pytest.approx(0.05, abs=1e-6)
+
+    def test_calibration_caps_scale_below_anchor_n(self) -> None:
+        """Slope/intercept caps widen by sqrt(1000/n_test) below the n=1000
+        anchor (van Calster 2019 band assumes ~1000+ validation rows)."""
+        import math
+
+        t = self._criteria(
+            n_samples=1688, prevalence=0.40, feature_count=16, n_train=1012, n_val=337, n_test=254
+        )
+        scale = math.sqrt(1000 / 254)
+        assert t["maximum_calibration_slope_deviation"] == pytest.approx(0.15 * scale, abs=1e-9)
+        assert t["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30 * scale, abs=1e-9)
+
+    def test_calibration_caps_fixed_at_or_above_anchor_n(self) -> None:
+        t = self._criteria(n_samples=8420, prevalence=0.35, n_train=5051, n_val=1684, n_test=1263)
+        assert t["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
+        assert t["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
+
+    @pytest.mark.parametrize("n_val", [10, 50, 200, 1000, 10_000, 100_000])
+    def test_scaling_never_tightens_below_floors(self, n_val: int) -> None:
+        """The scaled caps only LOOSEN relative to the fixed floors — never
+        tighten — for any split size (monotone safety of the overlay)."""
+        n_test = max(int(n_val * 0.75), 1)
+        t = self._criteria(n_train=n_val * 3, n_val=n_val, n_test=n_test)
+        assert t["maximum_train_val_delta"] >= 0.03 - 1e-12
+        assert t["maximum_calibration_slope_deviation"] >= 0.15 - 1e-12
+        assert t["maximum_calibration_intercept_magnitude"] >= 0.30 - 1e-12
+        assert t["maximum_calibration_error"] >= 0.05 - 1e-12
+
+    def test_initiation_cohort_still_passes_its_measured_metrics(self) -> None:
+        """Regression: the large-n cohort that DEPLOYED must still deploy —
+        its measured metrics stay far inside the (barely scaled) caps."""
+        t = self._criteria(n_samples=8420, prevalence=0.35, n_train=5051, n_val=1684, n_test=1263)
+        assert 0.0046 <= t["maximum_train_val_delta"]  # measured delta
+        assert 0.0365 <= t["maximum_calibration_error"]  # measured ECE
+        assert 0.0099 <= t["maximum_calibration_slope_deviation"]  # measured slope dev
+
+
+class TestHanleyMcNeilSE:
+    def test_matches_published_magnitudes(self) -> None:
+        """SE(AUC=0.7) at n=590/prev≈0.47 ≈ 0.022 and at n=337/prev=0.40
+        ≈ 0.030 — the issue #866 evidence-table magnitudes."""
+        from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+            _hanley_mcneil_se_auc,
+        )
+
+        assert _hanley_mcneil_se_auc(0.70, 590, 0.467) == pytest.approx(0.022, abs=0.002)
+        assert _hanley_mcneil_se_auc(0.70, 337, 0.40) == pytest.approx(0.030, abs=0.003)
+
+    def test_decreases_with_n(self) -> None:
+        from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+            _hanley_mcneil_se_auc,
+        )
+
+        ses = [_hanley_mcneil_se_auc(0.70, n, 0.35) for n in (100, 500, 2000, 10_000)]
+        assert ses == sorted(ses, reverse=True)
