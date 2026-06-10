@@ -16,10 +16,19 @@ Entity generators for synthetic data:
 
 from .base import BaseGenerator, GenerationResult, GeneratorConfig
 from .business_metrics_generator import BusinessMetricsGenerator
+from .causal_paths_generator import CausalPathsGenerator
+from .change_tracking import stamp_change_tracking
+from .coverage_tables_generator import CoverageTablesGenerator
+from .data_lag import stamp_data_lag_hours, stamp_sequence_number
 from .engagement_generator import EngagementGenerator
+from .experiment_generator import ABExperimentGenerator, ExperimentGenerator
 from .feature_store_seeder import FeatureStoreSeeder
 from .feature_value_generator import FeatureValueGenerator
+from .feedback_generator import FeedbackGenerator
 from .hcp_generator import HCPGenerator
+from .mlops_generator import MLOpsGenerator
+from .model_metrics import stamp_model_metrics
+from .observability_generator import ObservabilityGenerator
 from .outcome_generator import OutcomeGenerator
 from .patient_generator import PatientGenerator
 from .prediction_generator import PredictionGenerator
@@ -43,4 +52,16 @@ __all__ = [
     "BusinessMetricsGenerator",
     "FeatureStoreSeeder",
     "FeatureValueGenerator",
+    # Shard 09 breadth substrate generators
+    "ExperimentGenerator",
+    "ABExperimentGenerator",
+    "MLOpsGenerator",
+    "ObservabilityGenerator",
+    "FeedbackGenerator",
+    "CoverageTablesGenerator",
+    "CausalPathsGenerator",
+    "stamp_data_lag_hours",
+    "stamp_sequence_number",
+    "stamp_model_metrics",
+    "stamp_change_tracking",
 ]

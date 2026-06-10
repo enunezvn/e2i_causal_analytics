@@ -128,11 +128,17 @@ defect is `BLOCKED-BY-Fn` (not a Shard-09 failure).
   proven by a direct COUNT of the populated synthetic `ml_predictions` column (the
   same column the model-performance agent reads). The registry-backed twins
   (roc_auc=MP-001, shap=MP-007) confirm the RPC path returns the values too.
-- **feature_store reseed** (`feature_values.is_synthetic`): `feature_values` has NO
-  `is_synthetic` column on the faithful DB at load time (the load failed on it for an
-  unrelated schema reason — pre-existing Shard 02 substrate, not Shard 09). No KPI in
-  the 46 depends on `feature_values`, so this is out of Shard 09's scope and does not
-  affect the coverage result. Deferred — see report.
+- **feature_store reseed** (`feature_values.is_synthetic`): migration 069 ADDS the
+  `is_synthetic` column to `feature_groups`/`features`/`feature_values` (the loader
+  already registered it but it was never on the DB). After that, the reseed still fails
+  on TWO pre-existing Shard-02/04 bugs unrelated to Shard 09: (a) `feature_groups_name_key`
+  unique violation — the FeatureStoreSeeder emits fixed names (`hcp_demographics`) that
+  already exist while the loader UPSERTs on `id` (uuid); (b) `feature_values`
+  `valid_event_timestamp` CHECK rejects the FeatureValueGenerator's future-dated
+  anchored timestamps. **No KPI in the 46 depends on `feature_values`** (drift_monitor's
+  WS1-MP-009 reads `ml_drift_history`, which loads fine), so this does not affect the
+  46/46 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
+  deferred to their owning shards.
 - The substrate completions added beyond the plan's Task list (model-quality metrics,
   `sequence_number`, change-tracking) are post-hoc column stamps onto **existing,
   nullable** columns — the same pattern as `data_lag_hours` (Task 5b). They were

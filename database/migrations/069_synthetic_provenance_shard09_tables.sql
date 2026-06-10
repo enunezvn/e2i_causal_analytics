@@ -27,6 +27,12 @@ ALTER TABLE ab_experiment_enrollments ADD COLUMN IF NOT EXISTS is_synthetic BOOL
 ALTER TABLE ab_experiment_results  ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE ml_observability_spans ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE learning_signals       ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT false;
+-- Feature-store tables: the loader already registers is_synthetic on these (Shard 02)
+-- but the column was never migrated onto them, so the synthetic feature_values
+-- reseed (drift_monitor substrate) failed PGRST204. Add it here so the reseed lands.
+ALTER TABLE feature_groups         ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE features               ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE feature_values         ADD COLUMN IF NOT EXISTS is_synthetic BOOLEAN NOT NULL DEFAULT false;
 
 COMMENT ON COLUMN ml_experiments.is_synthetic IS
     'TRUE = synthetic causal-validation substrate (Shard 09), excluded by '
