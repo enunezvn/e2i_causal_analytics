@@ -79,3 +79,13 @@ def test_index_business_metrics_brand_discovery_excludes_synthetic() -> None:
     # discovery query predicate.
     asyncio.run(ci.index_business_metrics(supabase_client=_RecordingClient(calls)))
     assert ("is_synthetic", False) in calls
+
+
+def test_existing_corpus_descriptions_excludes_synthetic() -> None:
+    """Shard 07 R15: the dedup read must not let a synthetic episodic
+    description suppress ingesting a real business_metrics row."""
+    calls: list[tuple[Any, ...]] = []
+    ci._existing_corpus_descriptions(_RecordingClient(calls), "corpus_ingestion")
+    assert ("is_synthetic", False) in calls
+    # the agent_name filter must still be present (real reader, not vacuous).
+    assert ("agent_name", "corpus_ingestion") in calls

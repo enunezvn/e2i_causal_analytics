@@ -194,6 +194,11 @@ def _existing_corpus_descriptions(sb: Any, agent_name: str) -> set[str]:
             sb.table("episodic_memories")
             .select("description")
             .eq("agent_name", agent_name)
+            # Provenance (Shard 07 R12/R15): the dedup set must contain ONLY real
+            # corpus rows. A synthetic episodic description must never suppress
+            # ingesting a real business_metrics row (which would leave the real
+            # KPI unsearchable while the synthetic prose silently stands in).
+            .eq("is_synthetic", False)
             .range(page * page_size, page * page_size + page_size - 1)
             .execute()
         )
