@@ -68,3 +68,29 @@ class ClaimsDGPConfig:
     n_hcps: int = 0  # 0 => derived from n_patients in the CLI / events emit
     pre_days: int = ENROLLMENT_PRE_DAYS
     post_days: int = ENROLLMENT_POST_DAYS
+
+    # --- DGP coupling coefficients (the honest-band calibration knobs) -------
+    # severity is a RAW standard-normal latent (full dynamic range); pre-index
+    # feature COUNTS are log-linear in severity so the count encodes the latent
+    # with good signal-to-noise. The target propensities are logistic in
+    # severity with a calibrated noise term that sets the recoverable AUC.
+    #
+    # The numbers below were tuned via the P1.acceptance cheapest-disproof so the
+    # converter -> tier-0 round-trip recovers val_AUC in [0.62, 0.68] — NOT a
+    # degenerate 0.9+. ``signal_scale`` multiplies the severity coefficient on
+    # the target so the band can be re-centred without regenerating the table.
+    feature_log_rate_coef: float = 0.70  # latent -> log(count rate) slope
+    # Initiation logit = init_severity_coef*severity + init_tx_coef*tx_burden + noise.
+    init_severity_coef: float = 1.15  # severity (comorbidity axis) -> init logit
+    init_tx_coef: float = 1.15  # tx_burden (prior-therapy axis) -> init logit
+    init_noise_sd: float = 1.80  # initiation logit noise (sets AUC ceiling)
+    # (Non-)adherence logit = -(adh_severity*severity + adh_tx*tx_burden) + noise.
+    # tx_burden is weighted HIGHER than severity so the disc/persistence margin
+    # is carried by the prior-therapy fill features the comorbidity-only baseline
+    # lacks — giving those cohorts a recoverable longitudinal signal > 0.03
+    # WITHOUT any post-index leakage (the leaky P1c is therefore NOT needed).
+    # The noise is raised so disc/persistence land IN the [0.62, 0.68] band
+    # rather than above it.
+    adherence_severity_coef: float = 0.75  # severity -> non-adherence logit
+    adherence_tx_coef: float = 1.55  # tx_burden -> non-adherence logit
+    adherence_noise_sd: float = 1.80  # adherence logit noise

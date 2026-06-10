@@ -83,8 +83,13 @@ def emit_medication(
         idx = p["claim_index"]
         npi = npi_for(pid) if npi_for is not None else str(default_pool[pos])
 
-        # Pre-index prior therapy (non-biologic) -> *_fill_count features.
-        n_prior = int(rng.poisson(2 + 2.0 * float(p["severity"])))
+        # Pre-index prior therapy (non-biologic) -> NON_TARGET_DRUG_CLASSES
+        # *_fill_count / *_days_supply_total features. Log-linear rate in the
+        # INDEPENDENT ``tx_burden`` latent (NOT severity), so these prior-therapy
+        # features carry signal the comorbidity-only baseline cannot — the > 0.03
+        # margin the cheapest-disproof requires.
+        rate_prior = float(np.exp(np.log(5.0) + cfg.feature_log_rate_coef * float(p["tx_burden"])))
+        n_prior = int(rng.poisson(rate_prior))
         for _ in range(n_prior):
             offset = int(rng.integers(1, cfg.pre_days))
             d = idx - np.timedelta64(offset, "D")
@@ -102,21 +107,38 @@ def emit_medication(
             )
 
         # Cohort-A initiation: first biologic fill in (index, index+180] iff the
-        # responder draw fires. response_propensity drives the rate.
-        p_init = float(
-            np.clip((0.20 + 0.55 * float(p["response_propensity"])) * cfg.signal_scale, 0, 1)
-        )
+        # responder Bernoulli draw fires. ``response_propensity`` already encodes
+        # the calibrated severity coupling + noise (set in generate_patients), so
+        # it is used directly as the initiation probability — no extra rescaling
+        # that would decouple the label from the recoverable severity signal.
+        p_init = float(np.clip(float(p["response_propensity"]), 0.0, 1.0))
         if rng.random() < p_init:
-            # First fill 0–120d post-index (inside the 180d initiation window).
-            start = idx + np.timedelta64(int(rng.integers(0, 120)), "D")
+            # First fill 0–40d post-index — kept EARLY so the refill sequence
+            # reliably spans the converter's (init, init+180] disc/persistence
+            # window, making ADHERENCE (not the random start date) the dominant
+            # driver of the disc/persistence label.
+            start = idx + np.timedelta64(int(rng.integers(0, 40)), "D")
             # Item 5 — post-index refill sequence. Adherent patients refill on
             # schedule (~28d); non-adherent patients open a gap > the disc
-            # threshold, which the converter reads to set discontinued_180d.
+            # threshold (90d gap between fill_end and next fill), which the
+            # converter reads to set discontinued_180d. With days_sup=28, a
+            # fill-to-fill gap > ~118d trips discontinuation.
             adherence = float(p["adherence_propensity"])
             base_gap = BIOLOGIC_DAYS_SUP
-            extra_gap = (1.0 - adherence) * (BIOLOGIC_DISCONT_GAP_DAYS + 40)
+            extra_gap = (1.0 - adherence) * (BIOLOGIC_DISCONT_GAP_DAYS + 50)
             gap = int(max(base_gap + rng.normal(extra_gap, 8), 7))
-            n_fills = int(rng.integers(2, 7))
+            # Fill COUNT also scales with adherence: adherent patients refill
+            # enough to span the (init, init+180] window -> persistent_at_180d=1;
+            # non-adherent patients stop early -> NOT persistent. This couples
+            # BOTH disc (gap) and persistence (coverage to day 180) to the same
+            # adherence latent, so persistence is recoverable from pre-index too.
+            n_fills = int(np.clip(round(3 + 5 * adherence + rng.normal(0, 1)), 2, 10))
+            # Days-supply also scales with adherence: adherent patients fill
+            # larger supplies (28–42d) -> coverage reaches day 180 (persistent);
+            # non-adherent fill the minimum (~21d) -> coverage lapses. This makes
+            # persistent_at_180d (a days_sup-coverage readout) a clean function of
+            # the adherence latent, recoverable from the pre-index features.
+            bio_ds = int(np.clip(round(BIOLOGIC_DAYS_SUP * (0.75 + 0.5 * adherence)), 14, 56))
             for k in range(n_fills):
                 d = start + np.timedelta64(k * gap, "D")
                 rows.append(
@@ -127,7 +149,7 @@ def emit_medication(
                         code=BIOLOGIC_NDC,
                         brand=BIOLOGIC_BRAND,
                         generic=BIOLOGIC_GENERIC,
-                        days_sup=BIOLOGIC_DAYS_SUP,
+                        days_sup=bio_ds,
                     )
                 )
 
@@ -186,9 +208,10 @@ def emit_procedure(
         pid = int(p["patid"])
         idx = p["claim_index"]
         npi = npi_for(pid) if npi_for is not None else str(default_pool[pos])
-        # Pre-index office visits (E&M 99213/99214), rate ~ severity. These feed
-        # office_visits_* + unique_providers + the shared-patient graph.
-        n_visits = int(rng.poisson(1 + 2.0 * float(p["severity"])))
+        # Pre-index office visits (E&M 99213/99214), log-linear rate in severity.
+        # These feed office_visits_* + unique_providers + the shared-patient graph.
+        rate_visits = float(np.exp(np.log(2.5) + cfg.feature_log_rate_coef * float(p["severity"])))
+        n_visits = int(rng.poisson(rate_visits))
         for _ in range(n_visits):
             offset = int(rng.integers(1, cfg.pre_days))
             d = idx - np.timedelta64(offset, "D")
@@ -224,7 +247,8 @@ def emit_lab(
     for _, p in pats.iterrows():
         pid = int(p["patid"])
         idx = p["claim_index"]
-        n_labs = int(rng.poisson(1 + float(p["severity"])))
+        rate_labs = float(np.exp(np.log(1.5) + cfg.feature_log_rate_coef * float(p["severity"])))
+        n_labs = int(rng.poisson(rate_labs))
         for _ in range(n_labs):
             offset = int(rng.integers(1, cfg.pre_days))
             d = idx - np.timedelta64(offset, "D")

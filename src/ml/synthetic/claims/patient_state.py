@@ -38,11 +38,40 @@ def generate_patients(rng: np.random.Generator, cfg: ClaimsDGPConfig) -> pd.Data
     n = cfg.n_patients
     scale = cfg.signal_scale
 
-    # DGP item 1 — correlated latent block on a shared axis ``z``.
-    z = rng.standard_normal(n)
-    severity = _sigmoid(scale * (0.9 * z) + 0.4 * rng.standard_normal(n))
-    response = _sigmoid(scale * (0.7 * z) + 0.6 * rng.standard_normal(n))
-    adherence = _sigmoid(scale * (-0.6 * z) + 0.6 * rng.standard_normal(n))
+    # DGP item 1 — TWO independent latent axes (both RAW standard normals):
+    #   * ``severity``  — disease burden; drives comorbidity / hospitalisation /
+    #     office-visit counts (the converter's has_<comorbidity>/charlson/
+    #     elixhauser/office_visits features).
+    #   * ``tx_burden`` — prior-therapy escalation; drives non-biologic
+    #     antihistamine/LTRA fill counts (the converter's NON_TARGET_DRUG_CLASSES
+    #     *_fill_count / *_days_supply_total features).
+    # Keeping them INDEPENDENT is what gives the longitudinal prior-therapy
+    # features signal BEYOND the comorbidity-only baseline — the exact margin the
+    # cheapest-disproof checks (> 0.03). The target depends on BOTH axes, so the
+    # comorbidity-only subset CANNOT recover the full effect.
+    severity = rng.standard_normal(n)
+    tx_burden = rng.standard_normal(n)
+
+    # The post-index TARGET propensities are logistic in BOTH latents plus a
+    # calibrated noise term that caps the recoverable AUC at the honest band.
+    # The latents and the noise are the ONLY drivers, so the pre-index features
+    # (which track the latents) statistically predict the post-index target
+    # without the target ever being a feature (Fact #3).
+    init_logit = (
+        scale * cfg.init_severity_coef * severity
+        + scale * cfg.init_tx_coef * tx_burden
+        + cfg.init_noise_sd * rng.standard_normal(n)
+    )
+    response = _sigmoid(init_logit)
+    # Higher severity AND higher prior-therapy burden -> LOWER adherence (sicker,
+    # more treatment-experienced patients drop off / gap), so the disc/
+    # persistence labels are also recoverable from BOTH pre-index axes.
+    adh_logit = (
+        -scale * cfg.adherence_severity_coef * severity
+        - scale * cfg.adherence_tx_coef * tx_burden
+        + cfg.adherence_noise_sd * rng.standard_normal(n)
+    )
+    adherence = _sigmoid(adh_logit)
 
     # Rolling claim index in the past ~7–18 months. Far enough back that the
     # synthetic eligend (index + post + slack) is plausible and the converter's
@@ -86,6 +115,7 @@ def generate_patients(rng: np.random.Generator, cfg: ClaimsDGPConfig) -> pd.Data
             "lis_dual": 0,
             "continuous_enrollment": (~frag).astype(int),  # gate :1658
             "severity": severity,
+            "tx_burden": tx_burden,
             "response_propensity": response,
             "adherence_propensity": adherence,
         }
@@ -119,10 +149,18 @@ def emit_inpatient(
                 row[c] = ""
             rows.append(row)
 
-        # DGP item 3 — pre-index comorbidity admits, rate ~ severity, all inside
-        # the (index - 180, index - 1] lookback window so they reach the
-        # has_<comorbidity>/charlson/elixhauser features.
-        n_com = int(rng.poisson(0.5 + 3.0 * float(p["severity"]) * cfg.signal_scale))
+        # DGP item 3 — pre-index comorbidity admits, log-linear rate in severity.
+        # A log-linear rate keeps the count non-negative for the raw-normal
+        # severity AND makes the observed count encode severity with good SNR.
+        #
+        # The admits are spread over the FULL 180d pre-index window. For cohort
+        # B/C the converter re-anchors index to the first biologic fill (up to
+        # 120d AFTER the cohort-A index), so its 180d lookback only partially
+        # overlaps this window. A higher base rate ensures enough comorbidity
+        # admits land in EITHER lookback window for the severity signal to be
+        # recoverable in all three cohorts.
+        rate_com = float(np.exp(np.log(4.0) + cfg.feature_log_rate_coef * float(p["severity"])))
+        n_com = int(rng.poisson(rate_com))
         for _ in range(n_com):
             offset = int(rng.integers(1, 175))
             d = idx - np.timedelta64(offset, "D")
