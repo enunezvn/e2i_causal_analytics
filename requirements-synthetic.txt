@@ -13,7 +13,9 @@ pandas>=2.0.0
 scikit-learn>=1.5.0
 # Parquet engine — the Shard 10 claims round-trip (test_claims_roundtrip.py) runs
 # generate_synthetic_claims.py, which writes 6 parquet files via pandas.to_parquet.
-# Pinned to match requirements.txt so the benchmark env can write/read parquet.
+# Floor (>=) follows this file's minimum-version convention; pip resolves to the
+# same engine prod uses (requirements.txt pins pyarrow==21.0.0), so the benchmark
+# env can write/read parquet faithfully.
 pyarrow>=16.0.0
 
 # Claim-level CSU generator (Shard 10) generation-time causal gates import
