@@ -427,3 +427,61 @@ class TestHanleyMcNeilSE:
 
         ses = [_hanley_mcneil_se_auc(0.70, n, 0.35) for n in (100, 500, 2000, 10_000)]
         assert ses == sorted(ses, reverse=True)
+
+
+class TestScaledCapGuards:
+    """codex R1 HIGH (PR #865): the noise scaling must be FAIL-CLOSED at tiny
+    splits and bounded above — split_enforcer admits splits as small as 10
+    rows, where unbounded SE scaling produced delta cap ≈ 0.35 / slope cap
+    ≈ 0.47 and would deploy severely overfit/miscalibrated models."""
+
+    def _criteria(self, **kwargs):
+        from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+            adaptive_success_criteria,
+        )
+
+        defaults = {
+            "n_samples": 500,
+            "prevalence": 0.50,
+            "baseline_auc": 0.50,
+            "feature_count": 5,
+            "regime": "clean",
+        }
+        defaults.update(kwargs)
+        thresholds, _ = adaptive_success_criteria(**defaults)
+        return thresholds
+
+    def test_below_support_keeps_strict_floors(self) -> None:
+        """codex repro: n_val=10 / n_test below support → NO loosening (the
+        pre-#866 strict floors apply — fail-closed, a delta of 0.34 blocks)."""
+        t = self._criteria(n_train=300, n_val=10, n_test=50)
+        assert t["maximum_train_val_delta"] == pytest.approx(0.03, abs=1e-9)
+        assert t["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-9)
+        assert t["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-9)
+        assert t["maximum_calibration_error"] == pytest.approx(
+            0.10, abs=1e-9
+        )  # n_samples<1000 step
+
+    def test_ceilings_bound_the_loosening(self) -> None:
+        """Just above the support threshold the scaled values are clamped to
+        the hard ceilings (delta ≤ 0.10 = the loosest historical fpr tier;
+        slope ≤ 0.30; intercept ≤ 0.60; ECE ≤ 0.15)."""
+        t = self._criteria(n_train=300, n_val=100, n_test=100)
+        assert t["maximum_train_val_delta"] <= 0.10 + 1e-12
+        assert t["maximum_calibration_slope_deviation"] <= 0.30 + 1e-12
+        assert t["maximum_calibration_intercept_magnitude"] <= 0.60 + 1e-12
+        assert t["maximum_calibration_error"] <= 0.15 + 1e-12
+
+    def test_cohort_scale_values_unaffected_by_guards(self) -> None:
+        """The guards must not move the measured synthetic-CSU cohort caps
+        (hcp_adoption: the smallest deployed cohort)."""
+        import math
+
+        t = self._criteria(
+            n_samples=1688, prevalence=0.40, feature_count=16, n_train=1012, n_val=337, n_test=254
+        )
+        assert t["maximum_calibration_slope_deviation"] == pytest.approx(
+            0.15 * math.sqrt(1000 / 254), abs=1e-9
+        )
+        assert t["maximum_calibration_error"] > 0.0708  # measured hcp ECE still clears
+        assert t["maximum_train_val_delta"] > 0.0317  # measured hcp delta still clears

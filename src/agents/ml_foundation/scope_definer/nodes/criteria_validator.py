@@ -133,6 +133,20 @@ _ECE_BINS: int = 10
 # where SE(slope) at n≈1000 ≈ 0.07–0.08, i.e. the band ≈ 2·SE). Below the
 # anchor the band widens by sqrt(anchor/n) to admit the same noise quantile.
 _CALIBRATION_ANCHOR_N: int = 1000
+# FAIL-CLOSED guards on the scaling (codex R1 HIGH, PR #865): split_enforcer
+# admits splits as small as 10 rows, where the unbounded SE scaling produced
+# delta cap ≈ 0.35 / slope cap ≈ 0.47 — wide enough to deploy severely
+# overfit/miscalibrated models. Below _MIN_EVAL_SUPPORT rows the gated
+# metric has no statistical support, so NO loosening is applied (the strict
+# v3 floors stay — the deny path); at/above it, the scaled caps are clamped
+# to hard ceilings: delta ≤ 0.10 (the loosest historical fpr tier — never
+# looser than the pre-#866 maximum), slope ≤ 2× the van Calster band,
+# intercept ≤ 0.60, ECE ≤ 0.15.
+_MIN_EVAL_SUPPORT: int = 100
+_MAX_TRAIN_VAL_DELTA_CAP: float = 0.10
+_MAX_SLOPE_DEV_CAP: float = 0.30
+_MAX_INTERCEPT_CAP: float = 0.60
+_MAX_ECE_CAP: float = 0.15
 
 
 def _hanley_mcneil_se_auc(auc: float, n: int, prevalence: float) -> float:
@@ -303,11 +317,16 @@ def adaptive_success_criteria(
     # ~1000-row anchor the published band is narrower than its own sampling
     # noise, so it widens by sqrt(anchor/n_test). Floors preserved at/above
     # the anchor (and whenever n_test is unknown).
+    # FAIL-CLOSED guard (codex R1): below _MIN_EVAL_SUPPORT test rows the
+    # calibration metrics have no statistical support — keep the strict
+    # floors; at/above it, clamp the widened band to the hard ceilings.
     cal_scale: float = 1.0
-    if n_test is not None and 0 < n_test < _CALIBRATION_ANCHOR_N:
+    if n_test is not None and _MIN_EVAL_SUPPORT <= n_test < _CALIBRATION_ANCHOR_N:
         cal_scale = math.sqrt(_CALIBRATION_ANCHOR_N / n_test)
-    thresholds["maximum_calibration_slope_deviation"] = 0.15 * cal_scale
-    thresholds["maximum_calibration_intercept_magnitude"] = 0.30 * cal_scale
+    thresholds["maximum_calibration_slope_deviation"] = min(0.15 * cal_scale, _MAX_SLOPE_DEV_CAP)
+    thresholds["maximum_calibration_intercept_magnitude"] = min(
+        0.30 * cal_scale, _MAX_INTERCEPT_CAP
+    )
 
     # Lift over baseline: skipped when AUC SE proxy is too large for the
     # lift estimate to be stable (S1 fix — Hanley-McNeil-style SE at
@@ -328,12 +347,16 @@ def adaptive_success_criteria(
     # SE_bin = 0.5·sqrt(B/n_test) (per-bin binomial noise, p(1−p) ≤ 0.25),
     # so the cap must sit above that noise floor: mean + k·SD, where
     # SD(ECE) = SE_bin·sqrt(1−2/π)/sqrt(B) (mean of B folded-normal |gaps|).
+    # FAIL-CLOSED guard (codex R1): no loosening below _MIN_EVAL_SUPPORT
+    # test rows; the widened cap is clamped to _MAX_ECE_CAP above it.
     ece_cap: float = 0.05 if n_samples >= 1000 else 0.10
-    if n_test is not None and n_test > 0:
+    if n_test is not None and n_test >= _MIN_EVAL_SUPPORT:
         se_bin = 0.5 * math.sqrt(_ECE_BINS / n_test)
         ece_noise_mean = math.sqrt(2.0 / math.pi) * se_bin
         ece_noise_sd = se_bin * math.sqrt(1.0 - 2.0 / math.pi) / math.sqrt(_ECE_BINS)
-        ece_cap = max(ece_cap, ece_noise_mean + _CAP_SE_MULTIPLIER * ece_noise_sd)
+        ece_cap = max(
+            ece_cap, min(ece_noise_mean + _CAP_SE_MULTIPLIER * ece_noise_sd, _MAX_ECE_CAP)
+        )
     thresholds["maximum_calibration_error"] = ece_cap
 
     # Train-val Δ: feature-density step function (S2 fix — replaces the
@@ -352,14 +375,20 @@ def adaptive_success_criteria(
     # delta's own SE is sqrt(SE²(n_train)+SE²(n_val)); a cap below k·that SE
     # fails clean models on noise (measured: clean delta 0.0397 at n_val=591
     # vs the fixed 0.03). The feature-density tier stays as the floor.
-    if n_val is not None and n_val > 0:
+    # FAIL-CLOSED guard (codex R1): no loosening below _MIN_EVAL_SUPPORT
+    # validation rows; the widened cap is clamped to the loosest historical
+    # fpr tier (_MAX_TRAIN_VAL_DELTA_CAP) above it.
+    if n_val is not None and n_val >= _MIN_EVAL_SUPPORT:
         se_val = _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, n_val, prevalence)
         se_train = (
             _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, n_train, prevalence)
             if n_train is not None and n_train > 0
             else 0.0
         )
-        delta_cap = max(delta_cap, _CAP_SE_MULTIPLIER * math.hypot(se_val, se_train))
+        delta_cap = max(
+            delta_cap,
+            min(_CAP_SE_MULTIPLIER * math.hypot(se_val, se_train), _MAX_TRAIN_VAL_DELTA_CAP),
+        )
     thresholds["maximum_train_val_delta"] = delta_cap
 
     return thresholds, skipped
