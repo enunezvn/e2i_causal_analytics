@@ -1185,16 +1185,27 @@ if __name__ == "__main__":
 #   #   Expected (READ_PATHS taggable_tables): business_metrics, episodic_memories,
 #   #   ml_predictions, patient_journeys, treatment_events, triggers (+others)
 #
-#   # 3) Run the generator (Shards 02-06). --anchor-to-now re-anchors rolling dates so
-#   #    the NOW()-30d KPIs (gates 1,2,4) read non-zero. Writes the cohort_frames +
-#   #    per-HCP CATE artifacts (gates 3,6,10,11) AND must write the Shard-03
-#   #    ground-truth sidecar data/synthetic/ground_truth_<run>.json (gates 3,10).
+#   # 3a) Clean reload — the loader namespaces ids per run (appends), so clear prior
+#   #     synthetic rows first to avoid mixed-vintage/future-dated pollution:
+#   #     DELETE FROM <t> WHERE is_synthetic=true; (reverse-FK order, per taggable table)
+#   #
+#   # 3b) Run the generator (Shards 02-06). --anchor-to-now re-anchors rolling dates so
+#   #     the NOW()-30d KPIs (gates 1,2) read non-zero. Loads the docker-Supabase
+#   #     substrate for all 3 brands x 4 cohorts under the default confounded DGP.
 #   python scripts/load_synthetic_data.py --anchor-to-now
 #   #   Expected: "Loaded N synthetic rows ... is_synthetic=true"
 #
+#   # 3c) Produce the gitignored build artifacts the gates read (deterministic, seed=42):
+#   python scripts/write_ground_truth_sidecar.py          # gates 3,10 TRUE_ATE sidecar
+#   python scripts/build_synthetic_ensemble_manifest.py   # gate 7 >=2 real models/cell
+#   #   (the hcp_adoption cohort_frames gates 10/11 use are written by load_synthetic_data
+#   #    --parquet-out data/synthetic, or standalone via write_cohort_frames.)
+#
 #   # 4) Run the full gate ladder (this shard)
 #   python scripts/validate_synthetic_causal.py --all
-#   #   Expected: eleven "[PASS] ..." lines, exit 0
+#   #   Expected: eleven "[PASS] ..." lines, exit 0. Gate 11 runs a real CausalForestDML
+#   #   + CausalML hierarchical analysis via the live chat path (~96s serialized under
+#   #   LOKY=1), within the heterogeneous_optimizer 120s dispatch SLA.
 #
 #   # 5) STALENESS RE-CHECK (gate 1, "solved not shifted") — re-run the generator on a
 #   #    LATER date, then re-run gate 1; it must STILL be >0 (dates re-anchored, not
@@ -1209,8 +1220,10 @@ if __name__ == "__main__":
 # and excluded from every real read by Shard 07 — safe to leave; remove cleanly with
 # `DELETE FROM <table> WHERE is_synthetic=true;` per READ_PATHS taggable table.
 #
-# KNOWN PRODUCER GAP (flagged by Shard 11, 2026-06-10): scripts/load_synthetic_data.py
-# does NOT currently write the ground-truth sidecar — patient_generator sets
-# df.attrs["true_ate"]/cate_by_segment but parquet drops .attrs, and the loader never
-# calls GroundTruthStore.to_json_file. Gates 3 & 10 FAIL-LOUD on the missing sidecar
-# (no fabricated TRUE_ATE) until Step 3 is extended to persist it. See the report.
+# PRODUCER GAP RESOLVED (Shard 11, 2026-06-10): the loader still does not call
+# GroundTruthStore.to_json_file (patient_generator sets df.attrs["true_ate"] but parquet
+# drops .attrs), so the sidecar is produced by the standalone scripts/write_ground_truth_
+# sidecar.py (Step 3c) — it regenerates the patient frame with the loader's seed/DGP and
+# reads the realized per-brand mean of the PERSISTED per-unit treatment_effect_estimate
+# (tau_i), the value the causal agent recovers. Gates 3 & 10 still FAIL-LOUD if the
+# sidecar is absent (no fabricated TRUE_ATE).
