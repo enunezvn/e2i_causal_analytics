@@ -9,12 +9,13 @@ against the live schema and assert the round-trip succeeds, that the
 ``model_version`` handle is preserved/reconstructed, and that the rows address
 only real columns. Every inserted row is cleaned up.
 
-Reachability note (out of #842 scope, surfaced not silenced): in production the
-API/tasks construct these repos as ``DriftHistoryRepository()`` with NO client,
-so ``self.client`` is None and the methods no-op — the schema 42703 is currently
-*masked* by that no-op. This realignment is the precondition that makes wiring a
-real async client (the #820/#821 FAILS-OPEN family) safe. These tests pass a real
-client (the repo's designed contract) to prove the schema layer end-to-end.
+Reachability note (out of #842 scope, surfaced not silenced — filed as #845): in
+production the API/tasks construct these repos as ``DriftHistoryRepository()``
+with NO client, so ``self.client`` is None and the methods no-op — the schema
+42703 is currently *masked* by that no-op. This realignment is the precondition
+that makes wiring a real async client (the #820/#821 FAILS-OPEN family, tracked
+in #845) safe. These tests pass a real client (the repo's designed contract) to
+prove the schema layer end-to-end.
 
 Opt-in (real docker supabase-db required), skipped in CI by default:
     E2I_DB_INTEGRATION=1 .venv/bin/pytest \
@@ -76,6 +77,30 @@ async def client():
     assert c is not None, "real async supabase client required"
     yield c
     factories._async_supabase_client = None
+
+
+_GUARDED_TABLES = (
+    "ml_drift_history",
+    "ml_monitoring_alerts",
+    "ml_monitoring_runs",
+    "ml_performance_metrics",
+    "ml_retraining_history",
+)
+
+
+async def _count(client, table: str) -> int:
+    res = await client.table(table).select("id", count="exact").limit(1).execute()
+    return res.count or 0
+
+
+@pytest_asyncio.fixture(loop_scope="module", scope="module", autouse=True)
+async def _no_leak_guard(client):
+    """Snapshot the five tables' rowcounts and assert each test self-cleans:
+    no inserted row may survive the module (Finding 4 / anti-pollution)."""
+    before = {t: await _count(client, t) for t in _GUARDED_TABLES}
+    yield
+    after = {t: await _count(client, t) for t in _GUARDED_TABLES}
+    assert after == before, f"row leak — before={before} after={after}"
 
 
 async def _delete_by_handle(client, table: str, jsonb_col: str, handle: str) -> None:
