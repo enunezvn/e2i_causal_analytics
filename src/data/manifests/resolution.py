@@ -94,7 +94,12 @@ def resolve_manifest_source(
     known = set(known_manifest_sources())
     detected = autodetect_manifest_source(data_source)
 
-    if len(detected) > 1:
+    # M1 fires only when the caller gave no override: the error's own remedy
+    # is "pass an explicit feature_manifest_source", so a valid override must
+    # disambiguate rather than re-raise (M2 below still rejects an override
+    # outside the detected set). Real case: data/rwd/synthetic_CSU/... matches
+    # both 'synthetic' (prefix rule) and 'synthetic_csu' (exact segment).
+    if len(detected) > 1 and override is None:
         raise ValueError(
             f"data_source={data_source!r} contains multiple known manifest "
             f"sources {sorted(detected)} as path segments — auto-detection is "

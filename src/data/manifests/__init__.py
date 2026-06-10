@@ -61,6 +61,11 @@ from .optum_mart_feature_manifest import (
     OPTUM_MART_FEATURES,
     optum_mart_contract_for,
 )
+from .synthetic_csu_feature_manifest import (
+    SYNTHETIC_CSU_FEATURES,
+    SYNTHETIC_CSU_FORBIDDEN_AS_FEATURES,
+    synthetic_csu_contract_for,
+)
 from .synthetic_feature_manifest import (
     SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
@@ -91,6 +96,12 @@ MANIFEST_SOURCES: Mapping[str, Callable[[str], FeatureContract | None]] = {
     # feature_manifest_source override on the ``hcp_adoption`` cohort path.
     "optum_hcp": optum_hcp_contract_for,
     "synthetic": synthetic_contract_for,
+    # synthetic_csu: the synthetic causal-validation dataset's tier0 exports
+    # (scripts/export_synthetic_tier0.py). Declarations are correct BY
+    # CONSTRUCTION (the DGP draws every declared feature before the outcome);
+    # without them the leakage layers false-positively drop the designed
+    # causal drivers (disease_severity, influence_network_size).
+    "synthetic_csu": synthetic_csu_contract_for,
 }
 
 

@@ -113,6 +113,7 @@ from src.data.manifests import (
     OPTUM_HCP_FEATURES,
     OPTUM_HCP_FORBIDDEN_AS_FEATURES,
     OPTUM_MART_FEATURES,
+    SYNTHETIC_CSU_FORBIDDEN_AS_FEATURES,
     SYNTHETIC_FEATURES,
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
@@ -3067,6 +3068,10 @@ _MANIFEST_FORBIDDEN_BY_SOURCE: dict[str, list[str]] = {
     # Registered explicitly so ``_select_features`` does NOT log the
     # "unknown manifest_source" warning when synthetic runs opt in.
     "synthetic": SYNTHETIC_FORBIDDEN_AS_FEATURES,
+    # synthetic_csu: tier0 exports of the synthetic causal-validation dataset.
+    # Forbids the DGP answer-key columns (propensity_score /
+    # treatment_effect_estimate) + outcome-derived days_to_treatment.
+    "synthetic_csu": SYNTHETIC_CSU_FORBIDDEN_AS_FEATURES,
 }
 
 

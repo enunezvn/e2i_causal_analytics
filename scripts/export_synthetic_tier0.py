@@ -80,11 +80,37 @@ def _assign_splits(df: pd.DataFrame, target: str, seed: int) -> pd.Series:
     return split
 
 
+def _ensure_contract_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """v3-contract columns the data_preparer's GE suite auto-detect requires.
+
+    ge_validator.py:92-100 routes to the patient-level ``ml_patients`` suite only
+    when BOTH ``patient_journey_id`` and ``discontinuation_flag`` exist (and no
+    ``event_type``); otherwise it validates against the event-level
+    ``patient_journeys`` suite and the QC gate blocks on missing event columns.
+    Mirror the mart converters: ``discontinuation_flag`` is a constant-0
+    placeholder (mart initiation ships null_rate 0.0, values {0}) — zero
+    variance, so it can never leak; the HCP grain aliases ``hcp_id`` into the
+    patient id columns exactly as ``convert_optum_hcp_adoption.py`` does.
+    """
+    if "patient_journey_id" not in df.columns:
+        df["patient_journey_id"] = df["hcp_id"]
+    if "patient_id" not in df.columns:
+        df["patient_id"] = df["hcp_id"]
+    df["discontinuation_flag"] = 0
+    # The runner derives step-3 inclusion criteria FROM data_quality_score;
+    # absent, CohortConstructor gets no criteria and fails closed (CC_001
+    # INVALID_CONFIG -> 0 eligible). Synthetic rows are complete by
+    # construction, so the score is uniformly 1.0 (mart frames carry the
+    # converter-computed equivalent).
+    df["data_quality_score"] = 1.0
+    return df
+
+
 def _write_cell(out_dir: Path, cohort: str, df: pd.DataFrame, brand: str, seed: int) -> None:
     target = COHORT_TARGETS[cohort]
     if df[target].nunique(dropna=True) < 2:
         raise SystemExit(f"{cohort}: target {target!r} is single-class — not modelable")
-    df = df.copy()
+    df = _ensure_contract_cols(df.copy())
     df["data_split"] = _assign_splits(df, target, seed)
     cell = out_dir / cohort
     cell.mkdir(parents=True, exist_ok=True)

@@ -7783,7 +7783,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--feature-manifest-source",
         type=str,
-        choices=("csu", "optum", "synthetic"),
+        choices=("csu", "optum", "synthetic", "synthetic_csu"),
         default=None,
         help=(
             "Opt this run into a cohort-specific feature manifest so Layer 5 "
