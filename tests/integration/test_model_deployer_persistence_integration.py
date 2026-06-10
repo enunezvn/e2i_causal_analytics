@@ -466,6 +466,177 @@ async def test_register_model_node_end_to_end_real_mlflow_writes_registry():
             pass
 
 
+async def test_persist_fails_closed_when_uri_run_id_absent_from_training_runs():
+    """Provenance fabrication guard (codex F1): when ``model_uri`` pins an EXACT
+    run (``runs:/<run_id>/...``) that is ABSENT from ``ml_training_runs``, the
+    row must NOT be written by substituting ``get_best_run()`` — that would stamp
+    the row with this run_id + URI while sourcing ``algorithm`` /
+    ``hyperparameters`` from a DIFFERENT run. Fail closed, write nothing.
+
+    The experiment is seeded WITH a best run so ``get_best_run()`` *would* return
+    a run if the buggy fallback were taken — proving the guard, not an empty DB.
+    """
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    mlflow_exp = f"exp_f4absent_{tag}"
+    seeded_run_id = f"run_f4absent_{tag}"
+    model_name = f"f4_829_absentrun_{tag}"
+    exp = run = None
+    try:
+        exp, run = await _seed_exp_and_run(
+            client, mlflow_exp=mlflow_exp, run_id=seeded_run_id, algorithm="xgboost"
+        )
+        rid = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/missing_{tag}/model",  # a run id NOT in ml_training_runs
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid is None, (
+            "an absent exact run id must fail closed, not fall back to get_best_run "
+            "(which fabricates provenance)"
+        )
+        cnt = (
+            await client.table("ml_model_registry")
+            .select("id", count="exact")
+            .eq("model_name", model_name)
+            .execute()
+        ).count
+        assert cnt == 0
+    finally:
+        await _cleanup(
+            client,
+            run_ids=[run["id"]] if run else [],
+            exp_ids=[exp["id"]] if exp else [],
+        )
+
+
+async def test_persist_reuse_fails_closed_on_run_id_mismatch_same_experiment():
+    """Idempotency provenance guard (codex F2): an existing
+    ``(model_name, model_version)`` row in the SAME experiment but sourced from a
+    DIFFERENT run than the one this deployment references must NOT be silently
+    reused (mis-linking the deployment to the wrong model artifact). Fail closed;
+    the original row is untouched."""
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    mlflow_exp = f"exp_f4mism_{tag}"
+    run_id_1 = f"run1_f4mism_{tag}"
+    run_id_2 = f"run2_f4mism_{tag}"
+    model_name = f"f4_829_mism_{tag}"
+    exp = run1 = None
+    run2_id = None
+    registry_ids: list[str] = []
+    try:
+        exp, run1 = await _seed_exp_and_run(
+            client, mlflow_exp=mlflow_exp, run_id=run_id_1, algorithm="xgboost"
+        )
+        # A SECOND real run in the SAME experiment.
+        run2 = (
+            await client.table("ml_training_runs")
+            .insert(
+                {
+                    "experiment_id": exp["id"],
+                    "run_name": f"run_{run_id_2}",
+                    "mlflow_run_id": run_id_2,
+                    "algorithm": "lightgbm",
+                    "hyperparameters": {"num_leaves": 31},
+                    "training_samples": 1234,
+                    "status": "finished",
+                    "is_best_trial": False,
+                    "test_metrics": {"auc": 0.7},
+                }
+            )
+            .execute()
+        ).data[0]
+        run2_id = run2["id"]
+
+        rid1 = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/{run_id_1}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid1 is not None
+        registry_ids.append(rid1)
+
+        # Re-deploy same name+version+experiment but referencing run 2.
+        rid2 = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/{run_id_2}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid2 is None, "same name+version+experiment but different run must fail closed"
+        rows = (
+            await client.table("ml_model_registry")
+            .select("id,mlflow_run_id")
+            .eq("model_name", model_name)
+            .execute()
+        ).data
+        assert len(rows) == 1
+        assert rows[0]["id"] == rid1
+        assert rows[0]["mlflow_run_id"] == run_id_1
+    finally:
+        await _cleanup(
+            client,
+            registry_ids=registry_ids,
+            run_ids=[r for r in ((run1["id"] if run1 else None), run2_id) if r],
+            exp_ids=[exp["id"]] if exp else [],
+        )
+
+
+async def test_persist_reuse_ok_when_redeploy_uri_carries_no_run_id():
+    """No false fail-close (codex F2 fix must not over-constrain): a re-deploy
+    whose ``model_uri`` carries NO run id (``models:/`` form) must still REUSE the
+    existing same name+version+experiment row — we fail closed only on a DEFINITE
+    run-id conflict, never on a missing run id."""
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    mlflow_exp = f"exp_f4reuse_{tag}"
+    run_id = f"run_f4reuse_{tag}"
+    model_name = f"f4_829_reuse_{tag}"
+    exp = run = None
+    registry_ids: list[str] = []
+    try:
+        exp, run = await _seed_exp_and_run(
+            client, mlflow_exp=mlflow_exp, run_id=run_id, algorithm="xgboost"
+        )
+        rid1 = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/{run_id}/model",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid1 is not None
+        registry_ids.append(rid1)
+
+        # Re-deploy with a models:/ URI (no embedded run id) — must reuse, not fail.
+        rid2 = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"models:/{model_name}/1",
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid2 == rid1, "a missing run id must not block idempotent reuse"
+    finally:
+        await _cleanup(
+            client,
+            registry_ids=registry_ids,
+            run_ids=[run["id"]] if run else [],
+            exp_ids=[exp["id"]] if exp else [],
+        )
+
+
 async def test_store_to_database_without_registry_id_is_fail_closed_with_real_client():
     """A real client present but NO model_registry_id must write nothing and keep
     db_persisted=False — the client's presence alone never fabricates a row."""

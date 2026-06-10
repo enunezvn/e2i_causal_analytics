@@ -1006,52 +1006,83 @@ async def _persist_model_registry_row(
         )
         return None
 
+    # The MLflow run id carried by ``model_uri`` (``runs:/<run_id>/...``), if any.
+    # Parsed up front so the idempotency reuse below can verify the existing row
+    # was sourced from the SAME run — not merely the same experiment.
+    run_id = _parse_mlflow_run_id(model_uri)
+
     # 2. Idempotency FIRST: ml_model_registry has UNIQUE(model_name,
     #    model_version). A re-deploy of the SAME model must reuse the existing
-    #    row, not crash on the unique violation. Provenance guard: only reuse a
-    #    row that belongs to THIS resolved experiment — a same-name+version row
-    #    from a DIFFERENT experiment is a real collision (NOT our row), so fail
-    #    closed rather than mis-link the deployment to foreign provenance.
+    #    row, not crash on the unique violation. Provenance guards, in order:
+    #      - a same-name+version row from a DIFFERENT experiment is a real
+    #        collision (NOT our row) => fail closed;
+    #      - a row in THIS experiment but registered from a DIFFERENT run than
+    #        the one this deployment references (both run ids known and unequal)
+    #        is a different model artifact under the same name+version => fail
+    #        closed rather than mis-link the deployment to the wrong provenance.
+    #    A missing run id on EITHER side is NOT a conflict (avoids false
+    #    fail-close on legitimate ``models:/`` re-deploys) — same name+version+
+    #    experiment is sufficient identity then.
     registry_repo = MLModelRegistryRepository(supabase_client=client)
     existing = await registry_repo.get_by_name_version(registered_model_name, str(model_version))
     if existing and existing.id:
-        if str(existing.experiment_id) == str(experiment.id):
-            logger.info(
-                "ml_model_registry row already present for %s v%s (experiment %s) — reusing %s",
+        if str(existing.experiment_id) != str(experiment.id):
+            logger.error(
+                "ml_model_registry NOT written for '%s' v%s: an existing row belongs to "
+                "experiment %s, not the resolved experiment %s — name+version collision "
+                "(db_persisted=False)",
                 registered_model_name,
                 model_version,
+                existing.experiment_id,
                 experiment.id,
-                existing.id,
             )
-            return str(existing.id)
-        logger.error(
-            "ml_model_registry NOT written for '%s' v%s: an existing row belongs to "
-            "experiment %s, not the resolved experiment %s — name+version collision "
-            "(db_persisted=False)",
+            return None
+        existing_run_id = (existing.mlflow_run_id or "").strip() or None
+        if run_id and existing_run_id and existing_run_id != run_id:
+            logger.error(
+                "ml_model_registry NOT reused for '%s' v%s: existing row was registered "
+                "from run %s but this deployment references run %s — same name+version+"
+                "experiment, different source run (provenance collision, db_persisted=False)",
+                registered_model_name,
+                model_version,
+                existing_run_id,
+                run_id,
+            )
+            return None
+        logger.info(
+            "ml_model_registry row already present for %s v%s (experiment %s) — reusing %s",
             registered_model_name,
             model_version,
-            existing.experiment_id,
             experiment.id,
+            existing.id,
         )
-        return None
+        return str(existing.id)
 
     # 3. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
-    #    training run that produced this model. Prefer the EXACT run referenced
-    #    by model_uri (runs:/<run_id>/...) — and REQUIRE it to belong to the
-    #    resolved experiment, else the inputs (experiment_id vs model_uri)
-    #    disagree and we must not source provenance from a foreign experiment.
-    #    Fall back to the experiment's best run only when model_uri carries no
-    #    run id (models:/) or the exact run is absent; that run is still
-    #    experiment-scoped (same modeling problem). No run / no algorithm =>
-    #    fail closed (refuse to invent an algorithm for a NOT-NULL column).
+    #    training run that produced this model.
+    #      - model_uri pins an EXACT run (runs:/<run_id>/...): REQUIRE that run
+    #        to exist AND belong to the resolved experiment. If it is absent or
+    #        foreign, FAIL CLOSED — do NOT substitute get_best_run(), which would
+    #        stamp the row with this run_id + URI while sourcing algorithm /
+    #        hyperparameters from a DIFFERENT run (provenance fabrication).
+    #      - model_uri carries no run id (models:/): the experiment's best run is
+    #        the honest, experiment-scoped source — no specific run was pinned.
+    #    No run / no algorithm => fail closed (refuse to invent an algorithm for
+    #    a NOT-NULL column).
     run_repo = MLTrainingRunRepository(supabase_client=client)
-    run_id = _parse_mlflow_run_id(model_uri)
     run = None
     if run_id:
         candidate = await run_repo.get_by_mlflow_run_id(run_id)
-        if candidate is not None and str(candidate.experiment_id) == str(experiment.id):
-            run = candidate
-        elif candidate is not None:
+        if candidate is None:
+            logger.error(
+                "ml_model_registry NOT written for '%s': model_uri references run %s "
+                "which is absent from ml_training_runs — refusing to source provenance "
+                "from a different run (db_persisted=False)",
+                registered_model_name,
+                run_id,
+            )
+            return None
+        if str(candidate.experiment_id) != str(experiment.id):
             logger.error(
                 "ml_model_registry NOT written for '%s': training run %s belongs to "
                 "experiment %s, not the resolved experiment %s — provenance mismatch "
@@ -1062,7 +1093,8 @@ async def _persist_model_registry_row(
                 experiment.id,
             )
             return None
-    if run is None:
+        run = candidate
+    else:
         run = await run_repo.get_best_run(experiment.id)
     if run is None or not run.algorithm:
         logger.error(
@@ -1103,7 +1135,16 @@ async def _persist_model_registry_row(
             raced = await registry_repo.get_by_name_version(
                 registered_model_name, str(model_version)
             )
-            if raced and raced.id and str(raced.experiment_id) == str(experiment.id):
+            raced_run_id = (
+                ((raced.mlflow_run_id or "").strip() or None) if (raced and raced.id) else None
+            )
+            same_experiment = bool(
+                raced and raced.id and str(raced.experiment_id) == str(experiment.id)
+            )
+            # Same run-id provenance guard as the pre-check: a definite run-id
+            # conflict means the raced row is a different source run, not our row.
+            run_conflict = bool(run_id and raced_run_id and raced_run_id != run_id)
+            if raced is not None and same_experiment and not run_conflict:
                 logger.info(
                     "ml_model_registry insert raced for %s v%s — reusing "
                     "concurrently written row %s",
@@ -1114,7 +1155,8 @@ async def _persist_model_registry_row(
                 return str(raced.id)
             logger.error(
                 "ml_model_registry NOT written for '%s' v%s: unique violation but the "
-                "existing row is missing or foreign-provenance (db_persisted=False)",
+                "existing row is missing, foreign-experiment, or a different source run "
+                "(db_persisted=False)",
                 registered_model_name,
                 model_version,
             )
