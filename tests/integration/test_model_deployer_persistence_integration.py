@@ -513,6 +513,74 @@ async def test_persist_fails_closed_when_uri_run_id_absent_from_training_runs():
         )
 
 
+async def test_persist_fails_closed_on_absent_run_even_when_null_run_id_row_exists():
+    """Residual F1 bypass (codex round-3): the exact-run validation for a
+    ``runs:/<run_id>`` URI must run BEFORE the idempotency early-return. Otherwise
+    a pre-existing same name+version+experiment row whose ``mlflow_run_id`` is
+    NULL lets an ABSENT pinned run be silently reused (F2's definite-conflict
+    guard does not fire on a missing existing run id). Must fail closed; the
+    pre-existing row is untouched."""
+    client = await get_async_supabase_client()
+    tag = uuid.uuid4().hex[:10]
+    mlflow_exp = f"exp_f4nullrun_{tag}"
+    seeded_run_id = f"run_f4nullrun_{tag}"
+    model_name = f"f4_829_nullrun_{tag}"
+    exp = run = None
+    registry_ids: list[str] = []
+    try:
+        # Experiment WITH a best run, so get_best_run() WOULD return a run if the
+        # bug substituted it — proves the guard, not an empty DB.
+        exp, run = await _seed_exp_and_run(
+            client, mlflow_exp=mlflow_exp, run_id=seeded_run_id, algorithm="xgboost"
+        )
+        # A pre-existing (name, v1, experiment) registry row with NULL run id, as
+        # a producer that did not record the source run would leave it.
+        pre = (
+            await client.table("ml_model_registry")
+            .insert(
+                {
+                    "experiment_id": exp["id"],
+                    "model_name": model_name,
+                    "model_version": "1",
+                    "algorithm": "xgboost",
+                    # mlflow_run_id intentionally omitted -> NULL
+                }
+            )
+            .execute()
+        ).data[0]
+        registry_ids.append(pre["id"])
+
+        rid = await _persist_model_registry_row(
+            client,
+            experiment_id_str=mlflow_exp,
+            model_uri=f"runs:/missing_{tag}/model",  # pinned run absent from ml_training_runs
+            registered_model_name=model_name,
+            model_version=1,
+            validation_metrics=None,
+        )
+        assert rid is None, (
+            "an absent pinned run must fail closed even when a NULL-run_id row already "
+            "exists (exact-run validation must precede idempotent reuse)"
+        )
+        # The pre-existing row is intact and still NULL run id.
+        rows = (
+            await client.table("ml_model_registry")
+            .select("id,mlflow_run_id")
+            .eq("model_name", model_name)
+            .execute()
+        ).data
+        assert len(rows) == 1
+        assert rows[0]["id"] == pre["id"]
+        assert rows[0]["mlflow_run_id"] is None
+    finally:
+        await _cleanup(
+            client,
+            registry_ids=registry_ids,
+            run_ids=[run["id"]] if run else [],
+            exp_ids=[exp["id"]] if exp else [],
+        )
+
+
 async def test_persist_reuse_fails_closed_on_run_id_mismatch_same_experiment():
     """Idempotency provenance guard (codex F2): an existing
     ``(model_name, model_version)`` row in the SAME experiment but sourced from a

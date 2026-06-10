@@ -1007,22 +1007,54 @@ async def _persist_model_registry_row(
         return None
 
     # The MLflow run id carried by ``model_uri`` (``runs:/<run_id>/...``), if any.
-    # Parsed up front so the idempotency reuse below can verify the existing row
-    # was sourced from the SAME run — not merely the same experiment.
     run_id = _parse_mlflow_run_id(model_uri)
+    run_repo = MLTrainingRunRepository(supabase_client=client)
 
-    # 2. Idempotency FIRST: ml_model_registry has UNIQUE(model_name,
-    #    model_version). A re-deploy of the SAME model must reuse the existing
-    #    row, not crash on the unique violation. Provenance guards, in order:
+    # 2. Validate the EXACT run a ``runs:/<run_id>/...`` URI pins — BEFORE any
+    #    idempotent reuse. The pinned run MUST exist AND belong to the resolved
+    #    experiment, else FAIL CLOSED. Running this first is what makes the
+    #    exact-run requirement unbypassable: a pre-existing same name+version row
+    #    (especially one whose ``mlflow_run_id`` is NULL) must NOT let an
+    #    absent/foreign pinned run be silently reused. A ``models:/`` URI pins no
+    #    run (``run_id`` is None) — the experiment's best run is resolved below as
+    #    the honest, experiment-scoped source.
+    pinned_run = None
+    if run_id:
+        candidate = await run_repo.get_by_mlflow_run_id(run_id)
+        if candidate is None:
+            logger.error(
+                "ml_model_registry NOT written for '%s': model_uri references run %s "
+                "which is absent from ml_training_runs — refusing to source provenance "
+                "from a different run (db_persisted=False)",
+                registered_model_name,
+                run_id,
+            )
+            return None
+        if str(candidate.experiment_id) != str(experiment.id):
+            logger.error(
+                "ml_model_registry NOT written for '%s': training run %s belongs to "
+                "experiment %s, not the resolved experiment %s — provenance mismatch "
+                "(db_persisted=False)",
+                registered_model_name,
+                run_id,
+                candidate.experiment_id,
+                experiment.id,
+            )
+            return None
+        pinned_run = candidate
+
+    # 3. Idempotency: ml_model_registry has UNIQUE(model_name, model_version). A
+    #    re-deploy of the SAME model must reuse the existing row, not crash on the
+    #    unique violation. Provenance guards, in order:
     #      - a same-name+version row from a DIFFERENT experiment is a real
     #        collision (NOT our row) => fail closed;
-    #      - a row in THIS experiment but registered from a DIFFERENT run than
-    #        the one this deployment references (both run ids known and unequal)
-    #        is a different model artifact under the same name+version => fail
-    #        closed rather than mis-link the deployment to the wrong provenance.
-    #    A missing run id on EITHER side is NOT a conflict (avoids false
-    #    fail-close on legitimate ``models:/`` re-deploys) — same name+version+
-    #    experiment is sufficient identity then.
+    #      - a row in THIS experiment registered from a DIFFERENT run than the one
+    #        this deployment pins (both run ids known and unequal) is a different
+    #        model artifact under the same name+version => fail closed.
+    #    A missing run id on EITHER side is NOT a conflict (avoids false fail-close
+    #    on legitimate ``models:/`` re-deploys) — same name+version+experiment is
+    #    sufficient identity then, and the pinned-run existence was already proven
+    #    in step 2.
     registry_repo = MLModelRegistryRepository(supabase_client=client)
     existing = await registry_repo.get_by_name_version(registered_model_name, str(model_version))
     if existing and existing.id:
@@ -1058,44 +1090,12 @@ async def _persist_model_registry_row(
         )
         return str(existing.id)
 
-    # 3. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
-    #    training run that produced this model.
-    #      - model_uri pins an EXACT run (runs:/<run_id>/...): REQUIRE that run
-    #        to exist AND belong to the resolved experiment. If it is absent or
-    #        foreign, FAIL CLOSED — do NOT substitute get_best_run(), which would
-    #        stamp the row with this run_id + URI while sourcing algorithm /
-    #        hyperparameters from a DIFFERENT run (provenance fabrication).
-    #      - model_uri carries no run id (models:/): the experiment's best run is
-    #        the honest, experiment-scoped source — no specific run was pinned.
-    #    No run / no algorithm => fail closed (refuse to invent an algorithm for
-    #    a NOT-NULL column).
-    run_repo = MLTrainingRunRepository(supabase_client=client)
-    run = None
-    if run_id:
-        candidate = await run_repo.get_by_mlflow_run_id(run_id)
-        if candidate is None:
-            logger.error(
-                "ml_model_registry NOT written for '%s': model_uri references run %s "
-                "which is absent from ml_training_runs — refusing to source provenance "
-                "from a different run (db_persisted=False)",
-                registered_model_name,
-                run_id,
-            )
-            return None
-        if str(candidate.experiment_id) != str(experiment.id):
-            logger.error(
-                "ml_model_registry NOT written for '%s': training run %s belongs to "
-                "experiment %s, not the resolved experiment %s — provenance mismatch "
-                "(db_persisted=False)",
-                registered_model_name,
-                run_id,
-                candidate.experiment_id,
-                experiment.id,
-            )
-            return None
-        run = candidate
-    else:
-        run = await run_repo.get_best_run(experiment.id)
+    # 4. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
+    #    training run: the validated pinned run for ``runs:/`` URIs, else the
+    #    experiment's best run for ``models:/`` URIs (no specific run was pinned).
+    #    No run / no algorithm => fail closed (refuse to invent an algorithm for a
+    #    NOT-NULL column).
+    run = pinned_run if pinned_run is not None else await run_repo.get_best_run(experiment.id)
     if run is None or not run.algorithm:
         logger.error(
             "ml_model_registry NOT written for '%s': no training run / algorithm "
