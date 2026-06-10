@@ -170,12 +170,22 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
 
         sel = triggers[inject].reset_index(drop=True)
         sel_ts = ts[inject].reset_index(drop=True)
-        # Offset 1..27 days after the trigger => strictly inside the 30d window.
+        # Offset 1..27 days after the trigger => inside the 30d conversion window.
         offsets = self._rng.integers(1, 28, size=len(sel))
         event_dates = [
             (t + pd.Timedelta(days=int(o))).strftime("%Y-%m-%d")
             for t, o in zip(sel_ts, offsets, strict=False)
         ]
+        # #853: the trigger_timestamp is already capped at the rolling reference, but
+        # adding the 1..27d conversion offset pushes the FINAL injected event_date past
+        # the reference (up to ref+27d future-dated treatment_events). Cap the derived
+        # event_date itself — the recency the source carries is preserved, only the
+        # future tail collapses onto the reference. No-op when anchor_to_now is off.
+        # The window invariant still holds: trigger_timestamp is also <= ref, so a
+        # capped row stays event_date >= trigger_timestamp and within 0..27d (a tail
+        # row may collapse to same-day — no longer STRICTLY after, but inside the 30d
+        # conversion window the realized lift is computed over).
+        event_dates = self._shift_dates_to_window(event_dates)
         if "brand" in sel.columns:
             brand_vals = sel["brand"].to_numpy()
         elif "brand_id" in sel.columns:
