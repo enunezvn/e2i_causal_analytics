@@ -36,6 +36,11 @@ from .memory_hooks import ModelTrainerMemoryHooks
 from .splitting import FoldSpec, RepeatedStratifiedSplitter
 from .state import ModelTrainerState
 
+try:  # F19: optional — cap BLAS/OpenMP threads during fit/CV to bound peak RSS
+    from threadpoolctl import threadpool_limits as _threadpool_limits
+except Exception:  # pragma: no cover - best-effort; the agent must never hard-fail here
+    _threadpool_limits = None
+
 logger = logging.getLogger(__name__)
 
 # Phase 1 W3-lite Day 4 (shard 17 W3 row Day 4 + shard 21 §B): the
@@ -84,6 +89,27 @@ def _get_procedural_memory():
     except Exception as e:
         logger.debug(f"Procedural memory not available: {e}")
         return None
+
+
+def _blas_thread_limit(input_data: Optional[Dict[str, Any]] = None):
+    """F19: cap BLAS/OpenMP threads during fit/CV/bootstrap so a single
+    model_trainer run is memory-bounded. Thread count does NOT change the
+    deterministic fit output of these estimators — it only affects peak RSS and
+    wall-clock. Cap defaults to 1; overridable via ``input_data['blas_thread_cap']``
+    or the ``MODEL_TRAINER_BLAS_THREADS`` env var. Best-effort: returns a no-op
+    context if threadpoolctl is unavailable, so the agent never hard-fails on this.
+    """
+    import os
+    from contextlib import nullcontext
+
+    raw = (input_data or {}).get("blas_thread_cap") or os.getenv("MODEL_TRAINER_BLAS_THREADS")
+    try:
+        cap = max(1, int(raw)) if raw else 1
+    except (TypeError, ValueError):
+        cap = 1
+    if _threadpool_limits is None:
+        return nullcontext()
+    return _threadpool_limits(limits=cap, user_api="blas")
 
 
 class ModelTrainerAgent:
@@ -332,7 +358,8 @@ class ModelTrainerAgent:
                         "problem_type": problem_type,
                     },
                 ) as span:
-                    final_state = await self.graph.ainvoke(initial_state)
+                    with _blas_thread_limit(input_data):
+                        final_state = await self.graph.ainvoke(initial_state)
                     # Set output on span
                     if span and not final_state.get("error"):
                         span.set_output(
@@ -344,7 +371,8 @@ class ModelTrainerAgent:
                             }
                         )
             else:
-                final_state = await self.graph.ainvoke(initial_state)
+                with _blas_thread_limit(input_data):
+                    final_state = await self.graph.ainvoke(initial_state)
         except Exception as e:
             logger.exception(f"Model training failed: {e}")
             raise RuntimeError(f"Model training workflow failed: {str(e)}") from e
