@@ -13,6 +13,7 @@ from src.ml.synthetic.generators.feature_value_generator import FeatureValueGene
 from src.ml.synthetic.generators.hcp_generator import HCPGenerator
 from src.ml.synthetic.generators.patient_generator import PatientGenerator
 from src.ml.synthetic.generators.prediction_generator import PredictionGenerator
+from src.ml.synthetic.generators.treatment_generator import TreatmentGenerator
 from src.ml.synthetic.generators.trigger_generator import TriggerGenerator
 
 REF = date(2026, 6, 9)
@@ -46,6 +47,46 @@ def test_trigger_timestamps_fresh_and_not_future_under_anchor():
     ts = pd.to_datetime(df["trigger_timestamp"]).dt.date
     assert ts.max() <= REF, "trigger fires in the future"
     assert (ts >= (REF - timedelta(days=30))).mean() >= 0.30, "triggers not bulk-recent"
+
+
+def test_treatment_dates_not_future_under_anchor():
+    """#853 regression: TreatmentGenerator derived treatment_date (journey_start +
+    7-30d offset) must be clipped to the rolling reference — no future event dates."""
+    patients = _anchored_patients()
+    cfg = GeneratorConfig(seed=11, n_records=600, anchor_to_now=True, anchor_reference=REF)
+    df = TreatmentGenerator(cfg, patient_df=patients).generate()
+    d = pd.to_datetime(df["treatment_date"]).dt.date
+    assert d.max() <= REF, "treatment_date lands in the future under anchor_to_now"
+
+
+def test_injected_conversion_prescriptions_not_future_under_anchor():
+    """#853 regression (the actual leak): Shard-05 injected conversion prescriptions
+    derive event_date as (already-capped trigger_timestamp + 1-27d), pushing the
+    FINAL event_date past the reference. The cap must be applied to the injected
+    event_date, not just the source trigger timestamp."""
+    patients = _anchored_patients()
+    hcp = HCPGenerator(GeneratorConfig(seed=11, n_records=50, brand=Brand.KISQALI)).generate()
+    cfg = GeneratorConfig(seed=11, n_records=600, anchor_to_now=True, anchor_reference=REF)
+    gen = TriggerGenerator(cfg, patient_df=patients, hcp_df=hcp)
+    gen.generate()
+    inj = gen.injected_prescriptions
+    assert len(inj) > 0, "fixture must produce injected conversion prescriptions to be meaningful"
+    ed = pd.to_datetime(inj["event_date"]).dt.date
+    assert ed.max() <= REF, "injected conversion prescription event_date lands in the future"
+
+
+def test_injected_conversion_prescriptions_default_off_not_anchored():
+    """Anchoring off => identity: the legacy behaviour (no clip) is preserved, so the
+    fix is a no-op outside --anchor-to-now."""
+    patients = PatientGenerator(
+        GeneratorConfig(seed=11, n_records=200, brand=Brand.KISQALI)
+    ).generate()
+    gen = TriggerGenerator(GeneratorConfig(seed=11, n_records=400), patient_df=patients)
+    gen.generate()
+    inj = gen.injected_prescriptions
+    assert len(inj) > 0
+    # legacy journey 2022-2024 + trigger offset + conversion offset -> never the 2026 ref
+    assert max(int(s[:4]) for s in inj["event_date"]) <= 2025
 
 
 def test_feature_value_timestamps_anchor_to_reference():
