@@ -255,6 +255,22 @@ python scripts/run_tier0_test.py --data-dir data/rwd/synthetic_CSU/tier0/initiat
 | persistence | 2,952 | persistent_180d (0.533) | 0.633 | ✓ |
 | hcp_adoption | 1,688 | adopted_target_brand (0.400) | 0.777 | ✓ |
 
+**E2E outcome (2026-06-11, report
+`docs/reports/synthetic_csu_e2e_validation_20260610/`): all four cohorts DEPLOY to
+staging through the full tier0 pipeline, and the tier1-5 agent harness passes 13/13
+against every cohort's tier0 state.** Getting there fixed four tier0 defects the data
+isolated — #864 (split scramble), #866 (noise-blind deployment caps), #867
+(overfit-blind champion selection) via PR #865, and #868 (HPO blind to final-fit
+degeneracy: the L1-cliff trial collapsed in the conformal wrapper's internal refit; a
+degeneracy guard now re-verifies the HPO winner final-style and falls back) via PR #870.
+Champions: initiation LR 0.686 / discontinuation LR_Conformal 0.647 / persistence
+LR_Conformal 0.637 (guard-adopted trial) / hcp_adoption LR_Conformal 0.798. The tier1-5
+harness mapper (`src/testing/tier0_output_mapper.py`) binds the DESIGNED causal columns
+(`treatment_arm`, the scope-spec target, real non-constant confounders; on frames
+without `treatment_arm` it prefers designed binary exposures from a fixed allowlist —
+`academic_hcp` — over derived median-splits, which have no causal identity), and
+causal_impact recovers ATE 0.193 vs the sidecar's +0.172 with refuters running.
+
 What the exporter guarantees (verified by `tests/unit/test_synthetic/test_tier0_export.py`
 and a load through the real `load_rwd_data` entry point):
 
