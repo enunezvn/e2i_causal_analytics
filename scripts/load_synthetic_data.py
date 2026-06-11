@@ -321,7 +321,9 @@ def generate_datasets(
         )
     ).generate()
 
-    # 5 view-backed tables anchored to the rolling window.
+    # 5 view-backed tables anchored to the rolling window. hcp_intent_surveys
+    # FK-references hcp_profiles.hcp_id, so the generator samples from this run's
+    # real (namespaced) hcp ids — never hardcoded legacy-stub ids.
     datasets.update(
         CoverageTablesGenerator(
             GeneratorConfig(
@@ -330,6 +332,7 @@ def generate_datasets(
                 n_records=max(50, sizes.get("business_metrics", 1000)),
             ),
             run_date=run_date,
+            hcp_ids=datasets["hcp_profiles"]["hcp_id"].tolist(),
         ).generate()
     )
 
