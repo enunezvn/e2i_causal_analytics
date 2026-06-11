@@ -419,12 +419,24 @@ def _resolve_heterogeneous_optimizer_input(
     # (2) build the substrate from the real KPI frame.
     query = agent_input.get("query")
     brand, region = _extract_brand_region(agent_input)
+    # Validation runs opt into the synthetic substrate explicitly (the #851
+    # include_synthetic plumb, default False): every kpi_resolution source read
+    # default-excludes is_synthetic rows, so on a clean substrate a real-mode
+    # build correctly fails closed unless the caller opted in. Two channels:
+    # ``filters`` (direct resolver invocations) and ``user_context`` (the only
+    # caller-stash field _prepare_agent_input threads through the live chat path).
+    include_synthetic = bool(
+        (agent_input.get("filters") or {}).get("include_synthetic", False)
+        or (agent_input.get("user_context") or {}).get("include_synthetic", False)
+    )
     try:
         from src.services import kpi_resolution
 
         kpi = kpi_resolution.recognize_kpi(query)
         if kpi is not None:
-            kpi_frame = kpi_resolution.resolve_kpi_frame(kpi, brand, region)
+            kpi_frame = kpi_resolution.resolve_kpi_frame(
+                kpi, brand, region, include_synthetic=include_synthetic
+            )
             treatment = getattr(kpi_frame, "treatment_column", None)
             if kpi_frame is not None and treatment and len(kpi_frame.frame) >= _HET_MIN_ROWS:
                 # Exclude the treatment AND its raw source column from the effect

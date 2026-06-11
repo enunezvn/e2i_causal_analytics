@@ -529,9 +529,14 @@ class TestIntentToAgentMapping:
         router = RouterNode()
 
         # Per-intent ceilings. Most agents <= 120s; tool_composer's
-        # documented SLA is 180s (4-phase decompose/plan/execute/synthesize).
+        # documented SLA is 180s (4-phase decompose/plan/execute/synthesize);
+        # heterogeneous_optimizer (segment_analysis) is 420s as of 2026-06-11 —
+        # the full 37,378-row gold conversion frame's CausalForestDML +
+        # per-segment effect_interval + hierarchical uplift MEASURED 269.7s
+        # serialized (gate 11, clean substrate); 420s = measured + ~55% headroom.
         max_timeout_ms = {
             "multi_faceted": 180_000,
+            "segment_analysis": 420_000,
         }
         for intent, dispatches in router.INTENT_TO_AGENTS.items():
             for dispatch in dispatches:

@@ -489,3 +489,54 @@ async def test_domain_failure_guard_allows_completed_status() -> None:
     res = out["agent_results"][0]
     assert res["success"] is True, res.get("error")
     assert res["result"]["prediction_summary"] == "real result"
+
+
+def test_heterogeneous_resolver_forwards_include_synthetic_opt_in(monkeypatch) -> None:
+    """Validation runs opt into the synthetic substrate via filters.include_synthetic
+    (the #851 plumb pattern): the resolver must forward it to resolve_kpi_frame.
+    Without the flag the resolver stays real-mode (include_synthetic falsy) — on a
+    clean substrate (zero untagged legacy rows) real-mode correctly fails closed,
+    which is exactly why the opt-in must be explicit and default-off."""
+    kf = _real_kpi_frame()
+    seen: dict = {}
+
+    def _capture(*a, **k):
+        seen.update(k)
+        return kf
+
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: object())
+    monkeypatch.setattr("src.services.kpi_resolution.resolve_kpi_frame", _capture)
+
+    base_input = {
+        "query": "which segments respond best to conversion?",
+        "session_id": "s1",
+        "user_context": {},
+        "parsed_query": {"entities": []},
+    }
+
+    # opt-in via filters (direct resolver invocations): forwarded as True
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {**base_input, "filters": {"brand": "Kisqali", "include_synthetic": True}},
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is True
+
+    # opt-in via user_context (the only caller-stash field the live chat path's
+    # _prepare_agent_input threads through — the state schema carries no filters)
+    seen.clear()
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {**base_input, "user_context": {"include_synthetic": True}},
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is True
+
+    # default: real-mode (falsy)
+    seen.clear()
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {**base_input, "filters": {"brand": "Kisqali"}},
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert not seen.get("include_synthetic")
