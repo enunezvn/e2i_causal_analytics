@@ -266,6 +266,9 @@ class ModelTrainerState(BaseAgentSchema):
     best_hyperparameters: Optional[Dict[str, Any]] = None
     hpo_trials_run: Optional[int] = None
     hpo_duration_seconds: Optional[float] = None
+    # Issue #868: final-fit degeneracy guard decision (fired / fallback
+    # adopted / all-degenerate metadata from hyperparameter_tuner).
+    hpo_degeneracy_guard: Optional[Dict[str, Any]] = None
 
     # Model Training
     trained_model: Optional[Any] = None  # Trained model (sklearn / xgboost / etc.)

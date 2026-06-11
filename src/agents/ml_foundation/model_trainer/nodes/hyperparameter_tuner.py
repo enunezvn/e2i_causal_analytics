@@ -43,6 +43,52 @@ _LR_FIXED_PARAMS: Dict[str, Any] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Issue #868: final-fit degeneracy guard thresholds.
+#
+# Measured defect (synthetic-CSU persistence cohort): Optuna's best
+# LogisticRegression_Conformal trial was ``C=0.0019517/l1`` with best value
+# 0.6499999999999999 — which is EXACTLY ``0.7*0.5 + 0.3*1.0``: the blended
+# roc_auc objective (``OptunaOptimizer._evaluate_model``) REWARDING a
+# degenerate constant classifier (val AUC 0.5 + all-positive predictions →
+# minority recall 1.0 when positives are the majority). At that C the L1
+# penalty zeroes every coefficient (intercept-only model → near-constant
+# probabilities → test AUC exactly 0.500), while the same study's runner-up
+# trial (healthy C) delivers real discrimination.
+#
+# Threshold rationale:
+# - PROMISE_FLOOR 0.58: the guard only arms when HPO promised genuine
+#   discrimination (observed degenerate promise: 0.6499...). Below it,
+#   "collapse vs promise" is undefined and weak-but-honest models must
+#   pass through unchanged (conservative: deployed healthy cohorts are
+#   byte-identical in behavior).
+# - PROB_STD_FLOOR 1e-3: an intercept-only logistic model emits literally
+#   identical probabilities (std ~1e-16); healthy fits on these cohorts
+#   measure std ~0.05-0.4. 1e-3 separates the two by >1 order of magnitude
+#   in both directions.
+# - VAL_AUC_FLOOR 0.52: chance level plus a small noise margin on the
+#   ~500-1500-row validation splits — a model at/below it has no
+#   discrimination despite the >=0.58 promise.
+# - RECALIBRATION_SLOPE_CEILING 2.0: the probability-CRUSH regime of the
+#   same cliff family — over-regularized fits that keep ranking (AUC fine)
+#   but emit probabilities at least 2x too flat (van Calster 2019 logistic
+#   recalibration slope >= 2 == >=2x underconfident). Measured on the #868
+#   persistence cohort: the cliff-adjacent configs produce deploy-time
+#   slope deviations 0.45-0.99 (slope gate caps are <= ~0.3 — no
+#   deployment gate would ever accept them), while EVERY healthy candidate
+#   on the deployed cohorts measures deploy slope dev 0.014-0.27 (raw val
+#   slope ~0.9-1.3). 2.0 leaves >5x margin above the healthy band, so the
+#   guard cannot fire on the deployed initiation/discontinuation/
+#   hcp_adoption final fits. Only the underconfident side (slope >= 2) is
+#   degeneracy; over-confidence (slope < 1) is the overfit gate's
+#   territory and is deliberately NOT treated as collapse here.
+# ---------------------------------------------------------------------------
+DEGENERACY_GUARD_PROMISE_FLOOR: float = 0.58
+DEGENERACY_GUARD_PROB_STD_FLOOR: float = 1e-3
+DEGENERACY_GUARD_VAL_AUC_FLOOR: float = 0.52
+DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING: float = 2.0
+
+
 def _get_opik_connector():
     """Lazy import of OpikConnector to avoid circular imports."""
     try:
@@ -86,6 +132,8 @@ HPO_OPTIONAL_FIELDS = {
     "hpo_study_name": (str, type(None)),
     "hpo_metric": (str, type(None)),
     "hpo_pattern_id": (str, type(None)),  # Procedural memory pattern ID
+    # Issue #868: final-fit degeneracy guard decision metadata.
+    "hpo_degeneracy_guard": (dict, type(None)),
 }
 
 
@@ -184,6 +232,364 @@ def validate_hyperparameter_types(
                 errors.append(f"Parameter {param_name}: value {value} above maximum {high}")
 
     return (len(errors) == 0, errors)
+
+
+def _detect_final_fit_collapse(
+    model: Any,
+    X_val: Any,
+    y_val: Any,
+    *,
+    slope_collapse_applies: bool = True,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Detect whether a fitted binary classifier collapsed (issue #868).
+
+    Collapse criteria (see DEGENERACY_GUARD_* rationale above):
+    - near-constant predicted probabilities (std < 1e-3); subsumes the
+      constant/intercept-only classifier, OR
+    - chance-level validation AUC (<= 0.52) despite probability spread, OR
+    - probability-crush calibration collapse: ranking intact but the raw
+      validation recalibration slope (van Calster 2019; reuses the
+      evaluator's ``_compute_calibration_slope_intercept``) is >= 2.0 —
+      the fit is at least 2x underconfident, the same L1/L2
+      over-regularization cliff family with non-zero-but-crushed
+      coefficients (skipped fail-safe when the helper returns NaN on
+      unstable class counts). ONLY applied when
+      ``slope_collapse_applies=True`` — i.e. when the model's RAW
+      probabilities are what deploys (``skip_post_hoc_calibration``
+      candidates: conformal wrappers, NGBoost). For candidates whose
+      deploy path includes post-hoc Platt/isotonic recalibration, a
+      crushed-but-monotone fit is REPAIRABLE downstream (measured on
+      the initiation cohort: the crushed plain-LR's deployed artifact
+      scored slope dev 0.0099) — firing would be a false fire; the
+      deployment slope gate judges the repaired artifact honestly when
+      the repair fails. The slope is still measured and surfaced in
+      diagnostics for the log trail. OR
+    - single-class hard predictions, ONLY for models without
+      ``predict_proba`` (a healthy imbalanced model can legitimately
+      predict one class everywhere at the 0.5 cut while still ranking
+      well — hard predictions alone are not evidence of collapse when
+      probabilities are available).
+
+    Returns:
+        (collapsed, reason, diagnostics)
+    """
+    diagnostics: Dict[str, Any] = {}
+
+    if hasattr(model, "predict_proba"):
+        proba = np.asarray(model.predict_proba(X_val))
+        p1 = proba[:, 1] if proba.ndim == 2 and proba.shape[1] >= 2 else proba.ravel()
+        prob_std = float(np.std(p1))
+        diagnostics["val_prob_std"] = prob_std
+        if prob_std < DEGENERACY_GUARD_PROB_STD_FLOOR:
+            return (
+                True,
+                f"near-constant predicted probabilities "
+                f"(std={prob_std:.2e} < {DEGENERACY_GUARD_PROB_STD_FLOOR})",
+                diagnostics,
+            )
+        y_arr = np.asarray(y_val).ravel()
+        if len(np.unique(y_arr)) >= 2:
+            from sklearn.metrics import roc_auc_score
+
+            val_auc = float(roc_auc_score(y_arr, p1))
+            diagnostics["val_auc"] = val_auc
+            if val_auc <= DEGENERACY_GUARD_VAL_AUC_FLOOR:
+                return (
+                    True,
+                    f"chance-level validation AUC "
+                    f"({val_auc:.3f} <= {DEGENERACY_GUARD_VAL_AUC_FLOOR})",
+                    diagnostics,
+                )
+            # Probability-crush calibration collapse. Lazy import: this
+            # module is imported by model_trainer_node which evaluator also
+            # sits beside; importing at call time avoids any import-order
+            # coupling. Fail-safe: NaN slope (unstable n_pos/n_neg < 30) or
+            # a crashing helper skips the criterion — never a false fire.
+            try:
+                from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+                    _compute_calibration_slope_intercept,
+                )
+
+                slope, _intercept = _compute_calibration_slope_intercept(y_arr, p1)
+                if np.isfinite(slope):
+                    diagnostics["val_recalibration_slope"] = float(slope)
+                    if (
+                        slope_collapse_applies
+                        and slope >= DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING
+                    ):
+                        return (
+                            True,
+                            f"probability-crushed fit: >= "
+                            f"{DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING:.0f}x "
+                            f"underconfident (val recalibration slope "
+                            f"{slope:.2f})",
+                            diagnostics,
+                        )
+            except Exception as slope_error:  # pragma: no cover - defensive
+                logger.debug(
+                    "Degeneracy guard slope criterion skipped (non-fatal): %s",
+                    slope_error,
+                )
+        return (False, "healthy", diagnostics)
+
+    preds = np.asarray(model.predict(X_val)).ravel()
+    n_pred_classes = int(len(np.unique(preds)))
+    diagnostics["val_pred_classes"] = n_pred_classes
+    if n_pred_classes < 2:
+        return (
+            True,
+            "single-class predictions (model has no predict_proba)",
+            diagnostics,
+        )
+    return (False, "healthy", diagnostics)
+
+
+def _apply_degeneracy_guard(
+    *,
+    study: Any,
+    results: Dict[str, Any],
+    model_class: Any,
+    algorithm_name: str,
+    default_hyperparameters: Dict[str, Any],
+    fixed_params: Dict[str, Any],
+    X_train: Any,
+    y_train: Any,
+    X_val: Any,
+    y_val: Any,
+    problem_type: str,
+    raw_probabilities_deploy: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Issue #868: final-fit degeneracy guard with next-best-trial fallback.
+
+    ``raw_probabilities_deploy`` mirrors the candidate's
+    ``skip_post_hoc_calibration`` flag: when True (conformal wrappers,
+    NGBoost) the raw fit's probabilities ARE the deployed probabilities, so
+    the probability-crush slope criterion applies; when False the deploy
+    path post-hoc-recalibrates, a crushed-but-monotone fit is repairable
+    downstream, and only the unrepairable criteria (constant probabilities,
+    chance-level AUC) fire — see ``_detect_final_fit_collapse``.
+
+    The HPO objective can promise real discrimination (best_value >= 0.58)
+    for params whose FINAL fit collapses (e.g. the L1 coefficient-zeroing
+    cliff: the conformal wrapper's internal proper-train refit is smaller
+    than the objective's fit, and the blended roc_auc metric itself rewards
+    an all-positive constant classifier with 0.7*0.5 + 0.3*1.0 = 0.65).
+
+    This guard re-fits the best params final-fit-style (same
+    ``_filter_hyperparameters`` merge that ``train_model`` consumes),
+    checks for collapse on the validation split, and on genuine collapse
+    walks ALL the study's COMPLETE trials by value descending — skipping
+    param sets equal to ones already tried — and adopts the non-collapsed
+    candidate with the HIGHEST verification-fit validation AUC, by
+    mutating ``results['best_params'/'best_trial_number'/'best_value']``
+    in place (so the downstream merge, contract output and HPO pattern
+    memory all see the adopted trial). If ALL trials are degenerate the
+    original best is kept and flagged loudly — the downstream deployment
+    gates will block it honestly (fail-closed, never fabricate).
+
+    Why max-verification-val-AUC and not "first non-collapsed by HPO
+    value" (measured on the #868 persistence cohort, runs v1/v2): the
+    blended HPO objective (0.7*AUC + 0.3*minority_recall) systematically
+    ranks probability-crushed configs at the TOP of the study — their
+    near-flat all-positive predictions collect the full recall bonus —
+    so the first non-collapsed trial by value order is just the next
+    member of the same crush family (v2: adopted C=0.005/l2, value
+    0.6339, deployed conformal test slope dev 0.6098 → still blocked).
+    Pure validation AUC of the verification fit is the quantity HPO was
+    SUPPOSED to maximize (threshold-free discrimination, no recall
+    bonus), and measured on the same study it ranks the crushed configs
+    last (0.6022/0.6037) and the healthy configs first (0.6066, whose
+    conformal test slope dev is 0.064 — passes the 0.225 deployment
+    cap). Trials whose AUC is unavailable rank lowest; ties break by HPO
+    value then trial number. The extra refits are bounded by the trial
+    count and only happen when the guard has already FIRED.
+
+    Conservative by construction: arms only for binary classification
+    with a real promise (>= DEGENERACY_GUARD_PROMISE_FLOOR) and available
+    validation data; a healthy best fit returns with zero change to
+    ``results`` (deployed healthy cohorts stay byte-identical in
+    behavior).
+
+    Returns:
+        Guard metadata dict (always includes ``checked``/``fired``), or
+        None when the guard did not arm.
+    """
+    if problem_type != "binary_classification":
+        return None
+    best_value = results.get("best_value")
+    if best_value is None or not np.isfinite(best_value):
+        return None
+    if best_value < DEGENERACY_GUARD_PROMISE_FLOOR:
+        return None
+    if X_val is None or y_val is None or len(y_val) == 0:
+        return None
+
+    def _final_style_fit(trial_params: Dict[str, Any]) -> Any:
+        # Lazy import: model_trainer_node imports _LR_FIXED_PARAMS from this
+        # module at import time, so a module-level import here would be
+        # circular. Using the SAME merge + filter as the final fit keeps the
+        # verification faithful to what train_model will actually construct.
+        from src.agents.ml_foundation.model_trainer.nodes.model_trainer_node import (
+            _filter_hyperparameters,
+        )
+
+        merged = {**default_hyperparameters, **trial_params, **fixed_params}
+        filtered = _filter_hyperparameters(algorithm_name, merged)
+        model = model_class(**filtered)
+        model.fit(X_train, y_train)
+        return model
+
+    best_params = dict(results.get("best_params") or {})
+    best_model = _final_style_fit(best_params)
+    collapsed, reason, diagnostics = _detect_final_fit_collapse(
+        best_model, X_val, y_val, slope_collapse_applies=raw_probabilities_deploy
+    )
+
+    guard_meta: Dict[str, Any] = {
+        "checked": True,
+        "fired": False,
+        "hpo_promise": float(best_value),
+        "original_trial": results.get("best_trial_number"),
+        "original_params": best_params,
+        "original_diagnostics": diagnostics,
+    }
+    if not collapsed:
+        return guard_meta
+
+    guard_meta["fired"] = True
+    guard_meta["original_reason"] = reason
+    logger.warning(
+        "Issue #868 degeneracy guard FIRED for %s: HPO best trial %s "
+        "(params=%s) promised %.4f but the final-style fit collapsed (%s). "
+        "Falling back to the next-best distinct trial.",
+        algorithm_name,
+        results.get("best_trial_number"),
+        best_params,
+        float(best_value),
+        reason,
+    )
+
+    rejected: List[Dict[str, Any]] = [
+        {
+            "trial": results.get("best_trial_number"),
+            "value": float(best_value),
+            "params": best_params,
+            "reason": reason,
+        }
+    ]
+    tried_param_sets: List[Dict[str, Any]] = [best_params]
+
+    import optuna
+
+    completed = [
+        t
+        for t in study.trials
+        if t.state == optuna.trial.TrialState.COMPLETE
+        and t.value is not None
+        and np.isfinite(t.value)
+    ]
+    fallback_candidates: List[Dict[str, Any]] = []
+    for trial in sorted(completed, key=lambda t: (-float(t.value), t.number)):
+        trial_params = dict(trial.params)
+        if any(trial_params == tried for tried in tried_param_sets):
+            continue
+        tried_param_sets.append(trial_params)
+        try:
+            candidate_model = _final_style_fit(trial_params)
+        except Exception as fit_error:
+            rejected.append(
+                {
+                    "trial": trial.number,
+                    "value": float(trial.value),
+                    "params": trial_params,
+                    "reason": f"refit failed: {fit_error}",
+                }
+            )
+            continue
+        cand_collapsed, cand_reason, cand_diagnostics = _detect_final_fit_collapse(
+            candidate_model, X_val, y_val, slope_collapse_applies=raw_probabilities_deploy
+        )
+        if cand_collapsed:
+            rejected.append(
+                {
+                    "trial": trial.number,
+                    "value": float(trial.value),
+                    "params": trial_params,
+                    "reason": cand_reason,
+                }
+            )
+            continue
+        fallback_candidates.append(
+            {
+                "trial": trial.number,
+                "value": float(trial.value),
+                "params": trial_params,
+                "diagnostics": cand_diagnostics,
+                "val_auc": cand_diagnostics.get("val_auc"),
+            }
+        )
+
+    if fallback_candidates:
+        # Adopt the non-collapsed candidate with the highest verification
+        # val AUC (see docstring: the HPO value order is poisoned by the
+        # recall bonus, which is what promoted the crush family in the
+        # first place). AUC-less candidates rank lowest; ties break by HPO
+        # value then earlier trial — which degrades exactly to the
+        # first-non-collapsed-by-value behavior when no AUC is available.
+        adopted = max(
+            fallback_candidates,
+            key=lambda c: (
+                c["val_auc"] if c["val_auc"] is not None else float("-inf"),
+                c["value"],
+                -c["trial"],
+            ),
+        )
+        # Mutate the results contract in place so the downstream merge,
+        # hpo_output and pattern memory all see the adopted trial.
+        results["best_params"] = adopted["params"]
+        results["best_trial_number"] = adopted["trial"]
+        results["best_value"] = adopted["value"]
+        guard_meta["fallback_adopted"] = True
+        guard_meta["adopted_trial"] = adopted["trial"]
+        guard_meta["adopted_value"] = adopted["value"]
+        guard_meta["adopted_params"] = adopted["params"]
+        guard_meta["adopted_diagnostics"] = adopted["diagnostics"]
+        guard_meta["considered"] = [
+            {"trial": c["trial"], "value": c["value"], "val_auc": c["val_auc"]}
+            for c in fallback_candidates
+        ]
+        guard_meta["rejected"] = rejected
+        logger.warning(
+            "Issue #868 degeneracy guard ADOPTED fallback for %s: trial %s "
+            "(params=%s, value=%.4f, diagnostics=%s) — highest verification "
+            "val AUC among %d non-collapsed candidates %s. Rejected as "
+            "degenerate: %s.",
+            algorithm_name,
+            adopted["trial"],
+            adopted["params"],
+            adopted["value"],
+            adopted["diagnostics"],
+            len(fallback_candidates),
+            [(c["trial"], c["val_auc"]) for c in fallback_candidates],
+            [(r["trial"], r["reason"]) for r in rejected],
+        )
+        return guard_meta
+
+    # All trials degenerate: keep the original best, flag loudly. The
+    # downstream deployment gates will block it honestly (fail-closed).
+    guard_meta["fallback_adopted"] = False
+    guard_meta["all_degenerate"] = True
+    guard_meta["rejected"] = rejected
+    logger.error(
+        "Issue #868 degeneracy guard: ALL %d distinct HPO trial param sets for "
+        "%s produce degenerate final fits (%s). Keeping the original best "
+        "params %s — downstream deployment gates will judge it honestly.",
+        len(tried_param_sets),
+        algorithm_name,
+        [(r["trial"], r["reason"]) for r in rejected],
+        best_params,
+    )
+    return guard_meta
 
 
 async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -425,6 +831,67 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         opik = _get_opik_connector()
         hpo_start_time = time.time()
 
+        # Issue #868: final-fit degeneracy guard. The blended HPO objective
+        # can promote params whose final fit collapses (L1 cliff →
+        # intercept-only model, test AUC 0.500 while HPO promised 0.65).
+        # Verify the best params with a final-style fit and fall back to the
+        # next-best DISTINCT trial on genuine collapse. Mutates ``results``
+        # in place when a fallback is adopted; non-fatal on any error.
+        # Defined as a closure so BOTH the traced and untraced paths run it
+        # BEFORE the Opik span attributes are recorded (codex R3 LOW: the
+        # span must reflect the post-guard adopted trial, not the pre-guard
+        # best, or the HPO trace contradicts the returned contract).
+        def _run_degeneracy_guard() -> Optional[Dict[str, Any]]:
+            try:
+                # raw_probabilities_deploy: the conformal/NGBoost candidates
+                # (skip_post_hoc_calibration=True) deploy the raw fit's
+                # probabilities, so the probability-crush slope criterion
+                # applies to them. Everything else gets post-hoc
+                # Platt/isotonic recalibration downstream, which repairs a
+                # crushed-but-monotone fit — only the unrepairable criteria
+                # fire for those.
+                model_candidate_flags = state.get("model_candidate") or {}
+                skip_post_hoc = bool(
+                    model_candidate_flags.get("skip_post_hoc_calibration", False)
+                    if isinstance(model_candidate_flags, dict)
+                    else False
+                )
+                # codex R3 HIGH: the verification fit must use the SAME
+                # training arrays the real final fit consumes — train_model
+                # switches to the resampled data when resampling_applied=True
+                # (model_trainer_node.py), and a verification on the original
+                # distribution can pass while the real fit collapses (or
+                # refuse a candidate that is healthy after resampling).
+                guard_X_train = X_train
+                guard_y_train = y_train_np
+                if state.get("resampling_applied", False):
+                    X_resampled = state.get("X_train_resampled")
+                    y_resampled = state.get("y_train_resampled")
+                    if X_resampled is not None and y_resampled is not None:
+                        guard_X_train = _wrap_with_feature_names(X_resampled, state)
+                        guard_y_train = _ensure_numpy(y_resampled)
+                return _apply_degeneracy_guard(
+                    study=study,
+                    results=results,
+                    model_class=model_class,
+                    algorithm_name=algorithm_name,
+                    default_hyperparameters=default_hyperparameters,
+                    fixed_params=fixed_params,
+                    X_train=guard_X_train,
+                    y_train=guard_y_train,
+                    X_val=X_val,
+                    y_val=y_val_np,
+                    problem_type=problem_type,
+                    raw_probabilities_deploy=skip_post_hoc,
+                )
+            except Exception as guard_error:
+                logger.warning(
+                    "Issue #868 degeneracy guard errored (non-fatal, keeping HPO best params): %s",
+                    guard_error,
+                )
+                return None
+
+        degeneracy_guard_meta: Optional[Dict[str, Any]] = None
         if opik and opik.is_enabled:
             async with opik.trace_agent(
                 agent_name="model_trainer",
@@ -445,11 +912,23 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
                     n_trials=hpo_trials,
                     timeout=timeout_seconds,
                 )
-                # Log HPO metrics to Opik
+                degeneracy_guard_meta = _run_degeneracy_guard()
+                # Log HPO metrics to Opik — post-guard, so the trace matches
+                # the returned contract (adopted trial on guarded runs).
                 hpo_span.set_attribute("best_value", results["best_value"])
                 hpo_span.set_attribute("n_trials_completed", results["n_completed"])
                 hpo_span.set_attribute("n_trials_pruned", results["n_pruned"])
                 hpo_span.set_attribute("duration_seconds", time.time() - hpo_start_time)
+                if degeneracy_guard_meta and degeneracy_guard_meta.get("fired"):
+                    hpo_span.set_attribute("degeneracy_guard_fired", True)
+                    hpo_span.set_attribute(
+                        "degeneracy_guard_original_value",
+                        degeneracy_guard_meta.get("hpo_promise"),
+                    )
+                    hpo_span.set_attribute(
+                        "degeneracy_guard_adopted_trial",
+                        degeneracy_guard_meta.get("adopted_trial"),
+                    )
         else:
             # No Opik tracing available
             results = await optimizer.optimize(
@@ -458,6 +937,7 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
                 n_trials=hpo_trials,
                 timeout=timeout_seconds,
             )
+            degeneracy_guard_meta = _run_degeneracy_guard()
 
         # Merge: defaults < optuna best < fixed params (fixed params have highest priority)
         best_hyperparameters = {
@@ -482,6 +962,11 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
             "hpo_study_name": results["study_name"],
             "hpo_metric": metric,
         }
+
+        # Issue #868: surface the degeneracy-guard decision (declared in
+        # ModelTrainerState so it survives the LangGraph channel boundary).
+        if degeneracy_guard_meta is not None:
+            hpo_output["hpo_degeneracy_guard"] = degeneracy_guard_meta
 
         # Validate output against contract
         is_valid, validation_errors = validate_hpo_output(hpo_output)

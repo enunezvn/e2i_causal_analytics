@@ -135,6 +135,14 @@ class Tier0StateContract(TypedDict, total=False):
     business_utility: NotRequired[float]
 
 
+# Known DESIGNED binary exposures, in fixed preference order (after
+# treatment_arm). codex R4: an allowlist keeps treatment selection
+# deterministic and semantically grounded — a generic any-{0,1}-column scan
+# is column-order dependent and can bind a one-hot fragment as "treatment",
+# silently changing the causal estimand. Extend deliberately per dataset.
+_KNOWN_DESIGNED_BINARY_EXPOSURES: tuple = ("academic_hcp",)
+
+
 class Tier0OutputMapper:
     """Maps a tier0 state dictionary to agent-specific inputs.
 
@@ -209,6 +217,172 @@ class Tier0OutputMapper:
         features = self._get_feature_names()
         return features[:n] if features else []
 
+    def _get_outcome_var(self) -> str:
+        """Resolve the outcome column from the tier0 state's designed target.
+
+        Order of precedence (harness↔data coupling fix, synthetic-CSU 13/13):
+
+        1. ``scope_spec["prediction_target"]`` when it names a real,
+           NON-CONSTANT column of ``eligible_df`` — the synthetic-CSU frames
+           carry the modeling target there (e.g. ``treatment_initiated``)
+           while their legacy ``discontinuation_flag`` column is constant 0
+           (an all-zero outcome degenerates every causal/CATE estimation).
+        2. Legacy ``discontinuation_flag`` when present (the original tier0
+           fixture's target) — preserved verbatim for old caches.
+        3. Literal ``"outcome"`` fallback.
+        """
+        df = self.state["eligible_df"]
+        target = (self.state.get("scope_spec") or {}).get("prediction_target")
+        if target and target in df.columns and df[target].nunique() > 1:
+            return str(target)
+        if "discontinuation_flag" in df.columns:
+            return "discontinuation_flag"
+        return "outcome"
+
+    def _get_binary_treatment(self, outcome_var: str) -> tuple[str, str | None]:
+        """Resolve the binary treatment column and its raw basis column.
+
+        Returns ``(treatment_var, treatment_basis)``:
+
+        * ``("treatment_arm", None)`` — the synthetic-CSU frames carry a
+          DESIGNED binary treatment with a real treated/control split; it is
+          used directly (no derivation, hence no basis column to exclude).
+        * ``("high_hcp_engagement", "hcp_visits")`` — legacy fixture path: the
+          raw ``hcp_visits`` count has zero control units (every patient has
+          >=1 visit), so a median split derives a balanced binary treatment
+          (#606). The basis column must be EXCLUDED from confounders
+          (collinear with the derived treatment).
+        * ``("high_hcp_engagement", <first numeric feature>)`` — last-resort
+          derivation when neither designed column exists.
+        * ``("high_hcp_engagement", None)`` — degenerate (no numeric basis).
+        """
+        df = self.state["eligible_df"]
+        if (
+            "treatment_arm" in df.columns
+            and "treatment_arm" != outcome_var
+            and df["treatment_arm"].nunique() == 2
+        ):
+            return "treatment_arm", None
+
+        # A KNOWN designed binary exposure beats a derived median split.
+        # Measured 2026-06-11 on the hcp_adoption frame (no treatment_arm):
+        # the derived 50/50 split has no causal identity — the estimation
+        # node and the refuter's reconstruction mirror-flipped (+0.2492 vs
+        # −0.2357) and the refutation divergence gate correctly fail-closed.
+        # A real designed binary (academic_hcp, 1149/539) is a genuine
+        # confounded exposure both paths bind identically.
+        #
+        # codex R4 HIGH: the scan is a FIXED-ORDER allowlist of known
+        # designed exposures, NOT a generic any-{0,1}-column scan — a
+        # generic scan is column-order dependent and can fail open to a
+        # one-hot fragment or arbitrary flag, silently changing the causal
+        # estimand. Unknown binaries fall through to the explicit
+        # derivation path (visible in the treatment name).
+        for col in _KNOWN_DESIGNED_BINARY_EXPOSURES:
+            if col not in df.columns or col == outcome_var:
+                continue
+            values = set(df[col].dropna().unique().tolist())
+            if values == {0, 1}:
+                return col, None
+
+        treatment_basis = next((c for c in ("hcp_visits",) if c in df.columns), None)
+        if treatment_basis is None:
+            _numeric_cols = set(df.select_dtypes(include="number").columns)
+            treatment_basis = next(
+                (f for f in self._get_top_features(5) if f in _numeric_cols and f != outcome_var),
+                None,
+            )
+        return "high_hcp_engagement", treatment_basis
+
+    def _add_treatment_column(
+        self,
+        estimation_df: pd.DataFrame,
+        treatment_var: str,
+        treatment_basis: str | None,
+    ) -> None:
+        """Materialize the binary treatment column on ``estimation_df``.
+
+        A designed treatment (``treatment_arm``) is copied as int; a derived
+        treatment is the median split of its basis column; with no basis the
+        column degenerates to 0 (legacy behavior, fail-visible downstream).
+        """
+        df = self.state["eligible_df"]
+        if treatment_var in df.columns:
+            estimation_df[treatment_var] = df[treatment_var].astype(int)
+        elif treatment_basis is not None:
+            threshold = float(df[treatment_basis].median())
+            estimation_df[treatment_var] = (df[treatment_basis] >= threshold).astype(int)
+        else:
+            estimation_df[treatment_var] = 0  # degenerate fallback (no numeric basis)
+
+    def _get_numeric_confounders(
+        self, outcome_var: str, treatment_var: str, treatment_basis: str | None, n: int = 5
+    ) -> list[str]:
+        """Real, non-constant numeric top-features usable as confounders.
+
+        Excludes the outcome, the treatment, the treatment's basis column
+        (collinear with the derived treatment) and CONSTANT columns (e.g. the
+        synthetic frame's all-zero ``discontinuation_flag`` — a constant
+        regressor carries no information and can break estimators).
+        """
+        df = self.state["eligible_df"]
+        _numeric_cols = set(df.select_dtypes(include="number").columns)
+        _exclude = {outcome_var, treatment_var, treatment_basis}
+        return [
+            f
+            for f in self._get_feature_names()
+            if f not in _exclude and f in _numeric_cols and df[f].nunique() > 1
+        ][:n]
+
+    def _build_model_features(self, row_df: pd.DataFrame) -> dict[str, Any]:
+        """Build the MODEL-READY feature dict for a single entity row.
+
+        The tier0 model is trained on the PREPROCESSED matrix (one-hot encoded
+        categoricals + imputed/scaled numerics), NOT on raw entity columns —
+        the state carries ``fitted_preprocessor`` and ``categorical_encoding``
+        precisely so downstream consumers can rebuild that feature space.
+        Mirrors the SHAP rebuild in ``scripts/run_tier0_test.py``
+        (``_raw_feature_cols`` -> ``_apply_categorical_onehot`` ->
+        ``fitted_preprocessor.transform``).
+
+        Falls back to the raw feature dict (restricted to columns that exist
+        in the frame) when no preprocessing artefacts are present — legacy
+        caches whose models trained directly on raw numeric columns.
+        """
+        feature_cols = self._get_feature_names()
+        enc = self.state.get("categorical_encoding") or {}
+        preprocessor = self.state.get("fitted_preprocessor")
+
+        # Map the (possibly one-hot-EXPANDED) feature names back to the
+        # ORIGINAL pre-encode columns present in the raw frame.
+        onehot_out = set(enc.get("onehot_columns") or [])
+        cat_cols = [c for c in (enc.get("columns") or []) if c in row_df.columns]
+        raw_cols = [c for c in feature_cols if c not in onehot_out and c in row_df.columns]
+        raw_cols += [c for c in cat_cols if c not in raw_cols]
+        X = row_df[raw_cols].copy()
+
+        # Re-apply the fitted one-hot encoding so the row carries the IDENTICAL
+        # feature columns the model trained on.
+        encoder = enc.get("encoder")
+        if encoder is not None and cat_cols:
+            arr = encoder.transform(X[cat_cols].fillna("__missing__").astype(str))
+            X = X.drop(columns=cat_cols)
+            for i, col in enumerate(enc.get("onehot_columns") or []):
+                X[col] = arr[:, i]
+            if feature_cols and all(c in X.columns for c in feature_cols):
+                X = X[feature_cols]  # trained feature order
+
+        if preprocessor is None:
+            return dict(X.iloc[0].to_dict())
+
+        transformed = preprocessor.transform(X)
+        names_out = getattr(preprocessor, "feature_names_out_", None)
+        if names_out is not None and len(names_out) == transformed.shape[1]:
+            cols_out = [str(c) for c in names_out]
+        else:
+            cols_out = [str(c) for c in X.columns][: transformed.shape[1]]
+        return {c: float(v) for c, v in zip(cols_out, transformed[0], strict=False)}
+
     def _get_prediction_timestamp(self) -> pd.Timestamp | None:
         """Resolve the prediction timestamp from tier0 state.
 
@@ -271,30 +445,46 @@ class Tier0OutputMapper:
         """
         brand = self.state.get("scope_spec", {}).get("brand", "Kisqali")
         df = self.state["eligible_df"]
+
+        # Derive the causal bindings from the ACTUAL frame schema. The legacy
+        # canned query hardcoded hcp_visits/discontinuation — columns ABSENT
+        # from the synthetic-CSU frame — so the planner correctly failed
+        # closed ("unbound column ... not in schema"). Schema-derived bindings
+        # let the SAME canned query run on every tier0 frame: the designed
+        # ``treatment_arm``/``treatment_initiated`` pair on synthetic-CSU,
+        # the derived ``high_hcp_engagement``/``discontinuation_flag`` pair
+        # on the legacy fixture.
+        outcome_var = self._get_outcome_var()
+        treatment_var, treatment_basis = self._get_binary_treatment(outcome_var)
+        covariates = self._get_numeric_confounders(outcome_var, treatment_var, treatment_basis)
+
         # Numeric-only subset for the causal_effect_estimator tool — same reason
         # as map_to_causal_impact: dowhy/econml raise on the cohort's string
-        # columns (UUIDs, brand, age_group). Outcome + numeric confounders.
-        # Raw hcp_visits is EXCLUDED: step_1 uses a BINARY engagement treatment
-        # derived from it (below), and keeping the count would be collinear with
-        # that treatment (it is the basis of the split).
-        _numeric_cols = set(df.select_dtypes(include="number").columns)
-        _tc_cols = [
-            c
-            for c in ["discontinuation_flag", "prior_treatments", "days_on_therapy"]
-            if c in df.columns and c in _numeric_cols
-        ]
+        # columns (UUIDs, brand, age_group). Outcome + numeric covariates.
+        # The treatment's raw basis (e.g. hcp_visits) is EXCLUDED: step_1 uses
+        # the BINARY treatment derived from it (below), and keeping the count
+        # would be collinear with that treatment (it is the basis of the split).
+        _tc_cols = [c for c in [outcome_var, *covariates] if c in df.columns]
         estimation_df = df[_tc_cols].copy()
-        # Derive a BINARY engagement treatment (median split) so step_1's
-        # causal_effect_estimator runs a genuine treated/control contrast. The
-        # raw hcp_visits count (1..19, every patient >=1) has ZERO control units
-        # and yields a degenerate (causally meaningless) ATE — the same issue
-        # map_to_causal_impact fixes (codex #606 MEDIUM). step_2 uses
-        # prior_treatments, which has a natural treatment-naive (0) control group.
-        if "hcp_visits" in df.columns:
-            _thr = float(df["hcp_visits"].median())
-            estimation_df["high_hcp_engagement"] = (df["hcp_visits"] >= _thr).astype(int)
+        # Materialize the BINARY treatment so step_1's causal_effect_estimator
+        # runs a genuine treated/control contrast (designed ``treatment_arm``
+        # copied directly; legacy median split on hcp_visits — the raw count
+        # has ZERO control units and yields a degenerate ATE, codex #606
+        # MEDIUM).
+        self._add_treatment_column(estimation_df, treatment_var, treatment_basis)
+        _covariate_phrase = ", ".join(covariates[:3]) if covariates else "the available covariates"
         return {
-            "query": (f"What is the causal effect of HCP visits on discontinuation for {brand}?"),
+            # Two facets, each mapping to a REAL advertised tool on the
+            # threaded frame: (1) CAUSAL -> causal_effect_estimator
+            # (treatment/outcome are REAL schema columns the planner can
+            # bind); (2) propensity -> propensity_estimator (treatment +
+            # covariates). The legacy hcp_visits phrasing made the LLM
+            # decompose into facets it could not bind/plan on this schema.
+            "query": (
+                f"What is the causal effect of {treatment_var} on {outcome_var} for "
+                f"{brand}? Also estimate each patient's propensity to receive "
+                f"{treatment_var} given covariates such as {_covariate_phrase}."
+            ),
             "experiment_id": self.state["experiment_id"],
             # #621 rewired the formerly-hardcoded registry tools to compute from
             # a caller-supplied DataFrame and fail-closed without one (no more
@@ -341,41 +531,33 @@ class Tier0OutputMapper:
         - data_source: str
         """
         df = self.state["eligible_df"]
-        features = self._get_top_features(5)
 
-        outcome_var = "discontinuation_flag" if "discontinuation_flag" in df.columns else "outcome"
+        # Outcome: the state's designed prediction target (synthetic-CSU:
+        # ``treatment_initiated``; the frame's ``discontinuation_flag`` is
+        # CONSTANT 0 there and would degenerate estimation). Legacy caches
+        # keep ``discontinuation_flag``.
+        outcome_var = self._get_outcome_var()
 
-        # Derive a BINARY treatment with a real treated/control split. The
-        # fixture's natural candidate ``hcp_visits`` is a 1..19 COUNT — every
-        # patient has >=1 visit, so econml/dowhy's binary-treatment path sees
-        # ZERO control units. That degeneracy (a) makes the ATE meaningless (no
-        # causal contrast) and (b) crashes LinearDML/DRLearner ("unknown
-        # categories [0] in column 0 during transform") because CV folds train
-        # without the empty control category. A median split on HCP engagement
-        # is the well-posed binary causal query a real analyst/connector would
-        # pose ("high vs low HCP engagement -> discontinuation") and yields a
-        # balanced ~50/50 treated/control split. (#606)
-        _numeric_cols = set(df.select_dtypes(include="number").columns)
-        treatment_var = "high_hcp_engagement"
-        treatment_basis = next(
-            (c for c in ("hcp_visits",) if c in df.columns),
-            None,
-        )
-        if treatment_basis is None:
-            # No engagement column: binarize the first numeric non-outcome feature.
-            treatment_basis = next(
-                (f for f in features if f in _numeric_cols and f != outcome_var), None
-            )
+        # Treatment: prefer the frame's DESIGNED binary treatment
+        # (``treatment_arm`` with a real treated/control split — synthetic-CSU
+        # frames). Otherwise derive a BINARY treatment via median split: the
+        # legacy fixture's natural candidate ``hcp_visits`` is a 1..19 COUNT —
+        # every patient has >=1 visit, so econml/dowhy's binary-treatment path
+        # sees ZERO control units. That degeneracy (a) makes the ATE
+        # meaningless (no causal contrast) and (b) crashes LinearDML/DRLearner
+        # ("unknown categories [0] in column 0 during transform") because CV
+        # folds train without the empty control category. (#606)
+        treatment_var, treatment_basis = self._get_binary_treatment(outcome_var)
 
-        # Confounders: numeric top-features excluding the outcome AND the column
-        # the treatment is derived from (raw hcp_visits would be collinear with
-        # the binarized treatment). dowhy/econml cannot consume categorical
-        # string columns (age_group, geographic_region) — exclude them too.
-        _exclude = {outcome_var, treatment_var, treatment_basis}
-        confounders = [f for f in features if f not in _exclude and f in _numeric_cols][:5]
+        # Confounders: real, non-constant numeric top-features excluding the
+        # outcome, the treatment and the treatment's basis column (raw
+        # hcp_visits would be collinear with the binarized treatment).
+        # dowhy/econml cannot consume categorical string columns (age_group,
+        # geographic_region) — excluded via the numeric filter.
+        confounders = self._get_numeric_confounders(outcome_var, treatment_var, treatment_basis)
 
         # Pass ONLY the numeric columns the estimator needs (outcome +
-        # confounders + the derived binary treatment). The agent feeds this
+        # confounders + the binary treatment). The agent feeds this
         # DataFrame straight to dowhy/econml, which raise "could not convert
         # string to float" on the cohort's string columns (patient_journey_id
         # UUIDs, brand, age_group, dates). Subsetting to estimable numeric
@@ -383,14 +565,26 @@ class Tier0OutputMapper:
         # cleaned frame a real data connector returns.
         estimation_cols = [c for c in [outcome_var, *confounders] if c in df.columns]
         estimation_df = df[estimation_cols].copy()
-        if treatment_basis is not None:
-            threshold = float(df[treatment_basis].median())
-            estimation_df[treatment_var] = (df[treatment_basis] >= threshold).astype(int)
-        else:
-            estimation_df[treatment_var] = 0  # degenerate fallback (no numeric basis)
+        self._add_treatment_column(estimation_df, treatment_var, treatment_basis)
+
+        # Smoke-budget row cap (same #606 budget-shaping rationale as the
+        # bounded refutation_config below). MEASURED on the synthetic-CSU
+        # frame: each DoWhy refuter SIMULATION re-fits the estimator WITH
+        # bootstrapped CIs (~100 inner statsmodels refits), costing ~8-9s/sim
+        # nearly independent of row count — so the SIM COUNT below is the
+        # dominant budget knob; the row cap trims the estimation/energy-score
+        # phase and per-refit cost at the margin. A SEEDED subsample of the
+        # REAL frame keeps the suite honest (real rows, both treatment arms,
+        # the same designed confounding) within the smoke budget; full-frame
+        # refutation belongs to the slow-tests lane.
+        _max_estimation_rows = 2500
+        if len(estimation_df) > _max_estimation_rows:
+            estimation_df = estimation_df.sample(
+                n=_max_estimation_rows, random_state=42
+            ).reset_index(drop=True)
 
         return {
-            "query": f"What is the causal effect of high HCP engagement on {outcome_var}?",
+            "query": f"What is the causal effect of {treatment_var} on {outcome_var}?",
             "query_id": str(uuid.uuid4()),
             "treatment_var": treatment_var,
             "outcome_var": outcome_var,
@@ -405,19 +599,24 @@ class Tier0OutputMapper:
             # re-estimations EACH and bootstrap to 500, i.e. ~10 min on OLS /
             # ~60 min on a tree/DML estimator (MEASURED), which no per-agent CI
             # budget can hold.
-            #   * method=ols: a real linear-adjustment estimator; ~1s/refutation
-            #     re-estimation vs ~6s for the energy-score-selected causal_forest.
-            #   * refutation_config: run ALL real refuters with FEW simulations
-            #     (random_common_cause is the dominant cost — DoWhy default 100 ->
-            #     ~140s; bound it like the rest). MEASURED ~25-30s total here.
+            #   * method=ols: a real linear-adjustment estimator; cheapest
+            #     per-refutation re-estimation (vs the energy-score-selected
+            #     causal_forest).
+            #   * refutation_config: run ALL real refuters with FEW simulations.
+            #     MEASURED on the synthetic-CSU frame (2500-row capped, loaded
+            #     box): ~8-9s PER SIMULATION (each re-fit carries ~100 inner
+            #     bootstrap-CI refits), so the 22-sim config blew the 180s
+            #     per-agent SLA (~202s refutation alone). 11 sims ≈ ~100s
+            #     refutation + ~18s estimation/interpretation — inside the SLA
+            #     with margin, still every refuter REAL and represented.
             # Full-sim refutation + energy-score selection are covered by slow-tests.
             "parameters": {
                 "method": "ols",
                 "refutation_config": {
-                    "bootstrap": {"num_bootstraps": 10},
-                    "placebo_treatment": {"num_simulations": 5},
+                    "bootstrap": {"num_bootstraps": 3},
+                    "placebo_treatment": {"num_simulations": 3},
                     "data_subset": {"num_subsets": 2},
-                    "random_common_cause": {"num_simulations": 5},
+                    "random_common_cause": {"num_simulations": 3},
                 },
             },
         }
@@ -488,23 +687,35 @@ class Tier0OutputMapper:
         numeric_cols = df.select_dtypes(include=["int64", "float64"]).columns.tolist()
         categorical_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
 
-        # Outcome variable: prefer 'discontinuation_flag' first (the target we're modeling)
-        if "discontinuation_flag" in df.columns:
-            outcome_var = "discontinuation_flag"
-        elif "trx_total" in df.columns:
-            outcome_var = "trx_total"
-        else:
-            # Use a numeric column
-            outcome_var = numeric_cols[0] if numeric_cols else "outcome"
+        # Outcome variable: the state's designed prediction target first
+        # (synthetic-CSU: ``treatment_initiated`` — its ``discontinuation_flag``
+        # is CONSTANT 0, which made every CATE 0.0 and both responder lists
+        # empty). Legacy fallbacks preserved.
+        outcome_var = self._get_outcome_var()
+        if outcome_var == "outcome":  # neither designed target nor legacy flag
+            if "trx_total" in df.columns:
+                outcome_var = "trx_total"
+            else:
+                outcome_var = numeric_cols[0] if numeric_cols else "outcome"
 
-        # Treatment variable: prefer binary column that's NOT the outcome
-        # For CATE analysis, we need a treatment variable (intervention/exposure)
+        # Treatment variable: prefer the frame's DESIGNED binary treatment
+        # (``treatment_arm`` — real treated/control split, the column the
+        # production dispatcher's INPUT_RESOLVERS bind on this substrate),
+        # then the legacy exposure candidates.
         treatment_var = None
+        if (
+            "treatment_arm" in df.columns
+            and "treatment_arm" != outcome_var
+            and df["treatment_arm"].nunique() == 2
+        ):
+            treatment_var = "treatment_arm"
+
         treatment_candidates = ["hcp_visits", "prior_treatments", "days_on_therapy"]
-        for col in treatment_candidates:
-            if col in df.columns and col != outcome_var:
-                treatment_var = col
-                break
+        if not treatment_var:
+            for col in treatment_candidates:
+                if col in df.columns and col != outcome_var:
+                    treatment_var = col
+                    break
 
         # Fallback: find any binary column that's not outcome
         if not treatment_var:
@@ -529,16 +740,41 @@ class Tier0OutputMapper:
         # These are NOT used as the W (confounders) parameter in CausalForestDML — that is
         # decoupled in cate_estimator.py. segment_vars only drive the _calculate_cate_by_segment
         # loop which computes per-segment CATE estimates after model fitting.
-        segment_vars = [
-            c for c in categorical_cols if c not in {"patient_journey_id", "patient_id", "brand"}
-        ][:3]
+        # The frame's DESIGNED segmentation column comes first when present
+        # (synthetic-CSU ``segment_assignment``); identifier-ish / bookkeeping
+        # columns (patient & HCP ids, dates, train/test split labels) and
+        # high-cardinality columns are NOT patient segments — segmenting on
+        # them yields thousands of singleton "segments" and no honest
+        # responder differentiation.
+        _segment_exclude = {
+            "patient_journey_id",
+            "patient_id",
+            "brand",
+            "hcp_id",
+            "data_split",
+            "journey_start_date",
+        }
+        _max_segment_cardinality = 12
+        _preferred_segments = [c for c in ("segment_assignment",) if c in df.columns]
+        segment_vars = (
+            _preferred_segments
+            + [
+                c
+                for c in categorical_cols
+                if c not in _segment_exclude
+                and c not in _preferred_segments
+                and 1 < df[c].nunique() <= _max_segment_cardinality
+            ]
+        )[:3]
 
-        # Effect modifiers: numeric columns that aren't treatment/outcome
-        # For CATE, effect_modifiers determine heterogeneity - use all available numeric covariates
+        # Effect modifiers: NON-CONSTANT numeric columns that aren't
+        # treatment/outcome (a constant column — e.g. the synthetic frame's
+        # all-zero discontinuation_flag — carries no heterogeneity signal).
         effect_modifiers = [
             c
             for c in numeric_cols
             if c not in {treatment_var, outcome_var, "patient_journey_id", "patient_id"}
+            and df[c].nunique() > 1
         ][:5]
         # If no effect modifiers available, CATE estimation will fail - raise informative error
         if not effect_modifiers:
@@ -704,25 +940,39 @@ class Tier0OutputMapper:
         """
         df = self.state["eligible_df"]
 
-        # Select a patient with outcome_var == 1 (higher risk) so the model
-        # produces a non-zero point_estimate. Random sampling can pick a
-        # near-zero risk patient → point_estimate=0.0 → secondary gate failure.
-        outcome_col = "discontinuation_flag"
+        # Select a patient with outcome == 1 (positive class of the ACTUAL
+        # modeling target — synthetic-CSU: ``treatment_initiated``; legacy:
+        # ``discontinuation_flag``) so the model produces a non-zero
+        # point_estimate. Random sampling can pick a near-zero risk patient
+        # → point_estimate=0.0 → secondary gate failure.
+        outcome_col = self._get_outcome_var()
         if outcome_col in df.columns and (df[outcome_col] == 1).any():
-            sample_row = df[df[outcome_col] == 1].iloc[0]
+            sample_row_df = df[df[outcome_col] == 1].iloc[[0]]
         else:
-            sample_row = df.iloc[0]
+            sample_row_df = df.iloc[[0]]
+        sample_row = sample_row_df.iloc[0]
 
         # Get a sample entity
         sample_entity_id = str(sample_row.get("patient_journey_id", "test_patient_001"))
 
-        # Get feature data for the sample entity
-        feature_cols = self._get_feature_names()
-        sample_features = sample_row[feature_cols].to_dict() if feature_cols else {}
+        # Build the MODEL-READY feature dict: the tier0 model trains on the
+        # PREPROCESSED matrix (one-hot + scaled), so the raw entity row must be
+        # passed through the state's fitted artefacts — feeding raw columns to
+        # the model raised KeyError on the one-hot names
+        # (['geographic_region_midwest', ...] not in index).
+        sample_features = (
+            self._build_model_features(sample_row_df) if self._get_feature_names() else {}
+        )
+
+        # Prediction target follows the scope_spec's designed target when the
+        # tier0 run declares one; legacy caches keep the original label.
+        prediction_target = str(
+            (self.state.get("scope_spec") or {}).get("prediction_target") or "discontinuation_risk"
+        )
 
         return {
             "entity_id": sample_entity_id,
-            "prediction_target": "discontinuation_risk",
+            "prediction_target": prediction_target,
             "features": sample_features,
             "entity_type": "patient",
             "time_horizon": "30d",
@@ -737,7 +987,7 @@ class Tier0OutputMapper:
             # Harness-scoped mapper choice; the prod contract (fail when context
             # is requested but unavailable) is unchanged. (#606 item D)
             "include_context": False,
-            "query": f"Predict discontinuation risk for patient {sample_entity_id}",
+            "query": f"Predict {prediction_target} for patient {sample_entity_id}",
             "session_id": self.state["experiment_id"],
             # Note: deployment_manifest and trained_model are passed to agent constructor
             # via _get_agent_kwargs(), not to synthesize() method

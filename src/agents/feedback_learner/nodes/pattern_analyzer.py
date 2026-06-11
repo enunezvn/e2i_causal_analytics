@@ -61,6 +61,53 @@ def _rating_to_numeric(value: Any) -> Optional[float]:
     return None
 
 
+# Mirror of the ``DetectedPattern`` TypedDict Literals (state.py). The
+# LLM/DSPy pattern paths emit free-form values into these enum-constrained
+# contract fields; measured 2026-06-11: the LLM invented
+# pattern_type='baseline_establishment' → pydantic literal_error at
+# FeedbackLearnerOutput validation, failing the whole agent run.
+_VALID_PATTERN_TYPES: frozenset = frozenset(
+    {"accuracy_issue", "latency_issue", "relevance_issue", "format_issue", "coverage_gap"}
+)
+_VALID_SEVERITIES: frozenset = frozenset({"low", "medium", "high", "critical"})
+
+
+def _sanitize_llm_pattern_enums(
+    pattern_type: Any, severity: Any
+) -> "Optional[tuple[Any, Any]]":  # values verified against the Literal sets below
+    """Validate LLM-emitted enum fields against the DetectedPattern contract.
+
+    Returns ``(pattern_type, severity)`` when usable, ``None`` when the
+    pattern must be DROPPED. Uniform fail-closed (codex R4): BOTH an
+    out-of-contract pattern_type AND an out-of-contract severity drop the
+    whole pattern — the category is the semantic payload, and severity is
+    LOAD-BEARING downstream (learning_extractor emits the model_retrain
+    recommendation only for high/critical), so remapping either would
+    fabricate a decision the model never made. Dropped patterns are
+    surfaced via ``pattern_parse_anomalies`` on the node's state update,
+    never silently discarded.
+    """
+    if pattern_type not in _VALID_PATTERN_TYPES:
+        logger.warning(
+            "Dropping LLM-emitted pattern with out-of-contract pattern_type=%r "
+            "(allowed: %s) — the model invented a category outside the "
+            "DetectedPattern Literal.",
+            pattern_type,
+            sorted(_VALID_PATTERN_TYPES),
+        )
+        return None
+    if severity not in _VALID_SEVERITIES:
+        logger.warning(
+            "Dropping LLM-emitted pattern with out-of-contract severity=%r "
+            "(allowed: %s) — severity gates the retrain path downstream; "
+            "guessing a mapping would fabricate that decision.",
+            severity,
+            sorted(_VALID_SEVERITIES),
+        )
+        return None
+    return (pattern_type, severity)
+
+
 class PatternAnalyzerNode:
     """
     Deep reasoning for pattern detection in feedback.
@@ -111,6 +158,10 @@ class PatternAnalyzerNode:
                     "status": "extracting",
                 }
 
+            # codex R4: per-run reset of the out-of-contract drop counter
+            # (parse sites increment it; surfaced below — never silent).
+            self._enum_drop_count = 0
+
             # Analyze patterns: prefer the optimized DSPy module (closes the
             # self-improvement loop); fall back to LLM, then deterministic.
             result = None
@@ -126,7 +177,7 @@ class PatternAnalyzerNode:
 
             logger.info(f"Pattern analysis complete: {len(result['patterns'])} patterns detected")
 
-            return {
+            out: FeedbackLearnerState = {
                 **state,
                 "detected_patterns": result["patterns"],
                 "pattern_clusters": result["clusters"],
@@ -134,6 +185,21 @@ class PatternAnalyzerNode:
                 "model_used": result.get("model_used", "deterministic"),
                 "status": "extracting",
             }
+            # codex R4 fail-open guard: dropped out-of-contract patterns must
+            # be VISIBLE. "0 patterns detected" after drops is a PARSE
+            # anomaly, not a clean no-findings result — downstream and
+            # observability can distinguish the two via this field.
+            dropped = getattr(self, "_enum_drop_count", 0)
+            if dropped:
+                out["pattern_parse_anomalies"] = {"dropped_out_of_contract": dropped}
+                if not result["patterns"]:
+                    logger.error(
+                        "ALL %d LLM-emitted patterns were out-of-contract and "
+                        "dropped — this run's '0 patterns detected' is a parse "
+                        "anomaly, not a clean no-findings result.",
+                        dropped,
+                    )
+            return out
 
         except Exception as e:
             logger.error(f"Pattern analysis failed: {e}")
@@ -349,16 +415,25 @@ class PatternAnalyzerNode:
         for i, p in enumerate(raw_patterns, start=1):
             if not isinstance(p, dict):
                 continue
+            # LM output is free-form; the TypedDict fields are Literals.
+            # Validate against the contract: drop out-of-contract pattern
+            # types, clamp out-of-contract severities (see
+            # _sanitize_llm_pattern_enums).
+            sanitized = _sanitize_llm_pattern_enums(
+                p.get("type") or p.get("pattern_type", "accuracy_issue"),
+                p.get("severity") or "medium",
+            )
+            if sanitized is None:
+                self._enum_drop_count = getattr(self, "_enum_drop_count", 0) + 1
+                continue
+            ptype, severity = sanitized
             patterns.append(
                 DetectedPattern(
                     pattern_id=f"P{i}",
-                    # LM output is free-form; the TypedDict fields are Literals.
-                    # Mirror the LLM path's `.get(...)` (Any) so the best-effort
-                    # value flows through without a false typeddict-item error.
-                    pattern_type=p.get("type") or p.get("pattern_type", "accuracy_issue"),
+                    pattern_type=ptype,
                     description=str(p.get("description", "")),
                     frequency=int(p.get("frequency", 0) or 0),
-                    severity=p.get("severity") or "medium",
+                    severity=severity,
                     affected_agents=list(p.get("affected_agents", []) or []),
                     example_feedback_ids=[
                         fb["feedback_id"] for fb in feedback_items[:3] if "feedback_id" in fb
@@ -479,13 +554,24 @@ Output JSON:
                 data = json.loads(json_match.group(1))
                 patterns = []
                 for p in data.get("patterns", []):
+                    # LLM enum validation: drop out-of-contract patterns
+                    # (see _sanitize_llm_pattern_enums); drops are counted
+                    # and surfaced as pattern_parse_anomalies, never silent.
+                    sanitized = _sanitize_llm_pattern_enums(
+                        p.get("pattern_type", "accuracy_issue"),
+                        p.get("severity", "medium"),
+                    )
+                    if sanitized is None:
+                        self._enum_drop_count = getattr(self, "_enum_drop_count", 0) + 1
+                        continue
+                    ptype, severity = sanitized
                     patterns.append(
                         DetectedPattern(
                             pattern_id=p.get("pattern_id", "P?"),
-                            pattern_type=p.get("pattern_type", "accuracy_issue"),
+                            pattern_type=ptype,
                             description=p.get("description", ""),
                             frequency=p.get("frequency", 1),
-                            severity=p.get("severity", "medium"),
+                            severity=severity,
                             affected_agents=p.get("affected_agents", []),
                             example_feedback_ids=p.get("example_feedback_ids", []),
                             root_cause_hypothesis=p.get("root_cause_hypothesis", ""),

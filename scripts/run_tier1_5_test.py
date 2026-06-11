@@ -64,6 +64,37 @@ from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _install_networkx_dowhy_compat() -> None:
+    """Alias the renamed networkx d-separation API for dowhy 0.12 (harness-only).
+
+    The pinned dowhy==0.12 calls ``nx.algorithms.d_separated`` inside
+    ``CausalModel.identify_effect`` (dowhy/causal_graph.py), but networkx
+    RENAMED that function to ``is_d_separator`` (3.3) and REMOVED the old name
+    (3.5; the pinned networkx is 3.6.1). Without the alias the causal_impact
+    refutation node fail-closes before any refuter runs ("DoWhy CausalModel
+    reconstruction failed ... no attribute 'd_separated'") — a dependency
+    incompatibility, not an analysis failure (already noted in
+    tests/integration/test_synthetic_causal_gates.py gate_3). The rename is
+    semantics-preserving (identical (G, x, y, z) -> bool contract), so
+    aliasing lets the REAL DoWhy refutation suite execute; nothing is mocked.
+    Harness-scoped on purpose: prod owns its own dependency-resolution fix.
+    """
+    try:
+        import networkx as nx
+    except ImportError:  # harness deps guarantee networkx; stay quiet if absent
+        return
+    if not hasattr(nx.algorithms, "d_separated") and hasattr(nx.algorithms, "is_d_separator"):
+        nx.algorithms.d_separated = nx.algorithms.is_d_separator
+        nx.d_separated = nx.is_d_separator
+
+
+# NOTE (codex R3 MED): the shim is deliberately NOT installed at module
+# import time — importing this module (e.g. from tests) must not mutate
+# global networkx state, or it would mask the prod dependency break
+# (issue #869) for everything else in the process. It is installed inside
+# run_tier1_5_tests() — the harness execution boundary — only.
+
+
 # =============================================================================
 # RESULT DATACLASSES
 # =============================================================================
@@ -211,6 +242,28 @@ class AgentTestResult:
 from src.agents.orchestrator._agent_method_map import get_harness_configs
 
 AGENT_CONFIGS = get_harness_configs()
+
+# Base per-agent timeout when neither the agent config nor the CLI provides one.
+DEFAULT_AGENT_TIMEOUT_SECONDS = 30.0
+
+
+def resolve_agent_timeout(config: dict[str, Any], cli_timeout: float | None) -> float:
+    """Resolve the effective per-agent timeout.
+
+    An EXPLICIT CLI ``--timeout`` acts as a FLOOR, never a silent cap: a
+    per-agent configured timeout LONGER than the CLI value is preserved
+    (heavy agents keep their budget), but a SHORTER configured value (e.g.
+    experiment_monitor's 20s) must not cap the run below what the caller
+    explicitly asked for — on a LOKY-serialized box that capped
+    ``--timeout 180`` down to 20s and timed the agent out. Without a CLI
+    value, the per-agent config (or the 30s base default) applies unchanged.
+    """
+    configured = config.get("timeout")
+    if cli_timeout is None:
+        return float(configured if configured is not None else DEFAULT_AGENT_TIMEOUT_SECONDS)
+    if configured is None:
+        return float(cli_timeout)
+    return float(max(configured, cli_timeout))
 
 
 # =============================================================================
@@ -379,9 +432,17 @@ def _get_agent_kwargs(
             model_id = tier0_state.get("experiment_id", "tier0_model")
             feature_names = tier0_state.get("feature_names")  # Get from tier0 state
 
-            # Compute population discontinuation rate for baseline model
+            # Compute the population base rate of the ACTUAL modeling target
+            # for the baseline model. The synthetic-CSU frames model
+            # scope_spec.prediction_target (e.g. treatment_initiated) and
+            # carry a CONSTANT-0 legacy discontinuation_flag — using that
+            # would feed a fabricated 0.0 prior. Legacy caches (no
+            # prediction_target) keep the discontinuation rate.
             eligible_df = tier0_state.get("eligible_df")
-            if eligible_df is not None and "discontinuation_flag" in eligible_df.columns:
+            target_col = (tier0_state.get("scope_spec") or {}).get("prediction_target")
+            if eligible_df is not None and target_col and target_col in eligible_df.columns:
+                pop_rate = float(eligible_df[target_col].mean())
+            elif eligible_df is not None and "discontinuation_flag" in eligible_df.columns:
                 pop_rate = float(eligible_df["discontinuation_flag"].mean())
             else:
                 pop_rate = 0.3  # Reasonable default
@@ -1781,7 +1842,7 @@ async def run_tests(
     agents: list[str] | None = None,
     skip_observability: bool = False,
     output_path: str | None = None,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float | None = None,
     verbose: bool = True,
 ) -> dict[str, Any]:
     """Run all agent tests.
@@ -1793,7 +1854,8 @@ async def run_tests(
         agents: List of agent names to test (None = all)
         skip_observability: Skip Opik trace verification
         output_path: Path to save JSON results
-        timeout_seconds: Timeout per agent
+        timeout_seconds: Explicit per-agent timeout FLOOR (None = use each
+            agent's configured timeout, defaulting to 30s)
         verbose: Show detailed output for each agent
 
     Returns:
@@ -1806,6 +1868,12 @@ async def run_tests(
         QualityGateValidator,
         Tier0OutputMapper,
     )
+
+    # Harness execution boundary: install the networkx/dowhy compat alias
+    # HERE (not at module import — codex R3 MED: importing this module must
+    # not mutate global networkx state and mask the prod dependency break,
+    # issue #869).
+    _install_networkx_dowhy_compat()
 
     print_header("TIER 1-5 AGENT TESTING FRAMEWORK")
 
@@ -1882,8 +1950,10 @@ async def run_tests(
     total_start = time.time()
 
     for agent_name, config in agents_to_test.items():
-        # Use per-agent timeout if specified, otherwise use global timeout
-        agent_timeout = config.get("timeout", timeout_seconds)
+        # Per-agent timeout; an explicit CLI --timeout is a FLOOR (see
+        # resolve_agent_timeout) so a short per-agent config value cannot
+        # silently cap the run below what the caller asked for.
+        agent_timeout = resolve_agent_timeout(config, timeout_seconds)
         result = await test_agent(
             agent_name=agent_name,
             config=config,
@@ -2174,8 +2244,12 @@ def main():
     parser.add_argument(
         "--timeout",
         type=float,
-        default=30.0,
-        help="Timeout per agent in seconds (default: 30)",
+        default=None,
+        help=(
+            "Per-agent timeout FLOOR in seconds: per-agent configured timeouts "
+            "LONGER than this are preserved, shorter ones are raised to it. "
+            "Default: each agent's configured timeout (30s base)."
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -2320,7 +2394,11 @@ def main():
             md_content += (
                 f"- **Observability**: {'skipped' if args.skip_observability else 'enabled'}\n"
             )
-            md_content += f"- **Timeout**: {args.timeout}s per agent\n\n"
+            md_content += (
+                f"- **Timeout**: {args.timeout}s floor per agent\n\n"
+                if args.timeout is not None
+                else "- **Timeout**: per-agent config (30s base)\n\n"
+            )
             md_content += "## Results\n\n"
             md_content += "```\n"
             md_content += output_buffer.getvalue()

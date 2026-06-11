@@ -190,6 +190,11 @@ class FeedbackLearnerState(TypedDict):
     # === PATTERN ANALYSIS ===
     detected_patterns: NotRequired[List[DetectedPattern]]
     pattern_clusters: NotRequired[Dict[str, List[str]]]
+    # codex R4: count of LLM-emitted patterns dropped for violating the
+    # DetectedPattern enum contract. Surfaced so "0 patterns detected" after
+    # a parse-anomaly run is distinguishable from a clean no-findings run
+    # (never silently fail-open).
+    pattern_parse_anomalies: NotRequired[Dict[str, Any]]
 
     # === LEARNING OUTPUTS ===
     learning_recommendations: NotRequired[List[LearningRecommendation]]
