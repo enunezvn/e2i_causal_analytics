@@ -1262,7 +1262,14 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     # ``_adaptive_inputs`` or ``baseline_test_auc`` are absent (fixed
     # mode), it returns ``success_criteria`` unchanged.
     success_criteria = _apply_adaptive_criteria_overlay(
-        success_criteria, metrics_result["test_metrics"]
+        success_criteria,
+        metrics_result["test_metrics"],
+        # Issue #866: thread the materialized split sizes so the overfit/
+        # calibration caps reflect the noise floor of the splits the gated
+        # metrics are measured on (delta: train vs val; calibration: test).
+        n_train=int(len(y_train_np)) if y_train_np is not None else None,
+        n_val=int(len(y_val_np)) if y_val_np is not None else None,
+        n_test=int(len(y_test_np)) if y_test_np is not None else None,
     )
 
     # Check success criteria
@@ -3826,6 +3833,10 @@ def _check_success_criteria(
 def _apply_adaptive_criteria_overlay(
     success_criteria: Dict[str, Any],
     test_metrics: Dict[str, Any],
+    *,
+    n_train: Optional[int] = None,
+    n_val: Optional[int] = None,
+    n_test: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Recompute v3 adaptive thresholds with the live ``baseline_test_auc``.
 
@@ -3880,6 +3891,12 @@ def _apply_adaptive_criteria_overlay(
             feature_count=inputs["feature_count"],
             regime=inputs.get("regime"),
             deployment_intent=deployment_intent,
+            # Issue #866: the materialized split sizes (known only here, at
+            # evaluation time) scale the overfit/calibration caps to the
+            # sampling-noise floor of the split each metric is measured on.
+            n_train=n_train,
+            n_val=n_val,
+            n_test=n_test,
         )
     except (KeyError, ValueError, TypeError) as exc:
         logger.warning(

@@ -21,6 +21,7 @@ the fixed-threshold scheme. Full design contract at
 """
 
 import logging
+import math
 import os
 from typing import Any, Dict, List, Literal, Optional
 
@@ -106,6 +107,64 @@ _COMMERCIAL_LIFT_FLOOR: float = 0.08
 _COMMERCIAL_P_T: float = 0.05
 
 
+# --------------------------------------------------------------------------- #
+# Issue #866 — evaluation-split-size-aware cap scaling.                        #
+# --------------------------------------------------------------------------- #
+# Evidence (synthetic-CSU gold-standard run, 2026-06-10, known-clean data by
+# construction): at validation splits of ~590/337 rows the sampling noise of a
+# validation AUC alone is ±0.022–0.030 (Hanley-McNeil), so the fixed 0.03
+# train→val cap sat at ~1.3σ of pure noise and blocked statistically clean
+# models (measured clean deltas 0.0397/0.0317); the fixed ECE cap (0.05) sat
+# BELOW the n_test=254 perfect-calibration 10-bin noise floor (~0.079 mean).
+# When the evaluator threads the materialized split sizes, the caps widen to
+# the noise floor of the split each metric is measured on; the v3 floors are
+# kept as minima, so the scaling can only LOOSEN, never tighten.
+#
+# AUC anchor for the Hanley-McNeil SE: the SE varies <±10% across the
+# plausible 0.60–0.85 working range, so a fixed mid-range anchor keeps the
+# cap independent of the model's own (gameable) measured AUC.
+_SE_AUC_ANCHOR: float = 0.70
+# k in cap = floor ∨ k·SE — a ~97.7% one-sided noise quantile.
+_CAP_SE_MULTIPLIER: float = 2.0
+# Mirrors the evaluator's calibration_analysis n_bins=10.
+_ECE_BINS: int = 10
+# van Calster 2019's moderate-calibration band (slope ±0.15, |intercept|
+# ≤ 0.30) presumes ~1000+ validation rows (cf. Riley 2021 minimum-n work,
+# where SE(slope) at n≈1000 ≈ 0.07–0.08, i.e. the band ≈ 2·SE). Below the
+# anchor the band widens by sqrt(anchor/n) to admit the same noise quantile.
+_CALIBRATION_ANCHOR_N: int = 1000
+# FAIL-CLOSED guards on the scaling (codex R1 HIGH, PR #865): split_enforcer
+# admits splits as small as 10 rows, where the unbounded SE scaling produced
+# delta cap ≈ 0.35 / slope cap ≈ 0.47 — wide enough to deploy severely
+# overfit/miscalibrated models. Below _MIN_EVAL_SUPPORT rows the gated
+# metric has no statistical support, so NO loosening is applied (the strict
+# v3 floors stay — the deny path); at/above it, the scaled caps are clamped
+# to hard ceilings: delta ≤ 0.10 (the loosest historical fpr tier — never
+# looser than the pre-#866 maximum), slope ≤ 2× the van Calster band,
+# intercept ≤ 0.60, ECE ≤ 0.15.
+_MIN_EVAL_SUPPORT: int = 100
+_MAX_TRAIN_VAL_DELTA_CAP: float = 0.10
+_MAX_SLOPE_DEV_CAP: float = 0.30
+_MAX_INTERCEPT_CAP: float = 0.60
+_MAX_ECE_CAP: float = 0.15
+
+
+def _hanley_mcneil_se_auc(auc: float, n: int, prevalence: float) -> float:
+    """Hanley & McNeil (1982) standard error of an AUC measured on ``n`` rows.
+
+    ``n_pos``/``n_neg`` are floored at 1 so degenerate inputs return a large
+    (maximally conservative-loose) SE instead of dividing by zero.
+    """
+    n_pos = max(float(n) * prevalence, 1.0)
+    n_neg = max(float(n) * (1.0 - prevalence), 1.0)
+    q1 = auc / (2.0 - auc)
+    q2 = (2.0 * auc * auc) / (1.0 + auc)
+    var = (
+        auc * (1.0 - auc) + (n_pos - 1.0) * (q1 - auc * auc) + (n_neg - 1.0) * (q2 - auc * auc)
+    ) / (n_pos * n_neg)
+    return math.sqrt(max(var, 0.0))
+
+
 def _normalize_deployment_intent(value: Any) -> str:
     """Return a valid deployment-intent literal (defaults to ``"clinical"``)."""
     return value if value in _VALID_DEPLOYMENT_INTENTS else DEFAULT_DEPLOYMENT_INTENT
@@ -150,6 +209,9 @@ def adaptive_success_criteria(
     feature_count: int,
     regime: Optional[Literal["default", "clean", "adverse"]] = None,
     deployment_intent: Optional[Literal["clinical", "commercial"]] = None,
+    n_train: Optional[int] = None,
+    n_val: Optional[int] = None,
+    n_test: Optional[int] = None,
 ) -> tuple[Dict[str, float], set[str]]:
     """Return ``(thresholds, skipped)`` per the v3 (Option C) design contract.
 
@@ -174,12 +236,19 @@ def adaptive_success_criteria(
     silent-skip vulnerability.
 
     Args:
-        n_samples: training-split row count.
+        n_samples: full-frame row count (the runner feeds ``len(df)``).
         prevalence: positive-class rate, in [0, 1].
         baseline_auc: stratified-dummy baseline AUC (consumed verbatim).
         feature_count: number of features after preprocessing.
         regime: ``"default"``, ``"clean"``, ``"adverse"``, or ``None``
             (treated as ``"clean"``).
+        n_train / n_val / n_test: materialized split sizes, available only at
+            evaluation time (the model_trainer overlay threads them; the
+            scope-time path passes ``None``). When present, the overfit and
+            calibration caps widen to the sampling-noise floor of the split
+            each metric is measured on (issue #866): ``train_val_auc_delta``
+            is measured train-vs-validation, the calibration metrics on the
+            test split. ``None`` preserves the fixed v3 floors exactly.
 
     Returns:
         ``(thresholds, skipped)``. Invariant:
@@ -244,8 +313,20 @@ def adaptive_success_criteria(
 
     # Calibration quality (v3, van Calster 2019 "moderate calibration"):
     # slope ∈ [0.85, 1.15] and |intercept| ≤ 0.30. Regime-independent.
-    thresholds["maximum_calibration_slope_deviation"] = 0.15
-    thresholds["maximum_calibration_intercept_magnitude"] = 0.30
+    # Issue #866: both metrics are measured on the TEST split; below the
+    # ~1000-row anchor the published band is narrower than its own sampling
+    # noise, so it widens by sqrt(anchor/n_test). Floors preserved at/above
+    # the anchor (and whenever n_test is unknown).
+    # FAIL-CLOSED guard (codex R1): below _MIN_EVAL_SUPPORT test rows the
+    # calibration metrics have no statistical support — keep the strict
+    # floors; at/above it, clamp the widened band to the hard ceilings.
+    cal_scale: float = 1.0
+    if n_test is not None and _MIN_EVAL_SUPPORT <= n_test < _CALIBRATION_ANCHOR_N:
+        cal_scale = math.sqrt(_CALIBRATION_ANCHOR_N / n_test)
+    thresholds["maximum_calibration_slope_deviation"] = min(0.15 * cal_scale, _MAX_SLOPE_DEV_CAP)
+    thresholds["maximum_calibration_intercept_magnitude"] = min(
+        0.30 * cal_scale, _MAX_INTERCEPT_CAP
+    )
 
     # Lift over baseline: skipped when AUC SE proxy is too large for the
     # lift estimate to be stable (S1 fix — Hanley-McNeil-style SE at
@@ -261,19 +342,54 @@ def adaptive_success_criteria(
         skipped.add("minimum_lift_over_baseline")
 
     # ECE: tighten for N >= 1000 (binomial bin-occupancy noise drops).
-    thresholds["maximum_calibration_error"] = 0.05 if n_samples >= 1000 else 0.10
+    # Issue #866: ECE is measured on the TEST split with B=10 bins; under
+    # PERFECT calibration its expectation is already ≈ sqrt(2/π)·SE_bin with
+    # SE_bin = 0.5·sqrt(B/n_test) (per-bin binomial noise, p(1−p) ≤ 0.25),
+    # so the cap must sit above that noise floor: mean + k·SD, where
+    # SD(ECE) = SE_bin·sqrt(1−2/π)/sqrt(B) (mean of B folded-normal |gaps|).
+    # FAIL-CLOSED guard (codex R1): no loosening below _MIN_EVAL_SUPPORT
+    # test rows; the widened cap is clamped to _MAX_ECE_CAP above it.
+    ece_cap: float = 0.05 if n_samples >= 1000 else 0.10
+    if n_test is not None and n_test >= _MIN_EVAL_SUPPORT:
+        se_bin = 0.5 * math.sqrt(_ECE_BINS / n_test)
+        ece_noise_mean = math.sqrt(2.0 / math.pi) * se_bin
+        ece_noise_sd = se_bin * math.sqrt(1.0 - 2.0 / math.pi) / math.sqrt(_ECE_BINS)
+        ece_cap = max(
+            ece_cap, min(ece_noise_mean + _CAP_SE_MULTIPLIER * ece_noise_sd, _MAX_ECE_CAP)
+        )
+    thresholds["maximum_calibration_error"] = ece_cap
 
     # Train-val Δ: feature-density step function (S2 fix — replaces the
     # v1 false-Riley linear formula that clipped to a constant).
     fpr: float = feature_count / n_samples
     if fpr <= 1.0 / 50.0:
-        thresholds["maximum_train_val_delta"] = 0.03
+        delta_cap: float = 0.03
     elif fpr <= 1.0 / 30.0:
-        thresholds["maximum_train_val_delta"] = 0.05
+        delta_cap = 0.05
     elif fpr <= 1.0 / 15.0:
-        thresholds["maximum_train_val_delta"] = 0.07
+        delta_cap = 0.07
     else:
-        thresholds["maximum_train_val_delta"] = 0.10
+        delta_cap = 0.10
+    # Issue #866: the delta is |AUC(train) − AUC(validation)|, two AUCs each
+    # carrying Hanley-McNeil sampling noise. Under zero true overfit the
+    # delta's own SE is sqrt(SE²(n_train)+SE²(n_val)); a cap below k·that SE
+    # fails clean models on noise (measured: clean delta 0.0397 at n_val=591
+    # vs the fixed 0.03). The feature-density tier stays as the floor.
+    # FAIL-CLOSED guard (codex R1): no loosening below _MIN_EVAL_SUPPORT
+    # validation rows; the widened cap is clamped to the loosest historical
+    # fpr tier (_MAX_TRAIN_VAL_DELTA_CAP) above it.
+    if n_val is not None and n_val >= _MIN_EVAL_SUPPORT:
+        se_val = _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, n_val, prevalence)
+        se_train = (
+            _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, n_train, prevalence)
+            if n_train is not None and n_train > 0
+            else 0.0
+        )
+        delta_cap = max(
+            delta_cap,
+            min(_CAP_SE_MULTIPLIER * math.hypot(se_val, se_train), _MAX_TRAIN_VAL_DELTA_CAP),
+        )
+    thresholds["maximum_train_val_delta"] = delta_cap
 
     return thresholds, skipped
 

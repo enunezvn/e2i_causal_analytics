@@ -161,3 +161,133 @@ class TestCalibrationSlopeDeviationOf:
     )
     def test_missing_or_nonfinite_sorts_last(self, result: object) -> None:
         assert math.isinf(_calibration_slope_deviation_of(result))  # type: ignore[arg-type]
+
+
+# --------------------------------------------------------------------------- #
+# Gate-result-aware deployability (synthetic-CSU persistence finding,         #
+# 2026-06-10): the legacy ``overfitting_severity`` field is NEVER produced by #
+# the trainer result dicts, so the deployable-pool partition silently fell    #
+# back to the full pool and the raw-AUC argmax picked a severely overfit      #
+# XGBoost (train→val Δ 0.1873) over a deployable LR 0.002 AUC below it. The   #
+# Step 5b history entries must carry the candidate's own EVALUATED gate       #
+# results (success_criteria_results), which do exist.                         #
+# --------------------------------------------------------------------------- #
+
+
+class TestGateResultAwareSelection:
+    def test_persistence_case_overfit_raw_auc_winner_loses_to_deployable_lr(self) -> None:
+        """The measured 2026-06-10 persistence ranking: XGBoost=0.635,
+        LightGBM=0.635, LogisticRegression=0.633, LR_Conformal=0.500. The
+        severely-overfit XGBoost (train→val Δ 0.1873, overfit gate False) had
+        the LOWEST slope deviation among the AUC-tied set, so the legacy
+        calibration tiebreak picked IT — stranding the cohort. With evaluated
+        gate results in the entries the deployable pool excludes XGB/LGBM and
+        LR (slope dev worse than XGB's but inside its own evaluated scaled
+        gate) must win."""
+        hist = [
+            {
+                "algorithm": "XGBoost",
+                "auc_roc": 0.635,
+                "calibration_slope_deviation": 0.1534,  # best-calibrated of the tied set
+                "overfit_gate_met": False,  # train→val Δ 0.1873: genuinely overfit
+                "slope_gate_met": True,
+                "overfitting_severity": None,  # what production actually emits
+            },
+            {
+                "algorithm": "LightGBM",
+                "auc_roc": 0.635,
+                "calibration_slope_deviation": 0.30,
+                "overfit_gate_met": False,
+                "slope_gate_met": False,
+                "overfitting_severity": None,
+            },
+            {
+                "algorithm": "LogisticRegression",
+                "auc_roc": 0.633,
+                "calibration_slope_deviation": 0.18,  # worse than XGB's, within scaled gate
+                "overfit_gate_met": True,
+                "slope_gate_met": True,
+                "overfitting_severity": None,
+            },
+            {
+                "algorithm": "LogisticRegression_Conformal",
+                "auc_roc": 0.500,
+                "calibration_slope_deviation": 0.02,
+                "overfit_gate_met": True,
+                "slope_gate_met": True,
+                "overfitting_severity": None,
+            },
+        ]
+        assert _select_champion(hist)["algorithm"] == "LogisticRegression"
+
+    def test_all_gates_failed_falls_back_to_full_pool_argmax(self) -> None:
+        """No candidate passes its evaluated gates → pool reverts to all
+        candidates and the legacy AUC argmax (calibration tiebreak) applies."""
+        hist = [
+            {
+                "algorithm": "overfit_hi",
+                "auc_roc": 0.66,
+                "calibration_slope_deviation": 0.05,
+                "overfit_gate_met": False,
+                "slope_gate_met": True,
+            },
+            {
+                "algorithm": "overfit_lo",
+                "auc_roc": 0.61,
+                "calibration_slope_deviation": 0.04,
+                "overfit_gate_met": False,
+                "slope_gate_met": True,
+            },
+        ]
+        assert _select_champion(hist)["algorithm"] == "overfit_hi"
+
+    def test_missing_gate_fields_fall_back_to_legacy_severity(self) -> None:
+        """Entries without the gate fields keep the legacy semantics
+        (overfitting_severity + fixed slope check) — backward compatible."""
+        hist = [
+            {
+                "algorithm": "legacy_overfit",
+                "auc_roc": 0.640,
+                "calibration_slope_deviation": 0.41,
+                "overfitting_severity": "severe",
+            },
+            {
+                "algorithm": "legacy_deployable",
+                "auc_roc": 0.620,
+                "calibration_slope_deviation": 0.06,
+                "overfitting_severity": "none",
+            },
+        ]
+        assert _select_champion(hist)["algorithm"] == "legacy_deployable"
+
+
+class TestCandidateHistoryEntry:
+    """The Step 5b history-entry builder must carry the candidate's own
+    evaluated gate results so ``_select_champion`` can see deployability."""
+
+    def test_entry_carries_evaluated_gate_results(self) -> None:
+        from scripts.run_tier0_test import _candidate_history_entry
+
+        result = {
+            "auc_roc": 0.635,
+            "test_metrics": {"calibration_slope_deviation": 0.1534},
+            "success_criteria_results": {
+                "maximum_train_val_delta": False,
+                "maximum_calibration_slope_deviation": True,
+            },
+            "model_usefulness": "acceptable",
+        }
+        entry = _candidate_history_entry("XGBoost", result, is_primary=False)
+        assert entry["algorithm"] == "XGBoost"
+        assert entry["auc_roc"] == 0.635
+        assert entry["overfit_gate_met"] is False
+        assert entry["slope_gate_met"] is True
+        assert entry["is_primary"] is False
+
+    def test_entry_defaults_when_gates_absent(self) -> None:
+        from scripts.run_tier0_test import _candidate_history_entry
+
+        entry = _candidate_history_entry("LogisticRegression", {"auc_roc": 0.61}, is_primary=True)
+        assert entry["overfit_gate_met"] is None
+        assert entry["slope_gate_met"] is None
+        assert entry["is_primary"] is True

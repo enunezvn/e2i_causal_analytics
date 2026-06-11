@@ -101,6 +101,27 @@ def test_exports_all_four_cohort_contract_dirs(snapshot_dir):
         assert df["is_synthetic"].all()
         registry = json.loads(registry_path.read_text())
         assert registry[0]["split_strategy"] == "stratified_random"
+        # v3-contract columns the GE ml_patients suite requires (data_preparer
+        # auto-detect needs patient_journey_id + discontinuation_flag, else it
+        # validates against the event-level suite and the QC gate blocks).
+        # Mirrors the mart converters: discontinuation_flag is a constant-0
+        # placeholder (mart initiation: null_rate 0.0, values {0}) — no leak.
+        # data_quality_score feeds the runner's step-3 inclusion criteria —
+        # absent, CohortConstructor fails closed (CC_001) and excludes ALL rows.
+        for col in (
+            "patient_journey_id",
+            "patient_id",
+            "brand",
+            "discontinuation_flag",
+            "data_quality_score",
+        ):
+            assert col in df.columns, f"{cohort}: missing v3 contract column {col}"
+        assert df["patient_journey_id"].notna().all() and df["patient_id"].notna().all()
+        assert df["data_quality_score"].between(0, 1).all()
+        if target != "discontinued_180d":
+            assert (df["discontinuation_flag"] == 0).all(), (
+                f"{cohort}: discontinuation_flag must be the constant-0 placeholder"
+            )
 
 
 def test_patient_cohorts_exclude_leak_and_cross_outcome_columns(snapshot_dir):

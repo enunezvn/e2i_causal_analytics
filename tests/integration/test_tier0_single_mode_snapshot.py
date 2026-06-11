@@ -193,7 +193,10 @@ EXPECTED_TIER0_CLI_DESCRIPTORS: Dict[str, Dict[str, Any]] = {
     },
     "--feature-manifest-source": {
         "default": None,
-        "choices": ["csu", "optum", "synthetic"],
+        # synthetic_csu added with the synthetic-CSU tier0 e2e enablement
+        # (declared-safe-by-construction manifest for the causal-validation
+        # dataset's tier0 exports; see synthetic_csu_feature_manifest.py).
+        "choices": ["csu", "optum", "synthetic", "synthetic_csu"],
         "nargs": None,
         "type_name": "str",
         "action": "_StoreAction",

@@ -126,3 +126,19 @@ def test_every_registered_source_round_trips_as_override(source: str) -> None:
     with the registry, so adding a source that the resolver would reject (or
     forgetting to register one a runner already passes) trips here."""
     assert resolve_manifest_source(None, source) == source
+
+
+def test_resolve_ambiguous_path_with_valid_override_defers_to_override() -> None:
+    """M1's own error message instructs 'pass an explicit feature_manifest_source
+    to disambiguate' — so an ambiguous path WITH a valid in-set override must
+    resolve to the override, not raise. Real case: data/rwd/synthetic_CSU/...
+    segments match both 'synthetic' (prefix rule) and 'synthetic_csu' (exact)."""
+    assert (
+        resolve_manifest_source("data/rwd/synthetic_CSU/tier0/initiation", "synthetic_csu")
+        == "synthetic_csu"
+    )
+
+
+def test_resolve_ambiguous_path_without_override_still_raises() -> None:
+    with pytest.raises(ValueError, match="ambiguous|multiple"):
+        resolve_manifest_source("data/rwd/synthetic_CSU/tier0/initiation", None)

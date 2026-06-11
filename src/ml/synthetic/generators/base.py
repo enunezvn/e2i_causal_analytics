@@ -5,6 +5,7 @@ Provides common functionality for all entity generators.
 """
 
 from abc import ABC, abstractmethod
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Dict, Generic, Iterator, List, Optional, TypeVar
@@ -287,8 +288,26 @@ class BaseGenerator(ABC, Generic[T]):
         """
         Assign data splits based on dates (chronological).
 
+        Boundaries are cut on cumulative ROW share, not unique-date count
+        (#864): under ``anchor_to_now`` the date distribution is bimodal
+        (~60% of rows in the last ~30 unique days), so unique-date quantiles
+        mapped the dense recent window into holdout (observed holdout 61% /
+        train 25% of rows).
+
+        Rows are assigned chronologically, filling each split's row quota in
+        date order. A date that straddles a quota boundary is CHUNKED across
+        the adjacent splits (deterministically, in input-row order): the
+        anchor cap collapses derived tables' future tail onto a single
+        reference date carrying 30-50% of rows (measured 40.6% of
+        treatment_events), which no whole-date scheme can reconcile with the
+        designed ratios. Within a single date there is no temporal order to
+        leak, and the SplitValidator's temporal check is strict (``>``), so
+        equal boundary dates across adjacent splits are leak-safe. Every
+        non-boundary date still lands whole on one side.
+
         Args:
-            dates: List of ISO date strings.
+            dates: List of ISO date strings (or any homogeneous sortable
+                date-like values, e.g. pd.Timestamp).
             ratios: Split ratios. Uses default 60/20/15/5 if not provided.
 
         Returns:
@@ -300,29 +319,55 @@ class BaseGenerator(ABC, Generic[T]):
             "test": 0.15,
             "holdout": 0.05,
         }
+        if not dates:
+            return []
 
-        # Sort dates to get boundaries
-        sorted_dates = sorted(set(dates))
-        n_unique = len(sorted_dates)
+        counts = Counter(dates)
+        sorted_dates = sorted(counts)
+        n_rows = len(dates)
 
-        # Calculate cumulative boundaries
-        cum_train = int(n_unique * ratios["train"])
-        cum_val = int(n_unique * (ratios["train"] + ratios["validation"]))
-        cum_test = int(n_unique * (ratios["train"] + ratios["validation"] + ratios["test"]))
+        # Cumulative row quotas per split (the last absorbs rounding).
+        targets: List[tuple[str, int]] = []
+        cum_ratio = 0.0
+        for split in ("train", "validation", "test"):
+            cum_ratio += ratios[split]
+            targets.append((split, int(round(cum_ratio * n_rows))))
+        targets.append(("holdout", n_rows))
 
-        # Create date-to-split mapping
-        date_to_split = {}
-        for i, d in enumerate(sorted_dates):
-            if i < cum_train:
-                date_to_split[d] = "train"
-            elif i < cum_val:
-                date_to_split[d] = "validation"
-            elif i < cum_test:
-                date_to_split[d] = "test"
+        # Walk dates chronologically, filling quotas; chunk boundary dates.
+        allocation: Dict[Any, List[List[Any]]] = {}
+        assigned = 0
+        tier = 0
+        for d in sorted_dates:
+            remaining = counts[d]
+            chunks: List[List[Any]] = []
+            while remaining > 0:
+                split, bound = targets[tier]
+                room = bound - assigned
+                if room <= 0 and tier < len(targets) - 1:
+                    tier += 1
+                    continue
+                take = min(remaining, room) if tier < len(targets) - 1 else remaining
+                if take <= 0:
+                    tier += 1
+                    continue
+                chunks.append([split, take])
+                assigned += take
+                remaining -= take
+            allocation[d] = chunks
+
+        # Emit per input row, consuming each date's chunks in order so the
+        # boundary-date chunking is deterministic in input-row order.
+        out: List[str] = []
+        for d in dates:
+            chunks = allocation[d]
+            split, left = chunks[0]
+            out.append(split)
+            if left == 1:
+                chunks.pop(0)
             else:
-                date_to_split[d] = "holdout"
-
-        return [date_to_split[d] for d in dates]
+                chunks[0][1] = left - 1
+        return out
 
     def _log(self, message: str) -> None:
         """Log message if verbose mode enabled."""

@@ -21,6 +21,7 @@ Hops 3 and 4 are covered by ``tests/integration/test_adaptive_criteria_e2e.py``
 """
 
 import asyncio
+import math
 from typing import Any, Dict
 
 import numpy as np
@@ -113,8 +114,11 @@ def test_evaluate_model_returns_overlaid_success_criteria() -> None:
     # v3 active gates inserted by overlay.
     assert sc["minimum_net_benefit_at_p_t"] == pytest.approx(0.0, abs=1e-6)
     assert sc["minimum_mcc"] == pytest.approx(0.45, abs=1e-6)
-    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-6)
-    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-6)
+    # Issue #866 + codex R1 guard: the mock splits (n_test=20) are BELOW the
+    # _MIN_EVAL_SUPPORT threshold, so the calibration caps stay at the strict
+    # v3 floors — fail-closed (no statistical support, no loosening).
+    assert sc["maximum_calibration_slope_deviation"] == pytest.approx(0.15, abs=1e-9)
+    assert sc["maximum_calibration_intercept_magnitude"] == pytest.approx(0.30, abs=1e-9)
 
     # Regime-keyed AUC override (clean: max(0.75, baseline_auc + 0.20)).
     assert sc["minimum_auc"] >= 0.75
@@ -152,6 +156,60 @@ def test_evaluate_model_fixed_mode_passes_criteria_through() -> None:
     # No v3 active gates inserted.
     assert "minimum_net_benefit_at_p_t" not in out_sc
     assert "minimum_mcc" not in out_sc
+
+
+def test_evaluate_model_below_support_keeps_floor() -> None:
+    """Issue #866 + codex R1 guard, end-to-end through evaluate_model: the
+    mock validation split (n_val=30) is BELOW _MIN_EVAL_SUPPORT, so the
+    overfit cap must stay at the strict 0.03 floor — fail-closed. (Before
+    the guard, the unbounded SE scaling widened it to ≈ 0.22 here.)
+    """
+    state = _build_evaluation_state(_build_stash_success_criteria(regime="clean"))
+    result = asyncio.run(evaluate_model(state))
+
+    sc = result["success_criteria"]
+    assert sc["maximum_train_val_delta"] == pytest.approx(0.03, abs=1e-9)
+
+
+def test_overlay_threads_split_sizes_above_support() -> None:
+    """Issue #866: ``_apply_adaptive_criteria_overlay`` must pass the
+    materialized split sizes through to ``adaptive_success_criteria`` so the
+    overfit cap scales with the splits the train→val delta is measured on.
+    Unit-level (sizes above the support threshold so the scaling is
+    observable).
+
+    FAILS before the fix: the overlay recomputes from the stash alone, so
+    ``maximum_train_val_delta`` stays at the fixed 0.03 floor.
+    """
+    from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+        _apply_adaptive_criteria_overlay,
+    )
+    from src.agents.ml_foundation.scope_definer.nodes.criteria_validator import (
+        _SE_AUC_ANCHOR,
+        _hanley_mcneil_se_auc,
+    )
+
+    sc_in = _build_stash_success_criteria(regime="clean")
+    overlaid = _apply_adaptive_criteria_overlay(
+        sc_in,
+        {"baseline_test_auc": 0.50},
+        n_train=450,
+        n_val=150,
+        n_test=120,
+    )
+    expected_cap = max(
+        0.03,
+        min(
+            2.0
+            * math.hypot(
+                _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, 150, 0.50),
+                _hanley_mcneil_se_auc(_SE_AUC_ANCHOR, 450, 0.50),
+            ),
+            0.10,  # _MAX_TRAIN_VAL_DELTA_CAP ceiling
+        ),
+    )
+    assert overlaid["maximum_train_val_delta"] == pytest.approx(expected_cap, abs=1e-9)
+    assert overlaid["maximum_train_val_delta"] > 0.03  # scaling observable
 
 
 # ---------------------------------------------------------------------------
