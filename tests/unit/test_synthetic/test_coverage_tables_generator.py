@@ -49,3 +49,19 @@ def test_recent_rows_land_within_30d_of_run_date():
     # at least one row in each view-backed table inside the now()-30d window
     et = out["etl_pipeline_metrics"]["run_end"].apply(lambda s: datetime.fromisoformat(s).date())
     assert (et >= date(2026, 5, 10)).any()
+
+
+def test_surveys_reference_provided_hcp_id_pool():
+    """hcp_intent_surveys.hcp_id has a NO-ACTION FK to hcp_profiles.hcp_id. The
+    generator must sample from the run's REAL generated hcp ids (namespaced, e.g.
+    scvhcp_*) instead of minting hardcoded hcp_{i%50:05d} ids that only resolve
+    against legacy stub rows (the 2026-06-11 cleanup had to keep 50 untagged
+    legacy profiles solely because of that hardcoding)."""
+    run = date(2026, 6, 9)
+    pool = [f"scvhcp_{i:05d}" for i in range(200)]
+    out = CoverageTablesGenerator(
+        GeneratorConfig(seed=7, n_records=100), run_date=run, hcp_ids=pool
+    ).generate()
+    assert set(out["hcp_intent_surveys"]["hcp_id"]).issubset(set(pool))
+    # more than one distinct HCP gets surveyed (sampling, not a constant)
+    assert out["hcp_intent_surveys"]["hcp_id"].nunique() > 1

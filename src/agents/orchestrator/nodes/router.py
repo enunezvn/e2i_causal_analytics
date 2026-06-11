@@ -67,7 +67,14 @@ class RouterNode:
                 # CATE->segment->hierarchical pipeline finishes but the dispatch was cut
                 # at 25s). Raised to a workload-appropriate SLA, in line with the other
                 # heavy analytical agents (cohort_constructor 120s, tool_composer 180s).
-                timeout_ms=120000,
+                # 2026-06-11: 120s re-measured too tight — pre-cleanup the resolver
+                # bound the small untagged-legacy frame (~4.3k triggers, ~96s); on
+                # the clean gold substrate it binds the full 37,378-row conversion
+                # frame and the complete run MEASURES 269.7s serialized
+                # (LOKY_MAX_CPU_COUNT=1, real CausalForestDML + per-segment
+                # effect_interval + hierarchical uplift). 420s = measured + ~55%
+                # headroom; a workload-appropriate SLA, not a latency target.
+                timeout_ms=420000,
                 fallback_agent="gap_analyzer",
             )
         ],

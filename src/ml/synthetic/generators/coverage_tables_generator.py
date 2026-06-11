@@ -12,7 +12,7 @@ Enum-exact (22P02 landmine): user_region (region_type), brand (brand_type).
 
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import pandas as pd
 
@@ -24,9 +24,19 @@ _SOURCES = ["iqvia", "healthverity", "komodo", "veeva"]
 
 
 class CoverageTablesGenerator(BaseGenerator[pd.DataFrame]):
-    def __init__(self, config: Optional[GeneratorConfig] = None, run_date: Optional[date] = None):
+    def __init__(
+        self,
+        config: Optional[GeneratorConfig] = None,
+        run_date: Optional[date] = None,
+        hcp_ids: Optional[Sequence[str]] = None,
+    ):
         super().__init__(config)
         self.run_date = run_date or date.today()
+        # hcp_intent_surveys.hcp_id carries a NO-ACTION FK to hcp_profiles.hcp_id:
+        # the loader passes the run's generated (namespaced) hcp ids so surveys
+        # resolve against the run's own profiles instead of hardcoded hcp_NNNNN ids
+        # that only exist as legacy stub rows.
+        self.hcp_ids = list(hcp_ids) if hcp_ids is not None else None
 
     @property
     def entity_type(self) -> str:
@@ -77,7 +87,9 @@ class CoverageTablesGenerator(BaseGenerator[pd.DataFrame]):
             hi.append(
                 {
                     "survey_id": str(uuid.uuid4()),
-                    "hcp_id": f"hcp_{i % 50:05d}",
+                    "hcp_id": (
+                        str(self._rng.choice(self.hcp_ids)) if self.hcp_ids else f"hcp_{i % 50:05d}"
+                    ),
                     "survey_date": sdate.isoformat(),
                     "survey_type": "follow_up",
                     "brand": _BRANDS[i % 3],
