@@ -88,7 +88,11 @@ def _install_networkx_dowhy_compat() -> None:
         nx.d_separated = nx.is_d_separator
 
 
-_install_networkx_dowhy_compat()
+# NOTE (codex R3 MED): the shim is deliberately NOT installed at module
+# import time — importing this module (e.g. from tests) must not mutate
+# global networkx state, or it would mask the prod dependency break
+# (issue #869) for everything else in the process. It is installed inside
+# run_tier1_5_tests() — the harness execution boundary — only.
 
 
 # =============================================================================
@@ -1864,6 +1868,12 @@ async def run_tests(
         QualityGateValidator,
         Tier0OutputMapper,
     )
+
+    # Harness execution boundary: install the networkx/dowhy compat alias
+    # HERE (not at module import — codex R3 MED: importing this module must
+    # not mutate global networkx state and mask the prod dependency break,
+    # issue #869).
+    _install_networkx_dowhy_compat()
 
     print_header("TIER 1-5 AGENT TESTING FRAMEWORK")
 

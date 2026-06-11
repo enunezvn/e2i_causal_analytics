@@ -256,6 +256,27 @@ class Tier0OutputMapper:
         ):
             return "treatment_arm", None
 
+        # Any OTHER designed binary exposure beats a derived median split.
+        # Measured 2026-06-11 on the hcp_adoption frame (no treatment_arm):
+        # the derived 50/50 split has no causal identity — the estimation
+        # node and the refuter's reconstruction mirror-flipped (+0.2492 vs
+        # −0.2357) and the refutation divergence gate correctly fail-closed.
+        # A real designed binary (academic_hcp, 1149/539) is a genuine
+        # confounded exposure both paths bind identically. Bookkeeping
+        # flags and the outcome are excluded.
+        _binary_denylist = {
+            outcome_var,
+            "is_synthetic",
+            "discontinuation_flag",
+            "data_quality_score",
+        }
+        for col in df.select_dtypes(include=["number", "bool"]).columns:
+            if col in _binary_denylist:
+                continue
+            values = set(df[col].dropna().unique().tolist())
+            if values == {0, 1}:
+                return col, None
+
         treatment_basis = next((c for c in ("hcp_visits",) if c in df.columns), None)
         if treatment_basis is None:
             _numeric_cols = set(df.select_dtypes(include="number").columns)

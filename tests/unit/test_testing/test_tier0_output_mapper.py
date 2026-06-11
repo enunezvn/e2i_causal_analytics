@@ -941,3 +941,72 @@ class TestSyntheticCsuMappings:
         feats = result["features"]
         for name, exp_val in zip(state["feature_names"], expected, strict=True):
             assert feats[name] == pytest.approx(float(exp_val))
+
+
+@pytest.mark.unit
+class TestDesignedBinaryTreatmentPreference:
+    """An existing designed binary exposure beats a derived median split.
+
+    Measured 2026-06-11 (canonical tier1-5 vs the hcp_adoption tier0 state):
+    the HCP frame carries no ``treatment_arm``, so the mapper median-split a
+    continuous basis into ``high_hcp_engagement`` — an exact 50/50
+    pseudo-treatment with no causal identity. The estimation node reported
+    ATE +0.2492 while the refuter's reconstruction measured −0.2357 (mirror
+    flip), so the refutation node correctly fail-closed on the divergence
+    gate and the agent failed. A REAL designed binary (``academic_hcp``,
+    1149/539) is a genuine confounded exposure both paths bind identically.
+    """
+
+    def _hcp_state(self, sample_tier0_state):
+        df = pd.DataFrame(
+            {
+                "hcp_id": [f"hcp_{i:03d}" for i in range(1, 13)],
+                "academic_hcp": [0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0],
+                "years_experience": [5, 12, 8, 20, 15, 3, 25, 9, 11, 18, 7, 14],
+                "total_patient_volume": [100, 250, 150, 300, 220, 90, 400, 130, 180, 270, 120, 210],
+                "peer_influence_score": [
+                    0.2,
+                    0.8,
+                    0.4,
+                    0.6,
+                    0.7,
+                    0.1,
+                    0.9,
+                    0.3,
+                    0.5,
+                    0.75,
+                    0.25,
+                    0.55,
+                ],
+                "adopted_target_brand": [0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1],
+                "is_synthetic": [True] * 12,
+                "discontinuation_flag": [0] * 12,
+            }
+        )
+        return {**sample_tier0_state, "eligible_df": df}
+
+    def test_designed_binary_preferred_over_derived_split(self, sample_tier0_state):
+        mapper = Tier0OutputMapper(self._hcp_state(sample_tier0_state))
+        treatment, basis = mapper._get_binary_treatment("adopted_target_brand")
+        assert treatment == "academic_hcp"
+        assert basis is None  # designed column: nothing to exclude
+
+    def test_bookkeeping_binaries_never_selected(self, sample_tier0_state):
+        """is_synthetic / discontinuation_flag / the outcome itself must not
+        be picked as the designed exposure."""
+        df = self._hcp_state(sample_tier0_state)["eligible_df"].drop(columns=["academic_hcp"])
+        mapper = Tier0OutputMapper({**sample_tier0_state, "eligible_df": df})
+        treatment, basis = mapper._get_binary_treatment("adopted_target_brand")
+        # Falls back to derivation — never a bookkeeping flag or the outcome.
+        # (basis may be None here: the fixture's feature importances don't
+        # intersect this frame's numerics — the documented degenerate path.)
+        assert treatment == "high_hcp_engagement"
+        assert basis is None
+
+    def test_treatment_arm_still_wins_when_present(self, sample_tier0_state):
+        df = self._hcp_state(sample_tier0_state)["eligible_df"].copy()
+        df["treatment_arm"] = [0, 1] * 6
+        mapper = Tier0OutputMapper({**sample_tier0_state, "eligible_df": df})
+        treatment, basis = mapper._get_binary_treatment("adopted_target_brand")
+        assert treatment == "treatment_arm"
+        assert basis is None
