@@ -88,9 +88,7 @@ class CoverageTablesGenerator(BaseGenerator[pd.DataFrame]):
                 {
                     "survey_id": str(uuid.uuid4()),
                     "hcp_id": (
-                        str(self._rng.choice(self.hcp_ids))
-                        if self.hcp_ids
-                        else f"hcp_{i % 50:05d}"
+                        str(self._rng.choice(self.hcp_ids)) if self.hcp_ids else f"hcp_{i % 50:05d}"
                     ),
                     "survey_date": sdate.isoformat(),
                     "survey_type": "follow_up",
