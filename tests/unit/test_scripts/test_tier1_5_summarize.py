@@ -185,3 +185,33 @@ def test_step_summary_none_falls_back_to_stdout(harness, tmp_path, capsys):
     assert code == 0
     out = capsys.readouterr().out
     assert "Tier 1-5 Agent Harness" in out
+
+
+# ---------------------------------------------------------------------------
+# Per-agent timeout resolution (CLI --timeout is a FLOOR, not a cap)
+# ---------------------------------------------------------------------------
+#
+# Regression: with `--timeout 180`, experiment_monitor's per-agent config value
+# (20s) silently CAPPED the run BELOW the explicit CLI flag and the agent timed
+# out on a LOKY-serialized box. An explicit CLI timeout must act as a floor;
+# per-agent timeouts LONGER than the CLI value are preserved.
+
+
+def test_explicit_cli_timeout_floors_short_agent_config(harness):
+    assert harness.resolve_agent_timeout({"timeout": 20.0}, 180.0) == 180.0
+
+
+def test_longer_agent_config_timeout_is_preserved(harness):
+    assert harness.resolve_agent_timeout({"timeout": 300.0}, 180.0) == 300.0
+
+
+def test_no_cli_timeout_uses_agent_config(harness):
+    assert harness.resolve_agent_timeout({"timeout": 20.0}, None) == 20.0
+
+
+def test_no_agent_config_uses_cli_timeout(harness):
+    assert harness.resolve_agent_timeout({}, 180.0) == 180.0
+
+
+def test_neither_uses_default(harness):
+    assert harness.resolve_agent_timeout({}, None) == harness.DEFAULT_AGENT_TIMEOUT_SECONDS

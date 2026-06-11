@@ -692,3 +692,252 @@ class TestDataFrameColumnHandling:
         # Should use fallback segments
         assert "segments" in result
         assert len(result["segments"]) > 0
+
+
+@pytest.fixture
+def synthetic_csu_tier0_state():
+    """Tier0 state shaped like the synthetic-CSU initiation run (2026-06-10).
+
+    Mirrors ``docs/reports/synthetic_csu_e2e_validation_20260610`` semantics:
+    the DESIGNED binary treatment is ``treatment_arm``, the modeling target is
+    ``scope_spec.prediction_target == "treatment_initiated"``, the legacy
+    ``discontinuation_flag`` column is CONSTANT 0 (not a usable outcome), and
+    the trained model consumes the PREPROCESSED matrix rebuilt via the state's
+    ``fitted_preprocessor`` + ``categorical_encoding`` artefacts (one-hot
+    encoded categoricals + scaled numerics) — NOT raw entity columns.
+    """
+    import numpy as np
+    from sklearn.preprocessing import OneHotEncoder
+
+    from src.agents.ml_foundation.model_trainer.nodes.preprocessor import (
+        ModelTrainerPreprocessor,
+    )
+
+    rng = np.random.default_rng(7)
+    n = 40
+    df = pd.DataFrame(
+        {
+            "patient_journey_id": [f"scvpatient_{i:06d}" for i in range(n)],
+            "patient_id": [f"scvpt_{i:06d}" for i in range(n)],
+            "hcp_id": [f"scvhcp_{i:05d}" for i in range(n)],  # high-cardinality id
+            "brand": ["Remibrutinib"] * n,
+            "journey_start_date": [str(d.date()) for d in pd.date_range("2026-01-01", periods=n)],
+            "data_split": ["train"] * 30 + ["validation"] * 5 + ["test"] * 5,
+            "disease_severity": rng.uniform(0, 10, n),
+            "academic_hcp": rng.integers(0, 2, n),
+            "engagement_score": rng.uniform(5, 10, n),
+            "treatment_initiated": rng.integers(0, 2, n),
+            "geographic_region": rng.choice(["northeast", "south"], n),
+            "insurance_type": rng.choice(["commercial", "medicare"], n),
+            "age_at_diagnosis": rng.integers(18, 85, n),
+            "treatment_arm": rng.integers(0, 2, n),
+            "segment_assignment": rng.choice(
+                ["low_severity", "medium_severity", "high_severity"], n
+            ),
+            "discontinuation_flag": [0] * n,  # CONSTANT — not a usable outcome
+            "data_quality_score": [1.0] * n,  # CONSTANT
+        }
+    )
+
+    # Real fitted artefacts mirroring the tier0 pipeline: one-hot encode the
+    # categoricals, then fit the trainer preprocessor on the ENCODED matrix.
+    numeric_feats = [
+        "disease_severity",
+        "academic_hcp",
+        "engagement_score",
+        "age_at_diagnosis",
+        "treatment_arm",
+    ]
+    cat_cols = ["geographic_region", "insurance_type", "segment_assignment"]
+    encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    encoder.fit(df[cat_cols].astype(str))
+    onehot_cols = list(encoder.get_feature_names_out(cat_cols))
+    X_enc = df[numeric_feats].copy()
+    arr = encoder.transform(df[cat_cols].astype(str))
+    for i, col in enumerate(onehot_cols):
+        X_enc[col] = arr[:, i]
+    preprocessor = ModelTrainerPreprocessor(
+        numeric_features=list(X_enc.columns), categorical_features=[]
+    )
+    preprocessor.fit(X_enc)
+    feature_names = list(X_enc.columns)
+
+    return {
+        "experiment_id": "tier0_e2e_synthcsu",
+        "eligible_df": df,
+        "trained_model": "mock_model",  # mapper never calls it
+        "feature_names": feature_names,
+        "fitted_preprocessor": preprocessor,
+        "categorical_encoding": {
+            "encoder": encoder,
+            "columns": cat_cols,
+            "onehot_columns": onehot_cols,
+            "method": "onehot",
+        },
+        "feature_importance": [
+            {"feature": f, "importance": imp, "rank": i + 1}
+            for i, (f, imp) in enumerate(
+                [
+                    ("disease_severity", 0.088),
+                    ("treatment_arm", 0.033),
+                    ("academic_hcp", 0.0),
+                    ("engagement_score", 0.0),
+                    ("age_at_diagnosis", 0.0),
+                ]
+                + [(c, 0.0) for c in onehot_cols]
+            )
+        ],
+        "scope_spec": {
+            "brand": "Remibrutinib",
+            "prediction_target": "treatment_initiated",
+        },
+        "validation_metrics": {"roc_auc": 0.686},
+    }
+
+
+@pytest.mark.unit
+class TestSyntheticCsuMappings:
+    """Harness↔data couplings against the synthetic-CSU frame (tier1-5 13/13).
+
+    The synthetic-CSU tier0 frame has NO ``hcp_visits`` column, a CONSTANT
+    ``discontinuation_flag``, and instead carries the DESIGNED causal substrate:
+    ``treatment_arm`` (binary treatment), ``treatment_initiated`` (the
+    scope_spec prediction target), designed confounders/effect modifiers
+    (disease_severity, academic_hcp, ...) and ``segment_assignment``. The
+    mapper must bind to the REAL schema instead of the legacy fixture columns.
+    """
+
+    @pytest.fixture
+    def mapper(self, synthetic_csu_tier0_state):
+        return Tier0OutputMapper(synthetic_csu_tier0_state)
+
+    def test_causal_impact_binds_designed_treatment_and_target(self, mapper):
+        """causal_impact gets treatment_arm -> treatment_initiated, real arms."""
+        result = mapper.map_to_causal_impact()
+
+        assert result["treatment_var"] == "treatment_arm"
+        assert result["outcome_var"] == "treatment_initiated"
+        # Real treated/control split and a non-constant outcome in the frame.
+        est = result["data"]
+        assert est["treatment_arm"].nunique() == 2
+        assert est["treatment_initiated"].nunique() == 2
+        # Confounders are real, non-constant numeric columns excluding
+        # treatment/outcome (constant discontinuation_flag must not appear).
+        assert len(result["confounders"]) > 0
+        assert "treatment_arm" not in result["confounders"]
+        assert "treatment_initiated" not in result["confounders"]
+        assert "discontinuation_flag" not in result["confounders"]
+        for c in result["confounders"]:
+            assert c in est.columns
+
+    def test_causal_impact_caps_estimation_rows_for_smoke_budget(self, synthetic_csu_tier0_state):
+        """Large frames are SEEDED-subsampled to the smoke row cap.
+
+        Each DoWhy refuter simulation re-fits the estimator with bootstrapped
+        CIs, so per-sim cost scales with rows — the full 8420-row synthetic
+        frame blew the 180s harness SLA. The cap must keep REAL rows with
+        BOTH treatment arms and a non-constant outcome.
+        """
+        state = synthetic_csu_tier0_state.copy()
+        big = (
+            pd.concat([state["eligible_df"]] * 200, ignore_index=True)
+            .sample(frac=1.0, random_state=1)
+            .reset_index(drop=True)
+        )
+        state["eligible_df"] = big
+        assert len(big) > 2500
+
+        result = Tier0OutputMapper(state).map_to_causal_impact()
+
+        est = result["data"]
+        assert len(est) == 2500
+        assert est["treatment_arm"].nunique() == 2
+        assert est["treatment_initiated"].nunique() == 2
+
+    def test_heterogeneous_optimizer_designed_segments(self, mapper):
+        """het optimizer segments on designed columns, not ids/dates/splits."""
+        result = mapper.map_to_heterogeneous_optimizer()
+
+        assert result["treatment_var"] == "treatment_arm"
+        assert result["outcome_var"] == "treatment_initiated"
+        assert "segment_assignment" in result["segment_vars"]
+        for bad in (
+            "hcp_id",
+            "patient_id",
+            "patient_journey_id",
+            "journey_start_date",
+            "data_split",
+            "brand",
+        ):
+            assert bad not in result["segment_vars"]
+        # Effect modifiers exclude the treatment/outcome and constant columns.
+        assert "treatment_arm" not in result["effect_modifiers"]
+        assert "treatment_initiated" not in result["effect_modifiers"]
+        assert "discontinuation_flag" not in result["effect_modifiers"]
+        assert "disease_severity" in result["effect_modifiers"]
+
+    def test_tool_composer_schema_derived_bindings(self, mapper):
+        """tool_composer query + frame derive from the REAL schema, not hcp_visits."""
+        result = mapper.map_to_tool_composer()
+
+        est = result["context"]["estimation_data"]
+        assert "treatment_arm" in est.columns
+        assert est["treatment_arm"].nunique() == 2
+        assert "treatment_initiated" in est.columns
+        assert est["treatment_initiated"].nunique() == 2
+        # The canned query must reference real schema columns so the planner
+        # binds them (the legacy hcp_visits phrasing fails closed:
+        # "unbound column ... not in schema").
+        assert "treatment_arm" in result["query"]
+        assert "treatment_initiated" in result["query"]
+        assert "hcp visits" not in result["query"].lower()
+        assert "hcp_visits" not in result["query"].lower()
+
+    def test_prediction_synthesizer_model_ready_features(self, mapper, synthetic_csu_tier0_state):
+        """prediction_synthesizer features are the PREPROCESSED model matrix row.
+
+        The tier0 model trains on the one-hot + scaled matrix; feeding raw
+        entity columns raised ``KeyError: ['geographic_region_midwest', ...]
+        not in index``. The mapper must apply the state's fitted artefacts.
+        """
+        result = mapper.map_to_prediction_synthesizer()
+
+        feature_names = synthetic_csu_tier0_state["feature_names"]
+        feats = result["features"]
+        assert set(feats.keys()) == set(feature_names)
+        assert all(isinstance(v, float) for v in feats.values())
+
+        # Entity selected from the REAL positive class of the ACTUAL target.
+        df = synthetic_csu_tier0_state["eligible_df"]
+        row = df[df["patient_journey_id"] == result["entity_id"]]
+        assert not row.empty
+        assert int(row["treatment_initiated"].iloc[0]) == 1
+        # Prediction target follows the scope_spec, not the legacy label.
+        assert result["prediction_target"] == "treatment_initiated"
+
+    def test_prediction_synthesizer_features_reproduce_preprocessor_output(
+        self, mapper, synthetic_csu_tier0_state
+    ):
+        """The feature dict equals encoder+preprocessor applied to the raw row."""
+        result = mapper.map_to_prediction_synthesizer()
+
+        state = synthetic_csu_tier0_state
+        df = state["eligible_df"]
+        row = df[df["patient_journey_id"] == result["entity_id"]]
+        enc = state["categorical_encoding"]
+        numeric_feats = [
+            "disease_severity",
+            "academic_hcp",
+            "engagement_score",
+            "age_at_diagnosis",
+            "treatment_arm",
+        ]
+        X = row[numeric_feats].copy()
+        arr = enc["encoder"].transform(row[enc["columns"]].astype(str))
+        for i, col in enumerate(enc["onehot_columns"]):
+            X[col] = arr[:, i]
+        expected = state["fitted_preprocessor"].transform(X)[0]
+
+        feats = result["features"]
+        for name, exp_val in zip(state["feature_names"], expected, strict=True):
+            assert feats[name] == pytest.approx(float(exp_val))
