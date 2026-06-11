@@ -254,3 +254,58 @@ class TestPatternAnalyzerNode:
         assert "analysis_latency_ms" in result
         assert isinstance(result["analysis_latency_ms"], int)
         assert result["analysis_latency_ms"] >= 0
+
+
+class TestLLMEnumValidation:
+    """The LLM/DSPy paths emit free-form values into Literal-constrained
+    contract fields. Measured 2026-06-11 (canonical tier1-5 runs): the LLM
+    invented pattern_type='baseline_establishment' → pydantic literal_error
+    at FeedbackLearnerOutput validation, failing the whole agent. Out-of-
+    contract pattern types must be DROPPED with a log (the category IS the
+    semantic payload — clamping would fabricate meaning); out-of-contract
+    severities clamp to 'medium' (the pattern is real, the adjective is
+    malformed)."""
+
+    def _analyzer(self):
+        from src.agents.feedback_learner.nodes.pattern_analyzer import PatternAnalyzerNode
+
+        return PatternAnalyzerNode.__new__(PatternAnalyzerNode)  # no LLM client needed
+
+    def test_hallucinated_pattern_type_is_dropped(self):
+        content = """```json
+{"patterns": [
+  {"pattern_id": "P1", "pattern_type": "baseline_establishment",
+   "description": "hallucinated", "frequency": 2, "severity": "low",
+   "affected_agents": [], "example_feedback_ids": [], "root_cause_hypothesis": ""},
+  {"pattern_id": "P2", "pattern_type": "accuracy_issue",
+   "description": "real", "frequency": 3, "severity": "high",
+   "affected_agents": [], "example_feedback_ids": [], "root_cause_hypothesis": ""}
+]}
+```"""
+        patterns = self._analyzer()._parse_patterns(content)
+        assert [p["pattern_id"] for p in patterns] == ["P2"]
+        assert patterns[0]["pattern_type"] == "accuracy_issue"
+
+    def test_invalid_severity_clamped_to_medium(self):
+        content = """```json
+{"patterns": [
+  {"pattern_id": "P1", "pattern_type": "coverage_gap",
+   "description": "ok", "frequency": 1, "severity": "catastrophic",
+   "affected_agents": [], "example_feedback_ids": [], "root_cause_hypothesis": ""}
+]}
+```"""
+        patterns = self._analyzer()._parse_patterns(content)
+        assert len(patterns) == 1
+        assert patterns[0]["severity"] == "medium"
+
+    def test_all_valid_pass_through_unchanged(self):
+        content = """```json
+{"patterns": [
+  {"pattern_id": "P1", "pattern_type": "latency_issue",
+   "description": "ok", "frequency": 1, "severity": "critical",
+   "affected_agents": ["a"], "example_feedback_ids": ["f1"], "root_cause_hypothesis": "h"}
+]}
+```"""
+        patterns = self._analyzer()._parse_patterns(content)
+        assert patterns[0]["pattern_type"] == "latency_issue"
+        assert patterns[0]["severity"] == "critical"

@@ -61,6 +61,45 @@ def _rating_to_numeric(value: Any) -> Optional[float]:
     return None
 
 
+# Mirror of the ``DetectedPattern`` TypedDict Literals (state.py). The
+# LLM/DSPy pattern paths emit free-form values into these enum-constrained
+# contract fields; measured 2026-06-11: the LLM invented
+# pattern_type='baseline_establishment' → pydantic literal_error at
+# FeedbackLearnerOutput validation, failing the whole agent run.
+_VALID_PATTERN_TYPES: frozenset = frozenset(
+    {"accuracy_issue", "latency_issue", "relevance_issue", "format_issue", "coverage_gap"}
+)
+_VALID_SEVERITIES: frozenset = frozenset({"low", "medium", "high", "critical"})
+
+
+def _sanitize_llm_pattern_enums(pattern_type: Any, severity: Any) -> "Optional[tuple[str, str]]":
+    """Validate LLM-emitted enum fields against the DetectedPattern contract.
+
+    Returns ``(pattern_type, severity)`` when usable, ``None`` when the
+    pattern must be DROPPED. An out-of-contract pattern_type drops the whole
+    pattern (the category IS the semantic payload — remapping it would
+    fabricate meaning); an out-of-contract severity clamps to ``"medium"``
+    with a log (the pattern is real, only the adjective is malformed).
+    """
+    if pattern_type not in _VALID_PATTERN_TYPES:
+        logger.warning(
+            "Dropping LLM-emitted pattern with out-of-contract pattern_type=%r "
+            "(allowed: %s) — the model invented a category outside the "
+            "DetectedPattern Literal.",
+            pattern_type,
+            sorted(_VALID_PATTERN_TYPES),
+        )
+        return None
+    if severity not in _VALID_SEVERITIES:
+        logger.warning(
+            "Clamping LLM-emitted out-of-contract severity=%r to 'medium' (allowed: %s).",
+            severity,
+            sorted(_VALID_SEVERITIES),
+        )
+        severity = "medium"
+    return (pattern_type, severity)
+
+
 class PatternAnalyzerNode:
     """
     Deep reasoning for pattern detection in feedback.
@@ -349,16 +388,24 @@ class PatternAnalyzerNode:
         for i, p in enumerate(raw_patterns, start=1):
             if not isinstance(p, dict):
                 continue
+            # LM output is free-form; the TypedDict fields are Literals.
+            # Validate against the contract: drop out-of-contract pattern
+            # types, clamp out-of-contract severities (see
+            # _sanitize_llm_pattern_enums).
+            sanitized = _sanitize_llm_pattern_enums(
+                p.get("type") or p.get("pattern_type", "accuracy_issue"),
+                p.get("severity") or "medium",
+            )
+            if sanitized is None:
+                continue
+            ptype, severity = sanitized
             patterns.append(
                 DetectedPattern(
                     pattern_id=f"P{i}",
-                    # LM output is free-form; the TypedDict fields are Literals.
-                    # Mirror the LLM path's `.get(...)` (Any) so the best-effort
-                    # value flows through without a false typeddict-item error.
-                    pattern_type=p.get("type") or p.get("pattern_type", "accuracy_issue"),
+                    pattern_type=ptype,
                     description=str(p.get("description", "")),
                     frequency=int(p.get("frequency", 0) or 0),
-                    severity=p.get("severity") or "medium",
+                    severity=severity,
                     affected_agents=list(p.get("affected_agents", []) or []),
                     example_feedback_ids=[
                         fb["feedback_id"] for fb in feedback_items[:3] if "feedback_id" in fb
@@ -479,13 +526,23 @@ Output JSON:
                 data = json.loads(json_match.group(1))
                 patterns = []
                 for p in data.get("patterns", []):
+                    # LLM enum validation: drop out-of-contract pattern types,
+                    # clamp out-of-contract severities (see
+                    # _sanitize_llm_pattern_enums).
+                    sanitized = _sanitize_llm_pattern_enums(
+                        p.get("pattern_type", "accuracy_issue"),
+                        p.get("severity", "medium"),
+                    )
+                    if sanitized is None:
+                        continue
+                    ptype, severity = sanitized
                     patterns.append(
                         DetectedPattern(
                             pattern_id=p.get("pattern_id", "P?"),
-                            pattern_type=p.get("pattern_type", "accuracy_issue"),
+                            pattern_type=ptype,
                             description=p.get("description", ""),
                             frequency=p.get("frequency", 1),
-                            severity=p.get("severity", "medium"),
+                            severity=severity,
                             affected_agents=p.get("affected_agents", []),
                             example_feedback_ids=p.get("example_feedback_ids", []),
                             root_cause_hypothesis=p.get("root_cause_hypothesis", ""),
