@@ -650,18 +650,50 @@ def gate_6_hetero(client) -> GateResult:
     highs = out.get("high_responders") or []
     lows = out.get("low_responders") or []
     cate_seg = out.get("cate_by_segment") or {}
-    ok = hscore > 0.4 and len(highs) > 0 and len(lows) > 0 and bool(cate_seg)
+    # RECONCILED to the IMPLEMENTED DGP (REASON-BEFORE-RULES, 2026-06-11): the
+    # designed per-priority lift factors are {critical: 1.3, high: 1.3, medium: 1.0,
+    # low: 0.7} (trigger_generator._PRIORITY_LIFT_FACTOR), so the agent's responder
+    # cutoffs (high >= 1.5x ATE, low <= 0.5x ATE) are UNREACHABLE by design — the
+    # old "non-empty high+low responders AND score>0.4" criteria could only ever be
+    # satisfied by noise (and previously were, by the untagged legacy substrate the
+    # 2026-06-11 cleanup removed). The designed, recoverable property is the
+    # CATE-by-priority ORDERING: min(critical, high) > medium > low — the gate-3
+    # recover-known-truth pattern. Measured on the clean substrate: 1.28x/1.26x/
+    # 1.01x/0.58x vs ATE — ordering comfortably recovered. high/low responder
+    # counts stay informational only.
+    _ord = {"0.0": "low", "1.0": "medium", "2.0": "high", "3.0": "critical"}
+    pri = {
+        _ord.get(str(r.get("segment_value"))): r.get("cate_estimate")
+        for r in (cate_seg.get("priority") or [])
+        if isinstance(r, dict) and _ord.get(str(r.get("segment_value")))
+    }
+    ordering_ok = (
+        all(k in pri for k in ("critical", "high", "medium", "low"))
+        and min(pri["critical"], pri["high"]) > pri["medium"] > pri["low"]
+    )
+    overall_ate = out.get("overall_ate")
+    ok = (
+        str(spec.get("data_source", "")).startswith("kpi_substrate")
+        and bool(cate_seg)
+        and hscore > 0
+        and isinstance(overall_ate, (int, float))
+        and overall_ate > 0
+        and ordering_ok
+    )
     return GateResult(
         "6 heterogeneous_optimizer",
         ok,
         {
             "heterogeneity_score": hscore,
+            "overall_ate": overall_ate,
+            "cate_by_priority": pri,
+            "designed_ordering_recovered": ordering_ok,
             "n_high": len(highs),
             "n_low": len(lows),
-            "has_cate_by_segment": bool(cate_seg),
             "data_source": out.get("data_source") or spec.get("data_source"),
         },
-        "heterogeneity_score>0.4, non-empty high+low responders, cate_by_segment present",
+        "real kpi_substrate binding; designed CATE-by-priority ordering "
+        "min(critical,high)>medium>low recovered; overall_ate>0; score>0",
     )
 
 
@@ -1065,15 +1097,18 @@ def gate_11_chat_path(client) -> GateResult:
     # property the substrate does not provide — REASON-BEFORE-RULES); we assert
     # routed + real kpi_substrate binding + real recovered heterogeneity instead.
     query = "which segments respond best on conversion rate for Kisqali?"
-    # filters.include_synthetic: validation opt-in threaded through the live chat
-    # path to the #839 het resolver (default-off in prod; real-mode fails closed
-    # on a clean substrate by design).
+    # user_context.include_synthetic: validation opt-in threaded through the live
+    # chat path to the #839 het resolver (default-off in prod; real-mode fails
+    # closed on a clean substrate by design). user_context is the contract
+    # pass-through field _prepare_agent_input forwards verbatim — the state schema
+    # does not carry a ``filters`` key, so a filters-based opt-in never arrives.
     state = asyncio.run(
         graph.ainvoke(
             {
                 "query": query,
                 "user_query": query,
-                "filters": {"brand": "Kisqali", "include_synthetic": True},
+                "filters": {"brand": "Kisqali"},
+                "user_context": {"include_synthetic": True},
             }
         )
     )
