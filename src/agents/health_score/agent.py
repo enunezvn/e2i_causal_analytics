@@ -20,6 +20,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from .graph import build_health_score_graph, build_quick_check_graph
+from .memory_hooks import (
+    HealthScoreMemoryHooks,
+    contribute_to_memory,
+    get_health_score_memory_hooks,
+)
 from .state import HealthScoreState
 
 if TYPE_CHECKING:
@@ -117,6 +122,7 @@ class HealthScoreAgent:
         agent_registry: Optional[Any] = None,
         enable_mlflow: bool = True,
         enable_opik: bool = True,
+        enable_memory: bool = True,
     ):
         """
         Initialize Health Score agent.
@@ -128,6 +134,11 @@ class HealthScoreAgent:
             agent_registry: Registry of system agents
             enable_mlflow: Whether to enable MLflow tracking (default: True)
             enable_opik: Whether to enable Opik distributed tracing (default: True)
+            enable_memory: Whether to enable memory integration (default: True).
+                Mirrors the experiment_monitor convention (#879): when enabled,
+                each completed check is contributed to the memory systems
+                post-run (working-memory cache + episodic store for
+                significant events) — non-blocking, never affecting the run.
         """
         self.health_client = health_client
         self.metrics_store = metrics_store
@@ -135,8 +146,10 @@ class HealthScoreAgent:
         self.agent_registry = agent_registry
         self.enable_mlflow = enable_mlflow
         self.enable_opik = enable_opik
+        self.enable_memory = enable_memory
         self._mlflow_tracker: Optional["HealthScoreMLflowTracker"] = None
         self._opik_tracer: Optional["HealthScoreOpikTracer"] = None
+        self._memory_hooks: Optional[HealthScoreMemoryHooks] = None
 
         # Build graphs
         self._full_graph = build_health_score_graph(
@@ -183,11 +196,54 @@ class HealthScoreAgent:
 
         return self._opik_tracer
 
+    @property
+    def memory_hooks(self) -> Optional[HealthScoreMemoryHooks]:
+        """Lazy-load memory hooks (#879, mirrors experiment_monitor)."""
+        if self._memory_hooks is None and self.enable_memory:
+            try:
+                self._memory_hooks = get_health_score_memory_hooks()
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory hooks: {e}")
+        return self._memory_hooks
+
+    async def _contribute_to_memory(
+        self,
+        output: HealthScoreOutput,
+        final_state: Dict[str, Any],
+        session_id: Optional[str],
+    ) -> None:
+        """Contribute a completed health check to memory — NON-BLOCKING (#879).
+
+        Caller-side try/except per the settled cross-agent posture
+        (causal_impact / het / experiment_monitor; the migration-046 trap
+        lesson): a memory failure must NEVER poison the run's status/errors.
+        ``contribute_to_memory`` itself handles the significance gate (only
+        significant events reach episodic) and skips failed-state runs, so
+        this is safe to call on every graph-completed run.
+        """
+        if not self.enable_memory:
+            return
+        try:
+            memory_stats = await contribute_to_memory(
+                result=output.model_dump(),
+                state=final_state,
+                memory_hooks=self.memory_hooks,
+                session_id=session_id,
+            )
+            logger.debug(
+                f"Memory contribution complete: "
+                f"episodic={memory_stats.get('episodic_stored', 0)}, "
+                f"cached={memory_stats.get('working_cached', 0)}"
+            )
+        except Exception as e:
+            logger.warning(f"Memory contribution failed (non-blocking): {e}")
+
     async def check_health(
         self,
         scope: Literal["full", "quick", "models", "pipelines", "agents"] = "full",
         query: str = "",
         experiment_name: str = "default",
+        session_id: Optional[str] = None,
     ) -> HealthScoreOutput:
         """
         Run a health check.
@@ -196,6 +252,8 @@ class HealthScoreAgent:
             scope: Scope of health check
             query: Optional query text
             experiment_name: Name of MLflow experiment (default: "default")
+            session_id: Optional session ID for memory tracking (#879; the
+                memory layer generates a UUID if not provided)
 
         Returns:
             HealthScoreOutput with health metrics
@@ -222,8 +280,21 @@ class HealthScoreAgent:
         mlflow_tracker = self._get_mlflow_tracker()
         opik_tracer = self._get_opik_tracer()
 
+        # #879: the post-run memory contribution needs the final GRAPH STATE
+        # (status / check_scope / query) alongside the built output; capture it
+        # here since run_with_mlflow only returns the HealthScoreOutput.
+        # ``built_output`` is captured the moment the output is constructed so
+        # the contribution (single site, in the ``finally`` below) is keyed to
+        # the GRAPH outcome, not the telemetry wrappers' (codex r2 finding): an
+        # MLflow/Opik logging failure AFTER the graph completed must not
+        # suppress the real measurement's trend datapoint.
+        workflow_state: Dict[str, Any] = {}
+        built_output: Optional[HealthScoreOutput] = None
+
         async def execute_workflow() -> Dict[str, Any]:
             """Execute the health check workflow."""
+            nonlocal workflow_state
+
             # Select appropriate graph
             if scope == "quick":
                 graph = self._quick_graph
@@ -232,10 +303,13 @@ class HealthScoreAgent:
 
             # Run graph
             result: Dict[str, Any] = await graph.ainvoke(initial_state)
+            workflow_state = result
             return result
 
         async def run_with_mlflow(trace_ctx=None) -> HealthScoreOutput:
             """Execute workflow with optional MLflow tracking."""
+            nonlocal built_output
+
             if mlflow_tracker:
                 async with mlflow_tracker.start_health_run(
                     experiment_name=experiment_name,
@@ -285,6 +359,9 @@ class HealthScoreAgent:
                         errors=errors,
                         status=result.get("status", "completed"),
                     )
+                    # #879: capture BEFORE the MLflow log call — a telemetry
+                    # failure past this point must not lose the built output.
+                    built_output = output
 
                     # Log to MLflow
                     await mlflow_tracker.log_health_result(output, result)  # type: ignore[arg-type]
@@ -313,7 +390,7 @@ class HealthScoreAgent:
                 agent_s = HealthScoreAgent._resolve_dim_score(
                     result, "agent_health_score", "agent_health_measured"
                 )
-                return HealthScoreOutput(
+                output = HealthScoreOutput(
                     overall_health_score=result.get("overall_health_score", 0.0),
                     health_grade=result.get("health_grade", "F"),
                     component_health_score=comp_s,
@@ -336,6 +413,8 @@ class HealthScoreAgent:
                     errors=errors,
                     status=result.get("status", "completed"),
                 )
+                built_output = output
+                return output
 
         try:
             # Execute with Opik tracing if available
@@ -417,6 +496,21 @@ class HealthScoreAgent:
                 ],
                 status="failed",
             )
+        finally:
+            # #879: SINGLE memory-contribution site, keyed to the GRAPH outcome
+            # (codex r2). If the graph completed and an output was built, the
+            # measurement is real and gets contributed even when a telemetry
+            # wrapper (MLflow log / Opik post-log) raised afterwards — the
+            # caller still receives the failed fallback in that case, but the
+            # trend datapoint is not lost. When the graph itself raised (or the
+            # output build failed), ``built_output`` is None and nothing is
+            # stored: there is no trustworthy measurement to record, matching
+            # the sibling agents whose contributions are unreachable when their
+            # graphs raise. The helper is non-blocking (caller-side try/except,
+            # the migration-046 posture) and gated on ``enable_memory``;
+            # ``contribute_to_memory`` additionally skips failed-status states.
+            if built_output is not None:
+                await self._contribute_to_memory(built_output, workflow_state, session_id)
 
     async def quick_check(self) -> HealthScoreOutput:
         """
