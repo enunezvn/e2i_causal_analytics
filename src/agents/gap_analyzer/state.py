@@ -147,6 +147,13 @@ class GapAnalyzerState(TypedDict):
     min_gap_threshold: float  # Minimum gap % to report (e.g., 5.0)
     max_opportunities: int  # Maximum opportunities to return (e.g., 10)
 
+    # #874: per-RUN synthetic-substrate opt-in (the #851/#872 provenance plumb).
+    # The agent factory registers a real-mode instance (include_synthetic=False baked
+    # into the compiled graph), so a per-dispatch opt-in must travel through the run
+    # input: gap_detector resolves a per-run connector pair honoring this flag.
+    # Absent => the agent's constructor flag governs (backward compatible).
+    include_synthetic: NotRequired[bool]
+
     # === UPLIFT CONTEXT (from heterogeneous_optimizer, optional) ===
     # When uplift analysis is available, it enhances ROI calculations
     uplift_auuc: Optional[float]  # Area Under Uplift Curve (0-1)

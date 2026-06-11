@@ -321,6 +321,11 @@ class GapAnalyzerAgent(SkillsMixin):
             "gap_type": input_data.get("gap_type", "vs_potential"),  # type: ignore
             "min_gap_threshold": input_data.get("min_gap_threshold", 5.0),
             "max_opportunities": input_data.get("max_opportunities", 10),
+            # #874: per-run synthetic-substrate opt-in; defaults to the constructor
+            # flag so factory-registered real-mode instances stay real-mode unless a
+            # dispatch explicitly opts in (the #872 channels via the orchestrator's
+            # gap_analyzer input resolver).
+            "include_synthetic": bool(input_data.get("include_synthetic", self.include_synthetic)),
             # Outputs (initialized as None)
             "gaps_detected": None,
             "gaps_by_segment": None,
