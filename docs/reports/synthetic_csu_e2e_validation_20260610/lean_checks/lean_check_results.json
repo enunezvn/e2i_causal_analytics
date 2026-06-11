@@ -1,0 +1,80 @@
+{
+  "generated": "2026-06-10T21:16:31.144894",
+  "dataset": "data/rwd/synthetic_CSU",
+  "checks": {
+    "1_ate_recovery": {
+      "true_ate": 0.171769,
+      "ipw_estimate": 0.1634,
+      "abs_err": 0.0084,
+      "tolerance": 0.1,
+      "pass": true
+    },
+    "2_confounding_contrast": {
+      "naive_estimate": 0.269,
+      "naive_abs_err": 0.0973,
+      "ipw_abs_err": 0.0084,
+      "pass": true
+    },
+    "3_cate_ordering": {
+      "realized": {
+        "high_severity": 0.2941,
+        "low_severity": 0.074,
+        "medium_severity": 0.1911
+      },
+      "sidecar": {
+        "high_severity": 0.2940999999999999,
+        "low_severity": 0.074,
+        "medium_severity": 0.19110000000000005
+      },
+      "pass": true
+    },
+    "4_propensity_overlap": {
+      "auc": 0.682,
+      "e_min": 0.029,
+      "e_max": 0.574,
+      "pass": true
+    },
+    "5_tier0_modelability": {
+      "cohorts": {
+        "initiation": {
+          "rows": 8420,
+          "prevalence": 0.351,
+          "cv_auc": {
+            "lr": 0.682,
+            "gbc": 0.672
+          },
+          "pass": true
+        },
+        "discontinuation": {
+          "rows": 2952,
+          "prevalence": 0.467,
+          "cv_auc": {
+            "lr": 0.633,
+            "gbc": 0.636
+          },
+          "pass": true
+        },
+        "persistence": {
+          "rows": 2952,
+          "prevalence": 0.533,
+          "cv_auc": {
+            "lr": 0.633,
+            "gbc": 0.636
+          },
+          "pass": true
+        },
+        "hcp_adoption": {
+          "rows": 1688,
+          "prevalence": 0.4,
+          "cv_auc": {
+            "lr": 0.777,
+            "gbc": 0.761
+          },
+          "pass": true
+        }
+      },
+      "pass": true
+    }
+  },
+  "all_pass": true
+}
