@@ -831,6 +831,67 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         opik = _get_opik_connector()
         hpo_start_time = time.time()
 
+        # Issue #868: final-fit degeneracy guard. The blended HPO objective
+        # can promote params whose final fit collapses (L1 cliff →
+        # intercept-only model, test AUC 0.500 while HPO promised 0.65).
+        # Verify the best params with a final-style fit and fall back to the
+        # next-best DISTINCT trial on genuine collapse. Mutates ``results``
+        # in place when a fallback is adopted; non-fatal on any error.
+        # Defined as a closure so BOTH the traced and untraced paths run it
+        # BEFORE the Opik span attributes are recorded (codex R3 LOW: the
+        # span must reflect the post-guard adopted trial, not the pre-guard
+        # best, or the HPO trace contradicts the returned contract).
+        def _run_degeneracy_guard() -> Optional[Dict[str, Any]]:
+            try:
+                # raw_probabilities_deploy: the conformal/NGBoost candidates
+                # (skip_post_hoc_calibration=True) deploy the raw fit's
+                # probabilities, so the probability-crush slope criterion
+                # applies to them. Everything else gets post-hoc
+                # Platt/isotonic recalibration downstream, which repairs a
+                # crushed-but-monotone fit — only the unrepairable criteria
+                # fire for those.
+                model_candidate_flags = state.get("model_candidate") or {}
+                skip_post_hoc = bool(
+                    model_candidate_flags.get("skip_post_hoc_calibration", False)
+                    if isinstance(model_candidate_flags, dict)
+                    else False
+                )
+                # codex R3 HIGH: the verification fit must use the SAME
+                # training arrays the real final fit consumes — train_model
+                # switches to the resampled data when resampling_applied=True
+                # (model_trainer_node.py), and a verification on the original
+                # distribution can pass while the real fit collapses (or
+                # refuse a candidate that is healthy after resampling).
+                guard_X_train = X_train
+                guard_y_train = y_train_np
+                if state.get("resampling_applied", False):
+                    X_resampled = state.get("X_train_resampled")
+                    y_resampled = state.get("y_train_resampled")
+                    if X_resampled is not None and y_resampled is not None:
+                        guard_X_train = _wrap_with_feature_names(X_resampled, state)
+                        guard_y_train = _ensure_numpy(y_resampled)
+                return _apply_degeneracy_guard(
+                    study=study,
+                    results=results,
+                    model_class=model_class,
+                    algorithm_name=algorithm_name,
+                    default_hyperparameters=default_hyperparameters,
+                    fixed_params=fixed_params,
+                    X_train=guard_X_train,
+                    y_train=guard_y_train,
+                    X_val=X_val,
+                    y_val=y_val_np,
+                    problem_type=problem_type,
+                    raw_probabilities_deploy=skip_post_hoc,
+                )
+            except Exception as guard_error:
+                logger.warning(
+                    "Issue #868 degeneracy guard errored (non-fatal, keeping HPO best params): %s",
+                    guard_error,
+                )
+                return None
+
+        degeneracy_guard_meta: Optional[Dict[str, Any]] = None
         if opik and opik.is_enabled:
             async with opik.trace_agent(
                 agent_name="model_trainer",
@@ -851,11 +912,23 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
                     n_trials=hpo_trials,
                     timeout=timeout_seconds,
                 )
-                # Log HPO metrics to Opik
+                degeneracy_guard_meta = _run_degeneracy_guard()
+                # Log HPO metrics to Opik — post-guard, so the trace matches
+                # the returned contract (adopted trial on guarded runs).
                 hpo_span.set_attribute("best_value", results["best_value"])
                 hpo_span.set_attribute("n_trials_completed", results["n_completed"])
                 hpo_span.set_attribute("n_trials_pruned", results["n_pruned"])
                 hpo_span.set_attribute("duration_seconds", time.time() - hpo_start_time)
+                if degeneracy_guard_meta and degeneracy_guard_meta.get("fired"):
+                    hpo_span.set_attribute("degeneracy_guard_fired", True)
+                    hpo_span.set_attribute(
+                        "degeneracy_guard_original_value",
+                        degeneracy_guard_meta.get("hpo_promise"),
+                    )
+                    hpo_span.set_attribute(
+                        "degeneracy_guard_adopted_trial",
+                        degeneracy_guard_meta.get("adopted_trial"),
+                    )
         else:
             # No Opik tracing available
             results = await optimizer.optimize(
@@ -864,46 +937,7 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
                 n_trials=hpo_trials,
                 timeout=timeout_seconds,
             )
-
-        # Issue #868: final-fit degeneracy guard. The blended HPO objective
-        # can promote params whose final fit collapses (L1 cliff →
-        # intercept-only model, test AUC 0.500 while HPO promised 0.65).
-        # Verify the best params with a final-style fit and fall back to the
-        # next-best DISTINCT trial on genuine collapse. Mutates ``results``
-        # in place when a fallback is adopted; non-fatal on any error.
-        degeneracy_guard_meta: Optional[Dict[str, Any]] = None
-        try:
-            # raw_probabilities_deploy: the conformal/NGBoost candidates
-            # (skip_post_hoc_calibration=True) deploy the raw fit's
-            # probabilities, so the probability-crush slope criterion
-            # applies to them. Everything else gets post-hoc Platt/isotonic
-            # recalibration downstream, which repairs a crushed-but-monotone
-            # fit — only the unrepairable criteria fire for those.
-            model_candidate_flags = state.get("model_candidate") or {}
-            skip_post_hoc = bool(
-                model_candidate_flags.get("skip_post_hoc_calibration", False)
-                if isinstance(model_candidate_flags, dict)
-                else False
-            )
-            degeneracy_guard_meta = _apply_degeneracy_guard(
-                study=study,
-                results=results,
-                model_class=model_class,
-                algorithm_name=algorithm_name,
-                default_hyperparameters=default_hyperparameters,
-                fixed_params=fixed_params,
-                X_train=X_train,
-                y_train=y_train_np,
-                X_val=X_val,
-                y_val=y_val_np,
-                problem_type=problem_type,
-                raw_probabilities_deploy=skip_post_hoc,
-            )
-        except Exception as guard_error:
-            logger.warning(
-                "Issue #868 degeneracy guard errored (non-fatal, keeping HPO best params): %s",
-                guard_error,
-            )
+            degeneracy_guard_meta = _run_degeneracy_guard()
 
         # Merge: defaults < optuna best < fixed params (fixed params have highest priority)
         best_hyperparameters = {

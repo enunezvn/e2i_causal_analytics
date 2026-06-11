@@ -633,3 +633,71 @@ class TestTuneHyperparametersWiring:
         is_valid, errors = validate_hpo_output(output)
         assert is_valid is True
         assert errors == []
+
+
+@pytest.mark.asyncio
+class TestGuardResamplingFaithfulness:
+    """codex R3 HIGH: the verification fit must consume the SAME training
+    arrays the real final fit uses — train_model switches to the resampled
+    data when resampling_applied=True (model_trainer_node.py), so a guard
+    verifying on the original distribution can pass while the real fit
+    collapses (or refuse a candidate that is healthy after resampling)."""
+
+    def _state(self, **extra):
+        state = {
+            "enable_hpo": True,
+            "hpo_trials": 3,
+            "algorithm_name": "RandomForest",
+            "problem_type": "binary_classification",
+            "experiment_id": "test_868_resample",
+            "default_hyperparameters": {"n_estimators": 100},
+            "hyperparameter_search_space": {
+                "n_estimators": {"type": "int", "low": 50, "high": 200}
+            },
+            "X_train_preprocessed": np.random.rand(80, 4),
+            "X_validation_preprocessed": np.random.rand(30, 4),
+            "train_data": {"y": np.random.randint(0, 2, 80)},
+            "validation_data": {"y": np.random.randint(0, 2, 30)},
+        }
+        state.update(extra)
+        return state
+
+    async def test_guard_uses_resampled_arrays_when_resampling_applied(self):
+        captured = {}
+
+        def _spy_guard(**kwargs):
+            captured.update(kwargs)
+            return None
+
+        X_resampled = np.random.rand(120, 4)
+        y_resampled = np.random.randint(0, 2, 120)
+        state = self._state(
+            resampling_applied=True,
+            X_train_resampled=X_resampled,
+            y_train_resampled=y_resampled,
+        )
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner."
+            "_apply_degeneracy_guard",
+            side_effect=_spy_guard,
+        ):
+            await tune_hyperparameters(state)
+        assert len(captured["X_train"]) == 120, "guard must verify on the RESAMPLED rows"
+        assert len(captured["y_train"]) == 120
+
+    async def test_guard_uses_original_arrays_without_resampling(self):
+        captured = {}
+
+        def _spy_guard(**kwargs):
+            captured.update(kwargs)
+            return None
+
+        state = self._state(experiment_id="test_868_noresample")
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner."
+            "_apply_degeneracy_guard",
+            side_effect=_spy_guard,
+        ):
+            await tune_hyperparameters(state)
+        assert len(captured["X_train"]) == 80
+        assert len(captured["y_train"]) == 80
