@@ -238,6 +238,8 @@ def _detect_final_fit_collapse(
     model: Any,
     X_val: Any,
     y_val: Any,
+    *,
+    slope_collapse_applies: bool = True,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Detect whether a fitted binary classifier collapsed (issue #868).
 
@@ -251,7 +253,17 @@ def _detect_final_fit_collapse(
       the fit is at least 2x underconfident, the same L1/L2
       over-regularization cliff family with non-zero-but-crushed
       coefficients (skipped fail-safe when the helper returns NaN on
-      unstable class counts), OR
+      unstable class counts). ONLY applied when
+      ``slope_collapse_applies=True`` — i.e. when the model's RAW
+      probabilities are what deploys (``skip_post_hoc_calibration``
+      candidates: conformal wrappers, NGBoost). For candidates whose
+      deploy path includes post-hoc Platt/isotonic recalibration, a
+      crushed-but-monotone fit is REPAIRABLE downstream (measured on
+      the initiation cohort: the crushed plain-LR's deployed artifact
+      scored slope dev 0.0099) — firing would be a false fire; the
+      deployment slope gate judges the repaired artifact honestly when
+      the repair fails. The slope is still measured and surfaced in
+      diagnostics for the log trail. OR
     - single-class hard predictions, ONLY for models without
       ``predict_proba`` (a healthy imbalanced model can legitimately
       predict one class everywhere at the 0.5 cut while still ranking
@@ -301,7 +313,10 @@ def _detect_final_fit_collapse(
                 slope, _intercept = _compute_calibration_slope_intercept(y_arr, p1)
                 if np.isfinite(slope):
                     diagnostics["val_recalibration_slope"] = float(slope)
-                    if slope >= DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING:
+                    if (
+                        slope_collapse_applies
+                        and slope >= DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING
+                    ):
                         return (
                             True,
                             f"probability-crushed fit: >= "
@@ -342,8 +357,17 @@ def _apply_degeneracy_guard(
     X_val: Any,
     y_val: Any,
     problem_type: str,
+    raw_probabilities_deploy: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Issue #868: final-fit degeneracy guard with next-best-trial fallback.
+
+    ``raw_probabilities_deploy`` mirrors the candidate's
+    ``skip_post_hoc_calibration`` flag: when True (conformal wrappers,
+    NGBoost) the raw fit's probabilities ARE the deployed probabilities, so
+    the probability-crush slope criterion applies; when False the deploy
+    path post-hoc-recalibrates, a crushed-but-monotone fit is repairable
+    downstream, and only the unrepairable criteria (constant probabilities,
+    chance-level AUC) fire — see ``_detect_final_fit_collapse``.
 
     The HPO objective can promise real discrimination (best_value >= 0.58)
     for params whose FINAL fit collapses (e.g. the L1 coefficient-zeroing
@@ -417,7 +441,9 @@ def _apply_degeneracy_guard(
 
     best_params = dict(results.get("best_params") or {})
     best_model = _final_style_fit(best_params)
-    collapsed, reason, diagnostics = _detect_final_fit_collapse(best_model, X_val, y_val)
+    collapsed, reason, diagnostics = _detect_final_fit_collapse(
+        best_model, X_val, y_val, slope_collapse_applies=raw_probabilities_deploy
+    )
 
     guard_meta: Dict[str, Any] = {
         "checked": True,
@@ -481,7 +507,7 @@ def _apply_degeneracy_guard(
             )
             continue
         cand_collapsed, cand_reason, cand_diagnostics = _detect_final_fit_collapse(
-            candidate_model, X_val, y_val
+            candidate_model, X_val, y_val, slope_collapse_applies=raw_probabilities_deploy
         )
         if cand_collapsed:
             rejected.append(
@@ -847,6 +873,18 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
         # in place when a fallback is adopted; non-fatal on any error.
         degeneracy_guard_meta: Optional[Dict[str, Any]] = None
         try:
+            # raw_probabilities_deploy: the conformal/NGBoost candidates
+            # (skip_post_hoc_calibration=True) deploy the raw fit's
+            # probabilities, so the probability-crush slope criterion
+            # applies to them. Everything else gets post-hoc Platt/isotonic
+            # recalibration downstream, which repairs a crushed-but-monotone
+            # fit — only the unrepairable criteria fire for those.
+            model_candidate_flags = state.get("model_candidate") or {}
+            skip_post_hoc = bool(
+                model_candidate_flags.get("skip_post_hoc_calibration", False)
+                if isinstance(model_candidate_flags, dict)
+                else False
+            )
             degeneracy_guard_meta = _apply_degeneracy_guard(
                 study=study,
                 results=results,
@@ -859,6 +897,7 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
                 X_val=X_val,
                 y_val=y_val_np,
                 problem_type=problem_type,
+                raw_probabilities_deploy=skip_post_hoc,
             )
         except Exception as guard_error:
             logger.warning(

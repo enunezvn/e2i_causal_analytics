@@ -88,7 +88,13 @@ def _results_from_study(study):
     }
 
 
-def _run_guard(study, results, lr_data, problem_type="binary_classification"):
+def _run_guard(
+    study,
+    results,
+    lr_data,
+    problem_type="binary_classification",
+    raw_probabilities_deploy=True,
+):
     X_train, y_train, X_val, y_val = lr_data
     return _apply_degeneracy_guard(
         study=study,
@@ -102,6 +108,7 @@ def _run_guard(study, results, lr_data, problem_type="binary_classification"):
         X_val=X_val,
         y_val=y_val,
         problem_type=problem_type,
+        raw_probabilities_deploy=raw_probabilities_deploy,
     )
 
 
@@ -173,6 +180,52 @@ class TestDetectFinalFitCollapse:
             diagnostics["val_recalibration_slope"] >= DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING
         )
         assert "underconfident" in reason
+
+    def test_crush_not_collapse_when_post_hoc_calibration_downstream(self, lr_data):
+        """Conservatism (measured on the initiation cohort): a crushed-but-
+        monotone fit whose deploy path includes post-hoc Platt calibration is
+        REPAIRABLE — the deployed artifact measured slope dev 0.0099. Firing
+        on it would be a false fire; the slope-crush criterion only applies
+        when the raw probabilities deploy (skip_post_hoc_calibration
+        candidates: conformal / NGBoost)."""
+        X_train, y_train, X_val, y_val = lr_data
+        model = LogisticRegression(C=0.005, penalty="l2", **LR_FIXED).fit(X_train, y_train)
+        collapsed, _, diagnostics = _detect_final_fit_collapse(
+            model, X_val, y_val, slope_collapse_applies=False
+        )
+        assert collapsed is False
+        # The slope is still measured and surfaced for the log trail.
+        assert (
+            diagnostics["val_recalibration_slope"] >= DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING
+        )
+
+    def test_constant_probabilities_collapse_regardless_of_post_hoc(self, lr_data):
+        """An intercept-only model is unrepairable — Platt cannot create
+        discrimination from constant probabilities. Fires either way."""
+        X_train, y_train, X_val, y_val = lr_data
+        model = LogisticRegression(C=CLIFF_C, penalty="l1", **LR_FIXED).fit(X_train, y_train)
+        collapsed, reason, _ = _detect_final_fit_collapse(
+            model, X_val, y_val, slope_collapse_applies=False
+        )
+        assert collapsed is True
+        assert "constant" in reason
+
+    def test_guard_does_not_fire_on_crushed_best_when_repairable(self, lr_data):
+        """Guard-level: plain-LR candidates (post-hoc calibrated downstream)
+        keep their crushed-but-monotone HPO best — byte-identical behavior."""
+        study = _make_study(
+            [
+                ({"C": 0.005, "penalty": "l2"}, 0.72),  # crushed best
+                ({"C": HEALTHY_C, "penalty": "l2"}, 0.62),
+            ]
+        )
+        results = _results_from_study(study)
+        snapshot = dict(results["best_params"])
+        meta = _run_guard(study, results, lr_data, raw_probabilities_deploy=False)
+
+        assert meta is not None
+        assert meta["fired"] is False
+        assert results["best_params"] == snapshot
 
     def test_healthy_model_records_recalibration_slope_below_ceiling(self, lr_data):
         """C=1.0 measures raw slope ~1.14 on this fixture — no fire."""
@@ -492,6 +545,51 @@ class TestTuneHyperparametersWiring:
         assert result["best_hyperparameters"]["n_estimators"] == 77
         assert result["hpo_best_trial"] == 3
         assert result["hpo_degeneracy_guard"] == sentinel_meta
+
+    async def test_guard_receives_skip_post_hoc_flag_from_model_candidate(self):
+        """raw_probabilities_deploy mirrors the candidate's
+        skip_post_hoc_calibration flag (conformal/NGBoost deploy raw probs;
+        everything else gets post-hoc calibration downstream)."""
+        captured = {}
+
+        def _spy_guard(**kwargs):
+            captured.update(kwargs)
+            return None
+
+        state = {
+            "enable_hpo": True,
+            "hpo_trials": 3,
+            "algorithm_name": "RandomForest",
+            "problem_type": "binary_classification",
+            "experiment_id": "test_868_flag",
+            "model_candidate": {"skip_post_hoc_calibration": True},
+            "default_hyperparameters": {"n_estimators": 100},
+            "hyperparameter_search_space": {
+                "n_estimators": {"type": "int", "low": 50, "high": 200}
+            },
+            "X_train_preprocessed": np.random.rand(80, 4),
+            "X_validation_preprocessed": np.random.rand(30, 4),
+            "train_data": {"y": np.random.randint(0, 2, 80)},
+            "validation_data": {"y": np.random.randint(0, 2, 30)},
+        }
+
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner."
+            "_apply_degeneracy_guard",
+            side_effect=_spy_guard,
+        ):
+            await tune_hyperparameters(state)
+        assert captured["raw_probabilities_deploy"] is True
+
+        state["model_candidate"] = {}
+        state["experiment_id"] = "test_868_flag2"
+        with patch(
+            "src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner."
+            "_apply_degeneracy_guard",
+            side_effect=_spy_guard,
+        ):
+            await tune_hyperparameters(state)
+        assert captured["raw_probabilities_deploy"] is False
 
     async def test_guard_exception_is_non_fatal(self):
         """A crashing guard must not break HPO (keep the study best)."""
