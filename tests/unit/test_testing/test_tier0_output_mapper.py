@@ -1010,3 +1010,19 @@ class TestDesignedBinaryTreatmentPreference:
         treatment, basis = mapper._get_binary_treatment("adopted_target_brand")
         assert treatment == "treatment_arm"
         assert basis is None
+
+    def test_unknown_binary_never_selected_regardless_of_column_order(self, sample_tier0_state):
+        """codex R4 HIGH repro: a one-hot fragment / arbitrary {0,1} flag must
+        never be bound as treatment, in ANY column order — only the fixed
+        allowlist of known designed exposures qualifies."""
+        base = self._hcp_state(sample_tier0_state)["eligible_df"]
+        fragment = pd.Series([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], name="z_onehot_fragment")
+        for cols_first in (["z_onehot_fragment"], []):
+            df = (
+                pd.concat([fragment, base], axis=1)
+                if cols_first
+                else pd.concat([base, fragment], axis=1)
+            )
+            mapper = Tier0OutputMapper({**sample_tier0_state, "eligible_df": df})
+            treatment, _ = mapper._get_binary_treatment("adopted_target_brand")
+            assert treatment == "academic_hcp", f"order leak: picked {treatment}"

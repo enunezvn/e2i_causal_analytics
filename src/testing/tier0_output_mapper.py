@@ -135,6 +135,14 @@ class Tier0StateContract(TypedDict, total=False):
     business_utility: NotRequired[float]
 
 
+# Known DESIGNED binary exposures, in fixed preference order (after
+# treatment_arm). codex R4: an allowlist keeps treatment selection
+# deterministic and semantically grounded — a generic any-{0,1}-column scan
+# is column-order dependent and can bind a one-hot fragment as "treatment",
+# silently changing the causal estimand. Extend deliberately per dataset.
+_KNOWN_DESIGNED_BINARY_EXPOSURES: tuple = ("academic_hcp",)
+
+
 class Tier0OutputMapper:
     """Maps a tier0 state dictionary to agent-specific inputs.
 
@@ -256,22 +264,22 @@ class Tier0OutputMapper:
         ):
             return "treatment_arm", None
 
-        # Any OTHER designed binary exposure beats a derived median split.
+        # A KNOWN designed binary exposure beats a derived median split.
         # Measured 2026-06-11 on the hcp_adoption frame (no treatment_arm):
         # the derived 50/50 split has no causal identity — the estimation
         # node and the refuter's reconstruction mirror-flipped (+0.2492 vs
         # −0.2357) and the refutation divergence gate correctly fail-closed.
         # A real designed binary (academic_hcp, 1149/539) is a genuine
-        # confounded exposure both paths bind identically. Bookkeeping
-        # flags and the outcome are excluded.
-        _binary_denylist = {
-            outcome_var,
-            "is_synthetic",
-            "discontinuation_flag",
-            "data_quality_score",
-        }
-        for col in df.select_dtypes(include=["number", "bool"]).columns:
-            if col in _binary_denylist:
+        # confounded exposure both paths bind identically.
+        #
+        # codex R4 HIGH: the scan is a FIXED-ORDER allowlist of known
+        # designed exposures, NOT a generic any-{0,1}-column scan — a
+        # generic scan is column-order dependent and can fail open to a
+        # one-hot fragment or arbitrary flag, silently changing the causal
+        # estimand. Unknown binaries fall through to the explicit
+        # derivation path (visible in the treatment name).
+        for col in _KNOWN_DESIGNED_BINARY_EXPOSURES:
+            if col not in df.columns or col == outcome_var:
                 continue
             values = set(df[col].dropna().unique().tolist())
             if values == {0, 1}:

@@ -286,7 +286,11 @@ class TestLLMEnumValidation:
         assert [p["pattern_id"] for p in patterns] == ["P2"]
         assert patterns[0]["pattern_type"] == "accuracy_issue"
 
-    def test_invalid_severity_clamped_to_medium(self):
+    def test_invalid_severity_drops_pattern(self):
+        """codex R4: severity is LOAD-BEARING (learning_extractor emits the
+        model_retrain recommendation only for high/critical) — clamping an
+        invented severity would fabricate that decision, so the pattern
+        drops (counted in pattern_parse_anomalies)."""
         content = """```json
 {"patterns": [
   {"pattern_id": "P1", "pattern_type": "coverage_gap",
@@ -294,9 +298,37 @@ class TestLLMEnumValidation:
    "affected_agents": [], "example_feedback_ids": [], "root_cause_hypothesis": ""}
 ]}
 ```"""
-        patterns = self._analyzer()._parse_patterns(content)
-        assert len(patterns) == 1
-        assert patterns[0]["severity"] == "medium"
+        analyzer = self._analyzer()
+        patterns = analyzer._parse_patterns(content)
+        assert patterns == []
+        assert analyzer._enum_drop_count == 1
+
+    def test_all_dropped_surfaces_parse_anomalies_not_clean_success(self, state_with_feedback):
+        """codex R4 fail-open guard: when the LLM emits ONLY out-of-contract
+        patterns, the node must surface pattern_parse_anomalies so '0
+        patterns detected' is distinguishable from a clean no-findings run."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from src.agents.feedback_learner.nodes.pattern_analyzer import PatternAnalyzerNode
+
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(
+            return_value=MagicMock(
+                content="""```json
+{"patterns": [
+  {"pattern_id": "P1", "pattern_type": "baseline_establishment",
+   "description": "hallucinated", "frequency": 2, "severity": "low",
+   "affected_agents": [], "example_feedback_ids": [], "root_cause_hypothesis": ""}
+]}
+```"""
+            )
+        )
+        node = PatternAnalyzerNode(use_llm=True, llm=mock_llm, prefer_optimized=False)
+        result = asyncio.run(node.execute(state_with_feedback))
+        assert result["status"] == "extracting"  # NOT failed — drops are not crashes
+        assert result["detected_patterns"] == []
+        assert result["pattern_parse_anomalies"]["dropped_out_of_contract"] == 1
 
     def test_all_valid_pass_through_unchanged(self):
         content = """```json
