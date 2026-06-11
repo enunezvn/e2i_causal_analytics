@@ -49,11 +49,41 @@ class GapDetectorNode:
                         'config/agents/gap_analyzer.yaml'.
             include_synthetic: When True, the production connector/benchmark store opt
                 in to reading synthetic rows (the validation layer; #851). Default
-                False keeps the production read path real-mode isolated.
+                False keeps the production read path real-mode isolated. #874: this is
+                the per-instance DEFAULT — a run whose state carries
+                ``include_synthetic`` overrides it per-run (see ``_connectors_for``),
+                because the factory-registered chat-path instance is constructed
+                real-mode and the dispatch-time opt-in must still reach the connectors.
         """
+        self.use_mock = use_mock
+        self.include_synthetic = include_synthetic
         self.data_connector = get_data_connector(use_mock, include_synthetic=include_synthetic)
         self.benchmark_store = get_benchmark_store(use_mock, include_synthetic=include_synthetic)
+        # Per-run connector resolution (#874): cache one pair per provenance mode,
+        # seeded with the constructed pair so the default path is unchanged.
+        self._connector_pairs: Dict[bool, tuple] = {
+            include_synthetic: (self.data_connector, self.benchmark_store)
+        }
         self.config = self._load_config(config_path)
+
+    def _connectors_for(self, include_synthetic: bool) -> tuple:
+        """Return the (data_connector, benchmark_store) pair for a provenance mode.
+
+        The constructed pair serves its own mode; the opposite mode is built lazily
+        and cached. This is what lets a per-dispatch ``include_synthetic`` opt-in
+        (threaded through ``GapAnalyzerState`` by the orchestrator's gap_analyzer
+        input resolver, #874) actually reach the production connectors on a
+        real-mode-constructed agent — without it, an opted-in dispatch would
+        silently read the real-mode (default-exclude) substrate.
+        """
+        pair = self._connector_pairs.get(include_synthetic)
+        if pair is None:
+            pair = (
+                get_data_connector(self.use_mock, include_synthetic=include_synthetic),
+                get_benchmark_store(self.use_mock, include_synthetic=include_synthetic),
+            )
+            self._connector_pairs[include_synthetic] = pair
+        return pair
 
     def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
         """Load economic assumptions and thresholds from YAML config.
@@ -140,6 +170,14 @@ class GapDetectorNode:
             # Retrieve memory context for informed gap detection
             memory_context = await self._get_memory_context(state)
 
+            # #874: resolve the per-run connector pair. A state-carried
+            # include_synthetic (set by the dispatcher's resolver from the #872
+            # opt-in channels) overrides the constructed default; absent => the
+            # constructor flag governs (backward compatible).
+            requested = state.get("include_synthetic")
+            include_synthetic = self.include_synthetic if requested is None else bool(requested)
+            data_connector, benchmark_store = self._connectors_for(include_synthetic)
+
             # Priority 1: Use tier0 passthrough data if available
             tier0_data = state.get("tier0_data")
             if tier0_data is not None and len(tier0_data) >= 50:
@@ -160,6 +198,7 @@ class GapDetectorNode:
                     segments=state["segments"],
                     time_period=state["time_period"],
                     filters=state.get("filters"),
+                    data_connector=data_connector,
                 )
 
             # Get comparison data based on gap type
@@ -179,6 +218,8 @@ class GapDetectorNode:
                     metrics=state["metrics"],
                     segments=state["segments"],
                     time_period=state["time_period"],
+                    data_connector=data_connector,
+                    benchmark_store=benchmark_store,
                 )
 
             # Detect gaps in parallel across segments
@@ -404,6 +445,7 @@ class GapDetectorNode:
         segments: List[str],
         time_period: str,
         filters: Optional[Dict[str, Any]],
+        data_connector: Optional[Any] = None,
     ) -> pd.DataFrame:
         """Fetch current performance data from data connectors.
 
@@ -413,11 +455,13 @@ class GapDetectorNode:
             segments: Segmentation dimensions
             time_period: Analysis period
             filters: Additional filters
+            data_connector: Per-run connector (#874); defaults to the constructed one.
 
         Returns:
             DataFrame with current performance data
         """
-        return await self.data_connector.fetch_performance_data(
+        connector = data_connector if data_connector is not None else self.data_connector
+        return await connector.fetch_performance_data(
             brand=brand,
             metrics=metrics,
             segments=segments,
@@ -432,6 +476,8 @@ class GapDetectorNode:
         metrics: List[str],
         segments: List[str],
         time_period: str,
+        data_connector: Optional[Any] = None,
+        benchmark_store: Optional[Any] = None,
     ) -> Dict[str, pd.DataFrame]:
         """Get comparison data based on gap type.
 
@@ -441,10 +487,14 @@ class GapDetectorNode:
             metrics: List of KPIs
             segments: Segmentation dimensions
             time_period: Analysis period
+            data_connector: Per-run connector (#874); defaults to the constructed one.
+            benchmark_store: Per-run benchmark store (#874); same default rule.
 
         Returns:
             Dictionary mapping gap type to comparison DataFrames
         """
+        connector = data_connector if data_connector is not None else self.data_connector
+        store = benchmark_store if benchmark_store is not None else self.benchmark_store
         comparison_data = {}
 
         gap_types = (
@@ -455,19 +505,19 @@ class GapDetectorNode:
 
         for gtype in gap_types:
             if gtype == "vs_target":
-                comparison_data[gtype] = await self.benchmark_store.get_targets(
+                comparison_data[gtype] = await store.get_targets(
                     brand=brand, metrics=metrics, segments=segments
                 )
             elif gtype == "vs_benchmark":
-                comparison_data[gtype] = await self.benchmark_store.get_peer_benchmarks(
+                comparison_data[gtype] = await store.get_peer_benchmarks(
                     brand=brand, metrics=metrics, segments=segments
                 )
             elif gtype == "vs_potential":
-                comparison_data[gtype] = await self.benchmark_store.get_top_decile(
+                comparison_data[gtype] = await store.get_top_decile(
                     brand=brand, metrics=metrics, segments=segments
                 )
             elif gtype == "temporal":
-                comparison_data[gtype] = await self.data_connector.fetch_prior_period(
+                comparison_data[gtype] = await connector.fetch_prior_period(
                     brand=brand,
                     metrics=metrics,
                     segments=segments,

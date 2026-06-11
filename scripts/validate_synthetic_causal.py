@@ -469,26 +469,31 @@ def _synthetic_gap_tier0_frame(client):
     """Build a REAL per-(region, month) frame from synthetic business_metrics for the
     gap_analyzer's native ``tier0_data`` passthrough.
 
-    RECONCILED (why tier0_data, not the connector): the gap_analyzer's PRODUCTION
-    data path is blocked from reading synthetic for THREE production reasons, none of
-    which the harness may fix (src is out of scope):
-      1. ``get_data_connector(False)`` returns a ``SupabaseDataConnector()`` with NO
-         client (``repository.client is None``) -> every fetch returns [] (the #845
-         "client-less repo no-op" family).
-      2. Even given a client, ``fetch_performance_data`` calls
-         ``get_time_series(...)`` WITHOUT forwarding ``include_synthetic`` (the flag
-         exists on the repo but is not plumbed through the connector/graph), so
-         synthetic rows are excluded by the Shard-07 default.
-      3. The BenchmarkStore hardcodes title-case regions
-         (["Northeast", "Southeast", "Midwest", "West", "National"]) while the
-         synthetic rows use lowercase (south/northeast/west/midwest) — no match.
-    The gap_detector node has a FIRST-CLASS injection point that bypasses all three:
-    when ``state["tier0_data"]`` has >=50 rows it DERIVES both performance and
-    benchmarks from that frame (gap_detector.py:140-170). Feeding the REAL synthetic
-    business_metrics there exercises the agent's REAL gap-detection + ROI +
-    prioritization logic on the REAL synthetic substrate — NOT a fabricated
-    opportunity set. Pivot to per-(region, month) rows carrying the real metric
-    columns the agent reads.
+    RECONCILED (why tier0_data, not the connector): when this gate was written the
+    gap_analyzer's PRODUCTION data path was blocked from reading synthetic by three
+    production bugs — (1) ``get_data_connector(False)`` built a CLIENT-LESS
+    ``SupabaseDataConnector`` whose every fetch returned [] (the #845 family);
+    (2) ``include_synthetic`` was not plumbed through the connector, so the Shard-07
+    default excluded synthetic rows; (3) the BenchmarkStore hardcoded title-case
+    regions while the live enum is lowercase. ALL THREE were FIXED on main by PR
+    #856 (merge ad8c9b99, 2026-06-10, "fix(gap_analyzer): production connector reads
+    synthetic substrate, fail-closed by default (#851)"): the connector lazily
+    resolves a real client fail-closed, ``include_synthetic`` is threaded
+    factory -> connector -> repository, and segment values are discovered from the
+    data. The gate KEEPS the tier0_data injection deliberately:
+      1. it pins gate 5 to a deterministic frame, independent of the connector's
+         time-window parsing — isolating the agent's gap-detection + ROI +
+         prioritization core, which is the property this gate certifies;
+      2. it exercises the FIRST-CLASS tier0_data passthrough contract the
+         tier0 -> tier1-5 handoff uses (gap_detector.py Priority-1 path, >=50 rows);
+      3. the production CONNECTOR path (include_synthetic opt-in, end-to-end through
+         the orchestrator dispatcher, #874) is covered separately by
+         tests/integration/test_dispatcher_gap_analyzer_substrate_realdb.py and
+         tests/integration/test_issue_851_gap_analyzer_synthetic_connector_realdb.py.
+    Feeding the REAL synthetic business_metrics here exercises the agent's REAL
+    gap-detection + ROI + prioritization logic on the REAL synthetic substrate — NOT
+    a fabricated opportunity set. Pivot to per-(region, month) rows carrying the
+    real metric columns the agent reads.
     """
     import pandas as pd
 

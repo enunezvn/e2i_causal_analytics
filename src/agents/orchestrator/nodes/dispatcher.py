@@ -482,6 +482,249 @@ def _resolve_heterogeneous_optimizer_input(
     )
 
 
+# gap_analyzer's substrate probe scans single-column reads off business_metrics —
+# the table the agent's production connector reads post-#856. Cap mirrors
+# kpi_resolution._MAX_ROWS-style truncation safety on the distinct scans.
+_GAP_PROBE_ROW_CAP = 5000
+# Distinct-value paging bound: up to N pages of ROW_CAP rows (PK-ordered, paged to
+# slice exhaustion). Bounds dispatch latency while staying correct as the brand's
+# substrate grows past one page; hitting the bound warns (never fails closed).
+_GAP_PROBE_MAX_PAGES = 4
+_GAP_REQUIRED = ("metrics", "segments", "brand")
+
+
+def _coerce_provenance_flag(value: Any) -> bool:
+    """Strictly parse a provenance opt-in value (codex #874 R2).
+
+    Only ``True`` / ``"true"`` / ``"1"`` / ``"yes"`` opt in. Everything else —
+    ``False``, ``"false"``, ``"0"``, ``None``, invalid types — stays real-mode:
+    this flag controls provenance isolation, so an ambiguous value must FAIL
+    CLOSED to the default-exclude predicate (``bool("false")`` is ``True`` and
+    would silently flip an explicit opt-OUT into reading synthetic rows).
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return False
+
+
+# The single segment dimension business_metrics actually carries (the benchmark
+# store discovers its VALUES from the data; see BenchmarkStore._resolve_segment).
+_GAP_SEGMENT_COLUMN = "region"
+
+
+def _probe_gap_substrate(
+    brand: str, include_synthetic: bool
+) -> Tuple[List[str], Optional[str], List[str]]:
+    """Probe the REAL ``business_metrics`` substrate for ``brand``.
+
+    Returns ``(metric_names, canonical_brand, region_values)`` — every element
+    discovered from real rows under the provenance predicate (default-exclude
+    synthetic; ``include_synthetic=True`` opts in, the #851/#872 plumb).
+
+    ``brand`` is an enum column, so canonicalization uses bounded per-candidate
+    presence probes (``.eq(brand, <case-variant>).limit(1)``) rather than an
+    unfiltered distinct scan: the table's physical order groups rows by brand, so a
+    capped scan can miss a brand entirely, and a cased ``.eq`` miss on an enum
+    raises 22P02 (caught per-candidate — an invalid label means "not this
+    spelling", never an operational failure). ``([], None, [])`` means the
+    substrate genuinely has no rows for the brand.
+    """
+    from src.repositories import get_supabase_client
+    from src.repositories.provenance import apply_provenance_filter
+
+    client = get_supabase_client()
+
+    def _brand_present(candidate: str) -> bool:
+        q = client.table("business_metrics").select("brand").eq("brand", candidate)
+        q = apply_provenance_filter(q, include_synthetic)
+        try:
+            rows = getattr(q.limit(1).execute(), "data", None) or []
+        except Exception as exc:
+            # 22P02 = candidate is not a valid enum label (a casing miss), NOT an
+            # operational error — try the next case variant. Anything else raises.
+            if getattr(exc, "code", None) == "22P02":
+                return False
+            raise
+        return bool(rows)
+
+    raw = str(brand).strip()
+    candidates = list(dict.fromkeys([raw, raw.capitalize(), raw.title(), raw.lower(), raw.upper()]))
+    canonical = next((c for c in candidates if c and _brand_present(c)), None)
+    if canonical is None:
+        return [], None, []
+
+    # Distinct metric/region discovery: page through the brand slice until
+    # EXHAUSTED, bounded by _GAP_PROBE_MAX_PAGES. No early "saturation" stop — a
+    # full page adding no new distinct values proves nothing about later pages
+    # (PostgREST gives no distinct/ordering guarantee per page; codex #874 R2).
+    # Ordered by the PK so OFFSET pagination is deterministic under concurrent
+    # writes. A single capped prefix could silently omit metric names as the
+    # substrate grows; failing closed on the bound would be worse (MORE data must
+    # never disable a bindable substrate) — so page to the bound and warn.
+    metrics_set: set[str] = set()
+    regions_set: set[str] = set()
+    for page in range(_GAP_PROBE_MAX_PAGES):
+        q = client.table("business_metrics").select("metric_name,region").eq("brand", canonical)
+        q = apply_provenance_filter(q, include_synthetic)
+        offset = page * _GAP_PROBE_ROW_CAP
+        rows = (
+            getattr(
+                q.order("metric_id").range(offset, offset + _GAP_PROBE_ROW_CAP - 1).execute(),
+                "data",
+                None,
+            )
+            or []
+        )
+        for r in rows:
+            if isinstance(r, dict):
+                if r.get("metric_name"):
+                    metrics_set.add(str(r["metric_name"]))
+                if r.get("region"):
+                    regions_set.add(str(r["region"]))
+        if len(rows) < _GAP_PROBE_ROW_CAP:
+            break  # slice exhausted
+    else:
+        logger.warning(
+            "gap_analyzer dispatch: business_metrics metric/region scan for brand=%s "
+            "hit the %d-page x %d-row probe bound before exhausting the slice; "
+            "distinct values beyond it could be missed.",
+            canonical,
+            _GAP_PROBE_MAX_PAGES,
+            _GAP_PROBE_ROW_CAP,
+        )
+    return sorted(metrics_set), canonical, sorted(regions_set)
+
+
+def _resolve_gap_analyzer_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Build gap_analyzer's required structured inputs from REAL data, or fail closed.
+
+    gap_analyzer requires ``metrics``/``segments``/``brand`` (agent.py
+    ``_validate_input``); the generic chat payload carries none of them, so every
+    chat dispatch died in ~7ms with a raw ``Missing required field: metrics``
+    ValueError (#874). Mirroring ``_resolve_heterogeneous_optimizer_input``:
+
+    (1) An explicit analyst-supplied input set in ``dispatch.parameters`` wins.
+    (2) Otherwise DERIVE the inputs from the real ``business_metrics`` substrate —
+        the exact table the agent's production connector reads post-#856: the
+        brand's real ``metric_name`` values become ``metrics`` and the real
+        segment dimension (``region``, whose values exist in the data) becomes
+        ``segments``. ``include_synthetic`` is read from the same two opt-in
+        channels as the het resolver (#872) and ALSO forwarded into the agent
+        input: the registry's agent instance is constructed real-mode, so the
+        per-run flag is what lets an opted-in validation dispatch actually read
+        the synthetic substrate (gap_detector resolves a per-run connector pair).
+    (3) When the (provenance-filtered) substrate genuinely has no rows — or the
+        chat query names no brand to scope the read — fail closed with an
+        actionable ``NeedsStructuredInput``; nothing fabricated.
+    """
+    params = dispatch.get("parameters") or {}
+
+    # Provenance opt-in, resolved ONCE for both branches. Channels mirror the het
+    # resolver — ``filters`` (direct resolver invocations) and ``user_context``
+    # (the only caller-stash field _prepare_agent_input threads through the live
+    # chat path) — plus the parameter-level channels (``parameters.filters`` and
+    # the explicit ``parameters.include_synthetic``, which WINS when present and
+    # non-None: an analyst's explicit choice beats the ambient opt-in channels).
+    # Dropping the channel opt-in on the explicit-params path would silently run
+    # the analysis against the wrong provenance mode (codex #874 R1 HIGH). All
+    # values are STRICTLY parsed (codex R2): an ambiguous value stays real-mode.
+    channel_opt_in = (
+        _coerce_provenance_flag((params.get("filters") or {}).get("include_synthetic"))
+        or _coerce_provenance_flag((agent_input.get("filters") or {}).get("include_synthetic"))
+        or _coerce_provenance_flag((agent_input.get("user_context") or {}).get("include_synthetic"))
+    )
+    explicit_flag = params.get("include_synthetic")
+    include_synthetic = (
+        _coerce_provenance_flag(explicit_flag) if explicit_flag is not None else channel_opt_in
+    )
+
+    # (1) explicit analyst-supplied inputs pass through verbatim.
+    if params.get("metrics") and params.get("segments") and params.get("brand"):
+        passthrough = (
+            "metrics",
+            "segments",
+            "brand",
+            "time_period",
+            "gap_type",
+            "filters",
+            "tier0_data",
+            "min_gap_threshold",
+            "max_opportunities",
+            "instrument_specs",
+        )
+        out_explicit: Dict[str, Any] = {
+            k: params[k] for k in passthrough if params.get(k) is not None
+        }
+        out_explicit["include_synthetic"] = include_synthetic
+        return out_explicit
+
+    # (2) derive from the real business_metrics substrate. A partial structured
+    # ``parameters.brand`` wins over the chat-derived brand (the router put it
+    # there specifically for this agent — same precedence as _coerce_to_input_model).
+    params_brand = params.get("brand")
+    if isinstance(params_brand, str) and params_brand.strip():
+        brand: Optional[str] = params_brand
+    else:
+        brand, _ = _extract_brand_region(agent_input)
+    if brand:
+        try:
+            metrics, canonical_brand, regions = _probe_gap_substrate(brand, include_synthetic)
+            if canonical_brand and metrics and regions:
+                logger.info(
+                    "gap_analyzer dispatch: bound real business_metrics substrate for "
+                    "brand=%s (metrics=%s, segment=%s with %d values, "
+                    "include_synthetic=%s).",
+                    canonical_brand,
+                    metrics,
+                    _GAP_SEGMENT_COLUMN,
+                    len(regions),
+                    include_synthetic,
+                )
+                out: Dict[str, Any] = {
+                    "metrics": metrics,
+                    "segments": [_GAP_SEGMENT_COLUMN],
+                    "brand": canonical_brand,
+                    "include_synthetic": include_synthetic,
+                }
+                # Config-only router overrides apply on top of the derived inputs
+                # (they don't constitute the required trio, so they reach here).
+                for opt in ("gap_type", "time_period", "min_gap_threshold", "max_opportunities"):
+                    if params.get(opt) is not None:
+                        out[opt] = params[opt]
+                return out
+        except Exception as exc:  # noqa: BLE001 - best-effort; fail closed below
+            logger.warning(
+                "gap_analyzer dispatch: business_metrics substrate probe failed (%s); "
+                "failing closed.",
+                exc,
+            )
+
+    # (3) cannot ground in real data → fail closed (no fabricated metrics/segments).
+    if brand:
+        reason = (
+            f"the business_metrics substrate has no rows for brand {brand!r} under the "
+            "active provenance mode "
+            f"({'synthetic opted in' if include_synthetic else 'real-mode default-exclude'}), "
+            "so the metrics/segments to analyze cannot be derived from real data"
+        )
+    else:
+        reason = (
+            "the dispatch names no brand (parameters / parsed_query entities / "
+            "user_context), so there is no real business_metrics substrate to derive "
+            "metrics/segments from"
+        )
+    return NeedsStructuredInput(
+        agent_name="gap_analyzer",
+        missing=_GAP_REQUIRED,
+        reason=reason,
+        rest_endpoint="POST /api/gaps/analyze",
+    )
+
+
 def _resolve_resource_optimizer_input(
     agent_input: Dict[str, Any], dispatch: AgentDispatch
 ) -> Union[Dict[str, Any], NeedsStructuredInput]:
@@ -592,6 +835,7 @@ def _resolve_prediction_synthesizer_input(
 # an ``if`` branch in ``_dispatch_agent`` (#F12/F13/F14).
 INPUT_RESOLVERS: Dict[str, InputResolver] = {
     "tool_composer": _resolve_tool_composer_input,
+    "gap_analyzer": _resolve_gap_analyzer_input,
     "heterogeneous_optimizer": _resolve_heterogeneous_optimizer_input,
     "resource_optimizer": _resolve_resource_optimizer_input,
     "prediction_synthesizer": _resolve_prediction_synthesizer_input,
@@ -606,7 +850,7 @@ INPUT_RESOLVERS: Dict[str, InputResolver] = {
 # is intentionally EXCLUDED: its success semantics are governed by F6 (#827)
 # tool-level fail-closed + the synthesizer's filtering, not a status field.
 _FAIL_CLOSED_ON_FAILED_STATUS = frozenset(
-    {"heterogeneous_optimizer", "resource_optimizer", "prediction_synthesizer"}
+    {"gap_analyzer", "heterogeneous_optimizer", "resource_optimizer", "prediction_synthesizer"}
 )
 
 
@@ -615,8 +859,9 @@ def _agent_failed(agent_name: str, result: Dict[str, Any]) -> Optional[str]:
     internal domain failure that must fail the dispatch closed, else ``None``.
 
     Only applies to the resolver-backed fail-closed agents and only on an explicit
-    ``status == "failed"`` (the contract all three set on their failure paths,
-    e.g. heterogeneous_optimizer agent.py: ``"failed" if errors else "completed"``).
+    ``status == "failed"`` (the contract all four set on their failure paths,
+    e.g. heterogeneous_optimizer agent.py: ``"failed" if errors else "completed"``;
+    gap_analyzer agent.py ``_build_error_output`` / gap_detector's error path, #874).
     """
     if agent_name not in _FAIL_CLOSED_ON_FAILED_STATUS:
         return None
