@@ -1,0 +1,933 @@
+# =============================================================================
+# E2I Causal Analytics — Palantir Foundry Data Lineage Definition
+# =============================================================================
+# A directed lineage graph of the E2I platform's data flows, expressed in
+# Foundry Data Lineage vocabulary.
+#
+# Node taxonomy (exactly the four documented Foundry lineage node kinds):
+#   dataSource  — a source as it appears in Data Connection (external system)
+#   dataset     — a Foundry dataset (versioned as a linear sequence of
+#                 transactions; branches are pointers, NEVER merged)
+#   objectType  — an Ontology entity (defined in e2i_ontology.yaml; dataset
+#                 nodes that back object types carry the "Defines an object
+#                 type" indicator, here: definesObjectTypes)
+#   artifact    — other resources (reports, dashboards/analyses)
+#
+# Authoring conventions (repo-local YAML conveniences, NOT Foundry-official
+# fields — only the node taxonomy, edge semantics, and branch rules above
+# mirror documented Foundry vocabulary):
+#   zone, location, schemaRef, sourceTable, description — node annotations
+#   trigger, schedule, codePath, branchOverrides       — transform/JobSpec
+#                                                         annotations
+#   status: proposed       — transform does not exist yet; it is the Foundry
+#                            onboarding work this file specifies
+#   syncedFrom             — INBOUND Data Connection sync (dataSource ->
+#                            dataset); distinct from...
+#   syncsTo                — the documented "Syncs" node indicator: dataset
+#                            EXPORTED to an external system
+#   hasJobSpecOnMaster     — mirrors the documented dataset icon state
+#                            (gray = no JobSpec on master / source dataset)
+#
+# Edge conventions (edges are DERIVED, not duplicated):
+#   - dataset -> dataset edges come from each transform's inputs/outputs
+#     (every edge IS a transformation; transforms are JobSpec-like:
+#     per-output, branch-scoped, published by committing code)
+#   - dataset -> objectType provenance edges come from each dataset's
+#     definesObjectTypes list (the backing-datasource relationship)
+#   - dataSource -> dataset edges come from sync-kind transforms
+#
+# Branching model (two layers, per the branching docs):
+#   - dataset branches: linear transaction history per branch; one parent per
+#     non-root branch; NO merging — promotion to master = re-running the
+#     transform logic on master after the code PR merges
+#   - global branches: platform-wide, span datasets AND ontology entities;
+#     each global branch maps to exactly ONE ontology; when a global branch
+#     is selected, dataset fallback branches are DISABLED
+# =============================================================================
+
+lineage:
+  id: e2i-causal-analytics-pipeline
+  displayName: E2I Causal Analytics Pipeline
+  description: >
+    End-to-end lineage from raw RWD parquet / vendor drops / synthetic
+    generation, through converters and the operational Supabase store, to
+    feature store, ML training, agent serving, and the ontology-backing
+    curated datasets.
+  ontology: e2i-causal-analytics   # joins this file to e2i_ontology.yaml
+
+  branchConfig:
+    defaultBranch: master
+    fallbackBranches: [master]     # build/input resolution falls back here
+    notes: >
+      Foundry rules encoded: a build runs on exactly one branch and modifies
+      output datasets on that branch only; inputs read from the build branch
+      if present, else the first existing fallback; output branches are
+      created off the first fallback when absent. When a GLOBAL branch is
+      selected in Data Lineage, dataset fallbacks are disabled.
+    # Main is the Global Branching baseline a global branch is compared
+    # against ("master" at the dataset/pipeline layer) — not itself a
+    # global branch.
+    main: master
+    globalBranches:
+      - name: feat/synthetic-csu-tier0-e2e
+        description: >
+          Example feature global branch mirroring the current git branch:
+          carries the regenerated synthetic_CSU raw zone and three unmerged
+          fixes (tier0 exporter contract columns, synthetic_csu manifest,
+          resolver M1-override). Merging the code PR republishes the
+          JobSpecs on master; the dataset branches themselves are never
+          merged. NOTE: merge auto-deploys (deploy.yml is active on src/**).
+
+  # ===========================================================================
+  # DATA SOURCES (external systems at the platform boundary)
+  # ===========================================================================
+  dataSources:
+    - id: src-optum-spark-mart
+      displayName: Optum Mart Build Pipeline (external Spark)
+      system: "External Spark 3.5.5 pipeline v9.1 (NOT in this repo)"
+      description: >
+        Builds the entity-stacked Optum mart parquet. EXTERNAL BOUNDARY:
+        upstream lineage (including the comorbidity lookback window spec)
+        lives with the mart owners; the lookback is strongly evidenced
+        pre-index but NOT certified. Lineage upstream of Optum.parquet
+        terminates here.
+
+    - id: src-csu-vendor
+      displayName: CSU Vendor Workbook Drop
+      system: "Vendor Excel delivery (gitignored, not in repo)"
+      description: Source of data/rwd/csu/csu_data.xlsx (demo/med/proc/lab sheets).
+
+    - id: src-supabase-prod
+      displayName: Supabase PostgreSQL (prod)
+      system: "LOCAL docker Supabase stack on the droplet (supabase-db, PG15)"
+      description: >
+        The operational store, reached via a Data Connection JDBC source in
+        Foundry terms. CAVEAT: the CLOUD Supabase project is a stale,
+        non-faithful mirror — the docker stack is prod. The ds-ops-* dataset
+        nodes below are this store's table families viewed as pipeline
+        participants; the sync transforms materialize curated Foundry
+        datasets from it.
+
+    - id: src-falkordb
+      displayName: FalkorDB Knowledge Graph
+      system: "FalkorDB (Redis-compatible graph DB, droplet port 6381)"
+      description: >
+        8 node types / 15 edge types (docs/data/04-KNOWLEDGE-GRAPH-ONTOLOGY.md).
+        Written by the seeding/mirroring scripts; read by the
+        export_falkordb_links sync that materializes M:N join datasets.
+
+  # ===========================================================================
+  # DATASETS
+  # ===========================================================================
+  datasets:
+
+    # ------------------------------------------------------------- raw zone
+    - id: ds-raw-optum-mart
+      displayName: Optum Mart (entity-stacked parquet)
+      zone: raw
+      location: data/rwd/Optum_Parquet/Optum.parquet
+      schemaRef: docs/data/OPTUM-MART-DATA-DICTIONARY.md + docs/data/optum_mart_column_schema.csv
+      branches: [master]
+      hasJobSpecOnMaster: false   # source/upload dataset (gray icon state)
+      description: >
+        3,758,007 rows x 252 cols across 4 unjoinable grains: optum_hcp
+        (2,753,238), patient (814,587 CSU patients), veeva_hcp (189,951),
+        market (231 brand x market cells). Extract months 2025-09..2025-12.
+        Parquet is untracked in git.
+
+    - id: ds-raw-optum-enriched
+      displayName: Optum Enriched (patient grain)
+      zone: raw
+      location: data/rwd/Optum_Parquet/Optum_enriched.parquet
+      schemaRef: docs/reports/optum_enriched_cohort_disproof_20260609/EVIDENCE.md
+      branches: [master]
+      hasJobSpecOnMaster: false
+      description: >
+        Externally delivered 814,587 x 205 drop. Deployable-cohort premise
+        DISPROVEN (2026-06-09); consumed only by ad-hoc analysis under
+        docs/reports/, NOT by the production converter chain.
+
+    - id: ds-raw-optum-claims
+      displayName: Optum Raw Claims (6 parquets)
+      zone: raw
+      location: "data/rwd/Optum_Parquet/ expected grain: demographics, medication, procedure, lab, inpatientdata, provider (NOT currently on disk — only Optum.parquet / Optum_enriched.parquet exist there)"
+      schemaRef: .claude/plans/archive/8_completed_plans_20260509/csu-rwd-analyst-spec_NOT_PURSUED_SUPERSEDED_BY_PR84.md (sections 3-8)
+      branches: [master]
+      hasJobSpecOnMaster: false
+      description: >
+        Raw claims zone consumed by convert_optum_rwd (DEFAULT_INPUT
+        data/rwd/Optum_Parquet). A synthetic stand-in is emitted by
+        generate_synthetic_claims to a caller-supplied --out directory for
+        converter testing.
+
+    - id: ds-raw-csu-workbook
+      displayName: CSU Vendor Workbook
+      zone: raw
+      location: data/rwd/csu/csu_data.xlsx (gitignored)
+      schemaRef: docs/lineage/csu_field_audit.md
+      branches: [master]
+      hasJobSpecOnMaster: false
+      description: Vendor Excel workbook for the CSU RWD cohort.
+
+    - id: ds-raw-synthetic-csu
+      displayName: Synthetic CSU Snapshot (24 tables + cohort frames)
+      zone: raw
+      location: data/rwd/synthetic_CSU/ (*.parquet, manifest.json, cohort_frames/)
+      schemaRef: data/rwd/synthetic_CSU/README.md + docs/data/SYNTHETIC-CAUSAL-DATA-GUIDE.md
+      branches: [master, feat/synthetic-csu-tier0-e2e]
+      hasJobSpecOnMaster: true   # produced by tf-load-synthetic-data
+      description: >
+        Seeded (42) confounded-DGP synthetic raw zone: 25k patients /
+        94,796 treatment events (75k base config + injected conversion Rx,
+        #853) / 5k HCPs; 745,163 rows total. 24 table snapshots + 12
+        cohort frames (4 cohorts x 3 brands) + per-HCP CATE artifacts.
+        Every row is_synthetic=True. Regenerated per experiment;
+        --anchor-to-now shifts the timeline each regeneration (a new
+        transaction in Foundry terms).
+
+    # ---------------------------------------------------- intermediate zone
+    - id: ds-int-csu-canonical
+      displayName: CSU Canonical JSON
+      zone: intermediate
+      location: data/rwd/csu/e2i_ml_v3_{hcp_profiles,patient_journeys,treatment_events,split_registry}.json
+      schemaRef: docs/lineage/csu_field_audit.md
+      branches: [master]
+      description: >
+        Canonical E2I-shape output of the CSU converter. LEAKAGE CAVEAT: the
+        converter applies NO lookback window — the field audit marks several
+        emitted columns POST-INDEX (journey_end_date, journey_stage, brand,
+        days_on_therapy, ...).
+
+    - id: ds-int-optum-mart-cohorts
+      displayName: Optum Mart Cohorts (tier0 contract)
+      zone: intermediate
+      location: data/rwd/mart/{initiation,discontinuation,persistence,hcp_adoption}/ (+ fullpop/smoketest variants)
+      schemaRef: per-cohort data_dictionary.csv + src/data/manifests/optum_mart_feature_manifest.py
+      branches: [master]
+      description: >
+        Tier0-contract cohort dirs (e2i_ml_v3_patient_journeys.parquet +
+        e2i_ml_v3_split_registry.json + data_dictionary.csv +
+        attrition_report.csv). Patient cohorts use the 64-column pre-index
+        MART_SAFE_FEATURES allow-list; hcp_adoption is HCP-grain with
+        stratified-random split (no temporal index on that grain).
+
+    - id: ds-int-optum-claims-cohorts
+      displayName: Optum Claims Cohorts (tier0 contract)
+      zone: intermediate
+      location: data/rwd/optum/{initiation,discontinuation,persistence}/ (regenerated on demand; not currently on disk)
+      schemaRef: scripts/convert_optum_rwd.py docstring + emitted data_dictionary.csv
+      branches: [master]
+      description: >
+        Leakage-safe claims cohorts: claim-anchored index date, 180d
+        lookback / 180d prediction window, disjoint patient populations,
+        targets initiated_biologic_180d / discontinued_180d /
+        persistent_at_180d.
+
+    - id: ds-int-optum-gap-enriched
+      displayName: Optum Gap-Enriched Cohorts
+      zone: intermediate
+      location: data/rwd/optum_gap_enriched/<cohort>/ (regenerated on demand; not currently on disk)
+      schemaRef: scripts/enrich_cohort_with_hcp_features.py docstring
+      branches: [master]
+      description: >
+        Harness-testing variant with patient-HCP linkage features +
+        gap-analysis sidecars (hcp_targeting_tier, KOL_influence); complete
+        --data-dir replacement for tier0.
+
+    - id: ds-int-synthetic-tier0-contract
+      displayName: Synthetic Tier0 Contract (4 cohorts)
+      zone: intermediate
+      location: data/rwd/synthetic_CSU/tier0/{initiation,discontinuation,persistence,hcp_adoption}/
+      schemaRef: scripts/export_synthetic_tier0.py docstring
+      branches: [master, feat/synthetic-csu-tier0-e2e]
+      description: >
+        Per-cohort tier0 inputs. Brand-filtered (default Remibrutinib), DGP
+        answer-key columns excluded, opposite-cohort outcome dropped,
+        data_split REASSIGNED stratified-random 60/20/15/5, is_synthetic
+        kept on every row.
+
+    - id: ds-int-synthetic-ground-truth
+      displayName: Synthetic Ground-Truth Sidecar (TRUE_ATE)
+      zone: intermediate
+      location: data/rwd/synthetic_CSU/ground_truth_20260610T211458.json
+      schemaRef: src/ml/synthetic/ground_truth/causal_effects.py (GroundTruthStore)
+      branches: [master, feat/synthetic-csu-tier0-e2e]
+      description: >
+        Answer key: realized per-brand TRUE_ATE (Remibrutinib +0.1718,
+        Kisqali +0.1737, Fabhalta +0.1714; tolerance 0.10) + per-segment
+        CATE. Consumed by the 11-gate acceptance harness.
+
+    # ------------------------------------------- operational store (families)
+    - id: ds-ops-supabase-core
+      displayName: Supabase Core Tables (19 operational)
+      zone: operational
+      location: "Supabase PG (prod docker): hcp_profiles, patient_journeys, treatment_events, triggers, business_metrics, causal_paths, reference_universe, hcp_intent_surveys, agent_registry, agent_activities, ml_split_registry, ml_patient_split_assignments, territory_metrics, ..."
+      schemaRef: docs/data/02-CORE-DATA-DICTIONARY.md + database/core/e2i_ml_complete_v3_schema.sql
+      branches: [master]
+      syncedFrom: [src-supabase-prod]
+      description: >
+        The 19 core operational tables (grouped node; per-table column lists
+        in the data dictionary). Carries the causal variables, data_split
+        governance (assign_patient_split() + run_leakage_audit()), and
+        is_synthetic provenance with default-exclude reads.
+
+    - id: ds-ops-supabase-ml
+      displayName: Supabase ML Tables (MLOps substrate)
+      zone: operational
+      location: "Supabase PG (prod docker): ml_experiments, ml_model_registry, ml_training_runs, ml_predictions, ml_deployments, ml_drift_history, ml_observability_spans, ml_hpo_*, ml_monitoring_*, ml_feast_*, ab_experiment_*, causal_validations, ..."
+      schemaRef: docs/data/03-ML-PIPELINE-SCHEMA.md (13 sections)
+      branches: [master]
+      syncedFrom: [src-supabase-prod]
+      description: >
+        MLOps substrate (grouped node): experiment/model registries
+        (tr_single_champion trigger), training runs, predictions, drift and
+        monitoring history, A/B testing, Feast tracking tables.
+
+    # ------------------------------------------------------ feature store
+    - id: ds-feature-feast-offline
+      displayName: Feast Feature Views (offline)
+      zone: feature-store
+      location: "feature_repo/ (offline store = Supabase PG; config template feature_store.yaml.tmpl; registry data/registry.db on the feast_registry docker volume)"
+      schemaRef: docs/data/05-FEATURE-STORE-REFERENCE.md + feature_repo/features/*.py
+      branches: [master]
+      hasJobSpecOnMaster: false   # feature-view DEFINITIONS are code in feature_repo/, applied to the registry — not produced by a pipeline transform
+      description: >
+        Feast 0.43.0 (runtime hard-pinned: feastdev/feature-server:0.43.0
+        with version-drift guards in the docker entrypoints; the 0.58.0 in
+        docs/data/05 and entities.py comments is stale): 9 feature views /
+        48 features over 5 PG sources (business_metrics, patient_journeys,
+        triggers, hcp_profiles, territory_metrics; 365-day lookback),
+        8 entities, 2 push sources, 1 request source.
+
+    - id: ds-feature-feast-online
+      displayName: Feast Online Store (Redis)
+      zone: feature-store
+      location: "Redis db0 (redis:6379, password-auth per feature_store.yaml.tmpl — the 'db2' in docs/data/05 is stale; db2 is the Celery result backend); feature server 127.0.0.1:6567"
+      schemaRef: docs/data/05-FEATURE-STORE-REFERENCE.md (Materialization & Serving)
+      branches: [master]
+      description: >
+        Low-latency online serving; populated by Feast materialization;
+        freshness logged to ml_feast_feature_freshness.
+
+    # ----------------------------------------------------- model artifacts
+    - id: ds-model-tier0-cache
+      displayName: Tier0 Output Cache
+      zone: model-artifact
+      location: scripts/tier0_output_cache/latest.pkl
+      schemaRef: scripts/run_tier1_5_test.py (run_tier0_and_cache / --tier0-cache)
+      branches: [master, feat/synthetic-csu-tier0-e2e]
+      description: >
+        Pickled tier0 pipeline state (trained artifacts, prepared frames,
+        scope/QA results) — THE tier0 -> tier1-5 contract handoff. Only
+        artifacts passing the val_AUC/deployability gates feed the agent
+        stages. A moving pointer (each run overwrites = new transaction).
+
+    - id: ds-model-artifacts
+      displayName: Model Artifacts Volume
+      zone: model-artifact
+      location: "data/ml_artifacts/ + data/synthetic/models/ + deployment manifests (both dirs deploy/run-time-created on the writable prod volume; gitignored, not in the repo tree)"
+      schemaRef: src/mlops/prediction_synthesizer_deploy.py + scripts/build_synthetic_ensemble_manifest.py
+      branches: [master]
+      description: >
+        Serialized sklearn models + multi-model deployment manifests;
+        registered into ml_model_registry with artifact_path so the agent
+        factory resolves loadable champions.
+
+    # --------------------------------------- curated (ontology-backing) zone
+    # Proposed Foundry datasets materialized from src-supabase-prod (or
+    # derived); each backs the object type(s) listed in definesObjectTypes.
+    - id: ds-curated-hcp-profiles
+      displayName: Curated — hcp_profiles
+      zone: curated
+      sourceTable: hcp_profiles
+      branches: [master]
+      definesObjectTypes: [hcp]
+
+    - id: ds-curated-patient-master
+      displayName: Curated — patient master (DERIVED)
+      zone: curated
+      branches: [master]
+      definesObjectTypes: [patient]
+      description: >
+        No PG master table exists — derived by tf-derive-patient-master as
+        distinct patient_ids + latest-journey attributes (stage, risk,
+        region, age group, insurance) + is_synthetic.
+
+    - id: ds-curated-patient-journeys
+      displayName: Curated — patient_journeys
+      zone: curated
+      sourceTable: patient_journeys
+      branches: [master]
+      definesObjectTypes: [patient-journey]
+
+    - id: ds-curated-treatment-events
+      displayName: Curated — treatment_events
+      zone: curated
+      sourceTable: treatment_events
+      branches: [master]
+      definesObjectTypes: [treatment-event]
+
+    - id: ds-curated-triggers
+      displayName: Curated — triggers
+      zone: curated
+      sourceTable: triggers
+      branches: [master]
+      definesObjectTypes: [trigger]
+
+    - id: ds-curated-business-metrics
+      displayName: Curated — business_metrics
+      zone: curated
+      sourceTable: business_metrics
+      branches: [master]
+      definesObjectTypes: [business-metric]
+      description: "CAVEAT: prod contents currently synthetic (see object type)."
+
+    - id: ds-curated-reference-universe
+      displayName: Curated — reference_universe
+      zone: curated
+      sourceTable: reference_universe
+      branches: [master]
+      definesObjectTypes: [reference-universe]
+
+    - id: ds-curated-hcp-intent-surveys
+      displayName: Curated — hcp_intent_surveys
+      zone: curated
+      sourceTable: hcp_intent_surveys
+      branches: [master]
+      definesObjectTypes: [hcp-intent-survey]
+
+    - id: ds-curated-brand-dim
+      displayName: Curated — brand dimension (SEEDED)
+      zone: curated
+      branches: [master]
+      definesObjectTypes: [brand]
+      description: >
+        Authored 5-row reference dataset covering ALL PG brand_type enum
+        values (Remibrutinib, Fabhalta, Kisqali, competitor, other) so
+        enum-valued FK columns resolve for every row; attributes for the 3
+        real brands mirror the FalkorDB Brand nodes (therapeutic_area,
+        indication).
+
+    - id: ds-curated-region-dim
+      displayName: Curated — region dimension (SEEDED)
+      zone: curated
+      branches: [master]
+      definesObjectTypes: [region]
+      description: 4-row US census region reference dataset (region_type enum).
+
+    - id: ds-curated-causal-paths
+      displayName: Curated — causal_paths
+      zone: curated
+      sourceTable: causal_paths
+      branches: [master]
+      definesObjectTypes: [causal-path]
+
+    - id: ds-curated-kpi-definitions
+      displayName: Curated — KPI definitions (CONFIG-BACKED)
+      zone: curated
+      branches: [master]
+      definesObjectTypes: [kpi]
+      description: >
+        Materialized from config/kpi_definitions.yaml (46 KPIs, v3.0.0) by
+        tf-curate-kpi-definitions; ids WS1-DQ-001..CM-005 are the stable
+        primary keys.
+
+    - id: ds-curated-ml-experiments
+      displayName: Curated — ml_experiments
+      zone: curated
+      sourceTable: ml_experiments
+      branches: [master]
+      definesObjectTypes: [ml-experiment]
+
+    - id: ds-curated-ml-model-registry
+      displayName: Curated — ml_model_registry
+      zone: curated
+      sourceTable: ml_model_registry
+      branches: [master]
+      definesObjectTypes: [ml-model]
+
+    - id: ds-curated-ml-predictions
+      displayName: Curated — ml_predictions (+ derived model_registry_id)
+      zone: curated
+      sourceTable: ml_predictions
+      branches: [master]
+      definesObjectTypes: [prediction]
+      description: >
+        Produced by tf-curate-ml-predictions (not the plain sync): adds the
+        DERIVED model_registry_id column by resolving the loose
+        model_version string handle against ml_model_registry.
+
+    - id: ds-curated-ml-split-registry
+      displayName: Curated — ml_split_registry
+      zone: curated
+      sourceTable: ml_split_registry
+      branches: [master]
+      definesObjectTypes: [data-split-config]
+
+    - id: ds-curated-ml-patient-split-assignments
+      displayName: Curated — ml_patient_split_assignments (M:N join table)
+      zone: curated
+      sourceTable: ml_patient_split_assignments
+      branches: [master]
+      definesObjectTypes: []   # backs the patient-split-assignments LINK type
+      description: >
+        Real PG join table (UNIQUE(split_config_id, patient_id)); backs the
+        Patient<->DataSplitConfig many-to-many link.
+
+    - id: ds-curated-ml-drift-history
+      displayName: Curated — ml_drift_history
+      zone: curated
+      sourceTable: ml_drift_history
+      branches: [master]
+      definesObjectTypes: [drift-event]
+
+    - id: ds-curated-agent-registry
+      displayName: Curated — agent_registry
+      zone: curated
+      sourceTable: agent_registry
+      branches: [master]
+      definesObjectTypes: [agent]
+
+    - id: ds-curated-agent-activities
+      displayName: Curated — agent_activities
+      zone: curated
+      sourceTable: agent_activities
+      branches: [master]
+      definesObjectTypes: [agent-activity]
+
+    # -------------------------- M:N link join datasets (FalkorDB edge exports)
+    - id: ds-link-patient-hcp-treated-by
+      displayName: Link — Patient TREATED_BY HCP
+      zone: curated
+      branches: [master]
+      definesObjectTypes: []   # backs the patient-treated-by-hcp link type
+      description: "Columns: patient_id, hcp_id, is_primary_hcp, visit_count, relationship_status."
+
+    - id: ds-link-patient-brand-prescribed
+      displayName: Link — Patient PRESCRIBED Brand
+      zone: curated
+      branches: [master]
+      definesObjectTypes: []
+      description: "Columns: patient_id, brand_name (mapped to PG capitalization), prescription_date, line_of_therapy, status."
+
+    - id: ds-link-hcp-brand-prescribes
+      displayName: Link — HCP PRESCRIBES Brand
+      zone: curated
+      branches: [master]
+      definesObjectTypes: []
+      description: "Columns: hcp_id, brand_name, volume_monthly, market_share, prescribing_status."
+
+    - id: ds-link-hcp-influences
+      displayName: Link — HCP INFLUENCES HCP (reflexive)
+      zone: curated
+      branches: [master]
+      definesObjectTypes: []
+      description: "Columns: source_hcp_id, target_hcp_id, influence_strength, network_type."
+
+    - id: ds-link-agent-causal-path-discovered
+      displayName: Link — Agent DISCOVERED CausalPath
+      zone: curated
+      branches: [master]
+      definesObjectTypes: []
+      description: "Columns: agent_name, path_id, discovery_date, discovery_method."
+
+    - id: ds-link-agent-trigger-generated
+      displayName: Link — Agent GENERATED Trigger
+      zone: curated
+      branches: [master]
+      definesObjectTypes: []
+      description: "Columns: agent_name, trigger_id, generation_date, reasoning."
+
+    - id: ds-link-causal-path-kpi-impacts
+      displayName: Link — CausalPath IMPACTS KPI
+      zone: curated
+      branches: [master]
+      definesObjectTypes: []
+      description: >
+        Columns: path_id, kpi_id (graph ^KPI[0-9]{6}$ mapped to canonical
+        WS1-DQ-001-style config ids), impact_magnitude, direction.
+
+  # ===========================================================================
+  # ARTIFACTS (non-dataset lineage nodes)
+  # ===========================================================================
+  artifacts:
+    - id: ar-pipeline-reports
+      displayName: Pipeline Run Reports
+      location: docs/results/ (tier0_pipeline_run_<ts>.md, rwd_pipeline_run_<ts>.md) + docs/reports/
+      description: >
+        Markdown run/validation reports (prefix encodes synthetic-vs-RWD
+        source), e.g. docs/reports/synthetic_csu_e2e_validation_20260610/.
+
+    - id: ar-kpi-dashboard
+      displayName: KPI Dashboards / Chat UI
+      location: FastAPI routes (src/api/routes/copilotkit.py, chatbot_*.py) -> React frontend (frontend/)
+      description: >
+        Request-time KPI summaries (TRx/NRx, conversion, business impact)
+        via the kpi_query allowlist RPC + business_impact_* views
+        (migrations 063/064), rendered in chat/copilot UI and dashboards.
+
+  # ===========================================================================
+  # TRANSFORMS (JobSpec-like: per-output, branch-scoped; an edge in the
+  # lineage graph IS one of these transformations)
+  # ===========================================================================
+  transforms:
+
+    # ------------------------------------------------- raw zone production
+    - id: tf-generate-synthetic-claims
+      displayName: Generate Synthetic Claims
+      codePath: scripts/generate_synthetic_claims.py
+      inputs: []
+      outputs: [ds-raw-optum-claims]
+      trigger: manual script
+      description: >
+        Emits the 6 raw claim parquets with an embedded DGP so the real
+        converter->tier0 chain can be exercised (honest val_AUC 0.62-0.68).
+        Writes a synthetic STAND-IN into the raw claims zone.
+
+    - id: tf-load-synthetic-data
+      displayName: Generate / Load Synthetic Substrate
+      codePath: scripts/load_synthetic_data.py (generators src/ml/synthetic/generators/, DGP src/ml/synthetic/dgp/)
+      inputs: []
+      outputs: [ds-raw-synthetic-csu, ds-ops-supabase-core, ds-ops-supabase-ml]
+      trigger: manual script
+      branchOverrides: [feat/synthetic-csu-tier0-e2e]
+      description: >
+        Seeded confounded-DGP generation; either loads Supabase in FK
+        dependency order (ids namespaced by --tag, every row
+        is_synthetic=True, --anchor-to-now date remap) or writes
+        parquet-only snapshots (--parquet-only --parquet-out
+        data/rwd/synthetic_CSU).
+
+    # ----------------------------------------------------------- converters
+    - id: tf-convert-csu-rwd
+      displayName: CSU Converter
+      codePath: scripts/convert_csu_rwd.py
+      inputs: [ds-raw-csu-workbook]
+      outputs: [ds-int-csu-canonical]
+      trigger: manual script
+      description: >
+        Vendor Excel -> 4 canonical JSON files (id sequences, SHA-256
+        patient_hash, age binning, ZIP->census region). Applies NO lookback
+        window (per-field temporal verdicts: docs/lineage/csu_field_audit.md;
+        cross-converter reconciliation:
+        docs/lineage/converter_schema_reconciliation.json — has_mismatches=true,
+        identically-named columns differ in semantics across converters).
+
+    - id: tf-convert-optum-rwd
+      displayName: Optum Claims Converter (leakage-safe)
+      codePath: scripts/convert_optum_rwd.py
+      inputs: [ds-raw-optum-claims]
+      outputs: [ds-int-optum-claims-cohorts]
+      trigger: manual script
+      description: >
+        Claim-anchored index date, strict 180d pre-index lookback
+        (Charlson/Elixhauser), 180d prediction window, per-cohort targets,
+        chronological split; emits data_dictionary.csv + attrition_report.csv.
+
+    - id: tf-convert-optum-mart
+      displayName: Optum Mart Adapter (patient cohorts)
+      codePath: scripts/convert_optum_mart.py
+      inputs: [ds-raw-optum-mart]
+      outputs: [ds-int-optum-mart-cohorts]
+      trigger: manual script
+      description: >
+        Selects the patient grain, applies the owner-approved 64-column
+        pre-index MART_SAFE_FEATURES allow-list, shapes
+        initiation/discontinuation/persistence tier0 cohorts.
+
+    - id: tf-convert-optum-hcp-adoption
+      displayName: Optum Mart Adapter (HCP adoption)
+      codePath: scripts/convert_optum_hcp_adoption.py
+      inputs: [ds-raw-optum-mart]
+      outputs: [ds-int-optum-mart-cohorts]
+      trigger: manual script
+      description: >
+        HCP-grain adoption-propensity cohort: adopted_target_brand from
+        adoption_status, positive-enumeration pre-adoption features,
+        stratified-random split (no temporal index on the HCP grain).
+
+    - id: tf-enrich-cohort-hcp-features
+      displayName: Gap-Enrich Cohorts with HCP Features
+      codePath: scripts/enrich_cohort_with_hcp_features.py
+      inputs: [ds-int-optum-claims-cohorts, ds-raw-optum-claims]
+      outputs: [ds-int-optum-gap-enriched]
+      trigger: manual script
+
+    # --------------------------------------------------- synthetic e2e chain
+    - id: tf-write-ground-truth-sidecar
+      displayName: Write Ground-Truth Sidecar
+      codePath: scripts/write_ground_truth_sidecar.py
+      inputs: [ds-raw-synthetic-csu]
+      outputs: [ds-int-synthetic-ground-truth]
+      trigger: manual script
+      description: >
+        Regenerates the patient frame with the SAME loader config (seed 42,
+        DGPType.CONFOUNDED) and writes realized TRUE_ATE + per-segment CATE.
+
+    - id: tf-export-synthetic-tier0
+      displayName: Export Synthetic Tier0 Contract
+      codePath: scripts/export_synthetic_tier0.py
+      inputs: [ds-raw-synthetic-csu]
+      outputs: [ds-int-synthetic-tier0-contract]
+      trigger: manual script
+      branchOverrides: [feat/synthetic-csu-tier0-e2e]
+      description: >
+        Snapshot -> per-cohort tier0 inputs for all 4 cohorts (the exact
+        shape run_tier0_test.py::load_rwd_data consumes). JobSpec currently
+        overridden on the feature branch (exporter contract-columns fix).
+
+    # ------------------------------------------------------ onboarding load
+    - id: tf-manual-rwd-onboarding
+      displayName: Manual RWD Onboarding Load
+      codePath: docs/data/01-DATA-CONVERSION-GUIDE.md workflow; validation src/mlops/pandera_schemas.py; SQL assign_patient_split() / run_leakage_audit()
+      inputs: [ds-int-csu-canonical, ds-int-optum-mart-cohorts, ds-int-optum-claims-cohorts]
+      outputs: [ds-ops-supabase-core]
+      trigger: manual playbook
+      description: >
+        Map columns to E2I schema, generate ids, map enums, derive causal
+        variables, Pandera-validate, load in FK order, register split
+        config, assign chronological 60/20/15/5 splits (7-day gaps, patient
+        isolation), propagate to child tables, run leakage audit.
+
+    # -------------------------------------------------------- ML pipeline
+    - id: tf-tier0-pipeline
+      displayName: Tier0 MLOps Pipeline (8 agents)
+      codePath: scripts/run_tier0_test.py (cohort wrapper scripts/run_optum_tier0_test.py); agents src/agents/ml_foundation/ + src/agents/cohort_constructor/
+      inputs: [ds-int-synthetic-tier0-contract, ds-int-optum-mart-cohorts, ds-int-optum-claims-cohorts, ds-int-optum-gap-enriched, ds-int-csu-canonical, ds-feature-feast-offline]
+      outputs: [ds-model-tier0-cache, ds-ops-supabase-ml, ar-pipeline-reports, ds-model-artifacts]
+      trigger: manual script
+      description: >
+        scope_definer -> data_preparer (leakage detection) -> Feast
+        registration/freshness -> cohort_constructor -> model_selector ->
+        model_trainer + champion selection (deployability gates, val_AUC) ->
+        feature_analyzer (SHAP) -> model_deployer -> observability_connector.
+        Writes ml_experiments / ml_model_registry / ml_training_runs rows.
+
+    - id: tf-tier1-5-stages
+      displayName: Tier 1-5 Agent Stages (13 agents)
+      codePath: scripts/run_tier1_5_test.py; agents src/agents/ (roster src/agents/factory.py)
+      inputs: [ds-model-tier0-cache, ds-ops-supabase-core, ds-ops-supabase-ml]
+      outputs: [ds-ops-supabase-ml, ar-pipeline-reports]
+      trigger: manual script
+      description: >
+        causal_impact, heterogeneous_optimizer (CATE), gap_analyzer,
+        explainer, prediction_synthesizer, resource_optimizer, ... against
+        tier0 outputs (--tier0-cache). ONLY gate-passing tier0 artifacts
+        feed these stages (the tier0->tier1-5 contract handoff).
+
+    - id: tf-synthetic-acceptance-gates
+      displayName: Synthetic Acceptance Harness (11 gates)
+      codePath: scripts/validate_synthetic_causal.py + run_tier0_test.py val_AUC gate
+      inputs: [ds-ops-supabase-core, ds-int-synthetic-ground-truth, ds-raw-synthetic-csu, ds-model-tier0-cache]
+      outputs: [ar-pipeline-reports]
+      trigger: manual script (requires the faithful docker Supabase)
+      description: >
+        Proves the whole causal pipeline (4 cohorts x 3 brands) recovers the
+        DGP ground truth; gates fail closed when substrate is absent.
+        NOTE: the CI "Causal Validation Benchmarks" job runs the related
+        synthetic benchmark suite (tests/synthetic/, estimator recovery) —
+        NOT this 11-gate harness, which is manual-only.
+
+    # -------------------------------------------------- scheduled ETL/beat
+    - id: tf-etl-business-metrics-per-hcp
+      displayName: ETL — Per-HCP Business Metrics Rollup
+      codePath: src/etl/business_metrics_per_hcp_etl.py (run_per_hcp_rollup)
+      inputs: [ds-ops-supabase-core]
+      outputs: [ds-ops-supabase-core]
+      trigger: celery beat (24h)
+      schedule: "every 24h"
+      description: >
+        triggers x patient_journeys (LATERAL most-recent-journey brand) x
+        hcp_profiles -> per-(hcp_id, brand, metric_date) business_metrics
+        rows; idempotent md5 natural-key ON CONFLICT.
+
+    - id: tf-etl-patient-adherence
+      displayName: ETL — Patient Adherence Rollup
+      codePath: src/etl/patient_adherence_etl.py (run_patient_adherence_rollup)
+      inputs: [ds-ops-supabase-core]
+      outputs: [ds-ops-supabase-core]
+      trigger: celery beat (24h)
+      schedule: "every 24h"
+
+    - id: tf-etl-territory-metrics
+      displayName: ETL — Territory Metrics Rollup
+      codePath: src/etl/territory_metrics_etl.py (run_territory_rollup)
+      inputs: [ds-ops-supabase-core]
+      outputs: [ds-ops-supabase-core]
+      trigger: celery beat (24h)
+      schedule: "every 24h"
+
+    - id: tf-feast-materialization
+      displayName: Feast Materialization
+      codePath: scripts/feast_materialize.py; src/tasks materialize_incremental_features / materialize_features / check_feature_freshness
+      inputs: [ds-ops-supabase-core, ds-feature-feast-offline]
+      outputs: [ds-feature-feast-online, ds-ops-supabase-ml]
+      trigger: celery beat (incremental ~6h, full weekly, freshness ~4h) + manual CLI
+      schedule: "incremental ~6h / full weekly"
+
+    - id: tf-drift-monitoring-sweep
+      displayName: Drift & Monitoring Sweep
+      codePath: src/tasks/drift_monitoring_tasks.py (check_all_production_models) + src/repositories/drift_monitoring.py
+      inputs: [ds-ops-supabase-ml]
+      outputs: [ds-ops-supabase-ml]
+      trigger: celery beat (6h)
+      schedule: "every 6h"
+      description: >
+        Per-production-model sweep writing ml_drift_history /
+        ml_performance_metrics / ml_monitoring_alerts (fail-closed client
+        resolver per #845; schema realigned per #842).
+
+    # ------------------------------------------------------ serving + KPIs
+    - id: tf-prediction-synthesizer-deploy
+      displayName: Prediction Synthesizer Deploy (activation)
+      codePath: src/mlops/prediction_synthesizer_deploy.py (python -m, --verify)
+      inputs: [ds-raw-synthetic-csu, ds-ops-supabase-ml]
+      outputs: [ds-model-artifacts, ds-ops-supabase-ml]
+      trigger: deploy step (CLI on the target box)
+      description: >
+        Trains >=2 real sklearn models, pickles them + deployment manifest
+        to the writable volume, upserts champion rows (stage='production',
+        artifact_path set). NOTE: registers is_synthetic=False — these are
+        the real production-serving champions even though trained on
+        synthetic scenario data.
+
+    - id: tf-agent-prediction-serving
+      displayName: Agent Prediction Serving (request-time)
+      codePath: src/agents/ (prediction_synthesizer + factory model-client injection); src/mlops model-registry repositories
+      inputs: [ds-model-artifacts, ds-ops-supabase-ml, ds-feature-feast-online]
+      outputs: [ds-ops-supabase-ml, ar-kpi-dashboard]
+      trigger: API call (chat/copilotkit orchestrator routes)
+
+    - id: tf-kpi-calculation
+      displayName: KPI Calculation (request-time)
+      codePath: src/kpi/calculators/{business_impact,trigger_performance,causal_metrics,data_quality}.py via kpi_query allowlist RPC; src/api/routes/copilotkit.py get_kpi_summary
+      inputs: [ds-ops-supabase-core, ds-ops-supabase-ml]
+      outputs: [ar-kpi-dashboard]
+      trigger: API call (no batch precompute)
+      description: >
+        Real-data path post-PR-#820 (reads treatment_events, not the
+        synthetic business_metrics); synthetic rows excluded by default
+        (migration 066).
+
+    # ----------------------------------------------------- graph + syncs
+    - id: tf-knowledge-graph-seeding
+      displayName: Knowledge Graph Seeding / Mirroring
+      codePath: scripts/seed_falkordb.py (+ seed_falkordb_all.sh, seed_semantic_graph.py, persist_hcp_influence_to_falkordb.py, mirror_role_attributions_to_falkordb.py)
+      inputs: [ds-ops-supabase-core]
+      outputs: []
+      syncsTo: [src-falkordb]
+      trigger: manual script
+      description: >
+        Seeds FalkorDB with brands/regions/KPIs/agents and causal
+        relationships; mirrors HCP-influence and causal-role attributions.
+        Modeled as a SYNC (export to an external system) — the graph store
+        is a dataSource node, not a dataset.
+
+    # ------------------------------- Foundry onboarding (PROPOSED transforms)
+    - id: tf-sync-supabase-to-curated
+      displayName: Sync — Supabase tables to curated datasets
+      status: proposed
+      codePath: "(Foundry Data Connection JDBC syncs; one per table)"
+      inputs: [src-supabase-prod]
+      outputs: [ds-curated-hcp-profiles, ds-curated-patient-journeys, ds-curated-treatment-events, ds-curated-triggers, ds-curated-business-metrics, ds-curated-reference-universe, ds-curated-hcp-intent-surveys, ds-curated-causal-paths, ds-curated-ml-experiments, ds-curated-ml-model-registry, ds-curated-ml-split-registry, ds-curated-ml-patient-split-assignments, ds-curated-ml-drift-history, ds-curated-agent-registry, ds-curated-agent-activities]
+      trigger: Foundry sync schedule
+      description: >
+        Straight table syncs. Primary-key hygiene is enforced UPSTREAM of
+        the ontology (Foundry hard rule: PK unique, non-null, distinct per
+        row of the backing dataset) — dedupe in the sync/curation transform,
+        never in the Ontology Manager.
+
+    - id: tf-derive-patient-master
+      displayName: Derive — Patient master
+      status: proposed
+      codePath: "(Foundry transform; semantics: distinct patient_id over patient_journeys + treatment_events, latest-journey attributes)"
+      inputs: [ds-curated-patient-journeys, ds-curated-treatment-events]
+      outputs: [ds-curated-patient-master]
+      trigger: Foundry build (after syncs)
+
+    - id: tf-curate-ml-predictions
+      displayName: Curate — ml_predictions (+ model_registry_id)
+      status: proposed
+      codePath: "(Foundry transform; semantics mirror src/repositories/drift_monitoring.py::_resolve_model_id)"
+      inputs: [src-supabase-prod, ds-curated-ml-model-registry]
+      outputs: [ds-curated-ml-predictions]
+      trigger: Foundry build (after syncs)
+      description: >
+        Syncs ml_predictions and resolves the loose model_version string to
+        ml_model_registry.id, emitting the derived model_registry_id column
+        that realizes the MlModel->Prediction link.
+
+    - id: tf-curate-kpi-definitions
+      displayName: Curate — KPI definitions from config
+      status: proposed
+      codePath: "(Foundry transform over config/kpi_definitions.yaml, 46 KPIs v3.0.0)"
+      inputs: []
+      outputs: [ds-curated-kpi-definitions]
+      trigger: Foundry build (on config change)
+
+    - id: tf-seed-dimensions
+      displayName: Seed — Brand / Region dimensions
+      status: proposed
+      codePath: "(authored reference datasets; brand attributes mirror FalkorDB Brand nodes)"
+      inputs: []
+      outputs: [ds-curated-brand-dim, ds-curated-region-dim]
+      trigger: Foundry build (manual, on enum change)
+
+    - id: tf-export-falkordb-links
+      displayName: Export — FalkorDB edges to M:N join datasets
+      status: proposed
+      codePath: "(Foundry transform reading FalkorDB via Data Connection; edge catalogs in docs/data/04-KNOWLEDGE-GRAPH-ONTOLOGY.md)"
+      inputs: [src-falkordb]
+      outputs: [ds-link-patient-hcp-treated-by, ds-link-patient-brand-prescribed, ds-link-hcp-brand-prescribes, ds-link-hcp-influences, ds-link-agent-causal-path-discovered, ds-link-agent-trigger-generated, ds-link-causal-path-kpi-impacts]
+      trigger: Foundry build (after graph seeding)
+      description: >
+        Materializes the 7 modeled graph edges as join datasets backing the
+        MANY_TO_MANY link types. Must normalize graph vocabulary to PG
+        canonical (lowercase->capitalized brand names; graph KPI ids ->
+        config KPI ids). Inferred edges (HIGH_POTENTIAL_PRESCRIBER,
+        INDIRECTLY_INFLUENCES) are intentionally NOT exported.
+
+  # ===========================================================================
+  # Cross-cutting caveats (carry into any Foundry onboarding)
+  # ===========================================================================
+  caveats:
+    - >
+      SYNTHETIC PROVENANCE: every synthetic row carries is_synthetic=True;
+      platform reads default-exclude synthetic with explicit
+      include_synthetic opt-in (PRs #850/#851/#856); DB loads are
+      id-namespaced via --tag. Exception: prediction_synthesizer_deploy
+      registers its models is_synthetic=False (real serving champions
+      trained on synthetic scenario data).
+    - >
+      TWO data_split REGIMES: chronological 60/20/15/5 with 7-day gaps +
+      patient isolation for DB loads vs stratified-random 60/20/15/5 in the
+      synthetic tier0 exporter and HCP-adoption adapter. The governing
+      DataSplitConfig row is the per-dataset source of truth.
+    - >
+      LEAKAGE GOVERNANCE IS CONVERTER-SPECIFIC: CSU converter applies NO
+      lookback window (POST-INDEX columns flagged in
+      docs/lineage/csu_field_audit.md); Optum converters are leakage-safe by
+      positive enumeration. converter_schema_reconciliation.json records
+      has_mismatches=true — identically-named columns differ in semantics
+      across converter outputs (treatment_initiated, discontinuation_flag,
+      brand, data_quality_score, index_date anchor).
+    - >
+      EXTERNAL BOUNDARY: the Optum mart's upstream Spark v9.1 build is not
+      in this repo; its comorbidity lookback is evidenced but uncertified.
+      Foundry lineage upstream of Optum.parquet ends at src-optum-spark-mart.
+    - >
+      REGENERATED DATASETS: data/rwd/synthetic_CSU is regenerated per
+      experiment (seed-reproducible; --anchor-to-now shifts all dates);
+      data/rwd/optum cohorts are regenerated on demand (not currently on
+      disk); each tier0 run creates a fresh ml_experiments row and
+      overwrites the tier0 cache. In Foundry terms each regeneration is a
+      new transaction on the dataset branch.
+    - >
+      ACTIVATION-GATED EDGES: prediction serving requires the deploy-time
+      CLI to have registered loadable artifacts; BentoML/MLflow are optional
+      tier0 flags; FalkorDB seeding is manual. These edges exist only when
+      activated.
+    - >
+      PROD DB = local docker Supabase on the droplet; the cloud Supabase
+      project is a stale non-faithful mirror. business_metrics content is
+      currently synthetic; treatment_events ends 2025-12-22.

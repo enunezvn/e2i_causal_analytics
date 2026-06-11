@@ -1,0 +1,1373 @@
+# =============================================================================
+# E2I Causal Analytics — Palantir Foundry Ontology Definition
+# =============================================================================
+# Target: Foundry Ontology, Object Storage V2 semantics ONLY
+#         (Object Storage V1 / Phonograph is deprecated, unavailable after
+#         2026-06-30 — nothing here assumes V1 behavior).
+#
+# Authoring conventions
+#   - ids            : kebab-case, author-supplied, unique within the ontology
+#   - apiName        : PascalCase for object types, camelCase for properties
+#   - rid            : NOT authored — Foundry assigns RIDs on creation
+#   - column         : the backing-dataset column a property maps to
+#   - baseType       : Foundry property base types (string, integer, long,
+#                      double, boolean, date, timestamp, array<...>, struct).
+#                      All dataset field types are valid except Map and Binary.
+#   - datasources    : the backing dataset for each object type; dataset ids
+#                      here MUST exist as dataset nodes in e2i_lineage.yaml
+#                      (this is the join point between the two files).
+#   - objectStorage / defaultBranch / notes (ontology block) : repo-local
+#                      annotations, NOT Foundry-authorable fields — they
+#                      record the OSv2 target and the branch this definition
+#                      is evaluated against.
+#
+# Canonical vocabulary = live PostgreSQL schema (docker Supabase prod,
+# post-#825/#842 realignment). FalkorDB graph vocabulary divergences are
+# recorded in property descriptions rather than modeled as separate types.
+#
+# Hard Foundry rules honored throughout:
+#   - exactly one primaryKey per object type; unique, non-null, immutable
+#   - one-to-* links ride a foreign-key property referencing the target's
+#     primary key; many-to-many links are backed by their own join dataset
+#   - links never cross ontologies; self/reflexive links are allowed
+#   - object types materialize nothing until a backing datasource is attached
+# =============================================================================
+
+ontology:
+  id: e2i-causal-analytics
+  apiName: E2ICausalAnalytics
+  displayName: E2I Causal Analytics
+  description: >
+    Operational layer for the E2I pharmaceutical causal-analytics platform:
+    a 21-agent, 6-tier drug-adoption analysis system for three Novartis brands
+    (Remibrutinib/CSU, Fabhalta/PNH, Kisqali/HR+ HER2- breast cancer).
+    Models HCPs, patients, treatment journeys, triggers, causal paths, KPIs,
+    and the ML/agent lifecycle that produces them.
+  # Ontologies map 1:1 to Foundry spaces and inherit organization markings.
+  space: e2i-causal-analytics-space
+  objectStorage: v2
+  defaultBranch: master
+  notes: >
+    Read-only analytics ontology (v1): writeback is disabled on every object
+    type and no actionTypes are declared. Operational edits (e.g. recording
+    trigger acceptance) are deliberately deferred.
+
+# -----------------------------------------------------------------------------
+# Object type groups (categorization labels)
+# -----------------------------------------------------------------------------
+objectTypeGroups:
+  - id: core-domain
+    displayName: Core Commercial Domain
+    description: HCPs, patients, journeys, events, triggers, metrics, surveys.
+  - id: reference-dimension
+    displayName: Reference Dimensions
+    description: Small seeded dimensions (brands, US census regions).
+  - id: causal-analytics
+    displayName: Causal Analytics
+    description: Discovered causal paths and the KPI catalog they impact.
+  - id: ml-lifecycle
+    displayName: ML Lifecycle
+    description: Experiments, model registry, predictions, splits, drift.
+  - id: agentic-layer
+    displayName: Agentic Layer
+    description: The 21-agent system registry and its execution log.
+
+# -----------------------------------------------------------------------------
+# Shared properties (reusable definitions referenced by multiple object types)
+# -----------------------------------------------------------------------------
+sharedProperties:
+  - id: data-split
+    apiName: dataSplit
+    displayName: Data Split
+    baseType: string
+    column: data_split
+    description: >
+      ML split assignment (PG enum data_split_type: train | validation | test
+      | holdout | unassigned). CAVEAT — two regimes exist platform-wide:
+      Supabase loads use chronological 60/20/15/5 with 7-day temporal gaps and
+      patient-level isolation (ml_split_registry + assign_patient_split() +
+      run_leakage_audit()), while the synthetic tier0 exporter and the
+      HCP-adoption mart adapter REASSIGN stratified-random 60/20/15/5. Do not
+      treat this property as carrying a single global semantic; the governing
+      DataSplitConfig (split_config_id) is the source of truth per row.
+  - id: is-synthetic
+    apiName: isSynthetic
+    displayName: Is Synthetic
+    baseType: boolean
+    column: is_synthetic
+    description: >
+      Synthetic-data provenance flag (migrations 063/069). Platform reads
+      default to EXCLUDING synthetic rows; consumers opt in explicitly via
+      include_synthetic. Surface this flag prominently in any Foundry
+      application built over these object types.
+
+# =============================================================================
+# OBJECT TYPES (19)
+# =============================================================================
+objectTypes:
+
+  # --------------------------------------------------------------- core-domain
+  - id: hcp
+    apiName: Hcp
+    displayName: HCP
+    pluralDisplayName: HCPs
+    description: >
+      Healthcare professional (prescriber) profile. Backing table
+      hcp_profiles (~30 columns; the long tail — city, zip_code,
+      sub_specialty, patient volumes, affiliations, engagement history —
+      is omitted here and can be added incrementally; OSv2 allows up to
+      2000 properties per object type).
+    icon: stethoscope
+    groups: [core-domain]
+    status: active
+    visibility: prominent
+    writeback: disabled
+    primaryKey: hcpId
+    titleProperty: lastName
+    datasources:
+      - dataset: ds-curated-hcp-profiles
+        branch: master
+    properties:
+      - { apiName: hcpId, column: hcp_id, baseType: string,
+          description: "Internal HCP identifier (graph id pattern ^HCP[0-9]{8}$)." }
+      - { apiName: npi, column: npi, baseType: string,
+          description: "National Provider Identifier; UNIQUE in source table." }
+      - { apiName: firstName, column: first_name, baseType: string }
+      - { apiName: lastName, column: last_name, baseType: string }
+      - { apiName: specialty, column: specialty, baseType: string,
+          description: "Free VARCHAR in PG; FalkorDB constrains to a 13-value vocabulary (dermatology, allergist, immunology, hematology, oncology, ...)." }
+      - { apiName: practiceType, column: practice_type, baseType: string,
+          description: "hospital | clinic | academic | ..." }
+      - { apiName: geographicRegion, column: geographic_region, baseType: string,
+          description: "FK-style enum column (region_type: northeast | south | midwest | west) — realizes the link to Region." }
+      - { apiName: state, column: state, baseType: string,
+          description: "2-letter US state code." }
+      - { apiName: priorityTier, column: priority_tier, baseType: integer,
+          description: "1-5 (PG CHECK). NOTE: FalkorDB uses tier_1..tier_3 string enum — PG integer is canonical." }
+      - { apiName: decile, column: decile, baseType: integer,
+          description: "Prescribing volume decile 1-10." }
+      - { apiName: prescribingVolume, column: prescribing_volume, baseType: integer }
+      - { apiName: adoptionCategory, column: adoption_category, baseType: string,
+          description: "innovator | early_adopter | early_majority | late_majority | laggard." }
+      - { apiName: digitalEngagementScore, column: digital_engagement_score, baseType: double }
+      - { apiName: territoryId, column: territory_id, baseType: string }
+      - { apiName: salesRepId, column: sales_rep_id, baseType: string }
+      - { sharedProperty: is-synthetic }
+
+  - id: patient
+    apiName: Patient
+    displayName: Patient
+    pluralDisplayName: Patients
+    description: >
+      Patient entity. DERIVED object type: Postgres has NO patient master
+      table — patient_id is a plain VARCHAR(20) on patient_journeys,
+      treatment_events, ml_predictions, triggers, and
+      ml_patient_split_assignments; the Patient entity otherwise lives only
+      as a FalkorDB graph node. The backing dataset is produced by the
+      derive_patient_master transform (distinct patient_ids + latest journey
+      attributes); see e2i_lineage.yaml. One patient can have multiple
+      PatientJourney rows.
+    icon: person
+    groups: [core-domain]
+    status: experimental
+    visibility: prominent
+    writeback: disabled
+    primaryKey: patientId
+    titleProperty: patientId
+    datasources:
+      - dataset: ds-curated-patient-master
+        branch: master
+    properties:
+      - { apiName: patientId, column: patient_id, baseType: string,
+          description: "Unique patient identifier (graph pattern ^PAT[0-9]{8}$)." }
+      - { apiName: journeyStage, column: journey_stage, baseType: string,
+          description: "Latest funnel stage. Graph vocabulary: aware | considering | prescribed | first_fill | adherent | discontinued | maintained; PG journey_stage_type is a 12-value superset (adds 5 clinical stages)." }
+      - { apiName: riskScore, column: risk_score, baseType: double,
+          description: "0.0-1.0 churn/non-adherence risk (latest journey)." }
+      - { apiName: region, column: region, baseType: string,
+          description: "region_type: northeast | south | midwest | west (lowercase — #851)." }
+      - { apiName: ageGroup, column: age_group, baseType: string,
+          description: "PG buckets 18-34 | 35-49 | 50-64 | 65+; graph uses pediatric | young_adult | adult | senior." }
+      - { apiName: insuranceType, column: insurance_type, baseType: string,
+          description: "PG: commercial | medicare | medicaid | cash | other; the graph uses 'uninsured' in place of 'cash'." }
+      - { sharedProperty: is-synthetic }
+
+  - id: patient-journey
+    apiName: PatientJourney
+    displayName: Patient Journey
+    pluralDisplayName: Patient Journeys
+    description: >
+      A patient's treatment journey for one brand/indication; carries the
+      causal triad (disease_severity confounder, engagement_score treatment,
+      treatment_initiated outcome). Backing table patient_journeys (45+
+      columns; source-tracking block, comorbidities, and demographic tail
+      omitted here).
+    icon: route
+    groups: [core-domain]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: patientJourneyId
+    titleProperty: journeyStage
+    datasources:
+      - dataset: ds-curated-patient-journeys
+        branch: master
+    properties:
+      - { apiName: patientJourneyId, column: patient_journey_id, baseType: string }
+      - { apiName: patientId, column: patient_id, baseType: string,
+          description: "NOT NULL. Foreign key to Patient (derived object type)." }
+      - { apiName: hcpId, column: hcp_id, baseType: string,
+          description: "Treating HCP. SOFT JOIN — no declared FK constraint in PG; modeled as an explicit Foundry link." }
+      - { apiName: journeyStartDate, column: journey_start_date, baseType: date }
+      - { apiName: journeyStage, column: journey_stage, baseType: string,
+          description: "PG enum journey_stage_type, 12 values: diagnosis | initial_treatment | treatment_optimization | maintenance | treatment_switch | aware | considering | prescribed | first_fill | adherent | discontinued | maintained (migration 035 added the 7 funnel values)." }
+      - { apiName: journeyStatus, column: journey_status, baseType: string,
+          description: "journey_status_type: active | stable | transitioning | completed." }
+      - { apiName: primaryDiagnosisCode, column: primary_diagnosis_code, baseType: string,
+          description: "ICD-10." }
+      - { apiName: brand, column: brand, baseType: string,
+          description: "brand_type enum: Remibrutinib | Fabhalta | Kisqali | competitor | other. FK to Brand dimension." }
+      - { apiName: ageGroup, column: age_group, baseType: string }
+      - { apiName: geographicRegion, column: geographic_region, baseType: string,
+          description: "region_type enum; FK to Region dimension." }
+      - { apiName: insuranceType, column: insurance_type, baseType: string }
+      - { apiName: riskScore, column: risk_score, baseType: double }
+      - { apiName: diseaseSeverity, column: disease_severity, baseType: double,
+          description: "Causal CONFOUNDER, 0-10 (PG CHECK)." }
+      - { apiName: engagementScore, column: engagement_score, baseType: double,
+          description: "Causal TREATMENT variable, 0-10 (PG CHECK)." }
+      - { apiName: treatmentInitiated, column: treatment_initiated, baseType: integer,
+          description: "Causal OUTCOME variable, 0/1 (PG CHECK)." }
+      - { apiName: splitConfigId, column: split_config_id, baseType: string,
+          description: "FK to DataSplitConfig (ml_split_registry)." }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: treatment-event
+    apiName: TreatmentEvent
+    displayName: Treatment Event
+    pluralDisplayName: Treatment Events
+    description: >
+      Clinical/claims event within a patient journey. Backing table
+      treatment_events (~15 further columns omitted: icd/cpt/loinc code
+      arrays, lab_values, facility, outcome flags, sequencing). CAVEAT: prod
+      data ends 2025-12-22, so rolling 30-day aggregations legitimately
+      read 0 (dashboards use the dynamic data-coverage date, migration 064).
+    icon: calendar
+    groups: [core-domain]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: treatmentEventId
+    titleProperty: drugName
+    datasources:
+      - dataset: ds-curated-treatment-events
+        branch: master
+    properties:
+      - { apiName: treatmentEventId, column: treatment_event_id, baseType: string }
+      - { apiName: patientJourneyId, column: patient_journey_id, baseType: string,
+          description: "FK to PatientJourney (ON DELETE CASCADE in PG)." }
+      - { apiName: patientId, column: patient_id, baseType: string, description: "NOT NULL." }
+      - { apiName: hcpId, column: hcp_id, baseType: string,
+          description: "FK to hcp_profiles.hcp_id." }
+      - { apiName: eventDate, column: event_date, baseType: date, description: "NOT NULL." }
+      - { apiName: eventType, column: event_type, baseType: string,
+          description: "event_type enum: diagnosis | prescription | lab_test | procedure | consultation | hospitalization." }
+      - { apiName: eventSubtype, column: event_subtype, baseType: string,
+          description: "e.g. new_rx | refill | switch." }
+      - { apiName: brand, column: brand, baseType: string,
+          description: "brand_type enum; FK to Brand dimension." }
+      - { apiName: drugName, column: drug_name, baseType: string }
+      - { apiName: drugNdc, column: drug_ndc, baseType: string }
+      - { apiName: drugClass, column: drug_class, baseType: string }
+      - { apiName: dosage, column: dosage, baseType: string }
+      - { apiName: durationDays, column: duration_days, baseType: integer }
+      - { apiName: cost, column: cost, baseType: double, description: "USD." }
+      - { apiName: treatmentResponse, column: treatment_response, baseType: string,
+          description: "CHECK vocabulary (migration 037, not an ENUM type): controlled | inadequate | uncontrolled | refractory | discontinued. Populated ONLY for the CSU biologic-fill universe; NULL elsewhere." }
+      - { apiName: discontinuationFlag, column: discontinuation_flag, baseType: boolean }
+      - { apiName: splitConfigId, column: split_config_id, baseType: string }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: trigger
+    apiName: Trigger
+    displayName: Trigger
+    pluralDisplayName: Triggers
+    description: >
+      Actionable recommendation/alert delivered to an HCP. Backing table
+      triggers (30+ columns; delivery/view/action timestamps, causal_chain
+      and supporting_evidence JSONB omitted). CAVEAT: the core table has no
+      brand column — brand attribution must be joined via patient/HCP
+      context (observed all-UNKNOWN in the 2026-06-09 audit).
+    icon: bell
+    groups: [core-domain]
+    status: active
+    visibility: prominent
+    writeback: disabled
+    primaryKey: triggerId
+    titleProperty: triggerType
+    datasources:
+      - dataset: ds-curated-triggers
+        branch: master
+    properties:
+      - { apiName: triggerId, column: trigger_id, baseType: string,
+          description: "Graph id pattern ^TRG[0-9]{8}$." }
+      - { apiName: patientId, column: patient_id, baseType: string, description: "NOT NULL." }
+      - { apiName: hcpId, column: hcp_id, baseType: string,
+          description: "Target HCP; FK to hcp_profiles." }
+      - { apiName: triggerTimestamp, column: trigger_timestamp, baseType: timestamp,
+          description: "NOT NULL." }
+      - { apiName: triggerType, column: trigger_type, baseType: string,
+          description: "Free VARCHAR in PG (treatment_switch | adherence_risk | new_patient | ...); graph constrains to alert | recommendation | insight | nba." }
+      - { apiName: priority, column: priority, baseType: string,
+          description: "priority_type enum: critical | high | medium | low." }
+      - { apiName: confidenceScore, column: confidence_score, baseType: double }
+      - { apiName: expirationDate, column: expiration_date, baseType: date }
+      - { apiName: deliveryChannel, column: delivery_channel, baseType: string,
+          description: "email | dashboard | push | crm." }
+      - { apiName: deliveryStatus, column: delivery_status, baseType: string,
+          description: "pending | delivered | failed | expired." }
+      - { apiName: acceptanceStatus, column: acceptance_status, baseType: string,
+          description: "accepted | rejected | deferred | pending. Feeds WS2-TR-004 Acceptance Rate KPI." }
+      - { apiName: recommendedAction, column: recommended_action, baseType: string }
+      - { apiName: falsePositiveFlag, column: false_positive_flag, baseType: boolean,
+          description: "Feeds WS2-TR-005 False Alert Rate KPI." }
+      - { apiName: leadTimeDays, column: lead_time_days, baseType: integer,
+          description: "Feeds WS2-TR-007 Lead Time KPI." }
+      - { apiName: changeType, column: change_type, baseType: string,
+          description: "new | update | escalation | downgrade (Change-Fail-Rate tracking)." }
+      - { apiName: changeFailed, column: change_failed, baseType: boolean }
+      - { apiName: previousTriggerId, column: previous_trigger_id, baseType: string,
+          description: "Self-reference: version chain for change tracking." }
+      - { apiName: splitConfigId, column: split_config_id, baseType: string }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: business-metric
+    apiName: BusinessMetric
+    displayName: Business Metric
+    pluralDisplayName: Business Metrics
+    description: >
+      Time-series KPI snapshot per (metric, brand, region, date). Backing
+      table business_metrics. WARNING: prod contents are currently entirely
+      SYNTHETIC (load_synthetic_data.py, uniform 0-1M values; verified
+      2026-06-09) — the KPI serving path reads treatment_events via the
+      kpi_query RPC instead (PR #820). Treat rows as low-trust until the
+      per-HCP ETL backfills real rollups.
+    icon: chart-line
+    groups: [core-domain]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: metricId
+    titleProperty: metricName
+    datasources:
+      - dataset: ds-curated-business-metrics
+        branch: master
+    properties:
+      - { apiName: metricId, column: metric_id, baseType: string }
+      - { apiName: metricDate, column: metric_date, baseType: date, description: "NOT NULL snapshot date." }
+      - { apiName: metricType, column: metric_type, baseType: string,
+          description: "revenue | adoption | engagement | retention." }
+      - { apiName: metricName, column: metric_name, baseType: string,
+          description: "e.g. new_patient_starts | market_share | nps. Soft join to Kpi.name." }
+      - { apiName: brand, column: brand, baseType: string, description: "brand_type enum; FK to Brand." }
+      - { apiName: region, column: region, baseType: string, description: "region_type enum; FK to Region." }
+      - { apiName: value, column: value, baseType: double }
+      - { apiName: target, column: target, baseType: double }
+      - { apiName: achievementRate, column: achievement_rate, baseType: double, description: "value / target." }
+      - { apiName: yearOverYearChange, column: year_over_year_change, baseType: double }
+      - { apiName: roi, column: roi, baseType: double }
+      - { apiName: statisticalSignificance, column: statistical_significance, baseType: double, description: "p-value." }
+      - { apiName: sampleSize, column: sample_size, baseType: integer }
+      - { apiName: splitConfigId, column: split_config_id, baseType: string }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: reference-universe
+    apiName: ReferenceUniverse
+    displayName: Reference Universe
+    pluralDisplayName: Reference Universes
+    description: >
+      Reference population counts (coverage-KPI denominators) per
+      (universe_type, brand, region, specialty, effective_date) — that
+      composite is UNIQUE in the source table. Backing table
+      reference_universe.
+    icon: globe
+    groups: [core-domain]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: universeId
+    titleProperty: universeType
+    datasources:
+      - dataset: ds-curated-reference-universe
+        branch: master
+    properties:
+      - { apiName: universeId, column: universe_id, baseType: string, description: "UUID." }
+      - { apiName: universeType, column: universe_type, baseType: string,
+          description: "patient | hcp | territory." }
+      - { apiName: brand, column: brand, baseType: string, description: "brand_type enum; FK to Brand." }
+      - { apiName: region, column: region, baseType: string, description: "region_type enum; FK to Region." }
+      - { apiName: specialty, column: specialty, baseType: string }
+      - { apiName: totalCount, column: total_count, baseType: integer,
+          description: "NOT NULL reference population size." }
+      - { apiName: targetCount, column: target_count, baseType: integer,
+          description: "Targetable subset." }
+      - { apiName: effectiveDate, column: effective_date, baseType: date, description: "NOT NULL." }
+      - { apiName: expirationDate, column: expiration_date, baseType: date }
+      - { apiName: dataSource, column: data_source, baseType: string,
+          description: "e.g. IQVIA | CMS." }
+
+  - id: hcp-intent-survey
+    apiName: HcpIntentSurvey
+    displayName: HCP Intent Survey
+    pluralDisplayName: HCP Intent Surveys
+    description: >
+      Longitudinal HCP intent-to-prescribe survey (1-7 Likert scales).
+      Backing table hcp_intent_surveys. Feeds Intent-to-Prescribe Delta KPIs.
+    icon: clipboard
+    groups: [core-domain]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: surveyId
+    titleProperty: surveyType
+    datasources:
+      - dataset: ds-curated-hcp-intent-surveys
+        branch: master
+    properties:
+      - { apiName: surveyId, column: survey_id, baseType: string, description: "UUID." }
+      - { apiName: hcpId, column: hcp_id, baseType: string, description: "FK to hcp_profiles." }
+      - { apiName: surveyDate, column: survey_date, baseType: date, description: "NOT NULL." }
+      - { apiName: surveyType, column: survey_type, baseType: string,
+          description: "market_research | detail_followup | conference." }
+      - { apiName: brand, column: brand, baseType: string,
+          description: "brand_type enum, NOT NULL; FK to Brand." }
+      - { apiName: intentToPrescribeScore, column: intent_to_prescribe_score, baseType: integer,
+          description: "1-7 Likert (PG CHECK)." }
+      - { apiName: intentToPrescribeChange, column: intent_to_prescribe_change, baseType: integer,
+          description: "Delta vs previous survey." }
+      - { apiName: awarenessScore, column: awareness_score, baseType: integer }
+      - { apiName: favorabilityScore, column: favorability_score, baseType: integer }
+      - { apiName: daysSinceLastSurvey, column: days_since_last_survey, baseType: integer }
+      - { apiName: responseQualityFlag, column: response_quality_flag, baseType: boolean }
+      - { apiName: previousSurveyId, column: previous_survey_id, baseType: string,
+          description: "Self-reference: longitudinal chain." }
+      - { sharedProperty: is-synthetic }
+
+  # ------------------------------------------------------- reference-dimension
+  - id: brand
+    apiName: Brand
+    displayName: Brand
+    pluralDisplayName: Brands
+    description: >
+      Pharmaceutical brand dimension. The dimension dataset carries ALL FIVE
+      PG brand_type enum values (Remibrutinib, Fabhalta, Kisqali, competitor,
+      other) so every enum-valued FK column resolves; the three real brands
+      carry therapeutic-area/indication attributes. NOTE: FalkorDB stores
+      brand names lowercase — the PG capitalized spelling is canonical here.
+    icon: pill
+    groups: [reference-dimension]
+    status: active
+    visibility: prominent
+    writeback: disabled
+    primaryKey: brandName
+    titleProperty: brandName
+    datasources:
+      - dataset: ds-curated-brand-dim
+        branch: master
+    properties:
+      - { apiName: brandName, column: brand_name, baseType: string,
+          description: "brand_type enum value (PK)." }
+      - { apiName: therapeuticArea, column: therapeutic_area, baseType: string,
+          description: "immunology | hematology | oncology (NULL for competitor/other)." }
+      - { apiName: indication, column: indication, baseType: string,
+          description: "Remibrutinib=CSU, Fabhalta=PNH, Kisqali=HR+/HER2- breast cancer." }
+
+  - id: region
+    apiName: Region
+    displayName: Region
+    pluralDisplayName: Regions
+    description: >
+      US census region dimension (region_type enum, lowercase): northeast,
+      south, midwest, west.
+    icon: map
+    groups: [reference-dimension]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: regionName
+    titleProperty: regionName
+    datasources:
+      - dataset: ds-curated-region-dim
+        branch: master
+    properties:
+      - { apiName: regionName, column: region_name, baseType: string }
+      - { apiName: stateCount, column: state_count, baseType: integer }
+
+  # ---------------------------------------------------------- causal-analytics
+  - id: causal-path
+    apiName: CausalPath
+    displayName: Causal Path
+    pluralDisplayName: Causal Paths
+    description: >
+      Discovered causal relationship (full DAG in causal_chain JSONB).
+      Backing table causal_paths. Validation is governed by the
+      causal_validations DoWhy-refutation gate (gate_decision: proceed |
+      review | block).
+    icon: flow
+    groups: [causal-analytics]
+    status: active
+    visibility: prominent
+    writeback: disabled
+    primaryKey: pathId
+    titleProperty: startNode
+    datasources:
+      - dataset: ds-curated-causal-paths
+        branch: master
+    properties:
+      - { apiName: pathId, column: path_id, baseType: string,
+          description: "Graph id pattern ^CP[0-9]{8}$." }
+      - { apiName: discoveryDate, column: discovery_date, baseType: date, description: "NOT NULL." }
+      - { apiName: causalChain, column: causal_chain, baseType: struct,
+          description: "NOT NULL JSONB: full DAG nodes/edges/weights." }
+      - { apiName: startNode, column: start_node, baseType: string, description: "Cause variable." }
+      - { apiName: endNode, column: end_node, baseType: string, description: "Outcome variable." }
+      - { apiName: intermediateNodes, column: intermediate_nodes, baseType: array<string> }
+      - { apiName: pathLength, column: path_length, baseType: integer }
+      - { apiName: causalEffectSize, column: causal_effect_size, baseType: double,
+          description: "Can be negative. Feeds CM-003 Causal Impact KPI." }
+      - { apiName: confidenceLevel, column: confidence_level, baseType: double, description: "0-1." }
+      - { apiName: methodUsed, column: method_used, baseType: string,
+          description: "Free VARCHAR in PG (dowhy_refutation | pc_algorithm | granger | ...); graph uses an 8-value estimator vocabulary (dowhy_backdoor, econml_dml, ...)." }
+      - { apiName: confoundersControlled, column: confounders_controlled, baseType: array<string> }
+      - { apiName: timeLagDays, column: time_lag_days, baseType: integer }
+      - { apiName: validationStatus, column: validation_status, baseType: string,
+          description: "PG: validated | pending | refuted (graph: validated | pending | failed | skipped)." }
+      - { apiName: businessImpactEstimate, column: business_impact_estimate, baseType: double,
+          description: "Dollar impact (DECIMAL(15,2) in PG)." }
+      - { apiName: splitConfigId, column: split_config_id, baseType: string }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: kpi
+    apiName: Kpi
+    displayName: KPI
+    pluralDisplayName: KPIs
+    description: >
+      KPI catalog entry. CONFIG-BACKED, not a DB table: the 46 KPIs live in
+      config/kpi_definitions.yaml (v3.0.0, mirrored by
+      docs/data/06-KPI-REFERENCE.md); live values are computed at request
+      time by src/kpi/calculators/* through the kpi_query allowlist RPC.
+      The backing dataset is produced by the curate_kpi_definitions
+      transform.
+    icon: target
+    groups: [causal-analytics]
+    status: active
+    visibility: prominent
+    writeback: disabled
+    primaryKey: kpiId
+    titleProperty: name
+    datasources:
+      - dataset: ds-curated-kpi-definitions
+        branch: master
+    properties:
+      - { apiName: kpiId, column: id, baseType: string,
+          description: "Stable id, e.g. WS1-DQ-001, WS1-MP-001, WS2-TR-004, WS3-BI-005, BR-002, CM-001." }
+      - { apiName: name, column: name, baseType: string,
+          description: "e.g. 'Source Coverage - Patients', 'ROC-AUC', 'Trigger Precision', 'Total Prescriptions (TRx)'." }
+      - { apiName: definition, column: definition, baseType: string }
+      - { apiName: formula, column: formula, baseType: string }
+      - { apiName: calculationType, column: calculation_type, baseType: string,
+          description: "direct | derived." }
+      - { apiName: workstream, column: workstream, baseType: string,
+          description: "WS1 | WS2 | WS3 | Brand | Causal (9 WS1-DQ + 9 WS1-MP + 8 WS2-TR + 10 WS3-BI + 5 brand + 5 causal). The config key exists on only the 36 WS1-3 KPIs; the curation transform DERIVES 'Brand'/'Causal' from the brand_specific / causal_metrics section names." }
+      - { apiName: sourceTables, column: tables, baseType: array<string>,
+          description: "Source tables the calculator reads (e.g. ml_predictions, triggers)." }
+      - { apiName: sourceColumns, column: columns, baseType: array<string> }
+      - { apiName: thresholdTarget, column: threshold_target, baseType: double,
+          description: "Flattened by the curation transform from the config's nested threshold.{target,warning,critical} mapping; NULLABLE — the 10 brand/causal KPIs have no threshold block." }
+      - { apiName: thresholdWarning, column: threshold_warning, baseType: double,
+          description: "Flattened from threshold.warning; nullable." }
+      - { apiName: thresholdCritical, column: threshold_critical, baseType: double,
+          description: "Flattened from threshold.critical; nullable." }
+      - { apiName: frequency, column: frequency, baseType: string,
+          description: "daily | weekly | monthly | on_demand." }
+      - { apiName: calculator, column: calculator, baseType: string,
+          description: "Python calculator module reference. NOT a config key — SYNTHESIZED by the curation transform from the config section -> src/kpi/calculators/* module mapping (data_quality, model_performance, trigger_performance, business_impact, brand_specific, causal_metrics)." }
+
+  # -------------------------------------------------------------- ml-lifecycle
+  - id: ml-experiment
+    apiName: MlExperiment
+    displayName: ML Experiment
+    pluralDisplayName: ML Experiments
+    description: >
+      ML experiment registry entry. Backing table ml_experiments. NOTE:
+      canonical columns post-#825 are experiment_name / created_at. A status
+      column EXISTS (migration 061: CHECK draft | running | completed |
+      stopped | archived, default 'running'; 'running' = active campaign).
+      Run-level lifecycle lives on ml_training_runs.status — a free
+      VARCHAR(50), not DB-constrained; the code-level vocabulary is
+      running | finished | failed | killed.
+    icon: flask
+    groups: [ml-lifecycle]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: experimentId
+    titleProperty: experimentName
+    datasources:
+      - dataset: ds-curated-ml-experiments
+        branch: master
+    properties:
+      - { apiName: experimentId, column: id, baseType: string, description: "UUID PK." }
+      - { apiName: experimentName, column: experiment_name, baseType: string }
+      - { apiName: mlflowExperimentId, column: mlflow_experiment_id, baseType: string,
+          description: "UNIQUE MLflow reference." }
+      - { apiName: predictionTarget, column: prediction_target, baseType: string,
+          description: "What the experiment predicts; used by prediction_synthesizer FK-embed lookups (#857)." }
+      - { apiName: observationWindowDays, column: observation_window_days, baseType: integer }
+      - { apiName: predictionHorizonDays, column: prediction_horizon_days, baseType: integer }
+      - { apiName: minimumAuc, column: minimum_auc, baseType: double,
+          description: "Success threshold (PG CHECK 0.5-1.0)." }
+      - { apiName: status, column: status, baseType: string,
+          description: "Migration 061 CHECK: draft | running | completed | stopped | archived (default 'running')." }
+      - { apiName: brand, column: brand, baseType: string, description: "brand_type enum; FK to Brand." }
+      - { apiName: createdBy, column: created_by, baseType: string }
+      - { apiName: createdAt, column: created_at, baseType: timestamp }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: ml-model
+    apiName: MlModel
+    displayName: ML Model
+    pluralDisplayName: ML Models
+    description: >
+      Registered model version. Backing table ml_model_registry
+      (UNIQUE(model_name, model_version); tr_single_champion DB trigger caps
+      one champion per experiment). artifact_path was NULL for all 72 prod
+      rows until the #857/#859 deploy CLI registered loadable artifacts.
+    icon: cube
+    groups: [ml-lifecycle]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: modelId
+    titleProperty: modelName
+    datasources:
+      - dataset: ds-curated-ml-model-registry
+        branch: master
+    properties:
+      - { apiName: modelId, column: id, baseType: string, description: "UUID PK." }
+      - { apiName: experimentId, column: experiment_id, baseType: string,
+          description: "FK to ml_experiments.id." }
+      - { apiName: modelName, column: model_name, baseType: string }
+      - { apiName: modelVersion, column: model_version, baseType: string,
+          description: "App-wide model handle (string; not unique alone)." }
+      - { apiName: algorithm, column: algorithm, baseType: string,
+          description: "e.g. CausalForestDML, logistic_regression." }
+      - { apiName: hyperparameters, column: hyperparameters, baseType: struct }
+      - { apiName: auc, column: auc, baseType: double }
+      - { apiName: prAuc, column: pr_auc, baseType: double }
+      - { apiName: brierScore, column: brier_score, baseType: double }
+      - { apiName: fairnessMetrics, column: fairness_metrics, baseType: struct }
+      - { apiName: stage, column: stage, baseType: string,
+          description: "model_stage_enum: development | staging | shadow | production | archived | deprecated." }
+      - { apiName: isChampion, column: is_champion, baseType: boolean }
+      - { apiName: artifactPath, column: artifact_path, baseType: string,
+          description: "Serialized artifact location on the writable data/ml_artifacts volume." }
+      - { apiName: mlflowModelUri, column: mlflow_model_uri, baseType: string }
+      - { apiName: trainedAt, column: trained_at, baseType: timestamp }
+      - { apiName: promotedAt, column: promoted_at, baseType: timestamp }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: prediction
+    apiName: Prediction
+    displayName: Prediction
+    pluralDisplayName: Predictions
+    description: >
+      Individual ML prediction with explainability and causal estimates.
+      Backing table ml_predictions (40+ columns; probability/feature
+      importance/fairness tail omitted). The modelRegistryId property is
+      DERIVED by the curate_ml_predictions transform (resolves the loose
+      model_version string handle to the registry UUID, mirroring
+      src/repositories/drift_monitoring.py::_resolve_model_id).
+    icon: sparkles
+    groups: [ml-lifecycle]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: predictionId
+    titleProperty: predictionClass
+    datasources:
+      - dataset: ds-curated-ml-predictions
+        branch: master
+    properties:
+      - { apiName: predictionId, column: prediction_id, baseType: string }
+      - { apiName: modelVersion, column: model_version, baseType: string,
+          description: "Loose string handle — NO FK to ml_model_registry in PG." }
+      - { apiName: modelType, column: model_type, baseType: string }
+      - { apiName: modelRegistryId, column: model_registry_id, baseType: string,
+          description: "DERIVED column (curation transform): resolved ml_model_registry.id; realizes the link to MlModel." }
+      - { apiName: predictionTimestamp, column: prediction_timestamp, baseType: timestamp,
+          description: "NOT NULL." }
+      - { apiName: patientId, column: patient_id, baseType: string, description: "NOT NULL." }
+      - { apiName: hcpId, column: hcp_id, baseType: string, description: "FK to hcp_profiles." }
+      - { apiName: predictionType, column: prediction_type, baseType: string,
+          description: "prediction_type enum: trigger | propensity | risk | churn | next_best_action." }
+      - { apiName: predictionValue, column: prediction_value, baseType: double }
+      - { apiName: predictionClass, column: prediction_class, baseType: string }
+      - { apiName: confidenceScore, column: confidence_score, baseType: double }
+      - { apiName: shapValues, column: shap_values, baseType: struct,
+          description: "Per-feature SHAP JSONB (feeds WS1-MP-007 SHAP Coverage KPI)." }
+      - { apiName: treatmentEffectEstimate, column: treatment_effect_estimate, baseType: double,
+          description: "ATE." }
+      - { apiName: heterogeneousEffect, column: heterogeneous_effect, baseType: double,
+          description: "Per-patient CATE." }
+      - { apiName: actualOutcome, column: actual_outcome, baseType: double,
+          description: "Ground truth; NULL until observed (concept-drift input)." }
+      - { apiName: outcomeRecordedAt, column: outcome_recorded_at, baseType: timestamp }
+      - { apiName: splitConfigId, column: split_config_id, baseType: string }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+  - id: data-split-config
+    apiName: DataSplitConfig
+    displayName: Data Split Config
+    pluralDisplayName: Data Split Configs
+    description: >
+      ML split governance record. Backing table ml_split_registry (ratios
+      CHECK-sum to 1.0; companion tables ml_patient_split_assignments,
+      ml_preprocessing_metadata, ml_leakage_audit are split plumbing, not
+      modeled as object types — except the assignments join table, which
+      backs the Patient<->DataSplitConfig many-to-many link).
+    icon: split
+    groups: [ml-lifecycle]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: splitConfigId
+    titleProperty: configName
+    datasources:
+      - dataset: ds-curated-ml-split-registry
+        branch: master
+    properties:
+      - { apiName: splitConfigId, column: split_config_id, baseType: string, description: "UUID PK." }
+      - { apiName: configName, column: config_name, baseType: string, description: "UNIQUE." }
+      - { apiName: configVersion, column: config_version, baseType: string, description: "Default 1.0.0." }
+      - { apiName: trainRatio, column: train_ratio, baseType: double, description: "Default 0.60." }
+      - { apiName: validationRatio, column: validation_ratio, baseType: double, description: "Default 0.20." }
+      - { apiName: testRatio, column: test_ratio, baseType: double, description: "Default 0.15." }
+      - { apiName: holdoutRatio, column: holdout_ratio, baseType: double, description: "Default 0.05." }
+      - { apiName: dataStartDate, column: data_start_date, baseType: date }
+      - { apiName: dataEndDate, column: data_end_date, baseType: date }
+      - { apiName: trainEndDate, column: train_end_date, baseType: date,
+          description: "PG CHECK enforces strict chronological boundary ordering." }
+      - { apiName: validationEndDate, column: validation_end_date, baseType: date }
+      - { apiName: testEndDate, column: test_end_date, baseType: date }
+      - { apiName: temporalGapDays, column: temporal_gap_days, baseType: integer,
+          description: "Default 7 — anti-leakage gap between splits." }
+      - { apiName: patientLevelIsolation, column: patient_level_isolation, baseType: boolean,
+          description: "Default TRUE." }
+      - { apiName: splitStrategy, column: split_strategy, baseType: string,
+          description: "split_strategy_type enum: chronological | patient_stratified | rolling_window | causal_holdout." }
+      - { apiName: isActive, column: is_active, baseType: boolean }
+
+  - id: drift-event
+    apiName: DriftEvent
+    displayName: Drift Event
+    pluralDisplayName: Drift Events
+    description: >
+      Drift-detection record. Backing table ml_drift_history (#842-realigned
+      canonical columns: model_id UUID FK, created_at, baseline_count /
+      current_count, raw_results). The app-level model_version string has NO
+      column here — preserved in raw_results._model_version. History was
+      EMPTY until #845/#848 fixed client-less no-op repositories; expect
+      sparse early history.
+    icon: warning
+    groups: [ml-lifecycle]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: driftEventId
+    titleProperty: driftType
+    datasources:
+      - dataset: ds-curated-ml-drift-history
+        branch: master
+    properties:
+      - { apiName: driftEventId, column: id, baseType: string, description: "UUID PK." }
+      - { apiName: modelId, column: model_id, baseType: string,
+          description: "UUID FK to ml_model_registry.id (canonical post-#842)." }
+      - { apiName: experimentId, column: experiment_id, baseType: string, description: "Nullable." }
+      - { apiName: driftType, column: drift_type, baseType: string,
+          description: "drift_type_enum: data | model | concept." }
+      - { apiName: featureName, column: feature_name, baseType: string,
+          description: "Affected feature; NULL for model/concept drift." }
+      - { apiName: testType, column: test_type, baseType: string,
+          description: "statistical_test_enum: psi | ks | chi_square | wasserstein | js_divergence | importance_correlation." }
+      - { apiName: testStatistic, column: test_statistic, baseType: double }
+      - { apiName: pValue, column: p_value, baseType: double }
+      - { apiName: driftDetected, column: drift_detected, baseType: boolean }
+      - { apiName: severity, column: severity, baseType: string,
+          description: "drift_severity_enum: none | low | medium | high | critical. 'warning' is INVALID (22P02); the repo aliases warning->high. DB trigger auto-creates ml_monitoring_alerts at medium+." }
+      - { apiName: baselineStart, column: baseline_start, baseType: timestamp,
+          description: "NOT NULL; CHECK baseline_end <= current_start." }
+      - { apiName: currentEnd, column: current_end, baseType: timestamp }
+      - { apiName: baselineCount, column: baseline_count, baseType: integer }
+      - { apiName: currentCount, column: current_count, baseType: integer }
+      - { apiName: driftScore, column: drift_score, baseType: double, description: "Normalized 0-1." }
+      - { apiName: rawResults, column: raw_results, baseType: struct }
+      - { apiName: createdAt, column: created_at, baseType: timestamp }
+
+  # ------------------------------------------------------------- agentic-layer
+  - id: agent
+    apiName: Agent
+    displayName: Agent
+    pluralDisplayName: Agents
+    description: >
+      One of the 21 platform agents (tiers 0-5; roster source of truth is
+      src/agents/factory.py AGENT_REGISTRY_CONFIG; agent_tier_mapping is the
+      authoritative agent->tier map). Backing table agent_registry. NOTE:
+      agent_registry.agent_tier IS the agent_tier_type ENUM and covers
+      Tiers 1-5 ONLY by design (Tier 0 has no value in it); the plain-TEXT
+      6-tier column is agent_tier_mapping.tier
+      (tier_0_ml_foundation..tier_5_self_improvement), per migration 057.
+    icon: robot
+    groups: [agentic-layer]
+    status: active
+    visibility: prominent
+    writeback: disabled
+    primaryKey: agentName
+    titleProperty: displayNameText
+    datasources:
+      - dataset: ds-curated-agent-registry
+        branch: master
+    properties:
+      - { apiName: agentName, column: agent_name, baseType: string,
+          description: "PK; snake_case canonical name (orchestrator, causal_impact, scope_definer, ...)." }
+      - { apiName: agentTier, column: agent_tier, baseType: string,
+          description: "Tier 1-5 labels: coordination | causal_analytics | monitoring | ml_predictions | self_improvement. Canonical 6-tier labels (tier_0_ml_foundation..tier_5_self_improvement) live on agent_tier_mapping.tier." }
+      - { apiName: displayNameText, column: display_name, baseType: string,
+          description: "NOT NULL human-readable name (apiName avoids collision with the objectType displayName field)." }
+      - { apiName: agentDescription, column: description, baseType: string }
+      - { apiName: capabilities, column: capabilities, baseType: array<string>,
+          description: "JSONB capability strings, e.g. ate_estimation, dag_construction." }
+      - { apiName: routesFromIntents, column: routes_from_intents, baseType: array<string>,
+          description: "Orchestrator intent keywords routed to this agent." }
+      - { apiName: isActive, column: is_active, baseType: boolean }
+      - { apiName: priorityOrder, column: priority_order, baseType: integer,
+          description: "Lower = higher routing priority." }
+
+  - id: agent-activity
+    apiName: AgentActivity
+    displayName: Agent Activity
+    pluralDisplayName: Agent Activities
+    description: >
+      Agent execution-log record. Backing table agent_activities (JSONB
+      payloads input_data/analysis_results/recommendations omitted).
+      agent_name is a SOFT join to agent_registry (no FK) — modeled as an
+      explicit Foundry link.
+    icon: activity
+    groups: [agentic-layer]
+    status: active
+    visibility: normal
+    writeback: disabled
+    primaryKey: activityId
+    titleProperty: activityType
+    datasources:
+      - dataset: ds-curated-agent-activities
+        branch: master
+    properties:
+      - { apiName: activityId, column: activity_id, baseType: string }
+      - { apiName: agentName, column: agent_name, baseType: string,
+          description: "Soft FK to agent_registry.agent_name." }
+      - { apiName: agentTier, column: agent_tier, baseType: string,
+          description: "agent_tier_type enum value." }
+      - { apiName: activityTimestamp, column: activity_timestamp, baseType: timestamp,
+          description: "NOT NULL." }
+      - { apiName: activityType, column: activity_type, baseType: string,
+          description: "analysis | prediction | optimization | ..." }
+      - { apiName: workstream, column: workstream, baseType: string,
+          description: "workstream_type enum: WS1 | WS2 | WS3." }
+      - { apiName: processingDurationMs, column: processing_duration_ms, baseType: integer }
+      - { apiName: recordsProcessed, column: records_processed, baseType: integer }
+      - { apiName: causalPathsAnalyzed, column: causal_paths_analyzed, baseType: integer }
+      - { apiName: confidenceLevel, column: confidence_level, baseType: double }
+      - { apiName: impactEstimate, column: impact_estimate, baseType: double,
+          description: "Estimated dollar impact." }
+      - { apiName: roiEstimate, column: roi_estimate, baseType: double }
+      - { apiName: status, column: status, baseType: string,
+          description: "success | partial | failed | timeout." }
+      - { apiName: errorMessage, column: error_message, baseType: string }
+      - { apiName: splitConfigId, column: split_config_id, baseType: string }
+      - { sharedProperty: data-split }
+      - { sharedProperty: is-synthetic }
+
+# =============================================================================
+# LINK TYPES
+# =============================================================================
+# Conventions:
+#   - ONE_TO_MANY links: the "one" side is listed first (objectTypeA); the
+#     foreignKey property lives on objectTypeB and references objectTypeA's
+#     primary key.
+#   - MANY_TO_MANY links: backed by their own join dataset (datasource block)
+#     whose paired key columns are mapped to each endpoint's primary key.
+#   - status defaults to experimental in Foundry; links graduated to active
+#     here are enforced or near-enforced (DB FK) relationships.
+# =============================================================================
+linkTypes:
+
+  # ----- dimension links (enum-valued FK columns; no DB FK, values guaranteed
+  # ----- by PG enum types + complete dimension datasets)
+  - id: region-hcps
+    apiName: RegionHcps
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: region, displayName: Region, pluralDisplayName: Regions }
+    objectTypeB: { objectType: hcp, displayName: HCP, pluralDisplayName: HCPs }
+    foreignKey: { objectType: hcp, property: geographicRegion, references: regionName }
+    status: active
+    description: HCPs practicing in a region (hcp_profiles.geographic_region).
+
+  - id: region-patients
+    apiName: RegionPatients
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: region, displayName: Region, pluralDisplayName: Regions }
+    objectTypeB: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    foreignKey: { objectType: patient, property: region, references: regionName }
+    status: experimental
+    description: Patients located in a region (derived patient master).
+
+  - id: brand-patient-journeys
+    apiName: BrandPatientJourneys
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    objectTypeB: { objectType: patient-journey, displayName: Patient Journey, pluralDisplayName: Patient Journeys }
+    foreignKey: { objectType: patient-journey, property: brand, references: brandName }
+    status: active
+    description: Journeys for a brand (patient_journeys.brand enum column).
+
+  - id: brand-treatment-events
+    apiName: BrandTreatmentEvents
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    objectTypeB: { objectType: treatment-event, displayName: Treatment Event, pluralDisplayName: Treatment Events }
+    foreignKey: { objectType: treatment-event, property: brand, references: brandName }
+    status: active
+
+  - id: brand-business-metrics
+    apiName: BrandBusinessMetrics
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    objectTypeB: { objectType: business-metric, displayName: Business Metric, pluralDisplayName: Business Metrics }
+    foreignKey: { objectType: business-metric, property: brand, references: brandName }
+    status: active
+
+  - id: region-business-metrics
+    apiName: RegionBusinessMetrics
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: region, displayName: Region, pluralDisplayName: Regions }
+    objectTypeB: { objectType: business-metric, displayName: Business Metric, pluralDisplayName: Business Metrics }
+    foreignKey: { objectType: business-metric, property: region, references: regionName }
+    status: active
+
+  - id: brand-reference-universes
+    apiName: BrandReferenceUniverses
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    objectTypeB: { objectType: reference-universe, displayName: Reference Universe, pluralDisplayName: Reference Universes }
+    foreignKey: { objectType: reference-universe, property: brand, references: brandName }
+    status: active
+
+  - id: region-reference-universes
+    apiName: RegionReferenceUniverses
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: region, displayName: Region, pluralDisplayName: Regions }
+    objectTypeB: { objectType: reference-universe, displayName: Reference Universe, pluralDisplayName: Reference Universes }
+    foreignKey: { objectType: reference-universe, property: region, references: regionName }
+    status: active
+
+  - id: brand-intent-surveys
+    apiName: BrandIntentSurveys
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    objectTypeB: { objectType: hcp-intent-survey, displayName: HCP Intent Survey, pluralDisplayName: HCP Intent Surveys }
+    foreignKey: { objectType: hcp-intent-survey, property: brand, references: brandName }
+    status: active
+
+  - id: brand-ml-experiments
+    apiName: BrandMlExperiments
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    objectTypeB: { objectType: ml-experiment, displayName: ML Experiment, pluralDisplayName: ML Experiments }
+    foreignKey: { objectType: ml-experiment, property: brand, references: brandName }
+    status: active
+
+  # ----- patient / journey / event spine
+  - id: patient-patient-journeys
+    apiName: PatientPatientJourneys
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    objectTypeB: { objectType: patient-journey, displayName: Patient Journey, pluralDisplayName: Patient Journeys }
+    foreignKey: { objectType: patient-journey, property: patientId, references: patientId }
+    status: experimental
+    description: >
+      One patient, many journeys. Experimental because Patient is a derived
+      object type (no PG master table).
+
+  - id: hcp-patient-journeys
+    apiName: HcpPatientJourneys
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: hcp, displayName: HCP, pluralDisplayName: HCPs }
+    objectTypeB: { objectType: patient-journey, displayName: Patient Journey, pluralDisplayName: Patient Journeys }
+    foreignKey: { objectType: patient-journey, property: hcpId, references: hcpId }
+    status: active
+    description: >
+      Treating HCP per journey. SOFT JOIN in PG (patient_journeys.hcp_id has
+      no declared FK constraint) — the link is realized by Foundry, not by
+      the source DB.
+
+  - id: patient-journey-treatment-events
+    apiName: PatientJourneyTreatmentEvents
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: patient-journey, displayName: Patient Journey, pluralDisplayName: Patient Journeys }
+    objectTypeB: { objectType: treatment-event, displayName: Treatment Event, pluralDisplayName: Treatment Events }
+    foreignKey: { objectType: treatment-event, property: patientJourneyId, references: patientJourneyId }
+    status: active
+    description: DB FK with ON DELETE CASCADE.
+
+  - id: patient-treatment-events
+    apiName: PatientTreatmentEvents
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    objectTypeB: { objectType: treatment-event, displayName: Treatment Event, pluralDisplayName: Treatment Events }
+    foreignKey: { objectType: treatment-event, property: patientId, references: patientId }
+    status: experimental
+
+  - id: hcp-treatment-events
+    apiName: HcpTreatmentEvents
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: hcp, displayName: HCP, pluralDisplayName: HCPs }
+    objectTypeB: { objectType: treatment-event, displayName: Treatment Event, pluralDisplayName: Treatment Events }
+    foreignKey: { objectType: treatment-event, property: hcpId, references: hcpId }
+    status: active
+    description: DB FK to hcp_profiles.
+
+  # ----- triggers
+  - id: hcp-triggers
+    apiName: HcpTriggers
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: hcp, displayName: HCP, pluralDisplayName: HCPs }
+    objectTypeB: { objectType: trigger, displayName: Trigger, pluralDisplayName: Triggers }
+    foreignKey: { objectType: trigger, property: hcpId, references: hcpId }
+    status: active
+    description: DB FK; target HCP for the trigger.
+
+  - id: patient-triggers
+    apiName: PatientTriggers
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    objectTypeB: { objectType: trigger, displayName: Trigger, pluralDisplayName: Triggers }
+    foreignKey: { objectType: trigger, property: patientId, references: patientId }
+    status: experimental
+
+  - id: trigger-previous-trigger
+    apiName: TriggerPreviousTrigger
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: trigger, displayName: Previous Trigger, pluralDisplayName: Previous Triggers }
+    objectTypeB: { objectType: trigger, displayName: Successor Trigger, pluralDisplayName: Successor Triggers }
+    foreignKey: { objectType: trigger, property: previousTriggerId, references: triggerId }
+    status: active
+    description: >
+      Reflexive version chain for change tracking (allowed in Foundry).
+      ONE_TO_MANY, not 1:1: previous_trigger_id carries no UNIQUE constraint
+      in PG, so multiple successors may reference the same previous trigger.
+
+  # ----- surveys
+  - id: hcp-intent-surveys-link
+    apiName: HcpIntentSurveys
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: hcp, displayName: HCP, pluralDisplayName: HCPs }
+    objectTypeB: { objectType: hcp-intent-survey, displayName: HCP Intent Survey, pluralDisplayName: HCP Intent Surveys }
+    foreignKey: { objectType: hcp-intent-survey, property: hcpId, references: hcpId }
+    status: active
+    description: DB FK; surveyed HCP.
+
+  - id: survey-previous-survey
+    apiName: SurveyPreviousSurvey
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: hcp-intent-survey, displayName: Previous Survey, pluralDisplayName: Previous Surveys }
+    objectTypeB: { objectType: hcp-intent-survey, displayName: Successor Survey, pluralDisplayName: Successor Surveys }
+    foreignKey: { objectType: hcp-intent-survey, property: previousSurveyId, references: surveyId }
+    status: active
+    description: >
+      Reflexive longitudinal survey chain. ONE_TO_MANY, not 1:1:
+      previous_survey_id carries no UNIQUE constraint in PG.
+
+  # ----- ML lifecycle
+  - id: ml-experiment-models
+    apiName: MlExperimentModels
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: ml-experiment, displayName: ML Experiment, pluralDisplayName: ML Experiments }
+    objectTypeB: { objectType: ml-model, displayName: ML Model, pluralDisplayName: ML Models }
+    foreignKey: { objectType: ml-model, property: experimentId, references: experimentId }
+    status: active
+    description: >
+      DB FK; many model versions per experiment; tr_single_champion trigger
+      caps one champion per experiment.
+
+  - id: ml-model-predictions
+    apiName: MlModelPredictions
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: ml-model, displayName: ML Model, pluralDisplayName: ML Models }
+    objectTypeB: { objectType: prediction, displayName: Prediction, pluralDisplayName: Predictions }
+    foreignKey: { objectType: prediction, property: modelRegistryId, references: modelId }
+    status: experimental
+    description: >
+      DERIVED link: ml_predictions.model_version is a loose string with no
+      FK; the curate_ml_predictions transform resolves it to the registry
+      UUID (model_registry_id) best-effort, mirroring
+      drift_monitoring._resolve_model_id. Unresolvable rows have NULL FK and
+      simply carry no link.
+
+  - id: hcp-predictions
+    apiName: HcpPredictions
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: hcp, displayName: HCP, pluralDisplayName: HCPs }
+    objectTypeB: { objectType: prediction, displayName: Prediction, pluralDisplayName: Predictions }
+    foreignKey: { objectType: prediction, property: hcpId, references: hcpId }
+    status: active
+    description: DB FK; HCP context for the prediction.
+
+  - id: patient-predictions
+    apiName: PatientPredictions
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    objectTypeB: { objectType: prediction, displayName: Prediction, pluralDisplayName: Predictions }
+    foreignKey: { objectType: prediction, property: patientId, references: patientId }
+    status: experimental
+
+  - id: ml-model-drift-events
+    apiName: MlModelDriftEvents
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: ml-model, displayName: ML Model, pluralDisplayName: ML Models }
+    objectTypeB: { objectType: drift-event, displayName: Drift Event, pluralDisplayName: Drift Events }
+    foreignKey: { objectType: drift-event, property: modelId, references: modelId }
+    status: active
+    description: DB FK (post-#842 canonical model_id).
+
+  - id: ml-experiment-drift-events
+    apiName: MlExperimentDriftEvents
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: ml-experiment, displayName: ML Experiment, pluralDisplayName: ML Experiments }
+    objectTypeB: { objectType: drift-event, displayName: Drift Event, pluralDisplayName: Drift Events }
+    foreignKey: { objectType: drift-event, property: experimentId, references: experimentId }
+    status: active
+    description: Nullable FK.
+
+  # ----- split-config governance links (all DB FKs via split_config_id)
+  - id: split-config-patient-journeys
+    apiName: SplitConfigPatientJourneys
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    objectTypeB: { objectType: patient-journey, displayName: Patient Journey, pluralDisplayName: Patient Journeys }
+    foreignKey: { objectType: patient-journey, property: splitConfigId, references: splitConfigId }
+    status: active
+
+  - id: split-config-treatment-events
+    apiName: SplitConfigTreatmentEvents
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    objectTypeB: { objectType: treatment-event, displayName: Treatment Event, pluralDisplayName: Treatment Events }
+    foreignKey: { objectType: treatment-event, property: splitConfigId, references: splitConfigId }
+    status: active
+
+  - id: split-config-predictions
+    apiName: SplitConfigPredictions
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    objectTypeB: { objectType: prediction, displayName: Prediction, pluralDisplayName: Predictions }
+    foreignKey: { objectType: prediction, property: splitConfigId, references: splitConfigId }
+    status: active
+
+  - id: split-config-triggers
+    apiName: SplitConfigTriggers
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    objectTypeB: { objectType: trigger, displayName: Trigger, pluralDisplayName: Triggers }
+    foreignKey: { objectType: trigger, property: splitConfigId, references: splitConfigId }
+    status: active
+
+  - id: split-config-business-metrics
+    apiName: SplitConfigBusinessMetrics
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    objectTypeB: { objectType: business-metric, displayName: Business Metric, pluralDisplayName: Business Metrics }
+    foreignKey: { objectType: business-metric, property: splitConfigId, references: splitConfigId }
+    status: active
+
+  - id: split-config-causal-paths
+    apiName: SplitConfigCausalPaths
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    objectTypeB: { objectType: causal-path, displayName: Causal Path, pluralDisplayName: Causal Paths }
+    foreignKey: { objectType: causal-path, property: splitConfigId, references: splitConfigId }
+    status: active
+
+  - id: split-config-agent-activities
+    apiName: SplitConfigAgentActivities
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    objectTypeB: { objectType: agent-activity, displayName: Agent Activity, pluralDisplayName: Agent Activities }
+    foreignKey: { objectType: agent-activity, property: splitConfigId, references: splitConfigId }
+    status: active
+
+  # ----- agentic layer
+  - id: agent-agent-activities
+    apiName: AgentAgentActivities
+    cardinality: ONE_TO_MANY
+    objectTypeA: { objectType: agent, displayName: Agent, pluralDisplayName: Agents }
+    objectTypeB: { objectType: agent-activity, displayName: Agent Activity, pluralDisplayName: Agent Activities }
+    foreignKey: { objectType: agent-activity, property: agentName, references: agentName }
+    status: active
+    description: >
+      SOFT JOIN in PG (agent_activities.agent_name has no FK to
+      agent_registry) — realized as an explicit Foundry link.
+
+  # ----- many-to-many links (join-dataset-backed; Foundry hard rule).
+  # ----- The ds-link-* datasets are exported from FalkorDB graph edges by the
+  # ----- export_falkordb_links transform (see e2i_lineage.yaml); the
+  # ----- assignments link uses the real PG join table directly.
+  - id: patient-split-assignments
+    apiName: PatientSplitAssignments
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    objectTypeB: { objectType: data-split-config, displayName: Data Split Config, pluralDisplayName: Data Split Configs }
+    datasources:
+      - dataset: ds-curated-ml-patient-split-assignments
+        branch: master
+        keys: { objectTypeA: patient_id, objectTypeB: split_config_id }
+    status: active
+    description: >
+      Patient-level split assignment via the real PG join table
+      ml_patient_split_assignments (UNIQUE(split_config_id, patient_id);
+      carries assigned_split payload).
+
+  - id: patient-treated-by-hcp
+    apiName: PatientTreatedByHcp
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    objectTypeB: { objectType: hcp, displayName: Treating HCP, pluralDisplayName: Treating HCPs }
+    datasources:
+      - dataset: ds-link-patient-hcp-treated-by
+        branch: master
+        keys: { objectTypeA: patient_id, objectTypeB: hcp_id }
+    status: experimental
+    description: >
+      FalkorDB TREATED_BY edge (payload: is_primary_hcp, visit_count,
+      relationship_status).
+
+  - id: patient-prescribed-brand
+    apiName: PatientPrescribedBrand
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: patient, displayName: Patient, pluralDisplayName: Patients }
+    objectTypeB: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    datasources:
+      - dataset: ds-link-patient-brand-prescribed
+        branch: master
+        keys: { objectTypeA: patient_id, objectTypeB: brand_name }
+    status: experimental
+    description: >
+      FalkorDB PRESCRIBED edge (payload: prescription_date, line_of_therapy,
+      status). Export must map lowercase graph brand names to the PG
+      capitalized canonical spelling.
+
+  - id: hcp-prescribes-brand
+    apiName: HcpPrescribesBrand
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: hcp, displayName: HCP, pluralDisplayName: HCPs }
+    objectTypeB: { objectType: brand, displayName: Brand, pluralDisplayName: Brands }
+    datasources:
+      - dataset: ds-link-hcp-brand-prescribes
+        branch: master
+        keys: { objectTypeA: hcp_id, objectTypeB: brand_name }
+    status: experimental
+    description: >
+      FalkorDB PRESCRIBES edge (payload: volume_monthly, market_share,
+      prescribing_status). The inferred HIGH_POTENTIAL_PRESCRIBER edge is
+      NOT modeled (computed, not source data).
+
+  - id: hcp-influences-hcp
+    apiName: HcpInfluencesHcp
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: hcp, displayName: Influencer HCP, pluralDisplayName: Influencer HCPs }
+    objectTypeB: { objectType: hcp, displayName: Influenced HCP, pluralDisplayName: Influenced HCPs }
+    datasources:
+      - dataset: ds-link-hcp-influences
+        branch: master
+        keys: { objectTypeA: source_hcp_id, objectTypeB: target_hcp_id }
+    status: experimental
+    description: >
+      Reflexive HCP influence network (FalkorDB INFLUENCES edge; payload:
+      influence_strength 0-1, network_type peer|mentor|colleague|referral).
+
+  - id: agent-discovered-causal-paths
+    apiName: AgentDiscoveredCausalPaths
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: agent, displayName: Agent, pluralDisplayName: Agents }
+    objectTypeB: { objectType: causal-path, displayName: Causal Path, pluralDisplayName: Causal Paths }
+    datasources:
+      - dataset: ds-link-agent-causal-path-discovered
+        branch: master
+        keys: { objectTypeA: agent_name, objectTypeB: path_id }
+    status: experimental
+    description: >
+      Discovery provenance (FalkorDB DISCOVERED edge; payload:
+      discovery_date, discovery_method).
+
+  - id: agent-generated-triggers
+    apiName: AgentGeneratedTriggers
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: agent, displayName: Agent, pluralDisplayName: Agents }
+    objectTypeB: { objectType: trigger, displayName: Trigger, pluralDisplayName: Triggers }
+    datasources:
+      - dataset: ds-link-agent-trigger-generated
+        branch: master
+        keys: { objectTypeA: agent_name, objectTypeB: trigger_id }
+    status: experimental
+    description: >
+      Generation provenance (FalkorDB GENERATED edge; payload:
+      generation_date, reasoning).
+
+  - id: causal-path-impacts-kpis
+    apiName: CausalPathImpactsKpis
+    cardinality: MANY_TO_MANY
+    objectTypeA: { objectType: causal-path, displayName: Causal Path, pluralDisplayName: Causal Paths }
+    objectTypeB: { objectType: kpi, displayName: KPI, pluralDisplayName: KPIs }
+    datasources:
+      - dataset: ds-link-causal-path-kpi-impacts
+        branch: master
+        keys: { objectTypeA: path_id, objectTypeB: kpi_id }
+    status: experimental
+    description: >
+      FalkorDB IMPACTS edge (payload: impact_magnitude, direction
+      positive|negative|neutral). The graph kpi_id (^KPI[0-9]{6}$) must be
+      mapped to the canonical config KPI ids (WS1-DQ-001...) during export.
+
+# =============================================================================
+# Deliberately NOT modeled (v1)
+# =============================================================================
+# - actionTypes / writeback flows (read-only ontology; deferred)
+# - interfaces (no cross-type abstraction need yet)
+# - inferred graph edges (HIGH_POTENTIAL_PRESCRIBER, INDIRECTLY_INFLUENCES,
+#   TRANSITIONED_TO journey state machine) — computed artifacts, not source
+#   relationships
+# - utility tables: ml_preprocessing_metadata, ml_leakage_audit,
+#   user_sessions, data_source_tracking, ml_annotations,
+#   etl_pipeline_metrics, territory_metrics, memory/RAG/chat/audit schemas,
+#   and the ~40 ML-pipeline tables beyond the modeled set (HPO, A/B testing,
+#   digital twin, tool composer, observability spans)
+# - vector properties (RAG embeddings stay in Supabase/pgvector; if surfaced
+#   later, Foundry vector properties are KNN-only and capped at 2048 dims)
