@@ -38,10 +38,15 @@ def _dispatch(params=None):
 
 
 def test_het_resolver_builds_real_spec_from_live_conversion_substrate() -> None:
+    # include_synthetic opt-in (#872): the 2026-06-11 synthetic-gold cleanup left the
+    # live DB with ZERO untagged trigger/treatment_event rows, so a real-mode build
+    # now correctly fails closed (that is the designed provenance isolation, proven
+    # by test_het_resolver_real_mode_fails_closed_on_clean_substrate below). The
+    # substrate-binding proof therefore opts in explicitly, exactly like gate 11.
     agent_input = {
         "query": "which segments respond best on conversion rate?",
         "session_id": "itest-het",
-        "user_context": {},
+        "user_context": {"include_synthetic": True},
         "parsed_query": {"entities": []},
     }
     resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](agent_input, _dispatch())
@@ -62,3 +67,16 @@ def test_het_resolver_builds_real_spec_from_live_conversion_substrate() -> None:
     assert "accepted" not in resolved["effect_modifiers"]
     assert "acceptance_status" not in resolved["effect_modifiers"], "treatment-source leakage!"
     assert "kpi_substrate" in resolved["data_source"]
+
+
+def test_het_resolver_real_mode_fails_closed_on_clean_substrate() -> None:
+    """Real mode (no opt-in) on the post-cleanup substrate (zero untagged rows):
+    the resolver must fail closed — synthetic rows are NEVER silently read (#872)."""
+    agent_input = {
+        "query": "which segments respond best on conversion rate?",
+        "session_id": "itest-het",
+        "user_context": {},
+        "parsed_query": {"entities": []},
+    }
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](agent_input, _dispatch())
+    assert isinstance(resolved, NeedsStructuredInput), "real-mode must not read synthetic rows"
