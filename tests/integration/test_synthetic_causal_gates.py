@@ -91,9 +91,11 @@ def test_gate_3_ate_cate_recovery(client):
     # The scientific heart: the CausalImpactAgent recovers the designed TRUE_ATE
     # within 0.10 from the REAL synthetic substrate (categorical segment encoded;
     # frame projected to the numeric covariate set). gate_3 reads the recovered
-    # ate_estimate — NOT the agent's status, which can be 'failed' purely from a
-    # downstream refutation node hitting a networkx-version issue (d_separated) that
-    # is unrelated to whether the ATE was recovered.
+    # ate_estimate — NOT the agent's status, so a downstream-node failure
+    # unrelated to ATE recovery can't mask a recovered effect. (The historical
+    # instance — the refutation node dying on dowhy 0.12's removed
+    # nx.algorithms.d_separated call — was fixed by the #869 dowhy>=0.13 floor;
+    # guarded in tests/unit/test_causal_engine/test_dowhy_networkx_compat.py.)
     from scripts.validate_synthetic_causal import _true_ate, gate_3_ate_cate
 
     res = gate_3_ate_cate(client)

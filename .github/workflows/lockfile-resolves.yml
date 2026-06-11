@@ -28,6 +28,9 @@ on:
       - 'requirements-dev.txt'
       - 'requirements-ragas.txt'
       - 'requirements-synthetic.txt'
+      # The BentoML serving image installs this file directly (docker/bentoml/
+      # Dockerfile); its dowhy floor is guarded by test_requirements_lock.py.
+      - 'docker/bentoml/requirements-bentoml.txt'
       - 'pyproject.toml'
       # The two ./patches/ packages install --no-deps, so a dep added to a patch
       # without regenerating the lock must re-run the patch-dependency guard.
@@ -43,6 +46,9 @@ on:
       - 'requirements-dev.txt'
       - 'requirements-ragas.txt'
       - 'requirements-synthetic.txt'
+      # The BentoML serving image installs this file directly (docker/bentoml/
+      # Dockerfile); its dowhy floor is guarded by test_requirements_lock.py.
+      - 'docker/bentoml/requirements-bentoml.txt'
       - 'pyproject.toml'
       # The two ./patches/ packages install --no-deps, so a dep added to a patch
       # without regenerating the lock must re-run the patch-dependency guard.

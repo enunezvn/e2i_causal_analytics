@@ -10,6 +10,10 @@ on:
       # matrix unnecessarily. (3B-M-3)
       - 'src/**'
       - 'tests/**'
+      # Generated-Bento package floors live in this script; its unit guard
+      # (tests/unit/test_scripts/test_deploy_model_service_packages.py) must
+      # run when the script alone changes (#869 codex R2).
+      - 'scripts/deploy_model.py'
       - 'pyproject.toml'
       - 'requirements.txt'
       - '.github/workflows/backend-tests.yml'
@@ -18,6 +22,10 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      # Generated-Bento package floors live in this script; its unit guard
+      # (tests/unit/test_scripts/test_deploy_model_service_packages.py) must
+      # run when the script alone changes (#869 codex R2).
+      - 'scripts/deploy_model.py'
       - 'pyproject.toml'
       - 'requirements.txt'
       - '.github/workflows/backend-tests.yml'

@@ -13,7 +13,10 @@ pandas>=2.0.0
 
 # Causal inference
 econml>=0.14.0
-dowhy>=0.11.0
+# dowhy < 0.13 calls nx.algorithms.d_separated, removed in networkx 3.5
+# (#869); 0.13+ imports is_d_separator with a fallback. Keep in lockstep with
+# pyproject.toml (guarded by tests/test_requirements_lock.py).
+dowhy>=0.13
 
 # API and validation
 pydantic>=2.0.0

@@ -41,12 +41,14 @@ import venv
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQS_TXT = REPO_ROOT / "requirements.txt"
 REQS_LOCK = REPO_ROOT / "requirements.lock"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 DOCKERFILE = REPO_ROOT / "docker" / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 
@@ -411,3 +413,83 @@ def test_requirements_lock_installs_under_require_hashes(tmp_path: Path) -> None
             "stderr (last 2.5 KB):\n"
             f"{tail}"
         )
+
+
+BENTOML_REQS = REPO_ROOT / "docker" / "bentoml" / "requirements-bentoml.txt"
+
+
+def _declared_dowhy_requirements() -> list[tuple[str, Requirement]]:
+    """Every dowhy version spec the repo declares as a RESOLVER INPUT.
+
+    Sources:
+
+    * ``pyproject.toml [project.dependencies]`` — what uv/pip resolve for the
+      dev + tier1-5 harness environments.
+    * ``docker/bentoml/requirements-bentoml.txt`` — installed directly by
+      ``docker/bentoml/Dockerfile`` into the BentoML serving image (a causal
+      Bento service is wired in ``docker/bentoml/docker-compose.yaml``).
+
+    The third dowhy-declaring surface — the generated causal Bento package
+    list in ``scripts/deploy_model.py`` — is code, guarded by
+    ``tests/unit/test_scripts/test_deploy_model_service_packages.py``.
+    """
+    found: list[tuple[str, Requirement]] = []
+    for dep in tomllib.loads(PYPROJECT.read_text())["project"]["dependencies"]:
+        req = Requirement(dep)
+        if canonicalize_name(req.name) == "dowhy":
+            found.append(("pyproject.toml", req))
+    for raw in BENTOML_REQS.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith(("-", "./")):
+            continue
+        req = Requirement(line)
+        if canonicalize_name(req.name) == "dowhy":
+            found.append(("docker/bentoml/requirements-bentoml.txt", req))
+    return found
+
+
+def test_pyproject_dowhy_floor_is_networkx35_compatible() -> None:
+    """Every declared dowhy floor must exclude releases broken by networkx >= 3.5 (#869).
+
+    dowhy < 0.13 calls ``nx.algorithms.d_separated``, which networkx renamed to
+    ``is_d_separator`` (3.3) and removed (3.5). The repo's networkx floors are
+    ``>=3.0`` (or absent) — modern resolvers pick 3.6+ — so a spec that still
+    admits dowhy < 0.13 lets a resolver pair them: every
+    CausalModel.identify_effect and refuter call then raises AttributeError and
+    the causal_impact refutation node fail-closes (refutation_tests_total=0).
+    That exact pairing (dowhy==0.12 + networkx==3.6.1) is what uv resolved for
+    python < 3.13 from the pre-#869 ``dowhy>=0.11.0`` floor: dowhy 0.13/0.14
+    cap scipy at 1.15.3 on python < 3.13, so with scipy free to float to 1.16+
+    the resolver backtracked to the nx-incompatible dowhy 0.12 instead.
+    dowhy >= 0.13 imports ``is_d_separator`` with a ``d_separated`` fallback
+    and works against every networkx the project allows.
+
+    To falsify: lower the dowhy floor in pyproject.toml or
+    docker/bentoml/requirements-bentoml.txt below 0.13 — this test reports the
+    spec admits an nx-incompatible dowhy.
+
+    Runtime companion (proves the installed pairing actually works, no mocks):
+    tests/unit/test_causal_engine/test_dowhy_networkx_compat.py.
+    """
+    dowhy_reqs = _declared_dowhy_requirements()
+    sources = {source for source, _ in dowhy_reqs}
+    assert "pyproject.toml" in sources, "pyproject.toml no longer declares a dowhy dependency"
+    assert "docker/bentoml/requirements-bentoml.txt" in sources, (
+        "requirements-bentoml.txt no longer declares a dowhy dependency"
+    )
+
+    nx_incompatible = [
+        f"{source}: {req}" for source, req in dowhy_reqs if req.specifier.contains("0.12")
+    ]
+    assert not nx_incompatible, (
+        "these dependency sources admit dowhy releases that call the removed "
+        "nx.algorithms.d_separated (broken under networkx >= 3.5, #869); "
+        "raise the floor to >=0.13:\n" + "\n".join(nx_incompatible)
+    )
+    # Sanity: every spec must still admit the deployed pin (requirements.txt).
+    too_tight = [
+        f"{source}: {req}" for source, req in dowhy_reqs if not req.specifier.contains("0.14")
+    ]
+    assert not too_tight, (
+        "these dowhy specs no longer admit the deployed dowhy==0.14 pin:\n" + "\n".join(too_tight)
+    )

@@ -82,6 +82,28 @@ def register_model(
     return tag
 
 
+def service_packages(service_type: str) -> list:
+    """Python packages emitted into a generated Bento for a service type.
+
+    Guarded by tests/unit/test_scripts/test_deploy_model_service_packages.py:
+    the causal list's dowhy floor must stay >= 0.13 (#869) — dowhy < 0.13
+    calls the ``nx.algorithms.d_separated`` API networkx removed in 3.5, so a
+    looser floor lets the Bento image resolver install a dowhy whose
+    identify/refute calls raise AttributeError. Keep in lockstep with
+    pyproject.toml and docker/bentoml/requirements-bentoml.txt.
+    """
+    base_packages = [
+        "bentoml>=1.4.0",
+        "pydantic>=2.0.0",
+        "numpy>=1.24.0",
+    ]
+    if service_type in ("classification", "regression"):
+        return base_packages + ["scikit-learn>=1.3.0"]
+    if service_type == "causal":
+        return base_packages + ["econml>=0.14.0", "dowhy>=0.13"]
+    return base_packages
+
+
 def build_bento(
     model_tag: str,
     service_type: str,
@@ -133,18 +155,7 @@ def build_bento(
     )
 
     # Determine Python packages based on service type
-    base_packages = [
-        "bentoml>=1.4.0",
-        "pydantic>=2.0.0",
-        "numpy>=1.24.0",
-    ]
-
-    if service_type == "classification" or service_type == "regression":
-        packages = base_packages + ["scikit-learn>=1.3.0"]
-    elif service_type == "causal":
-        packages = base_packages + ["econml>=0.14.0", "dowhy>=0.11.0"]
-    else:
-        packages = base_packages
+    packages = service_packages(service_type)
 
     # Create bentofile
     config = BentoConfig(
