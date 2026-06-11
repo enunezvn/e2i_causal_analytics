@@ -413,7 +413,20 @@ class HeterogeneousOptimizerMemoryHooks:
                 description=description,
                 raw_content=analysis_result,
                 entities=None,
-                outcome_type="cate_analysis_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "cate_analysis_delivered" was rejected by the enum (22P02) and the
+                # ``except`` below swallowed it, so NO het CATE episodic ever landed
+                # (#873; same bug family as causal_impact #788/#785, fixed the same
+                # way: map, don't extend the enum). The domain signal stays fully
+                # recoverable via event_type='cate_analysis_completed' (DB migration
+                # database/memory/046) + agent_name. Callers skip failed analyses
+                # (contribute_to_memory / agent.py gate on status != "failed"), but
+                # map defensively in case this is ever called with a failed result.
+                outcome_type=(
+                    "failure" if analysis_result.get("status") == "failed" else "success"
+                ),
                 agent_name="heterogeneous_optimizer",
                 importance_score=0.8,  # CATE analyses are high value
                 e2i_refs=E2IEntityReferences(
