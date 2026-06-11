@@ -41,12 +41,14 @@ import venv
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQS_TXT = REPO_ROOT / "requirements.txt"
 REQS_LOCK = REPO_ROOT / "requirements.lock"
+PYPROJECT = REPO_ROOT / "pyproject.toml"
 DOCKERFILE = REPO_ROOT / "docker" / "Dockerfile"
 DOCKERIGNORE = REPO_ROOT / ".dockerignore"
 
@@ -411,3 +413,43 @@ def test_requirements_lock_installs_under_require_hashes(tmp_path: Path) -> None
             "stderr (last 2.5 KB):\n"
             f"{tail}"
         )
+
+
+def test_pyproject_dowhy_floor_is_networkx35_compatible() -> None:
+    """The pyproject dowhy floor must exclude releases broken by networkx >= 3.5 (#869).
+
+    dowhy < 0.13 calls ``nx.algorithms.d_separated``, which networkx renamed to
+    ``is_d_separator`` (3.3) and removed (3.5). pyproject's networkx floor is
+    ``>=3.0`` — modern resolvers pick 3.6+ — so a spec that still admits
+    dowhy < 0.13 lets a resolver pair them: every CausalModel.identify_effect
+    and refuter call then raises AttributeError and the causal_impact
+    refutation node fail-closes (refutation_tests_total=0). That exact pairing
+    (dowhy==0.12 + networkx==3.6.1) is what uv resolved for python < 3.13 from
+    the pre-#869 ``dowhy>=0.11.0`` floor: dowhy 0.13/0.14 cap scipy at 1.15.3
+    on python < 3.13, so with scipy free to float to 1.16+ the resolver
+    backtracked to the nx-incompatible dowhy 0.12 instead. dowhy >= 0.13
+    imports ``is_d_separator`` with a ``d_separated`` fallback and works
+    against every networkx the project allows.
+
+    To falsify: lower the dowhy floor in pyproject.toml below 0.13 — this test
+    reports the spec admits an nx-incompatible dowhy.
+
+    Runtime companion (proves the installed pairing actually works, no mocks):
+    tests/unit/test_causal_engine/test_dowhy_networkx_compat.py.
+    """
+    deps = tomllib.loads(PYPROJECT.read_text())["project"]["dependencies"]
+    dowhy_reqs = [
+        req for req in (Requirement(d) for d in deps) if canonicalize_name(req.name) == "dowhy"
+    ]
+    assert dowhy_reqs, "pyproject.toml no longer declares a dowhy dependency"
+
+    nx_incompatible = [str(r) for r in dowhy_reqs if r.specifier.contains("0.12")]
+    assert not nx_incompatible, (
+        "pyproject.toml admits dowhy releases that call the removed "
+        "nx.algorithms.d_separated (broken under networkx >= 3.5, #869); "
+        f"raise the floor to >=0.13: {nx_incompatible}"
+    )
+    # Sanity: the spec must still admit the deployed pin (requirements.txt).
+    assert any(r.specifier.contains("0.14") for r in dowhy_reqs), (
+        "pyproject.toml dowhy spec no longer admits the deployed dowhy==0.14 pin"
+    )

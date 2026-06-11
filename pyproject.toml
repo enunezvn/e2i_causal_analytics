@@ -31,7 +31,11 @@ dependencies = [
     "falkordb>=1.0.0",
 
     # Causal Inference
-    "dowhy>=0.11.0",
+    # dowhy < 0.13 calls nx.algorithms.d_separated, removed in networkx 3.5
+    # (#869); 0.13+ imports is_d_separator with a d_separated fallback, so it
+    # works against every networkx this spec admits. Floor guarded by
+    # tests/test_requirements_lock.py::test_pyproject_dowhy_floor_is_networkx35_compatible.
+    "dowhy>=0.13",
     "econml>=0.15.0",
     "networkx>=3.0",
     "causalml>=0.15.0",

@@ -64,35 +64,12 @@ from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-def _install_networkx_dowhy_compat() -> None:
-    """Alias the renamed networkx d-separation API for dowhy 0.12 (harness-only).
-
-    The pinned dowhy==0.12 calls ``nx.algorithms.d_separated`` inside
-    ``CausalModel.identify_effect`` (dowhy/causal_graph.py), but networkx
-    RENAMED that function to ``is_d_separator`` (3.3) and REMOVED the old name
-    (3.5; the pinned networkx is 3.6.1). Without the alias the causal_impact
-    refutation node fail-closes before any refuter runs ("DoWhy CausalModel
-    reconstruction failed ... no attribute 'd_separated'") — a dependency
-    incompatibility, not an analysis failure (already noted in
-    tests/integration/test_synthetic_causal_gates.py gate_3). The rename is
-    semantics-preserving (identical (G, x, y, z) -> bool contract), so
-    aliasing lets the REAL DoWhy refutation suite execute; nothing is mocked.
-    Harness-scoped on purpose: prod owns its own dependency-resolution fix.
-    """
-    try:
-        import networkx as nx
-    except ImportError:  # harness deps guarantee networkx; stay quiet if absent
-        return
-    if not hasattr(nx.algorithms, "d_separated") and hasattr(nx.algorithms, "is_d_separator"):
-        nx.algorithms.d_separated = nx.algorithms.is_d_separator
-        nx.d_separated = nx.is_d_separator
-
-
-# NOTE (codex R3 MED): the shim is deliberately NOT installed at module
-# import time — importing this module (e.g. from tests) must not mutate
-# global networkx state, or it would mask the prod dependency break
-# (issue #869) for everything else in the process. It is installed inside
-# run_tier1_5_tests() — the harness execution boundary — only.
+# The networkx/dowhy d-separation compat shim that used to live here was
+# removed with the #869 fix: pyproject now floors dowhy at >=0.13 (which
+# imports nx.is_d_separator natively), so the harness env can no longer
+# resolve the broken dowhy 0.12 + networkx >= 3.5 pairing the shim papered
+# over. Regression guards: tests/test_requirements_lock.py (spec floor) and
+# tests/unit/test_causal_engine/test_dowhy_networkx_compat.py (runtime).
 
 
 # =============================================================================
@@ -1868,12 +1845,6 @@ async def run_tests(
         QualityGateValidator,
         Tier0OutputMapper,
     )
-
-    # Harness execution boundary: install the networkx/dowhy compat alias
-    # HERE (not at module import — codex R3 MED: importing this module must
-    # not mutate global networkx state and mask the prod dependency break,
-    # issue #869).
-    _install_networkx_dowhy_compat()
 
     print_header("TIER 1-5 AGENT TESTING FRAMEWORK")
 
