@@ -423,7 +423,22 @@ class ExperimentMonitorMemoryHooks:
                     "timestamp": alert.get("timestamp"),
                 },
                 entities=None,
-                outcome_type="alert_generated",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "alert_generated" was rejected by the enum (22P02) and the
+                # ``except`` below swallowed it, so NO experiment_monitor alert
+                # episodic ever landed (#876; same bug family as causal_impact
+                # #788/#785 and het #873, fixed the same way: map, don't extend).
+                # The domain signal stays fully recoverable via
+                # event_type='experiment_alert_generated' (added by migration 070)
+                # + event_subtype ('alert_<type>') + agent_name. The mapping
+                # reflects the MONITORING operation's outcome, NOT the alert's
+                # severity — a critical alert raised by a completed run is a
+                # 'success'; severity lives in raw_content + importance_score.
+                # contribute_to_memory gates on state status != 'failed', but map
+                # defensively.
+                outcome_type=("failure" if state.get("status") == "failed" else "success"),
                 agent_name="experiment_monitor",
                 importance_score=self._calculate_alert_importance(alert),
                 e2i_refs=None,
@@ -504,7 +519,13 @@ class ExperimentMonitorMemoryHooks:
                     "summary": result.get("monitor_summary", ""),
                 },
                 entities=None,
-                outcome_type="monitoring_completed",
+                # Same #876 mapping as store_alert above: the prior literal
+                # "monitoring_completed" 22P02'd against memory_outcome_type and
+                # was swallowed, so NO monitoring-check episodic ever landed. The
+                # domain signal lives in event_type='experiment_monitoring_completed'
+                # (added by migration 070) + agent_name; critical/warning counts
+                # live in raw_content + importance_score.
+                outcome_type=("failure" if state.get("status") == "failed" else "success"),
                 agent_name="experiment_monitor",
                 importance_score=self._calculate_check_importance(result),
                 e2i_refs=None,
