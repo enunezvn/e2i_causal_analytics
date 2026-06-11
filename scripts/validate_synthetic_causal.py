@@ -105,16 +105,19 @@ def _synthetic_conversion_rate_last_30d(client) -> float:
     ``business_impact_conversion_rate`` definition (a delivered trigger is converted
     if the patient gets a prescription within 30d) but over the SYNTHETIC rows the
     production RPC excludes. Computed via the real ``kpi_resolution`` conversion
-    builder (triggers ⋈ treatment_events), which reads the substrate UN-provenance-
-    filtered (it issues raw ``.select()`` with no is_synthetic clause, so on an
-    all-synthetic DB it materializes the synthetic conversion frame). The rate is
+    builder (triggers ⋈ treatment_events) with the explicit ``include_synthetic=True``
+    opt-in: the builder default-excludes synthetic rows on every source read
+    (Shard 07 R10), so on a clean substrate (zero untagged legacy rows) the
+    default-mode frame is empty BY DESIGN and the gate must opt in. The rate is
     the real mean of the ``converted`` outcome — a measured value, never fabricated.
     """
     from src.kpi.registry import get_registry
     from src.services import kpi_resolution
 
     kpi = get_registry().get(kpi_resolution.CONVERSION_KPI_ID)
-    kf = kpi_resolution.resolve_kpi_frame(kpi, brand=None, region=None, supabase_client=client)
+    kf = kpi_resolution.resolve_kpi_frame(
+        kpi, brand=None, region=None, supabase_client=client, include_synthetic=True
+    )
     if kf is None or kf.frame.empty or kf.outcome_column not in kf.frame.columns:
         return 0.0
     return float(kf.frame[kf.outcome_column].astype(float).mean())
@@ -431,7 +434,11 @@ def _extract_ate(out) -> float | None:
 
 
 def gate_4_trigger(client) -> GateResult:
-    rows = _kpi(client, "trigger_performance_action_rate_uplift", [])
+    # include_synthetic RPC variant (migration 066/067 family): the real-mode id
+    # default-excludes synthetic rows, so on a clean substrate (zero untagged
+    # legacy rows) it is empty BY DESIGN — the gate must opt in to measure the
+    # synthetic substrate.
+    rows = _kpi(client, "trigger_performance_action_rate_uplift_include_synthetic", [])
     row = rows[0] if rows else {}
     ok = (
         bool(row)
@@ -607,7 +614,10 @@ def gate_6_hetero(client) -> GateResult:
         "session_id": "gate6",
         "user_context": {},
         "parsed_query": {"entities": []},
-        "filters": {"brand": "Kisqali"},
+        # include_synthetic: validation opt-in (default-off in prod) — the resolver's
+        # kpi_resolution reads default-exclude synthetic, so on a clean substrate the
+        # real-mode build fails closed by design.
+        "filters": {"brand": "Kisqali", "include_synthetic": True},
     }
     dispatch = {
         "agent_name": "heterogeneous_optimizer",
@@ -1055,8 +1065,17 @@ def gate_11_chat_path(client) -> GateResult:
     # property the substrate does not provide — REASON-BEFORE-RULES); we assert
     # routed + real kpi_substrate binding + real recovered heterogeneity instead.
     query = "which segments respond best on conversion rate for Kisqali?"
+    # filters.include_synthetic: validation opt-in threaded through the live chat
+    # path to the #839 het resolver (default-off in prod; real-mode fails closed
+    # on a clean substrate by design).
     state = asyncio.run(
-        graph.ainvoke({"query": query, "user_query": query, "filters": {"brand": "Kisqali"}})
+        graph.ainvoke(
+            {
+                "query": query,
+                "user_query": query,
+                "filters": {"brand": "Kisqali", "include_synthetic": True},
+            }
+        )
     )
     # RECONCILED to the REAL OrchestratorState (state.py:91-287): the routed agent is in
     # agents_dispatched / successful_agents; per-agent output is in agent_results[]
