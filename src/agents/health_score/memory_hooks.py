@@ -392,7 +392,22 @@ class HealthScoreMemoryHooks:
                     "total_latency_ms": result.get("total_latency_ms", 0),
                 },
                 entities=None,
-                outcome_type="health_assessment_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "health_assessment_delivered" was rejected by the enum (22P02)
+                # and the ``except`` below swallowed it, so NO health_score
+                # episodic ever landed (#876; same bug family as causal_impact
+                # #788/#785 and het #873, fixed the same way: map, don't extend).
+                # The domain signal stays fully recoverable via
+                # event_type='health_check_completed' (added by migration 070) +
+                # agent_name. The mapping reflects the health CHECK operation's
+                # outcome, NOT the health of the system being checked — an
+                # unhealthy system (grade F, critical issues) found by a completed
+                # check is a 'success'; severity lives in raw_content +
+                # importance_score. contribute_to_memory gates on
+                # state status != 'failed', but map defensively.
+                outcome_type=("failure" if state.get("status") == "failed" else "success"),
                 agent_name="health_score",
                 importance_score=self._calculate_importance(result),
                 e2i_refs=None,

@@ -412,6 +412,34 @@ class ToolComposerMemoryHooks:
                 f"confidence={response.get('confidence', 0):.2f}"
             )
 
+            # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+            # (success / partial_success / failure / pending / escalated) — a
+            # generic outcome STATE, NOT a domain descriptor. The prior literal
+            # "composition_delivered" was rejected by the enum (22P02) and the
+            # ``except`` below swallowed it, so NO tool_composer episodic ever
+            # landed (#876; same bug family as causal_impact #788/#785 and het
+            # #873, fixed the same way: map, don't extend the enum). The domain
+            # signal stays fully recoverable via
+            # event_type='composition_completed' + agent_name. Unlike the other
+            # #876 agents, the composition result carries a REAL multi-state
+            # contract status (CompositionStatus: success / partial / failed /
+            # timeout / blocked; ``success`` is the quality-gate bool, True for
+            # both SUCCESS and PARTIAL), so map it onto the enum's three states
+            # (PARTIAL -> partial_success mirrors the causal_impact #788
+            # REVIEW-band precedent). The composer only contributes memory on
+            # the synthesized path (status success/partial), but map the failure
+            # statuses defensively — and never fabricate success when the result
+            # claims neither a recognizable status nor success.
+            composition_status = result.get("status")
+            if composition_status == "partial":
+                episodic_outcome = "partial_success"
+            elif composition_status in ("failed", "timeout", "blocked"):
+                episodic_outcome = "failure"
+            elif composition_status == "success" or result.get("success", False):
+                episodic_outcome = "success"
+            else:
+                episodic_outcome = "failure"
+
             # Create episodic memory input
             memory_input = EpisodicMemoryInput(
                 event_type="composition_completed",
@@ -431,7 +459,7 @@ class ToolComposerMemoryHooks:
                     ],
                 },
                 entities=None,
-                outcome_type="composition_delivered",
+                outcome_type=episodic_outcome,
                 agent_name="tool_composer",
                 importance_score=0.75,
                 e2i_refs=E2IEntityReferences(

@@ -467,7 +467,20 @@ class ExplanationMemoryHooks:
                 description=description,
                 raw_content=explanation,
                 entities=explanation.get("entities"),
-                outcome_type="explanation_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "explanation_delivered" was rejected by the enum (22P02) and the
+                # ``except`` below swallowed it, so NO explainer episodic ever
+                # landed (#876; same bug family as causal_impact #788/#785 and het
+                # #873, fixed the same way: map, don't extend the enum). The domain
+                # signal stays fully recoverable via
+                # event_type='explanation_generated' + agent_name. Callers only
+                # store non-failed explanations (contribute_to_memory gates on
+                # state status; narrative_generator stores on the successful
+                # generation path), but map defensively in case a failed payload
+                # ever reaches this store.
+                outcome_type=("failure" if explanation.get("status") == "failed" else "success"),
                 agent_name="explainer",
                 importance_score=0.7,
                 e2i_refs=E2IEntityReferences(
