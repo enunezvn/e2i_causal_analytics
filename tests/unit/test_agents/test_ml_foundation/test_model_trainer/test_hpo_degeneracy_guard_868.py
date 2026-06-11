@@ -30,6 +30,7 @@ from sklearn.linear_model import LogisticRegression
 from src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner import (
     DEGENERACY_GUARD_PROB_STD_FLOOR,
     DEGENERACY_GUARD_PROMISE_FLOOR,
+    DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING,
     DEGENERACY_GUARD_VAL_AUC_FLOOR,
     _apply_degeneracy_guard,
     _detect_final_fit_collapse,
@@ -159,6 +160,45 @@ class TestDetectFinalFitCollapse:
         assert collapsed is True
         assert "single-class" in reason
 
+    def test_probability_crushed_model_is_calibration_collapsed(self, lr_data):
+        """Acceptance-run iteration: an over-regularized L2 fit keeps ranking
+        (AUC 0.97) but crushes probabilities (std 0.105, raw recalibration
+        slope 11.9 on this fixture) -> >=2x underconfident -> collapse."""
+        X_train, y_train, X_val, y_val = lr_data
+        model = LogisticRegression(C=0.005, penalty="l2", **LR_FIXED).fit(X_train, y_train)
+        collapsed, reason, diagnostics = _detect_final_fit_collapse(model, X_val, y_val)
+        assert collapsed is True
+        assert diagnostics["val_auc"] > DEGENERACY_GUARD_VAL_AUC_FLOOR  # ranking intact
+        assert (
+            diagnostics["val_recalibration_slope"] >= DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING
+        )
+        assert "underconfident" in reason
+
+    def test_healthy_model_records_recalibration_slope_below_ceiling(self, lr_data):
+        """C=1.0 measures raw slope ~1.14 on this fixture — no fire."""
+        X_train, y_train, X_val, y_val = lr_data
+        model = LogisticRegression(C=HEALTHY_C, penalty="l1", **LR_FIXED).fit(X_train, y_train)
+        collapsed, _, diagnostics = _detect_final_fit_collapse(model, X_val, y_val)
+        assert collapsed is False
+        assert diagnostics["val_recalibration_slope"] < DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING
+
+    def test_slope_criterion_skipped_when_unstable(self):
+        """n_pos < 30 -> the van Calster helper returns NaN -> criterion
+        skipped (fail-safe to healthy), never a false fire."""
+
+        class _MildModel:
+            def predict_proba(self, X):
+                p = np.linspace(0.2, 0.8, len(X))
+                return np.column_stack([1 - p, p])
+
+        X_val = np.zeros((40, 2))
+        # 20 positives < 30 -> slope is NaN; AUC here is healthy (positives
+        # concentrated at high p): y sorted with p ascending.
+        y_val = np.array([0] * 20 + [1] * 20)
+        collapsed, _, diagnostics = _detect_final_fit_collapse(_MildModel(), X_val, y_val)
+        assert collapsed is False
+        assert "val_recalibration_slope" not in diagnostics
+
 
 # ---------------------------------------------------------------------------
 # Guard behavior: fallback on collapse
@@ -210,8 +250,13 @@ class TestDegeneracyGuardFallback:
         rng = np.random.default_rng(3)
         X_train = rng.normal(size=(100, 3))
         y_train = (X_train[:, 0] > 0).astype(int)
-        X_val = rng.normal(size=(80, 3))
-        y_val = (X_val[:, 0] > 0).astype(int)
+        X_val = rng.normal(size=(200, 3))
+        # Labels drawn FROM the stub's own healthy probabilities so the
+        # healthy branch is well-calibrated (true recalibration slope = 1);
+        # deterministic labels would be perfectly separable and blow the
+        # recalibration slope past the crush ceiling.
+        p_val = 1.0 / (1.0 + np.exp(-X_val[:, 0]))
+        y_val = (rng.uniform(size=200) < p_val).astype(int)
 
         study = _make_study(
             [
@@ -244,6 +289,97 @@ class TestDegeneracyGuardFallback:
         cliff_fits = [p for p in fit_log if p.get("C") == CLIFF_C]
         assert len(cliff_fits) == 1
         assert len(fit_log) == 2
+
+    def test_walks_past_crushed_trial_to_calibrated_trial(self, lr_data):
+        """Acceptance-run iteration: the first fallback by value desc is a
+        probability-crushed l2 config (still underconfident -> would fail the
+        deployment slope gate); the guard must keep walking to the genuinely
+        calibrated trial."""
+        study = _make_study(
+            [
+                ({"C": CLIFF_C, "penalty": "l1"}, 0.65),  # intercept-only best
+                ({"C": 0.005, "penalty": "l2"}, 0.63),  # crushed: raw slope ~11.9
+                ({"C": HEALTHY_C, "penalty": "l2"}, 0.62),  # calibrated: slope ~1.27
+            ]
+        )
+        results = _results_from_study(study)
+        meta = _run_guard(study, results, lr_data)
+
+        assert meta is not None
+        assert meta["fallback_adopted"] is True
+        assert meta["adopted_trial"] == 2
+        assert results["best_params"] == {"C": HEALTHY_C, "penalty": "l2"}
+        rejected_trials = [r["trial"] for r in meta["rejected"]]
+        assert rejected_trials == [0, 1]
+        assert "underconfident" in meta["rejected"][1]["reason"]
+
+    def test_adopts_highest_verification_val_auc_not_first_by_hpo_value(self):
+        """Acceptance-run iteration 2 (measured on the real persistence
+        cohort): the HPO blend (0.7*AUC + 0.3*recall) ranks crushed configs
+        FIRST (all-positive predictions collect the recall bonus), so
+        'first non-collapsed by value desc' re-adopts the crush family
+        (v2 run: trial 8 C=0.005 adopted, conformal test slope dev 0.6098,
+        still blocked). Pure verification val AUC ranks them last (measured:
+        crushed 0.6022/0.6037 vs healthy 0.6066). The guard must adopt the
+        non-collapsed trial with the HIGHEST verification val AUC."""
+        rng = np.random.default_rng(11)
+        X_train = rng.normal(size=(100, 2))
+        y_train = (X_train[:, 0] > 0).astype(int)
+        X_val = rng.normal(size=(200, 2))
+        p_true = 1.0 / (1.0 + np.exp(-X_val[:, 0]))
+        y_val = (rng.uniform(size=200) < p_true).astype(int)
+
+        class _RankStub:
+            def __init__(self, **params):
+                self.C = params.get("C")
+
+            def fit(self, X, y):
+                return self
+
+            def predict_proba(self, X):
+                X = np.asarray(X)
+                if self.C == CLIFF_C:  # the cliff: constant probabilities
+                    return np.tile([0.4, 0.6], (len(X), 1))
+                if self.C == 0.5:  # weaker discriminator (noise-diluted)
+                    raw = X[:, 0] + 2.0 * X[:, 1]
+                else:  # C == 1.0: clean discriminator, calibrated
+                    raw = X[:, 0]
+                p = 1.0 / (1.0 + np.exp(-raw))
+                return np.column_stack([1 - p, p])
+
+        study = _make_study(
+            [
+                ({"C": CLIFF_C, "penalty": "l1"}, 0.70),  # collapsed best
+                ({"C": 0.5, "penalty": "l2"}, 0.65),  # non-collapsed, weaker AUC
+                ({"C": HEALTHY_C, "penalty": "l2"}, 0.60),  # non-collapsed, best AUC
+            ]
+        )
+        results = _results_from_study(study)
+        meta = _apply_degeneracy_guard(
+            study=study,
+            results=results,
+            model_class=_RankStub,
+            algorithm_name="LogisticRegression",
+            default_hyperparameters={},
+            fixed_params=dict(LR_FIXED),
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            problem_type="binary_classification",
+        )
+
+        assert meta is not None
+        assert meta["fired"] is True
+        assert meta["fallback_adopted"] is True
+        # NOT trial 1 (higher HPO value) — trial 2 has the higher
+        # verification val AUC.
+        assert meta["adopted_trial"] == 2
+        assert results["best_params"] == {"C": HEALTHY_C, "penalty": "l2"}
+        # Both non-collapsed candidates were considered and recorded.
+        considered = {c["trial"]: c for c in meta["considered"]}
+        assert set(considered) == {1, 2}
+        assert considered[2]["val_auc"] > considered[1]["val_auc"]
 
     def test_keeps_original_best_when_all_trials_degenerate(self, lr_data):
         """Fail-closed: never fabricate — keep the honest best and flag."""

@@ -69,10 +69,24 @@ _LR_FIXED_PARAMS: Dict[str, Any] = {
 # - VAL_AUC_FLOOR 0.52: chance level plus a small noise margin on the
 #   ~500-1500-row validation splits — a model at/below it has no
 #   discrimination despite the >=0.58 promise.
+# - RECALIBRATION_SLOPE_CEILING 2.0: the probability-CRUSH regime of the
+#   same cliff family — over-regularized fits that keep ranking (AUC fine)
+#   but emit probabilities at least 2x too flat (van Calster 2019 logistic
+#   recalibration slope >= 2 == >=2x underconfident). Measured on the #868
+#   persistence cohort: the cliff-adjacent configs produce deploy-time
+#   slope deviations 0.45-0.99 (slope gate caps are <= ~0.3 — no
+#   deployment gate would ever accept them), while EVERY healthy candidate
+#   on the deployed cohorts measures deploy slope dev 0.014-0.27 (raw val
+#   slope ~0.9-1.3). 2.0 leaves >5x margin above the healthy band, so the
+#   guard cannot fire on the deployed initiation/discontinuation/
+#   hcp_adoption final fits. Only the underconfident side (slope >= 2) is
+#   degeneracy; over-confidence (slope < 1) is the overfit gate's
+#   territory and is deliberately NOT treated as collapse here.
 # ---------------------------------------------------------------------------
 DEGENERACY_GUARD_PROMISE_FLOOR: float = 0.58
 DEGENERACY_GUARD_PROB_STD_FLOOR: float = 1e-3
 DEGENERACY_GUARD_VAL_AUC_FLOOR: float = 0.52
+DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING: float = 2.0
 
 
 def _get_opik_connector():
@@ -231,6 +245,13 @@ def _detect_final_fit_collapse(
     - near-constant predicted probabilities (std < 1e-3); subsumes the
       constant/intercept-only classifier, OR
     - chance-level validation AUC (<= 0.52) despite probability spread, OR
+    - probability-crush calibration collapse: ranking intact but the raw
+      validation recalibration slope (van Calster 2019; reuses the
+      evaluator's ``_compute_calibration_slope_intercept``) is >= 2.0 —
+      the fit is at least 2x underconfident, the same L1/L2
+      over-regularization cliff family with non-zero-but-crushed
+      coefficients (skipped fail-safe when the helper returns NaN on
+      unstable class counts), OR
     - single-class hard predictions, ONLY for models without
       ``predict_proba`` (a healthy imbalanced model can legitimately
       predict one class everywhere at the 0.5 cut while still ranking
@@ -266,6 +287,33 @@ def _detect_final_fit_collapse(
                     f"chance-level validation AUC "
                     f"({val_auc:.3f} <= {DEGENERACY_GUARD_VAL_AUC_FLOOR})",
                     diagnostics,
+                )
+            # Probability-crush calibration collapse. Lazy import: this
+            # module is imported by model_trainer_node which evaluator also
+            # sits beside; importing at call time avoids any import-order
+            # coupling. Fail-safe: NaN slope (unstable n_pos/n_neg < 30) or
+            # a crashing helper skips the criterion — never a false fire.
+            try:
+                from src.agents.ml_foundation.model_trainer.nodes.evaluator import (
+                    _compute_calibration_slope_intercept,
+                )
+
+                slope, _intercept = _compute_calibration_slope_intercept(y_arr, p1)
+                if np.isfinite(slope):
+                    diagnostics["val_recalibration_slope"] = float(slope)
+                    if slope >= DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING:
+                        return (
+                            True,
+                            f"probability-crushed fit: >= "
+                            f"{DEGENERACY_GUARD_RECALIBRATION_SLOPE_CEILING:.0f}x "
+                            f"underconfident (val recalibration slope "
+                            f"{slope:.2f})",
+                            diagnostics,
+                        )
+            except Exception as slope_error:  # pragma: no cover - defensive
+                logger.debug(
+                    "Degeneracy guard slope criterion skipped (non-fatal): %s",
+                    slope_error,
                 )
         return (False, "healthy", diagnostics)
 
@@ -306,14 +354,31 @@ def _apply_degeneracy_guard(
     This guard re-fits the best params final-fit-style (same
     ``_filter_hyperparameters`` merge that ``train_model`` consumes),
     checks for collapse on the validation split, and on genuine collapse
-    walks the study's COMPLETE trials by value descending — skipping param
-    sets equal to ones already tried — adopting the first non-degenerate
-    fit by mutating ``results['best_params'/'best_trial_number'/
-    'best_value']`` in place (so the downstream merge, contract output and
-    HPO pattern memory all see the adopted trial). If ALL trials are
-    degenerate the original best is kept and flagged loudly — the
-    downstream deployment gates will block it honestly (fail-closed,
-    never fabricate).
+    walks ALL the study's COMPLETE trials by value descending — skipping
+    param sets equal to ones already tried — and adopts the non-collapsed
+    candidate with the HIGHEST verification-fit validation AUC, by
+    mutating ``results['best_params'/'best_trial_number'/'best_value']``
+    in place (so the downstream merge, contract output and HPO pattern
+    memory all see the adopted trial). If ALL trials are degenerate the
+    original best is kept and flagged loudly — the downstream deployment
+    gates will block it honestly (fail-closed, never fabricate).
+
+    Why max-verification-val-AUC and not "first non-collapsed by HPO
+    value" (measured on the #868 persistence cohort, runs v1/v2): the
+    blended HPO objective (0.7*AUC + 0.3*minority_recall) systematically
+    ranks probability-crushed configs at the TOP of the study — their
+    near-flat all-positive predictions collect the full recall bonus —
+    so the first non-collapsed trial by value order is just the next
+    member of the same crush family (v2: adopted C=0.005/l2, value
+    0.6339, deployed conformal test slope dev 0.6098 → still blocked).
+    Pure validation AUC of the verification fit is the quantity HPO was
+    SUPPOSED to maximize (threshold-free discrimination, no recall
+    bonus), and measured on the same study it ranks the crushed configs
+    last (0.6022/0.6037) and the healthy configs first (0.6066, whose
+    conformal test slope dev is 0.064 — passes the 0.225 deployment
+    cap). Trials whose AUC is unavailable rank lowest; ties break by HPO
+    value then trial number. The extra refits are bounded by the trial
+    count and only happen when the guard has already FIRED.
 
     Conservative by construction: arms only for binary classification
     with a real promise (>= DEGENERACY_GUARD_PROMISE_FLOOR) and available
@@ -397,6 +462,7 @@ def _apply_degeneracy_guard(
         and t.value is not None
         and np.isfinite(t.value)
     ]
+    fallback_candidates: List[Dict[str, Any]] = []
     for trial in sorted(completed, key=lambda t: (-float(t.value), t.number)):
         trial_params = dict(trial.params)
         if any(trial_params == tried for tried in tried_param_sets):
@@ -427,26 +493,58 @@ def _apply_degeneracy_guard(
                 }
             )
             continue
+        fallback_candidates.append(
+            {
+                "trial": trial.number,
+                "value": float(trial.value),
+                "params": trial_params,
+                "diagnostics": cand_diagnostics,
+                "val_auc": cand_diagnostics.get("val_auc"),
+            }
+        )
 
-        # Adopt: mutate the results contract in place so the downstream
-        # merge, hpo_output and pattern memory all see the adopted trial.
-        results["best_params"] = trial_params
-        results["best_trial_number"] = trial.number
-        results["best_value"] = float(trial.value)
+    if fallback_candidates:
+        # Adopt the non-collapsed candidate with the highest verification
+        # val AUC (see docstring: the HPO value order is poisoned by the
+        # recall bonus, which is what promoted the crush family in the
+        # first place). AUC-less candidates rank lowest; ties break by HPO
+        # value then earlier trial — which degrades exactly to the
+        # first-non-collapsed-by-value behavior when no AUC is available.
+        adopted = max(
+            fallback_candidates,
+            key=lambda c: (
+                c["val_auc"] if c["val_auc"] is not None else float("-inf"),
+                c["value"],
+                -c["trial"],
+            ),
+        )
+        # Mutate the results contract in place so the downstream merge,
+        # hpo_output and pattern memory all see the adopted trial.
+        results["best_params"] = adopted["params"]
+        results["best_trial_number"] = adopted["trial"]
+        results["best_value"] = adopted["value"]
         guard_meta["fallback_adopted"] = True
-        guard_meta["adopted_trial"] = trial.number
-        guard_meta["adopted_value"] = float(trial.value)
-        guard_meta["adopted_params"] = trial_params
-        guard_meta["adopted_diagnostics"] = cand_diagnostics
+        guard_meta["adopted_trial"] = adopted["trial"]
+        guard_meta["adopted_value"] = adopted["value"]
+        guard_meta["adopted_params"] = adopted["params"]
+        guard_meta["adopted_diagnostics"] = adopted["diagnostics"]
+        guard_meta["considered"] = [
+            {"trial": c["trial"], "value": c["value"], "val_auc": c["val_auc"]}
+            for c in fallback_candidates
+        ]
         guard_meta["rejected"] = rejected
         logger.warning(
             "Issue #868 degeneracy guard ADOPTED fallback for %s: trial %s "
-            "(params=%s, value=%.4f, diagnostics=%s). Rejected as degenerate: %s.",
+            "(params=%s, value=%.4f, diagnostics=%s) — highest verification "
+            "val AUC among %d non-collapsed candidates %s. Rejected as "
+            "degenerate: %s.",
             algorithm_name,
-            trial.number,
-            trial_params,
-            float(trial.value),
-            cand_diagnostics,
+            adopted["trial"],
+            adopted["params"],
+            adopted["value"],
+            adopted["diagnostics"],
+            len(fallback_candidates),
+            [(c["trial"], c["val_auc"]) for c in fallback_candidates],
             [(r["trial"], r["reason"]) for r in rejected],
         )
         return guard_meta
