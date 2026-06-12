@@ -1,0 +1,180 @@
+/**
+ * CausalValueChains Tests
+ * =======================
+ *
+ * Verified finding (fix/fe-home-fake-data task 2): SAMPLE_CHAINS fabricated
+ * three causal chains ("+12% TRx Accuracy", confidence 0.92, "DoWhy",
+ * "2 min ago") and the component returned them on BOTH an empty-but-successful
+ * response AND a mutation error (useMutation error leaves `data` undefined),
+ * rendered unlabeled under "Primary Causal Value Chains - Live Tracking".
+ *
+ * The only allowed states are: real data, honest empty, labeled error.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { CausalValueChains } from './CausalValueChains';
+import type { GraphPath } from '@/types/graph';
+
+vi.mock('@/hooks/api/use-graph', () => ({
+  useCausalChains: vi.fn(),
+}));
+
+import { useCausalChains } from '@/hooks/api/use-graph';
+
+const mockUseCausalChains = useCausalChains as ReturnType<typeof vi.fn>;
+
+function mockChainsState(state: {
+  data?: unknown;
+  isPending?: boolean;
+  isError?: boolean;
+}) {
+  mockUseCausalChains.mockReturnValue({
+    mutate: vi.fn(),
+    data: state.data,
+    isPending: state.isPending ?? false,
+    isError: state.isError ?? false,
+  });
+}
+
+/** A minimal real GraphPath as returned by POST /graph/causal-chains. */
+function realPath(): GraphPath {
+  return {
+    nodes: [
+      { id: 'n1', type: 'HCP' as never, name: 'Call Frequency', properties: {} },
+      { id: 'n2', type: 'KPI' as never, name: 'Rx Propensity', properties: {} },
+      { id: 'n3', type: 'KPI' as never, name: 'TRx', properties: { value: 6.4 } },
+    ],
+    relationships: [
+      {
+        id: 'r1',
+        type: 'INFLUENCES' as never,
+        source_id: 'n1',
+        target_id: 'n2',
+        properties: { method: 'EconML' },
+      },
+      {
+        id: 'r2',
+        type: 'INFLUENCES' as never,
+        source_id: 'n2',
+        target_id: 'n3',
+        properties: {},
+      },
+    ],
+    total_confidence: 0.91,
+    path_length: 3,
+  };
+}
+
+const FABRICATED_MARKERS = [
+  '+12% TRx Accuracy',
+  '+8.5% Conversion',
+  '-4.2pp Gap',
+  'Data Quality Impact',
+  'HCP Engagement Path',
+  'Coverage Equity Chain',
+];
+
+describe('CausalValueChains', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders an honest empty state (NOT SAMPLE_CHAINS) when the API succeeds with zero chains', () => {
+    mockChainsState({
+      data: { chains: [], total_chains: 0, timestamp: new Date().toISOString() },
+    });
+
+    render(<CausalValueChains />);
+
+    // The fabricated chains must NOT render on an empty-but-successful response.
+    for (const marker of FABRICATED_MARKERS) {
+      expect(screen.queryByText(marker)).not.toBeInTheDocument();
+    }
+    // Honest empty state (repo F-002 convention: EmptyState component).
+    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
+    expect(screen.getByText('No causal chains discovered')).toBeInTheDocument();
+  });
+
+  it('renders a labeled degraded state (NOT SAMPLE_CHAINS) when the mutation errors', () => {
+    // useMutation error: data stays undefined, isError true.
+    mockChainsState({ data: undefined, isError: true });
+
+    render(<CausalValueChains />);
+
+    for (const marker of FABRICATED_MARKERS) {
+      expect(screen.queryByText(marker)).not.toBeInTheDocument();
+    }
+    // Clearly labeled degraded state, never unlabeled fakes.
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText(/causal chains unavailable/i)).toBeInTheDocument();
+  });
+
+  it('renders REAL chains from the API response', () => {
+    mockChainsState({
+      data: {
+        chains: [realPath()],
+        total_chains: 1,
+        aggregate_effect: 0.064,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    render(<CausalValueChains />);
+
+    // Real chain card content.
+    expect(screen.getByText('Call Frequency → TRx')).toBeInTheDocument();
+    expect(screen.getByText('91% confidence')).toBeInTheDocument();
+    expect(screen.getByText('EconML')).toBeInTheDocument();
+    expect(screen.getByText('+6.4% Impact')).toBeInTheDocument();
+    expect(screen.getByText('1 chains discovered')).toBeInTheDocument();
+    // No fabricated content alongside real data.
+    for (const marker of FABRICATED_MARKERS) {
+      expect(screen.queryByText(marker)).not.toBeInTheDocument();
+    }
+  });
+
+  it('does NOT fabricate confidence/method when the API omits them (real path honesty)', () => {
+    const path = realPath();
+    delete (path as Partial<GraphPath>).total_confidence;
+    path.relationships[0].properties = {};
+    path.nodes[2].properties = {};
+
+    mockChainsState({
+      data: { chains: [path], total_chains: 1, timestamp: new Date().toISOString() },
+    });
+
+    render(<CausalValueChains />);
+
+    // The old code fabricated `?? 0.8` confidence and `?? 'DoWhy'` method.
+    expect(screen.queryByText('80% confidence')).not.toBeInTheDocument();
+    expect(screen.queryByText('DoWhy')).not.toBeInTheDocument();
+    expect(screen.getByText(/confidence unavailable/i)).toBeInTheDocument();
+    // The old code rendered a literal "+X% Impact" placeholder.
+    expect(screen.queryByText('+X% Impact')).not.toBeInTheDocument();
+    expect(screen.getByText(/impact not quantified/i)).toBeInTheDocument();
+  });
+
+  it('shows the loading skeleton while the mutation is pending', () => {
+    mockChainsState({ isPending: true });
+
+    const { container } = render(<CausalValueChains />);
+
+    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+    for (const marker of FABRICATED_MARKERS) {
+      expect(screen.queryByText(marker)).not.toBeInTheDocument();
+    }
+  });
+
+  it('shows the loading skeleton on first mount before the mutation settles (no SAMPLE flash)', () => {
+    // Initial mount: mutate() fired in useEffect but state not yet pending.
+    mockChainsState({ data: undefined, isPending: false, isError: false });
+
+    const { container } = render(<CausalValueChains />);
+
+    for (const marker of FABRICATED_MARKERS) {
+      expect(screen.queryByText(marker)).not.toBeInTheDocument();
+    }
+    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+  });
+});
