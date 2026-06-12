@@ -19,7 +19,11 @@ The tracked `docker/nginx/host-nginx.conf` now:
    `/storage/` -> Kong `54321`) that were previously live-only drift,
 3. strips the container's own security headers via `proxy_hide_header` so the
    host-level CSP/security headers stay authoritative (duplicate CSP headers
-   are enforced as their intersection by browsers and would break the app).
+   are enforced as their intersection by browsers and would break the app),
+4. returns an explicit 404 for `/mockServiceWorker.js` so browsers that
+   registered the stale pre-flip mock service worker unregister it on their
+   next update check (the SPA fallback would otherwise answer with 200/HTML
+   and keep the registration alive forever).
 
 ## Pre-flight checks
 
