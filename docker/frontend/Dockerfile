@@ -70,17 +70,35 @@ FROM base AS builder
 
 # Install all dependencies including dev (typescript, vite, etc. live in
 # devDependencies and are needed by `npm run build` -> `tsc -b && vite build`).
-# NOTE: we deliberately do NOT set NODE_ENV=production here — npm 7+ honors
-# NODE_ENV=production by skipping devDependencies even when --include=dev is
-# absent, so combining the two would silently break tsc availability.
+# NOTE: we deliberately do NOT set ENV NODE_ENV=production for this stage — npm
+# 7+ honors NODE_ENV=production by skipping devDependencies even when
+# --include=dev is absent, so combining the two would silently break tsc
+# availability. Instead NODE_ENV=production is scoped to the build RUN below.
 RUN npm ci --include=dev && \
     npm cache clean --force
 
 # Copy application source
 COPY frontend/ .
 
-# Build the application (tsc emits to dist/, vite bundles)
-RUN npm run build
+# Build the application (tsc emits to dist/, vite bundles).
+# NODE_ENV=production is REQUIRED here: the base stage exports
+# NODE_ENV=development (for the development stage), and `vite build` under
+# NODE_ENV=development emits a DEV-FLAVORED bundle (import.meta.env.DEV=true),
+# which ships+invokes the MSW mock chunk and enables API-payload console
+# logging in the production image. Scoping the override to this RUN keeps
+# npm ci above unaffected.
+RUN NODE_ENV=production npm run build
+
+# Guard: fail the image build if the bundle is dev-flavored. A production
+# bundle must not contain the MSW service worker, any MSW bootstrap code, or
+# a baked dev Supabase URL.
+RUN test ! -f dist/mockServiceWorker.js && \
+    if grep -rqE "initMSW|setupWorker" dist/assets; then \
+        echo "ERROR: dev-flavored bundle - MSW code present in dist/assets" && exit 1; \
+    fi && \
+    if grep -rq "localhost:8443" dist/assets; then \
+        echo "ERROR: dev Supabase URL (localhost:8443) baked into bundle" && exit 1; \
+    fi
 
 # -----------------------------------------------------------------------------
 # Stage 4: Production
