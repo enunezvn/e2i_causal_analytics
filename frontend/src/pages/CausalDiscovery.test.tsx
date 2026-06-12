@@ -26,17 +26,35 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
     showDetails,
     showEffectsTable,
     showRefutationTests,
+    nodes,
+    edges,
+    effects,
+    refutationResults,
   }: {
     showControls?: boolean;
     showDetails?: boolean;
     showEffectsTable?: boolean;
     showRefutationTests?: boolean;
+    nodes?: Array<{ id: string; label: string }>;
+    edges?: Array<{ id: string }>;
+    effects?: Array<{ id: string; estimate: number; treatment: string }>;
+    refutationResults?: Array<{ id: string }>;
   }) => (
     <div data-testid="causal-discovery-viz">
       <div data-testid="show-controls">{String(showControls)}</div>
       <div data-testid="show-details">{String(showDetails)}</div>
       <div data-testid="show-effects-table">{String(showEffectsTable)}</div>
       <div data-testid="show-refutation-tests">{String(showRefutationTests)}</div>
+      <div data-testid="viz-nodes-count">{String(nodes?.length ?? '__undefined__')}</div>
+      <div data-testid="viz-edges-count">{String(edges?.length ?? '__undefined__')}</div>
+      <div data-testid="viz-effects-count">{String(effects?.length ?? '__undefined__')}</div>
+      <div data-testid="viz-refutations-count">
+        {String(refutationResults?.length ?? '__undefined__')}
+      </div>
+      <div data-testid="viz-effect-estimates">
+        {(effects ?? []).map((e) => `${e.treatment}:${e.estimate}`).join('|')}
+      </div>
+      <div data-testid="viz-node-labels">{(nodes ?? []).map((n) => n.label).join('|')}</div>
     </div>
   ),
 }));
@@ -190,6 +208,76 @@ describe('CausalDiscovery Page', () => {
       renderWithAllProviders(<CausalDiscovery />);
 
       expect(screen.getByTestId('causal-discovery-viz')).toBeInTheDocument();
+    });
+  });
+
+  // =========================================================================
+  // REAL-DATA THREADING TESTS (fix: hardcoded bottom-of-page analysis)
+  // =========================================================================
+  // The viz formerly received NO data props and fell back to fabricated
+  // SAMPLE_ analysis (ATE 0.45, all-passing refutations). The page must
+  // thread the real run's outputs down — empty until a run completes.
+
+  describe('Visualization receives real run data (no SAMPLE_ fallback)', () => {
+    it('passes EMPTY data arrays (not undefined) before any run, so the viz cannot fall back', () => {
+      renderWithAllProviders(<CausalDiscovery />);
+
+      expect(screen.getByTestId('viz-nodes-count')).toHaveTextContent(/^0$/);
+      expect(screen.getByTestId('viz-edges-count')).toHaveTextContent(/^0$/);
+      expect(screen.getByTestId('viz-effects-count')).toHaveTextContent(/^0$/);
+      expect(screen.getByTestId('viz-refutations-count')).toHaveTextContent(/^0$/);
+    });
+
+    it('threads parallel-pipeline results into the viz effects table', () => {
+      pipelineState.data = {
+        pipeline_id: 'pp_1',
+        status: 'completed',
+        libraries_succeeded: ['dowhy', 'econml'],
+        libraries_failed: [],
+        library_results: {
+          dowhy: { effect_estimate: 0.123, ci_lower: 0.05, ci_upper: 0.2 },
+          econml: { effect_estimate: 0.117, ci_lower: 0.04, ci_upper: 0.19 },
+        },
+        consensus_effect: 0.12,
+        consensus_ci_lower: 0.045,
+        consensus_ci_upper: 0.195,
+        consensus_method: 'variance_weighted',
+        total_latency_ms: 900,
+        created_at: '2026-06-12T00:00:00Z',
+        warnings: [],
+      };
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const estimates = screen.getByTestId('viz-effect-estimates').textContent ?? '';
+      expect(estimates).toContain('0.123');
+      expect(estimates).toContain('0.117');
+      // The fabricated SAMPLE effect must never appear.
+      expect(estimates).not.toContain('0.45');
+    });
+
+    it('threads discovered KG chains into the viz DAG nodes', () => {
+      chainsState.data = {
+        chains: [
+          {
+            nodes: [
+              { id: 'n1', name: 'Rep Visits', type: 'Action' },
+              { id: 'n2', name: 'TRx Count', type: 'KPI' },
+            ],
+            relationships: [{ source_id: 'n1', target_id: 'n2', confidence: 0.8 }],
+            path_length: 1,
+            total_confidence: 0.8,
+          },
+        ],
+        total_chains: 1,
+        query_latency_ms: 40,
+      };
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      expect(screen.getByTestId('viz-nodes-count')).toHaveTextContent(/^2$/);
+      expect(screen.getByTestId('viz-edges-count')).toHaveTextContent(/^1$/);
+      expect(screen.getByTestId('viz-node-labels')).toHaveTextContent('Rep Visits|TRx Count');
     });
   });
 

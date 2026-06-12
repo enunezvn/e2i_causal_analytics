@@ -3,15 +3,14 @@
  * =========================
  *
  * Main causal discovery visualization component that integrates the CausalDAG
- * component with controls and sample data for demonstration.
+ * component with controls. Renders ONLY caller-provided data.
  *
  * This component provides:
  * - Causal DAG visualization using D3.js
  * - Effect estimates table with confidence intervals
- * - Sample/demo data for initial rendering
  * - Controls for zoom, fit, and export
  * - Node selection and details panel integration points
- * - Loading and empty states
+ * - Loading, error, and honest empty states (no sample-data fallbacks)
  *
  * @module components/visualizations/CausalDiscovery
  */
@@ -22,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { CausalDAG, type CausalDAGRef, type CausalNode, type CausalEdge } from './causal/CausalDAG';
 import { EffectsTable, type CausalEffect } from './causal/EffectsTable';
 import { RefutationTests, type RefutationResult } from './causal/RefutationTests';
@@ -32,13 +32,13 @@ import { ZoomIn, ZoomOut, Maximize2, Download, RotateCcw } from 'lucide-react';
 // =============================================================================
 
 export interface CausalDiscoveryProps {
-  /** Causal graph nodes (uses sample data if not provided) */
+  /** Causal graph nodes (renders an empty state if not provided) */
   nodes?: CausalNode[];
-  /** Causal graph edges (uses sample data if not provided) */
+  /** Causal graph edges (renders an empty state if not provided) */
   edges?: CausalEdge[];
-  /** Causal effect estimates (uses sample data if not provided) */
+  /** Causal effect estimates (renders an empty state if not provided) */
   effects?: CausalEffect[];
-  /** Refutation test results (uses sample data if not provided) */
+  /** Refutation test results (renders an empty state if not provided) */
   refutationResults?: RefutationResult[];
   /** Whether data is loading */
   isLoading?: boolean;
@@ -64,162 +64,11 @@ export interface CausalDiscoveryProps {
   onEffectSelect?: (effect: CausalEffect | null) => void;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-/**
- * Sample causal DAG nodes for demonstration
- */
-const SAMPLE_NODES: CausalNode[] = [
-  { id: 'treatment', label: 'Treatment', type: 'treatment' },
-  { id: 'outcome', label: 'Health Outcome', type: 'outcome' },
-  { id: 'age', label: 'Patient Age', type: 'confounder' },
-  { id: 'severity', label: 'Disease Severity', type: 'confounder' },
-  { id: 'adherence', label: 'Treatment Adherence', type: 'mediator' },
-  { id: 'biomarker', label: 'Biomarker Level', type: 'mediator' },
-  { id: 'genetics', label: 'Genetic Factors', type: 'instrument' },
-];
-
-/**
- * Sample causal DAG edges for demonstration
- */
-const SAMPLE_EDGES: CausalEdge[] = [
-  { id: 'e1', source: 'treatment', target: 'adherence', type: 'causal', effect: 0.7 },
-  { id: 'e2', source: 'adherence', target: 'outcome', type: 'causal', effect: 0.5 },
-  { id: 'e3', source: 'treatment', target: 'biomarker', type: 'causal', effect: 0.6 },
-  { id: 'e4', source: 'biomarker', target: 'outcome', type: 'causal', effect: 0.4 },
-  { id: 'e5', source: 'age', target: 'treatment', type: 'confounding', confidence: 0.8 },
-  { id: 'e6', source: 'age', target: 'outcome', type: 'confounding', confidence: 0.7 },
-  { id: 'e7', source: 'severity', target: 'treatment', type: 'confounding', confidence: 0.9 },
-  { id: 'e8', source: 'severity', target: 'outcome', type: 'confounding', confidence: 0.85 },
-  { id: 'e9', source: 'genetics', target: 'treatment', type: 'instrumental', confidence: 0.6 },
-];
-
-/**
- * Sample causal effect estimates for demonstration
- */
-const SAMPLE_EFFECTS: CausalEffect[] = [
-  {
-    id: 'effect-1',
-    treatment: 'Treatment',
-    outcome: 'Health Outcome',
-    estimate: 0.45,
-    standardError: 0.12,
-    ciLower: 0.21,
-    ciUpper: 0.69,
-    confidenceLevel: 0.95,
-    pValue: 0.002,
-    isSignificant: true,
-  },
-  {
-    id: 'effect-2',
-    treatment: 'Treatment Adherence',
-    outcome: 'Health Outcome',
-    estimate: 0.32,
-    standardError: 0.08,
-    ciLower: 0.16,
-    ciUpper: 0.48,
-    confidenceLevel: 0.95,
-    pValue: 0.008,
-    isSignificant: true,
-  },
-  {
-    id: 'effect-3',
-    treatment: 'Biomarker Level',
-    outcome: 'Health Outcome',
-    estimate: 0.18,
-    standardError: 0.09,
-    ciLower: 0.00,
-    ciUpper: 0.36,
-    confidenceLevel: 0.95,
-    pValue: 0.051,
-    isSignificant: false,
-  },
-  {
-    id: 'effect-4',
-    treatment: 'Patient Age',
-    outcome: 'Health Outcome',
-    estimate: -0.25,
-    standardError: 0.11,
-    ciLower: -0.47,
-    ciUpper: -0.03,
-    confidenceLevel: 0.95,
-    pValue: 0.026,
-    isSignificant: true,
-  },
-  {
-    id: 'effect-5',
-    treatment: 'Disease Severity',
-    outcome: 'Health Outcome',
-    estimate: -0.52,
-    standardError: 0.14,
-    ciLower: -0.79,
-    ciUpper: -0.25,
-    confidenceLevel: 0.95,
-    pValue: 0.001,
-    isSignificant: true,
-  },
-  {
-    id: 'effect-6',
-    treatment: 'Genetic Factors',
-    outcome: 'Treatment Response',
-    estimate: 0.12,
-    standardError: 0.15,
-    ciLower: -0.17,
-    ciUpper: 0.41,
-    confidenceLevel: 0.95,
-    pValue: 0.42,
-    isSignificant: false,
-  },
-];
-
-/**
- * Sample refutation test results for demonstration
- */
-const SAMPLE_REFUTATION_RESULTS: RefutationResult[] = [
-  {
-    id: 'refute-1',
-    method: 'random_common_cause',
-    originalEstimate: 0.45,
-    refutedEstimate: 0.43,
-    pValue: 0.72,
-    passed: true,
-  },
-  {
-    id: 'refute-2',
-    method: 'placebo_treatment',
-    originalEstimate: 0.45,
-    refutedEstimate: 0.02,
-    pValue: 0.89,
-    passed: true,
-  },
-  {
-    id: 'refute-3',
-    method: 'data_subset',
-    originalEstimate: 0.45,
-    refutedEstimate: 0.42,
-    pValue: 0.65,
-    passed: true,
-  },
-  {
-    id: 'refute-4',
-    method: 'bootstrap',
-    originalEstimate: 0.45,
-    refutedEstimate: 0.44,
-    pValue: 0.78,
-    passed: true,
-  },
-  {
-    id: 'refute-5',
-    method: 'add_unobserved_common_cause',
-    originalEstimate: 0.45,
-    refutedEstimate: 0.28,
-    pValue: 0.03,
-    passed: false,
-    description: 'Estimate sensitive to unmeasured confounding with effect 0.5',
-  },
-];
+// NOTE: SAMPLE_NODES / SAMPLE_EDGES / SAMPLE_EFFECTS /
+// SAMPLE_REFUTATION_RESULTS (a fabricated ATE-0.45 analysis with an
+// all-passing refutation suite) were DELETED. Data comes ONLY from props;
+// omitted props render honest empty states so no call site can resurrect
+// the fake analysis.
 
 // =============================================================================
 // NODE TYPE COLORS
@@ -286,12 +135,12 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
     const [selectedEffect, setSelectedEffect] = useState<CausalEffect | null>(null);
     const [currentZoom, setCurrentZoom] = useState(1);
 
-    // Use provided data or fall back to sample data
-    const nodes = useMemo(() => propNodes ?? SAMPLE_NODES, [propNodes]);
-    const edges = useMemo(() => propEdges ?? SAMPLE_EDGES, [propEdges]);
-    const effects = useMemo(() => propEffects ?? SAMPLE_EFFECTS, [propEffects]);
+    // Data comes ONLY from props — empty by default, never sample fallbacks.
+    const nodes = useMemo(() => propNodes ?? [], [propNodes]);
+    const edges = useMemo(() => propEdges ?? [], [propEdges]);
+    const effects = useMemo(() => propEffects ?? [], [propEffects]);
     const refutationResults = useMemo(
-      () => propRefutationResults ?? SAMPLE_REFUTATION_RESULTS,
+      () => propRefutationResults ?? [],
       [propRefutationResults]
     );
 
@@ -479,18 +328,26 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
         )}
 
         <div className="flex gap-4">
-          {/* DAG Visualization */}
+          {/* DAG Visualization — honest empty state until real data arrives */}
           <div className="flex-1 min-w-0">
-            <CausalDAG
-              ref={dagRef}
-              nodes={nodes}
-              edges={edges}
-              showLoading={isLoading}
-              minHeight={500}
-              onNodeClick={handleNodeClick}
-              onEdgeClick={handleEdgeClick}
-              onBackgroundClick={handleBackgroundClick}
-            />
+            {nodes.length === 0 && !isLoading ? (
+              <EmptyState
+                title="No causal graph to display"
+                description="Run a causal analysis (routing, pipeline, or KG chain discovery) to populate the DAG. This panel never renders sample data."
+                className="min-h-[500px]"
+              />
+            ) : (
+              <CausalDAG
+                ref={dagRef}
+                nodes={nodes}
+                edges={edges}
+                showLoading={isLoading}
+                minHeight={500}
+                onNodeClick={handleNodeClick}
+                onEdgeClick={handleEdgeClick}
+                onBackgroundClick={handleBackgroundClick}
+              />
+            )}
           </div>
 
           {/* Details Panel */}

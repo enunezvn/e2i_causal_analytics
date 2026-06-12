@@ -17,10 +17,12 @@
  * @module pages/CausalDiscovery
  */
 
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { Brain, FlaskConical, GitBranch, Shield, Loader2 } from 'lucide-react';
 
 import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
+import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
+import type { CausalEffect } from '@/components/visualizations/causal/EffectsTable';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -187,6 +189,96 @@ function CausalDiscovery() {
       : null;
 
   const chains = chainsData?.chains ?? [];
+
+  // Backend reports a human-readable caveat when the DoWhy refutation /
+  // sensitivity suite did NOT run for this estimate. (Field exists on the
+  // wire schema; the local ParallelPipelineResponse type predates it.)
+  const robustnessWarning = (
+    pipelineData as { robustness_warning?: string | null } | undefined
+  )?.robustness_warning;
+
+  // ---------------------------------------------------------------------
+  // Real-data threading into the DAG visualization (fix: the viz formerly
+  // received NO data props and fell back to a fabricated SAMPLE_ analysis).
+  // ---------------------------------------------------------------------
+
+  /** DAG nodes/edges derived from the real KG chain-discovery results. */
+  const { vizNodes, vizEdges } = useMemo((): {
+    vizNodes: CausalNode[];
+    vizEdges: CausalEdge[];
+  } => {
+    const nodes: CausalNode[] = [];
+    const edges: CausalEdge[] = [];
+    const seenNodes = new Set<string>();
+    const seenEdges = new Set<string>();
+
+    for (const chain of chains) {
+      for (const node of chain.nodes) {
+        const id = node.id ?? node.name;
+        if (!id || seenNodes.has(id)) continue;
+        seenNodes.add(id);
+        nodes.push({ id, label: node.name ?? id, type: 'variable' });
+      }
+      for (const rel of chain.relationships ?? []) {
+        const edgeId = `${rel.source_id}->${rel.target_id}`;
+        if (seenEdges.has(edgeId)) continue;
+        seenEdges.add(edgeId);
+        edges.push({
+          id: edgeId,
+          source: rel.source_id,
+          target: rel.target_id,
+          type: 'causal',
+          confidence: rel.confidence,
+        });
+      }
+    }
+    return { vizNodes: nodes, vizEdges: edges };
+  }, [chains]);
+
+  /**
+   * Effect estimates derived from the real parallel-pipeline run:
+   * one row per library result plus the consensus row. Fields the API does
+   * not return (e.g. p-values) are simply omitted — never invented.
+   */
+  const vizEffects = useMemo((): CausalEffect[] => {
+    if (!pipelineData) return [];
+    const effects: CausalEffect[] = [];
+
+    for (const [library, raw] of Object.entries(
+      pipelineData.library_results ?? {}
+    )) {
+      const result = raw as {
+        effect_estimate?: number;
+        ci_lower?: number;
+        ci_upper?: number;
+      };
+      if (typeof result?.effect_estimate !== 'number') continue;
+      effects.push({
+        id: `lib-${library}`,
+        treatment: treatmentVar,
+        outcome: outcomeVar,
+        estimate: result.effect_estimate,
+        ciLower: result.ci_lower ?? result.effect_estimate,
+        ciUpper: result.ci_upper ?? result.effect_estimate,
+        confidenceLevel: 0.95,
+        metadata: { library },
+      });
+    }
+
+    if (typeof pipelineData.consensus_effect === 'number') {
+      effects.push({
+        id: 'consensus',
+        treatment: treatmentVar,
+        outcome: outcomeVar,
+        estimate: pipelineData.consensus_effect,
+        ciLower: pipelineData.consensus_ci_lower ?? pipelineData.consensus_effect,
+        ciUpper: pipelineData.consensus_ci_upper ?? pipelineData.consensus_effect,
+        confidenceLevel: 0.95,
+        metadata: { library: 'consensus' },
+      });
+    }
+    return effects;
+  }, [pipelineData, treatmentVar, outcomeVar]);
 
   return (
     <div className="container mx-auto px-4 py-8 space-y-6">
@@ -584,13 +676,28 @@ function CausalDiscovery() {
       )}
 
       {/* ===================================================================
-          DAG VISUALIZATION
+          DAG VISUALIZATION — fed exclusively by the real runs above.
+          Nodes/edges come from KG chain discovery; effect rows from the
+          parallel pipeline. Refutation details are not returned by the
+          pipeline endpoint, so that table stays honestly empty (the
+          robustness caveat, when reported, is surfaced as a warning).
           =================================================================== */}
+      {robustnessWarning && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-muted-foreground">
+          <span className="font-medium text-amber-600">Robustness caveat:</span>{' '}
+          {robustnessWarning}
+        </div>
+      )}
       <CausalDiscoveryViz
         showControls
         showDetails
         showEffectsTable
         showRefutationTests
+        nodes={vizNodes}
+        edges={vizEdges}
+        effects={vizEffects}
+        refutationResults={[]}
+        isLoading={isRunningPipeline || isDiscoveringChains}
       />
     </div>
   );
