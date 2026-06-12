@@ -368,14 +368,29 @@ def _fit_categorical_onehot(X: "pd.DataFrame", cat_cols: list) -> "tuple[pd.Data
     Returns ``(X_encoded, info)``; ``info`` carries the fitted encoder + the
     produced column names so SHAP / validation re-apply reproduce the EXACT
     trained feature space via :func:`_apply_categorical_onehot`.
+
+    Issue #773 (W2 residue beyond PR #913): ``get_feature_names_out`` embeds
+    raw category VALUES in the names, so nominal values like ``"<50"`` /
+    ``">65"`` (SampleDataGenerator ``age_group``) produce column names XGBoost
+    hard-rejects at fit time (``feature_names must not contain [, ] or <``) —
+    killing every Step-5b XGBoost alternative. PR #913 sanitized the
+    data_preparer's one-hot site; THIS harness-level encoder is a second,
+    independent name source and must sanitize identically (the shared
+    ``sanitize_feature_names`` docstring requires all re-derivation paths to
+    reuse it). ``_apply_categorical_onehot`` replays the stored
+    ``onehot_columns`` so sanitizing here keeps fit/re-apply consistent.
     """
     if not cat_cols:
         return X, {"encoder": None, "columns": [], "onehot_columns": [], "method": "onehot"}
     from sklearn.preprocessing import OneHotEncoder
 
+    from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+        sanitize_feature_names,
+    )
+
     ohe = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
     arr = ohe.fit_transform(X[cat_cols].fillna("__missing__").astype(str))
-    out_cols = list(ohe.get_feature_names_out(cat_cols))
+    out_cols = sanitize_feature_names(ohe.get_feature_names_out(cat_cols))
     X_out = X.drop(columns=list(cat_cols)).copy()
     X_out[out_cols] = arr
     return X_out, {
