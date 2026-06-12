@@ -664,3 +664,456 @@ def test_heterogeneous_resolver_parameter_channel_parity(monkeypatch) -> None:
     )
     assert isinstance(resolved, dict)
     assert seen.get("include_synthetic") is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #883 §3: the last 3 dead-via-chat ``uses_kwargs`` agents gain resolvers
+# (explainer / health_score / feedback_learner). RED on the pre-#883 base:
+#   explainer:        "ExplainerAgent.explain() got an unexpected keyword
+#                      argument 'user_context'"
+#   health_score:     "HealthScoreAgent.check_health() got an unexpected
+#                      keyword argument 'user_context'"
+#   feedback_learner: "FeedbackLearnerAgent.learn() got an unexpected keyword
+#                      argument 'query'"
+# ---------------------------------------------------------------------------
+
+
+def test_registry_contains_the_883_agents() -> None:
+    for name in ("explainer", "health_score", "feedback_learner"):
+        assert name in disp.INPUT_RESOLVERS, f"{name} missing from INPUT_RESOLVERS"
+
+
+def test_883_agents_fail_closed_on_failed_status() -> None:
+    """All three report ``status='failed'`` ONLY on internal failure (explainer
+    graph error / health_score exception path with placeholder 0.0-F values /
+    feedback_learner node error — a zero-feedback window completes honestly),
+    so a failed run must never be laundered into dispatch success."""
+    for name in ("explainer", "health_score", "feedback_learner"):
+        assert name in disp._FAIL_CLOSED_ON_FAILED_STATUS, name
+
+
+def test_coerce_provenance_flag_is_the_shared_ssot() -> None:
+    """#883 §4: the dispatcher's strict parser IS the shared repository helper
+    (one contract; non-orchestrator boundaries import the same function)."""
+    from src.repositories.provenance import coerce_provenance_flag
+
+    assert disp._coerce_provenance_flag is coerce_provenance_flag
+
+
+def test_prepare_agent_input_threads_agent_results() -> None:
+    """The generic payload carries the state's upstream agent results so the
+    explainer resolver can bind REAL analysis_results (#883 §3)."""
+    node = DispatcherNode()
+    upstream = [
+        {"agent_name": "causal_impact", "success": True, "result": {"ate": 0.1}, "error": None}
+    ]
+    prepared = node._prepare_agent_input(
+        {"query": "q", "agent_results": upstream},  # type: ignore[arg-type]
+        _dispatch("explainer"),
+    )
+    assert prepared["agent_results"] == upstream
+
+
+# --------------------------- explainer (#883 §3) ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_explainer_bare_chat_fails_closed_clearly() -> None:
+    """Bare 'explain' chat with NO upstream results: a clear, structured
+    fail-closed error — never the raw generic-payload TypeError."""
+    from src.agents.explainer import ExplainerAgent
+
+    agent = ExplainerAgent(use_llm=False)
+    node = DispatcherNode(agent_registry={"explainer": agent})
+    out = await node.execute(_state("explainer", "explain the analysis"))
+
+    res = out["agent_results"][0]
+    assert res["success"] is False
+    err = res["error"] or ""
+    assert "analysis_results" in err
+    assert "fabricat" in err.lower()
+    assert "unexpected keyword argument" not in err, f"raw TypeError leak: {err}"
+
+
+def test_explainer_resolver_binds_successful_upstream_results() -> None:
+    """The resolver binds analysis_results from the REAL upstream AgentResults
+    threaded through the payload: successes bound (with real agent attribution),
+    failures and the explainer's own prior output excluded."""
+    agent_input = {
+        "query": "explain it",
+        "session_id": "s1",
+        "user_context": {},
+        "parsed_query": {"entities": []},
+        "agent_results": [
+            {
+                "agent_name": "causal_impact",
+                "success": True,
+                "result": {"ate": 0.12, "status": "completed"},
+                "error": None,
+            },
+            {"agent_name": "gap_analyzer", "success": False, "result": None, "error": "boom"},
+            {
+                "agent_name": "explainer",
+                "success": True,
+                "result": {"executive_summary": "old explanation"},
+                "error": None,
+            },
+        ],
+    }
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch("explainer"))
+    assert isinstance(resolved, dict)
+    assert resolved["analysis_results"] == [
+        {"ate": 0.12, "status": "completed", "agent_name": "causal_impact"}
+    ]
+    assert resolved["query"] == "explain it"
+    assert resolved["session_id"] == "s1"
+    for leaked in ("user_context", "parsed_query", "span_id", "dispatch_id", "execution_mode"):
+        assert leaked not in resolved, f"{leaked} would leak into explain()"
+
+
+def test_explainer_resolver_explicit_params_win() -> None:
+    explicit = [{"finding": "real analyst-supplied result"}]
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        {"query": "explain", "session_id": "s1", "agent_results": []},
+        _dispatch("explainer", {"analysis_results": explicit, "user_expertise": "executive"}),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["analysis_results"] == explicit
+    assert resolved["user_expertise"] == "executive"
+
+
+def test_explainer_resolver_memory_config_from_real_entities() -> None:
+    """Brand/region come from the REAL parsed entities (skill loading), never
+    fabricated when absent."""
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        {
+            "query": "explain",
+            "agent_results": [
+                {"agent_name": "causal_impact", "success": True, "result": {"ate": 0.1}}
+            ],
+            "parsed_query": {
+                "entities": [{"type": "brand", "value": "Kisqali", "confidence": 0.9}]
+            },
+        },
+        _dispatch("explainer"),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["memory_config"] == {"brand": "Kisqali"}
+
+    resolved_no_brand = disp.INPUT_RESOLVERS["explainer"](
+        {
+            "query": "explain",
+            "agent_results": [
+                {"agent_name": "causal_impact", "success": True, "result": {"ate": 0.1}}
+            ],
+        },
+        _dispatch("explainer"),
+    )
+    assert isinstance(resolved_no_brand, dict)
+    assert "memory_config" not in resolved_no_brand
+
+
+@pytest.mark.asyncio
+async def test_explainer_fallback_binds_sibling_group_success() -> None:
+    """The universal-fallback path: a failing primary with fallback_agent=
+    'explainer' must hand the explainer the SUCCESSFUL results accumulated this
+    turn (earlier parallel group), not crash on the generic payload. This is
+    the router's standard fallback wiring (causal_effect/multi_faceted/...)."""
+    from src.agents.explainer import ExplainerAgent
+
+    class _GoodCausal:
+        async def run(self, input_data):
+            return {"status": "completed", "ate": 0.42, "narrative": "real upstream finding"}
+
+    class _FailingComposer:
+        async def run(self, input_data):
+            raise RuntimeError("primary agent crashed")
+
+    node = DispatcherNode(
+        agent_registry={
+            "causal_impact": _GoodCausal(),
+            "tool_composer": _FailingComposer(),
+            "explainer": ExplainerAgent(use_llm=False),
+        }
+    )
+    state = {
+        "query": "what drove conversions, and compose the follow-up?",
+        "user_context": {},
+        "session_id": "sess-fb",
+        "parsed_query": {"entities": []},
+        "dispatch_plan": [
+            {
+                "agent_name": "causal_impact",
+                "priority": "critical",
+                "parameters": {},
+                "timeout_ms": 15000,
+                "fallback_agent": None,
+                "execution_mode": "parallel",
+            },
+            {
+                "agent_name": "tool_composer",
+                "priority": "high",
+                "parameters": {},
+                "timeout_ms": 15000,
+                "fallback_agent": "explainer",
+                "execution_mode": "parallel",
+            },
+        ],
+        "parallel_groups": [["causal_impact"], ["tool_composer"]],
+    }
+    out = await node.execute(state)  # type: ignore[arg-type]
+
+    by_agent = {r["agent_name"]: r for r in out["agent_results"]}
+    assert by_agent["causal_impact"]["success"] is True
+    assert by_agent["tool_composer"]["success"] is False
+    explainer_res = by_agent["explainer"]
+    assert explainer_res["success"] is True, explainer_res["error"]
+    # The explanation is grounded in the REAL upstream result, not fabricated.
+    assert explainer_res["result"] is not None
+    assert explainer_res["result"].get("status") == "completed"
+
+
+@pytest.mark.asyncio
+async def test_explainer_fallback_with_no_upstream_success_fails_closed() -> None:
+    """When NOTHING succeeded this turn, the fallback explainer fails closed
+    (nothing real to explain) instead of fabricating an explanation."""
+    from src.agents.explainer import ExplainerAgent
+
+    class _FailingComposer:
+        async def run(self, input_data):
+            raise RuntimeError("primary agent crashed")
+
+    node = DispatcherNode(
+        agent_registry={
+            "tool_composer": _FailingComposer(),
+            "explainer": ExplainerAgent(use_llm=False),
+        }
+    )
+    state = _state("tool_composer", "compose something")
+    state["dispatch_plan"][0]["fallback_agent"] = "explainer"
+    out = await node.execute(state)
+
+    by_agent = {r["agent_name"]: r for r in out["agent_results"]}
+    explainer_res = by_agent["explainer"]
+    assert explainer_res["success"] is False
+    assert "analysis_results" in (explainer_res["error"] or "")
+    assert "unexpected keyword argument" not in (explainer_res["error"] or "")
+
+
+# -------------------------- health_score (#883 §3) --------------------------
+
+
+def test_health_score_resolver_clean_kwargs_and_session_id() -> None:
+    """The resolver maps the generic payload onto check_health's exact kwarg
+    set; session_id threads through for the #881 memory wiring."""
+    resolved = disp.INPUT_RESOLVERS["health_score"](
+        {
+            "query": "how healthy is the system?",
+            "session_id": "sess-hs",
+            "user_context": {"user_id": "u1"},
+            "parsed_query": {"entities": []},
+            "span_id": "span-x",
+            "dispatch_id": "disp-x",
+            "execution_mode": "parallel",
+            "agent_results": [],
+        },
+        _dispatch("health_score"),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["scope"] == "full"
+    assert resolved["query"] == "how healthy is the system?"
+    assert resolved["session_id"] == "sess-hs"
+    assert set(resolved) <= {"scope", "query", "experiment_name", "session_id"}
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_scope"),
+    [
+        ("how healthy is the system?", "full"),
+        ("are the models healthy?", "models"),
+        ("check the pipeline status", "pipelines"),
+        ("are all agents up?", "agents"),
+        ("give me a quick health check", "quick"),
+        # Multiple subsystem mentions -> the FULL check covers them all.
+        ("check models and pipelines", "full"),
+    ],
+)
+def test_health_score_scope_derivation(query: str, expected_scope: str) -> None:
+    resolved = disp.INPUT_RESOLVERS["health_score"]({"query": query}, _dispatch("health_score"))
+    assert isinstance(resolved, dict)
+    assert resolved["scope"] == expected_scope
+
+
+def test_health_score_params_scope_wins_when_valid() -> None:
+    resolved = disp.INPUT_RESOLVERS["health_score"](
+        {"query": "are the models healthy?"},
+        _dispatch("health_score", {"scope": "quick", "experiment_name": "ops"}),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["scope"] == "quick"
+    assert resolved["experiment_name"] == "ops"
+
+    # An invalid scope param falls back to derivation, never reaches the agent.
+    resolved_bad = disp.INPUT_RESOLVERS["health_score"](
+        {"query": "are the models healthy?"},
+        _dispatch("health_score", {"scope": "everything"}),
+    )
+    assert isinstance(resolved_bad, dict)
+    assert resolved_bad["scope"] == "models"
+
+
+@pytest.mark.asyncio
+async def test_health_score_dispatch_completes_for_real() -> None:
+    """E2E through the dispatcher: the 'system_health' intent (sole agent, no
+    fallback) actually RUNS now. RED on base: TypeError 'unexpected keyword
+    argument user_context' made the intent 100% dead via chat."""
+    from src.agents.health_score import HealthScoreAgent
+
+    agent = HealthScoreAgent(enable_mlflow=False, enable_opik=False, enable_memory=False)
+    node = DispatcherNode(agent_registry={"health_score": agent})
+    out = await node.execute(_state("health_score", "how healthy is the system?"))
+
+    res = out["agent_results"][0]
+    assert res["success"] is True, res["error"]
+    assert res["result"] is not None
+    assert res["result"].get("status") != "failed"
+    assert "health_summary" in res["result"]
+
+
+# ------------------------ feedback_learner (#883 §3) ------------------------
+
+
+def test_feedback_learner_default_window_mirrors_celery_beat(monkeypatch) -> None:
+    """No temporal entity -> the trailing window the 6h Celery beat learns on
+    (DSPY_LEARN_WINDOW_HOURS, default 24h, ending now UTC)."""
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.delenv("DSPY_LEARN_WINDOW_HOURS", raising=False)
+    resolved = disp.INPUT_RESOLVERS["feedback_learner"](
+        {"query": "what have we learned from feedback?", "parsed_query": {"entities": []}},
+        _dispatch("feedback_learner"),
+    )
+    assert isinstance(resolved, dict)
+    start = datetime.fromisoformat(resolved["time_range_start"])
+    end = datetime.fromisoformat(resolved["time_range_end"])
+    assert abs((end - start) - timedelta(hours=24)) < timedelta(seconds=5)
+    assert abs(end - datetime.now(timezone.utc)) < timedelta(minutes=1)
+    # learn() accepts NO query/session/context kwargs — the clean set only.
+    assert set(resolved) <= {"time_range_start", "time_range_end", "batch_id", "focus_agents"}
+
+    # The env var governs, exactly like the beat path.
+    monkeypatch.setenv("DSPY_LEARN_WINDOW_HOURS", "6")
+    resolved6 = disp.INPUT_RESOLVERS["feedback_learner"](
+        {"query": "feedback?", "parsed_query": {"entities": []}}, _dispatch("feedback_learner")
+    )
+    assert isinstance(resolved6, dict)
+    start6 = datetime.fromisoformat(resolved6["time_range_start"])
+    end6 = datetime.fromisoformat(resolved6["time_range_end"])
+    assert abs((end6 - start6) - timedelta(hours=6)) < timedelta(seconds=5)
+
+
+def test_feedback_learner_temporal_entities_bind_named_windows() -> None:
+    from datetime import datetime, timezone
+
+    def _resolve(entities):
+        return disp.INPUT_RESOLVERS["feedback_learner"](
+            {"query": "q", "parsed_query": {"entities": entities}},
+            _dispatch("feedback_learner"),
+        )
+
+    # Quarter + year (split entities, the classifier's Q[1-4] / 20xx shapes).
+    resolved = _resolve(
+        [
+            {"type": "time_period", "value": "Q3", "confidence": 0.9},
+            {"type": "time_period", "value": "2025", "confidence": 0.9},
+        ]
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["time_range_start"] == datetime(2025, 7, 1, tzinfo=timezone.utc).isoformat()
+    assert resolved["time_range_end"] == datetime(2025, 10, 1, tzinfo=timezone.utc).isoformat()
+
+    # Bare year -> calendar year.
+    resolved_y = _resolve([{"type": "time_period", "value": "2025"}])
+    assert isinstance(resolved_y, dict)
+    assert resolved_y["time_range_start"] == datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat()
+    assert resolved_y["time_range_end"] == datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat()
+
+    # Relative trailing phrase.
+    resolved_r = _resolve([{"type": "time_period", "value": "last 7 days"}])
+    assert isinstance(resolved_r, dict)
+    start = datetime.fromisoformat(resolved_r["time_range_start"])
+    end = datetime.fromisoformat(resolved_r["time_range_end"])
+    assert (end - start).days == 7
+
+
+def test_feedback_learner_unparseable_named_period_fails_closed() -> None:
+    """A period the user NAMED but we cannot parse must fail closed — silently
+    learning over a substituted window would misrepresent the result."""
+    resolved = disp.INPUT_RESOLVERS["feedback_learner"](
+        {
+            "query": "q",
+            "parsed_query": {
+                "entities": [{"type": "time_period", "value": "the fortnight of yore"}]
+            },
+        },
+        _dispatch("feedback_learner"),
+    )
+    assert isinstance(resolved, NeedsStructuredInput)
+    assert "time_range_start" in resolved.missing
+    assert "fortnight of yore" in resolved.reason
+
+
+def test_feedback_learner_explicit_params_validated() -> None:
+    # A real explicit window passes through verbatim (+ passthrough options).
+    resolved = disp.INPUT_RESOLVERS["feedback_learner"](
+        {"query": "q"},
+        _dispatch(
+            "feedback_learner",
+            {
+                "time_range_start": "2026-06-01T00:00:00+00:00",
+                "time_range_end": "2026-06-08T00:00:00+00:00",
+                "batch_id": "batch_x",
+                "focus_agents": ["causal_impact"],
+            },
+        ),
+    )
+    assert isinstance(resolved, dict)
+    assert resolved["time_range_start"] == "2026-06-01T00:00:00+00:00"
+    assert resolved["time_range_end"] == "2026-06-08T00:00:00+00:00"
+    assert resolved["batch_id"] == "batch_x"
+    assert resolved["focus_agents"] == ["causal_impact"]
+
+    # Garbled/half windows are ungroundable -> fail closed, never repaired.
+    for bad in (
+        {"time_range_start": "not-a-date", "time_range_end": "2026-06-08T00:00:00+00:00"},
+        {"time_range_start": "2026-06-08T00:00:00+00:00"},  # half a window
+        {
+            "time_range_start": "2026-06-08T00:00:00+00:00",
+            "time_range_end": "2026-06-01T00:00:00+00:00",  # start >= end
+        },
+    ):
+        out = disp.INPUT_RESOLVERS["feedback_learner"](
+            {"query": "q"}, _dispatch("feedback_learner", bad)
+        )
+        assert isinstance(out, NeedsStructuredInput), bad
+        assert "/feedback/learn" in (out.rest_endpoint or "")
+
+
+@pytest.mark.asyncio
+async def test_feedback_learner_dispatch_completes_honestly() -> None:
+    """E2E through the dispatcher: the 'feedback' intent (sole agent, no
+    fallback) runs the REAL agent over the default window. With no stores wired
+    the honest outcome is zero feedback items — completed with a warning, never
+    fabricated learnings. RED on base: TypeError 'unexpected keyword argument
+    query'."""
+    from src.agents.feedback_learner import FeedbackLearnerAgent
+
+    agent = FeedbackLearnerAgent()
+    node = DispatcherNode(agent_registry={"feedback_learner": agent})
+    out = await node.execute(_state("feedback_learner", "what have we learned from feedback?"))
+
+    res = out["agent_results"][0]
+    assert res["success"] is True, res["error"]
+    assert res["result"] is not None
+    assert res["result"].get("status") != "failed"
+    assert res["result"].get("feedback_count") == 0  # honest no-data outcome

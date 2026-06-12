@@ -8,10 +8,15 @@ import dataclasses
 import functools
 import importlib
 import logging
+import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
+
+from src.repositories.provenance import coerce_provenance_flag
 
 from .._agent_method_map import get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
@@ -494,20 +499,11 @@ _GAP_PROBE_MAX_PAGES = 4
 _GAP_REQUIRED = ("metrics", "segments", "brand")
 
 
-def _coerce_provenance_flag(value: Any) -> bool:
-    """Strictly parse a provenance opt-in value (codex #874 R2).
-
-    Only ``True`` / ``"true"`` / ``"1"`` / ``"yes"`` opt in. Everything else —
-    ``False``, ``"false"``, ``"0"``, ``None``, invalid types — stays real-mode:
-    this flag controls provenance isolation, so an ambiguous value must FAIL
-    CLOSED to the default-exclude predicate (``bool("false")`` is ``True`` and
-    would silently flip an explicit opt-OUT into reading synthetic rows).
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"true", "1", "yes"}
-    return False
+# Strict provenance opt-in parser (codex #874 R2). Lifted to the shared SSOT in
+# src/repositories/provenance.py (#883 §4) so agents and celery tasks parse the
+# flag identically without importing the orchestrator; this thin alias keeps the
+# dispatcher-local name every existing caller/test references.
+_coerce_provenance_flag = coerce_provenance_flag
 
 
 def _resolve_include_synthetic_opt_in(agent_input: Dict[str, Any], params: Dict[str, Any]) -> bool:
@@ -850,6 +846,303 @@ def _resolve_prediction_synthesizer_input(
     )
 
 
+def _successful_upstream_results(agent_input: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract the REAL result payloads from the upstream ``AgentResult`` list.
+
+    ``_prepare_agent_input`` threads ``state["agent_results"]`` into the payload
+    (#883 §3): on the failure-fallback path ``execute()`` enriches it with the
+    results accumulated this turn, and on a checkpointer-resumed multi-turn state
+    it carries prior turns' results (the ``operator.add`` reducer). Only
+    SUCCESSFUL results with a non-empty result dict qualify — a failed upstream
+    dispatch has nothing real to explain. The explainer's own prior outputs are
+    excluded: re-explaining an explanation is circular, not analysis.
+
+    Each qualifying result dict is passed through as-is, with the dispatching
+    agent's REAL name attached (``setdefault`` — never overwriting a result's own
+    field) so the narrative can attribute findings to their source agent.
+    """
+    raw = agent_input.get("agent_results") or []
+    upstream: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("success"):
+            continue
+        if item.get("agent_name") == "explainer":
+            continue
+        result = item.get("result")
+        if isinstance(result, dict) and result:
+            enriched = dict(result)
+            if isinstance(item.get("agent_name"), str):
+                enriched.setdefault("agent_name", item["agent_name"])
+            upstream.append(enriched)
+    return upstream
+
+
+def _resolve_explainer_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Bind ``explain``'s required ``analysis_results`` to REAL upstream agent
+    results, or fail closed (#883 §3).
+
+    explainer is BOTH the 'explanation'-intent primary AND the universal
+    fallback agent (router.py), so before this resolver EVERY direct dispatch
+    and every agent's failure-fallback crashed identically on the generic
+    payload splat (``explain() got an unexpected keyword argument
+    'user_context'``).
+
+    (1) An explicit analyst-supplied ``parameters.analysis_results`` wins.
+    (2) Otherwise bind the successful upstream results carried in the dispatch
+        state — this turn's earlier/sibling agent outputs on the fallback path,
+        prior turns' outputs on a resumed conversation state.
+    (3) With neither, fail closed: an explanation of nothing would have to be
+        fabricated.
+    """
+    params = dispatch.get("parameters") or {}
+
+    # (1) explicit analyst-supplied results pass through verbatim.
+    explicit = params.get("analysis_results")
+    if isinstance(explicit, list) and explicit and all(isinstance(r, dict) for r in explicit):
+        analysis_results: List[Dict[str, Any]] = explicit
+    else:
+        # (2) real upstream results from the orchestrator state.
+        analysis_results = _successful_upstream_results(agent_input)
+
+    if not analysis_results:
+        return NeedsStructuredInput(
+            agent_name="explainer",
+            missing=("analysis_results",),
+            reason=(
+                "no successful upstream agent results exist in this conversation "
+                "state to explain, and dispatch.parameters supplies none — run an "
+                "analysis first (e.g. a causal, gap or segmentation query), then "
+                "ask for the explanation"
+            ),
+            rest_endpoint=None,
+        )
+
+    out: Dict[str, Any] = {
+        "analysis_results": analysis_results,
+        "query": agent_input.get("query") or "",
+    }
+    session_id = agent_input.get("session_id")
+    if session_id is not None:
+        out["session_id"] = session_id
+    for opt in ("user_expertise", "output_format", "focus_areas", "memory_config"):
+        if params.get(opt) is not None:
+            out[opt] = params[opt]
+    # Real brand/region from the parsed query feed the skill loader (NOT a
+    # fabricated default: absent entities simply omit the config).
+    if "memory_config" not in out:
+        brand, region = _extract_brand_region(agent_input)
+        memory_config = {k: v for k, v in (("brand", brand), ("region", region)) if v}
+        if memory_config:
+            out["memory_config"] = memory_config
+    return out
+
+
+# check_health's scope Literal (agent.py). Every kwarg has a default, so this
+# resolver NEVER fails closed — it only maps the generic payload onto the clean
+# kwarg set (verified against the #881 signature: scope/query/experiment_name/
+# session_id).
+_HEALTH_SCOPES = ("full", "quick", "models", "pipelines", "agents")
+_HEALTH_SCOPE_KEYWORDS: Tuple[Tuple[str, str], ...] = (
+    (r"\bmodels?\b", "models"),
+    (r"\bpipelines?\b", "pipelines"),
+    (r"\bagents?\b", "agents"),
+    (r"\bquick\b", "quick"),
+)
+
+
+def _derive_health_scope(query: str) -> str:
+    """Derive ``check_health``'s scope from the user's query, default ``full``.
+
+    A single unambiguous subsystem mention scopes the check to that subsystem;
+    zero or multiple mentions run the FULL check (which covers every subsystem
+    — the conservative, never-narrower default).
+    """
+    lowered = (query or "").lower()
+    matched = {scope for pattern, scope in _HEALTH_SCOPE_KEYWORDS if re.search(pattern, lowered)}
+    if len(matched) == 1:
+        return matched.pop()
+    return "full"
+
+
+def _resolve_health_score_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Dict[str, Any]:
+    """Map the generic payload onto ``check_health``'s clean kwarg set (#883 §3).
+
+    'system_health' is a sole-agent intent with no fallback, so the generic
+    payload splat (``check_health() got an unexpected keyword argument
+    'user_context'``) made the intent 100% dead via chat. Every ``check_health``
+    kwarg has a default, so nothing here can be ungroundable — no fail-closed
+    branch. ``session_id`` is passed through for the #881 memory wiring.
+    """
+    params = dispatch.get("parameters") or {}
+    query = agent_input.get("query") or ""
+
+    scope = params.get("scope")
+    if not (isinstance(scope, str) and scope in _HEALTH_SCOPES):
+        scope = _derive_health_scope(query)
+
+    out: Dict[str, Any] = {"scope": scope, "query": query}
+    experiment_name = params.get("experiment_name")
+    if isinstance(experiment_name, str) and experiment_name.strip():
+        out["experiment_name"] = experiment_name
+    session_id = agent_input.get("session_id")
+    if session_id is not None:
+        out["session_id"] = session_id
+    return out
+
+
+# feedback_learner window grounding (#883 §3). The default trailing window
+# MIRRORS the 6h Celery beat path (src/tasks/dspy_optimization_tasks.py
+# ``run_feedback_learning_cycle``): end = now UTC, start = end - DSPY_LEARN_WINDOW_HOURS
+# (default 24) — the chat path and the beat path must read the same window
+# contract or the two learning surfaces drift.
+_FL_WINDOW_ENV = "DSPY_LEARN_WINDOW_HOURS"
+_FL_DEFAULT_WINDOW_HOURS = 24.0
+_FL_REQUIRED = ("time_range_start", "time_range_end")
+
+_FL_RELATIVE_RE = re.compile(
+    r"\b(?:last|past|previous)\s+(?:(\d+)\s+)?(day|week|month|quarter|year)s?\b"
+)
+_FL_QUARTER_RE = re.compile(r"\bQ([1-4])\b", re.IGNORECASE)
+_FL_YEAR_RE = re.compile(r"\b(20[0-9]{2})\b")
+_FL_RELATIVE_DAYS = {"day": 1, "week": 7, "month": 30, "quarter": 91, "year": 365}
+
+
+def _parse_time_period_text(text: str, now: datetime) -> Optional[Tuple[datetime, datetime]]:
+    """Parse a ``time_period`` entity text into a concrete UTC window, or ``None``.
+
+    Grounded in the same shapes the NLP layer emits (classifier
+    ``feature_extractor`` patterns ``Q[1-4]`` / ``20xx`` plus common relative
+    phrases). Returns ``None`` when the text matches none of them — the caller
+    FAILS CLOSED rather than silently substituting a different window than the
+    one the user named.
+    """
+    relative = _FL_RELATIVE_RE.search(text.lower())
+    if relative:
+        count = int(relative.group(1) or 1)
+        days = count * _FL_RELATIVE_DAYS[relative.group(2)]
+        return now - timedelta(days=days), now
+
+    quarter = _FL_QUARTER_RE.search(text)
+    year_match = _FL_YEAR_RE.search(text)
+    if quarter:
+        year = int(year_match.group(1)) if year_match else now.year
+        q = int(quarter.group(1))
+        start = datetime(year, 3 * (q - 1) + 1, 1, tzinfo=timezone.utc)
+        end = (
+            datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+            if q == 4
+            else datetime(year, 3 * q + 1, 1, tzinfo=timezone.utc)
+        )
+        return start, end
+    if year_match:
+        year = int(year_match.group(1))
+        return (
+            datetime(year, 1, 1, tzinfo=timezone.utc),
+            datetime(year + 1, 1, 1, tzinfo=timezone.utc),
+        )
+    return None
+
+
+def _resolve_feedback_learner_input(
+    agent_input: Dict[str, Any], dispatch: AgentDispatch
+) -> Union[Dict[str, Any], NeedsStructuredInput]:
+    """Ground ``learn``'s required ``(time_range_start, time_range_end)`` window
+    in real dispatch context, or fail closed (#883 §3).
+
+    'feedback' is a sole-agent intent with no fallback; the generic payload splat
+    (``learn() got an unexpected keyword argument 'query'``) made it 100% dead
+    via chat (#839 leftover — the 6h Celery beat path calls ``learn()`` correctly
+    and is untouched here).
+
+    (1) An explicit analyst-supplied window in ``dispatch.parameters`` wins, but
+        must actually BE a window (both bounds, ISO-parseable, start < end) —
+        a half/garbled window is ungroundable, so it fails closed rather than
+        being silently replaced.
+    (2) Otherwise derive the window from the parsed_query ``time_period``
+        entities. An entity that names a period we cannot parse fails CLOSED:
+        learning over a different window than the user asked for would
+        misrepresent the result.
+    (3) With no temporal entity at all, use the default trailing window the 6h
+        Celery beat already learns on (``DSPY_LEARN_WINDOW_HOURS``, default 24h,
+        ending now UTC) — the settled production window contract.
+    """
+    params = dispatch.get("parameters") or {}
+    now = datetime.now(timezone.utc)
+
+    explicit_start = params.get("time_range_start")
+    explicit_end = params.get("time_range_end")
+    if explicit_start is not None or explicit_end is not None:
+        # (1) explicit analyst-supplied window — validate, never repair.
+        try:
+            start_dt = datetime.fromisoformat(str(explicit_start))
+            end_dt = datetime.fromisoformat(str(explicit_end))
+            valid = start_dt < end_dt
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            return NeedsStructuredInput(
+                agent_name="feedback_learner",
+                missing=_FL_REQUIRED,
+                reason=(
+                    "dispatch.parameters supplied an explicit feedback window that is "
+                    f"not a valid ISO interval (time_range_start={explicit_start!r}, "
+                    f"time_range_end={explicit_end!r}; both bounds required, start < end)"
+                ),
+                rest_endpoint="POST /feedback/learn",
+            )
+        window = (str(explicit_start), str(explicit_end))
+        window_source = "parameters"
+    else:
+        parsed_query = agent_input.get("parsed_query") or {}
+        entities = (parsed_query.get("entities") if isinstance(parsed_query, dict) else None) or []
+        period_texts = [
+            str(ent["value"])
+            for ent in entities
+            if isinstance(ent, dict) and ent.get("type") == "time_period" and ent.get("value")
+        ]
+        if period_texts:
+            # (2) the user NAMED a period — bind it or fail closed. Values are
+            # joined so split entities ("Q3" + "2025") resolve as one period.
+            parsed = _parse_time_period_text(" ".join(period_texts), now)
+            if parsed is None:
+                return NeedsStructuredInput(
+                    agent_name="feedback_learner",
+                    missing=_FL_REQUIRED,
+                    reason=(
+                        f"the query names a time period ({', '.join(period_texts)!s}) "
+                        "that could not be parsed into a concrete window; learning "
+                        "over a substituted window would misrepresent the result"
+                    ),
+                    rest_endpoint="POST /feedback/learn",
+                )
+            window = (parsed[0].isoformat(), parsed[1].isoformat())
+            window_source = "parsed_query.time_period"
+        else:
+            # (3) default trailing window — mirrors the 6h Celery beat path.
+            try:
+                hours = float(os.getenv(_FL_WINDOW_ENV, "") or _FL_DEFAULT_WINDOW_HOURS)
+            except ValueError:
+                hours = _FL_DEFAULT_WINDOW_HOURS
+            window = ((now - timedelta(hours=hours)).isoformat(), now.isoformat())
+            window_source = f"trailing_{hours:g}h_beat_default"
+
+    logger.info(
+        "feedback_learner dispatch: bound learning window %s → %s (source=%s).",
+        window[0],
+        window[1],
+        window_source,
+    )
+    out: Dict[str, Any] = {"time_range_start": window[0], "time_range_end": window[1]}
+    for opt in ("batch_id", "focus_agents"):
+        if params.get(opt) is not None:
+            out[opt] = params[opt]
+    return out
+
+
 # Single source of truth: agent_name -> input resolver. Add a resolver here, not
 # an ``if`` branch in ``_dispatch_agent`` (#F12/F13/F14).
 INPUT_RESOLVERS: Dict[str, InputResolver] = {
@@ -858,6 +1151,14 @@ INPUT_RESOLVERS: Dict[str, InputResolver] = {
     "heterogeneous_optimizer": _resolve_heterogeneous_optimizer_input,
     "resource_optimizer": _resolve_resource_optimizer_input,
     "prediction_synthesizer": _resolve_prediction_synthesizer_input,
+    # #883 §3 — the last three ``uses_kwargs`` agents with neither a resolver
+    # nor an input_model (the generic-payload splat raised TypeError on every
+    # chat dispatch): explainer (the 'explanation' primary AND universal
+    # fallback agent), health_score ('system_health', sole agent), and
+    # feedback_learner ('feedback', sole agent).
+    "explainer": _resolve_explainer_input,
+    "health_score": _resolve_health_score_input,
+    "feedback_learner": _resolve_feedback_learner_input,
 }
 
 
@@ -868,8 +1169,31 @@ INPUT_RESOLVERS: Dict[str, InputResolver] = {
 # launder an empty/failed analysis into a "success" (#F12/F13/F14). tool_composer
 # is intentionally EXCLUDED: its success semantics are governed by F6 (#827)
 # tool-level fail-closed + the synthesizer's filtering, not a status field.
+#
+# #883 §3 — the three newly resolver-backed agents are included after reading
+# their output status semantics:
+#   * explainer: ``ExplainerOutput.status = result.get("status", "failed")`` —
+#     "failed" iff the explanation graph itself errored; an empty-but-honest
+#     explanation completes. Laundering a failed explanation as dispatch
+#     success would surface a blank narrative as a real one.
+#   * health_score: status is "failed" ONLY on the agent's exception path,
+#     where the output carries fabricated-looking placeholders (score 0.0,
+#     grade "F") — a degraded-but-measured system still reports "completed",
+#     so failing closed never hides a real unhealthy reading.
+#   * feedback_learner: graph nodes set "failed" only on internal errors; a
+#     window with ZERO feedback rows completes honestly ("analyzing" →
+#     "completed", warnings=['No feedback items collected']) and is NOT failed
+#     closed — the honest no-data outcome must reach the user.
 _FAIL_CLOSED_ON_FAILED_STATUS = frozenset(
-    {"gap_analyzer", "heterogeneous_optimizer", "resource_optimizer", "prediction_synthesizer"}
+    {
+        "gap_analyzer",
+        "heterogeneous_optimizer",
+        "resource_optimizer",
+        "prediction_synthesizer",
+        "explainer",
+        "health_score",
+        "feedback_learner",
+    }
 )
 
 
@@ -940,12 +1264,28 @@ class DispatcherNode:
         parallel_groups = state.get("parallel_groups") or []
         all_results: List[AgentResult] = []
 
+        # #883 §3: dispatches must see the results accumulated SO FAR — the
+        # incoming state's prior-turn results (operator.add reducer on a
+        # checkpointer-resumed conversation) plus this turn's earlier groups —
+        # so the explainer resolver (fallback agent + later-group dispatches)
+        # can bind REAL upstream analysis_results instead of crashing or
+        # fabricating. The enriched dict is dispatch-local: the node still
+        # returns only ``all_results`` for the reducer to append.
+        prior_results: List[AgentResult] = list(state.get("agent_results") or [])
+
+        def _state_so_far() -> OrchestratorState:
+            return cast(
+                OrchestratorState,
+                {**state, "agent_results": prior_results + all_results},
+            )
+
         # Execute each parallel group sequentially
         for group in parallel_groups:
             group_dispatches = [d for d in dispatch_plan if d["agent_name"] in group]
 
             # Run agents in parallel within group
-            tasks = [self._dispatch_agent(d, state) for d in group_dispatches]
+            group_state = _state_so_far()
+            tasks = [self._dispatch_agent(d, group_state) for d in group_dispatches]
 
             group_results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -965,7 +1305,9 @@ class DispatcherNode:
                     # Try fallback if available
                     fallback_agent = dispatch.get("fallback_agent")
                     if fallback_agent:
-                        fallback_result = await self._dispatch_fallback(str(fallback_agent), state)
+                        fallback_result = await self._dispatch_fallback(
+                            str(fallback_agent), _state_so_far()
+                        )
                         all_results.append(fallback_result)
                 elif isinstance(result, dict) and not result.get("success", True):
                     # AgentResult returned with success=False
@@ -974,7 +1316,9 @@ class DispatcherNode:
                     # Try fallback if available
                     fallback_agent2 = dispatch.get("fallback_agent")
                     if fallback_agent2:
-                        fallback_result = await self._dispatch_fallback(str(fallback_agent2), state)
+                        fallback_result = await self._dispatch_fallback(
+                            str(fallback_agent2), _state_so_far()
+                        )
                         all_results.append(fallback_result)
                 else:
                     # Result is AgentResult (TypedDict cannot use isinstance, check dict)
@@ -1362,6 +1706,14 @@ class DispatcherNode:
             "dispatch_id": dispatch_id,
             "span_id": span_id,
             "execution_mode": dispatch.get("execution_mode", "sequential"),
+            # #883 §3: upstream agent results — the REAL substrate the explainer
+            # resolver binds ``analysis_results`` from. ``execute()`` threads in
+            # the results accumulated this turn for later groups and fallback
+            # dispatches; a checkpointer-resumed state carries prior turns'.
+            # Like the other generic keys, resolver-backed kwargs agents never
+            # see it (the resolver output REPLACES the payload) and run(dict)/
+            # input-model agents ignore undeclared keys.
+            "agent_results": list(state.get("agent_results") or []),
         }
 
         # Per-agent input resolution (real cohort/KPI data for tool_composer, the

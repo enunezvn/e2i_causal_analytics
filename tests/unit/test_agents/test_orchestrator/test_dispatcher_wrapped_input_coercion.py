@@ -193,8 +193,15 @@ async def test_dispatch_parameters_override_payload_defaults() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_wrapped_agent_dispatch_unaffected_by_fix() -> None:
-    """``health_score`` has no input_model and uses ``uses_kwargs=True``."""
+async def test_non_wrapped_kwargs_agent_gets_clean_resolver_kwargs() -> None:
+    """``health_score`` has no input_model and uses ``uses_kwargs=True``.
+
+    Pre-#883 this test pinned the generic-payload LEAK (``user_context`` /
+    ``parsed_query`` splatted into ``check_health``) as the status quo — the
+    exact TypeError that made the 'system_health' intent dead against the REAL
+    agent (#883 §3). The resolver registry now hands kwargs agents a CLEAN
+    kwarg set, so the contract this test pins is the clean one.
+    """
     captured: dict = {}
 
     async def fake_check_health(**kwargs):  # noqa: ANN003
@@ -217,8 +224,11 @@ async def test_non_wrapped_agent_dispatch_unaffected_by_fix() -> None:
     assert agent_result["success"] is True, agent_result.get("error")
     assert agent_result["result"]["health_grade"] == "A"
     assert captured["kwargs"]["query"] == "check system health"
-    assert "user_context" in captured["kwargs"]
-    assert "parsed_query" in captured["kwargs"]
+    # #883 §3: the generic payload must NOT leak into the kwargs splat — the
+    # real ``check_health`` signature rejects these with TypeError.
+    assert "user_context" not in captured["kwargs"]
+    assert "parsed_query" not in captured["kwargs"]
+    assert set(captured["kwargs"]) <= {"scope", "query", "experiment_name", "session_id"}
 
 
 @pytest.mark.asyncio
@@ -232,8 +242,10 @@ async def test_projection_filters_to_declared_fields_only() -> None:
     fake_module.MinimalInput = MinimalInput  # type: ignore[attr-defined]
     sys.modules["__test_minimal_input__"] = fake_module
 
-    original = mm.AGENT_METHOD_MAP.get("explainer")
-    mm.AGENT_METHOD_MAP["explainer"] = mm.AgentMethodSpec(
+    # Host the synthetic spec on a resolver-LESS agent (#883 added an explainer
+    # resolver that fails closed pre-projection; this test is about projection).
+    original = mm.AGENT_METHOD_MAP.get("causal_impact")
+    mm.AGENT_METHOD_MAP["causal_impact"] = mm.AgentMethodSpec(
         method="explain",
         is_async=True,
         uses_kwargs=False,
@@ -251,8 +263,8 @@ async def test_projection_filters_to_declared_fields_only() -> None:
         agent.explain = fake_explain
         del agent.analyze
 
-        dispatcher = DispatcherNode(agent_registry={"explainer": agent})
-        result = await dispatcher.execute(_state_for("explainer", query="explain X"))
+        dispatcher = DispatcherNode(agent_registry={"causal_impact": agent})
+        result = await dispatcher.execute(_state_for("causal_impact", query="explain X"))
 
         agent_result = result["agent_results"][0]
         assert agent_result["success"] is True, agent_result.get("error")
@@ -260,7 +272,7 @@ async def test_projection_filters_to_declared_fields_only() -> None:
         assert captured["input_obj"].query == "explain X"
     finally:
         if original is not None:
-            mm.AGENT_METHOD_MAP["explainer"] = original
+            mm.AGENT_METHOD_MAP["causal_impact"] = original
 
 
 @pytest.mark.asyncio
@@ -393,8 +405,10 @@ async def test_kwargs_plus_input_model_combo_robust() -> None:
     fake_module.KwargsAndModelInput = KwargsAndModelInput  # type: ignore[attr-defined]
     sys.modules["__test_kwargs_and_model__"] = fake_module
 
-    original = mm.AGENT_METHOD_MAP.get("explainer")
-    mm.AGENT_METHOD_MAP["explainer"] = mm.AgentMethodSpec(
+    # Host the synthetic spec on a resolver-LESS agent (#883 added an explainer
+    # resolver whose output would REPLACE the payload before the combo under test).
+    original = mm.AGENT_METHOD_MAP.get("causal_impact")
+    mm.AGENT_METHOD_MAP["causal_impact"] = mm.AgentMethodSpec(
         method="explain",
         is_async=True,
         uses_kwargs=True,
@@ -412,8 +426,8 @@ async def test_kwargs_plus_input_model_combo_robust() -> None:
         agent.explain = fake_explain
         del agent.analyze
 
-        dispatcher = DispatcherNode(agent_registry={"explainer": agent})
-        state = _state_for("explainer", query="explain this thing")
+        dispatcher = DispatcherNode(agent_registry={"causal_impact": agent})
+        state = _state_for("causal_impact", query="explain this thing")
         state["dispatch_plan"][0]["parameters"] = {"flag": True}
 
         result = await dispatcher.execute(state)
@@ -423,4 +437,4 @@ async def test_kwargs_plus_input_model_combo_robust() -> None:
         assert captured["kwargs"]["flag"] is True
     finally:
         if original is not None:
-            mm.AGENT_METHOD_MAP["explainer"] = original
+            mm.AGENT_METHOD_MAP["causal_impact"] = original
