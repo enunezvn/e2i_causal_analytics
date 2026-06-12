@@ -621,3 +621,32 @@ def make_synthesis_response(
             "reasoning": reasoning,
         }
     )
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_memory_layer_883b(monkeypatch):
+    """Keep unit tests off the live memory DB (#883 PR B residue check).
+
+    tool_composer's episodic write has LANDED since the #876 outcome remap,
+    so every unmocked ``composer.compose`` in this suite inserts a REAL
+    'composition_completed' row (+ embedding call) into the live DB when run
+    from a creds-configured dev box — 41 residue rows were measured from one
+    suite run during #883 PR B verification. Same pattern as the
+    gap_analyzer / prediction_synthesizer guards: the source-module functions
+    raise, the hooks swallow honestly, and tests exercising a specific memory
+    behavior re-patch these symbols themselves.
+    """
+
+    async def _unavailable(*_args, **_kwargs):
+        raise RuntimeError(
+            "hermetic unit-test memory layer (#883): patch the memory function "
+            "explicitly if the test needs a specific behavior"
+        )
+
+    import src.memory.episodic_memory as episodic_memory
+    import src.memory.procedural_memory as procedural_memory
+
+    monkeypatch.setattr(episodic_memory, "insert_episodic_memory_with_text", _unavailable)
+    monkeypatch.setattr(episodic_memory, "search_episodic_by_text", _unavailable)
+    monkeypatch.setattr(procedural_memory, "insert_procedural_memory_with_text", _unavailable)
+    monkeypatch.setattr(procedural_memory, "find_relevant_procedures_by_text", _unavailable)
