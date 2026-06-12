@@ -142,7 +142,8 @@ export function useAuth(): UseAuthReturn {
     );
   })();
 
-  const accessToken = session?.access_token ?? null;
+  // Token exposure mirrors isAuthenticated: fail closed when unconfigured.
+  const accessToken = supabaseConfigured ? (session?.access_token ?? null) : null;
 
   const userInfo = {
     email: user?.email ?? null,

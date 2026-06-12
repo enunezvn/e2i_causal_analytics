@@ -155,9 +155,15 @@ export const useAuthStore = create<AuthStore>()(
 
 /**
  * Selector: Check if user is authenticated
+ *
+ * FAIL CLOSED: false when Supabase is unconfigured (mirrors useAuth) - a
+ * persisted session from an older configured build must not read as
+ * authenticated.
  */
 export const useIsAuthenticated = () =>
-  useAuthStore((state) => Boolean(state.session?.access_token && state.user));
+  useAuthStore((state) =>
+    isSupabaseConfigured() ? Boolean(state.session?.access_token && state.user) : false
+  );
 
 /**
  * Selector: Check if user is admin
