@@ -140,11 +140,14 @@ async def test_het_episodic_context_with_vars_returns_hydrated_row(episodic_rowc
     outcome_var = "trx_rate"
     query = f"CATE analysis: {treatment_var} -> {outcome_var} heterogeneity probe ({marker})"
 
-    memory_id = await _store_cate_row(session_id, marker, treatment_var, outcome_var)
-    assert memory_id, "store_cate_analysis failed — cannot exercise the filtered read"
-
     hooks = HeterogeneousOptimizerMemoryHooks()
+    memory_id: str | None = None
     try:
+        # Seed INSIDE try so a failed write/assert cannot leak the row
+        # (codex R1 LOW on this suite).
+        memory_id = await _store_cate_row(session_id, marker, treatment_var, outcome_var)
+        assert memory_id, "store_cate_analysis failed — cannot exercise the filtered read"
+
         results = await hooks._get_episodic_context(
             query=query,
             treatment_var=treatment_var,
@@ -175,7 +178,8 @@ async def test_het_episodic_context_with_vars_returns_hydrated_row(episodic_rowc
             "treatment_var filter is not actually filtering"
         )
     finally:
-        _cleanup_episodic(memory_id)
+        if memory_id:
+            _cleanup_episodic(memory_id)
 
 
 # =============================================================================
@@ -227,13 +231,17 @@ async def test_tool_composer_find_similar_compositions_hydrates_and_filters_succ
     marker = f"889-tc-{uuid.uuid4().hex[:12]}"
     query = f"Compare TRx conversion drivers across segments ({marker})"
 
-    ok_id = await _store_composition_row(session_id, marker, success=True)
-    assert ok_id, "store_composition (success) failed — cannot exercise the read"
-    failed_id = await _store_composition_row(session_id, f"{marker}-failed", success=False)
-    assert failed_id, "store_composition (failed) failed — cannot exercise the read"
-
     hooks = ToolComposerMemoryHooks()
+    ok_id: str | None = None
+    failed_id: str | None = None
     try:
+        # Seed INSIDE try so a failed second write cannot leak the first row
+        # (codex R1 LOW on this suite).
+        ok_id = await _store_composition_row(session_id, marker, success=True)
+        assert ok_id, "store_composition (success) failed — cannot exercise the read"
+        failed_id = await _store_composition_row(session_id, f"{marker}-failed", success=False)
+        assert failed_id, "store_composition (failed) failed — cannot exercise the read"
+
         results = await hooks.find_similar_compositions(query=query, limit=5)
         by_id = {str(r.get("memory_id")): r for r in results}
         assert str(ok_id) in by_id, (
@@ -263,8 +271,10 @@ async def test_tool_composer_find_similar_compositions_hydrates_and_filters_succ
         assert "0.90" in prompt_block
         assert "1234ms" in prompt_block
     finally:
-        _cleanup_episodic(ok_id)
-        _cleanup_episodic(failed_id)
+        if ok_id:
+            _cleanup_episodic(ok_id)
+        if failed_id:
+            _cleanup_episodic(failed_id)
 
 
 # =============================================================================
@@ -322,13 +332,15 @@ async def test_causal_impact_get_prior_analyses_confidence_filter_real(episodic_
     treatment_var = f"speaker_programs_{marker}"
     outcome_var = "nbrx_share"
 
-    memory_id = await _store_causal_row(
-        session_id, marker, treatment_var, outcome_var, confidence=0.91
-    )
-    assert memory_id, "store_causal_analysis failed — cannot exercise get_prior_analyses"
-
     hooks = CausalImpactMemoryHooks()
+    memory_id: str | None = None
     try:
+        # Seed INSIDE try so a failed write/assert cannot leak the row.
+        memory_id = await _store_causal_row(
+            session_id, marker, treatment_var, outcome_var, confidence=0.91
+        )
+        assert memory_id, "store_causal_analysis failed — cannot exercise get_prior_analyses"
+
         rows = await hooks.get_prior_analyses(
             treatment_var=treatment_var,
             outcome_var=outcome_var,
@@ -369,7 +381,8 @@ async def test_causal_impact_get_prior_analyses_confidence_filter_real(episodic_
             "treatment_var filter is not actually filtering"
         )
     finally:
-        _cleanup_episodic(memory_id)
+        if memory_id:
+            _cleanup_episodic(memory_id)
 
 
 @pytest.mark.asyncio
@@ -390,13 +403,15 @@ async def test_causal_impact_episodic_context_with_vars_returns_hydrated_row(
     outcome_var = "trx_volume"
     query = f"Causal analysis: {treatment_var} -> {outcome_var} probe ({marker})"
 
-    memory_id = await _store_causal_row(
-        session_id, marker, treatment_var, outcome_var, confidence=0.85
-    )
-    assert memory_id, "store_causal_analysis failed — cannot exercise the filtered read"
-
     hooks = CausalImpactMemoryHooks()
+    memory_id: str | None = None
     try:
+        # Seed INSIDE try so a failed write/assert cannot leak the row.
+        memory_id = await _store_causal_row(
+            session_id, marker, treatment_var, outcome_var, confidence=0.85
+        )
+        assert memory_id, "store_causal_analysis failed — cannot exercise the filtered read"
+
         results = await hooks._get_episodic_context(
             query=query,
             treatment_var=treatment_var,
@@ -419,7 +434,8 @@ async def test_causal_impact_episodic_context_with_vars_returns_hydrated_row(
             "outcome_var filter is not actually filtering"
         )
     finally:
-        _cleanup_episodic(memory_id)
+        if memory_id:
+            _cleanup_episodic(memory_id)
 
 
 # =============================================================================
@@ -475,15 +491,19 @@ async def test_scope_definer_get_prior_scopes_validation_filter_real(episodic_ro
     marker = f"889-sd-{uuid.uuid4().hex[:12]}"
     problem_type = f"churn_prediction_{marker}"
 
-    ok_id = await _store_scope_row(session_id, marker, problem_type, validation_passed=True)
-    assert ok_id, "store_scope_definition (validated) failed — cannot exercise the read"
-    bad_id = await _store_scope_row(
-        session_id, f"{marker}-unvalidated", problem_type, validation_passed=False
-    )
-    assert bad_id, "store_scope_definition (unvalidated) failed — cannot exercise the read"
-
     hooks = ScopeDefinerMemoryHooks()
+    ok_id: str | None = None
+    bad_id: str | None = None
     try:
+        # Seed INSIDE try so a failed second write cannot leak the first row
+        # (codex R1 LOW on this suite).
+        ok_id = await _store_scope_row(session_id, marker, problem_type, validation_passed=True)
+        assert ok_id, "store_scope_definition (validated) failed — cannot exercise the read"
+        bad_id = await _store_scope_row(
+            session_id, f"{marker}-unvalidated", problem_type, validation_passed=False
+        )
+        assert bad_id, "store_scope_definition (unvalidated) failed — cannot exercise the read"
+
         rows = await hooks.get_prior_scopes(problem_type=problem_type)
         by_id = {str(r.get("memory_id")): r for r in rows}
         assert str(ok_id) in by_id, (
@@ -505,5 +525,7 @@ async def test_scope_definer_get_prior_scopes_validation_filter_real(episodic_ro
             "problem_type filter is not actually filtering"
         )
     finally:
-        _cleanup_episodic(ok_id)
-        _cleanup_episodic(bad_id)
+        if ok_id:
+            _cleanup_episodic(ok_id)
+        if bad_id:
+            _cleanup_episodic(bad_id)
