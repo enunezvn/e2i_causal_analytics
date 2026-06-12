@@ -136,6 +136,10 @@ describe('CausalValueChains', () => {
     // may be invented (codex iter-1 HIGH-2: 'Just now' was a new fabrication).
     expect(screen.queryByText('Just now')).not.toBeInTheDocument();
     expect(screen.queryByText(/min ago/)).not.toBeInTheDocument();
+    // No impact-band label: the API provides no impact classification, and
+    // deriving 'High Impact' from confidence/path-length is a fabricated
+    // magnitude claim (codex iter-6 HIGH). The real magnitude is the result pill.
+    expect(screen.queryByText(/High Impact|Medium Impact|Low Impact/)).not.toBeInTheDocument();
   });
 
   it('renders a quantified ZERO effect as 0.0% Impact, not "Impact not quantified" (codex iter-1 MED-3)', () => {

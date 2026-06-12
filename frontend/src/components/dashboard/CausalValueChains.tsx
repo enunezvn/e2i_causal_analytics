@@ -3,15 +3,15 @@
  * =====================================
  *
  * Displays live tracking of causal value chains for the E2I dashboard.
- * Shows interactive causal chain cards with impact indicators and
- * confidence scores.
+ * Shows interactive causal chain cards with reported confidence scores and
+ * quantified terminal-node effects.
  *
  * Features:
  * - Interactive causal chain cards
  * - Visual chain path representation
- * - Impact indicators (high/medium/low)
- * - Confidence scores and methods
+ * - Reported confidence scores and methods (never fabricated defaults)
  * - Real-time API integration via useCausalChains
+ * - Honest empty state / labeled error state (no sample fallback)
  *
  * @module components/dashboard/CausalValueChains
  */
@@ -47,10 +47,13 @@ interface ChainCardData {
   confidence: number | null;
   /** Causal method recorded on the relationship; null when not reported. */
   method: string | null;
-  /** Derived impact band; null when confidence is unknown (no claim made). */
-  impact: 'high' | 'medium' | 'low' | null;
   icon: React.ReactNode;
 }
+
+// NOTE: there is intentionally NO impact band (high/medium/low). The API
+// provides no impact classification, and deriving one from confidence and
+// path length is a fabricated magnitude claim — the real magnitude is the
+// result pill (terminal-node value) or 'Impact not quantified'.
 
 interface CausalValueChainsProps {
   className?: string;
@@ -84,15 +87,6 @@ function getStatusConfig(status: ChainCardData['status']) {
   return config[status];
 }
 
-function getImpactConfig(impact: NonNullable<ChainCardData['impact']>) {
-  const config = {
-    high: { label: 'High Impact', className: 'text-emerald-600' },
-    medium: { label: 'Medium Impact', className: 'text-amber-600' },
-    low: { label: 'Low Impact', className: 'text-slate-500' },
-  };
-  return config[impact];
-}
-
 /**
  * Transform API GraphPath to ChainCardData
  */
@@ -110,14 +104,6 @@ function transformGraphPathToCard(
   if (confidence != null) {
     if (confidence >= 0.9) status = 'active';
     else if (confidence >= 0.7) status = 'in-progress';
-  }
-
-  // Impact band only when confidence is reported; otherwise make no claim.
-  let impact: ChainCardData['impact'] = null;
-  if (confidence != null) {
-    if (confidence >= 0.85 && path.path_length >= 3) impact = 'high';
-    else if (confidence >= 0.7) impact = 'medium';
-    else impact = 'low';
   }
 
   // Method only when recorded on the relationship — never default to 'DoWhy'.
@@ -149,7 +135,6 @@ function transformGraphPathToCard(
     method,
     // NOTE: no timestamp — GraphPath carries none, and inventing a recency
     // claim ('Just now' / '2 min ago') would be silently-fake data.
-    impact,
     icon:
       index === 0 ? (
         <BarChart3 className="h-4 w-4 text-blue-500" />
@@ -167,7 +152,6 @@ function transformGraphPathToCard(
 
 function ChainCard({ chain }: { chain: ChainCardData }) {
   const statusConfig = getStatusConfig(chain.status);
-  const impactConfig = chain.impact != null ? getImpactConfig(chain.impact) : null;
 
   return (
     <Card className="bg-[var(--color-card)] border-[var(--color-border)] hover:border-[var(--color-primary)]/30 transition-colors">
@@ -223,13 +207,6 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
                 <GitBranch className="h-3 w-3" />
                 <span>{chain.method}</span>
               </div>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {impactConfig && (
-              <span className={cn('text-xs font-medium', impactConfig.className)}>
-                {impactConfig.label}
-              </span>
             )}
           </div>
         </div>
