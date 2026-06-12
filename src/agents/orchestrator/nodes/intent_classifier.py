@@ -28,7 +28,7 @@ Multi-faceted detection (issues #256 + #288):
 import logging
 import re
 import time
-from typing import Literal, cast
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from src.agents.multi_faceted import (
     MULTI_FACETED_PATTERNS,
@@ -232,7 +232,18 @@ class IntentClassifierNode:
             intent = pattern_result
         else:
             # Fall back to LLM for genuinely ambiguous (low-confidence) cases.
-            intent = await self._llm_classify(state.get("query", ""))
+            # #883 read-side: ambiguous queries are exactly where conversation
+            # continuity pays — a follow-up like "what about the other brand?"
+            # carries no pattern signal of its own; the prior turns (hydrated
+            # from working memory by agent.run, or caller-supplied) give the
+            # LLM the missing referent. Routing consumes this classification,
+            # so context here IS CONTRACT_VALIDATION §10.3's "session context
+            # for routing". The pattern path above stays history-free by
+            # design: a strong pattern match is already unambiguous.
+            intent = await self._llm_classify(
+                state.get("query", ""),
+                conversation_history=state.get("conversation_history"),
+            )
 
         classification_time = int((time.time() - start_time) * 1000)
 
@@ -331,18 +342,55 @@ class IntentClassifierNode:
             requires_multi_agent=requires_multi_agent,
         )
 
-    async def _llm_classify(self, query: str) -> IntentClassification:
+    # Conversation-context bounds for the LLM-fallback prompt: last N turns,
+    # content truncated — classification needs the referent, not a transcript
+    # (the fallback runs on the <500ms classification path with a 2s LLM
+    # timeout; an unbounded history would blow the token/latency budget).
+    HISTORY_TURNS_IN_PROMPT = 4
+    HISTORY_CONTENT_CHARS = 240
+
+    @classmethod
+    def _format_history_block(cls, conversation_history: Optional[List[Dict[str, Any]]]) -> str:
+        """Render recent turns for the fallback prompt; '' when none usable."""
+        if not conversation_history:
+            return ""
+        lines = []
+        for msg in conversation_history[-cls.HISTORY_TURNS_IN_PROMPT :]:
+            if not isinstance(msg, dict):
+                continue
+            content = str(msg.get("content") or "").strip()
+            if not content:
+                continue
+            role = str(msg.get("role") or "user")
+            lines.append(f"{role}: {content[: cls.HISTORY_CONTENT_CHARS]}")
+        if not lines:
+            return ""
+        joined = "\n".join(lines)
+        return (
+            "Recent conversation (use it to resolve follow-up references "
+            f"in the query):\n{joined}\n\n"
+        )
+
+    async def _llm_classify(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> IntentClassification:
         """LLM-based classification for ambiguous cases.
 
         Args:
             query: User query
+            conversation_history: Optional prior turns (#883 read-side —
+                hydrated from working memory by agent.run or caller-supplied);
+                gives ambiguous follow-ups their referent context
 
         Returns:
             Intent classification result
         """
+        history_block = self._format_history_block(conversation_history)
         prompt = f"""Classify this pharmaceutical analytics query into ONE primary intent.
 
-Query: "{query}"
+{history_block}Query: "{query}"
 
 Intents:
 - causal_effect: Questions about cause and effect, impact, attribution
