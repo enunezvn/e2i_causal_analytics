@@ -775,6 +775,33 @@ describe('SAMPLE_KPIS green-badge edge (task 5)', () => {
     expect(screen.getByText('No KPIs available')).toBeInTheDocument();
   });
 
+  it('shows every live KPI under its REAL workstream tab — none silently vanish (codex iter-2 HIGH-1)', () => {
+    // Real backend workstreams (src/kpi/models.py Workstream enum) contain no
+    // 'commercial'/'hcp'/'patient'/'market' keywords, so the old keyword
+    // mapper dumped ALL live KPIs into 'causal' while the default Commercial
+    // tab claimed "No KPIs available" — a fake empty state over real data.
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        kpis: [
+          { id: 'trx', name: 'Total TRx', workstream: 'ws3_business', definition: 'TRx volume', unit: undefined },
+          { id: 'roc_auc', name: 'ROC AUC', workstream: 'ws1_model_performance', definition: 'Model AUC', unit: undefined },
+        ],
+        total: 2,
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithAllProviders(<Home />);
+
+    // Tabs reflect the REAL workstreams present.
+    expect(screen.getByRole('tab', { name: /Business/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Model Performance/ })).toBeInTheDocument();
+    // The first live tab is active and its KPI is visible — no fake empty state.
+    expect(screen.getByText('Total TRx')).toBeInTheDocument();
+    expect(screen.queryByText('No KPIs available')).not.toBeInTheDocument();
+  });
+
   it('never renders SAMPLE_KPIS while the KPI list is still loading (codex iter-1 HIGH-1)', () => {
     (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,

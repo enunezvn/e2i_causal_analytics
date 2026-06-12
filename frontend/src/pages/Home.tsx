@@ -135,12 +135,35 @@ const DATE_RANGES: { value: DateRange; label: string; description: string }[] = 
   { value: 'Last 12 Months', label: 'Last 12 Months', description: 'Rolling 12 months' },
 ];
 
+// Demo-mode (SAMPLE_KPIS) categories — only used when the API is offline.
 const KPI_CATEGORIES = [
   { id: 'commercial', label: 'Commercial', icon: DollarSign },
   { id: 'hcp', label: 'HCP Engagement', icon: Users },
   { id: 'patient', label: 'Patient Journey', icon: Activity },
   { id: 'market', label: 'Market Share', icon: Target },
   { id: 'causal', label: 'Causal Metrics', icon: Brain },
+];
+
+// REAL backend workstreams (src/kpi/models.py Workstream enum, populated from
+// config/kpi_definitions.yaml). Live tabs derive from these so every real KPI
+// is visible under its true workstream — the old keyword mapper
+// (includes('commercial')/...) matched NONE of the real values and dumped all
+// live KPIs into 'causal' while other tabs claimed to be empty.
+const WORKSTREAM_META: Record<string, { label: string; icon: typeof DollarSign }> = {
+  ws3_business: { label: 'Business', icon: DollarSign },
+  brand_specific: { label: 'Brand', icon: Pill },
+  causal_metrics: { label: 'Causal Metrics', icon: Brain },
+  ws2_triggers: { label: 'Triggers', icon: Zap },
+  ws1_model_performance: { label: 'Model Performance', icon: Target },
+  ws1_data_quality: { label: 'Data Quality', icon: BarChart3 },
+};
+const WORKSTREAM_ORDER = [
+  'ws3_business',
+  'brand_specific',
+  'causal_metrics',
+  'ws2_triggers',
+  'ws1_model_performance',
+  'ws1_data_quality',
 ];
 
 const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
@@ -428,18 +451,16 @@ function Home() {
     { retry: false }
   );
 
-  // Transform API KPIs to local KPIMetric format
+  // Transform API KPIs to local KPIMetric format. The category IS the real
+  // workstream value — no keyword guessing (which silently mis-binned every
+  // real KPI), no invented taxonomy.
   const apiKPIs = useMemo((): KPIMetric[] => {
     if (!kpiListData?.kpis) return [];
 
     return kpiListData.kpis.map((kpi) => ({
       id: kpi.id,
       name: kpi.name,
-      category: kpi.workstream?.includes('commercial') ? 'commercial'
-        : kpi.workstream?.includes('hcp') ? 'hcp'
-        : kpi.workstream?.includes('patient') ? 'patient'
-        : kpi.workstream?.includes('market') ? 'market'
-        : 'causal',
+      category: kpi.workstream ?? 'other',
       value: 0, // Value comes from separate calculation endpoint
       description: kpi.definition || '',
       trend: 'stable' as const,
@@ -508,11 +529,34 @@ function Home() {
   // Get navigation routes for quick actions
   const navRoutes = getNavigationRoutes().filter((route) => route.path !== '/');
 
+  // Category tabs: in live mode, derived from the REAL workstreams present in
+  // the API response (every KPI visible under its true workstream by
+  // construction); the fixed demo categories apply only to SAMPLE_KPIS.
+  const kpiCategories = useMemo(() => {
+    if (!liveKpiMode) return KPI_CATEGORIES;
+    const present = new Set(effectiveKPIs.map((k) => k.category));
+    const ordered = WORKSTREAM_ORDER.filter((ws) => present.has(ws));
+    const extras = [...present]
+      .filter((ws) => !WORKSTREAM_ORDER.includes(ws))
+      .sort();
+    return [...ordered, ...extras].map((ws) => ({
+      id: ws,
+      label: WORKSTREAM_META[ws]?.label ?? (ws === 'other' ? 'Other' : ws),
+      icon: WORKSTREAM_META[ws]?.icon ?? BarChart3,
+    }));
+  }, [liveKpiMode, effectiveKPIs]);
+
+  // Keep the active tab valid across demo/live category sets.
+  const activeCategory = useMemo(() => {
+    if (kpiCategories.some((c) => c.id === selectedCategory)) return selectedCategory;
+    return kpiCategories[0]?.id ?? selectedCategory;
+  }, [kpiCategories, selectedCategory]);
+
   // Filter KPIs by category and brand (uses API data when available)
   const filteredKPIs = useMemo(() => {
-    if (selectedCategory === 'all') return effectiveKPIs;
-    return effectiveKPIs.filter((kpi) => kpi.category === selectedCategory);
-  }, [effectiveKPIs, selectedCategory]);
+    if (activeCategory === 'all') return effectiveKPIs;
+    return effectiveKPIs.filter((kpi) => kpi.category === activeCategory);
+  }, [effectiveKPIs, activeCategory]);
 
   // Calculate summary stats (uses API data when available)
   const summaryStats = useMemo(() => {
@@ -954,10 +998,10 @@ function Home() {
               </div>
             </CardHeader>
             <CardContent>
-              {/* Category Tabs */}
-              <Tabs value={selectedCategory} onValueChange={setSelectedCategory} className="space-y-4">
+              {/* Category Tabs — live mode: the REAL workstreams present */}
+              <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
                 <TabsList className="flex flex-wrap">
-                  {KPI_CATEGORIES.map((cat) => (
+                  {kpiCategories.map((cat) => (
                     <TabsTrigger key={cat.id} value={cat.id} className="flex items-center gap-1.5">
                       <cat.icon className="h-3.5 w-3.5" />
                       <span className="hidden sm:inline">{cat.label}</span>
@@ -965,7 +1009,7 @@ function Home() {
                   ))}
                 </TabsList>
 
-                {KPI_CATEGORIES.map((cat) => (
+                {kpiCategories.map((cat) => (
                   <TabsContent key={cat.id} value={cat.id} className="mt-4">
                     {filteredKPIs.length === 0 ? (
                       kpisLoading ? (
