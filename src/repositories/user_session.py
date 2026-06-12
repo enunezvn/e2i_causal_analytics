@@ -22,6 +22,7 @@ class UserSessionRepository(BaseRepository):
 
     table_name = "user_sessions"
     model_class = None  # Set to UserSession model when available
+    id_column = "session_id"  # live PK (#894: .eq("id") was a latent 42703)
     # Provenance (#894): user_sessions carries is_synthetic (migration 063;
     # live substrate 10000/10000 synthetic at filing time), so real-mode
     # engagement/MAU reads default-exclude synthetic sessions. The

@@ -31,6 +31,7 @@ class AgentActivityRepository(BaseRepository):
 
     table_name = "agent_activities"
     model_class = None  # Set to AgentActivity model when available
+    id_column = "activity_id"  # live PK (#894: .eq("id") was a latent 42703)
     # Provenance (#894): agent_activities carries is_synthetic (migration 063).
     # The synthetic loader emits no agent_activities today (0 live rows), but a
     # future load must never surface planted "agent analyses" through the chat

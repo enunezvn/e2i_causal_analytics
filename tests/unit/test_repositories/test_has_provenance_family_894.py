@@ -813,3 +813,34 @@ async def test_feedback_summaries_exclude_synthetic(monkeypatch) -> None:
     _patch_procedural_client(monkeypatch, client2)
     await get_feedback_summary_for_agent("causal_impact")
     _assert_excludes(client2.last("learning_signals"), "get_feedback_summary_for_agent")
+
+
+# =============================================================================
+# id_column: live PKs pinned per repository (#894 — .eq("id") was a latent
+# 42703 on every table whose PK is a natural key; values verified against the
+# live schema's pg_index)
+# =============================================================================
+
+
+def test_id_column_matches_live_pk_per_repository() -> None:
+    from src.repositories.agent_activity import AgentActivityRepository
+    from src.repositories.business_metric import BusinessMetricRepository
+    from src.repositories.causal_path import CausalPathRepository
+    from src.repositories.patient_journey import PatientJourneyRepository
+    from src.repositories.prediction import PredictionRepository
+    from src.repositories.trigger import TriggerRepository
+    from src.repositories.user_session import UserSessionRepository
+
+    expected = {
+        CausalPathRepository: "path_id",
+        AgentActivityRepository: "activity_id",
+        UserSessionRepository: "session_id",
+        TriggerRepository: "trigger_id",
+        BusinessMetricRepository: "metric_id",
+        PatientJourneyRepository: "patient_journey_id",
+        PredictionRepository: "prediction_id",
+    }
+    for repo_cls, pk in expected.items():
+        assert repo_cls.id_column == pk, (
+            f"{repo_cls.__name__}.id_column must be {pk!r} (live PK), got {repo_cls.id_column!r}"
+        )

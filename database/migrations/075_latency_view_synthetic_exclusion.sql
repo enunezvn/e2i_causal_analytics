@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 072 (#894): exclude synthetic spans from v_agent_latency_summary
+-- Migration 075 (#894): exclude synthetic spans from v_agent_latency_summary
 -- ============================================================================
 -- ml_observability_spans is is_synthetic-tagged (migration 069) and the
 -- synthetic mlops generator loads spans with recent started_at values
