@@ -15,6 +15,7 @@ Memory Types Required (per CONTRACT_VALIDATION.md):
 """
 
 import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -221,6 +222,32 @@ class ExperimentDesignerMemoryHooks:
                 logger.warning(f"Could not initialize Supabase client: {e}")
         return self._supabase_client
 
+    # ------------------------------------------------------------------
+    # Working-memory raw-client helpers (#883 PR B): RedisWorkingMemory has
+    # no get/set/delete methods — the hook predated that API, so every cache
+    # call AttributeError'd into its except (surfaced by the agent-path
+    # wiring proof). Route through the raw client like the sibling hooks.
+    # ------------------------------------------------------------------
+
+    async def _wm_get_json(self, key: str) -> Optional[Dict[str, Any]]:
+        redis = await self.working_memory.get_client()
+        raw = await redis.get(key)
+        if raw is None:
+            return None
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    async def _wm_set_json(self, key: str, value: Dict[str, Any], ttl: int) -> None:
+        redis = await self.working_memory.get_client()
+        await redis.setex(key, ttl, json.dumps(value, default=str))
+
+    async def _wm_delete(self, key: str) -> None:
+        redis = await self.working_memory.get_client()
+        await redis.delete(key)
+
     # ========================================================================
     # Hybrid Retriever Wire-in (Phase 2 finishing, issue #373)
     # ========================================================================
@@ -327,14 +354,14 @@ class ExperimentDesignerMemoryHooks:
         try:
             # Check for session-specific cache
             session_key = f"experiment_designer:session:{session_id}"
-            session_cache = await self.working_memory.get(session_key)
+            session_cache = await self._wm_get_json(session_key)
             if session_cache:
                 cached_results.append(session_cache)
 
             # Check for question-specific cache (using hash)
             question_hash = self._hash_question(business_question)
             question_key = f"experiment_designer:question:{question_hash}"
-            question_cache = await self.working_memory.get(question_key)
+            question_cache = await self._wm_get_json(question_key)
             if question_cache:
                 cached_results.append(question_cache)
 
@@ -365,19 +392,24 @@ class ExperimentDesignerMemoryHooks:
             return []
 
         try:
-            # Query agent_activities for experiment_designer records
+            # Query agent_activities for experiment_designer records using its
+            # REAL columns (#883 §5): the original filters (.eq("agent_type")
+            # / .contains("metadata")) named nonexistent columns, so every
+            # call errored server-side, was swallowed below, and this reader
+            # returned [] forever.
             query = self.supabase_client.table("agent_activities").select("*")
 
-            # Filter by agent
-            query = query.eq("agent_type", "experiment_designer")
+            # Filter by agent and the design-record activity rows
+            query = query.eq("agent_name", "experiment_designer")
+            query = query.eq("activity_type", "experiment_design")
 
-            # Filter by brand if specified
+            # Filter by brand if specified (record.to_dict embeds brand)
             if brand:
-                query = query.contains("metadata", {"brand": brand})
+                query = query.contains("analysis_results", {"brand": brand})
 
             # Filter by design type if specified
             if design_type:
-                query = query.contains("metadata", {"design_type": design_type})
+                query = query.contains("analysis_results", {"design_type": design_type})
 
             # Order by recency and limit
             query = query.order("created_at", desc=True).limit(max_records * 2)
@@ -390,8 +422,8 @@ class ExperimentDesignerMemoryHooks:
                 question_words = set(business_question.lower().split())
 
                 for record in response.data:
-                    metadata = record.get("metadata", {})
-                    record_question = metadata.get("business_question", "").lower()
+                    analysis = record.get("analysis_results") or {}
+                    record_question = (analysis.get("business_question") or "").lower()
                     record_words = set(record_question.split())
 
                     # Simple keyword overlap scoring
@@ -428,12 +460,15 @@ class ExperimentDesignerMemoryHooks:
             return []
 
         try:
-            # Query for past experiments with this design type
+            # Query for past experiments with this design type using the REAL
+            # columns (#883 §5; both the design rows and the dedicated
+            # validity_threats batch rows carry analysis_results.design_type +
+            # .validity_threats, and the dedup below collapses duplicates).
             query = (
                 self.supabase_client.table("agent_activities")
-                .select("metadata")
-                .eq("agent_type", "experiment_designer")
-                .contains("metadata", {"design_type": design_type})
+                .select("analysis_results")
+                .eq("agent_name", "experiment_designer")
+                .contains("analysis_results", {"design_type": design_type})
                 .order("created_at", desc=True)
                 .limit(20)
             )
@@ -446,8 +481,8 @@ class ExperimentDesignerMemoryHooks:
                 unique_threats = []
 
                 for record in response.data:
-                    metadata = record.get("metadata", {})
-                    for threat in metadata.get("validity_threats", []):
+                    analysis = record.get("analysis_results") or {}
+                    for threat in analysis.get("validity_threats", []):
                         threat_key = f"{threat.get('threat_type')}:{threat.get('threat_name')}"
                         if threat_key not in threats_seen:
                             threats_seen.add(threat_key)
@@ -493,13 +528,13 @@ class ExperimentDesignerMemoryHooks:
                 "result": result,
                 "cached_at": datetime.now(timezone.utc).isoformat(),
             }
-            await self.working_memory.set(session_key, cache_data, ttl=self.CACHE_TTL_SECONDS)
+            await self._wm_set_json(session_key, cache_data, self.CACHE_TTL_SECONDS)
 
             # Also cache by question hash for reuse
             if business_question:
                 question_hash = self._hash_question(business_question)
                 question_key = f"experiment_designer:question:{question_hash}"
-                await self.working_memory.set(question_key, cache_data, ttl=self.CACHE_TTL_SECONDS)
+                await self._wm_set_json(question_key, cache_data, self.CACHE_TTL_SECONDS)
 
             logger.debug(f"Cached experiment design for session {session_id}")
             return True
@@ -522,7 +557,7 @@ class ExperimentDesignerMemoryHooks:
 
         try:
             session_key = f"experiment_designer:session:{session_id}"
-            cached = await self.working_memory.get(session_key)
+            cached = await self._wm_get_json(session_key)
             if cached:
                 return cast(Dict[str, Any], cached.get("result"))
         except Exception as e:
@@ -550,13 +585,13 @@ class ExperimentDesignerMemoryHooks:
         try:
             if session_id:
                 session_key = f"experiment_designer:session:{session_id}"
-                await self.working_memory.delete(session_key)
+                await self._wm_delete(session_key)
                 logger.debug(f"Invalidated cache for session {session_id}")
 
             if business_question:
                 question_hash = self._hash_question(business_question)
                 question_key = f"experiment_designer:question:{question_hash}"
-                await self.working_memory.delete(question_key)
+                await self._wm_delete(question_key)
                 logger.debug(f"Invalidated cache for question hash {question_hash}")
 
             return True
@@ -643,21 +678,33 @@ class ExperimentDesignerMemoryHooks:
                 for t in validity_threats
             ]
 
-            # Store in agent_activities table
+            # Store in agent_activities using its REAL columns (#883 §5). The
+            # original payload wrote 5 nonexistent columns (agent_type /
+            # session_id / query_text / result_summary / metadata) and omitted
+            # the defaultless NOT NULL PK activity_id + NOT NULL
+            # activity_timestamp — PGRST204/23502 on every call, swallowed
+            # below, so NO design was ever stored. Schema SSOT:
+            # database/core/e2i_ml_complete_v3_schema.sql:608 (re-verified
+            # against the live DB).
             activity_data = {
-                "agent_type": "experiment_designer",
+                "activity_id": f"expd_{record_id}",  # VARCHAR(30): 5 + 16 hex
+                "agent_name": "experiment_designer",
+                "agent_tier": "monitoring",  # tier 3 (agent_tier_mapping)
+                "activity_timestamp": datetime.now(timezone.utc).isoformat(),
                 "activity_type": "experiment_design",
-                "session_id": session_id,
-                "query_text": state.get("business_question", ""),
-                "result_summary": f"{result.get('design_type', 'RCT')} design with "
-                f"validity score {result.get('overall_validity_score', 0.0):.2f}",
-                "metadata": {
+                "processing_duration_ms": result.get("total_latency_ms", 0),
+                "input_data": {
+                    "session_id": session_id,
+                    "business_question": state.get("business_question", ""),
+                    "constraints": state.get("constraints", {}),
+                },
+                "analysis_results": {
                     **record.to_dict(),
                     "validity_threats": validity_threats_data,
                     "treatments": result.get("treatments", []),
                     "outcomes": result.get("outcomes", []),
                 },
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "status": "completed",
             }
 
             response = (
@@ -679,6 +726,7 @@ class ExperimentDesignerMemoryHooks:
         validity_threats: List[Dict[str, Any]],
         design_type: str,
         business_question: str,
+        session_id: Optional[str] = None,
     ) -> int:
         """Store validity threats for learning.
 
@@ -689,16 +737,16 @@ class ExperimentDesignerMemoryHooks:
             business_question: Business question context
 
         Returns:
-            Number of threats stored
+            Number of threats actually persisted (0 when the insert did not
+            land — never a fabricated count).
         """
         if not self.supabase_client or not validity_threats:
             return 0
 
-        stored_count = 0
         keywords = self._extract_keywords(business_question)
 
         try:
-            for threat in validity_threats:
+            threat_records = [
                 ValidityThreatRecord(
                     threat_id=self._generate_threat_id(experiment_record_id, threat),
                     experiment_record_id=experiment_record_id,
@@ -714,15 +762,53 @@ class ExperimentDesignerMemoryHooks:
                     mitigation_strategy=threat.get("mitigation_strategy"),
                     mitigation_effectiveness=threat.get("effectiveness_rating"),
                 )
+                for threat in validity_threats
+            ]
 
-                # Store as part of experiment metadata (already done in store_experiment_design)
-                # This method is for additional threat-specific queries if needed
-                stored_count += 1
+            # #883 §5: the original implementation constructed the records,
+            # made NO database call, yet returned len(threats) — a fabricated
+            # "N threats stored" success. Persist the batch as a dedicated
+            # threat-specific agent_activities row (real columns only) and
+            # return the count ONLY when the insert actually landed. The
+            # reader (get_similar_validity_threats) dedupes by
+            # threat_type:threat_name, so the copy embedded in the design row
+            # cannot double-count.
+            batch_id = hashlib.sha256(
+                f"{experiment_record_id}:threats:{datetime.now(timezone.utc).isoformat()}".encode()
+            ).hexdigest()[:16]
+            activity_data = {
+                "activity_id": f"expdt_{batch_id}",  # VARCHAR(30): 6 + 16 hex
+                "agent_name": "experiment_designer",
+                "agent_tier": "monitoring",
+                "activity_timestamp": datetime.now(timezone.utc).isoformat(),
+                "activity_type": "validity_threats",
+                "records_processed": len(threat_records),
+                "input_data": {
+                    "session_id": session_id,
+                    "experiment_record_id": experiment_record_id,
+                    "business_question_keywords": keywords,
+                },
+                "analysis_results": {
+                    "design_type": design_type,
+                    "validity_threats": [r.to_dict() for r in threat_records],
+                },
+                "status": "completed",
+            }
+
+            response = (
+                self.supabase_client.table("agent_activities").insert(activity_data).execute()
+            )
+            if response.data:
+                logger.info(
+                    f"Stored {len(threat_records)} validity threats for "
+                    f"experiment {experiment_record_id}"
+                )
+                return len(threat_records)
 
         except Exception as e:
             logger.warning(f"Error storing validity threats: {e}")
 
-        return stored_count
+        return 0
 
     # ========================================================================
     # Helper Methods
@@ -898,6 +984,7 @@ async def contribute_to_memory(
                 validity_threats=validity_threats,
                 design_type=result.get("design_type", "RCT"),
                 business_question=business_question,
+                session_id=session_id,
             )
             counts["episodic"] += threats_stored
 

@@ -1,17 +1,38 @@
-"""Drift Monitor Memory Hooks.
+"""Drift Monitor Memory Hooks — INTENTIONAL PLACEHOLDER, not wired (#883 PR B).
 
+Intent decision (2026-06-12, issue #883 §2/§4 — reason-before-rules
+investigation, KEEP-AS-INTENTIONAL-PLACEHOLDER):
+
+- ``agent.py`` declares **"Memory: None (stateless statistical computation)"**
+  — the agent's own design statement.
+- The in-repo ``CONTRACT_VALIDATION.md`` for drift_monitor contains NO memory
+  requirement at all (unlike e.g. the orchestrator's, which marks memory
+  integration BLOCKING) — the "per CONTRACT_VALIDATION.md" claim this
+  docstring previously made did not match the document.
+- This file was added by the platform-wide 4-memory rollout (1253622c,
+  2025-12-23) applied uniformly across agents; no caller was ever added and
+  nobody noticed the writes were schema-broken — no consumer ever needed it.
+- Drift detections ALREADY have a dedicated real persistence path for
+  trending: ``ml_drift_history`` via the drift_monitoring repositories
+  (#842/#845) — wiring these hooks would duplicate that store.
+
+DECISION: affirm stateless-by-design; the hooks stay UNWIRED. They are kept
+(not deleted) because they were added under the user-requested 4-memory
+initiative and remain the designated seam if drift-pattern memory is ever
+requested. The ``agent_activities`` payload and reader in this file were
+realigned to the table's real columns (#883 §5) so the placeholder is not a
+guaranteed-PGRST204 landmine for any future wiring; row-lands proof:
+tests/integration/test_agent_activities_realign_883b.py. KNOWN RESIDUAL: the
+working-memory cache helpers still call a pre-refactor Redis API
+(``working_memory.get/.set`` — RedisWorkingMemory exposes neither; they warn
+and degrade honestly). Fix via the raw-client pattern (see
+experiment_designer's ``_wm_*`` helpers) WHEN wiring is requested.
+
+Original design notes:
 Integrates the Drift Monitor agent with the 4-Memory Architecture:
 - Working Memory (Redis): Cache drift detection results with 24h TTL
 - Episodic Memory (Supabase + pgvector): Store past drift detections for pattern recognition
 - Semantic Memory (FalkorDB + Graphity): Store drift patterns and affected feature relationships
-
-Contract: .claude/contracts/tier3-contracts.md
-Architecture: .claude/contracts/4-MEMORY_ARCHITECTURE_CONTRACT.md
-
-Memory Types Required (per CONTRACT_VALIDATION.md):
-- Working: Yes (drift result caching)
-- Episodic: Yes (drift detection history)
-- Semantic: Yes (drift pattern relationships)
 - Procedural: No (statistical computation, no LLM prompts to optimize)
 """
 
@@ -396,19 +417,22 @@ class DriftMonitorMemoryHooks:
             return []
 
         try:
-            # Query agent_activities for drift_monitor records
+            # Query agent_activities for drift_monitor records using its REAL
+            # columns (#883 §5: the original agent_type/metadata filters named
+            # nonexistent columns -> server-side error swallowed -> []).
             query = self.supabase_client.table("agent_activities").select("*")
 
             # Filter by agent
-            query = query.eq("agent_type", "drift_monitor")
+            query = query.eq("agent_name", "drift_monitor")
+            query = query.eq("activity_type", "drift_detection")
 
             # Filter by model if specified
             if model_id:
-                query = query.contains("metadata", {"model_id": model_id})
+                query = query.contains("analysis_results", {"model_id": model_id})
 
             # Filter by brand if specified
             if brand:
-                query = query.contains("metadata", {"brand": brand})
+                query = query.contains("analysis_results", {"brand": brand})
 
             # Order by recency and limit
             query = query.order("created_at", desc=True).limit(max_records)
@@ -419,7 +443,8 @@ class DriftMonitorMemoryHooks:
                 # Filter for feature overlap
                 relevant_records = []
                 for record in response.data:
-                    record_features = record.get("metadata", {}).get("features_monitored", [])
+                    analysis = record.get("analysis_results") or {}
+                    record_features = analysis.get("features_monitored", [])
                     if set(features) & set(record_features):
                         relevant_records.append(record)
                 return relevant_records[:max_records]
@@ -697,15 +722,26 @@ class DriftMonitorMemoryHooks:
                 warnings=result.get("warnings", []),
             )
 
-            # Store in agent_activities table
+            # Store in agent_activities using its REAL columns (#883 §5). The
+            # original payload wrote 5 nonexistent columns and omitted the
+            # defaultless NOT NULL PK activity_id + NOT NULL
+            # activity_timestamp — PGRST204/23502 swallowed below. Schema
+            # SSOT: database/core/e2i_ml_complete_v3_schema.sql:608.
             activity_data = {
-                "agent_type": "drift_monitor",
+                "activity_id": f"drift_{record_id}"[:30],  # VARCHAR(30)
+                "agent_name": "drift_monitor",
+                "agent_tier": "monitoring",  # tier 3 (agent_tier_mapping)
+                "activity_timestamp": datetime.now(timezone.utc).isoformat(),
                 "activity_type": "drift_detection",
-                "session_id": session_id,
-                "query_text": state.get("query", ""),
-                "result_summary": result.get("drift_summary", ""),
-                "metadata": record.to_dict(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "processing_duration_ms": result.get("total_latency_ms", 0),
+                "input_data": {
+                    "session_id": session_id,
+                    "query": state.get("query", ""),
+                    "model_id": state.get("model_id"),
+                    "time_window": state.get("time_window", "7d"),
+                },
+                "analysis_results": record.to_dict(),
+                "status": "completed",
             }
 
             response = (

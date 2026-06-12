@@ -5,6 +5,7 @@ Tests the 4-Memory Architecture integration for experiment design:
 - Episodic Memory: Storing design history for learning
 """
 
+import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -292,9 +293,12 @@ class TestExperimentDesignerMemoryHooksWithMocks:
         """Test successful caching with mocked Redis."""
         hooks = ExperimentDesignerMemoryHooks()
 
+        # #883 PR B: the hooks now use the raw Redis client (RedisWorkingMemory
+        # has no .set) — mock the get_client() -> redis.setex path.
         mock_redis = AsyncMock()
-        mock_redis.set = AsyncMock(return_value=True)
-        hooks._working_memory = mock_redis
+        mock_wm = MagicMock()
+        mock_wm.get_client = AsyncMock(return_value=mock_redis)
+        hooks._working_memory = mock_wm
 
         result = await hooks.cache_experiment_design(
             session_id="test-session",
@@ -304,7 +308,7 @@ class TestExperimentDesignerMemoryHooksWithMocks:
 
         assert result is True
         # Session cache + question cache
-        assert mock_redis.set.call_count == 2
+        assert mock_redis.setex.call_count == 2
 
     @pytest.mark.asyncio
     async def test_get_cached_experiment_design_success(self):
@@ -315,9 +319,13 @@ class TestExperimentDesignerMemoryHooksWithMocks:
             "result": {"design_type": "RCT"},
             "cached_at": datetime.now(timezone.utc).isoformat(),
         }
+        # #883 PR B: raw-client path; Redis returns the JSON string the hook
+        # serialized at write time.
         mock_redis = AsyncMock()
-        mock_redis.get = AsyncMock(return_value=cached_data)
-        hooks._working_memory = mock_redis
+        mock_redis.get = AsyncMock(return_value=json.dumps(cached_data))
+        mock_wm = MagicMock()
+        mock_wm.get_client = AsyncMock(return_value=mock_redis)
+        hooks._working_memory = mock_wm
 
         result = await hooks.get_cached_experiment_design("test-session")
 
@@ -330,8 +338,9 @@ class TestExperimentDesignerMemoryHooksWithMocks:
         hooks = ExperimentDesignerMemoryHooks()
 
         mock_redis = AsyncMock()
-        mock_redis.delete = AsyncMock(return_value=True)
-        hooks._working_memory = mock_redis
+        mock_wm = MagicMock()
+        mock_wm.get_client = AsyncMock(return_value=mock_redis)
+        hooks._working_memory = mock_wm
 
         result = await hooks.invalidate_cache(
             session_id="test-session",
@@ -395,13 +404,15 @@ class TestExperimentDesignerMemoryHooksWithMocks:
         mock_response = MagicMock()
         mock_response.data = [
             {
-                "metadata": {
+                # #883 PR B: the realigned reader consumes the REAL
+                # agent_activities column (analysis_results).
+                "analysis_results": {
                     "business_question": "Does rep visit improve engagement?",
                     "design_type": "RCT",
                 }
             },
             {
-                "metadata": {
+                "analysis_results": {
                     "business_question": "Unrelated experiment question",
                     "design_type": "quasi_experiment",
                 }
@@ -436,7 +447,7 @@ class TestExperimentDesignerMemoryHooksWithMocks:
         mock_response = MagicMock()
         mock_response.data = [
             {
-                "metadata": {
+                "analysis_results": {
                     "design_type": "RCT",
                     "validity_threats": [
                         {"threat_type": "internal", "threat_name": "Attrition"},
@@ -445,7 +456,7 @@ class TestExperimentDesignerMemoryHooksWithMocks:
                 }
             },
             {
-                "metadata": {
+                "analysis_results": {
                     "design_type": "RCT",
                     "validity_threats": [
                         {"threat_type": "internal", "threat_name": "Attrition"},  # Duplicate
@@ -482,11 +493,13 @@ class TestExperimentDesignerMemoryHooksWithMocks:
         mock_redis = AsyncMock()
         mock_redis.get = AsyncMock(
             side_effect=[
-                {"result": "session_cache"},
-                {"result": "question_cache"},
+                json.dumps({"result": "session_cache"}),
+                json.dumps({"result": "question_cache"}),
             ]
         )
-        hooks._working_memory = mock_redis
+        mock_wm = MagicMock()
+        mock_wm.get_client = AsyncMock(return_value=mock_redis)
+        hooks._working_memory = mock_wm
 
         context = await hooks._get_working_memory_context(
             session_id="test-session",

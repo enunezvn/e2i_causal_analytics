@@ -49,3 +49,38 @@ def _end_all_mlflow_runs():
                 break
     except (ImportError, Exception):
         pass
+
+
+import pytest as _pytest_883b
+
+
+@_pytest_883b.fixture(autouse=True)
+def _hermetic_memory_clients_883b(monkeypatch):
+    """Keep unit tests off the live memory backends (#883 PR B).
+
+    Before #883 the agent_activities insert in this agent's memory hooks was
+    schema-broken (PGRST204 swallowed -> None), so this suite was de-facto
+    hermetic even on a creds-configured dev box. Now that the write actually
+    LANDS, an unmocked hook call would insert REAL rows into the live DB
+    mid-unit-run (the 883-A lesson). Force the lazy client factories to fail
+    init — the hooks degrade to their honest "no client" paths. Tests that
+    exercise a specific client behavior set ``hooks._supabase_client`` /
+    ``hooks._working_memory`` / ``hooks._semantic_memory`` directly, which
+    bypasses the factories entirely.
+    """
+
+    def _unavailable(*_args, **_kwargs):
+        raise RuntimeError(
+            "hermetic unit-test memory layer (#883): set the hook's private "
+            "client attribute directly if the test needs a specific behavior"
+        )
+
+    import src.repositories as repositories
+
+    monkeypatch.setattr(repositories, "get_supabase_client", _unavailable)
+    import src.memory.working_memory as working_memory
+
+    monkeypatch.setattr(working_memory, "get_working_memory", _unavailable)
+    import src.memory.semantic_memory as semantic_memory
+
+    monkeypatch.setattr(semantic_memory, "get_semantic_memory", _unavailable)
