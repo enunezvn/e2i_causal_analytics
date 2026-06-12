@@ -37,7 +37,14 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
     showRefutationTests?: boolean;
     nodes?: Array<{ id: string; label: string }>;
     edges?: Array<{ id: string }>;
-    effects?: Array<{ id: string; estimate: number; treatment: string }>;
+    effects?: Array<{
+      id: string;
+      estimate: number;
+      treatment: string;
+      ciLower?: number;
+      ciUpper?: number;
+      confidenceLevel?: number;
+    }>;
     refutationResults?: Array<{ id: string }>;
   }) => (
     <div data-testid="causal-discovery-viz">
@@ -52,7 +59,12 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
         {String(refutationResults?.length ?? '__undefined__')}
       </div>
       <div data-testid="viz-effect-estimates">
-        {(effects ?? []).map((e) => `${e.treatment}:${e.estimate}`).join('|')}
+        {(effects ?? [])
+          .map(
+            (e) =>
+              `${e.treatment}:${e.estimate}:ci=${e.ciLower ?? 'none'},${e.ciUpper ?? 'none'}:lvl=${e.confidenceLevel ?? 'none'}`
+          )
+          .join('|')}
       </div>
       <div data-testid="viz-node-labels">{(nodes ?? []).map((n) => n.label).join('|')}</div>
     </div>
@@ -236,7 +248,8 @@ describe('CausalDiscovery Page', () => {
         libraries_failed: [],
         library_results: {
           dowhy: { effect_estimate: 0.123, ci_lower: 0.05, ci_upper: 0.2 },
-          econml: { effect_estimate: 0.117, ci_lower: 0.04, ci_upper: 0.19 },
+          // econml reports an estimate WITHOUT CI bounds — nothing may be invented.
+          econml: { effect_estimate: 0.117 },
         },
         consensus_effect: 0.12,
         consensus_ci_lower: 0.045,
@@ -250,8 +263,14 @@ describe('CausalDiscovery Page', () => {
       renderWithAllProviders(<CausalDiscovery />);
 
       const estimates = screen.getByTestId('viz-effect-estimates').textContent ?? '';
-      expect(estimates).toContain('0.123');
-      expect(estimates).toContain('0.117');
+      expect(estimates).toContain('0.123:ci=0.05,0.2');
+      // Missing CI bounds stay missing — never synthesized from the estimate
+      // (the old code did `ci_lower ?? effect_estimate`, faking a zero-width CI).
+      expect(estimates).toContain('0.117:ci=none,none');
+      expect(estimates).not.toContain('0.117:ci=0.117');
+      // No invented confidence level: the pipeline request/response has no
+      // confidence_level field, so labeling 0.95 was fabrication.
+      expect(estimates).not.toContain('lvl=0.95');
       // The fabricated SAMPLE effect must never appear.
       expect(estimates).not.toContain('0.45');
     });

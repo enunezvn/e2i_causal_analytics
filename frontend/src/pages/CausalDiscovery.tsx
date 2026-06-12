@@ -244,6 +244,19 @@ function CausalDiscovery() {
     if (!pipelineData) return [];
     const effects: CausalEffect[] = [];
 
+    // CI bounds are included ONLY when the backend reports both of them —
+    // a missing interval stays missing (rendered as an em dash), never
+    // synthesized from the point estimate. No confidence level is labeled
+    // either: the pipeline schema carries no confidence_level field, so
+    // asserting "95%" would be fabrication.
+    const realCI = (
+      lower: unknown,
+      upper: unknown
+    ): { ciLower: number; ciUpper: number } | undefined =>
+      typeof lower === 'number' && typeof upper === 'number'
+        ? { ciLower: lower, ciUpper: upper }
+        : undefined;
+
     for (const [library, raw] of Object.entries(
       pipelineData.library_results ?? {}
     )) {
@@ -258,9 +271,7 @@ function CausalDiscovery() {
         treatment: treatmentVar,
         outcome: outcomeVar,
         estimate: result.effect_estimate,
-        ciLower: result.ci_lower ?? result.effect_estimate,
-        ciUpper: result.ci_upper ?? result.effect_estimate,
-        confidenceLevel: 0.95,
+        ...realCI(result.ci_lower, result.ci_upper),
         metadata: { library },
       });
     }
@@ -271,9 +282,10 @@ function CausalDiscovery() {
         treatment: treatmentVar,
         outcome: outcomeVar,
         estimate: pipelineData.consensus_effect,
-        ciLower: pipelineData.consensus_ci_lower ?? pipelineData.consensus_effect,
-        ciUpper: pipelineData.consensus_ci_upper ?? pipelineData.consensus_effect,
-        confidenceLevel: 0.95,
+        ...realCI(
+          pipelineData.consensus_ci_lower,
+          pipelineData.consensus_ci_upper
+        ),
         metadata: { library: 'consensus' },
       });
     }

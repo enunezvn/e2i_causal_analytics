@@ -440,6 +440,32 @@ describe('EffectsTable', () => {
     });
   });
 
+  describe('Missing CI bounds (honest rendering)', () => {
+    it('renders an em dash, not a fabricated zero-width interval, when CI bounds are absent', () => {
+      // A library result can report an effect estimate without CI bounds.
+      // The table must NOT synthesize an interval from the point estimate.
+      render(
+        <EffectsTable
+          effects={[
+            {
+              id: 'no-ci',
+              treatment: 'rep_visits',
+              outcome: 'trx_count',
+              estimate: 0.123,
+              isSignificant: undefined,
+            },
+          ]}
+          showCIBars
+        />
+      );
+
+      expect(screen.getByText('0.123')).toBeInTheDocument();
+      // No "[0.123, 0.123]" fake interval.
+      expect(screen.queryByText(/\[0\.123, 0\.123\]/)).not.toBeInTheDocument();
+      expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    });
+  });
+
   describe('Loading State', () => {
     it('shows loading spinner when isLoading is true', () => {
       const { container } = render(<EffectsTable effects={mockEffects} isLoading />);
