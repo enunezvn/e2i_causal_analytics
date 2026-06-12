@@ -497,7 +497,14 @@ function Home() {
   const liveKpiMode = apiKPIs.length > 0;
 
   // Fetch real KPI values for the live ids via the batch calculation endpoint.
-  const { mutate: batchCalc, data: batchData } = useBatchCalculateKPIs();
+  const {
+    mutate: batchCalc,
+    data: batchData,
+    isError: batchError,
+  } = useBatchCalculateKPIs();
+  // A failed batch REQUEST is a degraded state (labeled below) — distinct
+  // from the backend honestly answering value:null ("Not yet computed").
+  const batchFailed = batchError && !batchData;
   const kpiListIds = useMemo(
     () => kpiListData?.kpis?.map((k) => k.id) ?? [],
     [kpiListData]
@@ -593,7 +600,9 @@ function Home() {
             : 'info') as 'critical' | 'warning' | 'info',
         title: a.title || a.alert_type || 'Alert',
         message: a.description || '',
-        time: a.triggered_at ? new Date(a.triggered_at).toLocaleString() : 'recently',
+        // Honest timestamp: only what the API reports — never an invented
+        // 'recently'. null hides the timestamp (and its separator) entirely.
+        time: a.triggered_at ? new Date(a.triggered_at).toLocaleString() : null,
       }));
   }, [alertsData, dismissedAlerts]);
 
@@ -928,7 +937,8 @@ function Home() {
                       {alert.title}
                     </p>
                     <p className="text-xs text-[var(--color-muted-foreground)]">
-                      {alert.message} • {alert.time}
+                      {alert.message}
+                      {alert.time ? ` • ${alert.time}` : ''}
                     </p>
                   </div>
                 </div>
@@ -998,6 +1008,17 @@ function Home() {
               </div>
             </CardHeader>
             <CardContent>
+              {/* Labeled degraded notice: the batch VALUES request failed —
+                  distinct from the backend honestly returning value:null. */}
+              {liveKpiMode && batchFailed && (
+                <p
+                  role="alert"
+                  className="mb-3 text-xs text-amber-600 dark:text-amber-400"
+                >
+                  KPI values unavailable — the batch calculation request
+                  failed. Cards show metadata only.
+                </p>
+              )}
               {/* Category Tabs — live mode: the REAL workstreams present */}
               <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
                 <TabsList className="flex flex-wrap">
@@ -1034,7 +1055,13 @@ function Home() {
                             <KPICard
                               key={kpi.id}
                               title={kpi.name}
-                              value={hasValue ? (r!.value as number) : 'Not yet computed'}
+                              value={
+                                hasValue
+                                  ? (r!.value as number)
+                                  : batchFailed
+                                    ? 'Unavailable'
+                                    : 'Not yet computed'
+                              }
                               unit={hasValue ? kpi.unit : undefined}
                               target={hasValue ? kpi.target : undefined}
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}

@@ -76,6 +76,7 @@ function resetHomeHookDefaults() {
   (useBatchCalculateKPIs as ReturnType<typeof vi.fn>).mockReturnValue({
     mutate: vi.fn(),
     data: undefined,
+    isError: false,
   });
   (useKPIValue as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
@@ -584,6 +585,39 @@ describe('Home', () => {
       }
     });
 
+    it('does NOT invent "recently" for a real alert missing triggered_at (codex iter-5 HIGH-1)', () => {
+      (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          total_count: 1,
+          active_count: 1,
+          alerts: [
+            {
+              id: 'alert_003',
+              alert_type: 'drift',
+              severity: 'high',
+              title: 'Drift alert without timestamp',
+              description: 'No triggered_at supplied by the API',
+              status: 'active',
+              // triggered_at intentionally absent
+            },
+          ],
+        },
+        isLoading: false,
+        error: null,
+      });
+
+      renderWithAllProviders(<Home />);
+
+      expect(screen.getByText('Drift alert without timestamp')).toBeInTheDocument();
+      // The fabricated recency claim must not render.
+      expect(screen.queryByText(/recently/)).not.toBeInTheDocument();
+      // No dangling separator: message renders without ' • '.
+      expect(
+        screen.getByText('No triggered_at supplied by the API')
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/•/)).not.toBeInTheDocument();
+    });
+
     it('can dismiss real alerts (string ids, no Math.random keys)', () => {
       (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
         data: REAL_ALERTS,
@@ -808,6 +842,33 @@ describe('SAMPLE_KPIS green-badge edge (task 5)', () => {
     fireEvent.click(mpTab);
     expect(screen.getByText('ROC AUC')).toBeInTheDocument();
     expect(screen.queryByText('No KPIs available')).not.toBeInTheDocument();
+  });
+
+  it('labels a failed batch-values request as degraded, not "Not yet computed" (codex iter-5 HIGH-2)', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        kpis: [
+          { id: 'trx', name: 'Total TRx', workstream: 'ws3_business', definition: 'TRx volume', unit: undefined },
+        ],
+        total: 1,
+      },
+      isLoading: false,
+      error: null,
+    });
+    (useBatchCalculateKPIs as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: undefined,
+      isError: true,
+    });
+
+    renderWithAllProviders(<Home />);
+
+    // A request failure is a labeled degraded state, NOT the honest
+    // per-KPI "Not yet computed" (which means the backend answered null).
+    expect(screen.getByText(/KPI values unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText('Not yet computed')).not.toBeInTheDocument();
+    // The metadata still renders.
+    expect(screen.getByText('Total TRx')).toBeInTheDocument();
   });
 
   it('never renders SAMPLE_KPIS while the KPI list is still loading (codex iter-1 HIGH-1)', () => {
