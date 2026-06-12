@@ -324,3 +324,32 @@ def _no_live_supabase_in_recipient_tests(monkeypatch):
         "src.memory.services.factories.get_supabase_client",
         lambda: None,
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_memory_hooks(monkeypatch):
+    """Isolate this tree from the live episodic/working memory stores (#883-A).
+
+    The guard above stops ``dspy_agent_training_signals`` writes, but it does
+    NOT stop the explainer's episodic path: ``narrative_generator``'s lazy
+    ``get_explanation_memory_hooks()`` → ``store_explanation`` →
+    ``insert_episodic_memory_with_text``, which binds ``get_supabase_client``
+    at MODULE level in ``src.memory.episodic_memory`` — a factories-module
+    monkeypatch never reaches that binding. From a creds-configured dev box
+    this tree deposited 47 real ``explanation_generated`` rows in one run
+    (observed 2026-06-12 during the #883 read-side ripple; the same
+    pre-existing leak class #886 fixed for tool_composer — writes always
+    "worked" here because explainer's hooks were wired long ago).
+
+    Both the agent property and the node resolve the factory via a call-time
+    local import from ``src.agents.explainer.memory_hooks``, so patching the
+    source symbol makes every lazy property see "memory hooks unavailable"
+    (None) — each path's own honest no-op branch. Tests that construct
+    ``ExplanationMemoryHooks`` directly (test_memory_hooks_outcome_876) or
+    patch the agent property (test_memory_failures) bypass the factory and
+    are unaffected.
+    """
+    monkeypatch.setattr(
+        "src.agents.explainer.memory_hooks.get_explanation_memory_hooks",
+        lambda: None,
+    )
