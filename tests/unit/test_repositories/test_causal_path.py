@@ -2,6 +2,11 @@
 Unit tests for CausalPathRepository.
 
 Tests causal relationship queries and path traversal.
+
+The query mocks are self-chaining (``eq``/``limit``/``offset`` return the same
+mock) so they tolerate the provenance predicate ``.eq("is_synthetic", False)``
+appended by real-mode reads since #893 (``HAS_PROVENANCE = True``). The
+predicate itself is pinned in ``test_causal_path_provenance.py``.
 """
 
 from unittest.mock import AsyncMock, MagicMock
@@ -10,6 +15,19 @@ from uuid import uuid4
 import pytest
 
 from src.repositories.causal_path import CausalPathRepository
+
+
+def _install_chain_query(mock_client, data):
+    """Install a self-chaining supabase-style query mock returning ``data``."""
+    query = MagicMock()
+    query.eq.return_value = query
+    query.limit.return_value = query
+    query.offset.return_value = query
+    result = MagicMock()
+    result.data = data
+    query.execute = AsyncMock(return_value=result)
+    mock_client.table.return_value.select.return_value = query
+    return query
 
 
 @pytest.mark.unit
@@ -63,35 +81,23 @@ class TestGetPathsForCause(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_returns_all_paths_from_cause(self, repo, mock_client, sample_paths):
         """Test that all paths originating from a cause are returned."""
-        mock_result = MagicMock()
-        mock_result.data = sample_paths
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        query = _install_chain_query(mock_client, sample_paths)
 
         result = await repo.get_paths_for_cause(cause="HCP_engagement")
 
         assert len(result) == 2
         mock_client.table.assert_called_with("causal_paths")
+        query.eq.assert_any_call("cause", "HCP_engagement")
 
     @pytest.mark.asyncio
     async def test_respects_limit(self, repo, mock_client, sample_paths):
         """Test that limit is respected."""
-        mock_result = MagicMock()
-        mock_result.data = sample_paths[:1]
-        mock_execute = AsyncMock(return_value=mock_result)
-
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq = MagicMock()
-        mock_eq.limit.return_value = mock_limit
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq
+        query = _install_chain_query(mock_client, sample_paths[:1])
 
         result = await repo.get_paths_for_cause(cause="HCP_engagement", limit=1)
 
         assert len(result) == 1
-        mock_eq.limit.assert_called_with(1)
+        query.limit.assert_called_with(1)
 
 
 @pytest.mark.unit
@@ -101,34 +107,22 @@ class TestGetPathsForEffect(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_returns_all_paths_to_effect(self, repo, mock_client, sample_paths):
         """Test that all paths leading to an effect are returned."""
-        mock_result = MagicMock()
-        mock_result.data = [sample_paths[0]]
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        query = _install_chain_query(mock_client, [sample_paths[0]])
 
         result = await repo.get_paths_for_effect(effect="TRx_growth")
 
         assert len(result) == 1
+        query.eq.assert_any_call("effect", "TRx_growth")
 
     @pytest.mark.asyncio
     async def test_respects_limit(self, repo, mock_client, sample_paths):
         """Test that limit is respected."""
-        mock_result = MagicMock()
-        mock_result.data = sample_paths[:1]
-        mock_execute = AsyncMock(return_value=mock_result)
-
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq = MagicMock()
-        mock_eq.limit.return_value = mock_limit
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq
+        query = _install_chain_query(mock_client, sample_paths[:1])
 
         result = await repo.get_paths_for_effect(effect="TRx_growth", limit=1)
 
         assert len(result) == 1
-        mock_eq.limit.assert_called_with(1)
+        query.limit.assert_called_with(1)
 
 
 @pytest.mark.unit
@@ -138,41 +132,17 @@ class TestGetPathBetween(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_returns_path_when_exists(self, repo, mock_client, sample_paths):
         """Test that path is returned when it exists."""
-        mock_result = MagicMock()
-        mock_result.data = [sample_paths[0]]
-        mock_execute = AsyncMock(return_value=mock_result)
-
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq_effect = MagicMock()
-        mock_eq_effect.limit.return_value = mock_limit
-        mock_eq_cause = MagicMock()
-        mock_eq_cause.eq.return_value = mock_eq_effect
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_cause
+        query = _install_chain_query(mock_client, [sample_paths[0]])
 
         result = await repo.get_path_between(cause="HCP_engagement", effect="TRx_growth")
 
         assert result is not None
-        mock_eq_cause.eq.assert_called_with("effect", "TRx_growth")
+        query.eq.assert_any_call("effect", "TRx_growth")
 
     @pytest.mark.asyncio
     async def test_returns_none_when_not_exists(self, repo, mock_client):
         """Test that None is returned when path doesn't exist."""
-        mock_result = MagicMock()
-        mock_result.data = []
-        mock_execute = AsyncMock(return_value=mock_result)
-
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq_effect = MagicMock()
-        mock_eq_effect.limit.return_value = mock_limit
-        mock_eq_cause = MagicMock()
-        mock_eq_cause.eq.return_value = mock_eq_effect
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_cause
+        _install_chain_query(mock_client, [])
 
         result = await repo.get_path_between(cause="X", effect="Y")
 
@@ -181,44 +151,22 @@ class TestGetPathBetween(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_applies_both_filters(self, repo, mock_client, sample_paths):
         """Test that both cause and effect filters are applied."""
-        mock_result = MagicMock()
-        mock_result.data = [sample_paths[0]]
-        mock_execute = AsyncMock(return_value=mock_result)
-
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq_effect = MagicMock()
-        mock_eq_effect.limit.return_value = mock_limit
-        mock_eq_cause = MagicMock()
-        mock_eq_cause.eq.return_value = mock_eq_effect
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_cause
+        query = _install_chain_query(mock_client, [sample_paths[0]])
 
         result = await repo.get_path_between(cause="HCP_engagement", effect="TRx_growth")
 
         assert result is not None
+        query.eq.assert_any_call("cause", "HCP_engagement")
+        query.eq.assert_any_call("effect", "TRx_growth")
 
     @pytest.mark.asyncio
     async def test_limits_to_one_result(self, repo, mock_client, sample_paths):
         """Test that only one result is returned."""
-        mock_result = MagicMock()
-        mock_result.data = [sample_paths[0]]
-        mock_execute = AsyncMock(return_value=mock_result)
-
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq_effect = MagicMock()
-        mock_eq_effect.limit.return_value = mock_limit
-        mock_eq_cause = MagicMock()
-        mock_eq_cause.eq.return_value = mock_eq_effect
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_cause
+        query = _install_chain_query(mock_client, [sample_paths[0]])
 
         await repo.get_path_between(cause="HCP_engagement", effect="TRx_growth")
 
-        mock_eq_effect.limit.assert_called_with(1)
+        query.limit.assert_called_with(1)
 
 
 @pytest.mark.unit
@@ -228,34 +176,22 @@ class TestGetByBrand(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_filters_by_brand(self, repo, mock_client, sample_paths):
         """Test that brand filter is applied."""
-        mock_result = MagicMock()
-        mock_result.data = sample_paths
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        query = _install_chain_query(mock_client, sample_paths)
 
         result = await repo.get_by_brand(brand="Kisqali")
 
         assert len(result) == 2
+        query.eq.assert_any_call("brand", "Kisqali")
 
     @pytest.mark.asyncio
     async def test_respects_limit(self, repo, mock_client, sample_paths):
         """Test that limit is respected."""
-        mock_result = MagicMock()
-        mock_result.data = sample_paths[:1]
-        mock_execute = AsyncMock(return_value=mock_result)
-
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq = MagicMock()
-        mock_eq.limit.return_value = mock_limit
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq
+        query = _install_chain_query(mock_client, sample_paths[:1])
 
         result = await repo.get_by_brand(brand="Kisqali", limit=1)
 
         assert len(result) == 1
-        mock_eq.limit.assert_called_with(1)
+        query.limit.assert_called_with(1)
 
 
 @pytest.mark.unit
@@ -265,10 +201,7 @@ class TestCausalPathEdgeCases(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_handles_empty_cause_list(self, repo, mock_client):
         """Test handling when no paths exist for a cause."""
-        mock_result = MagicMock()
-        mock_result.data = []
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_chain_query(mock_client, [])
 
         result = await repo.get_paths_for_cause(cause="NonexistentCause")
 
@@ -277,10 +210,7 @@ class TestCausalPathEdgeCases(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_handles_empty_effect_list(self, repo, mock_client):
         """Test handling when no paths exist for an effect."""
-        mock_result = MagicMock()
-        mock_result.data = []
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_chain_query(mock_client, [])
 
         result = await repo.get_paths_for_effect(effect="NonexistentEffect")
 
@@ -289,10 +219,7 @@ class TestCausalPathEdgeCases(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_handles_empty_brand_list(self, repo, mock_client):
         """Test handling when no paths exist for a brand."""
-        mock_result = MagicMock()
-        mock_result.data = []
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_chain_query(mock_client, [])
 
         result = await repo.get_by_brand(brand="NonexistentBrand")
 
@@ -306,10 +233,7 @@ class TestCausalPathInheritance(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_inherits_get_by_id(self, repo, mock_client, sample_paths):
         """Test that get_by_id is inherited from BaseRepository."""
-        mock_result = MagicMock()
-        mock_result.data = [sample_paths[0]]
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.execute = mock_execute
+        _install_chain_query(mock_client, [sample_paths[0]])
 
         result = await repo.get_by_id(sample_paths[0]["path_id"])
 
@@ -318,10 +242,7 @@ class TestCausalPathInheritance(TestCausalPathRepository):
     @pytest.mark.asyncio
     async def test_inherits_get_many(self, repo, mock_client, sample_paths):
         """Test that get_many is inherited from BaseRepository."""
-        mock_result = MagicMock()
-        mock_result.data = sample_paths
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_chain_query(mock_client, sample_paths)
 
         result = await repo.get_many(filters={"brand": "Kisqali"})
 
