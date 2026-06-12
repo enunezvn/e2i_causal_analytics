@@ -890,3 +890,65 @@ class TestPathToChain:
         assert chain["nodes"] == []
         assert chain["edges"] == []
         assert chain["length"] == -1  # len([]) - 1
+
+
+# ============================================================================
+# Shared-graph grouping (#890)
+# ============================================================================
+
+
+class TestSharedGraphGrouping:
+    """session_id must NOT become a Graphiti group_id on FalkorDB (#890).
+
+    graphiti-core's FalkorDriver maps group_id -> database (graph) name and its
+    constructor schedules build_indices_and_constraints(), so passing the
+    session UUID as group_id creates one fully-indexed empty graph per session
+    -- even on a pure read (search). Episodes belong in the single configured
+    semantic graph (config.graph_name, deployed: e2i_causal, see #749); session
+    scoping lives in episodic memory / the fallback node property.
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_episode_does_not_use_session_as_group_id(self, graphiti_service):
+        """The Graphiti write path must not partition by session UUID."""
+        graphiti_service._initialized = True
+
+        mock_result = MagicMock()
+        mock_result.nodes = []
+        mock_result.edges = []
+        mock_graphiti = AsyncMock()
+        mock_graphiti.add_episode.return_value = mock_result
+        graphiti_service._graphiti = mock_graphiti
+
+        result = await graphiti_service.add_episode(
+            content="Dr. Smith prescribed Remibrutinib",
+            source="orchestrator",
+            session_id="f789fbc0-9779-4ae2-9fb6-4d962f7f3da1",
+        )
+
+        assert result.success is True
+        call_kwargs = mock_graphiti.add_episode.call_args.kwargs
+        assert call_kwargs.get("group_id") is None, (
+            "session_id leaked into Graphiti group_id: on FalkorDB this creates "
+            "a per-session graph shell (issue #890)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_search_does_not_scope_group_ids_by_session(self, graphiti_service):
+        """The Graphiti read path must not clone a per-session database."""
+        graphiti_service._initialized = True
+
+        mock_graphiti = AsyncMock()
+        mock_graphiti.search.return_value = []
+        graphiti_service._graphiti = mock_graphiti
+
+        await graphiti_service.search(
+            query="What treatments?",
+            session_id="9aed4469-faea-4ad5-8aa8-9061c6546b83",
+        )
+
+        call_kwargs = mock_graphiti.search.call_args.kwargs
+        assert call_kwargs.get("group_ids") is None, (
+            "session_id leaked into Graphiti group_ids: on FalkorDB even a read "
+            "creates a per-session graph shell (issue #890)"
+        )

@@ -239,7 +239,10 @@ class E2IGraphitiService:
         Args:
             content: The text content of the episode
             source: Source of the episode (agent_name or "user")
-            session_id: Session identifier for grouping episodes
+            session_id: Session identifier. Recorded on the fallback-path
+                episode node only — it is intentionally NOT used as a Graphiti
+                group_id, because on FalkorDB that would create one graph per
+                session (#890).
             metadata: Optional metadata to attach to the episode
             reference_time: Optional timestamp (defaults to now)
 
@@ -255,13 +258,23 @@ class E2IGraphitiService:
 
         try:
             if self._graphiti is not None:
-                # Use Graphiti for extraction
+                # Use Graphiti for extraction.
+                #
+                # Do NOT pass session_id as group_id: graphiti-core's
+                # FalkorDriver maps group_id -> database (graph) name and its
+                # constructor schedules build_indices_and_constraints(), so a
+                # per-session group_id creates one fully-indexed, perpetually
+                # empty graph per session (issue #890 found 8 such UUID-named
+                # shells). Episodes belong in the single configured semantic
+                # graph (config.graph_name, deployed: e2i_causal — #749);
+                # session scoping lives in episodic memory and the fallback
+                # path's session_id node property.
                 result = await self._graphiti.add_episode(
                     name=f"episode_{episode_id[:8]}",
                     episode_body=content,
                     source_description=source,
                     reference_time=ref_time,
-                    group_id=session_id,
+                    group_id=None,
                 )
 
                 # Convert Graphiti result to our format
@@ -437,7 +450,10 @@ class E2IGraphitiService:
 
         Args:
             query: Natural language search query
-            session_id: Optional session to scope the search
+            session_id: Retained for API compatibility. NOT used to scope the
+                Graphiti search: on FalkorDB a group_id is a whole database, so
+                session scoping would read (and thereby create, #890) a
+                per-session graph instead of the configured shared graph.
             entity_types: Optional list of entity types to filter
             limit: Maximum number of results
 
@@ -449,10 +465,17 @@ class E2IGraphitiService:
 
         try:
             if self._graphiti is not None:
-                # Use Graphiti search
+                # Use Graphiti search.
+                #
+                # Do NOT scope group_ids by session_id: on FalkorDB each
+                # group_id is a separate database (graph), and graphiti-core
+                # clones a FalkorDriver per group_id whose constructor builds
+                # indices — so even a pure READ with a session-UUID group_id
+                # creates an empty per-session graph shell (issue #890).
+                # Search the configured shared graph instead.
                 results = await self._graphiti.search(
                     query=query,
-                    group_ids=[session_id] if session_id else None,
+                    group_ids=None,
                     num_results=limit,
                 )
                 return self._convert_search_results(results, entity_types)

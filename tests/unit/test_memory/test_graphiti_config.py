@@ -510,3 +510,66 @@ class TestPortConfiguration:
                 assert config.falkordb_port == 6399
             finally:
                 os.unlink(config_path)
+
+
+# ============================================================================
+# FalkorDB connection resolution (#890)
+# ============================================================================
+
+
+class TestFalkorDBUrlResolution:
+    """load_graphiti_config must honor FALKORDB_URL like factories.get_falkordb_client.
+
+    Deployed containers set only FALKORDB_URL (docker compose common-env), not
+    FALKORDB_HOST/PORT/PASSWORD. Before #890 the Graphiti config ignored the URL,
+    so FalkorDriver dialed localhost:6379 inside the container, failed with
+    Error 111, and the service silently fell back (no entity extraction).
+    """
+
+    def _load_with_env(self, env: dict) -> "GraphitiConfig":
+        clear_graphiti_config_cache()
+        removals = ["FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT", "FALKORDB_PASSWORD"]
+        clean = {k: v for k, v in os.environ.items() if k not in removals}
+        clean.update(env)
+        with patch.dict(os.environ, clean, clear=True):
+            with NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+                f.write("environment: local_pilot\n")
+                f.flush()
+                config_path = Path(f.name)
+            try:
+                return load_graphiti_config(config_path)
+            finally:
+                os.unlink(config_path)
+
+    def test_falkordb_url_resolves_host_port_password(self):
+        """FALKORDB_URL alone must yield host/port/password (container parity)."""
+        config = self._load_with_env({"FALKORDB_URL": "redis://:secretpw@falkordb:6379/0"})
+        assert config.falkordb_host == "falkordb"
+        assert config.falkordb_port == 6379
+        assert config.falkordb_password == "secretpw"
+
+    def test_falkordb_url_takes_precedence_over_host_vars(self):
+        """Same precedence as factories.get_falkordb_client: URL first."""
+        config = self._load_with_env(
+            {
+                "FALKORDB_URL": "redis://:urlpw@graphhost:7000/0",
+                "FALKORDB_HOST": "otherhost",
+                "FALKORDB_PORT": "9999",
+                "FALKORDB_PASSWORD": "envpw",
+            }
+        )
+        assert config.falkordb_host == "graphhost"
+        assert config.falkordb_port == 7000
+        assert config.falkordb_password == "urlpw"
+
+    def test_no_url_falls_back_to_host_port_password_env(self):
+        config = self._load_with_env(
+            {
+                "FALKORDB_HOST": "envhost",
+                "FALKORDB_PORT": "6390",
+                "FALKORDB_PASSWORD": "envpw",
+            }
+        )
+        assert config.falkordb_host == "envhost"
+        assert config.falkordb_port == 6390
+        assert config.falkordb_password == "envpw"

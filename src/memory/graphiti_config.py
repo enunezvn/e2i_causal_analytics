@@ -279,6 +279,38 @@ DEFAULT_RELATIONSHIP_CONFIGS = {
 }
 
 
+def _resolve_falkordb_connection() -> "tuple[str, int, Optional[str]]":
+    """Resolve FalkorDB host/port/password with the same precedence as
+    ``src.memory.services.factories.get_falkordb_client``.
+
+    Deployed containers set only ``FALKORDB_URL`` (docker-compose common-env),
+    not ``FALKORDB_HOST``/``PORT``/``PASSWORD``. Before #890 this module read
+    only the discrete vars, so inside a container Graphiti's FalkorDriver
+    dialed ``localhost:6379``, failed with ECONNREFUSED, and the service
+    silently dropped to fallback mode (no LLM entity extraction). Parsing the
+    URL here completes the intent of commit 8b5fbe57 ("resolve FalkorDB
+    connection using FALKORDB_URL from compose env").
+
+    Returns:
+        (host, port, password)
+    """
+    falkordb_url = os.environ.get("FALKORDB_URL")
+    if falkordb_url:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(falkordb_url)
+        return (
+            parsed.hostname or "localhost",
+            parsed.port or 6379,
+            parsed.password,
+        )
+    return (
+        os.environ.get("FALKORDB_HOST", "localhost"),
+        int(os.environ.get("FALKORDB_PORT", "6379")),
+        os.environ.get("FALKORDB_PASSWORD"),
+    )
+
+
 def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
     """
     Load Graphiti configuration from YAML file.
@@ -331,6 +363,9 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
     # Get reflector settings for extraction confidence
     reflector_config = raw_config.get("cognitive_workflow", {}).get("reflector", {})
 
+    # Resolve connection settings (FALKORDB_URL first — parity with factories, #890)
+    falkordb_host, falkordb_port, falkordb_password = _resolve_falkordb_connection()
+
     # Build config
     config = GraphitiConfig(
         enabled=graphity_config.get("enabled", True),
@@ -342,9 +377,9 @@ def load_graphiti_config(config_path: Optional[Path] = None) -> GraphitiConfig:
         relationship_configs=DEFAULT_RELATIONSHIP_CONFIGS.copy(),
         episode_batch_size=reflector_config.get("graphity_batch_size", 5),
         min_confidence_for_extraction=reflector_config.get("min_confidence_for_learning", 0.6),
-        falkordb_host=os.environ.get("FALKORDB_HOST", "localhost"),
-        falkordb_port=int(os.environ.get("FALKORDB_PORT", "6379")),
-        falkordb_password=os.environ.get("FALKORDB_PASSWORD"),
+        falkordb_host=falkordb_host,
+        falkordb_port=falkordb_port,
+        falkordb_password=falkordb_password,
         cache_enabled=cache_config.get("enabled", True),
     )
 
