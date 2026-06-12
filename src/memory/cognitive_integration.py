@@ -835,14 +835,33 @@ class CognitiveService:
                 agent_used=agent_used,
             )
 
-            # Record learning signal
+            # Record learning signal.
+            # ``signal_type`` is the constrained ``learning_signal_type`` enum
+            # (thumbs_up / thumbs_down / correction / rating / implicit_positive /
+            # implicit_negative — never extended). The prior literals
+            # "outcome_success"/"outcome_partial" were rejected (22P02) and the
+            # broad except below swallowed it, so NO reflector learning signal
+            # ever persisted (#883; map onto existing values, don't extend).
+            # Mapping: implicit_positive for BOTH grades — the signal is
+            # machine-derived (implicit, not an explicit user rating: using
+            # 'rating' would leak self-confidence into the avg_rating
+            # aggregations that today reflect explicit scores), and both grades
+            # are positive-direction (the reflector only learns from cycles
+            # above its 0.6 worth-remembering bar; 'outcome_partial' at
+            # 0.6-0.7 confidence is a weaker positive, NOT a negative). Zero
+            # information loss: the exact grade is signal_value=confidence
+            # (the old type was a pure >0.7 threshold of it) and the original
+            # domain label is preserved in signal_details.
+            domain_signal = "outcome_success" if confidence > 0.7 else "outcome_partial"
             signal = LearningSignalInput(
-                signal_type="outcome_success" if confidence > 0.7 else "outcome_partial",
+                signal_type="implicit_positive",
                 signal_value=confidence,
                 applies_to_type="query",
                 applies_to_id=cycle_id,
                 rated_agent=agent_used,
                 signal_details={
+                    "domain_signal": domain_signal,
+                    "signal_source": "reflector_confidence",
                     "query_type": query_type,
                     "evidence_count": len(evidence),
                     "is_training_example": confidence > 0.8,

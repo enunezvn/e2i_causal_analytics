@@ -323,6 +323,66 @@ class TestInsertProceduralMemory:
         assert update_call.called
 
     @pytest.mark.asyncio
+    async def test_dedup_prefix_guard_skips_foreign_match(
+        self, mock_supabase, sample_procedure_input, sample_embedding
+    ):
+        """#883 codex R2: the >0.9 dedup filters by procedure_type only, and
+        types like 'optimization' are shared across writers — a high-similarity
+        FOREIGN row must NOT swallow the new pattern when a name-prefix guard
+        is given (INSERT a new row, don't update the foreign one)."""
+        mock_supabase.rpc.return_value.execute.return_value.data = [
+            {
+                "procedure_id": "foreign-hpo-row",
+                "procedure_name": "hpo_RandomForest_binary_classification",
+                "usage_count": 7,
+                "success_count": 6,
+            }
+        ]
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            with patch(
+                "src.memory.procedural_memory._increment_memory_stats", new_callable=AsyncMock
+            ):
+                result = await insert_procedural_memory(
+                    sample_procedure_input,
+                    sample_embedding,
+                    dedup_name_prefix="optimization_pattern_",
+                )
+
+        assert result != "foreign-hpo-row"
+        assert mock_supabase.table.return_value.insert.called
+        assert not mock_supabase.table.return_value.update.called
+        # With the guard, the dedup fetches a candidate window (the single
+        # best match may be foreign).
+        assert mock_supabase.rpc.call_args.args[1]["match_count"] == 5
+
+    @pytest.mark.asyncio
+    async def test_dedup_prefix_guard_matches_own_family(
+        self, mock_supabase, sample_procedure_input, sample_embedding
+    ):
+        """A high-similarity row from the caller's OWN naming family still
+        dedups (update path), prefix guard or not."""
+        mock_supabase.rpc.return_value.execute.return_value.data = [
+            {
+                "procedure_id": "own-pattern-row",
+                "procedure_name": "optimization_pattern_budget_maximize_outcome",
+                "usage_count": 2,
+                "success_count": 2,
+            }
+        ]
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            result = await insert_procedural_memory(
+                sample_procedure_input,
+                sample_embedding,
+                dedup_name_prefix="optimization_pattern_",
+            )
+
+        assert result == "own-pattern-row"
+        assert mock_supabase.table.return_value.update.called
+        assert not mock_supabase.table.return_value.insert.called
+
+    @pytest.mark.asyncio
     async def test_insert_sets_defaults(self, mock_supabase, sample_embedding):
         """insert_procedural_memory should set default values for optional fields."""
         minimal_input = ProceduralMemoryInput(

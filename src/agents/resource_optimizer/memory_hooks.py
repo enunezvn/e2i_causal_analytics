@@ -262,10 +262,15 @@ class ResourceOptimizerMemoryHooks:
     ) -> List[Dict[str, Any]]:
         """Get learned optimization patterns from procedural memory."""
         try:
-            from src.memory.procedural_memory import (  # type: ignore[attr-defined]
-                ProceduralSearchFilters,
-                search_procedures_by_text,
-            )
+            # #883: this read was DOUBLY dead — it imported
+            # ``ProceduralSearchFilters`` / ``search_procedures_by_text`` which
+            # never existed in src.memory.procedural_memory (ImportError swallowed
+            # below -> always []), and its filter used the invalid enum literal
+            # 'optimization_pattern' (22P02 even if the import had resolved).
+            # Repointed to the REAL read API (find_relevant_procedures_by_text ->
+            # find_relevant_procedures RPC) with the existing enum member
+            # 'optimization' — matching what store_optimization_pattern writes.
+            from src.memory.procedural_memory import find_relevant_procedures_by_text
 
             # Build query from optimization parameters
             query_text = f"optimization pattern {resource_type} {objective}"
@@ -273,23 +278,27 @@ class ResourceOptimizerMemoryHooks:
                 constraint_types = [c.get("constraint_type", "") for c in constraints[:3]]
                 query_text += f" constraints: {' '.join(constraint_types)}"
 
-            filters = ProceduralSearchFilters(
-                procedure_type="optimization_pattern",
-                agent_name="resource_optimizer",
-            )
-
-            results = await search_procedures_by_text(
+            # The RPC has no agent filter (the old agent_name filter never worked);
+            # this hook's own writes are identified by their procedure_name prefix
+            # (store_optimization_pattern names them
+            # "optimization_pattern_<resource_type>_<objective>"). Because
+            # procedure_type='optimization' is shared with other writers (e.g.
+            # hpo_pattern_memory), the top-`limit` rows can be entirely
+            # non-resource-optimizer — over-fetch, prefix-filter, then trim.
+            fetch_limit = max(limit * 5, limit + 10)
+            results = await find_relevant_procedures_by_text(
                 query_text=query_text,
-                filters=filters,
-                limit=limit,
+                procedure_type="optimization",
+                limit=fetch_limit,
                 min_similarity=0.5,
             )
 
-            return results  # type: ignore[no-any-return]
-        except ImportError:
-            # Procedural memory may not be fully implemented yet
-            logger.debug("Procedural memory not available, skipping pattern retrieval")
-            return []
+            matched = [
+                r
+                for r in results
+                if str(r.get("procedure_name", "")).startswith("optimization_pattern_")
+            ]
+            return matched[:limit]
         except Exception as e:
             logger.warning(f"Failed to get optimization patterns: {e}")
             return []
@@ -463,14 +472,28 @@ class ResourceOptimizerMemoryHooks:
                         "entities_optimized": len(allocations),
                     }
                 ],
-                procedure_type="optimization_pattern",
+                # ``procedure_type`` is the constrained DB ``procedure_type`` enum;
+                # the prior literal "optimization_pattern" was not a member, so the
+                # 22P02 fired at the dedup find_relevant_procedures RPC (enum-typed
+                # filter_type) BEFORE the insert was even reached and the ``except``
+                # below swallowed it — no pattern was ever stored (#883). Use the
+                # EXISTING member 'optimization' (hpo_pattern_memory precedent:
+                # use existing enum values, never extend); the pattern identity
+                # stays recoverable via the procedure_name prefix.
+                procedure_type="optimization",
                 trigger_pattern=description,
             )
 
-            # Insert pattern
+            # Insert pattern. The dedup_name_prefix guard (#883 codex R2) keeps
+            # the >0.9-similarity dedup inside insert_procedural_memory from
+            # matching a FOREIGN procedure_type='optimization' row (e.g.
+            # hpo_pattern_memory's) — without it the foreign row would be
+            # "updated" and returned, the pattern silently lost, and the
+            # prefix-filtered read would never see it.
             pattern_id = await insert_procedural_memory_with_text(
                 procedure=memory_input,
                 trigger_text=description,
+                dedup_name_prefix="optimization_pattern_",
             )
 
             logger.info(f"Stored optimization pattern: {pattern_id}")
@@ -541,7 +564,17 @@ class ResourceOptimizerMemoryHooks:
                     "recommendations": result.get("recommendations", [])[:5],
                 },
                 entities=None,
-                outcome_type="optimization_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "optimization_delivered" was rejected by the enum (22P02) and the
+                # ``except`` below swallowed it, so NO optimization episodic ever
+                # landed (#883; #876/#873 family — map, don't extend the enum). The
+                # domain signal stays recoverable via
+                # event_type='optimization_completed' + agent_name. Terminal
+                # statuses are completed/failed and contribute_to_memory skips
+                # failed runs, but map defensively.
+                outcome_type=("failure" if state.get("status") == "failed" else "success"),
                 agent_name="resource_optimizer",
                 importance_score=0.7,
                 e2i_refs=None,
