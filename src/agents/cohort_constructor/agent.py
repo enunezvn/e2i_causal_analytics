@@ -29,6 +29,11 @@ from .configs import get_brand_config, list_available_configs
 from .constants import AGENT_METADATA, SUPPORTED_BRANDS, Defaults
 from .constructor import CohortConstructor
 from .graph import create_cohort_constructor_graph
+from .memory_hooks import (
+    CohortConstructorMemoryHooks,
+    contribute_to_memory,
+    get_cohort_constructor_memory_hooks,
+)
 from .state import create_initial_state
 from .types import CohortConfig, CohortExecutionResult
 
@@ -95,6 +100,7 @@ class CohortConstructorAgent:
         self,
         use_graph: bool = True,
         enable_observability: bool = True,
+        enable_memory: bool = True,
         db_client: Optional[Any] = None,
     ):
         """Initialize CohortConstructor agent.
@@ -102,10 +108,19 @@ class CohortConstructorAgent:
         Args:
             use_graph: If True, use LangGraph workflow. If False, use direct execution.
             enable_observability: If True, enable MLflow/Opik tracking.
+            enable_memory: If True, contribute completed constructions to the
+                tri-memory architecture (default: True). #883 PR B — the hooks
+                existed since the 4-memory rollout but had no caller, so the
+                learning-loop readers (get_prior_cohorts /
+                get_effective_rules_for_brand) were permanently empty. NOTE:
+                ``tier0_integration._store_*`` are SEPARATE direct-DB writes
+                (ml_cohort_definitions / ml_cohort_executions), not these hooks.
             db_client: Optional Supabase client for database operations.
         """
         self.use_graph = use_graph
         self.enable_observability = enable_observability
+        self.enable_memory = enable_memory
+        self._memory_hooks: Optional[CohortConstructorMemoryHooks] = None
         self.db_client = db_client or _get_supabase_client()
 
         # Initialize cohort-specific observability
@@ -128,6 +143,64 @@ class CohortConstructorAgent:
             f"CohortConstructorAgent initialized: "
             f"use_graph={self.use_graph}, observability={enable_observability}"
         )
+
+    @property
+    def memory_hooks(self) -> Optional[CohortConstructorMemoryHooks]:
+        """Lazy-load memory hooks (#883 PR B, mirrors health_score #879)."""
+        if self._memory_hooks is None and self.enable_memory:
+            try:
+                self._memory_hooks = get_cohort_constructor_memory_hooks()
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory hooks: {e}")
+        return self._memory_hooks
+
+    async def _contribute_to_memory(
+        self,
+        result: CohortExecutionResult,
+        state: Dict[str, Any],
+        session_id: Optional[str],
+    ) -> None:
+        """Contribute a completed construction to memory — NON-BLOCKING.
+
+        Caller-side try/except per the settled cross-agent posture (#879 /
+        #881; the migration-046 trap lesson): a memory failure must NEVER
+        poison the run's status or the returned result.
+        ``contribute_to_memory`` itself skips non-success constructions and
+        covers all the per-run writes: the working-memory cache, the episodic
+        construction record (read back by ``get_prior_cohorts``), and the
+        semantic cohort-pattern / eligibility-rule graph nodes (read back by
+        ``get_effective_rules_for_brand``) — each individually best-effort
+        inside the hook.
+        """
+        if not self.enable_memory:
+            return
+        try:
+            # Graph mode ends in the CohortConstructorState vocabulary
+            # ("completed"); direct mode in the CohortExecutionResult
+            # vocabulary ("success"). Normalize to the hook's gate/reader
+            # vocabulary ("success"/"partial") so graph-mode runs are neither
+            # skipped by the gate nor invisible to get_prior_cohorts'
+            # status filter.
+            status = "success" if result.status in ("success", "completed") else result.status
+            memory_stats = await contribute_to_memory(
+                result={
+                    "cohort_id": result.cohort_id,
+                    "execution_id": result.execution_id,
+                    "status": status,
+                },
+                state=state,
+                memory_hooks=self.memory_hooks,
+                session_id=session_id,
+            )
+            logger.debug(
+                f"Memory contribution complete: "
+                f"episodic={memory_stats.get('episodic_stored', 0)}, "
+                f"semantic={memory_stats.get('semantic_stored', 0)}, "
+                f"rules={memory_stats.get('rules_stored', 0)}, "
+                f"cached={memory_stats.get('working_cached', 0)}"
+            )
+        except Exception as e:
+            logger.warning(f"Memory contribution failed (non-blocking): {e}")
 
     @property
     def metadata(self) -> Dict[str, Any]:
@@ -163,6 +236,7 @@ class CohortConstructorAgent:
         config: Optional[CohortConfig] = None,
         environment: str = Defaults.DEFAULT_ENVIRONMENT,
         executed_by: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Tuple[pd.DataFrame, CohortExecutionResult]:
         """Execute cohort construction.
 
@@ -176,6 +250,8 @@ class CohortConstructorAgent:
             config: Explicit CohortConfig (overrides brand/indication)
             environment: Execution environment (development/staging/production)
             executed_by: User or system identifier
+            session_id: Optional session identifier for memory correlation
+                (#883 PR B); when omitted the memory hook generates a UUID.
 
         Returns:
             Tuple of (eligible_df, execution_result)
@@ -185,10 +261,30 @@ class CohortConstructorAgent:
         """
         if self.use_graph and self._graph:
             return await self._run_graph(
-                patient_df, brand, indication, config, environment, executed_by
+                patient_df, brand, indication, config, environment, executed_by, session_id
             )
-        else:
-            return self._run_direct(patient_df, brand, indication, config, environment, executed_by)
+
+        eligible_df, result = self._run_direct(
+            patient_df, brand, indication, config, environment, executed_by
+        )
+        # #883 PR B: direct mode has no graph state — synthesize the minimal
+        # state shape the hook reads (config / eligibility_stats /
+        # execution_metadata). run() is async, so the contribution awaits
+        # here; run_sync() bypasses memory by design (no event loop).
+        direct_config = config
+        if direct_config is None and brand:
+            direct_config = get_brand_config(brand, indication)
+        await self._contribute_to_memory(
+            result,
+            state={
+                "config": direct_config.to_dict() if direct_config else {},
+                "eligibility_stats": result.eligibility_stats,
+                "execution_metadata": result.execution_metadata,
+                "session_id": session_id,
+            },
+            session_id=session_id,
+        )
+        return eligible_df, result
 
     async def _run_graph(
         self,
@@ -198,6 +294,7 @@ class CohortConstructorAgent:
         config: Optional[CohortConfig],
         environment: str,
         executed_by: Optional[str],
+        session_id: Optional[str] = None,
     ) -> Tuple[pd.DataFrame, CohortExecutionResult]:
         """Execute via LangGraph workflow."""
         logger.info(f"Executing CohortConstructor via LangGraph: brand={brand}")
@@ -304,6 +401,11 @@ class CohortConstructorAgent:
                     )
                 except Exception as e:
                     logger.warning(f"Could not log completion to Opik: {e}")
+
+            # #883 PR B: contribute the completed construction to memory —
+            # non-blocking, keyed to the graph outcome (the helper and the
+            # hook both gate on result status).
+            await self._contribute_to_memory(result, dict(final_state), session_id)
 
             return eligible_df, result
 
