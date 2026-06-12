@@ -775,6 +775,22 @@ describe('SAMPLE_KPIS green-badge edge (task 5)', () => {
     expect(screen.getByText('No KPIs available')).toBeInTheDocument();
   });
 
+  it('never renders SAMPLE_KPIS while the KPI list is still loading (codex iter-1 HIGH-1)', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+
+    renderWithAllProviders(<Home />);
+
+    // Badge says Loading… — sample values must not render beneath it.
+    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(screen.queryByText('Total TRx')).not.toBeInTheDocument();
+    expect(screen.queryByText('125,430')).not.toBeInTheDocument();
+    expect(screen.getByText('Loading KPIs…')).toBeInTheDocument();
+  });
+
   it('keeps the labeled Demo Mode fallback when the API is offline (intentional feature)', () => {
     (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,

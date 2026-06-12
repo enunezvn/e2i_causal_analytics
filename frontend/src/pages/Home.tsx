@@ -463,8 +463,13 @@ function Home() {
       // Connected but the backend genuinely has no KPI definitions.
       return [];
     }
+    if (kpisLoading) {
+      // Query in flight — the badge says "Loading...", so no sample values
+      // may render beneath it (codex iter-1 HIGH-1).
+      return [];
+    }
     return SAMPLE_KPIS[selectedBrand];
-  }, [apiKPIs, kpiListData, selectedBrand]);
+  }, [apiKPIs, kpiListData, kpisLoading, selectedBrand]);
 
   // True only when we are rendering live metadata (real ids, real values fetched
   // separately via the batch endpoint below).
@@ -963,11 +968,15 @@ function Home() {
                 {KPI_CATEGORIES.map((cat) => (
                   <TabsContent key={cat.id} value={cat.id} className="mt-4">
                     {filteredKPIs.length === 0 ? (
-                      <EmptyState
-                        title="No KPIs available"
-                        description="The API returned no KPI definitions for this category yet."
-                        className="p-6"
-                      />
+                      kpisLoading ? (
+                        <p className="text-sm text-muted-foreground py-4">Loading KPIs…</p>
+                      ) : (
+                        <EmptyState
+                          title="No KPIs available"
+                          description="The API returned no KPI definitions for this category yet."
+                          className="p-6"
+                        />
+                      )
                     ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                       {filteredKPIs.map((kpi) => {

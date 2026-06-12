@@ -132,6 +132,24 @@ describe('CausalValueChains', () => {
     for (const marker of FABRICATED_MARKERS) {
       expect(screen.queryByText(marker)).not.toBeInTheDocument();
     }
+    // No fake recency claim: GraphPath carries no chain timestamp, so none
+    // may be invented (codex iter-1 HIGH-2: 'Just now' was a new fabrication).
+    expect(screen.queryByText('Just now')).not.toBeInTheDocument();
+    expect(screen.queryByText(/min ago/)).not.toBeInTheDocument();
+  });
+
+  it('renders a quantified ZERO effect as 0.0% Impact, not "Impact not quantified" (codex iter-1 MED-3)', () => {
+    const path = realPath();
+    path.nodes[2].properties = { value: 0 };
+
+    mockChainsState({
+      data: { chains: [path], total_chains: 1, timestamp: new Date().toISOString() },
+    });
+
+    render(<CausalValueChains />);
+
+    expect(screen.getByText('0.0% Impact')).toBeInTheDocument();
+    expect(screen.queryByText(/impact not quantified/i)).not.toBeInTheDocument();
   });
 
   it('does NOT fabricate confidence/method when the API omits them (real path honesty)', () => {

@@ -47,7 +47,6 @@ interface ChainCardData {
   confidence: number | null;
   /** Causal method recorded on the relationship; null when not reported. */
   method: string | null;
-  timestamp: string;
   /** Derived impact band; null when confidence is unknown (no claim made). */
   impact: 'high' | 'medium' | 'low' | null;
   icon: React.ReactNode;
@@ -134,8 +133,9 @@ function transformGraphPathToCard(
       : 'Causal Chain';
 
   // Result text from the real terminal-node value; honest when absent.
+  // `!= null` (not truthiness): a quantified ZERO effect is real data.
   const resultValue = lastNode?.properties?.value as number | undefined;
-  const result = resultValue
+  const result = resultValue != null
     ? `${resultValue > 0 ? '+' : ''}${resultValue.toFixed(1)}% Impact`
     : 'Impact not quantified';
 
@@ -147,7 +147,8 @@ function transformGraphPathToCard(
     result,
     confidence,
     method,
-    timestamp: 'Just now',
+    // NOTE: no timestamp — GraphPath carries none, and inventing a recency
+    // claim ('Just now' / '2 min ago') would be silently-fake data.
     impact,
     icon:
       index === 0 ? (
@@ -230,9 +231,6 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
                 {impactConfig.label}
               </span>
             )}
-            <span className="text-xs text-[var(--color-muted-foreground)]">
-              {chain.timestamp}
-            </span>
           </div>
         </div>
       </CardContent>
