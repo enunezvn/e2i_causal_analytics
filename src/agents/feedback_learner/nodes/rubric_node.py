@@ -80,11 +80,20 @@ class RubricNode:
         if state.get("status") == "failed":
             return state
 
-        # Get evaluation context from state
-        eval_context = state.get("rubric_evaluation_context")
+        # Get evaluation context from state. When the caller does not provide
+        # one explicitly, derive it from the run's REAL collected feedback —
+        # but only when persistence is armed (db_client injected): the batch
+        # pipeline's purpose for this node is a persisted learning signal, and
+        # deriving without a sink would burn a judge LLM call per cycle with
+        # nowhere to land (it also keeps hermetic unit graphs, which never
+        # inject db_client, exactly as before). Explicit contexts evaluate
+        # regardless of db_client (standalone use, pre-existing contract).
+        eval_context: Any = state.get("rubric_evaluation_context")
+        if not eval_context and self.db_client is not None:
+            eval_context = self._derive_context_from_feedback(state)
 
         if not eval_context:
-            logger.debug("No rubric evaluation context provided, skipping")
+            logger.debug("No rubric evaluation context provided or derivable, skipping")
             return {
                 **state,
                 "rubric_evaluation": None,
@@ -105,6 +114,13 @@ class RubricNode:
             # Store results if db_client provided
             if self.db_client:
                 await self._store_evaluation(evaluation, context)
+            else:
+                # Never a silent client-less no-op (#845 convention): the
+                # evaluation ran but cannot persist a learning signal.
+                logger.warning(
+                    "Rubric evaluation completed but no db_client is injected — "
+                    "the result will NOT be persisted to learning_signals"
+                )
 
             # Log result
             logger.info(
@@ -135,6 +151,51 @@ class RubricNode:
                 "errors": (state.get("errors") or []) + [{"node": "rubric_node", "error": str(e)}],
                 "warnings": (state.get("warnings") or []) + [f"Rubric evaluation failed: {e}"],
             }
+
+    def _derive_context_from_feedback(self, state: FeedbackLearnerState) -> Optional[Any]:
+        """Build an :class:`EvaluationContext` from the run's collected feedback.
+
+        #883 deferred item: ``graph.py`` plumbed ``db_client`` into this node
+        but no production build site injected one AND nothing ever set
+        ``rubric_evaluation_context`` — the (post-#886-correct) persistence
+        path was structurally dead. The run's real data IS available: the
+        collector lands ``feedback_items`` carrying the original user query
+        and the agent's response (chatbot_message_feedback.query_text /
+        response_preview). Evaluate the most recent item that has both —
+        a real (query, response) pair the rubric was designed to judge.
+
+        Only GENUINE user-feedback items qualify (``rating`` / ``correction``
+        / ``explicit``): the collector also manufactures ``implicit``
+        performance probes ("System performance signal for X" → "operational",
+        timestamped now, so they would always win a recency pick) and
+        ``outcome`` items whose ``agent_response`` is a bare predicted number —
+        judging either against the causal-analytics rubric would persist
+        meaningless scores every cycle. Data-driven fail-closed: when no
+        genuine pair exists, return None and the node skips honestly (no
+        fabricated context).
+        """
+        items = state.get("feedback_items") or []
+        candidates = [
+            it
+            for it in items
+            if it.get("feedback_type") in ("rating", "correction", "explicit")
+            and (it.get("query") or "").strip()
+            and (it.get("agent_response") or "").strip()
+        ]
+        if not candidates:
+            return None
+
+        latest = max(candidates, key=lambda it: str(it.get("timestamp") or ""))
+        agent = latest.get("source_agent") or "unknown"
+        metadata = latest.get("metadata") or {}
+        return EvaluationContext(
+            user_query=str(latest["query"]),
+            final_response=str(latest["agent_response"]),
+            agent_outputs={agent: str(latest["agent_response"])},
+            agent_names=[agent],
+            session_id=metadata.get("session_id") if isinstance(metadata, dict) else None,
+            messages_evaluated=1,
+        )
 
     async def _store_evaluation(
         self,

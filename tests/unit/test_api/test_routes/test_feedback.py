@@ -21,6 +21,35 @@ from fastapi import HTTPException
 
 
 @pytest.fixture(autouse=True)
+def _no_live_supabase_in_route_unit_tests(monkeypatch):
+    """Isolate this suite from the live DB (#883 hermetic lesson).
+
+    On this box pytest autoloads ``.env`` (real SUPABASE creds), and
+    ``mock_feedback_learner_agent`` below patches a NONEXISTENT symbol
+    (``create_feedback_learner_graph``, create=True) — a vacuous mock — so the
+    sync learning-cycle test runs the REAL graph against REAL production
+    stores: pre-#883-defL it silently deposited one real
+    ``dspy_agent_training_signals`` row per run (verified on clean main), and
+    with the rubric path now armed it could also judge+persist real
+    ``learning_signals`` rows. Pin the production builder to the fail-closed
+    triple and the default persist factory to None; tests that patch the
+    builder explicitly override this.
+    """
+
+    async def _disarmed():
+        return None, None, None
+
+    monkeypatch.setattr(
+        "src.agents.feedback_learner.agent.build_production_feedback_stores",
+        _disarmed,
+    )
+    monkeypatch.setattr(
+        "src.memory.services.factories.get_supabase_client",
+        lambda: None,
+    )
+
+
+@pytest.fixture(autouse=True)
 def mock_opik_feedback():
     """Mock the Opik feedback integration module."""
     with patch("src.api.routes.feedback.OPIK_FEEDBACK_AVAILABLE", True):
@@ -294,7 +323,7 @@ async def test_execute_learning_cycle_applied_updates_consistent_with_count():
     ):
         with patch(
             "src.agents.feedback_learner.agent.build_production_feedback_stores",
-            new=AsyncMock(return_value=(None, None)),
+            new=AsyncMock(return_value=(None, None, None)),
         ):
             response = await _execute_learning_cycle(request)
 
