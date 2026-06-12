@@ -37,9 +37,14 @@ def sql() -> str:
     return MIGRATION.read_text()
 
 
-def test_replaces_rag_vector_search_and_creates_normalizer(sql: str):
+def test_replaces_rag_search_functions_and_creates_normalizer(sql: str):
     assert "CREATE OR REPLACE FUNCTION rag_vector_search" in sql
     assert "CREATE OR REPLACE FUNCTION rag_filter_values" in sql
+    # codex iter-1 MED: the fulltext leg of the SAME HybridRetriever call
+    # receives the SAME filters dict — its rag_document_chunks branch needs
+    # the same case-insensitive plural-aware treatment or fused results stay
+    # polluted by off-brand chunks.
+    assert "CREATE OR REPLACE FUNCTION rag_fulltext_search" in sql
 
 
 def test_provenance_default_exclusion_on_episodic_branch(sql: str):
@@ -62,17 +67,21 @@ def test_provenance_predicate_scoped_to_episodic_only(sql: str):
 
 
 def test_case_insensitive_plural_aware_brand_region(sql: str):
-    # Both filterable branches (rag_document_chunks + episodic_memories) must
-    # use the lowercased, plural-aware normalized arrays.
-    for alias in ("dc", "em"):
-        assert f"lower({alias}.brand) = ANY(v_brands)" in sql, (
-            f"{alias} branch must match brand case-insensitively against the "
-            "normalized filter array"
-        )
-        assert f"lower({alias}.region) = ANY(v_regions)" in sql
-    # the arrays must come from the singular+plural normalizer
-    assert "rag_filter_values(filters, 'brand', 'brands')" in sql
-    assert "rag_filter_values(filters, 'region', 'regions')" in sql
+    # Both filterable branches of the vector RPC (rag_document_chunks +
+    # episodic_memories) AND the rag_document_chunks branch of the fulltext
+    # RPC must use the lowercased, plural-aware normalized arrays. dc appears
+    # in both functions -> >= 2 occurrences.
+    assert sql.count("lower(dc.brand) = ANY(v_brands)") >= 2, (
+        "rag_document_chunks brand predicate must be normalized in BOTH the "
+        "vector and fulltext RPCs"
+    )
+    assert sql.count("lower(dc.region) = ANY(v_regions)") >= 2
+    assert "lower(em.brand) = ANY(v_brands)" in sql
+    assert "lower(em.region) = ANY(v_regions)" in sql
+    # the arrays must come from the singular+plural normalizer, in BOTH
+    # functions' DECLARE blocks.
+    assert sql.count("rag_filter_values(filters, 'brand', 'brands')") >= 2
+    assert sql.count("rag_filter_values(filters, 'region', 'regions')") >= 2
 
 
 def test_normalizer_lowercases_and_handles_both_shapes(sql: str):
@@ -82,4 +91,5 @@ def test_normalizer_lowercases_and_handles_both_shapes(sql: str):
 
 def test_grants_preserved(sql: str):
     assert "GRANT EXECUTE ON FUNCTION rag_vector_search TO authenticated" in sql
+    assert "GRANT EXECUTE ON FUNCTION rag_fulltext_search TO authenticated" in sql
     assert "GRANT EXECUTE ON FUNCTION rag_filter_values" in sql

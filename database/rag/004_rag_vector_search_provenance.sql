@@ -36,6 +36,18 @@
 --       singular callers (free-form request.filters via /rag/search,
 --       VectorBackend docstring usage) keep working unchanged.
 --
+--   (3b, codex iter-1 MED) rag_fulltext_search — the OTHER leg of the SAME
+--       dispatched-agent HybridRetriever call — receives the SAME filters
+--       dict in parallel and carried the same case-sensitive, singular-only
+--       brand predicate on its rag_document_chunks branch (and no region
+--       predicate at all). Fixing only the vector leg would leave the FUSED
+--       results polluted by off-brand fulltext chunks. PART 3 gives that
+--       branch the same normalized treatment. rag_fulltext_search has NO
+--       episodic branch, and its causal_paths / agent_activities / triggers
+--       branches stay provenance-unfiltered to mirror memory/044's explicit
+--       scoping ("not part of the synthetic corpus blast radius" — the same
+--       branches are unfiltered in the hardened hybrid_fulltext_search).
+--
 -- Branch-by-branch provenance scope (verified against migrations/063, 069 and
 -- the live schema):
 --   * episodic_memories      — HAS is_synthetic (063) → full treatment.
@@ -234,13 +246,137 @@ COMMENT ON FUNCTION rag_vector_search IS
 
 GRANT EXECUTE ON FUNCTION rag_vector_search TO authenticated;
 
+-- ----------------------------------------------------------------------------
+-- PART 3 — rag_fulltext_search: case-insensitive, plural-aware brand/region on
+--          the rag_document_chunks branch (codex iter-1 MED; #896 bugs 2+3 on
+--          the parallel fulltext leg). Body reproduced from rag/001 verbatim
+--          except that branch's predicates; causal_paths / agent_activities /
+--          triggers branches unchanged (no brand/region predicates existed,
+--          and provenance stays out per the memory/044 blast-radius scoping).
+--          The region predicate is NEW on this branch (rag/001 had none): the
+--          search-filters contract filters brand+region, and the vector leg's
+--          rag_document_chunks branch already enforced region — entity-derived
+--          regions were silently unfiltered here.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION rag_fulltext_search(
+    search_query text,
+    match_count int DEFAULT 20,
+    filters jsonb DEFAULT '{}'::jsonb
+)
+RETURNS TABLE (
+    id text,
+    content text,
+    rank double precision,
+    metadata jsonb,
+    source_table text
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    tsquery_val tsquery;
+    -- #896 bug 3: honor singular text AND plural array filter keys (see
+    -- rag_filter_values).
+    v_brands  text[] := rag_filter_values(filters, 'brand', 'brands');
+    v_regions text[] := rag_filter_values(filters, 'region', 'regions');
+BEGIN
+    tsquery_val := websearch_to_tsquery('english', search_query);
+
+    RETURN QUERY
+
+    -- Search rag_document_chunks
+    SELECT
+        dc.chunk_id::text as id,
+        dc.content as content,
+        ts_rank_cd(dc.search_vector, tsquery_val)::double precision as rank,
+        jsonb_build_object(
+            'document_id', dc.document_id,
+            'document_type', dc.document_type,
+            'brand', dc.brand,
+            'region', dc.region
+        ) || dc.metadata as metadata,
+        'rag_document_chunks'::text as source_table
+    FROM rag_document_chunks dc
+    WHERE
+        dc.search_vector @@ tsquery_val
+        -- #896 bug 2/3: case-insensitive, plural-aware brand/region matching
+        -- (no is_synthetic predicate — the table carries no provenance
+        -- column; structurally exempt, see header).
+        AND (v_brands IS NULL OR lower(dc.brand) = ANY(v_brands))
+        AND (v_regions IS NULL OR lower(dc.region) = ANY(v_regions))
+        AND (filters->>'document_type' IS NULL OR dc.document_type = filters->>'document_type')
+
+    UNION ALL
+
+    -- Search causal_paths
+    SELECT
+        cp.path_id::text as id,
+        COALESCE(cp.start_node, '') || ' → ' || COALESCE(cp.end_node, '') || ': ' ||
+        COALESCE(cp.method_used, '') as content,
+        ts_rank_cd(cp.search_vector, tsquery_val)::double precision as rank,
+        jsonb_build_object(
+            'start_node', cp.start_node,
+            'end_node', cp.end_node,
+            'causal_effect_size', cp.causal_effect_size,
+            'confidence_level', cp.confidence_level
+        ) as metadata,
+        'causal_paths'::text as source_table
+    FROM causal_paths cp
+    WHERE
+        cp.search_vector @@ tsquery_val
+
+    UNION ALL
+
+    -- Search agent_activities
+    SELECT
+        aa.activity_id::text as id,
+        aa.agent_name || ' (' || aa.activity_type || ')' as content,
+        ts_rank_cd(aa.search_vector, tsquery_val)::double precision as rank,
+        jsonb_build_object(
+            'agent_name', aa.agent_name,
+            'agent_tier', aa.agent_tier,
+            'activity_type', aa.activity_type,
+            'status', aa.status
+        ) as metadata,
+        'agent_activities'::text as source_table
+    FROM agent_activities aa
+    WHERE
+        aa.search_vector @@ tsquery_val
+        AND (filters->>'agent_name' IS NULL OR aa.agent_name = filters->>'agent_name')
+
+    UNION ALL
+
+    -- Search triggers
+    SELECT
+        t.trigger_id::text as id,
+        t.trigger_reason as content,
+        ts_rank_cd(t.search_vector, tsquery_val)::double precision as rank,
+        jsonb_build_object(
+            'trigger_type', t.trigger_type,
+            'priority', t.priority,
+            'confidence_score', t.confidence_score
+        ) as metadata,
+        'triggers'::text as source_table
+    FROM triggers t
+    WHERE
+        t.search_vector @@ tsquery_val
+
+    ORDER BY rank DESC
+    LIMIT match_count;
+END;
+$$;
+
+COMMENT ON FUNCTION rag_fulltext_search IS
+'Extended fulltext search for RAG system. Searches rag_document_chunks, causal_paths, agent_activities, and triggers. brand/region filters on the rag_document_chunks branch are case-insensitive and accept singular text (brand) or plural list (brands) keys (rag/004, #896).';
+
+GRANT EXECUTE ON FUNCTION rag_fulltext_search TO authenticated;
+
 NOTIFY pgrst, 'reload schema';
 -- (No COMMIT; run_migrations.sh owns the outer --single-transaction.)
 
 -- ============================================================================
 -- ROLLBACK
 -- ============================================================================
--- Re-apply the rag_vector_search definition from rag/001_rag_schema.sql
--- (restores the pre-043-semantics function) and
+-- Re-apply the rag_vector_search and rag_fulltext_search definitions from
+-- rag/001_rag_schema.sql (restores the pre-043-semantics functions) and
 --   DROP FUNCTION IF EXISTS rag_filter_values(jsonb, text, text);
 -- ============================================================================
