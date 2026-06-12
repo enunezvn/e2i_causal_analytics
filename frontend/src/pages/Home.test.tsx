@@ -796,9 +796,17 @@ describe('SAMPLE_KPIS green-badge edge (task 5)', () => {
 
     // Tabs reflect the REAL workstreams present.
     expect(screen.getByRole('tab', { name: /Business/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Model Performance/ })).toBeInTheDocument();
+    const mpTab = screen.getByRole('tab', { name: /Model Performance/ });
     // The first live tab is active and its KPI is visible — no fake empty state.
     expect(screen.getByText('Total TRx')).toBeInTheDocument();
+    expect(screen.queryByText('No KPIs available')).not.toBeInTheDocument();
+
+    // Activate the NON-default live tab: its KPI must be visible too (codex
+    // iter-3 MED: the iter-2 failure mode was a KPI invisible because its tab
+    // never activates — verify activation, not just trigger presence).
+    fireEvent.mouseDown(mpTab);
+    fireEvent.click(mpTab);
+    expect(screen.getByText('ROC AUC')).toBeInTheDocument();
     expect(screen.queryByText('No KPIs available')).not.toBeInTheDocument();
   });
 
