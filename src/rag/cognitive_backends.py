@@ -477,15 +477,29 @@ class SignalCollector:
         """
         for signal in signals:
             try:
-                # Convert to LearningSignalInput format
+                # Convert to LearningSignalInput format.
+                # ``signal_type`` is the constrained ``learning_signal_type``
+                # enum (thumbs_up / thumbs_down / correction / rating /
+                # implicit_positive / implicit_negative — never extended). The
+                # prior literal "dspy_signal" was rejected (22P02), swallowed
+                # into the pending-retry queue below, so NO DSPy signal ever
+                # persisted (#883; map onto existing values, don't extend).
+                # Mapping: 'rating' — the DSPy metric IS a graded score of the
+                # signature execution (direction unknown a priori, so the
+                # implicit_positive/negative pair would assert a direction the
+                # data doesn't carry); the metric is mirrored into signal_value
+                # and the domain label preserved in signal_details. These rows
+                # set no rated_agent/related_trigger_id, so they are invisible
+                # to the explicit-feedback avg_rating aggregations.
                 learning_signal = LearningSignalInput(
-                    signal_type="dspy_signal",
+                    signal_type="rating",
+                    signal_value=signal.get("metric"),
                     is_training_example=True,
                     dspy_metric_name=signal.get("signature_name"),
                     dspy_metric_value=signal.get("metric"),
                     training_input=str(signal.get("input", "")),
                     training_output=str(signal.get("output", "")),
-                    signal_details=signal,
+                    signal_details={**signal, "domain_signal": "dspy_signal"},
                 )
 
                 await record_learning_signal(
