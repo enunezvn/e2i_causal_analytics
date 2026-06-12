@@ -36,17 +36,31 @@ from typing import Any
 __all__ = ["sanitize_jsonb_payload"]
 
 
+def _has_numpy_ancestry(obj: Any) -> bool:
+    """True when any class in the object's MRO is defined in numpy.
+
+    codex iter-2 MEDIUM: an exact ``type(obj).__module__ == "numpy"`` check
+    misses user-defined SUBCLASSES of numpy scalar types (their concrete
+    type's module is the defining module, not ``"numpy"``), which are not
+    ``float`` subclasses either and still crash strict json with
+    ``TypeError``. Walking the MRO detects numpy ancestry without importing
+    numpy (numpy may legitimately be absent in slim environments).
+    """
+    return any(
+        getattr(klass, "__module__", "").split(".", 1)[0] == "numpy" for klass in type(obj).__mro__
+    )
+
+
 def _normalize_numpy_scalar(obj: Any) -> Any:
     """Collapse numpy scalars (np.float32/np.int32/np.bool_ ...) to Python.
 
     codex iter-1 MEDIUM: ``np.float32`` is NOT a ``float`` subclass (unlike
     ``np.float64``), and stdlib json rejects even FINITE numpy-only scalars
     with ``TypeError`` — recreating the silent-drop class through a different
-    type. ``.item()`` is the numpy-blessed scalar conversion; the duck-typed
-    check keeps this module free of a numpy import (numpy may legitimately be
-    absent in slim environments).
+    type. ``.item()`` is the numpy-blessed scalar conversion; subclass
+    coverage via :func:`_has_numpy_ancestry` (codex iter-2).
     """
-    if type(obj).__module__ == "numpy" and hasattr(obj, "item"):
+    if hasattr(obj, "item") and _has_numpy_ancestry(obj):
         try:
             return obj.item()
         except (AttributeError, ValueError):  # 0-d-only guard; arrays pass through

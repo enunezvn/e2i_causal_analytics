@@ -134,3 +134,22 @@ class TestStrictJsonGuarantee:
         assert out == {None: "x", 0.5: "y", "name": "z"}
         text = json.dumps(out, allow_nan=False)
         assert json.loads(text) == {"null": "x", "0.5": "y", "name": "z"}
+
+    def test_numpy_scalar_subclasses_are_handled(self):
+        """codex iter-2 MEDIUM: a user-defined subclass of a numpy scalar type
+        carries its DEFINING module as type(obj).__module__ (not 'numpy'), so
+        an exact-module check skips it; np.float32 subclasses are not float
+        subclasses either, and strict json raises TypeError — the silent-drop
+        class again. Numpy ancestry must be detected through the MRO."""
+        np = __import__("numpy")
+
+        class SubF32(np.float32):
+            pass
+
+        out = sanitize_jsonb_payload(
+            {"nan": SubF32("nan"), "fin": SubF32(0.5), SubF32("inf"): "via-key"}
+        )
+        assert out["nan"] is None
+        assert math.isclose(float(out["fin"]), 0.5)
+        assert out[None] == "via-key"  # non-finite subclass KEY also sanitized
+        json.dumps(out, allow_nan=False)  # must be strict-JSON clean
