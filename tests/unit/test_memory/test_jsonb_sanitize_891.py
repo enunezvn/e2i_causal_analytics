@@ -102,3 +102,35 @@ class TestStrictJsonGuarantee:
         out = sanitize_jsonb_payload({"m": np.float64("nan"), "k": np.float64(0.5)})
         assert out["m"] is None
         assert math.isclose(float(out["k"]), 0.5)
+
+    def test_numpy_non_float_subclass_scalars_are_handled(self):
+        """codex iter-1 MEDIUM: np.float32 (and friends) are NOT float
+        subclasses — stdlib json rejects even FINITE ones (TypeError), so a
+        float32-typed metric recreates the silent-drop class. The sanitizer
+        must normalize numpy scalars to Python types and then apply the
+        non-finite mapping."""
+        np = __import__("numpy")
+        out = sanitize_jsonb_payload(
+            {
+                "nan32": np.float32("nan"),
+                "inf16": np.float16("inf"),
+                "fin32": np.float32(0.25),
+                "i32": np.int32(7),
+                "b": np.bool_(True),
+            }
+        )
+        assert out["nan32"] is None
+        assert out["inf16"] is None
+        assert math.isclose(float(out["fin32"]), 0.25)
+        assert out["i32"] == 7
+        assert out["b"] is True
+        json.dumps(out, allow_nan=False)  # must be strict-JSON clean
+
+    def test_non_finite_float_dict_keys_are_sanitized(self):
+        """codex iter-1 MEDIUM: a non-finite float KEY also crashes the strict
+        encoder (ValueError) — the silent-drop class through the key position.
+        Map it to None, which json renders as the "null" key."""
+        out = sanitize_jsonb_payload({float("nan"): "x", 0.5: "y", "name": "z"})
+        assert out == {None: "x", 0.5: "y", "name": "z"}
+        text = json.dumps(out, allow_nan=False)
+        assert json.loads(text) == {"null": "x", "0.5": "y", "name": "z"}

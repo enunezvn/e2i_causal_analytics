@@ -36,23 +36,59 @@ from typing import Any
 __all__ = ["sanitize_jsonb_payload"]
 
 
+def _normalize_numpy_scalar(obj: Any) -> Any:
+    """Collapse numpy scalars (np.float32/np.int32/np.bool_ ...) to Python.
+
+    codex iter-1 MEDIUM: ``np.float32`` is NOT a ``float`` subclass (unlike
+    ``np.float64``), and stdlib json rejects even FINITE numpy-only scalars
+    with ``TypeError`` — recreating the silent-drop class through a different
+    type. ``.item()`` is the numpy-blessed scalar conversion; the duck-typed
+    check keeps this module free of a numpy import (numpy may legitimately be
+    absent in slim environments).
+    """
+    if type(obj).__module__ == "numpy" and hasattr(obj, "item"):
+        try:
+            return obj.item()
+        except (AttributeError, ValueError):  # 0-d-only guard; arrays pass through
+            return obj
+    return obj
+
+
+def _sanitize_key(key: Any) -> Any:
+    """Map a non-finite float dict KEY to ``None`` (json renders it "null").
+
+    codex iter-1 MEDIUM: ``json.dumps({float("nan"): 1}, allow_nan=False)``
+    raises just like a NaN value does — the key position was a residual
+    silent-drop path. Finite float keys are left for json's normal key
+    coercion ("0.5"). Distinct non-finite keys (nan + inf) collapse onto the
+    single None key (last one wins) — JSON cannot represent them distinctly
+    anyway, and a lossy-but-stored payload beats a silently dropped one.
+    """
+    key = _normalize_numpy_scalar(key)
+    if isinstance(key, float) and not math.isfinite(key):
+        return None
+    return key
+
+
 def sanitize_jsonb_payload(obj: Any) -> Any:
     """Recursively map non-finite floats (nan/inf/-inf) to ``None``.
 
-    - dicts/lists are rebuilt with sanitized values (keys untouched — JSON
-      keys are strings and cannot carry floats);
+    - dicts/lists are rebuilt with sanitized values; non-finite float KEYS
+      map to ``None`` (rendered as the "null" key) — see :func:`_sanitize_key`;
     - tuples normalize to lists (what JSON encoding does anyway);
-    - ``bool`` is untouched (subclasses ``int``, not ``float``); numpy float
-      subclasses (``np.float64``) are handled by the ``float`` isinstance;
+    - numpy scalars normalize to Python scalars first (``np.float32`` is not
+      a ``float`` subclass and even finite ones crash stdlib json);
+    - ``bool`` is untouched (subclasses ``int``, not ``float``);
     - every other value passes through unchanged.
 
     The result is guaranteed to survive ``json.dumps(..., allow_nan=False)``
     as far as float-finiteness is concerned, and the function is idempotent.
     """
+    obj = _normalize_numpy_scalar(obj)
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
     if isinstance(obj, dict):
-        return {k: sanitize_jsonb_payload(v) for k, v in obj.items()}
+        return {_sanitize_key(k): sanitize_jsonb_payload(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [sanitize_jsonb_payload(v) for v in obj]
     return obj

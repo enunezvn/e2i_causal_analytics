@@ -188,10 +188,23 @@ def _counts(conn) -> Tuple[int, int]:
 
 
 def _resolve_dsn(arg_dsn: Optional[str]) -> str:
-    dsn = arg_dsn or os.environ.get("E2I_PG_DSN") or os.environ.get("SUPABASE_DB_URL")
-    if not dsn:
-        sys.exit("No DSN: pass --dsn or set E2I_PG_DSN (see script header for the recipe)")
-    return dsn
+    dsn = arg_dsn or os.environ.get("E2I_PG_DSN")
+    if dsn:
+        return dsn
+    dsn = os.environ.get("SUPABASE_DB_URL")
+    if dsn:
+        # Codex iter-1 M1: on the droplet this env var points at the supavisor
+        # pooler and connect fails with "Tenant or user not found" — keep the
+        # fallback (it IS the direct DSN inside the worker containers) but say
+        # so loudly instead of letting the pooler error mystify the operator.
+        print(
+            "WARNING: no --dsn/E2I_PG_DSN; falling back to SUPABASE_DB_URL. On the "
+            "droplet host that is the supavisor pooler and will fail with 'Tenant or "
+            "user not found' — use the worker-DSN recipe in the script header.",
+            file=sys.stderr,
+        )
+        return dsn
+    sys.exit("No DSN: pass --dsn or set E2I_PG_DSN (see script header for the recipe)")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
