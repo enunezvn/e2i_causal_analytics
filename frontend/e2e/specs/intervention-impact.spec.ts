@@ -39,14 +39,20 @@ test.describe('Intervention Impact Page', () => {
     })
   })
 
-  test.describe('Intervention Selector', () => {
-    test('should display intervention selector', async () => {
-      await expect(impactPage.interventionSelector).toBeVisible()
+  test.describe('Intervention Catalog (honestly gated)', () => {
+    // The fabricated 4-intervention catalog was removed: the backend exposes
+    // no interventions-registry endpoint, so the page renders an honest
+    // empty state and routes real work through the Digital Twin tab.
+    test('should display the honest no-catalog empty state', async ({ page }) => {
+      await expect(
+        page.getByText('No intervention catalog available')
+      ).toBeVisible()
     })
 
-    test('should allow intervention selection', async () => {
-      await impactPage.selectIntervention('Campaign')
-      await impactPage.page.waitForTimeout(500)
+    test('should offer the Digital Twin tab as the real path', async ({ page }) => {
+      await expect(
+        page.getByRole('tab', { name: /digital twin/i })
+      ).toBeVisible()
     })
   })
 
@@ -147,13 +153,15 @@ test.describe('Intervention Impact Page', () => {
   })
 
   test.describe('Actions', () => {
-    test('should have refresh button', async () => {
-      await expect(impactPage.refreshButton).toBeVisible()
-    })
-
-    test('should allow refresh', async () => {
-      await impactPage.clickRefresh()
-      await impactPage.page.waitForTimeout(500)
+    // The refresh button went with the fabricated catalog; the surviving
+    // action is Export, honestly disabled until a real simulation produces
+    // results to export.
+    test('export is disabled until a simulation has produced results', async ({ page }) => {
+      const exportButton = page.getByRole('button', {
+        name: 'Export simulation results',
+      })
+      await expect(exportButton).toBeVisible()
+      await expect(exportButton).toBeDisabled()
     })
 
     test('should have download button', async () => {

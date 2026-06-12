@@ -6,6 +6,8 @@ import { ProtectedRoute } from '@/components/auth';
 const Home = lazy(() => import('@/pages/Home'));
 const Login = lazy(() => import('@/pages/Login'));
 const Signup = lazy(() => import('@/pages/Signup'));
+const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
 const KnowledgeGraph = lazy(() => import('@/pages/KnowledgeGraph'));
 const CausalDiscovery = lazy(() => import('@/pages/CausalDiscovery'));
 const ModelPerformance = lazy(() => import('@/pages/ModelPerformance'));
@@ -249,6 +251,25 @@ export const routes: RouteObject[] = [
     element: (
       <LazyPage>
         <Signup />
+      </LazyPage>
+    ),
+  },
+  // Password recovery (public, like /login): /forgot-password is linked from
+  // the login page; /reset-password is the AuthProvider resetPassword
+  // redirect target reached from the recovery email.
+  {
+    path: '/forgot-password',
+    element: (
+      <LazyPage>
+        <ForgotPassword />
+      </LazyPage>
+    ),
+  },
+  {
+    path: '/reset-password',
+    element: (
+      <LazyPage>
+        <ResetPassword />
       </LazyPage>
     ),
   },

@@ -191,7 +191,10 @@ def _run_tier0_subprocess(regime: str, tmp_path: Path) -> dict[str, Any]:
 
     assert result.returncode == 0, (
         f"Tier-0 e2e ({regime}) exited {result.returncode}. "
-        f"stderr (truncated): {result.stderr[-800:]!r}"
+        # #773: -800 chars truncated the true traceback out of CI logs
+        # (only the terminal RuntimeError survived); keep enough tail to
+        # root-cause from the nightly output alone.
+        f"stderr (truncated): {result.stderr[-8000:]!r}"
     )
     assert json_out.exists(), (
         f"TIER0_E2E_JSON_OUT artifact missing at {json_out}; runner produced no JSON."

@@ -2,21 +2,44 @@
  * Heterogeneous Treatment Effects Component
  * ==========================================
  *
- * Displays segment-level Conditional Average Treatment Effects (CATE) analysis.
- * Shows how treatment effects vary across different patient/HCP segments.
+ * Displays segment-level Conditional Average Treatment Effects (CATE)
+ * sourced from the real hierarchical analysis endpoint
+ * (`POST /api/causal/hierarchical/analyze`, EconML-within-CausalML
+ * segmentation served by the live heterogeneous-optimizer substrate).
+ *
+ * Honest-state contract (no fabricated data):
+ * - Before any run: explicit empty state with a "Run CATE analysis" action.
+ *   The analysis trains a real CausalForestDML server-side (can take
+ *   minutes), so it is user-triggered rather than auto-fired on mount.
+ * - Pending: labeled loading state.
+ * - Completed: real `segment_results` (name, n, CATE, CI). Significance is
+ *   derived from the CI excluding zero — no invented p-values or "drivers".
+ * - Failed / demo-mode placeholder: labeled error / demo notice.
  *
  * @module components/insights/HeterogeneousTreatmentEffects
  */
 
-import { useState, useEffect } from 'react';
-import { Users, TrendingUp, TrendingDown, BarChart3, RefreshCw, Info } from 'lucide-react';
+import { useCallback } from 'react';
+import {
+  Users,
+  TrendingUp,
+  TrendingDown,
+  BarChart3,
+  RefreshCw,
+  Info,
+  AlertTriangle,
+  Play,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
-import { useBatchExplain } from '@/hooks/api/use-explain';
-import { ModelType } from '@/types/explain';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { useRunHierarchicalAnalysisAndWait } from '@/hooks/api/use-causal';
+import type {
+  HierarchicalAnalysisRequest,
+  SegmentCATEResult,
+} from '@/types/causal';
 
 // =============================================================================
 // TYPES
@@ -24,100 +47,46 @@ import { ModelType } from '@/types/explain';
 
 interface HeterogeneousTreatmentEffectsProps {
   className?: string;
-}
-
-interface SegmentEffect {
-  id: string;
-  segment: string;
-  description: string;
-  sampleSize: number;
-  treatmentEffect: number;
-  confidence: number;
-  pValue: number;
-  isSignificant: boolean;
-  topDrivers: { feature: string; impact: number }[];
+  /** Treatment variable for the CATE analysis (documented default). */
+  treatmentVar?: string;
+  /** Outcome variable for the CATE analysis (documented default). */
+  outcomeVar?: string;
 }
 
 // =============================================================================
-// SAMPLE DATA
+// HELPERS
 // =============================================================================
 
-const SAMPLE_SEGMENTS: SegmentEffect[] = [
-  {
-    id: 'seg-1',
-    segment: 'High-Volume Specialists',
-    description: 'HCPs with >100 patients/month in specialty areas',
-    sampleSize: 1247,
-    treatmentEffect: 0.23,
-    confidence: 0.94,
-    pValue: 0.001,
-    isSignificant: true,
-    topDrivers: [
-      { feature: 'Prior Auth Volume', impact: 0.18 },
-      { feature: 'Payer Mix Index', impact: 0.12 },
-      { feature: 'Practice Size', impact: 0.08 },
-    ],
-  },
-  {
-    id: 'seg-2',
-    segment: 'Academic Medical Centers',
-    description: 'Physicians affiliated with teaching hospitals',
-    sampleSize: 523,
-    treatmentEffect: 0.15,
-    confidence: 0.87,
-    pValue: 0.012,
-    isSignificant: true,
-    topDrivers: [
-      { feature: 'Research Activity', impact: 0.14 },
-      { feature: 'Specialty Mix', impact: 0.09 },
-      { feature: 'Patient Complexity', impact: 0.07 },
-    ],
-  },
-  {
-    id: 'seg-3',
-    segment: 'Community Practice',
-    description: 'Independent community-based practices',
-    sampleSize: 2156,
-    treatmentEffect: 0.08,
-    confidence: 0.72,
-    pValue: 0.089,
-    isSignificant: false,
-    topDrivers: [
-      { feature: 'Geographic Access', impact: 0.06 },
-      { feature: 'Payer Distribution', impact: 0.04 },
-      { feature: 'Competition Density', impact: 0.03 },
-    ],
-  },
-  {
-    id: 'seg-4',
-    segment: 'Early Adopters',
-    description: 'HCPs who rapidly adopt new therapies',
-    sampleSize: 412,
-    treatmentEffect: 0.31,
-    confidence: 0.91,
-    pValue: 0.002,
-    isSignificant: true,
-    topDrivers: [
-      { feature: 'Innovation Score', impact: 0.22 },
-      { feature: 'Conference Attendance', impact: 0.11 },
-      { feature: 'Digital Engagement', impact: 0.09 },
-    ],
-  },
-];
+/**
+ * A segment effect is reported "significant" only when its confidence
+ * interval excludes zero — derived from real bounds, never invented.
+ */
+function ciExcludesZero(seg: SegmentCATEResult): boolean | null {
+  if (seg.cate_ci_lower === undefined || seg.cate_ci_upper === undefined) {
+    return null;
+  }
+  return seg.cate_ci_lower > 0 || seg.cate_ci_upper < 0;
+}
+
+function fmtPct(value: number | undefined | null, digits = 1): string {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+  const pct = value * 100;
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(digits)}%`;
+}
 
 // =============================================================================
 // SUB-COMPONENTS
 // =============================================================================
 
-function SegmentCard({ segment }: { segment: SegmentEffect }) {
-  const effectPercent = (segment.treatmentEffect * 100).toFixed(1);
-  const isPositive = segment.treatmentEffect >= 0;
+function SegmentCard({ segment }: { segment: SegmentCATEResult }) {
+  const significant = ciExcludesZero(segment);
+  const isPositive = (segment.cate_mean ?? 0) >= 0;
 
   return (
     <div
       className={cn(
         'p-4 rounded-lg border',
-        segment.isSignificant
+        significant
           ? 'border-emerald-500/30 bg-emerald-500/5'
           : 'border-[var(--color-border)] bg-[var(--color-card)]'
       )}
@@ -125,24 +94,31 @@ function SegmentCard({ segment }: { segment: SegmentEffect }) {
       {/* Header */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div>
-          <h4 className="text-sm font-medium text-[var(--color-foreground)]">{segment.segment}</h4>
-          <p className="text-xs text-[var(--color-muted-foreground)]">{segment.description}</p>
+          <h4 className="text-sm font-medium text-[var(--color-foreground)]">
+            {segment.segment_name}
+          </h4>
+          <p className="text-xs text-[var(--color-muted-foreground)]">
+            Uplift range [{segment.uplift_range[0].toFixed(2)},{' '}
+            {segment.uplift_range[1].toFixed(2)}]
+          </p>
         </div>
-        <Badge
-          variant="outline"
-          className={cn(
-            'text-xs',
-            segment.isSignificant
-              ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-              : 'bg-gray-500/10 text-gray-600 border-gray-500/20'
-          )}
-        >
-          {segment.isSignificant ? 'Significant' : 'Not Significant'}
-        </Badge>
+        {significant !== null && (
+          <Badge
+            variant="outline"
+            className={cn(
+              'text-xs',
+              significant
+                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                : 'bg-gray-500/10 text-gray-600 border-gray-500/20'
+            )}
+          >
+            {significant ? 'CI excludes 0' : 'CI includes 0'}
+          </Badge>
+        )}
       </div>
 
       {/* Treatment Effect */}
-      <div className="grid grid-cols-3 gap-3 mb-3">
+      <div className="grid grid-cols-3 gap-3">
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
           <div className="text-xs text-[var(--color-muted-foreground)]">CATE</div>
           <div
@@ -151,47 +127,36 @@ function SegmentCard({ segment }: { segment: SegmentEffect }) {
               isPositive ? 'text-emerald-600' : 'text-rose-600'
             )}
           >
-            {isPositive ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-            {isPositive ? '+' : ''}
-            {effectPercent}%
+            {isPositive ? (
+              <TrendingUp className="h-4 w-4" />
+            ) : (
+              <TrendingDown className="h-4 w-4" />
+            )}
+            {fmtPct(segment.cate_mean)}
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
-          <div className="text-xs text-[var(--color-muted-foreground)]">Confidence</div>
-          <div className="text-lg font-bold text-blue-600">
-            {(segment.confidence * 100).toFixed(0)}%
+          {/* The CATE schema reports raw bounds with no confidence-level field */}
+          <div className="text-xs text-[var(--color-muted-foreground)]">CI</div>
+          <div className="text-sm font-medium text-[var(--color-foreground)] pt-1">
+            {segment.cate_ci_lower !== undefined && segment.cate_ci_upper !== undefined
+              ? `[${fmtPct(segment.cate_ci_lower)}, ${fmtPct(segment.cate_ci_upper)}]`
+              : '—'}
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
           <div className="text-xs text-[var(--color-muted-foreground)]">Sample</div>
           <div className="text-lg font-bold text-[var(--color-foreground)]">
-            {segment.sampleSize.toLocaleString()}
+            {segment.n_samples.toLocaleString()}
           </div>
         </div>
       </div>
 
-      {/* Top Drivers */}
-      <div className="space-y-2">
-        <div className="text-xs text-[var(--color-muted-foreground)] font-medium">Top Drivers</div>
-        {segment.topDrivers.map((driver, idx) => (
-          <div key={idx} className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-muted-foreground)] w-28 truncate">
-              {driver.feature}
-            </span>
-            <Progress value={driver.impact * 100} className="flex-1 h-1.5" />
-            <span className="text-xs font-medium w-10 text-right">
-              {(driver.impact * 100).toFixed(0)}%
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* P-value footer */}
-      <div className="mt-3 pt-2 border-t border-[var(--color-border)]">
-        <span className="text-xs text-[var(--color-muted-foreground)]">
-          p-value: {segment.pValue.toFixed(3)}
-        </span>
-      </div>
+      {!segment.success && (
+        <div className="mt-3 pt-2 border-t border-[var(--color-border)] text-xs text-rose-600">
+          Estimation failed{segment.error_message ? `: ${segment.error_message}` : ''}
+        </div>
+      )}
     </div>
   );
 }
@@ -200,49 +165,36 @@ function SegmentCard({ segment }: { segment: SegmentEffect }) {
 // MAIN COMPONENT
 // =============================================================================
 
-export function HeterogeneousTreatmentEffects({ className }: HeterogeneousTreatmentEffectsProps) {
-  const [segments] = useState<SegmentEffect[]>(SAMPLE_SEGMENTS);
+export function HeterogeneousTreatmentEffects({
+  className,
+  treatmentVar = 'rep_visits',
+  outcomeVar = 'trx_count',
+}: HeterogeneousTreatmentEffectsProps) {
+  const {
+    mutate: runAnalysis,
+    data: analysis,
+    error,
+    isPending,
+  } = useRunHierarchicalAnalysisAndWait();
 
-  // Use batch explain for SHAP-based segment analysis
-  const { mutate: explainBatch, data: batchResponse, isPending } = useBatchExplain();
+  const handleRun = useCallback(() => {
+    const request: HierarchicalAnalysisRequest = {
+      treatment_var: treatmentVar,
+      outcome_var: outcomeVar,
+      n_segments: 3,
+    };
+    runAnalysis({ request, pollIntervalMs: 3000, maxWaitMs: 300000 });
+  }, [runAnalysis, treatmentVar, outcomeVar]);
 
-  // Fetch on mount
-  useEffect(() => {
-    explainBatch({
-      requests: [
-        { patient_id: 'segment_high_volume', model_type: ModelType.PROPENSITY },
-        { patient_id: 'segment_academic', model_type: ModelType.PROPENSITY },
-        { patient_id: 'segment_community', model_type: ModelType.PROPENSITY },
-        { patient_id: 'segment_early_adopter', model_type: ModelType.PROPENSITY },
-      ],
-      parallel: true,
-    });
-  }, [explainBatch]);
-
-  // Transform batch response if available (simplified - real impl would parse properly)
-  useEffect(() => {
-    if (batchResponse?.successful && batchResponse.successful > 0) {
-      // In a real implementation, we would transform batchResponse.explanations
-      // to SegmentEffect format. For now, keep sample data as fallback.
-      // Future: setSegments(transformedSegments);
-    }
-  }, [batchResponse]);
-
-  const handleRefresh = () => {
-    explainBatch({
-      requests: [
-        { patient_id: 'segment_high_volume', model_type: ModelType.PROPENSITY },
-        { patient_id: 'segment_academic', model_type: ModelType.PROPENSITY },
-        { patient_id: 'segment_community', model_type: ModelType.PROPENSITY },
-        { patient_id: 'segment_early_adopter', model_type: ModelType.PROPENSITY },
-      ],
-      parallel: true,
-    });
-  };
-
-  const significantCount = segments.filter((s) => s.isSignificant).length;
-  const avgEffect =
-    segments.reduce((sum, s) => sum + s.treatmentEffect, 0) / segments.length;
+  // A demo-mode response is a pinned-zero placeholder, NOT a real analysis
+  // (backend flags it explicitly). Never present it as real numbers.
+  const isDemo =
+    (analysis as { is_demo?: boolean | null } | undefined)?.is_demo === true;
+  const failed = analysis?.status === 'failed';
+  const segments: SegmentCATEResult[] =
+    !isDemo && !failed && analysis?.segment_results ? analysis.segment_results : [];
+  const hasResults = segments.length > 0;
+  const significantCount = segments.filter((s) => ciExcludesZero(s) === true).length;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -257,20 +209,23 @@ export function HeterogeneousTreatmentEffects({ className }: HeterogeneousTreatm
                 Heterogeneous Treatment Effects
               </CardTitle>
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                Segment-level CATE analysis
+                Segment-level CATE — {treatmentVar} → {outcomeVar}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-xs bg-indigo-500/10 text-indigo-600">
-              {significantCount}/{segments.length} Significant
-            </Badge>
+            {hasResults && (
+              <Badge variant="outline" className="text-xs bg-indigo-500/10 text-indigo-600">
+                {significantCount}/{segments.length} CI excl. 0
+              </Badge>
+            )}
             <Button
               variant="ghost"
               size="icon"
-              onClick={handleRefresh}
+              onClick={handleRun}
               disabled={isPending}
               className="h-8 w-8"
+              aria-label="Refresh segment analysis"
             >
               <RefreshCw className={cn('h-4 w-4', isPending && 'animate-spin')} />
             </Button>
@@ -278,54 +233,108 @@ export function HeterogeneousTreatmentEffects({ className }: HeterogeneousTreatm
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {/* Summary Stats */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
-            <div className="flex items-center gap-2 mb-1">
-              <Users className="h-4 w-4 text-[var(--color-muted-foreground)]" />
-              <span className="text-xs text-[var(--color-muted-foreground)]">Avg. Treatment Effect</span>
-            </div>
-            <div className="text-xl font-bold text-emerald-600">
-              +{(avgEffect * 100).toFixed(1)}%
-            </div>
-          </div>
-          <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
-            <div className="flex items-center gap-2 mb-1">
-              <TrendingUp className="h-4 w-4 text-[var(--color-muted-foreground)]" />
-              <span className="text-xs text-[var(--color-muted-foreground)]">Total Sample Size</span>
-            </div>
-            <div className="text-xl font-bold text-[var(--color-foreground)]">
-              {segments.reduce((sum, s) => sum + s.sampleSize, 0).toLocaleString()}
-            </div>
-          </div>
-        </div>
-
         {/* Loading State */}
         {isPending && (
           <div className="flex items-center justify-center py-8">
             <div className="flex items-center gap-3 text-[var(--color-muted-foreground)]">
               <RefreshCw className="h-5 w-5 animate-spin" />
-              <span className="text-sm">Analyzing segment effects...</span>
+              <span className="text-sm">
+                Analyzing segment effects... (trains a causal forest server-side;
+                this can take a few minutes)
+              </span>
             </div>
           </div>
         )}
 
-        {/* Segment Cards */}
-        {!isPending && (
-          <div className="grid gap-3">
-            {segments.map((segment) => (
-              <SegmentCard key={segment.id} segment={segment} />
-            ))}
+        {/* Error State */}
+        {!isPending && (error || failed) && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/5 border border-rose-500/20">
+            <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
+            <div className="text-xs text-[var(--color-muted-foreground)]">
+              <span className="font-medium text-rose-600">CATE analysis failed:</span>{' '}
+              {error?.message ?? analysis?.errors?.join('; ') ?? 'Unknown error'}
+            </div>
           </div>
+        )}
+
+        {/* Demo-placeholder notice — never presented as real analysis */}
+        {!isPending && !error && isDemo && (
+          <EmptyState
+            title="Demo-mode placeholder response"
+            description="The causal engine returned a demo placeholder, not a real analysis. Results are suppressed to avoid presenting pinned values as measured effects."
+          />
+        )}
+
+        {/* Empty state with explicit run action */}
+        {!isPending && !error && !failed && !isDemo && !hasResults && (
+          <EmptyState
+            title="No CATE analysis has been run"
+            description="Run a segment-level CATE analysis against live data. The server trains a real causal forest, so this can take a few minutes."
+            action={
+              <Button onClick={handleRun} size="sm">
+                <Play className="h-4 w-4 mr-2" />
+                Run CATE analysis
+              </Button>
+            }
+          />
+        )}
+
+        {/* Results */}
+        {!isPending && hasResults && (
+          <>
+            {/* Summary Stats — real overall ATE and heterogeneity from the API */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
+                <div className="flex items-center gap-2 mb-1">
+                  <Users className="h-4 w-4 text-[var(--color-muted-foreground)]" />
+                  <span className="text-xs text-[var(--color-muted-foreground)]">
+                    Overall ATE
+                  </span>
+                </div>
+                <div className="text-xl font-bold text-[var(--color-foreground)]">
+                  {fmtPct(analysis?.overall_ate)}
+                </div>
+              </div>
+              <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
+                <div className="flex items-center gap-2 mb-1">
+                  <TrendingUp className="h-4 w-4 text-[var(--color-muted-foreground)]" />
+                  <span className="text-xs text-[var(--color-muted-foreground)]">
+                    Heterogeneity (I²)
+                  </span>
+                </div>
+                <div className="text-xl font-bold text-[var(--color-foreground)]">
+                  {typeof analysis?.segment_heterogeneity === 'number'
+                    ? analysis.segment_heterogeneity.toFixed(2)
+                    : '—'}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-3">
+              {segments.map((segment) => (
+                <SegmentCard key={segment.segment_id} segment={segment} />
+              ))}
+            </div>
+
+            {analysis?.warnings && analysis.warnings.length > 0 && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
+                <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5" />
+                <div className="text-xs text-[var(--color-muted-foreground)]">
+                  {analysis.warnings.join(' ')}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* Info Banner */}
         <div className="flex items-start gap-2 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20">
           <Info className="h-4 w-4 text-indigo-500 mt-0.5" />
           <div className="text-xs text-[var(--color-muted-foreground)]">
-            <span className="font-medium text-indigo-600">CATE Analysis:</span> Conditional Average
-            Treatment Effects show how intervention impact varies across segments. Significant
-            effects (p &lt; 0.05) indicate reliable segment-level targeting opportunities.
+            <span className="font-medium text-indigo-600">CATE Analysis:</span>{' '}
+            Conditional Average Treatment Effects show how intervention impact
+            varies across uplift segments. Segments whose confidence interval
+            excludes zero indicate reliable targeting opportunities.
           </div>
         </div>
       </CardContent>

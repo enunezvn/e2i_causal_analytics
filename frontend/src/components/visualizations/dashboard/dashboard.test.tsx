@@ -110,6 +110,34 @@ describe('KPICard', () => {
     // Should show 0.85 (2 decimal places)
     expect(screen.getByText('0.85')).toBeInTheDocument();
   });
+
+  // ===========================================================================
+  // SAMPLE_SPARKLINE fabrication (fix/fe-home-fake-data task 4)
+  // KPICard previously fell back to a fabricated upward-trending
+  // SAMPLE_SPARKLINE = [45, 52, 48, 55, 60, 58, 62, 65, 63, 68] whenever the
+  // `sparklineData` prop was absent — rendering a fake trend behind REAL
+  // values (ATE/ROI cards) on ~7 pages. Absent prop must mean NO sparkline.
+  // ===========================================================================
+
+  it('renders NO sparkline when sparklineData is not provided (no SAMPLE_SPARKLINE fabrication)', () => {
+    const { container } = render(<KPICard title="ATE on TRx" value={0.156} />);
+    // No fabricated trend chart may render without real historical data.
+    expect(container.querySelector('.recharts-responsive-container')).toBeNull();
+  });
+
+  it('renders NO sparkline for an explicitly empty series', () => {
+    const { container } = render(
+      <KPICard title="ATE on TRx" value={0.156} sparklineData={[]} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeNull();
+  });
+
+  it('renders a sparkline only when real data is passed', () => {
+    const { container } = render(
+      <KPICard title="ATE on TRx" value={0.156} sparklineData={[0.12, 0.14, 0.156]} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeNull();
+  });
 });
 
 // =============================================================================

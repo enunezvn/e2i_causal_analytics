@@ -65,6 +65,42 @@ function DefaultLoadingFallback() {
 }
 
 // =============================================================================
+// CONFIGURATION ERROR STATE
+// =============================================================================
+
+/**
+ * Visible fail-closed state shown when Supabase auth is not configured.
+ *
+ * Rendering this (rather than redirecting to /login, which cannot work
+ * without Supabase either) makes a misconfigured build IMPOSSIBLE to miss
+ * while still never granting access (see use-auth.ts fail-closed derivation).
+ */
+function AuthConfigurationError() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-[var(--color-background)] p-4">
+      <div
+        role="alert"
+        className="max-w-lg rounded-lg border border-[var(--color-destructive)]/40 bg-[var(--color-destructive)]/10 p-6 text-center"
+      >
+        <h1 className="text-xl font-semibold text-[var(--color-destructive)]">
+          Authentication is not configured
+        </h1>
+        <p className="mt-3 text-sm text-[var(--color-foreground)]">
+          This deployment is missing its Supabase configuration, so sign-in is
+          unavailable and access to the application is disabled.
+        </p>
+        <p className="mt-3 text-sm text-[var(--color-muted-foreground)]">
+          Set <code className="font-mono">VITE_SUPABASE_URL</code> and{' '}
+          <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> at build
+          time (see <code className="font-mono">frontend/.env.production</code>),
+          then rebuild the frontend.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // COMPONENT
 // =============================================================================
 
@@ -81,7 +117,17 @@ export function ProtectedRoute({
   loadingFallback,
 }: ProtectedRouteProps) {
   const location = useLocation();
-  const { isAuthenticated, isAdmin, isInitialized, setRedirectTo } = useAuth();
+  const { isAuthenticated, isAuthConfigured, isAdmin, isInitialized, setRedirectTo } =
+    useAuth();
+
+  // FAIL CLOSED: without Supabase configuration there is no way to
+  // authenticate anyone - show a visible configuration error instead of
+  // either granting access (the old bypass) or redirecting to a login page
+  // that cannot work. Checked before isInitialized: the configuration state
+  // is static for the lifetime of the bundle.
+  if (!isAuthConfigured) {
+    return <AuthConfigurationError />;
+  }
 
   // Show loading state while initializing
   if (!isInitialized) {
