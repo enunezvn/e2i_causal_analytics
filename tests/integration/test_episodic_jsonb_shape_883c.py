@@ -132,14 +132,15 @@ async def test_no_reader_opaque_string_scalars_remain():
       the reader CANNOT parse would silently hydrate to ``{}`` and resurrect
       the dropped-rows bug.
 
-    Live state behind this: migration 073's first pass repaired 491
-    raw_content + 628 entities + 628 outcome_details rows in-session; the
-    137 remaining raw_content string scalars are all model_trainer payloads
-    whose bare-NaN tokens fail the Postgres cast (the migration's
-    second-chance NaN->null pass covers them when the migration pipeline
-    next runs; reapplying live mid-session was deliberately left to the
-    user-authorized pipeline). The writers are fixed, so this set can only
-    shrink — a GROWING set means a writer regressed to double-encoding."""
+    Live state behind this: migration 073 repaired 491 raw_content + 628
+    entities + 628 outcome_details rows in-session; the 137 remaining
+    raw_content string scalars are all model_trainer payloads whose bare-NaN
+    tokens fail the Postgres cast. They stay string scalars BY DESIGN
+    (codex R2: an in-SQL text rewrite cannot be made quote-aware, so the
+    migration only plain-casts and skips them; the safe convergence path,
+    if ever wanted, is a Python json.loads/json.dumps repair). The writers
+    are fixed, so this set can only shrink — a GROWING set means a writer
+    regressed to double-encoding."""
     import math
 
     from src.memory.episodic_memory import get_supabase_client
@@ -236,18 +237,25 @@ async def test_hydrate_raw_content_tolerates_both_shapes():
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
 async def test_hydrate_parses_nan_bearing_legacy_rows():
-    """Pins the live 137-row class: Python's json.dumps emitted bare NaN
-    tokens that Postgres ::jsonb rejects (which is why 073's plain cast
-    skipped them), but json.loads — the hydration parser — accepts them, so
-    the reader recovers the full payload instead of dropping the row."""
+    """Pins the live 137-row class AND the codex-R2 corruption scenario:
+    Python's json.dumps emitted bare NaN tokens that Postgres ::jsonb rejects
+    (which is why 073's plain cast skips these rows BY DESIGN — an in-SQL
+    regex rewrite would also hit ': NaN' inside legitimate string values and
+    the per-row guard could not catch it). json.loads — the hydration
+    parser — accepts the bare tokens, so the reader recovers the full
+    payload, INCLUDING a string value that contains the dangerous text
+    verbatim."""
     import math
 
     from src.memory.episodic_memory import get_supabase_client, hydrate_raw_content
 
     marker = f"883c-nan-{uuid.uuid4().hex[:12]}"
     legacy_id = str(uuid.uuid4())
-    # Exactly what the old writer produced for a NaN metric payload.
-    payload_text = json.dumps({"marker": marker, "auc": float("nan")})
+    # Exactly what the old writer produced for a NaN metric payload — plus
+    # the codex-R2 regression: a STRING value containing ': NaN'/', Infinity'
+    # text that any quote-unaware rewriter would corrupt.
+    note = "threshold: NaN means missing, Infinity capped"
+    payload_text = json.dumps({"marker": marker, "auc": float("nan"), "note": note})
     assert "NaN" in payload_text  # the non-standard token under test
     get_supabase_client().table("episodic_memories").insert(
         {
@@ -264,5 +272,10 @@ async def test_hydrate_parses_nan_bearing_legacy_rows():
         rc = hydrated[0]["raw_content"]
         assert rc.get("marker") == marker, "NaN-bearing legacy row hydrated to {} — content lost"
         assert math.isnan(rc["auc"])
+        assert rc["note"] == note, (
+            "string content containing ': NaN' text must survive VERBATIM — "
+            "the reader path is the only endorsed repair path precisely "
+            "because it cannot corrupt string values"
+        )
     finally:
         _cleanup(legacy_id)

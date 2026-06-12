@@ -22,46 +22,46 @@
 -- them) have zero non-module consumers; hydrate_raw_content — the only
 -- production reader of raw_content content — stays tolerant of both shapes.
 --
--- Pattern: migration 072 §2 (per-row exception guard: any row whose inner
--- text is not valid JSON is left untouched and counted; NOTICE totals) plus a
--- second-chance pass for Python-emitted non-standard tokens: json.dumps
--- writes bare NaN/Infinity (accepted by Python json.loads, REJECTED by
--- Postgres ::jsonb). Live: 137/628 raw_content rows (all model_trainer
--- metric payloads) failed the plain cast for exactly this; value-position
--- ': NaN' / ': Infinity' / ': -Infinity' are rewritten to ': null' before
--- one retry — semantically honest (an unknown metric), and a row that STILL
--- fails is skipped and counted, never corrupted.
--- Idempotent: re-running is a clean no-op (jsonb_typeof no longer 'string').
--- Transactional-safe (no ALTER TYPE ... ADD VALUE), so run_migrations.sh
--- applies it wrapped as usual.
+-- Pattern: migration 072 §2 exactly (per-row exception guard: any row whose
+-- inner text Postgres cannot cast to jsonb is left untouched and counted;
+-- NOTICE totals). Live: 137/628 raw_content rows (all model_trainer metric
+-- payloads) fail the cast because Python's json.dumps emitted bare
+-- NaN/Infinity tokens, which ::jsonb rejects. Those rows are DELIBERATELY
+-- LEFT as string scalars: an in-SQL text rewrite cannot be made quote-aware
+-- (codex R2: a global regex would also rewrite ': NaN' inside legitimate
+-- string values, and the corrupted text still casts, so the per-row guard
+-- cannot catch it). The production reader (hydrate_raw_content) parses them
+-- fine — Python json.loads accepts the tokens Postgres rejects (pinned by
+-- tests/integration/test_episodic_jsonb_shape_883c.py). If full shape
+-- convergence is ever wanted, the safe path is a Python repair
+-- (json.loads(txt, parse_constant=lambda _: None) -> strict json.dumps ->
+-- update), NOT SQL text surgery.
 --
--- APPLICATION STATE (2026-06-12): the plain-cast pass ran live in-session
--- (raw_content 491 repaired / 137 NaN-skipped; entities 628; outcome_details
--- 628) BEFORE the NaN second-chance pass below was added. The file is left
--- untracked in schema_migrations on purpose so the normal migration pipeline
--- applies this final version (no-op for repaired rows, NaN->null for the
--- remaining 137). Readers (hydrate_raw_content) parse the NaN rows fine in
--- the meantime — Python json.loads accepts the tokens Postgres rejects.
+-- Idempotent: re-running is a clean no-op (plain-cast rows are no longer
+-- 'string'; NaN rows re-skip). Transactional-safe (no ALTER TYPE ... ADD
+-- VALUE), so run_migrations.sh applies it wrapped as usual.
+--
+-- APPLICATION STATE (2026-06-12): this plain-cast pass already ran live
+-- in-session (raw_content 491 repaired / 137 NaN-skipped; entities 628;
+-- outcome_details 628). The file is left untracked in schema_migrations on
+-- purpose so the normal user-authorized migration pipeline records it
+-- through the standard path (re-run is a no-op).
 -- ----------------------------------------------------------------------------
 
 DO $$
 DECLARE
     col TEXT;
     row_rec RECORD;
-    fixed_text TEXT;
     repaired INTEGER;
-    nan_repaired INTEGER;
     skipped INTEGER;
 BEGIN
     FOREACH col IN ARRAY ARRAY['raw_content', 'entities', 'outcome_details']
     LOOP
         repaired := 0;
-        nan_repaired := 0;
         skipped := 0;
         FOR row_rec IN EXECUTE format(
-            'SELECT memory_id, (%I #>> ''{}'') AS txt FROM episodic_memories '
-            'WHERE jsonb_typeof(%I) = ''string''',
-            col, col
+            'SELECT memory_id FROM episodic_memories WHERE jsonb_typeof(%I) = ''string''',
+            col
         )
         LOOP
             BEGIN
@@ -71,27 +71,12 @@ BEGIN
                 ) USING row_rec.memory_id;
                 repaired := repaired + 1;
             EXCEPTION WHEN others THEN
-                BEGIN
-                    -- Second chance: Python json.dumps NaN/Infinity tokens in
-                    -- VALUE position (after ':' or in arrays after ',' / '[')
-                    -- become null; retry the cast on the rewritten text.
-                    fixed_text := regexp_replace(
-                        row_rec.txt,
-                        '([:\[,]\s*)-?(NaN|Infinity)',
-                        '\1null',
-                        'g'
-                    );
-                    EXECUTE format(
-                        'UPDATE episodic_memories SET %I = $2::jsonb WHERE memory_id = $1',
-                        col
-                    ) USING row_rec.memory_id, fixed_text;
-                    nan_repaired := nan_repaired + 1;
-                EXCEPTION WHEN others THEN
-                    skipped := skipped + 1; -- still not valid JSON; readers tolerate
-                END;
+                -- Inner text not valid JSON for Postgres (the live class is
+                -- Python-emitted bare NaN tokens); left untouched BY DESIGN —
+                -- see header. Readers tolerate.
+                skipped := skipped + 1;
             END;
         END LOOP;
-        RAISE NOTICE 'episodic_memories.% repair: % repaired, % nan-repaired, % skipped',
-            col, repaired, nan_repaired, skipped;
+        RAISE NOTICE 'episodic_memories.% repair: % repaired, % skipped', col, repaired, skipped;
     END LOOP;
 END $$;
