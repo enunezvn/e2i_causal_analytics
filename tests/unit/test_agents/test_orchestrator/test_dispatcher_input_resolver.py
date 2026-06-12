@@ -1117,3 +1117,108 @@ async def test_feedback_learner_dispatch_completes_honestly() -> None:
     assert res["result"] is not None
     assert res["result"].get("status") != "failed"
     assert res["result"].get("feedback_count") == 0  # honest no-data outcome
+
+
+# ---------------------------------------------------------------------------
+# codex #883-B1 R1 findings (red-first)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_explainer_fallback_is_order_independent_within_group() -> None:
+    """codex R1 finding 1: with ``[failing, succeeding]`` ordered in the SAME
+    parallel group, the interleaved fallback dispatch fired before the sibling
+    success was recorded — the same group produced different fallback outcomes
+    per dispatch-plan ordering. Fallbacks must see the COMPLETE group."""
+    from src.agents.explainer import ExplainerAgent
+
+    class _GoodCausal:
+        async def run(self, input_data):
+            return {"status": "completed", "ate": 0.42, "narrative": "real upstream finding"}
+
+    class _FailingComposer:
+        async def run(self, input_data):
+            raise RuntimeError("primary agent crashed")
+
+    node = DispatcherNode(
+        agent_registry={
+            "causal_impact": _GoodCausal(),
+            "tool_composer": _FailingComposer(),
+            "explainer": ExplainerAgent(use_llm=False),
+        }
+    )
+    state = {
+        "query": "what drove conversions, and compose the follow-up?",
+        "user_context": {},
+        "session_id": "sess-order",
+        "parsed_query": {"entities": []},
+        "dispatch_plan": [
+            # The FAILING agent is processed FIRST within the single group.
+            {
+                "agent_name": "tool_composer",
+                "priority": "high",
+                "parameters": {},
+                "timeout_ms": 15000,
+                "fallback_agent": "explainer",
+                "execution_mode": "parallel",
+            },
+            {
+                "agent_name": "causal_impact",
+                "priority": "critical",
+                "parameters": {},
+                "timeout_ms": 15000,
+                "fallback_agent": None,
+                "execution_mode": "parallel",
+            },
+        ],
+        "parallel_groups": [["tool_composer", "causal_impact"]],
+    }
+    out = await node.execute(state)  # type: ignore[arg-type]
+
+    by_agent = {r["agent_name"]: r for r in out["agent_results"]}
+    assert by_agent["causal_impact"]["success"] is True
+    assert by_agent["tool_composer"]["success"] is False
+    explainer_res = by_agent["explainer"]
+    assert explainer_res["success"] is True, (
+        f"fallback must bind the sibling success regardless of intra-group "
+        f"ordering: {explainer_res['error']}"
+    )
+
+
+def test_feedback_learner_bare_calendar_units_bind_previous_calendar_period() -> None:
+    """codex R1 finding 2: a bare 'last quarter/month/year' means the previous
+    CALENDAR period, not a rolling window ending now — the rolling read bound a
+    different period than the user named."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
+
+    assert disp._parse_time_period_text("last quarter", now) == (
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        datetime(2026, 4, 1, tzinfo=timezone.utc),
+    )
+    assert disp._parse_time_period_text("previous month", now) == (
+        datetime(2026, 5, 1, tzinfo=timezone.utc),
+        datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    assert disp._parse_time_period_text("last year", now) == (
+        datetime(2025, 1, 1, tzinfo=timezone.utc),
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    # Year-boundary edges.
+    jan = datetime(2026, 1, 15, tzinfo=timezone.utc)
+    assert disp._parse_time_period_text("last month", jan) == (
+        datetime(2025, 12, 1, tzinfo=timezone.utc),
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    assert disp._parse_time_period_text("last quarter", jan) == (
+        datetime(2025, 10, 1, tzinfo=timezone.utc),
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    # An EXPLICIT count stays a rolling trailing window.
+    start, end = disp._parse_time_period_text("past 2 quarters", now)
+    assert end == now and (end - start).days == 182
+    start7, end7 = disp._parse_time_period_text("last 7 days", now)
+    assert end7 == now and (end7 - start7).days == 7

@@ -1009,6 +1009,33 @@ _FL_RELATIVE_RE = re.compile(
 _FL_QUARTER_RE = re.compile(r"\bQ([1-4])\b", re.IGNORECASE)
 _FL_YEAR_RE = re.compile(r"\b(20[0-9]{2})\b")
 _FL_RELATIVE_DAYS = {"day": 1, "week": 7, "month": 30, "quarter": 91, "year": 365}
+_FL_CALENDAR_UNITS = ("month", "quarter", "year")
+
+
+def _previous_calendar_period(unit: str, now: datetime) -> Tuple[datetime, datetime]:
+    """Return the PREVIOUS calendar ``month``/``quarter``/``year`` window (UTC).
+
+    Codex #883-B1 R1: a bare "last quarter" means the previous CALENDAR quarter
+    in business language (on 2026-06-12: 2026-01-01 → 2026-04-01), not a rolling
+    91-day window ending now — the rolling read silently bound a different
+    period than the user named.
+    """
+    if unit == "year":
+        return (
+            datetime(now.year - 1, 1, 1, tzinfo=timezone.utc),
+            datetime(now.year, 1, 1, tzinfo=timezone.utc),
+        )
+    if unit == "quarter":
+        current_q = (now.month - 1) // 3 + 1
+        current_start = datetime(now.year, 3 * (current_q - 1) + 1, 1, tzinfo=timezone.utc)
+        if current_q == 1:
+            return datetime(now.year - 1, 10, 1, tzinfo=timezone.utc), current_start
+        return datetime(now.year, 3 * (current_q - 2) + 1, 1, tzinfo=timezone.utc), current_start
+    # month
+    current_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    if now.month == 1:
+        return datetime(now.year - 1, 12, 1, tzinfo=timezone.utc), current_start
+    return datetime(now.year, now.month - 1, 1, tzinfo=timezone.utc), current_start
 
 
 def _parse_time_period_text(text: str, now: datetime) -> Optional[Tuple[datetime, datetime]]:
@@ -1018,12 +1045,18 @@ def _parse_time_period_text(text: str, now: datetime) -> Optional[Tuple[datetime
     ``feature_extractor`` patterns ``Q[1-4]`` / ``20xx`` plus common relative
     phrases). Returns ``None`` when the text matches none of them — the caller
     FAILS CLOSED rather than silently substituting a different window than the
-    one the user named.
+    one the user named. Relative-phrase semantics: an EXPLICIT count ("last 7
+    days", "past 2 months") is a rolling trailing window ending now; a BARE
+    calendar unit ("last month/quarter/year") is the previous CALENDAR period
+    (codex #883-B1 R1); bare day/week stay rolling (≈ "the last 24h/7d").
     """
     relative = _FL_RELATIVE_RE.search(text.lower())
     if relative:
+        unit = relative.group(2)
+        if relative.group(1) is None and unit in _FL_CALENDAR_UNITS:
+            return _previous_calendar_period(unit, now)
         count = int(relative.group(1) or 1)
-        days = count * _FL_RELATIVE_DAYS[relative.group(2)]
+        days = count * _FL_RELATIVE_DAYS[unit]
         return now - timedelta(days=days), now
 
     quarter = _FL_QUARTER_RE.search(text)
@@ -1289,7 +1322,15 @@ class DispatcherNode:
 
             group_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Process results
+            # Process results — FIRST record every sibling's result, THEN run
+            # fallbacks. Fallback dispatches read the accumulated results via
+            # ``_state_so_far()``, so deferring them makes fallback visibility
+            # depend on what actually completed in the group rather than on the
+            # dispatch plan's intra-group ordering (codex #883-B1 R1: with
+            # ``[failing, succeeding]`` the interleaved version dispatched the
+            # fallback before the sibling success was recorded, so the same
+            # group produced different fallback outcomes per ordering).
+            pending_fallbacks: List[str] = []
             for dispatch, result in zip(group_dispatches, group_results, strict=False):
                 if isinstance(result, Exception):
                     # Handle unexpected exceptions from asyncio.gather
@@ -1302,28 +1343,29 @@ class DispatcherNode:
                     )
                     all_results.append(failed_result)
 
-                    # Try fallback if available
+                    # Queue fallback if available
                     fallback_agent = dispatch.get("fallback_agent")
                     if fallback_agent:
-                        fallback_result = await self._dispatch_fallback(
-                            str(fallback_agent), _state_so_far()
-                        )
-                        all_results.append(fallback_result)
+                        pending_fallbacks.append(str(fallback_agent))
                 elif isinstance(result, dict) and not result.get("success", True):
                     # AgentResult returned with success=False
                     all_results.append(result)  # type: ignore[arg-type]
 
-                    # Try fallback if available
+                    # Queue fallback if available
                     fallback_agent2 = dispatch.get("fallback_agent")
                     if fallback_agent2:
-                        fallback_result = await self._dispatch_fallback(
-                            str(fallback_agent2), _state_so_far()
-                        )
-                        all_results.append(fallback_result)
+                        pending_fallbacks.append(str(fallback_agent2))
                 else:
                     # Result is AgentResult (TypedDict cannot use isinstance, check dict)
                     if isinstance(result, dict) and "agent_name" in result:
                         all_results.append(result)
+
+            # Fallbacks see the COMPLETE group (plus all earlier groups/turns).
+            for fallback_agent_name in pending_fallbacks:
+                fallback_result = await self._dispatch_fallback(
+                    fallback_agent_name, _state_so_far()
+                )
+                all_results.append(fallback_result)
 
         dispatch_time = int((time.time() - start_time) * 1000)
 

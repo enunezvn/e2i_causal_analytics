@@ -320,3 +320,26 @@ def test_train_twin_model_string_true_opts_in():
         train_twin_model.apply(args=[payload]).get()
 
     assert mock_train.await_args.kwargs["synthetic"] is True
+
+
+def test_train_twin_model_ambiguous_synthetic_hits_designed_fail_closed():
+    """codex #883-B1 R1 finding 3: pin the actual fail-closed path — with the
+    strict-coerced ``synthetic="false"`` and no data/data_source, the REAL
+    ``train_and_persist_twin`` must raise its designed ValueError ('requires
+    one of: data, data_source, or synthetic=True') out of the task, never
+    train on the wrong provenance."""
+    import pytest as _pytest
+
+    from src.tasks.heavy_offload_tasks import train_twin_model
+
+    payload = {"twin_type": "hcp", "brand": "Remibrutinib", "synthetic": "false"}
+    with (
+        # Only the I/O boundary is stubbed; the training job is the REAL one.
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+        patch("src.digital_twin.twin_repository.TwinRepository", MagicMock()),
+        _pytest.raises(ValueError, match="synthetic=True"),
+    ):
+        train_twin_model.apply(args=[payload], throw=True).get()
