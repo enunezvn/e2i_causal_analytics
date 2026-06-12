@@ -307,6 +307,20 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
       [onRowSelect]
     );
 
+    // The header may only claim a confidence level when every effect
+    // uniformly reports the same one — anything else is fabrication.
+    const uniformLevel = effects.length
+      ? effects.every(
+          (e) =>
+            e.confidenceLevel !== undefined &&
+            e.confidenceLevel === effects[0].confidenceLevel
+        )
+        ? effects[0].confidenceLevel
+        : undefined
+      : undefined;
+    const ciHeader =
+      uniformLevel !== undefined ? `${Math.round(uniformLevel * 100)}% CI` : 'CI';
+
     // Empty state
     if (effects.length === 0 && !isLoading) {
       return (
@@ -378,7 +392,7 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
                   {renderSortIcon('estimate')}
                 </div>
               </TableHead>
-              <TableHead className="text-center">95% CI</TableHead>
+              <TableHead className="text-center">{ciHeader}</TableHead>
               {showCIBars && <TableHead className="min-w-[120px]">CI Visualization</TableHead>}
               <TableHead
                 className={cn(

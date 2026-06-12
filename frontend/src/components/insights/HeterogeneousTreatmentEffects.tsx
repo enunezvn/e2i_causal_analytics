@@ -136,7 +136,8 @@ function SegmentCard({ segment }: { segment: SegmentCATEResult }) {
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
-          <div className="text-xs text-[var(--color-muted-foreground)]">95% CI</div>
+          {/* The CATE schema reports raw bounds with no confidence-level field */}
+          <div className="text-xs text-[var(--color-muted-foreground)]">CI</div>
           <div className="text-sm font-medium text-[var(--color-foreground)] pt-1">
             {segment.cate_ci_lower !== undefined && segment.cate_ci_upper !== undefined
               ? `[${fmtPct(segment.cate_ci_lower)}, ${fmtPct(segment.cate_ci_upper)}]`

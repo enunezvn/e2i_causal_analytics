@@ -480,9 +480,27 @@ describe('EffectsTable', () => {
       expect(screen.getByText('Treatment')).toBeInTheDocument();
       expect(screen.getByText('Outcome')).toBeInTheDocument();
       expect(screen.getByText('Estimate')).toBeInTheDocument();
-      expect(screen.getByText('95% CI')).toBeInTheDocument();
+      // mockEffects carry no confidenceLevel — the header must not claim one
+      expect(screen.getByText('CI')).toBeInTheDocument();
+      expect(screen.queryByText('95% CI')).toBeNull();
       expect(screen.getByText('P-value')).toBeInTheDocument();
       expect(screen.getByText('Sig.')).toBeInTheDocument();
+    });
+
+    it('claims a confidence level in the CI header only when every effect uniformly reports it', () => {
+      const leveled = mockEffects.map((e) => ({ ...e, confidenceLevel: 0.95 }));
+      const { rerender } = render(<EffectsTable effects={leveled} />);
+      expect(screen.getByText('95% CI')).toBeInTheDocument();
+
+      // Mixed levels → no single-level claim
+      const mixed = mockEffects.map((e, i) => ({
+        ...e,
+        confidenceLevel: i === 0 ? 0.9 : 0.95,
+      }));
+      rerender(<EffectsTable effects={mixed} />);
+      expect(screen.queryByText('95% CI')).toBeNull();
+      expect(screen.queryByText('90% CI')).toBeNull();
+      expect(screen.getByText('CI')).toBeInTheDocument();
     });
 
     it('renders effect rows', () => {

@@ -451,7 +451,8 @@ const CausalDiscovery = React.forwardRef<HTMLDivElement, CausalDiscoveryProps>(
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Causal Effect Estimates</CardTitle>
               <CardDescription>
-                Treatment effects with 95% confidence intervals
+                Treatment effects with confidence intervals as reported by the
+                estimator
               </CardDescription>
             </CardHeader>
             <CardContent>

@@ -525,7 +525,9 @@ function CausalDiscovery() {
                     <th className="text-left p-2 font-medium">
                       Effect estimate
                     </th>
-                    <th className="text-left p-2 font-medium">95% CI</th>
+                    {/* The pipeline schema reports raw ci_lower/ci_upper with no
+                        confidence-level field — claiming 95% would be fabrication. */}
+                    <th className="text-left p-2 font-medium">CI</th>
                     <th className="text-left p-2 font-medium">Confidence</th>
                   </tr>
                 </thead>
@@ -609,7 +611,7 @@ function CausalDiscovery() {
                 <Badge variant="default">
                   {fmtNumber(pipelineData.consensus_effect)}
                 </Badge>
-                <span className="font-medium">95% CI:</span>
+                <span className="font-medium">CI:</span>
                 <span>
                   {fmtCI(
                     pipelineData.consensus_ci_lower,
