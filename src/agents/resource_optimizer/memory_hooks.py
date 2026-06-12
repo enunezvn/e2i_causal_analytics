@@ -278,22 +278,27 @@ class ResourceOptimizerMemoryHooks:
                 constraint_types = [c.get("constraint_type", "") for c in constraints[:3]]
                 query_text += f" constraints: {' '.join(constraint_types)}"
 
-            results = await find_relevant_procedures_by_text(
-                query_text=query_text,
-                procedure_type="optimization",
-                limit=limit,
-                min_similarity=0.5,
-            )
-
             # The RPC has no agent filter (the old agent_name filter never worked);
             # this hook's own writes are identified by their procedure_name prefix
             # (store_optimization_pattern names them
-            # "optimization_pattern_<resource_type>_<objective>").
-            return [
+            # "optimization_pattern_<resource_type>_<objective>"). Because
+            # procedure_type='optimization' is shared with other writers (e.g.
+            # hpo_pattern_memory), the top-`limit` rows can be entirely
+            # non-resource-optimizer — over-fetch, prefix-filter, then trim.
+            fetch_limit = max(limit * 5, limit + 10)
+            results = await find_relevant_procedures_by_text(
+                query_text=query_text,
+                procedure_type="optimization",
+                limit=fetch_limit,
+                min_similarity=0.5,
+            )
+
+            matched = [
                 r
                 for r in results
                 if str(r.get("procedure_name", "")).startswith("optimization_pattern_")
             ]
+            return matched[:limit]
         except Exception as e:
             logger.warning(f"Failed to get optimization patterns: {e}")
             return []

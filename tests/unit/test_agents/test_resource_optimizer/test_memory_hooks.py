@@ -205,6 +205,66 @@ class TestGetContext:
             assert context.learned_patterns == []
 
 
+class TestGetOptimizationPatterns:
+    """Tests for the repaired procedural pattern read (#883).
+
+    procedure_type='optimization' is shared with other writers (e.g.
+    hpo_pattern_memory), so the read must over-fetch and prefix-filter on
+    procedure_name without starving when foreign rows outrank this agent's
+    patterns.
+    """
+
+    @pytest.mark.asyncio
+    async def test_prefix_filter_survives_foreign_rows_ahead(self, memory_hooks):
+        """Foreign 'optimization' rows outranking ours must not starve the read."""
+        foreign = [
+            {"procedure_id": f"hpo-{i}", "procedure_name": "hpo_RandomForest_binary"}
+            for i in range(12)
+        ]
+        ours = {
+            "procedure_id": "ro-1",
+            "procedure_name": "optimization_pattern_budget_maximize_outcome",
+        }
+
+        with patch(
+            "src.memory.procedural_memory.find_relevant_procedures_by_text",
+            new_callable=AsyncMock,
+            return_value=foreign + [ours],
+        ) as mock_find:
+            patterns = await memory_hooks._get_optimization_patterns(
+                resource_type="budget",
+                objective="maximize_outcome",
+                limit=3,
+            )
+
+        # Over-fetch: the RPC limit must exceed the requested limit so the
+        # prefix filter has rows left after foreign ones are dropped.
+        assert mock_find.call_args.kwargs["limit"] >= 13
+        assert mock_find.call_args.kwargs["procedure_type"] == "optimization"
+        assert patterns == [ours]
+
+    @pytest.mark.asyncio
+    async def test_result_trimmed_to_limit(self, memory_hooks):
+        """More matching patterns than `limit` are trimmed (similarity order kept)."""
+        ours = [
+            {"procedure_id": f"ro-{i}", "procedure_name": f"optimization_pattern_budget_obj{i}"}
+            for i in range(5)
+        ]
+
+        with patch(
+            "src.memory.procedural_memory.find_relevant_procedures_by_text",
+            new_callable=AsyncMock,
+            return_value=ours,
+        ):
+            patterns = await memory_hooks._get_optimization_patterns(
+                resource_type="budget",
+                objective="maximize_outcome",
+                limit=3,
+            )
+
+        assert patterns == ours[:3]
+
+
 class TestWorkingMemoryContext:
     """Tests for working memory context retrieval."""
 
