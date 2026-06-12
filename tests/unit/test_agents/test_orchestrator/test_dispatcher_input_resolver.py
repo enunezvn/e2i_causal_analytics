@@ -540,3 +540,127 @@ def test_heterogeneous_resolver_forwards_include_synthetic_opt_in(monkeypatch) -
     )
     assert isinstance(resolved, dict)
     assert not seen.get("include_synthetic")
+
+
+# ---------------------------------------------------------------------------
+# Issue #880: strict provenance coercion + parameter-channel parity (het)
+# ---------------------------------------------------------------------------
+
+
+_HET_BASE_INPUT: Dict[str, Any] = {
+    "query": "which segments respond best to conversion?",
+    "session_id": "s1",
+    "user_context": {},
+    "parsed_query": {"entities": []},
+}
+
+
+def _capture_kpi_resolution(monkeypatch) -> Dict[str, Any]:
+    """Monkeypatch the KPI build to a real (no-DB) frame, recording kwargs."""
+    kf = _real_kpi_frame()
+    seen: Dict[str, Any] = {}
+
+    def _capture(*a, **k):
+        seen.update(k)
+        return kf
+
+    monkeypatch.setattr("src.services.kpi_resolution.recognize_kpi", lambda _q: object())
+    monkeypatch.setattr("src.services.kpi_resolution.resolve_kpi_frame", _capture)
+    return seen
+
+
+def test_heterogeneous_resolver_string_false_stays_real_mode(monkeypatch) -> None:
+    """Issue #880 RED-FIRST: ``include_synthetic="false"`` (string, e.g. from a
+    JSON-ish payload) must NOT opt into the synthetic substrate. ``bool("false")``
+    is ``True``, so the loose coercion silently flipped an explicit opt-OUT into
+    wrong-provenance reads — the failure class the #850/#851/#872 provenance work
+    exists to prevent. Ambiguous values fail CLOSED to real-mode, mirroring the
+    gap_analyzer resolver's ``_coerce_provenance_flag`` semantics (#877)."""
+    seen = _capture_kpi_resolution(monkeypatch)
+
+    # filters channel (direct resolver invocations, e.g. validation gate 6)
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {**_HET_BASE_INPUT, "filters": {"brand": "Kisqali", "include_synthetic": "false"}},
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is False
+
+    # user_context channel (the live chat path)
+    seen.clear()
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {**_HET_BASE_INPUT, "user_context": {"include_synthetic": "false"}},
+        _dispatch("heterogeneous_optimizer"),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is False
+
+    # other ambiguous / non-bool values likewise stay real-mode (fail CLOSED)
+    for ambiguous in ("0", "no", 1, {"opt": True}):
+        seen.clear()
+        resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+            {**_HET_BASE_INPUT, "user_context": {"include_synthetic": ambiguous}},
+            _dispatch("heterogeneous_optimizer"),
+        )
+        assert isinstance(resolved, dict)
+        assert seen.get("include_synthetic") is False, f"value {ambiguous!r} must NOT opt in"
+
+
+def test_heterogeneous_resolver_truthy_strings_opt_in(monkeypatch) -> None:
+    """Per ``_coerce_provenance_flag`` semantics, "true"/"1"/"yes" (and ``True``)
+    DO opt in on either channel."""
+    seen = _capture_kpi_resolution(monkeypatch)
+    for truthy in ("true", "1", "yes", True):
+        seen.clear()
+        resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+            {**_HET_BASE_INPUT, "user_context": {"include_synthetic": truthy}},
+            _dispatch("heterogeneous_optimizer"),
+        )
+        assert isinstance(resolved, dict)
+        assert seen.get("include_synthetic") is True, f"value {truthy!r} must opt in"
+
+
+def test_heterogeneous_resolver_parameter_channel_parity(monkeypatch) -> None:
+    """Issue #880 RED-FIRST (parity decision): the het resolver gains the gap
+    resolver's parameter-level opt-in channels — ``parameters.filters.
+    include_synthetic`` and the explicit ``parameters.include_synthetic``, which
+    WINS when present and non-None. ``parameters`` is a live chat-path channel
+    (_prepare_agent_input threads it; ``filters`` never arrives via chat) and
+    gap_analyzer is het's fallback agent, so an explicitly-set parameter flag
+    must not yield two different provenance modes for the same dispatch."""
+    seen = _capture_kpi_resolution(monkeypatch)
+
+    # parameters.filters channel opts in
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        dict(_HET_BASE_INPUT),
+        _dispatch("heterogeneous_optimizer", {"filters": {"include_synthetic": True}}),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is True
+
+    # explicit parameters.include_synthetic opts in
+    seen.clear()
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        dict(_HET_BASE_INPUT),
+        _dispatch("heterogeneous_optimizer", {"include_synthetic": True}),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is True
+
+    # explicit "false" (string) beats an ambient True channel — strict opt-OUT
+    seen.clear()
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {**_HET_BASE_INPUT, "user_context": {"include_synthetic": True}},
+        _dispatch("heterogeneous_optimizer", {"include_synthetic": "false"}),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is False
+
+    # None means "unset": the ambient channel governs
+    seen.clear()
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](
+        {**_HET_BASE_INPUT, "user_context": {"include_synthetic": True}},
+        _dispatch("heterogeneous_optimizer", {"include_synthetic": None}),
+    )
+    assert isinstance(resolved, dict)
+    assert seen.get("include_synthetic") is True
