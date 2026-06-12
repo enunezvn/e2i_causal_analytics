@@ -82,3 +82,35 @@ describe('useAuth fail-closed derivation', () => {
     expect(result.current.isAuthConfigured).toBe(true);
   });
 });
+
+describe('auth actions when unconfigured (visible failure, not silent)', () => {
+  // Pages catch action rejections and rely on the store error for display
+  // ("Error is already set in auth store"). When unconfigured, the actions
+  // used to throw WITHOUT setting the store error - submitting the login or
+  // recovery forms failed silently. Every action must set a visible error.
+  it.each(['login', 'signup', 'resetPassword', 'updatePassword'] as const)(
+    '%s sets a visible store error and rejects',
+    async (action) => {
+      mockIsSupabaseConfigured.mockReturnValue(false);
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      const invoke = async () => {
+        switch (action) {
+          case 'login':
+            return result.current.login({ email: 'a@b.c', password: 'pw' });
+          case 'signup':
+            return result.current.signup({ email: 'a@b.c', password: 'pw' });
+          case 'resetPassword':
+            return result.current.resetPassword('a@b.c');
+          case 'updatePassword':
+            return result.current.updatePassword('new-password-123');
+        }
+      };
+
+      await expect(invoke()).rejects.toThrow(/not configured/i);
+      expect(useAuthStore.getState().error).toMatchObject({
+        code: 'auth_not_configured',
+      });
+    }
+  );
+});
