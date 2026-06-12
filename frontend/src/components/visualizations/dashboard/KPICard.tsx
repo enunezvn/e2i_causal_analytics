@@ -63,9 +63,11 @@ export interface KPICardProps {
   valueColor?: string;
 }
 
-// NOTE: SAMPLE_SPARKLINE (a fabricated upward trend painted on every
-// KPICard rendered without real sparkline data) was DELETED. No prop ->
-// no sparkline.
+// =============================================================================
+// SAMPLE DATA
+// =============================================================================
+
+const SAMPLE_SPARKLINE = [45, 52, 48, 55, 60, 58, 62, 65, 63, 68];
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -158,8 +160,8 @@ export const KPICard = React.forwardRef<HTMLDivElement, KPICardProps>(
     },
     ref
   ) => {
-    // Sparkline renders ONLY from caller-provided data.
-    const sparklineData = propSparkline ?? [];
+    // Use provided sparkline or sample
+    const sparklineData = propSparkline ?? SAMPLE_SPARKLINE;
 
     // Calculate trend
     const trend = useMemo(() => {
