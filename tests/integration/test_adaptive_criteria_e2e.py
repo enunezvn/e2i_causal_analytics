@@ -126,6 +126,26 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     metrics (pr_auc/accuracy/recall/test_*) shifted in lockstep and are
     re-pinned to the same two-run measured values.
 
+    Rebaselined 2026-06-12 (#773 W1): two stacked, deliberate shifts.
+    (1) PR #761 (67be1cbf) + PR #760 (5a9e3e5b), merged 2026-06-06,
+    changed the training path: LR solver l2/None saga→lbfgs, severe/extreme
+    non_tree resampling SMOTE→class_weight (the default regime's ~15%
+    positive share is in the severe band, so its SMOTE step disappeared),
+    and param-less QC remediation drops now apply. First red nightly
+    2026-06-07 (run 27087062518) observed val roc_auc 0.6444 vs the 0.6532
+    pin. (2) That 0.6444 was itself measured in a DEGRADED environment:
+    the harness one-hot names (age_group_<50 / age_group_>65) crash
+    XGBoost at fit time (#773 W2), so every Step-5b XGBoost alternative
+    had been silently dead and the LR primary won by default. With the W2
+    fix family in place (PR #913 data_preparer + the harness sanitize in
+    this PR), the XGBoost alternative trains and WINS the Step-5b champion
+    comparison, changing the whole operating profile (e.g. recall 0.80 →
+    0.378 at a 0.602 validation-frozen threshold, val roc_auc → 0.6366).
+    Values below are pinned from the faithful slow-tests dispatch run
+    27443822891 (2026-06-12, branch fix/issue-773-pr4-baseline-repins);
+    the follow-up green dispatch on the same branch is the second seeded
+    run confirming determinism. Tolerance widths unchanged.
+
     Tolerances (S3 fix):
       - AUC and PR-AUC: ±0.005 (deterministic at seed=42 modulo
         sklearn-version drift).
@@ -160,19 +180,23 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
         f"validation_metrics={val} | test_metrics={test} | "
         f"model_usefulness={out.get('model_usefulness')}"
     )
-    assert val["roc_auc"] == pytest.approx(0.6532, abs=0.005), _diag
-    assert val["pr_auc"] == pytest.approx(0.2829, abs=0.005), _diag
-    assert val["accuracy"] == pytest.approx(0.5400, abs=0.02), _diag
-    assert val["precision"] == pytest.approx(0.2182, abs=0.02), _diag
-    assert val["recall"] == pytest.approx(0.8000, abs=0.02), _diag
-    assert val["f1_score"] == pytest.approx(0.3429, abs=0.02), _diag
+    # Re-pinned 2026-06-12 (#773 W1): #761/#760 training-path changes + the
+    # W2 fix restoring Step-5b XGBoost alternates (which now WIN the champion
+    # comparison). See the "Rebaselined 2026-06-12" docstring section.
+    # Values measured on slow-tests dispatch run 27443822891.
+    assert val["roc_auc"] == pytest.approx(0.6366, abs=0.005), _diag
+    assert val["pr_auc"] == pytest.approx(0.2735, abs=0.005), _diag
+    assert val["accuracy"] == pytest.approx(0.8000, abs=0.02), _diag
+    assert val["precision"] == pytest.approx(0.3469, abs=0.02), _diag
+    assert val["recall"] == pytest.approx(0.3778, abs=0.02), _diag
+    assert val["f1_score"] == pytest.approx(0.3617, abs=0.02), _diag
 
-    # Test metrics — rebaselined 2026-06-06 (same remediation; two-run values).
-    assert test["roc_auc"] == pytest.approx(0.7148, abs=0.005), _diag
-    assert test["accuracy"] == pytest.approx(0.5422, abs=0.02), _diag
-    assert test["precision"] == pytest.approx(0.2177, abs=0.02), _diag
-    assert test["recall"] == pytest.approx(0.8182, abs=0.02), _diag
-    assert test["f1_score"] == pytest.approx(0.3439, abs=0.02), _diag
+    # Test metrics — re-pinned 2026-06-12 (#773 W1, same dispatch run).
+    assert test["roc_auc"] == pytest.approx(0.7044, abs=0.005), _diag
+    assert test["accuracy"] == pytest.approx(0.7733, abs=0.02), _diag
+    assert test["precision"] == pytest.approx(0.3043, abs=0.02), _diag
+    assert test["recall"] == pytest.approx(0.4242, abs=0.02), _diag
+    assert test["f1_score"] == pytest.approx(0.3544, abs=0.02), _diag
 
     # Apr-26 verdict line 18: Step 7 BLOCKED, success_criteria_met False.
     assert out["success_criteria_met"] is False
