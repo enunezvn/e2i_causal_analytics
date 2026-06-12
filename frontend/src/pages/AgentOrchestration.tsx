@@ -301,7 +301,7 @@ export default function AgentOrchestration() {
     const processing = displayAgents.filter((a: { status: string }) => a.status === 'processing').length;
     const error = displayAgents.filter((a: { status: string }) => a.status === 'error').length;
     return {
-      totalAgents: agentStatus?.total_agents ?? displayAgents.length,
+      totalAgents: agentStatus?.total ?? displayAgents.length,
       activeAgents: active,
       processingAgents: processing,
       errorAgents: error,

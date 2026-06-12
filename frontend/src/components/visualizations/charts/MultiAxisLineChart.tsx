@@ -167,8 +167,8 @@ export const MultiAxisLineChart = React.forwardRef<HTMLDivElement, MultiAxisLine
     ref
   ) => {
     // Data comes ONLY from props — never a sample fallback.
-    const data = propData ?? [];
-    const axes = propAxes ?? [];
+    const data = useMemo(() => propData ?? [], [propData]);
+    const axes = useMemo(() => propAxes ?? [], [propAxes]);
 
     // Calculate domains for left and right axes
     const { leftDomain, rightDomain } = useMemo(() => {

@@ -188,7 +188,7 @@ function CausalDiscovery() {
       ? Math.round(routeData.routing_confidence * 100)
       : null;
 
-  const chains = chainsData?.chains ?? [];
+  const chains = useMemo(() => chainsData?.chains ?? [], [chainsData]);
 
   // Backend reports a human-readable caveat when the DoWhy refutation /
   // sensitivity suite did NOT run for this estimate. (Field exists on the

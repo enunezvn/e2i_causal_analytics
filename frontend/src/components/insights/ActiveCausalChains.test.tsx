@@ -125,7 +125,8 @@ describe('ActiveCausalChains — no SAMPLE_ELEMENTS graph', () => {
     render(<ActiveCausalChains />);
 
     expect(cytoscapeApi.setElements).toHaveBeenCalled();
-    const elements = cytoscapeApi.setElements.mock.calls.at(-1)?.[0] as Array<{
+    const calls = cytoscapeApi.setElements.mock.calls;
+    const elements = calls[calls.length - 1][0] as Array<{
       data: { id?: string; label?: string };
     }>;
     const labels = elements.map((e) => e.data.label).filter(Boolean);
