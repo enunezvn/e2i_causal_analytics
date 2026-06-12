@@ -85,7 +85,7 @@ function getStatusConfig(status: ChainCardData['status']) {
   return config[status];
 }
 
-function getImpactConfig(impact: ChainCardData['impact']) {
+function getImpactConfig(impact: NonNullable<ChainCardData['impact']>) {
   const config = {
     high: { label: 'High Impact', className: 'text-emerald-600' },
     medium: { label: 'Medium Impact', className: 'text-amber-600' },
