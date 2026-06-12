@@ -898,6 +898,58 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
                 names.append(name)
         return names
 
+    async def get_model_performance_for_target(
+        self, target: str, entity_type: str = ""
+    ) -> Dict[str, Dict[str, Any]]:
+        """Measured registry metrics per DEPLOYABLE serving model for a target.
+
+        #883 PR B: feeds ``prediction_synthesizer``'s model-performance
+        working-memory key (``update_model_performance``) with the registry's
+        REAL measured holdout metrics (``auc`` / ``pr_auc`` / ``brier_score``
+        / ``calibration_slope`` — written at registration from actual
+        evaluation), NOT values fabricated at prediction time. Membership is
+        exactly :meth:`get_models_for_target`'s (serving stage + loadable
+        artifact, same FK-embed join — the 414 lesson from #857 applies
+        identically here).
+
+        Fails closed: no client / no deployable model -> ``{}``.
+        """
+        if not self.client:
+            return {}
+
+        reg_result = await (
+            self.client.table(self.table_name)
+            .select(
+                "model_name, model_version, stage, artifact_path, auc, pr_auc, "
+                "brier_score, calibration_slope, registered_at, "
+                "ml_experiments!inner(prediction_target)"
+            )
+            .eq("ml_experiments.prediction_target", target)
+            .in_("stage", list(self._SERVING_STAGES))
+            .not_.is_("artifact_path", "null")
+            .execute()
+        )
+
+        performance: Dict[str, Dict[str, Any]] = {}
+        for row in reg_result.data or []:
+            # Same defense-in-depth membership re-check as get_models_for_target.
+            if row.get("stage") not in self._SERVING_STAGES:
+                continue
+            if not row.get("artifact_path"):
+                continue
+            name = row.get("model_name")
+            if not name or name in performance:
+                continue
+            performance[name] = {
+                "auc": row.get("auc"),
+                "pr_auc": row.get("pr_auc"),
+                "brier_score": row.get("brier_score"),
+                "calibration_slope": row.get("calibration_slope"),
+                "model_version": row.get("model_version"),
+                "registered_at": row.get("registered_at"),
+            }
+        return performance
+
     async def register_model(
         self,
         experiment_id: UUID,

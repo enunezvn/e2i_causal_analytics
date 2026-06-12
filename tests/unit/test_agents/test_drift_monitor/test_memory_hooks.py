@@ -472,7 +472,10 @@ class TestDriftMonitorMemoryHooksWithMocks:
         mock_response = MagicMock()
         mock_response.data = [
             {
-                "metadata": {
+                # #883 PR B: the realigned reader consumes the REAL
+                # agent_activities column (analysis_results), not the
+                # never-existed "metadata".
+                "analysis_results": {
                     "features_monitored": ["f1", "f2"],
                     "overall_drift_score": 0.5,
                 }

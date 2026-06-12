@@ -341,21 +341,18 @@ class OrchestratorMemoryHooks:
             return False
 
         try:
-            message = {
-                "role": "user",
-                "content": query,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            await self.working_memory.add_message(session_id, message)
-
-            response_message = {
-                "role": "assistant",
-                "content": response,
-                "intent": intent,
-                "agents_used": agents_used or [],
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            await self.working_memory.add_message(session_id, response_message)
+            # RedisWorkingMemory.add_message(session_id, role, content, metadata)
+            # — the hook predated that API and passed a single message dict,
+            # so every call TypeError'd into the except below and no
+            # conversation turn was ever stored (#883 PR B, surfaced by the
+            # agent-path wiring proof). Timestamps are stamped by add_message.
+            await self.working_memory.add_message(session_id, "user", query)
+            await self.working_memory.add_message(
+                session_id,
+                "assistant",
+                response,
+                metadata={"intent": intent, "agents_used": agents_used or []},
+            )
 
             logger.debug(f"Stored conversation turn for session {session_id}")
             return True

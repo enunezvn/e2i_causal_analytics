@@ -129,6 +129,44 @@ class PredictionSynthesizerAgent:
                 return None
         return self._memory_hooks
 
+    async def _record_model_performance(
+        self,
+        output: "PredictionSynthesizerOutput",
+        prediction_target: str,
+    ) -> None:
+        """Write the run's models' MEASURED registry metrics to working memory.
+
+        #883 PR B. Sources ``get_model_performance_for_target`` from the
+        injected registry (LiveChampionModelRegistry in production — lazy
+        async repo, fails closed to ``{}``) and stores each succeeded model's
+        measured holdout metrics under the Redis key the live reader
+        ``get_context._get_model_performance_history`` consumes. Skips
+        honestly when the registry has no such capability (legacy/stub
+        registries) or returns no metrics — never invents a number.
+        """
+        if not self.enable_memory or not self.memory_hooks:
+            return
+        registry = self.model_registry
+        if registry is None or not hasattr(registry, "get_model_performance_for_target"):
+            return
+
+        performance = await registry.get_model_performance_for_target(prediction_target)
+        if not performance:
+            return
+
+        succeeded_ids = {p.get("model_id") for p in output.individual_predictions or []}
+        for model_id, metrics in performance.items():
+            if model_id not in succeeded_ids:
+                continue
+            measured = {k: v for k, v in (metrics or {}).items() if v is not None}
+            if not measured:
+                continue
+            await self.memory_hooks.update_model_performance(
+                prediction_target=prediction_target,
+                model_id=model_id,
+                metrics=measured,
+            )
+
     @property
     def tracer(self) -> Optional["PredictionSynthesizerOpikTracer"]:
         """Lazy-load Opik tracer."""
@@ -376,6 +414,20 @@ class PredictionSynthesizerAgent:
                 )
             except Exception as e:
                 logger.warning(f"Failed to contribute to memory: {e}")
+
+            # #883 PR B: record per-model performance for future weighting.
+            # The writer (update_model_performance) previously had no caller,
+            # permanently starving the LIVE reader get_context ->
+            # _get_model_performance_history (context.model_performance was
+            # always {} in prod). The honest source at prediction time is the
+            # registry's MEASURED holdout metrics (auc/pr_auc/brier_score/
+            # calibration_slope from ml_model_registry) — true post-hoc
+            # accuracy is unknowable until actuals arrive, so nothing is
+            # fabricated here. Non-blocking by the same caller-side posture.
+            try:
+                await self._record_model_performance(output, prediction_target)
+            except Exception as e:
+                logger.warning(f"Failed to record model performance (non-blocking): {e}")
 
         # Emit DSPy training signal after successful prediction
         if self.enable_dspy and output.status != "failed":

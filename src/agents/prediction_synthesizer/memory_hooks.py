@@ -263,10 +263,20 @@ class PredictionSynthesizerMemoryHooks:
             redis = await self.working_memory.get_client()
             performance_key = f"prediction_synthesizer:model_performance:{prediction_target}"
 
-            cached = await redis.get(performance_key)
-            if cached:
-                return cast(Dict[str, Dict[str, Any]], json.loads(cached))
-            return {}
+            # Hash layout (one field per model, see update_model_performance).
+            cached = await redis.hgetall(performance_key)
+            if not cached:
+                return {}
+            performance: Dict[str, Dict[str, Any]] = {}
+            for model_id, raw in cached.items():
+                key = model_id.decode() if isinstance(model_id, bytes) else str(model_id)
+                try:
+                    value = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(value, dict):
+                    performance[key] = value
+            return performance
         except Exception as e:
             logger.warning(f"Failed to get model performance history: {e}")
             return {}
@@ -330,17 +340,28 @@ class PredictionSynthesizerMemoryHooks:
         self,
         prediction_target: str,
         model_id: str,
-        accuracy: float,
-        calibration_error: float,
+        accuracy: Optional[float] = None,
+        calibration_error: Optional[float] = None,
+        metrics: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Update model performance tracking for future weighting.
 
+        #883 PR B: previously this writer had NO caller, so the Redis key the
+        LIVE reader ``get_context -> _get_model_performance_history`` consumes
+        was never written (``context.model_performance`` permanently ``{}`` in
+        prod). The agent now feeds it post-prediction with the registry's
+        MEASURED metrics (``metrics=`` — auc/pr_auc/brier_score/
+        calibration_slope from ``ml_model_registry``), never values fabricated
+        at prediction time; the legacy ``accuracy``/``calibration_error``
+        kwargs remain for callers that hold real evaluation numbers.
+
         Args:
             prediction_target: What was predicted
             model_id: Model identifier
-            accuracy: Model accuracy on this target
-            calibration_error: Calibration error
+            accuracy: Measured model accuracy on this target (optional)
+            calibration_error: Measured calibration error (optional)
+            metrics: Measured metric dict stored verbatim (optional)
 
         Returns:
             True if successful
@@ -352,23 +373,22 @@ class PredictionSynthesizerMemoryHooks:
             redis = await self.working_memory.get_client()
             performance_key = f"prediction_synthesizer:model_performance:{prediction_target}"
 
-            # Get existing performance data
-            existing = await redis.get(performance_key)
-            performance = json.loads(existing) if existing else {}
+            # Update model entry — only measured, non-None values are stored.
+            entry: Dict[str, Any] = dict(metrics or {})
+            if accuracy is not None:
+                entry["accuracy"] = accuracy
+            if calibration_error is not None:
+                entry["calibration_error"] = calibration_error
+            entry["last_updated"] = datetime.now(timezone.utc).isoformat()
 
-            # Update model entry
-            performance[model_id] = {
-                "accuracy": accuracy,
-                "calibration_error": calibration_error,
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-            }
-
-            # Store with TTL
-            await redis.setex(
-                performance_key,
-                self.CACHE_TTL_SECONDS * 7,  # Keep for 1 week
-                json.dumps(performance),
-            )
+            # Per-model HSET on a hash keyed by target (#883 codex R1): the
+            # previous whole-map GET -> mutate -> SETEX was a read-modify-write
+            # race — concurrent syntheses for the same target could drop each
+            # other's model entries (last writer wins). A hash field write is
+            # atomic per model; no prod keys predate this writer (it never had
+            # a caller), so there is no legacy string-key migration concern.
+            await redis.hset(performance_key, model_id, json.dumps(entry))
+            await redis.expire(performance_key, self.CACHE_TTL_SECONDS * 7)  # 1 week
 
             return True
         except Exception as e:

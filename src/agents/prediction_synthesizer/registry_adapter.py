@@ -24,7 +24,7 @@ what distinguishes this from the dormant #845 repos.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.memory.services.factories import get_async_supabase_client
 from src.repositories.ml_experiment import MLModelRegistryRepository
@@ -59,3 +59,19 @@ class LiveChampionModelRegistry:
         if repo is None:
             return []
         return await repo.get_models_for_target(target, entity_type)
+
+    async def get_model_performance_for_target(
+        self, target: str, entity_type: str = ""
+    ) -> Dict[str, Dict[str, Any]]:
+        """Measured registry metrics per deployable serving model (#883 PR B).
+
+        Pass-through to
+        ``MLModelRegistryRepository.get_model_performance_for_target`` — the
+        source of the model-performance working-memory key the
+        prediction_synthesizer's ``get_context`` reads. Fails closed: ``{}``.
+        """
+        repo = await self._ensure_repo()
+        if repo is None:
+            return {}
+        result = await repo.get_model_performance_for_target(target, entity_type)
+        return dict(result or {})

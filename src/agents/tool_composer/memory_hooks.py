@@ -313,59 +313,17 @@ class ToolComposerMemoryHooks:
             return None
 
     # =========================================================================
-    # EXECUTION STATE TRACKING (Working Memory)
+    # EXECUTION STATE TRACKING — REMOVED (#883 PR B intent decision)
     # =========================================================================
-
-    async def store_execution_state(
-        self,
-        session_id: str,
-        composition_id: str,
-        phase: str,
-        step_id: Optional[str] = None,
-        step_status: Optional[str] = None,
-        step_output: Optional[Dict[str, Any]] = None,
-    ) -> bool:
-        """
-        Store execution state during composition for recovery and debugging.
-
-        Args:
-            session_id: Session identifier
-            composition_id: Composition identifier
-            phase: Current phase (decompose, plan, execute, synthesize)
-            step_id: Optional step ID being executed
-            step_status: Optional step status
-            step_output: Optional step output
-
-        Returns:
-            True if successful
-        """
-        if not self.working_memory:
-            return False
-
-        try:
-            redis = await self.working_memory.get_client()
-            state_key = f"tool_composer:state:{session_id}:{composition_id}"
-
-            state = {
-                "phase": phase,
-                "step_id": step_id,
-                "step_status": step_status,
-                "step_output": step_output,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            # Store with shorter TTL (1 hour) as this is transient state
-            await redis.setex(
-                state_key,
-                3600,
-                json.dumps(state, default=str),
-            )
-
-            logger.debug(f"Stored execution state: {phase}/{step_id}")
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to store execution state: {e}")
-            return False
+    # ``store_execution_state`` (added by the platform-wide 4-memory rollout,
+    # 71260266) persisted per-phase transient state to Redis "for recovery and
+    # debugging" — but no reader was ever defined, no caller was ever added,
+    # and no resume/recovery capability exists or was requested anywhere in
+    # tool_composer (no checkpointing in composer.py; no issue/roadmap item).
+    # A write-only key with a 1h TTL serves nobody and misleads readers into
+    # assuming recovery exists. Classification: DELETE (vestigial scaffold,
+    # no recoverable intent). If composition resume is ever requested, design
+    # the write WITH its reader (LangGraph checkpointing is the natural seam).
 
     # =========================================================================
     # COMPOSITION HISTORY (Episodic Memory)

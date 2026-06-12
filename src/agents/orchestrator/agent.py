@@ -16,6 +16,11 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from .graph import create_orchestrator_graph
+from .memory_hooks import (
+    OrchestratorMemoryHooks,
+    contribute_to_memory,
+    get_orchestrator_memory_hooks,
+)
 from .state import OrchestratorState
 
 if TYPE_CHECKING:
@@ -44,6 +49,7 @@ class OrchestratorAgent:
         agent_registry: Optional[Dict[str, Any]] = None,
         enable_checkpointing: bool = False,
         enable_opik: bool = True,
+        enable_memory: bool = True,
         allow_mock: bool = False,
     ):
         """Initialize orchestrator agent.
@@ -52,6 +58,12 @@ class OrchestratorAgent:
             agent_registry: Optional dict mapping agent_name to agent instance
             enable_checkpointing: Whether to enable graph checkpointing
             enable_opik: Whether to enable Opik distributed tracing (default: True)
+            enable_memory: Whether to contribute completed turns to the
+                tri-memory architecture (default: True). #883 PR B — the hooks
+                existed since the 4-memory rollout but had no caller, leaving
+                CONTRACT_VALIDATION.md §10 (memory integration, BLOCKING)
+                unsatisfied and the readers get_conversation_history /
+                get_routing_decisions permanently empty.
             allow_mock: TEST-ONLY. When True, a dispatch to an agent absent from
                 the registry returns the canned dispatcher mock scaffold (used by
                 orchestrator integration tests that exercise the graph without real
@@ -66,7 +78,9 @@ class OrchestratorAgent:
             allow_mock=allow_mock,
         )
         self.enable_opik = enable_opik
+        self.enable_memory = enable_memory
         self._opik_tracer: Optional["OrchestratorOpikTracer"] = None
+        self._memory_hooks: Optional[OrchestratorMemoryHooks] = None
 
     def _get_opik_tracer(self) -> Optional["OrchestratorOpikTracer"]:
         """Get or create Opik tracer instance (lazy initialization).
@@ -87,6 +101,56 @@ class OrchestratorAgent:
                 return None
 
         return self._opik_tracer
+
+    @property
+    def memory_hooks(self) -> Optional[OrchestratorMemoryHooks]:
+        """Lazy-load memory hooks (#883 PR B, mirrors health_score #879)."""
+        if self._memory_hooks is None and self.enable_memory:
+            try:
+                self._memory_hooks = get_orchestrator_memory_hooks()
+            except Exception as e:
+                logger.warning(f"Failed to initialize memory hooks: {e}")
+        return self._memory_hooks
+
+    async def _contribute_to_memory(
+        self,
+        output: Dict[str, Any],
+        final_state: Dict[str, Any],
+        session_id: Optional[str],
+    ) -> None:
+        """Contribute a completed orchestration turn to memory — NON-BLOCKING.
+
+        Caller-side try/except per the settled cross-agent posture (#879 /
+        causal_impact / het / experiment_monitor; the migration-046 trap
+        lesson): a memory failure must NEVER poison the turn's status/errors.
+        ``contribute_to_memory`` itself skips failed-status turns and covers
+        all four per-turn writes in one call: working-memory cache,
+        conversation turn (user+assistant messages), the episodic
+        orchestration record, and the routing-decision signal for DSPy
+        optimization — each individually best-effort inside the hook.
+
+        ``brand``/``region`` are deliberately NOT derived from free-form
+        ``user_context`` values: episodic ``region`` is enum-typed (the #851
+        lesson — an unvalidated string would 22P02 the whole insert).
+        """
+        if not self.enable_memory:
+            return
+        try:
+            memory_stats = await contribute_to_memory(
+                result=output,
+                state=final_state,
+                memory_hooks=self.memory_hooks,
+                session_id=session_id,
+            )
+            logger.debug(
+                f"Memory contribution complete: "
+                f"episodic={memory_stats.get('episodic_stored', 0)}, "
+                f"conversation={memory_stats.get('conversation_stored', 0)}, "
+                f"routing={memory_stats.get('routing_tracked', 0)}, "
+                f"cached={memory_stats.get('working_cached', 0)}"
+            )
+        except Exception as e:
+            logger.warning(f"Memory contribution failed (non-blocking): {e}")
 
     async def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Execute orchestrator workflow.
@@ -144,7 +208,13 @@ class OrchestratorAgent:
         async def execute_and_build_output() -> Dict[str, Any]:
             """Execute workflow and build output."""
             final_state = cast(OrchestratorState, await self.graph.ainvoke(initial_state))
-            return self._build_output(final_state)
+            output = self._build_output(final_state)
+            # #883 PR B: SINGLE memory-contribution site, shared by the
+            # opik/non-opik branches and keyed to the graph outcome — when the
+            # graph raises, no output is built and nothing is stored (there is
+            # no trustworthy turn to record). Non-blocking by contract.
+            await self._contribute_to_memory(output, dict(final_state), session_id)
+            return output
 
         if opik_tracer:
             async with opik_tracer.trace_orchestration(

@@ -209,3 +209,29 @@ def mock_opik_tracer(mocker):
     )
     mock.trace_cohort_construction.return_value.__exit__ = mocker.MagicMock(return_value=None)
     return mock
+
+
+@pytest.fixture(autouse=True)
+def _no_real_memory_contribution(monkeypatch):
+    """Isolate unit tests from the live memory systems (#883 PR B).
+
+    Since #883 PR B, ``CohortConstructorAgent.run`` contributes every
+    successful construction to memory (episodic insert + embedding call,
+    working-memory cache, semantic graph writes). Without this guard every
+    unit test that drives ``agent.run`` from a creds-configured dev box would
+    write REAL rows into the live DB (the 883-A lesson). Stub the symbol the
+    agent's caller-side helper resolves with an honest no-op returning the
+    hook's real "nothing stored" shape; the faithful persistence proof lives
+    in tests/integration/test_agent_memory_wiring_883b.py, and the wiring
+    unit tests re-patch this attribute with their own recorders.
+    """
+
+    async def _stub(result, state, memory_hooks=None, session_id=None, region=None):
+        return {
+            "episodic_stored": 0,
+            "semantic_stored": 0,
+            "working_cached": 0,
+            "rules_stored": 0,
+        }
+
+    monkeypatch.setattr("src.agents.cohort_constructor.agent.contribute_to_memory", _stub)

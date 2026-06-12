@@ -289,22 +289,24 @@ class TestModelPerformance:
     @pytest.mark.asyncio
     async def test_get_model_performance_found(self, memory_hooks, mock_working_memory, mock_redis):
         """Test retrieving model performance history."""
-        performance_data = {
-            "xgboost_churn": {"accuracy": 0.85, "calibration_error": 0.05},
-            "rf_churn": {"accuracy": 0.82, "calibration_error": 0.08},
+        # Hash layout (#883 codex R1): one field per model.
+        mock_redis.hgetall.return_value = {
+            "xgboost_churn": json.dumps({"accuracy": 0.85, "calibration_error": 0.05}),
+            b"rf_churn": json.dumps({"accuracy": 0.82, "calibration_error": 0.08}),
         }
-        mock_redis.get.return_value = json.dumps(performance_data)
         memory_hooks._working_memory = mock_working_memory
 
         result = await memory_hooks._get_model_performance_history("churn")
 
         assert "xgboost_churn" in result
         assert result["xgboost_churn"]["accuracy"] == 0.85
+        # bytes field names (decode_responses=False clients) are tolerated
+        assert result["rf_churn"]["accuracy"] == 0.82
 
     @pytest.mark.asyncio
     async def test_get_model_performance_empty(self, memory_hooks, mock_working_memory, mock_redis):
         """Test when no model performance history exists."""
-        mock_redis.get.return_value = None
+        mock_redis.hgetall.return_value = {}
         memory_hooks._working_memory = mock_working_memory
 
         result = await memory_hooks._get_model_performance_history("churn")
@@ -379,14 +381,19 @@ class TestCachePrediction:
 
 
 class TestUpdateModelPerformance:
-    """Tests for model performance update."""
+    """Tests for model performance update.
+
+    #883 codex R1: the store is a Redis HASH (one field per model, atomic
+    HSET) — the previous whole-map GET/SETEX was a read-modify-write race
+    where concurrent syntheses for the same target dropped each other's
+    entries.
+    """
 
     @pytest.mark.asyncio
-    async def test_update_model_performance_new(
+    async def test_update_model_performance_writes_hash_field(
         self, memory_hooks, mock_working_memory, mock_redis
     ):
-        """Test updating model performance for new model."""
-        mock_redis.get.return_value = None  # No existing data
+        """A per-model HSET lands with the measured values + TTL refresh."""
         memory_hooks._working_memory = mock_working_memory
 
         result = await memory_hooks.update_model_performance(
@@ -397,30 +404,38 @@ class TestUpdateModelPerformance:
         )
 
         assert result is True
-        mock_redis.setex.assert_called_once()
+        mock_redis.hset.assert_called_once()
+        key, field, raw = mock_redis.hset.call_args[0]
+        assert key == "prediction_synthesizer:model_performance:churn"
+        assert field == "xgboost_churn"
+        entry = json.loads(raw)
+        assert entry["accuracy"] == 0.85
+        assert entry["calibration_error"] == 0.05
+        mock_redis.expire.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_update_model_performance_existing(
+    async def test_update_model_performance_metrics_dict(
         self, memory_hooks, mock_working_memory, mock_redis
     ):
-        """Test updating existing model performance."""
-        existing_data = {"rf_churn": {"accuracy": 0.82, "calibration_error": 0.08}}
-        mock_redis.get.return_value = json.dumps(existing_data)
+        """The measured registry-metrics dict is stored verbatim (#883 PR B);
+        another model's field is untouched (no read-modify-write of the map)."""
         memory_hooks._working_memory = mock_working_memory
 
         result = await memory_hooks.update_model_performance(
             prediction_target="churn",
             model_id="xgboost_churn",
-            accuracy=0.85,
-            calibration_error=0.05,
+            metrics={"auc": 0.83, "brier_score": 0.12},
         )
 
         assert result is True
-        # Verify the merged data was stored
-        call_args = mock_redis.setex.call_args
-        stored_data = json.loads(call_args[0][2])
-        assert "xgboost_churn" in stored_data
-        assert "rf_churn" in stored_data
+        _key, field, raw = mock_redis.hset.call_args[0]
+        assert field == "xgboost_churn"
+        entry = json.loads(raw)
+        assert entry["auc"] == 0.83
+        assert entry["brier_score"] == 0.12
+        assert "accuracy" not in entry  # only measured values are stored
+        # No whole-map read happened — the write is per-field atomic.
+        mock_redis.get.assert_not_called()
 
 
 # ============================================================================

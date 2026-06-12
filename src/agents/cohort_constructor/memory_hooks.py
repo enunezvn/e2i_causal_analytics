@@ -308,11 +308,16 @@ class CohortConstructorMemoryHooks:
             return False
 
         try:
+            # RedisWorkingMemory has no ``set`` method — the hook predated the
+            # API and every call AttributeError'd into the except below (#883
+            # PR B, surfaced by the agent-path wiring proof). Use the raw
+            # client like the sibling hooks do.
+            redis = await self.working_memory.get_client()
             cache_key = f"cohort_constructor:result:{session_id}"
-            await self.working_memory.set(
+            await redis.setex(
                 cache_key,
-                json.dumps(result),
-                ex=self.CACHE_TTL_SECONDS,
+                self.CACHE_TTL_SECONDS,
+                json.dumps(result, default=str),
             )
             logger.debug(f"Cached cohort result for session {session_id}")
             return True
@@ -344,7 +349,11 @@ class CohortConstructorMemoryHooks:
             Memory entry ID if successful, None otherwise
         """
         try:
-            from src.memory.episodic_memory import insert_episodic_memory
+            from src.memory.episodic_memory import (
+                E2IEntityReferences,
+                EpisodicMemoryInput,
+                insert_episodic_memory_with_text,
+            )
 
             # Extract key information
             config = state.get("config", {})
@@ -361,6 +370,7 @@ class CohortConstructorMemoryHooks:
                 "cohort_name": cohort_name,
                 "brand": brand,
                 "indication": indication,
+                "kpi_category": "cohort",
                 "total_patients": stats.get("total_input_patients", 0),
                 "eligible_patients": stats.get("eligible_patient_count", 0),
                 "eligibility_rate": 1.0 - stats.get("exclusion_rate", 0),
@@ -378,16 +388,32 @@ class CohortConstructorMemoryHooks:
                 f"Eligible: {content['eligible_patients']}/{content['total_patients']} ({eligibility_rate:.1f}%)."
             )
 
-            # TODO: Refactor to use EpisodicMemoryInput pattern
-            memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
-                session_id=session_id,
+            # Canonical EpisodicMemoryInput pattern (the legacy #749 compat
+            # kwargs path folds brand into raw_content but leaves the BRAND
+            # COLUMN null, so the brand-filtered search RPC behind
+            # get_prior_cohorts could never match a row — #883 PR B).
+            # outcome_type is the constrained memory_outcome_type enum: map
+            # the construction status (the hook gate admits success/partial).
+            memory_input = EpisodicMemoryInput(
                 event_type="cohort_construction_completed",
-                agent_name="cohort_constructor",
-                summary=summary,
+                event_subtype="cohort_construction",
+                description=summary,
                 raw_content=content,
-                brand=brand,
-                region=region,
-                kpi_category="cohort",
+                outcome_type=(
+                    "partial_success" if result.get("status") == "partial" else "success"
+                ),
+                agent_name="cohort_constructor",
+                importance_score=0.6,
+                e2i_refs=E2IEntityReferences(
+                    brand=brand if brand != "unknown" else None,
+                    region=region,
+                ),
+            )
+
+            memory_id = await insert_episodic_memory_with_text(
+                memory=memory_input,
+                text_to_embed=summary,
+                session_id=session_id,
             )
 
             logger.info(f"Stored cohort result in episodic memory: {memory_id}")
@@ -575,6 +601,7 @@ class CohortConstructorMemoryHooks:
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                get_supabase_client,
                 search_episodic_by_text,
             )
 
@@ -594,14 +621,42 @@ class CohortConstructorMemoryHooks:
                 min_similarity=0.5,
                 include_entity_context=False,
             )
+            if not results:
+                return []
 
-            # Filter by eligibility rate
-            filtered = [
-                r
-                for r in results
-                if r.get("raw_content", {}).get("eligibility_rate", 0) >= min_eligibility_rate
-                and r.get("raw_content", {}).get("status") == "success"
-            ]
+            # The search RPC's TABLE shape does NOT include raw_content, so
+            # the original post-filter (`r.get("raw_content", {})`) saw {} on
+            # every row and dropped them all — the reader stayed dead even
+            # once writes landed (#883 PR B). Hydrate raw_content by
+            # memory_id; the writer json.dumps's it, so the jsonb column
+            # holds a JSON-string scalar that must be parsed back.
+            ids = [str(r["memory_id"]) for r in results if r.get("memory_id")]
+            rows = (
+                get_supabase_client()
+                .table("episodic_memories")
+                .select("memory_id, raw_content")
+                .in_("memory_id", ids)
+                .execute()
+            ).data or []
+            content_by_id: Dict[str, Dict[str, Any]] = {}
+            for row in rows:
+                rc = row.get("raw_content")
+                if isinstance(rc, str):
+                    try:
+                        rc = json.loads(rc)
+                    except (TypeError, ValueError):
+                        rc = {}
+                content_by_id[str(row["memory_id"])] = rc if isinstance(rc, dict) else {}
+
+            # Filter by eligibility rate and construction status
+            filtered = []
+            for r in results:
+                rc = content_by_id.get(str(r.get("memory_id")), {})
+                if (
+                    rc.get("eligibility_rate", 0) >= min_eligibility_rate
+                    and rc.get("status") == "success"
+                ):
+                    filtered.append({**r, "raw_content": rc})
 
             return filtered[:limit]
         except Exception as e:
