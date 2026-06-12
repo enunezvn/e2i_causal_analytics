@@ -51,6 +51,13 @@ export interface UseAuthReturn {
   isInitialized: boolean;
   /** Whether user is authenticated */
   isAuthenticated: boolean;
+  /**
+   * Whether Supabase auth is configured (VITE_SUPABASE_URL +
+   * VITE_SUPABASE_ANON_KEY present at build time). When false, auth FAILS
+   * CLOSED: isAuthenticated is always false and the UI must surface a
+   * configuration error (see ProtectedRoute) instead of granting access.
+   */
+  isAuthConfigured: boolean;
   /** Whether user has admin role */
   isAdmin: boolean;
   /** Last auth error */
@@ -114,11 +121,15 @@ export function useAuth(): UseAuthReturn {
   const setRedirectTo = useAuthStore((state) => state.setRedirectTo);
 
   // Derived state
-  // When Supabase is not configured, bypass authentication (allow access)
+  // SECURITY - FAIL CLOSED: when Supabase is not configured the user is NEVER
+  // authenticated. The previous behavior (57e151fd) hard-coded
+  // isAuthenticated=true here so the demo app could run without Supabase;
+  // once real auth shipped, that became a latent production auth bypass (any
+  // build missing VITE_SUPABASE_* silently granted access to every protected
+  // route). ProtectedRoute uses isAuthConfigured to show a visible
+  // configuration-error state instead.
   const supabaseConfigured = isSupabaseConfigured();
-  const isAuthenticated = supabaseConfigured
-    ? Boolean(session?.access_token && user)
-    : true; // Bypass auth when Supabase is not configured
+  const isAuthenticated = supabaseConfigured && Boolean(session?.access_token && user);
 
   const isAdmin = (() => {
     if (!user) return false;
@@ -146,6 +157,7 @@ export function useAuth(): UseAuthReturn {
     isLoading,
     isInitialized,
     isAuthenticated,
+    isAuthConfigured: supabaseConfigured,
     isAdmin,
     error,
     accessToken,
