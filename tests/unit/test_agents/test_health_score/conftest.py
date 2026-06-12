@@ -386,3 +386,35 @@ def _no_live_supabase_in_recipient_tests(monkeypatch):
         "src.memory.services.factories.get_supabase_client",
         lambda: None,
     )
+
+
+# ============================================================================
+# OFFLINE GUARD — post-run memory contribution isolation (#879)
+# ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _no_real_memory_contribution(monkeypatch):
+    """Isolate unit tests from the live memory systems (#879).
+
+    Since #879, ``HealthScoreAgent.check_health`` contributes every completed
+    run to memory (working-memory cache + episodic store). A default agent run
+    is DETERMINISTICALLY significant (nothing measured -> grade F + critical
+    issue), so without this guard every unit test that calls ``check_health``
+    would attempt a REAL episodic insert (live Supabase row + embedding call)
+    and a REAL Redis cache write — the #845 lesson: unit runs pick up real
+    keys from the parent .env.
+
+    Stub the symbol the agent's caller-side helper resolves
+    (``src.agents.health_score.agent.contribute_to_memory``) with an honest
+    no-op that returns the hook's real "nothing stored" shape — NOT a
+    fabricated success. The faithful persistence proof lives in
+    ``tests/integration/test_health_score_memory_wiring_879.py``; the wiring
+    unit tests in ``test_memory_wiring_879.py`` re-patch this attribute with
+    their own recorders.
+    """
+
+    async def _stub(result, state, memory_hooks=None, session_id=None):
+        return {"episodic_stored": 0, "working_cached": 0}
+
+    monkeypatch.setattr("src.agents.health_score.agent.contribute_to_memory", _stub)
