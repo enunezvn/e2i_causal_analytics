@@ -115,3 +115,61 @@ async def test_gap_detector_execute_honors_state_opt_in(monkeypatch) -> None:
     out = await node.execute(state)  # type: ignore[arg-type]
     assert captured.get("used_opt_in_connector") is True
     assert out.get("status") != "failed", out.get("errors")
+
+
+# ---------------------------------------------------------------------------
+# Issue #883 §4: strict provenance coercion at the gap_analyzer payload
+# boundaries. RED on the pre-#883 base: ``bool("false")`` is True, so a
+# JSON-derived string opt-OUT silently opted INTO the synthetic substrate.
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_state_string_false_stays_real_mode() -> None:
+    """``run(dict)`` is a public payload boundary (#883 §4): ambiguous values
+    must fail CLOSED to real mode; only explicit opt-ins flip the flag."""
+    agent = GapAnalyzerAgent(enable_mlflow=False, enable_opik=False)
+    base = {"query": "q", "metrics": ["trx"], "segments": ["region"], "brand": "Kisqali"}
+
+    for ambiguous in ("false", "0", "no", 1, {"opt": True}):
+        state = agent._initialize_state({**base, "include_synthetic": ambiguous})
+        assert state["include_synthetic"] is False, f"{ambiguous!r} must NOT opt in"
+
+    for truthy in ("true", "1", "yes", True):
+        state = agent._initialize_state({**base, "include_synthetic": truthy})
+        assert state["include_synthetic"] is True, f"{truthy!r} must opt in"
+
+
+@pytest.mark.asyncio
+async def test_gap_detector_execute_string_false_uses_real_connectors(monkeypatch) -> None:
+    """The second copy of the loose coercion (gap_detector.py): a state-carried
+    string "false" (gaps.py casts raw request JSON into GapAnalyzerState) must
+    resolve the REAL-mode connector pair, not the synthetic one."""
+    node = GapDetectorNode(use_mock=True, include_synthetic=False)
+
+    seen: dict = {}
+    orig = node._connectors_for
+
+    def _spy(flag):
+        seen["flag"] = flag
+        return orig(flag)
+
+    monkeypatch.setattr(node, "_connectors_for", _spy)
+
+    state = {
+        "query": "q",
+        "metrics": ["trx"],
+        "segments": ["region"],
+        "brand": "Kisqali",
+        "time_period": "current_quarter",
+        "filters": None,
+        "tier0_data": None,
+        "gap_type": "vs_potential",
+        "min_gap_threshold": 5.0,
+        "max_opportunities": 10,
+        "include_synthetic": "false",
+        "errors": [],
+        "warnings": [],
+        "status": "pending",
+    }
+    await node.execute(state)  # type: ignore[arg-type]
+    assert seen.get("flag") is False, "string 'false' must resolve the REAL connector pair"

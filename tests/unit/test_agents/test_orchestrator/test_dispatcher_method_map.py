@@ -256,8 +256,11 @@ async def test_dispatcher_catches_pydantic_validation_error_on_input_wrapper() -
 
     from src.agents.orchestrator import _agent_method_map as mm
 
-    original = mm.AGENT_METHOD_MAP.get("explainer")
-    mm.AGENT_METHOD_MAP["explainer"] = mm.AgentMethodSpec(
+    # Host the synthetic spec on a resolver-LESS agent (#883 added an explainer
+    # resolver that fails closed BEFORE input-model construction; this test is
+    # about the ValidationError -> structured-error path).
+    original = mm.AGENT_METHOD_MAP.get("causal_impact")
+    mm.AGENT_METHOD_MAP["causal_impact"] = mm.AgentMethodSpec(
         method="explain",
         is_async=True,
         uses_kwargs=True,
@@ -268,26 +271,26 @@ async def test_dispatcher_catches_pydantic_validation_error_on_input_wrapper() -
     agent = MagicMock()
     agent.explain = AsyncMock(return_value={"narrative": "ok"})
 
-    dispatcher = DispatcherNode(agent_registry={"explainer": agent})
+    dispatcher = DispatcherNode(agent_registry={"causal_impact": agent})
     state = {
         "query": "explain something",
         "dispatch_plan": [
             {
-                "agent_name": "explainer",
+                "agent_name": "causal_impact",
                 "priority": "critical",
                 "parameters": {"required_field": ""},  # min_length=1 → ValidationError
                 "timeout_ms": 5000,
                 "fallback_agent": None,
             }
         ],
-        "parallel_groups": [["explainer"]],
+        "parallel_groups": [["causal_impact"]],
     }
 
     try:
         result = await dispatcher.execute(state)
     finally:
         if original is not None:
-            mm.AGENT_METHOD_MAP["explainer"] = original
+            mm.AGENT_METHOD_MAP["causal_impact"] = original
 
     agent_result = result["agent_results"][0]
     assert agent_result["success"] is False, agent_result

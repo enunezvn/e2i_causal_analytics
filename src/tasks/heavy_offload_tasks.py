@@ -84,6 +84,7 @@ async def _train_twin_model_async(payload: Dict[str, Any]) -> Dict[str, Any]:
     from src.digital_twin.training_job import train_and_persist_twin
     from src.digital_twin.twin_repository import TwinRepository
     from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.provenance import coerce_provenance_flag
 
     client = await get_async_supabase_client()
     repo = TwinRepository(supabase_client=client)
@@ -94,7 +95,14 @@ async def _train_twin_model_async(payload: Dict[str, Any]) -> Dict[str, Any]:
         data_source=payload.get("data_source"),
         target_column=payload.get("target_column", "outcome"),
         algorithm=payload.get("algorithm", "random_forest"),
-        synthetic=bool(payload.get("synthetic", False)),
+        # #883 §4: STRICT provenance parse at the celery JSON boundary. The old
+        # ``bool(payload.get("synthetic", False))`` turned a string ``"false"``
+        # opt-OUT into True and silently TRAINED + PERSISTED a synthetic twin
+        # (loadable by POST /digital-twin/simulate). Strict coercion keeps
+        # ambiguity in real mode, where training_job's designed fail-closed
+        # ValueError ("requires one of: data, data_source, or synthetic=True")
+        # fires LOUDLY instead of training on the wrong provenance.
+        synthetic=coerce_provenance_flag(payload.get("synthetic", False)),
         n_rows=int(payload.get("n_rows", 2000)),
         seed=int(payload.get("seed", 0)),
     )

@@ -19,6 +19,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from src.agents.base import SkillsMixin
+from src.repositories.provenance import coerce_provenance_flag
 
 from .graph import create_gap_analyzer_graph
 from .state import GapAnalyzerState
@@ -324,8 +325,12 @@ class GapAnalyzerAgent(SkillsMixin):
             # #874: per-run synthetic-substrate opt-in; defaults to the constructor
             # flag so factory-registered real-mode instances stay real-mode unless a
             # dispatch explicitly opts in (the #872 channels via the orchestrator's
-            # gap_analyzer input resolver).
-            "include_synthetic": bool(input_data.get("include_synthetic", self.include_synthetic)),
+            # gap_analyzer input resolver). #883 §4: ``run(dict)`` is a public payload
+            # boundary, so the flag is parsed STRICTLY (a JSON-derived ``"false"``
+            # opt-OUT must never coerce True and flip the connector pair synthetic).
+            "include_synthetic": coerce_provenance_flag(
+                input_data.get("include_synthetic", self.include_synthetic)
+            ),
             # Outputs (initialized as None)
             "gaps_detected": None,
             "gaps_by_segment": None,
