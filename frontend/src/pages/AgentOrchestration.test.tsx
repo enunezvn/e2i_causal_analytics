@@ -288,11 +288,14 @@ describe('AgentOrchestration', () => {
     expect(screen.getByText('0 active, 0 processing')).toBeInTheDocument();
   });
 
-  it('renders view all button in recent activity section', () => {
+  it('renders NO dead controls in the activity sections (View All / Filter / Export)', () => {
     render(<AgentOrchestration />, { wrapper: createWrapper() });
 
-    const viewAllButtons = screen.getAllByRole('button', { name: /View All/i });
-    expect(viewAllButtons.length).toBeGreaterThan(0);
+    // The activity endpoint is explicitly unwired; buttons with no handler
+    // would fake capability. They must not render.
+    expect(screen.queryByRole('button', { name: /View All/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Filter$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Export$/i })).not.toBeInTheDocument();
   });
 
   it('shows tier metrics with utilization progress bars', async () => {
@@ -430,6 +433,24 @@ describe('AgentOrchestration — no fabricated stats', () => {
 
     // Three telemetry cards (queries / latency / success rate) show "—".
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('renders NO per-agent Play button (no run-agent endpoint exists)', async () => {
+    const user = userEvent.setup();
+    render(<AgentOrchestration />, { wrapper: createWrapper() });
+
+    await act(async () => {
+      await user.click(screen.getByRole('tab', { name: 'All Agents' }));
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Scope Definer')).toBeInTheDocument();
+    }, { timeout: 5000 });
+
+    // The handler-less Play icon implied agents could be launched from
+    // this page — the same fake-capability class as the removed Pause All.
+    expect(screen.queryByRole('button', { name: /play/i })).not.toBeInTheDocument();
+    const playIcons = document.querySelectorAll('svg.lucide-play');
+    expect(playIcons.length).toBe(0);
   });
 
   it('renders REAL telemetry from /analytics/summary when available', () => {

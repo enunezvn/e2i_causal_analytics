@@ -121,6 +121,15 @@ const customStyles: StylesheetStyle[] = [
       'opacity': 0.7,
     },
   },
+  {
+    // Edges whose relationship arrived WITHOUT a confidence value: thin and
+    // dashed to signal unknown strength (the value is never invented).
+    selector: 'edge[!weight]',
+    style: {
+      'width': 1,
+      'line-style': 'dashed',
+    },
+  },
 ];
 
 // =============================================================================
@@ -167,43 +176,52 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
 
   // Transform API response to Cytoscape elements
   useEffect(() => {
-    if (chainsResponse?.chains && chainsResponse.chains.length > 0) {
-      const elements: ElementDefinition[] = [];
-      const nodeIds = new Set<string>();
+    if (!chainsResponse) return;
 
-      chainsResponse.chains.forEach((chain) => {
-        chain.nodes.forEach((node) => {
-          if (!nodeIds.has(node.id)) {
-            nodeIds.add(node.id);
-            const apiType = node.type || 'entity';
-            elements.push({
-              data: {
-                id: node.id,
-                label: node.name || node.id,
-                type: apiType,
-                vizType: getNodeVisualizationType(apiType),
-              },
-            });
-          }
-        });
+    // Zero chains: explicitly clear the graph so stale elements from a
+    // previous response cannot linger beneath the empty-state overlay.
+    if (chainsResponse.chains.length === 0) {
+      setElements([]);
+      return;
+    }
 
-        chain.relationships.forEach((rel, idx) => {
+    const elements: ElementDefinition[] = [];
+    const nodeIds = new Set<string>();
+
+    chainsResponse.chains.forEach((chain) => {
+      chain.nodes.forEach((node) => {
+        if (!nodeIds.has(node.id)) {
+          nodeIds.add(node.id);
+          const apiType = node.type || 'entity';
           elements.push({
             data: {
-              id: `edge-${chain.nodes[0]?.id}-${idx}`,
-              source: rel.source_id,
-              target: rel.target_id,
-              weight: rel.confidence ?? 0.5,
+              id: node.id,
+              label: node.name || node.id,
+              type: apiType,
+              vizType: getNodeVisualizationType(apiType),
             },
           });
-        });
+        }
       });
 
-      if (elements.length > 0) {
-        setElements(elements);
-        runLayout('cose');
-      }
-    }
+      chain.relationships.forEach((rel, idx) => {
+        // confidence is optional on the wire: when absent it stays absent
+        // (rendered as a thin dashed unknown-strength edge), never invented.
+        elements.push({
+          data: {
+            id: `edge-${chain.nodes[0]?.id}-${idx}`,
+            source: rel.source_id,
+            target: rel.target_id,
+            ...(typeof rel.confidence === 'number'
+              ? { weight: rel.confidence }
+              : {}),
+          },
+        });
+      });
+    });
+
+    setElements(elements);
+    runLayout('cose');
   }, [chainsResponse, setElements, runLayout]);
 
   // Fetch chains on mount

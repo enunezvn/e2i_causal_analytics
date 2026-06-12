@@ -134,4 +134,51 @@ describe('ActiveCausalChains — no SAMPLE_ELEMENTS graph', () => {
     // The fabricated demo graph must not be re-injected.
     expect(labels).not.toContain('Detailing Frequency');
   });
+
+  it('does NOT invent a 0.5 edge weight when the API omits relationship confidence', () => {
+    mockChains({
+      data: {
+        chains: [
+          {
+            nodes: [
+              { id: 'n1', name: 'Rep Visits', type: 'Action' },
+              { id: 'n2', name: 'TRx', type: 'KPI' },
+            ],
+            // confidence intentionally omitted — optional on the wire.
+            relationships: [{ source_id: 'n1', target_id: 'n2' }],
+            path_length: 1,
+          },
+        ],
+        total_chains: 1,
+        query_latency_ms: 30,
+      } as unknown as CausalChainResponse,
+    } as unknown as Partial<ChainsMutation>);
+
+    render(<ActiveCausalChains />);
+
+    const calls = cytoscapeApi.setElements.mock.calls;
+    const elements = calls[calls.length - 1][0] as Array<{
+      data: { source?: string; weight?: number };
+    }>;
+    const edge = elements.find((e) => e.data.source === 'n1');
+    expect(edge).toBeDefined();
+    // Absent confidence must stay absent — never a fabricated 0.5.
+    expect(edge?.data.weight).toBeUndefined();
+  });
+
+  it('clears previously rendered elements when a later response has zero chains', () => {
+    mockChains({
+      data: {
+        chains: [],
+        total_chains: 0,
+        query_latency_ms: 10,
+      } as unknown as CausalChainResponse,
+    } as unknown as Partial<ChainsMutation>);
+
+    render(<ActiveCausalChains />);
+
+    // The graph must be explicitly emptied so stale chains cannot linger
+    // beneath the empty-state overlay.
+    expect(cytoscapeApi.setElements).toHaveBeenCalledWith([]);
+  });
 });

@@ -28,7 +28,6 @@ import {
   CheckCircle2,
   Clock,
   AlertTriangle,
-  Play,
   RefreshCw,
   Zap,
   Brain,
@@ -411,18 +410,12 @@ export default function AgentOrchestration() {
             </Card>
           </div>
 
-          {/* Recent Activity Preview */}
+          {/* Recent Activity Preview — no action buttons until the activity
+              endpoint exists (dead controls would fake capability). */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Recent Activity</CardTitle>
-                  <CardDescription>Latest agent actions and events</CardDescription>
-                </div>
-                <Button variant="ghost" size="sm">
-                  View All
-                </Button>
-              </div>
+              <CardTitle>Recent Activity</CardTitle>
+              <CardDescription>Latest agent actions and events</CardDescription>
             </CardHeader>
             <CardContent>
               {ACTIVITIES.length === 0 ? (
@@ -445,20 +438,11 @@ export default function AgentOrchestration() {
         <TabsContent value="activity" className="space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Activity Feed</CardTitle>
-                  <CardDescription>Complete log of agent actions</CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm">
-                    Filter
-                  </Button>
-                  <Button variant="outline" size="sm">
-                    Export
-                  </Button>
-                </div>
-              </div>
+              {/* Filter/Export controls intentionally absent: the activity
+                  endpoint is unwired, so there is nothing to filter or
+                  export — dead buttons would fake capability. */}
+              <CardTitle>Activity Feed</CardTitle>
+              <CardDescription>Complete log of agent actions</CardDescription>
             </CardHeader>
             <CardContent>
               {ACTIVITIES.length === 0 ? (
@@ -526,6 +510,8 @@ export default function AgentOrchestration() {
                 {filteredAgents.map((agent: { id: string; name: string; tier: number; status: string; capabilities: string[] }) => (
                   <Card key={agent.id} className="hover:shadow-md transition-shadow">
                     <CardContent className="p-4">
+                      {/* No per-agent Play control: no run-agent endpoint
+                          exists, so a launch button would fake capability. */}
                       <div className="flex items-start justify-between">
                         <div>
                           <div className="flex items-center gap-2">
@@ -548,9 +534,6 @@ export default function AgentOrchestration() {
                             </Badge>
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm">
-                          <Play className="h-4 w-4" />
-                        </Button>
                       </div>
                       <div className="mt-3">
                         <p className="text-xs text-muted-foreground">Capabilities:</p>
