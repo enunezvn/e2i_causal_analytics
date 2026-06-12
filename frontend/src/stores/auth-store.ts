@@ -13,6 +13,7 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import type { Session, User } from '@supabase/supabase-js';
+import { isSupabaseConfigured } from '@/lib/supabase';
 
 /**
  * Auth error type for consistent error handling
@@ -208,8 +209,16 @@ export const useAuthError = () =>
 
 /**
  * Selector: Get access token for API requests
+ *
+ * FAIL CLOSED: returns null when Supabase is unconfigured even if a session
+ * was rehydrated from persisted storage (written by an older configured
+ * build) - shell integrations (CopilotKitWrapper) mount outside
+ * ProtectedRoute and must never send a stale bearer token in an
+ * unconfigured build.
  */
 export const useAccessToken = () =>
-  useAuthStore((state) => state.session?.access_token ?? null);
+  useAuthStore((state) =>
+    isSupabaseConfigured() ? (state.session?.access_token ?? null) : null
+  );
 
 export default useAuthStore;
