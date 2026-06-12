@@ -271,6 +271,9 @@ async def test_cohort_constructor_run_lands_episodic_row():
 
 
 @pytest.mark.asyncio
+# Real DSPy/LLM-backed designer run: measured 82s on the shared box (2026-06-12);
+# 300s allows LLM-latency variance (het-SLA precedent: measured x ~3 headroom).
+@pytest.mark.timeout(300)
 async def test_experiment_designer_arun_lands_activity_row():
     """RED before wiring: a completed design leaves NO agent_activities trace
     (contribute_to_memory has zero callers; pre-fix the payload also wrote 5
