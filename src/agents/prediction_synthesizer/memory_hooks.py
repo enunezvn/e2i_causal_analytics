@@ -330,17 +330,28 @@ class PredictionSynthesizerMemoryHooks:
         self,
         prediction_target: str,
         model_id: str,
-        accuracy: float,
-        calibration_error: float,
+        accuracy: Optional[float] = None,
+        calibration_error: Optional[float] = None,
+        metrics: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Update model performance tracking for future weighting.
 
+        #883 PR B: previously this writer had NO caller, so the Redis key the
+        LIVE reader ``get_context -> _get_model_performance_history`` consumes
+        was never written (``context.model_performance`` permanently ``{}`` in
+        prod). The agent now feeds it post-prediction with the registry's
+        MEASURED metrics (``metrics=`` — auc/pr_auc/brier_score/
+        calibration_slope from ``ml_model_registry``), never values fabricated
+        at prediction time; the legacy ``accuracy``/``calibration_error``
+        kwargs remain for callers that hold real evaluation numbers.
+
         Args:
             prediction_target: What was predicted
             model_id: Model identifier
-            accuracy: Model accuracy on this target
-            calibration_error: Calibration error
+            accuracy: Measured model accuracy on this target (optional)
+            calibration_error: Measured calibration error (optional)
+            metrics: Measured metric dict stored verbatim (optional)
 
         Returns:
             True if successful
@@ -356,12 +367,14 @@ class PredictionSynthesizerMemoryHooks:
             existing = await redis.get(performance_key)
             performance = json.loads(existing) if existing else {}
 
-            # Update model entry
-            performance[model_id] = {
-                "accuracy": accuracy,
-                "calibration_error": calibration_error,
-                "last_updated": datetime.now(timezone.utc).isoformat(),
-            }
+            # Update model entry — only measured, non-None values are stored.
+            entry: Dict[str, Any] = dict(metrics or {})
+            if accuracy is not None:
+                entry["accuracy"] = accuracy
+            if calibration_error is not None:
+                entry["calibration_error"] = calibration_error
+            entry["last_updated"] = datetime.now(timezone.utc).isoformat()
+            performance[model_id] = entry
 
             # Store with TTL
             await redis.setex(

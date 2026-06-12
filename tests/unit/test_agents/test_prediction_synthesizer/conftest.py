@@ -344,3 +344,17 @@ def _hermetic_memory_layer(monkeypatch):
     monkeypatch.setattr(episodic_memory, "search_episodic_by_text", _unavailable)
     monkeypatch.setattr(procedural_memory, "insert_procedural_memory_with_text", _unavailable)
     monkeypatch.setattr(procedural_memory, "find_relevant_procedures_by_text", _unavailable)
+
+    # #883 PR B: synthesize() now also writes the model-performance Redis key
+    # (update_model_performance via working memory). Block the lazy factory so
+    # unit runs from a creds box cannot touch the real Redis; the hooks
+    # degrade to their honest "no working memory" False path.
+    def _unavailable_sync(*_args, **_kwargs):
+        raise RuntimeError(
+            "hermetic unit-test memory layer (#883): set hooks._working_memory "
+            "directly if the test needs a specific behavior"
+        )
+
+    import src.memory.working_memory as working_memory
+
+    monkeypatch.setattr(working_memory, "get_working_memory", _unavailable_sync)
