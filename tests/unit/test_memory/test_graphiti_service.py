@@ -906,10 +906,17 @@ class TestSharedGraphGrouping:
     -- even on a pure read (search). Episodes belong in the single configured
     semantic graph (config.graph_name, deployed: e2i_causal, see #749); session
     scoping lives in episodic memory / the fallback node property.
+
+    The group_id is pinned to config.graph_name (== the FalkorDriver's preset
+    database) instead of None: graphiti skips the driver clone when group_id
+    equals the current database, so writes deterministically stay in the
+    configured graph and never depend on graphiti's provider default-group
+    ("_") handling, whose FalkorDriver clone path reroutes to 'default_db'
+    (codex review round 1).
     """
 
     @pytest.mark.asyncio
-    async def test_add_episode_does_not_use_session_as_group_id(self, graphiti_service):
+    async def test_add_episode_pins_group_id_to_configured_graph(self, graphiti_service):
         """The Graphiti write path must not partition by session UUID."""
         graphiti_service._initialized = True
 
@@ -928,13 +935,15 @@ class TestSharedGraphGrouping:
 
         assert result.success is True
         call_kwargs = mock_graphiti.add_episode.call_args.kwargs
-        assert call_kwargs.get("group_id") is None, (
-            "session_id leaked into Graphiti group_id: on FalkorDB this creates "
-            "a per-session graph shell (issue #890)"
+        assert call_kwargs.get("group_id") == graphiti_service.config.graph_name, (
+            "Graphiti group_id must be pinned to the configured graph name: a "
+            "session UUID creates a per-session graph shell, and None delegates "
+            "to graphiti's '_' default-group handling whose FalkorDriver clone "
+            "path reroutes to 'default_db' (issue #890)"
         )
 
     @pytest.mark.asyncio
-    async def test_search_does_not_scope_group_ids_by_session(self, graphiti_service):
+    async def test_search_pins_group_ids_to_configured_graph(self, graphiti_service):
         """The Graphiti read path must not clone a per-session database."""
         graphiti_service._initialized = True
 
@@ -948,7 +957,8 @@ class TestSharedGraphGrouping:
         )
 
         call_kwargs = mock_graphiti.search.call_args.kwargs
-        assert call_kwargs.get("group_ids") is None, (
-            "session_id leaked into Graphiti group_ids: on FalkorDB even a read "
-            "creates a per-session graph shell (issue #890)"
+        assert call_kwargs.get("group_ids") == [graphiti_service.config.graph_name], (
+            "Graphiti search group_ids must match what add_episode writes "
+            "(the configured graph name) -- session UUIDs read/create "
+            "per-session graph shells (issue #890)"
         )

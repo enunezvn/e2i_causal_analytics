@@ -269,12 +269,20 @@ class E2IGraphitiService:
                 # graph (config.graph_name, deployed: e2i_causal — #749);
                 # session scoping lives in episodic memory and the fallback
                 # path's session_id node property.
+                #
+                # group_id is pinned to config.graph_name (== the driver's
+                # preset database) rather than None: graphiti skips the driver
+                # clone when group_id equals the current database, so writes
+                # deterministically stay in the configured graph and never
+                # depend on graphiti's provider default-group ("_") handling,
+                # which on FalkorDB can reroute to its own 'default_db'
+                # (codex review, #890).
                 result = await self._graphiti.add_episode(
                     name=f"episode_{episode_id[:8]}",
                     episode_body=content,
                     source_description=source,
                     reference_time=ref_time,
-                    group_id=None,
+                    group_id=self.config.graph_name,
                 )
 
                 # Convert Graphiti result to our format
@@ -470,12 +478,14 @@ class E2IGraphitiService:
                 # Do NOT scope group_ids by session_id: on FalkorDB each
                 # group_id is a separate database (graph), and graphiti-core
                 # clones a FalkorDriver per group_id whose constructor builds
-                # indices — so even a pure READ with a session-UUID group_id
-                # creates an empty per-session graph shell (issue #890).
-                # Search the configured shared graph instead.
+                # indices — so even a READ with a session-UUID group_id can
+                # create an empty per-session graph shell (issue #890).
+                # Search the configured shared graph, using the same pinned
+                # group_id that add_episode writes (config.graph_name ==
+                # driver database, so no clone occurs).
                 results = await self._graphiti.search(
                     query=query,
-                    group_ids=None,
+                    group_ids=[self.config.graph_name],
                     num_results=limit,
                 )
                 return self._convert_search_results(results, entity_types)
