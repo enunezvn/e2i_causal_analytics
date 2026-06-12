@@ -969,7 +969,10 @@ class TestEdgeCases:
         assert result is not None
         insert_call = mock_supabase.table.return_value.insert
         insert_data = insert_call.call_args[0][0]
-        assert insert_data["tool_sequence"] == "[]"
+        # #883 deferred fix: the raw structure goes to the client (postgrest
+        # JSON-encodes the payload itself); a pre-dumped "[]" string would be
+        # double-encoded into a JSON string scalar in the JSONB column.
+        assert insert_data["tool_sequence"] == []
 
     @pytest.mark.asyncio
     async def test_all_signal_types(self, mock_supabase):
@@ -1004,7 +1007,10 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_json_serialization_in_signal(self, mock_supabase):
-        """Signal details should be JSON serialized."""
+        """Signal details must reach the client as a raw dict (#883 deferred
+        fix): postgrest JSON-encodes the payload itself, so a pre-dumped
+        string would land in the JSONB column as a JSON string scalar
+        (double-encoded), not an object."""
         signal = LearningSignalInput(
             signal_type="correction",
             signal_details={
@@ -1020,12 +1026,10 @@ class TestEdgeCases:
         insert_call = mock_supabase.table.return_value.insert
         insert_data = insert_call.call_args[0][0]
 
-        # Should be JSON string
         details = insert_data["signal_details"]
-        assert isinstance(details, str)
-        parsed = json.loads(details)
-        assert parsed["original"] == "Wrong answer"
-        assert parsed["nested"]["key"] == "value"
+        assert isinstance(details, dict)
+        assert details["original"] == "Wrong answer"
+        assert details["nested"]["key"] == "value"
 
     @pytest.mark.asyncio
     async def test_procedure_with_all_optional_fields(self, mock_supabase, sample_embedding):

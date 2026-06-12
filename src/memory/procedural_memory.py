@@ -246,7 +246,12 @@ async def insert_procedural_memory(
         "procedure_id": procedure_id,
         "procedure_name": procedure.procedure_name,
         "procedure_type": procedure.procedure_type,
-        "tool_sequence": json.dumps(procedure.tool_sequence),
+        # #883 deferred: pass the structure raw — postgrest JSON-encodes the
+        # payload itself, so a pre-dumped string double-encodes (the column
+        # stores a JSON *string scalar*, not an array; live DB had 1566/1566
+        # such rows). Old string rows are repaired by migration 072 and
+        # readers stay tolerant of both shapes.
+        "tool_sequence": procedure.tool_sequence,
         "trigger_pattern": procedure.trigger_pattern,
         "trigger_embedding": trigger_embedding,
         "intent_keywords": procedure.intent_keywords or [],
@@ -331,7 +336,13 @@ async def get_few_shot_examples(
     for proc in procedures:
         tool_sequence = proc.get("tool_sequence", [])
         if isinstance(tool_sequence, str):
-            tool_sequence = json.loads(tool_sequence)
+            # Pre-#883-fix rows hold a double-encoded JSON string scalar
+            # (repaired by migration 072, but tolerate un-migrated envs); a
+            # malformed survivor must not break the whole example set.
+            try:
+                tool_sequence = json.loads(tool_sequence)
+            except (ValueError, TypeError):
+                tool_sequence = []
 
         examples.append(
             {
@@ -520,7 +531,10 @@ async def record_learning_signal(
         "session_id": session_id,
         "signal_type": signal.signal_type,
         "signal_value": signal.signal_value,
-        "signal_details": json.dumps(signal.signal_details or {}),
+        # #883 deferred: raw dict, NOT json.dumps — a pre-dumped string is
+        # double-encoded by the client into a JSON string scalar (the exact
+        # raw_content failure B2's get_prior_cohorts had to json.loads around).
+        "signal_details": signal.signal_details or {},
         "applies_to_type": signal.applies_to_type,
         "applies_to_id": signal.applies_to_id,
         # E2I context

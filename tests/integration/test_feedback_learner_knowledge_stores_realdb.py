@@ -190,7 +190,9 @@ async def test_build_production_feedback_stores_wires_real_stores():
     fully-wired cycle (update_effectiveness measurable)."""
     from src.agents.feedback_learner.agent import build_production_feedback_stores
 
-    feedback_store, knowledge_stores = await build_production_feedback_stores()
+    feedback_store, knowledge_stores, db_client = await build_production_feedback_stores()
     assert feedback_store is not None
     assert knowledge_stores is not None
     assert set(knowledge_stores) == {"baseline", "agent_config", "prompt", "threshold"}
+    # #883 deferred: the shared async client is the rubric node's signal sink.
+    assert db_client is not None

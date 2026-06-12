@@ -195,7 +195,7 @@ async def test_feedback_learner_dispatch_binds_real_window_honest_outcome() -> N
     assert abs((end - start) - timedelta(hours=default_hours)) < timedelta(seconds=10)
     assert abs(end - datetime.now(timezone.utc)) < timedelta(minutes=2)
 
-    feedback_store, knowledge_stores = await build_production_feedback_stores()
+    feedback_store, knowledge_stores, _db_client = await build_production_feedback_stores()
     agent = FeedbackLearnerAgent(
         feedback_store=feedback_store,
         knowledge_stores=knowledge_stores,

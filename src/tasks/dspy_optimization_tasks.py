@@ -179,7 +179,9 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
     # fails closed to (None, None) — the honest unwired path (F15).
     from src.agents.feedback_learner.agent import build_production_feedback_stores
 
-    feedback_store, knowledge_stores = await build_production_feedback_stores()
+    # #883 deferred: the third element (shared async client) arms the rubric
+    # node's learning_signals persistence on this Celery trigger too.
+    feedback_store, knowledge_stores, db_client = await build_production_feedback_stores()
 
     # Optional scope: DSPY_LEARN_FOCUS_AGENTS="agent_a,agent_b" (default: all agents).
     _focus_env = os.environ.get("DSPY_LEARN_FOCUS_AGENTS", "").strip()
@@ -188,6 +190,7 @@ async def _run_learning_cycle(task_id: str, window_hours: float) -> Dict[str, An
     agent = FeedbackLearnerAgent(
         feedback_store=feedback_store,
         knowledge_stores=knowledge_stores,
+        db_client=db_client,
         use_llm=True,
         persist_signals=True,
     )

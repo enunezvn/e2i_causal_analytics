@@ -1349,10 +1349,15 @@ async def _execute_learning_cycle(
         # caller is not a bypass of the persistence path.
         from src.agents.feedback_learner.agent import build_production_feedback_stores
 
-        feedback_store, knowledge_stores = await build_production_feedback_stores()
+        # #883 deferred: the builder's third element (the shared async client)
+        # arms the rubric node's learning_signals persistence; the rubric
+        # evaluation context is derived inside the node from the run's real
+        # collected feedback. Fail-closed (None) -> rubric skips honestly.
+        feedback_store, knowledge_stores, db_client = await build_production_feedback_stores()
         graph = build_feedback_learner_graph(
             feedback_store=feedback_store,
             knowledge_stores=knowledge_stores,
+            db_client=db_client,
             persist_signals=True,
         )
         result = await graph.ainvoke(initial_state)

@@ -454,3 +454,119 @@ class TestRubricNodeGraphIntegration:
 
         # Should not raise
         assert build_feedback_learner_graph is not None
+
+
+# =============================================================================
+# Context Derivation Tests (#883 deferred item — rubric arming)
+# =============================================================================
+
+
+def _db_client_mock():
+    """Async-insert-capable db_client stand-in."""
+    db = MagicMock()
+    db.table.return_value.insert.return_value.execute = AsyncMock(return_value=MagicMock())
+    return db
+
+
+def _feedback_item(**overrides):
+    base = {
+        "feedback_id": "F100",
+        "timestamp": "2026-06-01T10:00:00+00:00",
+        "feedback_type": "rating",
+        "source_agent": "causal_impact",
+        "query": "Why did Remibrutinib TRx drop?",
+        "agent_response": "Access changes in Q3 drove the decline.",
+        "user_feedback": "thumbs_down",
+        "metadata": {},
+    }
+    base.update(overrides)
+    return base
+
+
+class TestRubricNodeContextDerivation:
+    """#883 deferred item: with db_client armed and no explicit context, the
+    node derives an EvaluationContext from the run's REAL collected feedback —
+    genuine user-feedback items only, never the manufactured implicit
+    performance probes or numeric outcome items."""
+
+    @pytest.mark.asyncio
+    async def test_derivation_requires_db_client(self, sample_state, mock_evaluator):
+        """No db_client -> no derivation -> skip (hermetic graphs unchanged)."""
+        sample_state["rubric_evaluation_context"] = None
+        sample_state["feedback_items"] = [_feedback_item()]
+        node = RubricNode(evaluator=mock_evaluator, db_client=None)
+
+        result = await node.execute(sample_state)
+
+        mock_evaluator.evaluate.assert_not_called()
+        assert result["rubric_evaluation"] is None
+
+    @pytest.mark.asyncio
+    async def test_derives_from_genuine_feedback_and_stores(self, sample_state, mock_evaluator):
+        """Armed node evaluates the most recent GENUINE (query, response) pair
+        — the implicit probe (newest timestamp, manufactured at now()) must
+        never win the recency pick — and persists the result."""
+        db = _db_client_mock()
+        sample_state["rubric_evaluation_context"] = None
+        sample_state["feedback_items"] = [
+            _feedback_item(),
+            _feedback_item(
+                feedback_id="F101",
+                timestamp="2026-06-02T10:00:00+00:00",
+                query="Show market share trend",
+                agent_response="Market share is declining by 2%.",
+            ),
+            _feedback_item(
+                feedback_id="implicit_probe",
+                timestamp="2099-01-01T00:00:00+00:00",  # always newest
+                feedback_type="implicit",
+                query="System performance signal for causal_impact",
+                agent_response="operational",
+            ),
+        ]
+        node = RubricNode(evaluator=mock_evaluator, db_client=db)
+
+        result = await node.execute(sample_state)
+
+        mock_evaluator.evaluate.assert_called_once()
+        ctx = mock_evaluator.evaluate.call_args.args[0]
+        assert ctx.user_query == "Show market share trend"
+        assert ctx.final_response == "Market share is declining by 2%."
+        assert ctx.agent_names == ["causal_impact"]
+        assert result["rubric_evaluation"] is not None
+        db.table.assert_called_with("learning_signals")
+
+    @pytest.mark.asyncio
+    async def test_fail_closed_when_no_genuine_pair(self, sample_state, mock_evaluator):
+        """Only implicit/outcome items (or empty q/r) -> derivation returns
+        None -> the node skips honestly; no judge call, no write."""
+        db = _db_client_mock()
+        sample_state["rubric_evaluation_context"] = None
+        sample_state["feedback_items"] = [
+            _feedback_item(
+                feedback_type="implicit",
+                query="System performance signal for causal_impact",
+                agent_response="operational",
+            ),
+            _feedback_item(feedback_type="outcome", agent_response="0.83"),
+            _feedback_item(query=""),  # genuine type but no usable pair
+        ]
+        node = RubricNode(evaluator=mock_evaluator, db_client=db)
+
+        result = await node.execute(sample_state)
+
+        mock_evaluator.evaluate.assert_not_called()
+        assert result["rubric_evaluation"] is None
+        db.table.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_context_takes_precedence(self, sample_state, mock_evaluator):
+        """A caller-provided context wins over derivation (pre-existing
+        contract: explicit contexts evaluate even without db_client)."""
+        sample_state["feedback_items"] = [_feedback_item(query="should not be used")]
+        node = RubricNode(evaluator=mock_evaluator, db_client=_db_client_mock())
+
+        await node.execute(sample_state)
+
+        ctx = mock_evaluator.evaluate.call_args.args[0]
+        assert ctx.user_query == "Why did Kisqali adoption increase in Q3?"

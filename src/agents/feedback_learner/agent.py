@@ -101,6 +101,7 @@ class FeedbackLearnerAgent:
         cognitive_rag: Optional[Any] = None,
         persist_client: Optional[Any] = None,
         persist_signals: bool = True,
+        db_client: Optional[Any] = None,
     ):
         """
         Initialize Feedback Learner agent.
@@ -118,6 +119,11 @@ class FeedbackLearnerAgent:
             persist_signals: When True (default), persist the finalized signal to
                 ``dspy_agent_training_signals`` so it is durable + readable by the
                 optimizer. Best-effort: a DB error never fails a learning cycle.
+            db_client: Optional async Supabase client for the rubric node's
+                ``learning_signals`` persistence (#883 deferred item). When
+                None the rubric node derives no context and skips — production
+                triggers pass the shared client from
+                :func:`build_production_feedback_stores`.
         """
         self._feedback_store = feedback_store
         self._outcome_store = outcome_store
@@ -127,6 +133,7 @@ class FeedbackLearnerAgent:
         self._cognitive_rag = cognitive_rag
         self._persist_client = persist_client
         self._persist_signals = persist_signals
+        self._db_client = db_client
         self._graph = None
 
     @property
@@ -140,6 +147,7 @@ class FeedbackLearnerAgent:
                 use_llm=self._use_llm,
                 llm=self._llm,
                 cognitive_rag=self._cognitive_rag,
+                db_client=self._db_client,
                 persist_signals=self._persist_signals,
                 persist_client=self._persist_client,
             )
@@ -320,15 +328,23 @@ class FeedbackLearnerAgent:
 # ============================================================================
 
 
-async def build_production_feedback_stores() -> tuple[Optional[Any], Optional[Dict[str, Any]]]:
-    """Build the REAL ``(feedback_store, knowledge_stores)`` for every production
-    learning-cycle trigger (the Celery task, the ``/feedback/learn`` route, and
-    :func:`process_feedback_batch`) from one async Supabase client.
+async def build_production_feedback_stores() -> tuple[
+    Optional[Any], Optional[Dict[str, Any]], Optional[Any]
+]:
+    """Build the REAL ``(feedback_store, knowledge_stores, db_client)`` for every
+    production learning-cycle trigger (the Celery task, the ``/feedback/learn``
+    route, and :func:`process_feedback_batch`) from one async Supabase client.
 
-    FAIL-CLOSED: returns ``(None, None)`` when the client is unavailable
+    The third element is the shared async client itself, injected into the
+    graph build as the rubric node's ``learning_signals`` sink (#883 deferred
+    item: ``graph.py`` plumbed ``db_client`` but no production site armed it,
+    leaving the rubric persistence path structurally dead).
+
+    FAIL-CLOSED: returns ``(None, None, None)`` when the client is unavailable
     (SUPABASE_URL unset, CI / offline) so the cycle runs the HONEST unwired path —
     ``update_backend_wired`` False, ``update_effectiveness`` None (the F15
-    contract), never a fabricated 0.0.
+    contract), never a fabricated 0.0 — and the rubric node skips (it never
+    constructs a client-less write path, the #845 convention).
 
     NOTE on the orchestrator-DISPATCHED path: it never reaches this builder OR the
     learning cycle. The agent registry holds a pre-built ``FeedbackLearnerAgent``
@@ -353,14 +369,16 @@ async def build_production_feedback_stores() -> tuple[Optional[Any], Optional[Di
         return (
             get_chatbot_feedback_repository(supabase_client=client),
             build_knowledge_stores(client),
+            client,
         )
     except Exception as exc:  # pragma: no cover - degraded path
         logger.warning(
             "feedback_learner: could not build production feedback/knowledge stores "
-            "(%s); learning from empty, update_effectiveness stays None",
+            "(%s); learning from empty, update_effectiveness stays None, "
+            "rubric persistence disarmed",
             exc,
         )
-        return None, None
+        return None, None, None
 
 
 async def process_feedback_batch(
@@ -381,10 +399,12 @@ async def process_feedback_batch(
     """
     # #837: wire the real feedback + knowledge stores so update_effectiveness is
     # measurable on this public convenience path too (fail-closed → unwired/None).
-    feedback_store, knowledge_stores = await build_production_feedback_stores()
+    # #883 deferred: the shared client also arms the rubric persistence path.
+    feedback_store, knowledge_stores, db_client = await build_production_feedback_stores()
     agent = FeedbackLearnerAgent(
         feedback_store=feedback_store,
         knowledge_stores=knowledge_stores,
+        db_client=db_client,
     )
     return await agent.learn(
         time_range_start=time_range_start,
