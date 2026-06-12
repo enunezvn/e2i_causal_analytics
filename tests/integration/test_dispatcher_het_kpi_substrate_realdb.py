@@ -80,3 +80,21 @@ def test_het_resolver_real_mode_fails_closed_on_clean_substrate() -> None:
     }
     resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](agent_input, _dispatch())
     assert isinstance(resolved, NeedsStructuredInput), "real-mode must not read synthetic rows"
+
+
+def test_het_resolver_string_false_opt_out_fails_closed_on_clean_substrate() -> None:
+    """Issue #880: ``include_synthetic="false"`` (string) is an explicit opt-OUT.
+    The loose ``bool()`` coercion read it as truthy and silently bound the
+    SYNTHETIC substrate (wrong-provenance read); strict parsing keeps the
+    dispatch real-mode, which on the clean post-cleanup substrate fails closed
+    exactly like no opt-in above."""
+    agent_input = {
+        "query": "which segments respond best on conversion rate?",
+        "session_id": "itest-het",
+        "user_context": {"include_synthetic": "false"},
+        "parsed_query": {"entities": []},
+    }
+    resolved = disp.INPUT_RESOLVERS["heterogeneous_optimizer"](agent_input, _dispatch())
+    assert isinstance(resolved, NeedsStructuredInput), (
+        "string 'false' must NOT opt into the synthetic substrate"
+    )

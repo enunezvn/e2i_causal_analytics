@@ -422,13 +422,14 @@ def _resolve_heterogeneous_optimizer_input(
     # Validation runs opt into the synthetic substrate explicitly (the #851
     # include_synthetic plumb, default False): every kpi_resolution source read
     # default-excludes is_synthetic rows, so on a clean substrate a real-mode
-    # build correctly fails closed unless the caller opted in. Two channels:
-    # ``filters`` (direct resolver invocations) and ``user_context`` (the only
-    # caller-stash field _prepare_agent_input threads through the live chat path).
-    include_synthetic = bool(
-        (agent_input.get("filters") or {}).get("include_synthetic", False)
-        or (agent_input.get("user_context") or {}).get("include_synthetic", False)
-    )
+    # build correctly fails closed unless the caller opted in. Channels +
+    # strict parsing are shared with the gap resolver (#880 — was a loose
+    # ``bool()`` over filters/user_context, so ``"false"`` opted IN and the
+    # chat-path ``parameters`` channels were silently ignored). The flag stays
+    # dispatch-local: branch (1) explicit specs do no provenance read here and
+    # the het agent takes no include_synthetic input, so nothing is forwarded
+    # into the agent (unlike gap_analyzer's per-run connector opt-in).
+    include_synthetic = _resolve_include_synthetic_opt_in(agent_input, params)
     try:
         from src.services import kpi_resolution
 
@@ -507,6 +508,35 @@ def _coerce_provenance_flag(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"true", "1", "yes"}
     return False
+
+
+def _resolve_include_synthetic_opt_in(agent_input: Dict[str, Any], params: Dict[str, Any]) -> bool:
+    """Resolve the per-dispatch synthetic-provenance opt-in (#872/#877/#880).
+
+    Shared by the gap_analyzer and heterogeneous_optimizer resolvers so the
+    opt-in contract cannot drift between them again (gap_analyzer is het's
+    fallback agent — the same dispatch must never run in two different
+    provenance modes depending on which agent fires). Channels:
+
+    * ``agent_input.filters`` — direct resolver invocations (validation gates);
+    * ``agent_input.user_context`` — the only caller-stash field
+      ``_prepare_agent_input`` threads through the live chat path;
+    * ``parameters.filters`` and the explicit ``parameters.include_synthetic``,
+      which WINS when present and non-None (an analyst's explicit choice beats
+      the ambient opt-in channels). ``parameters`` is router-supplied and DOES
+      flow on the chat path, unlike ``filters``.
+
+    Every value is STRICTLY parsed via :func:`_coerce_provenance_flag`: an
+    ambiguous value (``"false"``, ``"0"``, non-bool/non-str types) fails CLOSED
+    to the real-mode default-exclude predicate.
+    """
+    channel_opt_in = (
+        _coerce_provenance_flag((params.get("filters") or {}).get("include_synthetic"))
+        or _coerce_provenance_flag((agent_input.get("filters") or {}).get("include_synthetic"))
+        or _coerce_provenance_flag((agent_input.get("user_context") or {}).get("include_synthetic"))
+    )
+    explicit_flag = params.get("include_synthetic")
+    return _coerce_provenance_flag(explicit_flag) if explicit_flag is not None else channel_opt_in
 
 
 # The single segment dimension business_metrics actually carries (the benchmark
@@ -612,8 +642,8 @@ def _resolve_gap_analyzer_input(
         the exact table the agent's production connector reads post-#856: the
         brand's real ``metric_name`` values become ``metrics`` and the real
         segment dimension (``region``, whose values exist in the data) becomes
-        ``segments``. ``include_synthetic`` is read from the same two opt-in
-        channels as the het resolver (#872) and ALSO forwarded into the agent
+        ``segments``. ``include_synthetic`` is read from the opt-in channels
+        shared with the het resolver (#872/#880) and ALSO forwarded into the agent
         input: the registry's agent instance is constructed real-mode, so the
         per-run flag is what lets an opted-in validation dispatch actually read
         the synthetic substrate (gap_detector resolves a per-run connector pair).
@@ -623,24 +653,13 @@ def _resolve_gap_analyzer_input(
     """
     params = dispatch.get("parameters") or {}
 
-    # Provenance opt-in, resolved ONCE for both branches. Channels mirror the het
-    # resolver — ``filters`` (direct resolver invocations) and ``user_context``
-    # (the only caller-stash field _prepare_agent_input threads through the live
-    # chat path) — plus the parameter-level channels (``parameters.filters`` and
-    # the explicit ``parameters.include_synthetic``, which WINS when present and
-    # non-None: an analyst's explicit choice beats the ambient opt-in channels).
-    # Dropping the channel opt-in on the explicit-params path would silently run
-    # the analysis against the wrong provenance mode (codex #874 R1 HIGH). All
-    # values are STRICTLY parsed (codex R2): an ambiguous value stays real-mode.
-    channel_opt_in = (
-        _coerce_provenance_flag((params.get("filters") or {}).get("include_synthetic"))
-        or _coerce_provenance_flag((agent_input.get("filters") or {}).get("include_synthetic"))
-        or _coerce_provenance_flag((agent_input.get("user_context") or {}).get("include_synthetic"))
-    )
-    explicit_flag = params.get("include_synthetic")
-    include_synthetic = (
-        _coerce_provenance_flag(explicit_flag) if explicit_flag is not None else channel_opt_in
-    )
+    # Provenance opt-in, resolved ONCE for both branches via the shared helper
+    # (channels + precedence documented on _resolve_include_synthetic_opt_in;
+    # now shared with the het resolver, #880). Dropping the channel opt-in on
+    # the explicit-params path would silently run the analysis against the
+    # wrong provenance mode (codex #874 R1 HIGH). All values are STRICTLY
+    # parsed (codex R2): an ambiguous value stays real-mode.
+    include_synthetic = _resolve_include_synthetic_opt_in(agent_input, params)
 
     # (1) explicit analyst-supplied inputs pass through verbatim.
     if params.get("metrics") and params.get("segments") and params.get("brand"):
