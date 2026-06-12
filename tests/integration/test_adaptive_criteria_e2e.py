@@ -150,20 +150,29 @@ def test_flag_off_reproduces_apr26_baseline_within_tolerance() -> None:
     # synthetic cohort. See the "Rebaselined 2026-06-06" docstring section.
     # Values are the bit-identical two-seeded-run measurement (seed=42).
     val = out["validation_metrics"]
-    assert val["roc_auc"] == pytest.approx(0.6532, abs=0.005)
-    assert val["pr_auc"] == pytest.approx(0.2829, abs=0.005)
-    assert val["accuracy"] == pytest.approx(0.5400, abs=0.02)
-    assert val["precision"] == pytest.approx(0.2182, abs=0.02)
-    assert val["recall"] == pytest.approx(0.8000, abs=0.02)
-    assert val["f1_score"] == pytest.approx(0.3429, abs=0.02)
+    test = out["test_metrics"]
+    # #773: emit the FULL realized metric surface in every assertion message
+    # (same rationale as the #633 _diag in the clean-v3 test below) so one
+    # failing pin reveals every faithful CI value in a single nightly run
+    # instead of one value per run.
+    _diag = (
+        f"FAITHFUL flag-off default metrics — "
+        f"validation_metrics={val} | test_metrics={test} | "
+        f"model_usefulness={out.get('model_usefulness')}"
+    )
+    assert val["roc_auc"] == pytest.approx(0.6532, abs=0.005), _diag
+    assert val["pr_auc"] == pytest.approx(0.2829, abs=0.005), _diag
+    assert val["accuracy"] == pytest.approx(0.5400, abs=0.02), _diag
+    assert val["precision"] == pytest.approx(0.2182, abs=0.02), _diag
+    assert val["recall"] == pytest.approx(0.8000, abs=0.02), _diag
+    assert val["f1_score"] == pytest.approx(0.3429, abs=0.02), _diag
 
     # Test metrics — rebaselined 2026-06-06 (same remediation; two-run values).
-    test = out["test_metrics"]
-    assert test["roc_auc"] == pytest.approx(0.7148, abs=0.005)
-    assert test["accuracy"] == pytest.approx(0.5422, abs=0.02)
-    assert test["precision"] == pytest.approx(0.2177, abs=0.02)
-    assert test["recall"] == pytest.approx(0.8182, abs=0.02)
-    assert test["f1_score"] == pytest.approx(0.3439, abs=0.02)
+    assert test["roc_auc"] == pytest.approx(0.7148, abs=0.005), _diag
+    assert test["accuracy"] == pytest.approx(0.5422, abs=0.02), _diag
+    assert test["precision"] == pytest.approx(0.2177, abs=0.02), _diag
+    assert test["recall"] == pytest.approx(0.8182, abs=0.02), _diag
+    assert test["f1_score"] == pytest.approx(0.3439, abs=0.02), _diag
 
     # Apr-26 verdict line 18: Step 7 BLOCKED, success_criteria_met False.
     assert out["success_criteria_met"] is False

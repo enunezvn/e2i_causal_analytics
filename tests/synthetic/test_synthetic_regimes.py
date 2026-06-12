@@ -238,22 +238,38 @@ class TestAdverseRegimeE2E:
             f"Expected severity=extreme; got {info.get('imbalance_severity')}; full info={info}"
         )
 
-    def test_resampling_strategy_upgrades_to_combined(self, pipeline_state):
-        """Per Block 4 plan: at extreme imbalance with a non-tree model the
-        deterministic strategy matrix upgrades to ``combined`` (SMOTE +
-        class weights).
+    def test_resampling_strategy_class_weight_at_extreme_non_tree(self, pipeline_state):
+        """At extreme imbalance with a non-tree model the deterministic
+        strategy matrix selects ``class_weight`` (cost-sensitive weights,
+        no synthetic oversampling).
 
         Block 6A (`a8069cf`) replaced the LLM-based imbalance strategy
         selection with a deterministic matrix lookup, so any deviation
-        from ``combined`` at extreme imbalance + non-tree model is a real
-        bug rather than transient LLM noise. (4-MIN-4: re-tighten from
-        soft-warn to fail-loud now that the determinism guarantee holds.)
+        from the matrix value at extreme imbalance + non-tree model is a
+        real bug rather than transient LLM noise. (4-MIN-4: re-tighten
+        from soft-warn to fail-loud now that the determinism guarantee
+        holds.)
+
+        Re-pinned 2026-06-12: PR #761 (67be1cbf, merged 2026-06-06)
+        re-tuned ``config/imbalance_strategy.yaml`` extreme.non_tree from
+        ``combined`` (SMOTE 0.5 + class weights) to ``class_weight`` —
+        the HPO objective is already PR-AUC at severe/extreme, and SMOTE
+        measured at/below the no-resampling PR-AUC baseline for linear
+        models (imbalance-methodology review,
+        docs/reports/tier0_imbalance_methodology_review_20260606.md).
+        This pin is XGBoost-alternates-independent: class_imbalance_info
+        is captured from the PRIMARY (non-tree) Step-5 run before the
+        Step-5b champion comparison and is never swapped by a winning
+        alternative (run_tier0_test.py). See #773 (first red nightly
+        2026-06-07 observed strategy='class_weight').
         """
         info = pipeline_state.get("class_imbalance_info", {})
         strategy = info.get("recommended_strategy")
-        assert strategy == "combined", (
-            f"After 6A determinism, extreme imbalance + non-tree model "
-            f"must yield strategy='combined' (SMOTE + class weights). "
+        assert strategy == "class_weight", (
+            f"Per the post-#761 deterministic matrix "
+            f"(config/imbalance_strategy.yaml extreme.non_tree), extreme "
+            f"imbalance + non-tree model must yield strategy='class_weight' "
+            f"(cost-sensitive weights, no SMOTE). "
             f"Got strategy={strategy!r}; full info={info}"
         )
 
