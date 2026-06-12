@@ -424,21 +424,22 @@ class SupabaseDataConnector(BaseDataConnector):
 
             # #894: ml_model_registry is is_synthetic-tagged and the synthetic
             # generator stamps stage='production' — the drift sweep must never
-            # enumerate planted models. NOTE (pre-existing, out of #894 scope):
-            # this projection names columns that do not exist on the live
-            # schema (model_name/model_version/registered_at are canonical; no
-            # metrics/created_at), so the call currently 42703s into the
-            # except-branch [] — the #842-style schema realign is deferred and
-            # tracked in the #894 PR body.
+            # enumerate planted models. Codex R1 also surfaced that the old
+            # projection named columns that do not exist on the live schema
+            # (name/version/metrics/created_at vs the canonical model_name/
+            # model_version/registered_at — see explain.py's note and
+            # database/ml/mlops_tables.sql), so every call 42703'd into the
+            # except-branch [] and the 6-hourly production sweep reported
+            # "No production models found" forever. Realigned to live columns.
             query = self._client.table("ml_model_registry").select(
-                "id, name, version, stage, metrics, created_at"
+                "id, model_name, model_version, stage, registered_at"
             )
 
             if stage:
                 query = query.eq("stage", stage)
             query = apply_provenance_filter(query)
 
-            response = query.order("created_at", desc=True).execute()
+            response = query.order("registered_at", desc=True).execute()
 
             if response.data:
                 return response.data  # type: ignore[no-any-return]

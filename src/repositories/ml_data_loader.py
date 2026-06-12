@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 # Supported tables for ML data loading
 ML_TABLES = [
     "business_metrics",
-    "predictions",
+    "ml_predictions",  # #894: was "predictions" — a table that does not exist
+    # in the live schema, so the allowlist both blocked the REAL tagged
+    # prediction table and let "predictions" loads 404 into empty DataFrames.
     "triggers",
     "causal_paths",
     "patient_journeys",

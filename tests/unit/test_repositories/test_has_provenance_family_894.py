@@ -826,6 +826,7 @@ def test_id_column_matches_live_pk_per_repository() -> None:
     from src.repositories.agent_activity import AgentActivityRepository
     from src.repositories.business_metric import BusinessMetricRepository
     from src.repositories.causal_path import CausalPathRepository
+    from src.repositories.expert_review import ExpertReviewRepository
     from src.repositories.patient_journey import PatientJourneyRepository
     from src.repositories.prediction import PredictionRepository
     from src.repositories.trigger import TriggerRepository
@@ -839,8 +840,99 @@ def test_id_column_matches_live_pk_per_repository() -> None:
         BusinessMetricRepository: "metric_id",
         PatientJourneyRepository: "patient_journey_id",
         PredictionRepository: "prediction_id",
+        # codex R1: create_renewal_review's get_by_id hit a nonexistent "id"
+        ExpertReviewRepository: "review_id",
     }
     for repo_cls, pk in expected.items():
         assert repo_cls.id_column == pk, (
             f"{repo_cls.__name__}.id_column must be {pk!r} (live PK), got {repo_cls.id_column!r}"
         )
+
+
+# =============================================================================
+# Codex R1 regressions
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_ml_data_loader_allows_and_filters_ml_predictions() -> None:
+    """codex R1: ML_TABLES listed a nonexistent "predictions" table — the REAL
+    tagged table is ml_predictions; loads of it must carry the predicate."""
+    from src.repositories.ml_data_loader import ML_TABLES, MLDataLoader
+
+    assert "ml_predictions" in ML_TABLES
+    assert "predictions" not in ML_TABLES
+
+    client = _RecordingClient(sync=True)
+    loader = MLDataLoader(supabase_client=client)
+    await loader.load_table_sample("ml_predictions", columns=["prediction_id"])
+    _assert_excludes(client.last("ml_predictions"), "load_table_sample(ml_predictions)")
+
+
+@pytest.mark.asyncio
+async def test_drift_connector_models_projection_uses_live_columns() -> None:
+    """codex R1: get_available_models selected name/version/metrics/created_at
+    — none exist on ml_model_registry — so the 6-hourly production sweep
+    42703'd into [] ("No production models found") forever. Pin the live
+    projection + the provenance predicate."""
+    from src.agents.drift_monitor.connectors.supabase_connector import (
+        SupabaseDataConnector,
+    )
+
+    client = _RecordingClient(sync=True)
+    connector = SupabaseDataConnector.__new__(SupabaseDataConnector)
+    connector._client = client
+    connector._initialized = True
+
+    async def _noop():
+        return None
+
+    connector._ensure_initialized = _noop  # type: ignore[method-assign]
+
+    await connector.get_available_models(stage="production")
+
+    query = client.last("ml_model_registry")
+    selects = [args for (name, args) in query.calls if name == "select"]
+    assert selects, "no select recorded"
+    sel = selects[0][0]
+    for col in ("model_name", "model_version", "registered_at"):
+        assert col in sel, f"projection missing live column {col!r}: {sel}"
+    for col in ("metrics", "created_at"):
+        assert col not in sel, f"projection still names nonexistent column {col!r}: {sel}"
+    _assert_excludes(query, "get_available_models")
+
+
+class _EnrollmentRecordingRepo:
+    """Records the include_synthetic each read receives (codex R1 #3)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+
+    async def get_assignments(self, experiment_id, include_synthetic=False):
+        self.calls.append(("get_assignments", include_synthetic))
+        return []
+
+    async def get_enrollment_by_assignment(self, assignment_id, include_synthetic=False):
+        self.calls.append(("get_enrollment_by_assignment", include_synthetic))
+        return None
+
+
+@pytest.mark.asyncio
+async def test_enrollment_stats_threads_opt_in(monkeypatch) -> None:
+    """codex R1: get_enrollment_stats had no opt-in path, so synthetic-only
+    validation experiments became zero-count stats with no recourse."""
+    import src.repositories.ab_experiment as ab_mod
+    from src.services.enrollment import EnrollmentService
+
+    recorder = _EnrollmentRecordingRepo()
+    monkeypatch.setattr(ab_mod, "ABExperimentRepository", lambda *a, **kw: recorder)
+
+    service = EnrollmentService.__new__(EnrollmentService)
+    stats = await service.get_enrollment_stats(uuid4(), include_synthetic=True)
+    assert ("get_assignments", True) in recorder.calls
+    assert stats.total_assigned == 0
+
+    recorder2 = _EnrollmentRecordingRepo()
+    monkeypatch.setattr(ab_mod, "ABExperimentRepository", lambda *a, **kw: recorder2)
+    await service.get_enrollment_stats(uuid4())
+    assert ("get_assignments", False) in recorder2.calls
