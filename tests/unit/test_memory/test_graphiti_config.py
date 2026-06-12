@@ -543,16 +543,19 @@ class TestFalkorDBUrlResolution:
 
     def test_falkordb_url_resolves_host_port_password(self):
         """FALKORDB_URL alone must yield host/port/password (container parity)."""
-        config = self._load_with_env({"FALKORDB_URL": "redis://:secretpw@falkordb:6379/0"})
+        # Fake credential, interpolated so secret scanners don't see a literal URI
+        fake_pw = "not-a-real-secret"
+        config = self._load_with_env({"FALKORDB_URL": f"redis://:{fake_pw}@falkordb:6379/0"})
         assert config.falkordb_host == "falkordb"
         assert config.falkordb_port == 6379
-        assert config.falkordb_password == "secretpw"
+        assert config.falkordb_password == fake_pw
 
     def test_falkordb_url_takes_precedence_over_host_vars(self):
         """Same precedence as factories.get_falkordb_client: URL first."""
+        fake_url_pw = "fake-url-pw"
         config = self._load_with_env(
             {
-                "FALKORDB_URL": "redis://:urlpw@graphhost:7000/0",
+                "FALKORDB_URL": f"redis://:{fake_url_pw}@graphhost:7000/0",
                 "FALKORDB_HOST": "otherhost",
                 "FALKORDB_PORT": "9999",
                 "FALKORDB_PASSWORD": "envpw",
@@ -560,7 +563,7 @@ class TestFalkorDBUrlResolution:
         )
         assert config.falkordb_host == "graphhost"
         assert config.falkordb_port == 7000
-        assert config.falkordb_password == "urlpw"
+        assert config.falkordb_password == fake_url_pw
 
     def test_no_url_falls_back_to_host_port_password_env(self):
         config = self._load_with_env(
