@@ -347,6 +347,65 @@ async def search_episodic_by_text(
     )
 
 
+async def hydrate_raw_content(
+    results: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Attach each search hit's stored ``raw_content`` dict by ``memory_id``.
+
+    The ``search_episodic_memory`` RPC's TABLE shape (database/memory/035 —
+    re-verified against the live function 2026-06-12) does NOT include
+    ``raw_content``, so any reader that post-filters on
+    ``row.get("raw_content", {})`` sees ``{}`` on every row and silently drops
+    them all (#883 read-side deferral; first observed on cohort_constructor's
+    ``get_prior_cohorts`` in PR #886, then gap_analyzer's three readers).
+
+    Hydration is ONE batched primary-key select for the whole result set —
+    not N+1 — and was chosen over extending the RPC's return shape (a
+    DROP+CREATE migration) on live evidence: the insert path json.dumps's
+    ``raw_content`` (see ``insert_episodic_memory``), so the jsonb column
+    holds a JSON-string SCALAR (628/628 live rows ``jsonb_typeof='string'``).
+    An RPC that returned the column verbatim would hand every consumer a
+    ``str`` whose ``.get`` post-filters would AttributeError-and-swallow into
+    ``[]`` — each consumer would still need exactly the parse-back this
+    helper centralizes, plus every RPC call would pay the payload bloat.
+
+    Args:
+        results: rows as returned by ``search_episodic_memory`` /
+            ``search_episodic_by_text`` (each carrying ``memory_id``)
+
+    Returns:
+        NEW row dicts (``{**row, "raw_content": dict}``), input order
+        preserved. Rows whose stored raw_content is missing or unparseable
+        hydrate to ``{}`` — never fabricated. Empty input returns ``[]``.
+    """
+    if not results:
+        return []
+
+    ids = [str(r["memory_id"]) for r in results if r.get("memory_id")]
+    if not ids:
+        return [dict(r) for r in results]
+
+    rows = (
+        get_supabase_client()
+        .table("episodic_memories")
+        .select("memory_id, raw_content")
+        .in_("memory_id", ids)
+        .execute()
+    ).data or []
+
+    content_by_id: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        rc = row.get("raw_content")
+        if isinstance(rc, str):
+            try:
+                rc = json.loads(rc)
+            except (TypeError, ValueError):
+                rc = {}
+        content_by_id[str(row["memory_id"])] = rc if isinstance(rc, dict) else {}
+
+    return [{**r, "raw_content": content_by_id.get(str(r.get("memory_id")), {})} for r in results]
+
+
 async def search_episodic_by_e2i_entity(
     entity_type: E2IEntityType,
     entity_id: str,
