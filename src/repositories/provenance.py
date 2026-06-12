@@ -18,6 +18,30 @@ PROVENANCE_COLUMN = "is_synthetic"
 PROVENANCE_DROP_COLS: tuple[str, ...] = (PROVENANCE_COLUMN,)
 
 
+def coerce_provenance_flag(value: Any) -> bool:
+    """Strictly parse a provenance opt-in value (``include_synthetic``/``synthetic``).
+
+    Only ``True`` / ``"true"`` / ``"1"`` / ``"yes"`` opt in. Everything else —
+    ``False``, ``"false"``, ``"0"``, ``"no"``, ``None``, invalid types — stays
+    real-mode: this flag controls provenance isolation, so an ambiguous value
+    must FAIL CLOSED to the default-exclude predicate (``bool("false")`` is
+    ``True`` and would silently flip an explicit opt-OUT into reading — or
+    training on — synthetic rows).
+
+    Shared SSOT (issue #883 §4, lifting the codex #874-R2 helper out of the
+    orchestrator dispatcher): agents and celery tasks must parse payload
+    provenance flags through THIS function rather than ``bool()`` so the strict
+    contract cannot drift per boundary. It lives here, next to
+    :func:`apply_provenance_filter`, because both enforce the same isolation:
+    one parses the opt-in, the other applies it to reads.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return False
+
+
 def apply_provenance_filter(query: Any, include_synthetic: bool = False) -> Any:
     """Append the default-exclude provenance predicate to a supabase-py query.
 

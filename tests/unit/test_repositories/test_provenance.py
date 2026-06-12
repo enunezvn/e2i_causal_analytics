@@ -40,3 +40,27 @@ def test_apply_filter_opt_in_is_noop():
     out = apply_provenance_filter(q, include_synthetic=True)
     q.eq.assert_not_called()
     assert out is q
+
+
+# ---------------------------------------------------------------------------
+# Issue #883 §4: strict provenance opt-in parser (shared SSOT)
+# ---------------------------------------------------------------------------
+
+from src.repositories.provenance import coerce_provenance_flag  # noqa: E402
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [True, "true", "TRUE", " true ", "1", "yes", "Yes"])
+def test_coerce_provenance_flag_opts_in(value):
+    assert coerce_provenance_flag(value) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [False, "false", "False", "0", "no", "", None, 1, 0, 1.0, [], {}, ["true"], {"opt": True}],
+)
+def test_coerce_provenance_flag_ambiguity_fails_closed(value):
+    """Anything that is not an explicit opt-in stays real-mode — the loose
+    ``bool()`` this replaces turned a string "false" opt-OUT into True."""
+    assert coerce_provenance_flag(value) is False
