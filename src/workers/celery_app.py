@@ -210,18 +210,17 @@ celery_app.conf.beat_schedule = {
         "schedule": 21600.0,  # 6 hours
         "options": {"queue": "analytics"},
     },
-    # Health checks every hour
-    "health-check": {
-        "task": "src.tasks.health_check",
-        "schedule": 3600.0,  # 1 hour
-        "options": {"queue": "quick"},
-    },
-    # Cache cleanup every day
-    "cache-cleanup": {
-        "task": "src.tasks.cleanup_old_cache",
-        "schedule": 86400.0,  # 24 hours
-        "options": {"queue": "quick"},
-    },
+    # NOTE (#897): the scaffolded "health-check" -> src.tasks.health_check and
+    # "cache-cleanup" -> src.tasks.cleanup_old_cache entries were removed.
+    # Neither task was ever defined in any commit; each tick enqueued a message
+    # the worker rejected with KeyError ("Received unregistered task ...").
+    # Their intent is already covered by live machinery: container healthchecks
+    # (celery inspect ping), the API /health probe, the "queue-metrics" entry
+    # below (5-min worker/queue stats), Redis result_expires +
+    # celery.backend_cleanup, and the dedicated cleanup_old_ab_results /
+    # cleanup_old_drift_history schedules.
+    # tests/unit/test_workers/test_beat_schedule_registration.py guards the
+    # whole class: every beat entry must reference a registered task.
     # Queue metrics every 5 minutes (for autoscaler)
     "queue-metrics": {
         "task": "src.tasks.collect_queue_metrics",
