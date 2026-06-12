@@ -13,6 +13,17 @@
 import { setupWorker } from 'msw/browser';
 import { handlers } from './handlers';
 
+declare global {
+  interface Window {
+    /**
+     * Published when the MSW worker is actively intercepting requests.
+     * Consumed by MSWBanner (which must not import msw) to render the
+     * persistent mock-data banner.
+     */
+    __E2I_MSW_ACTIVE__?: boolean;
+  }
+}
+
 /**
  * MSW browser worker instance
  *
@@ -55,6 +66,9 @@ export async function initMSW(): Promise<void> {
       },
     });
 
+    // Publish the active flag for the persistent UI banner (MSWBanner).
+    window.__E2I_MSW_ACTIVE__ = true;
+
     console.info('[MSW] Mock Service Worker started successfully');
     console.info('[MSW] API requests will be intercepted and return mock data');
   } catch (error) {
@@ -70,6 +84,7 @@ export async function initMSW(): Promise<void> {
  */
 export function stopMSW(): void {
   worker.stop();
+  window.__E2I_MSW_ACTIVE__ = false;
   console.info('[MSW] Mock Service Worker stopped');
 }
 

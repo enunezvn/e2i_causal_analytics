@@ -19,6 +19,7 @@ import axios, {
 import type { ZodTypeAny } from 'zod';
 import { env, buildApiUrl } from '@/config/env';
 import { useAuthStore } from '@/stores/auth-store';
+import { isSupabaseConfigured } from '@/lib/supabase';
 import { validateApiResponse } from './api-schemas';
 import type { ApiErrorResponse } from './api-schemas';
 
@@ -142,9 +143,12 @@ function requestInterceptor(
   // Add common headers
   config.headers = config.headers || {};
 
-  // Add auth token if available
+  // Add auth token if available.
+  // FAIL CLOSED: never attach a token when Supabase is unconfigured - the
+  // store may hold a stale session rehydrated from persisted storage
+  // (written by an older configured build) before AuthProvider clears it.
   const session = useAuthStore.getState().session;
-  if (session?.access_token) {
+  if (isSupabaseConfigured() && session?.access_token) {
     config.headers['Authorization'] = `Bearer ${session.access_token}`;
   }
 
