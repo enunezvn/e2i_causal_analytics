@@ -64,19 +64,33 @@ interface QuickStat {
 
 export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
   // Real graph statistics (FalkorDB-backed).
-  const { data: graphStats, isLoading: graphLoading } = useGraphStats();
+  const {
+    data: graphStats,
+    isLoading: graphLoading,
+    error: graphError,
+  } = useGraphStats();
 
   // Real system health from the Health Score agent (same source as the Home
   // System Health card) — NOT a number invented from a KPI status string.
-  const { data: health } = useQuickHealthCheck({ refetchInterval: 30000 });
+  const { data: health, error: healthError } = useQuickHealthCheck({
+    refetchInterval: 30000,
+  });
 
   // Real agent roster (same source as the Home Agent Status card).
-  const { data: agentStatus } = useQuery({
+  const { data: agentStatus, error: agentsError } = useQuery({
     queryKey: ['agent-status'],
     queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
     refetchInterval: 30000,
     retry: false,
   });
+
+  // Failed sources get a LABELED degraded notice — a query error must be
+  // distinguishable from honest "no data yet" ('—').
+  const failedSources = [
+    ...(graphError ? ['graph metrics'] : []),
+    ...(healthError ? ['health score'] : []),
+    ...(agentsError ? ['agent roster'] : []),
+  ];
 
   const totalAgents = agentStatus?.agents?.length ?? null;
   const activeAgents = useMemo(
@@ -194,6 +208,14 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
                 ? statusClauses.join(' ')
                 : 'Live system metrics are currently unavailable.'}
             </p>
+
+            {failedSources.length > 0 && (
+              <p role="alert" className="text-xs text-amber-600 dark:text-amber-400">
+                Degraded: {failedSources.join(', ')}{' '}
+                {failedSources.length === 1 ? 'request' : 'requests'} failed —
+                affected figures show '—'.
+              </p>
+            )}
 
             {/* Quick Stats Row — real values or honest '—'. */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">

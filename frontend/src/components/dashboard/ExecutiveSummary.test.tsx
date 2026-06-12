@@ -156,6 +156,38 @@ describe('ExecutiveSummary', () => {
     expect(screen.queryByText('Causal Intelligence Finding')).not.toBeInTheDocument();
   });
 
+  it('labels failed sources as degraded — error is distinguishable from honest absence (codex iter-4 MED)', () => {
+    (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('graph service down'),
+    });
+    (useQuickHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('health service down'),
+    });
+
+    renderWithProviders(<ExecutiveSummary />);
+
+    // A labeled degraded notice names the failed sources.
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(/degraded/i);
+    expect(alert).toHaveTextContent(/graph metrics/i);
+    expect(alert).toHaveTextContent(/health score/i);
+    // Still no fabricated numbers.
+    expect(screen.queryByText('142')).not.toBeInTheDocument();
+  });
+
+  it('shows NO degraded notice when sources merely have no data (honest empty, not an error)', () => {
+    // Defaults: data undefined, error null for graph/health; agents query
+    // rejected — only the agent roster may be flagged.
+    renderWithProviders(<ExecutiveSummary />);
+
+    expect(screen.queryByText(/graph metrics/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/health score/i)).not.toBeInTheDocument();
+  });
+
   it('shows the loading skeleton while graph stats load', () => {
     (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
