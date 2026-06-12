@@ -22,6 +22,12 @@ class UserSessionRepository(BaseRepository):
 
     table_name = "user_sessions"
     model_class = None  # Set to UserSession model when available
+    # Provenance (#894): user_sessions carries is_synthetic (migration 063;
+    # live substrate 10000/10000 synthetic at filing time), so real-mode
+    # engagement/MAU reads default-exclude synthetic sessions. The
+    # v_kpi_active_users view (get_active_user_counts) is already wrapped by
+    # migration 067 and needs no repository-side predicate.
+    HAS_PROVENANCE = True
 
     async def get_by_user(
         self,
@@ -48,6 +54,7 @@ class UserSessionRepository(BaseRepository):
         start_date: datetime,
         end_date: datetime,
         limit: int = 10000,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get sessions within a date range.
@@ -56,6 +63,7 @@ class UserSessionRepository(BaseRepository):
             start_date: Start of range
             end_date: End of range
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of UserSession records
@@ -63,11 +71,16 @@ class UserSessionRepository(BaseRepository):
         if not self.client:
             return []
 
-        result = await (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .gte("session_start", start_date.isoformat())
             .lte("session_start", end_date.isoformat())
+        )
+        result = await (
+            apply_provenance_filter(query, include_synthetic)
             .order("session_start", desc=True)
             .limit(limit)
             .execute()
@@ -114,6 +127,7 @@ class UserSessionRepository(BaseRepository):
     async def get_session_metrics(
         self,
         user_id: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Get session metrics (avg duration, pages viewed, etc.).
@@ -136,6 +150,8 @@ class UserSessionRepository(BaseRepository):
                 "total_sessions": 0,
             }
 
+        from src.repositories.provenance import apply_provenance_filter
+
         # Build query
         query = self.client.table(self.table_name).select(
             "session_duration_seconds, page_views, queries_executed"
@@ -143,6 +159,7 @@ class UserSessionRepository(BaseRepository):
 
         if user_id:
             query = query.eq("user_id", user_id)
+        query = apply_provenance_filter(query, include_synthetic)
 
         result = await query.limit(10000).execute()
 
@@ -168,9 +185,14 @@ class UserSessionRepository(BaseRepository):
             "total_sessions": total,
         }
 
-    async def get_engagement_by_role(self) -> Dict[str, Dict[str, Any]]:
+    async def get_engagement_by_role(
+        self, include_synthetic: bool = False
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Get session engagement metrics broken down by user role.
+
+        Args:
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict mapping role to engagement metrics
@@ -178,12 +200,12 @@ class UserSessionRepository(BaseRepository):
         if not self.client:
             return {}
 
-        result = await (
-            self.client.table(self.table_name)
-            .select("user_role, session_duration_seconds, page_views, queries_executed")
-            .limit(10000)
-            .execute()
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select(
+            "user_role, session_duration_seconds, page_views, queries_executed"
         )
+        result = await apply_provenance_filter(query, include_synthetic).limit(10000).execute()
 
         if not result.data:
             return {}

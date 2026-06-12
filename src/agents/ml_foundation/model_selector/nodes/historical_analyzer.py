@@ -76,6 +76,11 @@ async def _query_historical_experiments(
         # silently swallowed, so the historical query never actually ran. PostgREST
         # cannot express the ml_training_runs JOIN ml_experiments, so we run two
         # simple filtered queries and join in Python.
+        from src.repositories.provenance import apply_provenance_filter
+
+        # #894: both tables are is_synthetic-tagged (migration 069) — planted
+        # experiments/runs must not skew historical success rates that drive
+        # real model selection.
         exp_query = (
             client.table("ml_experiments")
             .select("id,problem_type,kpi_category,created_at")
@@ -83,6 +88,7 @@ async def _query_historical_experiments(
         )
         if kpi_category:
             exp_query = exp_query.eq("kpi_category", kpi_category)
+        exp_query = apply_provenance_filter(exp_query)
         # The original SQL applied ORDER BY ex.created_at DESC LIMIT 100 to the JOINED
         # rows, so we must NOT cap the per-table fetches at 100 (capping each side
         # independently would drop valid completed runs of slightly-older experiments).
@@ -98,15 +104,13 @@ async def _query_historical_experiments(
         if not exp_by_id:
             return []
 
-        runs = (
+        runs_query = (
             client.table("ml_training_runs")
             .select("algorithm_name,algorithm_family,primary_metric_value,status,experiment_id")
             .in_("experiment_id", list(exp_by_id.keys()))
             .eq("status", "completed")
-            .execute()
-            .data
-            or []
         )
+        runs = apply_provenance_filter(runs_query).execute().data or []
 
         records: List[Dict[str, Any]] = []
         for run in runs:

@@ -420,12 +420,23 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
+            from src.repositories.provenance import apply_provenance_filter
+
+            # #894: ml_model_registry is is_synthetic-tagged and the synthetic
+            # generator stamps stage='production' — the drift sweep must never
+            # enumerate planted models. NOTE (pre-existing, out of #894 scope):
+            # this projection names columns that do not exist on the live
+            # schema (model_name/model_version/registered_at are canonical; no
+            # metrics/created_at), so the call currently 42703s into the
+            # except-branch [] — the #842-style schema realign is deferred and
+            # tracked in the #894 PR body.
             query = self._client.table("ml_model_registry").select(
                 "id, name, version, stage, metrics, created_at"
             )
 
             if stage:
                 query = query.eq("stage", stage)
+            query = apply_provenance_filter(query)
 
             response = query.order("created_at", desc=True).execute()
 
