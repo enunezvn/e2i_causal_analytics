@@ -36,6 +36,32 @@ Both the SQL ``md5(...)`` call and the Python helper ``_build_metric_id``
 must produce byte-identical strings; see ``test_sql_metric_id_uses_md5``
 which pins the SQL component-order against drift.
 
+Provenance inheritance (issue #895)
+-----------------------------------
+``business_metrics.is_synthetic`` (migration 063) defaults to ``false``, so
+omitting it from the INSERT column list would stamp every derived row
+"real" even when ALL aggregated inputs are synthetic — write-side
+provenance laundering. The rollup therefore computes
+``is_synthetic = bool(any synthetic input)`` inside the SQL itself:
+
+* each (trigger, lateral-journey) input pair is synthetic if either row is;
+* ``hcp_brand_daily`` collapses the cell with ``BOOL_OR``;
+* ``territory_totals`` carries a cell-level ``any_synthetic`` because the
+  ``market_share`` denominator mixes counts across HCPs — a "real" HCP's
+  share computed against a denominator containing synthetic counts is a
+  synthetic-contaminated number;
+* the final row is synthetic if its own inputs, its HCP profile, or its
+  territory denominator cell are.
+
+Mixed-substrate semantics: an aggregate that mixes real and synthetic
+inputs is tagged synthetic (fail-closed, same direction as the #872
+real-mode default-exclude precedent). Real-mode reads lose mixed cells
+rather than consuming numbers partially derived from synthetic rows; a
+provenance-split computation (separate real/synthetic rollup rows) would
+need provenance in the natural key and is deliberately out of scope here.
+The ON CONFLICT update arm recomputes the tag alongside the value columns
+so re-runs track current provenance instead of freezing a stale tag.
+
 Why ``engagement_score`` and ``call_frequency`` are NULL
 --------------------------------------------------------
 The plan calls for both fields to be sourced from an ``interactions`` table.
@@ -122,10 +148,14 @@ WITH triggers_with_brand AS (
         pj.brand,
         DATE(t.trigger_timestamp)         AS metric_date,
         t.delivery_status,
-        t.acceptance_status
+        t.acceptance_status,
+        -- Provenance of this input pair (issue #895): a trigger row OR the
+        -- journey row that supplied its brand being synthetic makes the
+        -- pair synthetic. Both columns exist via migration 063.
+        (t.is_synthetic OR pj.is_synthetic)  AS is_synthetic
     FROM triggers t
     JOIN LATERAL (
-        SELECT pj_inner.brand
+        SELECT pj_inner.brand, pj_inner.is_synthetic
           FROM patient_journeys pj_inner
          WHERE pj_inner.patient_id = t.patient_id
            AND pj_inner.brand IS NOT NULL
@@ -149,7 +179,10 @@ hcp_brand_daily AS (
             COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))::NUMERIC
             / NULLIF(COUNT(*) FILTER (WHERE delivery_status = 'delivered'), 0),
             0
-        )                                                                           AS conversion_rate
+        )                                                                           AS conversion_rate,
+        -- Provenance inheritance (issue #895): any synthetic input row in
+        -- the cell taints the derived aggregate.
+        BOOL_OR(is_synthetic)                                                       AS any_synthetic
     FROM triggers_with_brand
     GROUP BY hcp_id, brand, metric_date
 ),
@@ -158,7 +191,12 @@ territory_totals AS (
         hp.territory_id,
         hbd.brand,
         hbd.metric_date,
-        SUM(hbd.total_rx_count) AS territory_total
+        SUM(hbd.total_rx_count) AS territory_total,
+        -- Provenance of the market_share DENOMINATOR (issue #895): if any
+        -- HCP cell feeding this territory total is synthetic (or the HCP
+        -- profile itself is), every market_share computed against it is a
+        -- synthetic-contaminated number.
+        BOOL_OR(hbd.any_synthetic OR hp.is_synthetic) AS any_synthetic
     FROM hcp_brand_daily hbd
     JOIN hcp_profiles  hp ON hbd.hcp_id = hp.hcp_id
     GROUP BY hp.territory_id, hbd.brand, hbd.metric_date
@@ -178,6 +216,7 @@ INSERT INTO business_metrics (
     -- engagement_score and call_frequency intentionally NULL: the
     -- canonical `interactions` table does not exist in v3 schema. A
     -- future ETL block will populate these once the table lands.
+    is_synthetic,
     created_at
 )
 SELECT
@@ -205,6 +244,13 @@ SELECT
         ELSE 0
     END                                         AS market_share,
     hbd.conversion_rate,
+    -- Inherited provenance (issue #895). tt.any_synthetic already subsumes
+    -- this row's own cell (the territory total includes it), but the row-
+    -- local terms are kept explicit so the semantics survive a refactor of
+    -- territory_totals: synthetic if (a) any aggregated trigger/journey
+    -- pair was synthetic, (b) the HCP profile is synthetic, or (c) the
+    -- market_share denominator mixed in synthetic counts.
+    (hbd.any_synthetic OR hp.is_synthetic OR tt.any_synthetic) AS is_synthetic,
     NOW()                                       AS created_at
 FROM hcp_brand_daily hbd
 JOIN hcp_profiles      hp ON hbd.hcp_id = hp.hcp_id
@@ -219,7 +265,12 @@ ON CONFLICT (metric_id) DO UPDATE SET
     market_share    = EXCLUDED.market_share,
     conversion_rate = EXCLUDED.conversion_rate,
     region          = EXCLUDED.region,
-    metric_type     = EXCLUDED.metric_type;
+    metric_type     = EXCLUDED.metric_type,
+    -- Re-runs recompute every value column from the base tables; the
+    -- provenance tag tracks the same recomputation (issue #895). Keeping a
+    -- stale tag here would let laundered semantics survive via the update
+    -- arm.
+    is_synthetic    = EXCLUDED.is_synthetic;
 """
 
 
