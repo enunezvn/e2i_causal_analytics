@@ -16,6 +16,7 @@ Usage:
     )
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -377,13 +378,26 @@ class ProceduralMemoryBackend:
             # Convert to workflow-compatible format
             formatted_results = []
             for r in results:
-                # Build content from procedure data
+                # Build content from procedure data.
+                # #883 deferred: rows written before the double-encode fix
+                # (and before migration 072's repair) hold tool_sequence as a
+                # JSON *string scalar*; iterating that string yielded
+                # characters and `.get` on a str raised — tolerate both
+                # shapes (str -> parse; dict -> single step; list -> steps).
                 tool_sequence = r.get("tool_sequence", [])
+                if isinstance(tool_sequence, str):
+                    try:
+                        tool_sequence = json.loads(tool_sequence)
+                    except (ValueError, TypeError):
+                        tool_sequence = []
+                if isinstance(tool_sequence, dict):
+                    tool_sequence = [tool_sequence]
                 procedure_name = r.get("procedure_name", "Unknown procedure")
 
                 if tool_sequence:
                     content = f"{procedure_name}: " + " → ".join(
-                        step.get("tool", str(step)) for step in tool_sequence
+                        step.get("tool", str(step)) if isinstance(step, dict) else str(step)
+                        for step in tool_sequence
                     )
                 else:
                     content = procedure_name

@@ -600,14 +600,16 @@ class TestSearchSpaceSerialization:
         }
 
     def test_roundtrips_optuna_distributions(self):
-        """Optuna distribution objects survive serialize → JSON string → deserialize."""
+        """Optuna distribution objects survive serialize → JSON-native dict → deserialize."""
         search_space = self._optuna_search_space()
 
         raw = hpo_mem._serialize_search_space(search_space)
 
-        # Must be a real JSON string (DB column is text/jsonb).
-        assert isinstance(raw, str)
-        json.loads(raw)  # parses as JSON, i.e. no un-encodable objects leaked
+        # #883 deferred fix: must be a JSON-NATIVE structure (a pre-dumped
+        # string would be double-encoded by postgrest into a JSONB string
+        # scalar) with no un-encodable objects leaked.
+        assert isinstance(raw, dict)
+        json.dumps(raw)  # fully JSON-native, i.e. no un-encodable objects leaked
 
         restored = hpo_mem._deserialize_search_space(raw)
         assert restored == search_space  # Optuna distributions compare by value

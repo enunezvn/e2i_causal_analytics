@@ -77,14 +77,25 @@ def _search_space_json_default(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-def _serialize_search_space(search_space: Dict[str, Any]) -> str:
-    """JSON-encode a search space whose values may be Optuna distributions.
+def _serialize_search_space(search_space: Dict[str, Any]) -> Dict[str, Any]:
+    """Encode a search space whose values may be Optuna distributions to a
+    JSON-NATIVE dict.
 
     Plain JSON-safe values (E2I-format dicts, primitives) pass through
     unchanged; Optuna distribution objects are encoded via
     ``_search_space_json_default``. Symmetric with ``_deserialize_search_space``.
+
+    #883 deferred: the result is a STRUCTURE, not a pre-dumped string —
+    postgrest JSON-encodes the insert payload itself, so a string here lands
+    in the JSONB column as a JSON string scalar (double-encoded; live DB held
+    887 such rows before migration 072 repaired them). The dumps→loads
+    round-trip exists purely to apply the ``default`` hook to non-native
+    values.
     """
-    return json.dumps(search_space, default=_search_space_json_default)
+    encoded: Dict[str, Any] = json.loads(
+        json.dumps(search_space, default=_search_space_json_default)
+    )
+    return encoded
 
 
 def _decode_search_space_value(value: Any) -> Any:
@@ -116,7 +127,16 @@ def _deserialize_search_space(raw: Any) -> Dict[str, Any]:
     """
     if raw is None:
         return {}
-    data = json.loads(raw) if isinstance(raw, str) else raw
+    if isinstance(raw, str):
+        # Pre-#883-fix rows are double-encoded string scalars (repaired by
+        # migration 072, which intentionally SKIPS malformed survivors) —
+        # a single unparseable row must not discard the whole result set.
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+    else:
+        data = raw
     if not isinstance(data, dict):
         return {}
     return {key: _decode_search_space_value(value) for key, value in data.items()}
@@ -219,13 +239,15 @@ async def store_hpo_pattern(pattern: HPOPatternInput) -> Optional[str]:
             "procedure_id": pattern_id,
             "procedure_name": f"hpo_{pattern.algorithm_name}_{pattern.problem_type}",
             "procedure_type": "optimization",  # Use existing enum value
-            "tool_sequence": json.dumps(
-                {
-                    "type": "hpo_pattern",
-                    "algorithm": pattern.algorithm_name,
-                    "best_params": pattern.best_hyperparameters,
-                }
-            ),
+            # #883 deferred: raw dict, NOT json.dumps — postgrest JSON-encodes
+            # the payload itself; a pre-dumped string lands as a JSON string
+            # scalar (double-encoded). The read path (:119) tolerates both
+            # shapes for pre-migration-072 rows.
+            "tool_sequence": {
+                "type": "hpo_pattern",
+                "algorithm": pattern.algorithm_name,
+                "best_params": pattern.best_hyperparameters,
+            },
             "trigger_pattern": f"{pattern.algorithm_name} {pattern.problem_type} hyperparameter optimization",
             "detected_intent": "optimization",
             "applicable_agents": ["model_trainer"],
@@ -244,8 +266,12 @@ async def store_hpo_pattern(pattern: HPOPatternInput) -> Optional[str]:
             "procedure_id": pattern_id,
             "algorithm_name": pattern.algorithm_name,
             "problem_type": pattern.problem_type,
+            # #883 deferred: raw structures for ALL JSONB columns (see
+            # tool_sequence above) — _serialize_search_space now returns a
+            # JSON-native dict (Optuna distributions tagged), and
+            # best_hyperparameters/feature_types go through raw.
             "search_space": _serialize_search_space(pattern.search_space),
-            "best_hyperparameters": json.dumps(pattern.best_hyperparameters),
+            "best_hyperparameters": pattern.best_hyperparameters,
             "best_value": pattern.best_value,
             "optimization_metric": pattern.optimization_metric,
             "n_trials": pattern.n_trials,
@@ -257,7 +283,7 @@ async def store_hpo_pattern(pattern: HPOPatternInput) -> Optional[str]:
             "n_features": pattern.n_features,
             "n_classes": pattern.n_classes,
             "class_balance": pattern.class_balance,
-            "feature_types": json.dumps(pattern.feature_types) if pattern.feature_types else None,
+            "feature_types": pattern.feature_types if pattern.feature_types else None,
             "times_used_as_warmstart": 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -329,7 +355,14 @@ async def find_similar_patterns(
             # Parse JSON fields
             best_hp = row.get("best_hyperparameters", {})
             if isinstance(best_hp, str):
-                best_hp = json.loads(best_hp)
+                # Tolerate pre-#883-fix double-encoded rows AND migration
+                # 072's intentionally-skipped malformed survivors.
+                try:
+                    best_hp = json.loads(best_hp)
+                except (ValueError, TypeError):
+                    best_hp = {}
+            if not isinstance(best_hp, dict):
+                best_hp = {}
 
             # Reconstruct any Optuna distributions stored in the search space
             # (symmetric with _serialize_search_space on write).
