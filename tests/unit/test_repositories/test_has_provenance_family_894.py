@@ -903,14 +903,21 @@ async def test_drift_connector_models_projection_uses_live_columns() -> None:
 
 
 class _EnrollmentRecordingRepo:
-    """Records the include_synthetic each read receives (codex R1 #3)."""
+    """Records the include_synthetic each read receives (codex R1 #3).
+
+    Returns ONE fake assignment so the per-assignment enrollment read actually
+    fires (codex R2 #5: an empty list made the second assertion vacuous).
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
 
     async def get_assignments(self, experiment_id, include_synthetic=False):
         self.calls.append(("get_assignments", include_synthetic))
-        return []
+        assignment = MagicMock()
+        assignment.id = uuid4()
+        assignment.variant = "control"
+        return [assignment]
 
     async def get_enrollment_by_assignment(self, assignment_id, include_synthetic=False):
         self.calls.append(("get_enrollment_by_assignment", include_synthetic))
@@ -930,9 +937,102 @@ async def test_enrollment_stats_threads_opt_in(monkeypatch) -> None:
     service = EnrollmentService.__new__(EnrollmentService)
     stats = await service.get_enrollment_stats(uuid4(), include_synthetic=True)
     assert ("get_assignments", True) in recorder.calls
-    assert stats.total_assigned == 0
+    assert ("get_enrollment_by_assignment", True) in recorder.calls
+    assert stats.total_assigned == 1
 
     recorder2 = _EnrollmentRecordingRepo()
     monkeypatch.setattr(ab_mod, "ABExperimentRepository", lambda *a, **kw: recorder2)
     await service.get_enrollment_stats(uuid4())
     assert ("get_assignments", False) in recorder2.calls
+    assert ("get_enrollment_by_assignment", False) in recorder2.calls
+
+
+# =============================================================================
+# Codex R2 regressions
+# =============================================================================
+
+
+def _bare_connector(client):
+    from src.agents.drift_monitor.connectors.supabase_connector import (
+        SupabaseDataConnector,
+    )
+
+    connector = SupabaseDataConnector.__new__(SupabaseDataConnector)
+    connector._client = client
+    connector._initialized = True
+
+    async def _noop():
+        return None
+
+    connector._ensure_initialized = _noop  # type: ignore[method-assign]
+    return connector
+
+
+@pytest.mark.asyncio
+async def test_drift_query_features_excludes_synthetic() -> None:
+    """codex R2: feature_values is tagged (069) — real drift checks must not
+    ingest planted feature values."""
+    from datetime import datetime, timezone
+    from unittest.mock import MagicMock as _MM
+
+    client = _RecordingClient(sync=True)
+    connector = _bare_connector(client)
+    connector._get_feature_id_subquery = lambda name: "feat-1"  # type: ignore[method-assign]
+
+    window = _MM()
+    window.start = datetime.now(timezone.utc)
+    window.end = datetime.now(timezone.utc)
+
+    await connector.query_features(["f1"], window)
+    _assert_excludes(client.last("feature_values"), "query_features")
+
+    client2 = _RecordingClient(sync=True)
+    connector2 = _bare_connector(client2)
+    connector2._get_feature_id_subquery = lambda name: "feat-1"  # type: ignore[method-assign]
+    await connector2.query_features(["f1"], window, include_synthetic=True)
+    _assert_no_predicate(client2.last("feature_values"), "query_features opt-in")
+
+
+@pytest.mark.asyncio
+async def test_drift_available_features_excludes_synthetic() -> None:
+    """codex R2: features is tagged (069) — the sweep must not auto-select
+    planted feature names."""
+    client = _RecordingClient(sync=True)
+    connector = _bare_connector(client)
+    await connector.get_available_features()
+    _assert_excludes(client.last("features"), "get_available_features")
+
+
+@pytest.mark.asyncio
+async def test_drift_health_check_probes_live_pk() -> None:
+    """codex R2: ml_predictions PK is prediction_id — probing "id" was a
+    reachable 42703 that aborted the whole health_check try block."""
+    client = _RecordingClient(sync=True)
+    connector = _bare_connector(client)
+    await connector.health_check()
+
+    pred_query = client.last("ml_predictions")
+    selects = [args for (name, args) in pred_query.calls if name == "select"]
+    assert selects and selects[0][0] == "prediction_id", (
+        f"health_check must probe the live PK prediction_id, got {selects}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_algorithm_trends_exclude_synthetic_runs(monkeypatch) -> None:
+    """codex R2: ml_training_runs is tagged (069; 720/720 live synthetic) —
+    planted runs must not skew model-selection trends."""
+    import src.repositories.ml_data_loader as loader_mod
+    from src.agents.ml_foundation.model_selector.nodes.historical_analyzer import (
+        _query_algorithm_trends,
+    )
+
+    client = _RecordingClient(sync=True)
+
+    class _FakeLoader:
+        def __init__(self, *a, **kw):
+            self.client = client
+
+    monkeypatch.setattr(loader_mod, "MLDataLoader", _FakeLoader)
+    await _query_algorithm_trends(["logistic_regression"])
+    _assert_excludes(client.last("ml_training_runs"), "_query_algorithm_trends")

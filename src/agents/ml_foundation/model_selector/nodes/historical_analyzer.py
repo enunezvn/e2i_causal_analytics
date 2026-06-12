@@ -61,6 +61,7 @@ async def _query_historical_experiments(
     """
     try:
         from src.repositories.ml_data_loader import MLDataLoader
+        from src.repositories.provenance import apply_provenance_filter
 
         loader = MLDataLoader()
         client = loader.client
@@ -76,7 +77,6 @@ async def _query_historical_experiments(
         # silently swallowed, so the historical query never actually ran. PostgREST
         # cannot express the ml_training_runs JOIN ml_experiments, so we run two
         # simple filtered queries and join in Python.
-        from src.repositories.provenance import apply_provenance_filter
 
         # #894: both tables are is_synthetic-tagged (migration 069) — planted
         # experiments/runs must not skew historical success rates that drive
@@ -340,6 +340,7 @@ async def _query_algorithm_trends(
 
     try:
         from src.repositories.ml_data_loader import MLDataLoader
+        from src.repositories.provenance import apply_provenance_filter
 
         loader = MLDataLoader()
         client = loader.client
@@ -356,16 +357,17 @@ async def _query_algorithm_trends(
         # JSONB-AVG / GROUP BY, so fetch the completed runs in the window and
         # aggregate per (algorithm, time_period) in Python — producing the same
         # {algorithm, time_period, avg_metric, run_count} shape the SQL returned.
-        runs = (
+        # #894 codex R2: ml_training_runs is is_synthetic-tagged (migration
+        # 069; 720/720 live rows synthetic) — planted runs must not skew
+        # algorithm trend output that drives real model selection.
+        trends_query = (
             client.table("ml_training_runs")
             .select("algorithm,started_at,test_metrics,validation_metrics,status")
             .in_("algorithm", algorithm_names)
             .eq("status", "completed")
             .gte("started_at", older_cutoff.isoformat())
-            .execute()
-            .data
-            or []
         )
+        runs = apply_provenance_filter(trends_query).execute().data or []
 
         metrics_by_group: Dict[tuple, List[float]] = {}
         for run in runs:
