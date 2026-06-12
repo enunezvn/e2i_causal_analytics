@@ -440,7 +440,8 @@ async def test_prediction_synthesizer_writes_model_performance_key():
         assert output.status != "failed", f"synthesize failed: {output.errors}"
         assert output.models_succeeded == 2
 
-        raw = await redis.get(perf_key)
+        # Hash layout (#883 codex R1: atomic per-model HSET).
+        raw = await redis.hgetall(perf_key)
         assert raw, (
             f"Redis key {perf_key} was not written — update_model_performance "
             "has no caller (#883 PR B: prediction_synthesizer PARTIAL wiring)"

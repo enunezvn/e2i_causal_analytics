@@ -263,10 +263,20 @@ class PredictionSynthesizerMemoryHooks:
             redis = await self.working_memory.get_client()
             performance_key = f"prediction_synthesizer:model_performance:{prediction_target}"
 
-            cached = await redis.get(performance_key)
-            if cached:
-                return cast(Dict[str, Dict[str, Any]], json.loads(cached))
-            return {}
+            # Hash layout (one field per model, see update_model_performance).
+            cached = await redis.hgetall(performance_key)
+            if not cached:
+                return {}
+            performance: Dict[str, Dict[str, Any]] = {}
+            for model_id, raw in cached.items():
+                key = model_id.decode() if isinstance(model_id, bytes) else str(model_id)
+                try:
+                    value = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(value, dict):
+                    performance[key] = value
+            return performance
         except Exception as e:
             logger.warning(f"Failed to get model performance history: {e}")
             return {}
@@ -363,10 +373,6 @@ class PredictionSynthesizerMemoryHooks:
             redis = await self.working_memory.get_client()
             performance_key = f"prediction_synthesizer:model_performance:{prediction_target}"
 
-            # Get existing performance data
-            existing = await redis.get(performance_key)
-            performance = json.loads(existing) if existing else {}
-
             # Update model entry — only measured, non-None values are stored.
             entry: Dict[str, Any] = dict(metrics or {})
             if accuracy is not None:
@@ -374,14 +380,15 @@ class PredictionSynthesizerMemoryHooks:
             if calibration_error is not None:
                 entry["calibration_error"] = calibration_error
             entry["last_updated"] = datetime.now(timezone.utc).isoformat()
-            performance[model_id] = entry
 
-            # Store with TTL
-            await redis.setex(
-                performance_key,
-                self.CACHE_TTL_SECONDS * 7,  # Keep for 1 week
-                json.dumps(performance),
-            )
+            # Per-model HSET on a hash keyed by target (#883 codex R1): the
+            # previous whole-map GET -> mutate -> SETEX was a read-modify-write
+            # race — concurrent syntheses for the same target could drop each
+            # other's model entries (last writer wins). A hash field write is
+            # atomic per model; no prod keys predate this writer (it never had
+            # a caller), so there is no legacy string-key migration concern.
+            await redis.hset(performance_key, model_id, json.dumps(entry))
+            await redis.expire(performance_key, self.CACHE_TTL_SECONDS * 7)  # 1 week
 
             return True
         except Exception as e:

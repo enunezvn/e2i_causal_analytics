@@ -307,7 +307,12 @@ async def test_drift_monitor_store_drift_detection_lands_real_row():
                 "data_drift_results": [{"feature": f"feat_{marker}", "psi": 0.31}],
                 "model_drift_results": [],
                 "concept_drift_results": [],
-                "alerts": [{"severity": "medium", "feature": f"feat_{marker}"}],
+                # REAL AlertAggregatorNode vocabulary: high drift emits a
+                # 'warning' alert ('warning'/'critical' only). The original
+                # severity_order list.index() ValueError'd on 'warning' and the
+                # whole insert was swallowed (#883 codex R1) — pin the
+                # production label here.
+                "alerts": [{"severity": "warning", "feature": f"feat_{marker}"}],
                 "drift_summary": f"PSI drift on feat_{marker}",
                 "recommended_actions": ["retrain"],
                 "total_latency_ms": 950,
@@ -332,7 +337,7 @@ async def test_drift_monitor_store_drift_detection_lands_real_row():
         assert row["activity_type"] == "drift_detection"
         assert row["agent_tier"] == "monitoring"
         assert row["analysis_results"]["overall_drift_score"] == pytest.approx(0.42)
-        assert row["analysis_results"]["max_severity"] == "medium"
+        assert row["analysis_results"]["max_severity"] == "warning"
 
         # The (placeholder) reader is realigned too: it must surface the row.
         records = await hooks._get_episodic_context(

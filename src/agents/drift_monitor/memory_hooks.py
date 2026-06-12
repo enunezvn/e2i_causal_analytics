@@ -684,15 +684,27 @@ class DriftMonitorMemoryHooks:
             # Generate record ID
             record_id = self._generate_record_id(session_id, result)
 
-            # Determine max severity from alerts
+            # Determine max severity from alerts. PRODUCTION alerts carry the
+            # AlertAggregatorNode vocabulary ('warning'/'critical' — high
+            # drift maps to a 'warning' alert), while drift RESULTS use
+            # none/low/medium/high/critical; the original list.index() raised
+            # ValueError on 'warning' (or any unknown label), was swallowed,
+            # and the activity row silently never landed (#883 codex R1).
+            # Rank unknown labels conservatively-high so they surface.
             alerts = result.get("alerts", [])
+            severity_rank = {
+                "none": 0,
+                "low": 1,
+                "medium": 2,
+                "warning": 3,
+                "high": 3,
+                "critical": 4,
+            }
             max_severity = "none"
-            if alerts:
-                severity_order = ["none", "low", "medium", "high", "critical"]
-                for alert in alerts:
-                    alert_severity = alert.get("severity", "none")
-                    if severity_order.index(alert_severity) > severity_order.index(max_severity):
-                        max_severity = alert_severity
+            for alert in alerts:
+                alert_severity = str(alert.get("severity", "none"))
+                if severity_rank.get(alert_severity, 3) > severity_rank.get(max_severity, 3):
+                    max_severity = alert_severity
 
             # Count drift types
             data_drift_count = len(result.get("data_drift_results", []))
