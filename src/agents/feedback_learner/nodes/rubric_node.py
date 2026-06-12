@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any, Dict, Optional
 
 from ..evaluation import (
@@ -143,6 +144,18 @@ class RubricNode:
         """
         Store evaluation results in learning_signals table.
 
+        #883 §5: the original payload wrote ``signal_type="rubric_evaluation"``
+        (not a ``learning_signal_type`` member — guaranteed 22P02) plus two
+        nonexistent columns (``source_agent``, ``context_summary``), all
+        swallowed by the except below — zero rows would ever land once a
+        ``db_client`` was injected. Per the #876/#878 convention: map onto the
+        EXISTING enum member ``rating`` (a rubric evaluation IS a graded
+        score; ``signal_value`` = the weighted score), keep the purpose-built
+        rubric/improvement columns (database/ml/022 added them FOR this
+        payload), and fold the domain label + displaced fields into
+        ``signal_details``. Row-lands proof:
+        tests/integration/test_rubric_node_signal_883b.py.
+
         Args:
             evaluation: The completed rubric evaluation
             context: The evaluation context
@@ -151,10 +164,36 @@ class RubricNode:
             return
 
         try:
-            signal_data = {
-                "signal_type": "rubric_evaluation",
+            # learning_signals.session_id is uuid-typed; the evaluation
+            # context's session id is a free-form string. A non-UUID value
+            # would 22P02 the whole insert — preserve it in signal_details
+            # instead and leave the column NULL.
+            session_uuid: Optional[str] = None
+            raw_session = context.session_id
+            if raw_session:
+                try:
+                    session_uuid = str(uuid.UUID(str(raw_session)))
+                except (ValueError, AttributeError, TypeError):
+                    session_uuid = None
+
+            signal_details: Dict[str, Any] = {
+                # Domain label preserved (map, never extend the enum).
+                "domain_signal": "rubric_evaluation",
                 "source_agent": "feedback_learner",
-                "session_id": context.session_id,
+                "context_summary": {
+                    "user_query": context.user_query[:500],  # Truncate for storage
+                    "agents_used": context.agent_names,
+                    "messages_evaluated": context.messages_evaluated,
+                },
+            }
+            if session_uuid is None and raw_session:
+                signal_details["raw_session_id"] = str(raw_session)
+
+            signal_data = {
+                "signal_type": "rating",
+                "signal_value": evaluation.weighted_score,
+                "session_id": session_uuid,
+                "signal_details": signal_details,
                 "rubric_scores": {
                     s.criterion: {"score": s.score, "reasoning": s.reasoning}
                     for s in evaluation.criterion_scores
@@ -175,12 +214,11 @@ class RubricNode:
                     # 3.0 scores.
                     "evaluation_method": evaluation.evaluation_method,
                 },
-                "context_summary": {
-                    "user_query": context.user_query[:500],  # Truncate for storage
-                    "agents_used": context.agent_names,
-                    "messages_evaluated": context.messages_evaluated,
-                },
             }
+            # ``rated_agent`` (e2i_agent_name enum) is deliberately NOT set
+            # from context.agent_names: an off-enum string would 22P02 the
+            # whole insert (the exact failure family this fix closes); the
+            # agent list is preserved in signal_details.context_summary.
 
             await self.db_client.table("learning_signals").insert(signal_data).execute()
 
