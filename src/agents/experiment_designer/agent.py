@@ -18,7 +18,9 @@ Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/experiment-designer.m
 Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
+import asyncio
 import logging
+import uuid
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from pydantic import BaseModel, Field, field_validator
@@ -27,6 +29,7 @@ from src.agents.base import SkillsMixin
 from src.agents.experiment_designer.graph import (
     create_experiment_designer_graph,
 )
+from src.agents.experiment_designer.memory_hooks import contribute_to_memory
 from src.agents.experiment_designer.state import ExperimentDesignState
 
 if TYPE_CHECKING:
@@ -268,18 +271,91 @@ class ExperimentDesignerAgent(SkillsMixin):
         - pharma-commercial/brand-analytics.md: Brand-specific experiment context
     """
 
-    def __init__(self, max_redesign_iterations: int = 2, enable_mlflow: bool = True):
+    def __init__(
+        self,
+        max_redesign_iterations: int = 2,
+        enable_mlflow: bool = True,
+        enable_memory: bool = True,
+    ):
         """Initialize experiment designer agent.
 
         Args:
             max_redesign_iterations: Maximum number of design iterations
             enable_mlflow: Whether to enable MLflow tracking (default: True)
+            enable_memory: Whether to contribute completed designs to memory
+                (default: True). #883 PR B — the hooks existed since the
+                4-memory rollout but had no caller (and the agent_activities
+                payload was schema-broken, masking the gap); reader
+                ``get_similar_validity_threats`` was permanently empty.
         """
         self.max_redesign_iterations = max_redesign_iterations
         self.enable_mlflow = enable_mlflow
+        self.enable_memory = enable_memory
+        #: Session id of the most recent memory contribution (None until the
+        #: first completed design; ExperimentDesignerInput carries no session
+        #: concept, so the agent mints one per run for memory correlation).
+        self.last_memory_session_id: Optional[str] = None
         self._mlflow_tracker: Optional["ExperimentDesignerMLflowTracker"] = None
         self.graph = create_experiment_designer_graph(
             max_redesign_iterations=max_redesign_iterations
+        )
+
+    async def _contribute_to_memory(
+        self,
+        output: "ExperimentDesignerOutput",
+        final_state: ExperimentDesignState,
+    ) -> None:
+        """Contribute a completed design to memory — NON-BLOCKING (#883 PR B).
+
+        Caller-side try/except per the settled cross-agent posture (#879/#881;
+        the migration-046 trap lesson): a memory failure must NEVER poison the
+        run's status or raise to the caller. Called only after the failed-run
+        check, so only trustworthy designs are stored.
+        """
+        if not self.enable_memory:
+            return
+        session_id = str(uuid.uuid4())
+        self.last_memory_session_id = session_id
+        try:
+            counts = await contribute_to_memory(
+                result=output.model_dump(),
+                state=dict(final_state),
+                session_id=session_id,
+                brand=final_state.get("brand"),
+            )
+            logger.debug(
+                f"Memory contribution complete: working={counts.get('working', 0)}, "
+                f"episodic={counts.get('episodic', 0)}"
+            )
+        except Exception as e:
+            logger.warning(f"Memory contribution failed (non-blocking): {e}")
+
+    def _contribute_to_memory_sync(
+        self,
+        output: "ExperimentDesignerOutput",
+        final_state: ExperimentDesignState,
+    ) -> None:
+        """Sync-path memory contribution (#883 PR B).
+
+        The dispatcher invokes the sync ``run()`` via ``run_in_executor`` — an
+        executor THREAD with no running event loop — so ``asyncio.run`` is
+        safe there. When ``run()`` is called from inside a live event loop
+        (where ``asyncio.run`` would raise), skip with a debug note: ``arun``
+        is the async path and contributes natively.
+        """
+        if not self.enable_memory:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                asyncio.run(self._contribute_to_memory(output, final_state))
+            except Exception as e:  # pragma: no cover - double safety
+                logger.warning(f"Memory contribution failed (non-blocking): {e}")
+            return
+        logger.debug(
+            "Skipping memory contribution from sync run() inside a running "
+            "event loop; use arun() for native async contribution"
         )
 
     def _get_mlflow_tracker(self) -> Optional["ExperimentDesignerMLflowTracker"]:
@@ -332,6 +408,10 @@ class ExperimentDesignerAgent(SkillsMixin):
         if final_state.get("status") == "failed":
             error_messages = [e.get("error", "Unknown") for e in final_state.get("errors", [])]
             raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
+
+        # #883 PR B: contribute the completed design to memory (non-blocking;
+        # after the failure check so only trustworthy designs are stored).
+        self._contribute_to_memory_sync(output, final_state)
 
         return output
 
@@ -386,6 +466,10 @@ class ExperimentDesignerAgent(SkillsMixin):
                     ]
                     raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
 
+                # #883 PR B: contribute the completed design to memory
+                # (non-blocking; after the failure check).
+                await self._contribute_to_memory(output, final_state)
+
                 return output
         else:
             # Execute graph asynchronously without MLflow
@@ -398,6 +482,10 @@ class ExperimentDesignerAgent(SkillsMixin):
             if final_state.get("status") == "failed":
                 error_messages = [e.get("error", "Unknown") for e in final_state.get("errors", [])]
                 raise RuntimeError(f"Experiment design failed: {'; '.join(error_messages)}")
+
+            # #883 PR B: contribute the completed design to memory
+            # (non-blocking; after the failure check).
+            await self._contribute_to_memory(output, final_state)
 
             return output
 
