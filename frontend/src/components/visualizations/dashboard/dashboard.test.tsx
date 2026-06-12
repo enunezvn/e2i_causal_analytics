@@ -23,6 +23,21 @@ describe('KPICard', () => {
     expect(screen.getByText('125.0K')).toBeInTheDocument();
   });
 
+  it('renders NO sparkline when sparklineData is not provided (no SAMPLE fallback)', () => {
+    // The component formerly fell back to SAMPLE_SPARKLINE (45,52,48,...),
+    // painting a fabricated trend on every KPICard rendered without real
+    // sparkline data — an ACTIVE fabrication on live pages.
+    const { container } = render(<KPICard title="Total Revenue" value={125000} />);
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeInTheDocument();
+  });
+
+  it('renders a sparkline when real sparklineData is provided', () => {
+    const { container } = render(
+      <KPICard title="Total Revenue" value={125000} sparklineData={[1, 2, 3, 4]} />
+    );
+    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+  });
+
   it('formats large numbers correctly', () => {
     render(<KPICard title="Users" value={1500000} />);
     expect(screen.getByText('1.5M')).toBeInTheDocument();

@@ -127,23 +127,8 @@ export function CustomTooltip({
   );
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_DATA = [
-  { date: '2024-01', conversions: 245, revenue: 48500, cost: 12000 },
-  { date: '2024-02', conversions: 312, revenue: 62400, cost: 14500 },
-  { date: '2024-03', conversions: 287, revenue: 57300, cost: 13200 },
-  { date: '2024-04', conversions: 356, revenue: 71200, cost: 15800 },
-  { date: '2024-05', conversions: 398, revenue: 79600, cost: 17200 },
-  { date: '2024-06', conversions: 425, revenue: 85000, cost: 18500 },
-];
-
-const SAMPLE_AXES: AxisConfig[] = [
-  { dataKey: 'conversions', name: 'Conversions', color: 'hsl(var(--chart-1))', yAxisId: 'left' },
-  { dataKey: 'revenue', name: 'Revenue ($)', color: 'hsl(var(--chart-2))', yAxisId: 'right', unit: '$' },
-];
+// NOTE: SAMPLE_DATA / SAMPLE_AXES (fabricated conversions/revenue series)
+// were DELETED. Omitted props render the existing empty state.
 
 // =============================================================================
 // COMPONENT
@@ -181,9 +166,9 @@ export const MultiAxisLineChart = React.forwardRef<HTMLDivElement, MultiAxisLine
     },
     ref
   ) => {
-    // Use provided data or sample
-    const data = propData ?? SAMPLE_DATA;
-    const axes = propAxes ?? SAMPLE_AXES;
+    // Data comes ONLY from props — never a sample fallback.
+    const data = propData ?? [];
+    const axes = propAxes ?? [];
 
     // Calculate domains for left and right axes
     const { leftDomain, rightDomain } = useMemo(() => {
