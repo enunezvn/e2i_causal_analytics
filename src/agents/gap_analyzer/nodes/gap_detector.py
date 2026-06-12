@@ -21,6 +21,8 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from src.repositories.provenance import coerce_provenance_flag
+
 from ..connectors import get_benchmark_store, get_data_connector
 from ..state import GapAnalyzerState, PerformanceGap
 
@@ -175,7 +177,12 @@ class GapDetectorNode:
             # opt-in channels) overrides the constructed default; absent => the
             # constructor flag governs (backward compatible).
             requested = state.get("include_synthetic")
-            include_synthetic = self.include_synthetic if requested is None else bool(requested)
+            # #883 §4: strict parse — gaps.py casts raw request JSON straight into
+            # GapAnalyzerState, so a string "false" here must stay real-mode
+            # (bool("false") is True and would opt INTO the synthetic connectors).
+            include_synthetic = (
+                self.include_synthetic if requested is None else coerce_provenance_flag(requested)
+            )
             data_connector, benchmark_store = self._connectors_for(include_synthetic)
 
             # Priority 1: Use tier0 passthrough data if available
