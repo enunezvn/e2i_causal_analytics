@@ -9,6 +9,7 @@ The orchestrator is the entry point for all queries. It performs:
 Total orchestration overhead target: <2 seconds
 """
 
+import asyncio
 import logging
 import time
 import uuid
@@ -43,6 +44,15 @@ class OrchestratorAgent:
     tier_name = "coordination"
     agent_type = "standard"
     sla_seconds = 2  # Orchestration overhead only
+
+    # Hard latency budget for the pre-graph working-memory read (#883
+    # read-side deferral, wired after PR #886 landed the write side). The
+    # read is a single Redis LRANGE (sub-10ms healthy); the budget exists so
+    # a hung/unreachable Redis can never spend the <2s orchestration-overhead
+    # target waiting on context that is best-effort by contract. On
+    # timeout/error the turn proceeds with NO context — fail-open, never
+    # fabricated.
+    MEMORY_READ_BUDGET_SECONDS = 0.5
 
     def __init__(
         self,
@@ -112,6 +122,60 @@ class OrchestratorAgent:
                 logger.warning(f"Failed to initialize memory hooks: {e}")
         return self._memory_hooks
 
+    async def _load_conversation_history(
+        self,
+        session_id: Optional[str],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Hydrate ``conversation_history`` from working memory — BUDGETED, fail-open.
+
+        #883 read-side deferral: PR #886 wired the WRITE side (every completed
+        turn persists its conversation turn), but nothing consumed the read
+        back, so a second turn in the same session always started blank —
+        every production call site passes ``session_id`` but never
+        ``conversation_history`` (a contract-documented optional input,
+        CONTRACT_VALIDATION.md §1). This closes the loop: when the caller did
+        not supply history, read it back under a hard
+        ``MEMORY_READ_BUDGET_SECONDS`` budget (``asyncio.wait_for``). The
+        consumer is the intent classifier's LLM fallback — ambiguous
+        follow-ups ("what about the other brand?") get the prior turns as
+        referent context, i.e. §10.3's "session context for routing".
+
+        Deliberately NOT wired here (intent decision, not an omission):
+        episodic + semantic ``get_context`` reads would put an embedding API
+        call and FalkorDB round-trips on the <2s critical path with no graph
+        node consuming the result — a decorative read; and
+        ``get_routing_decisions``'s documented consumer is batch DSPy routing
+        optimization (AgentRoutingSignature), not per-request routing, which
+        is a deterministic intent→agent map prior decisions cannot honestly
+        change. Either becomes worth wiring only with a real consumer.
+
+        Returns the stored messages, or ``None`` (no fabricated context) when
+        memory is disabled, no session is keyed, nothing is stored, the read
+        exceeds the budget, or it errors — each failure logged once and never
+        allowed to poison the turn.
+        """
+        if not self.enable_memory or not session_id:
+            return None
+        hooks = self.memory_hooks
+        if hooks is None:
+            return None
+        try:
+            history = await asyncio.wait_for(
+                hooks.get_conversation_history(session_id=session_id, limit=10),
+                timeout=self.MEMORY_READ_BUDGET_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Conversation-history read exceeded the %.1fs budget — "
+                "continuing without context (fail-open)",
+                self.MEMORY_READ_BUDGET_SECONDS,
+            )
+            return None
+        except Exception as e:
+            logger.warning(f"Conversation-history read failed — continuing without context: {e}")
+            return None
+        return history or None
+
     async def _contribute_to_memory(
         self,
         output: Dict[str, Any],
@@ -177,6 +241,14 @@ class OrchestratorAgent:
         user_id = input_data.get("user_id")
         session_id = input_data.get("session_id")
 
+        # #883 read-side: the caller's history wins; only when it is
+        # absent/None is it hydrated from working memory (budgeted,
+        # fail-open — see _load_conversation_history). An explicit [] is a
+        # caller statement of "no history" and is respected as-is.
+        conversation_history = input_data.get("conversation_history")
+        if conversation_history is None:
+            conversation_history = await self._load_conversation_history(session_id)
+
         # Prepare initial state
         initial_state: OrchestratorState = {
             "query": query,
@@ -184,7 +256,7 @@ class OrchestratorAgent:
             "user_id": user_id,
             "session_id": session_id,
             "user_context": input_data.get("user_context", {}),
-            "conversation_history": input_data.get("conversation_history"),
+            "conversation_history": conversation_history,
             "start_time": datetime.now(timezone.utc).isoformat(),
             "current_phase": "classifying",
             "status": "pending",

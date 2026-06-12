@@ -273,13 +273,13 @@ Contract requirement: Sequential execution with dependencies
 
 | Memory Type | Technology | Status | Implementation |
 |-------------|------------|--------|----------------|
-| **Working** | Redis + LangGraph MemorySaver | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
-| **Episodic** | Supabase + pgvector | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
-| **Semantic** | FalkorDB + Graphity | ❌ **BLOCKING** | `memory_hooks.py` (NOT IMPLEMENTED) |
+| **Working** | Redis + LangGraph MemorySaver | ✅ Write wired (#883 PR B2 / #886); read wired (#883 read-side) | `memory_hooks.py`; write: `agent.py` `_contribute_to_memory`; read: `agent.py` `_load_conversation_history` (budgeted, fail-open) |
+| **Episodic** | Supabase + pgvector | ✅ Write wired (#883 PR B2 / #886); read on-demand only | `memory_hooks.py` (`store_orchestration` per turn; `_get_episodic_context` deliberately NOT on the per-request critical path — see 10.3) |
+| **Semantic** | FalkorDB + Graphity | ✅ Hooks implemented; read on-demand only | `memory_hooks.py` (`_get_semantic_context`; not on the per-request critical path — see 10.3) |
 
 ### 10.2 Memory Hooks Interface
 
-**Required File**: `src/agents/orchestrator/memory_hooks.py` ❌ NOT IMPLEMENTED
+**Required File**: `src/agents/orchestrator/memory_hooks.py` ✅ IMPLEMENTED (write side wired in #886; conversation-continuity read wired in the #883 read-side follow-up)
 
 ```python
 class OrchestratorMemoryHooks(MemoryHooksInterface):
@@ -301,10 +301,11 @@ class OrchestratorMemoryHooks(MemoryHooksInterface):
 
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| `memory_hooks.py` file | ❌ **BLOCKING** | Required for memory integration |
-| Working memory integration | ❌ **BLOCKING** | Session context for routing |
-| Episodic memory integration | ❌ **BLOCKING** | Historical query patterns |
-| Semantic memory integration | ❌ **BLOCKING** | Entity/causal graph for routing |
+| `memory_hooks.py` file | ✅ Implemented | All four per-turn writes + read-back APIs |
+| Working memory integration | ✅ Wired (write #886, read #883 read-side) | Session context for routing: `run()` hydrates `conversation_history` (single Redis LRANGE under `MEMORY_READ_BUDGET_SECONDS`, fail-open to no-context); consumed by the intent classifier's LLM fallback to resolve follow-up referents before routing |
+| Episodic memory integration | ✅ Write wired (#886); read deliberately on-demand | Historical query patterns persist per turn (`store_orchestration`). The read (`_get_episodic_context`) requires an embedding API call and stays OFF the <2s per-request critical path until a graph node genuinely consumes it — decision documented at `agent.py::_load_conversation_history` |
+| Semantic memory integration | ✅ Hooks implemented; read deliberately on-demand | Entity/causal graph reads (`_get_semantic_context`) stay off the critical path for the same reason; routing is a deterministic intent→agent map today |
+| Routing-decision signals | ✅ Write wired (#886) | `track_routing_decision` per turn; reader `get_routing_decisions` feeds batch DSPy routing optimization (AgentRoutingSignature), NOT per-request routing — wiring it into the request path would be a decorative read |
 
 ---
 
@@ -367,12 +368,12 @@ class OrchestratorDSPyHub(DSPyHubInterface):
 
 ### Critical Priority (BLOCKING - Required for 4-Memory & DSPy)
 
-0. **Memory Hooks Implementation** ❌ BLOCKING
-   - [ ] Create `memory_hooks.py` with `OrchestratorMemoryHooks` class
-   - [ ] Implement Working memory integration (Redis + MemorySaver)
-   - [ ] Implement Episodic memory integration (Supabase + pgvector)
-   - [ ] Implement Semantic memory integration (FalkorDB + Graphity)
-   - **Files**: `src/agents/orchestrator/memory_hooks.py` (TO BE CREATED)
+0. **Memory Hooks Implementation** ✅ DONE (#883 PR B2 / #886 write side; #883 read-side follow-up)
+   - [x] Create `memory_hooks.py` with `OrchestratorMemoryHooks` class
+   - [x] Implement Working memory integration (Redis + MemorySaver) — write per turn; read hydrates `conversation_history` (budgeted, fail-open)
+   - [x] Implement Episodic memory integration (Supabase + pgvector) — write per turn; read on-demand (see 10.3)
+   - [x] Implement Semantic memory integration (FalkorDB + Graphity) — hooks implemented; read on-demand (see 10.3)
+   - **Files**: `src/agents/orchestrator/memory_hooks.py`, `src/agents/orchestrator/agent.py`
 
 0. **DSPy Hub Integration** ❌ BLOCKING
    - [ ] Create `dspy_integration.py` with `OrchestratorDSPyHub` class

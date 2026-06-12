@@ -186,35 +186,50 @@ class GapAnalyzerMemoryHooks:
         segments: Optional[List[str]] = None,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Search episodic memory for similar past gap analyses."""
+        """Search episodic memory for similar past gap analyses.
+
+        The search RPC's TABLE shape does NOT include ``raw_content``, so the
+        original post-filter (``result.get("raw_content", {})``) saw ``{}`` on
+        every row and dropped them ALL whenever brand/metrics/segments were
+        passed — which the production caller (gap_detector._get_memory_context)
+        always does, leaving the episodic context permanently empty even after
+        #884 made the writes land (#883 read-side deferral). Fix, per the #886
+        cohort_constructor precedent: ``brand`` moves SERVER-side onto the
+        RPC's existing ``filter_brand`` param (the write populates the brand
+        column via ``e2i_refs``); metrics/segments live only in the
+        raw_content JSONB, so hydrate by memory_id (one batched select) and
+        post-filter on the real stored content, over-fetching to survive the
+        trim.
+        """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
             filters = EpisodicSearchFilters(
                 event_type="gap_analysis_completed",
                 agent_name="gap_analyzer",
+                brand=brand,
             )
 
+            needs_content_filter = bool(metrics or segments)
             results = await search_episodic_by_text(
                 query_text=query,
                 filters=filters,
-                limit=limit,
+                limit=content_filter_fetch_limit(limit) if needs_content_filter else limit,
                 min_similarity=0.6,
                 include_entity_context=False,
             )
+            results = await hydrate_raw_content(results)
 
-            # Further filter by brand/metrics/segments if specified
-            if brand or metrics or segments:
+            # Filter by metrics/segments on the HYDRATED stored content
+            if needs_content_filter:
                 filtered_results = []
                 for result in results:
                     content = result.get("raw_content", {})
-
-                    # Filter by brand
-                    if brand and content.get("brand") != brand:
-                        continue
 
                     # Filter by metrics (any overlap)
                     if metrics:
@@ -229,7 +244,7 @@ class GapAnalyzerMemoryHooks:
                             continue
 
                     filtered_results.append(result)
-                return filtered_results
+                return filtered_results[:limit]
 
             return results
         except Exception as e:
@@ -420,30 +435,46 @@ class GapAnalyzerMemoryHooks:
             limit: Maximum results to return
 
         Returns:
-            List of historical gap analyses with ROI outcomes
+            List of historical gap analyses with ROI outcomes (each row carries
+            the hydrated ``raw_content`` payload — the search RPC itself
+            returns no ``raw_content``, and without it there are no ROI
+            outcomes in the result; #883 read-side deferral)
         """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
             query_text = f"gap analysis ROI {brand or ''} {metric or ''}"
 
+            # brand filters SERVER-side (the write populates the brand column
+            # via e2i_refs); metric exists only in the raw_content JSONB, so
+            # it filters on the hydrated content below (previously both
+            # params only seeded the embedding text and filtered nothing).
             filters = EpisodicSearchFilters(
                 event_type="gap_analysis_completed",
                 agent_name="gap_analyzer",
+                brand=brand,
             )
 
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit,
+                limit=content_filter_fetch_limit(limit) if metric else limit,
                 min_similarity=0.4,
                 include_entity_context=False,
             )
+            results = await hydrate_raw_content(results)
 
-            return results
+            if metric:
+                results = [
+                    r for r in results if metric in (r.get("raw_content", {}).get("metrics") or [])
+                ]
+
+            return results[:limit]
         except Exception as e:
             logger.warning(f"Failed to get historical ROI data: {e}")
             return []
@@ -465,11 +496,15 @@ class GapAnalyzerMemoryHooks:
             limit: Maximum results to return
 
         Returns:
-            List of similar past opportunities with outcomes
+            List of similar past opportunities with outcomes (each row carries
+            the hydrated ``raw_content`` payload — without it there is no
+            benchmark data to calibrate against; #883 read-side deferral)
         """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
@@ -480,15 +515,29 @@ class GapAnalyzerMemoryHooks:
                 agent_name="gap_analyzer",
             )
 
+            # segment/metric exist only in the raw_content JSONB — hydrate by
+            # memory_id and filter on the real stored content (previously the
+            # declared params only seeded the embedding text and the rows came
+            # back without the benchmark payload). Over-fetch to survive trim.
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit,
+                limit=content_filter_fetch_limit(limit),
                 min_similarity=0.5,
                 include_entity_context=False,
             )
+            results = await hydrate_raw_content(results)
 
-            return results
+            filtered = []
+            for r in results:
+                content = r.get("raw_content", {})
+                if segment not in (content.get("segments") or []):
+                    continue
+                if metric not in (content.get("metrics") or []):
+                    continue
+                filtered.append(r)
+
+            return filtered[:limit]
         except Exception as e:
             logger.warning(f"Failed to get opportunity benchmarks: {e}")
             return []

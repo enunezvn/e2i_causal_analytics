@@ -601,7 +601,8 @@ class CohortConstructorMemoryHooks:
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
-                get_supabase_client,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
@@ -614,10 +615,14 @@ class CohortConstructorMemoryHooks:
             if brand:
                 filters.brand = brand
 
+            # Bounded candidate window, NOT a small fixed multiple: the
+            # eligibility/status post-filter below runs on hydrated content,
+            # and a `limit * 2` window starves when high-similarity
+            # non-matching rows fill it (codex R1 on the #883 read-side fix).
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit * 2,
+                limit=content_filter_fetch_limit(limit),
                 min_similarity=0.5,
                 include_entity_context=False,
             )
@@ -627,36 +632,22 @@ class CohortConstructorMemoryHooks:
             # The search RPC's TABLE shape does NOT include raw_content, so
             # the original post-filter (`r.get("raw_content", {})`) saw {} on
             # every row and dropped them all — the reader stayed dead even
-            # once writes landed (#883 PR B). Hydrate raw_content by
-            # memory_id; the writer json.dumps's it, so the jsonb column
-            # holds a JSON-string scalar that must be parsed back.
-            ids = [str(r["memory_id"]) for r in results if r.get("memory_id")]
-            rows = (
-                get_supabase_client()
-                .table("episodic_memories")
-                .select("memory_id, raw_content")
-                .in_("memory_id", ids)
-                .execute()
-            ).data or []
-            content_by_id: Dict[str, Dict[str, Any]] = {}
-            for row in rows:
-                rc = row.get("raw_content")
-                if isinstance(rc, str):
-                    try:
-                        rc = json.loads(rc)
-                    except (TypeError, ValueError):
-                        rc = {}
-                content_by_id[str(row["memory_id"])] = rc if isinstance(rc, dict) else {}
+            # once writes landed (#883 PR B). Hydrate raw_content by memory_id
+            # via the shared helper (one batched select + JSON-string-scalar
+            # parse-back; this hook's inline copy was lifted into
+            # episodic_memory.hydrate_raw_content when gap_analyzer's three
+            # readers needed the identical fix).
+            results = await hydrate_raw_content(results)
 
             # Filter by eligibility rate and construction status
             filtered = []
             for r in results:
-                rc = content_by_id.get(str(r.get("memory_id")), {})
+                rc = r.get("raw_content", {})
                 if (
                     rc.get("eligibility_rate", 0) >= min_eligibility_rate
                     and rc.get("status") == "success"
                 ):
-                    filtered.append({**r, "raw_content": rc})
+                    filtered.append(r)
 
             return filtered[:limit]
         except Exception as e:

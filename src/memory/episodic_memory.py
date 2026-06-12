@@ -347,6 +347,84 @@ async def search_episodic_by_text(
     )
 
 
+def content_filter_fetch_limit(limit: int) -> int:
+    """Bounded candidate window for readers that post-filter hydrated raw_content.
+
+    A small fixed over-fetch (``limit * 2`` / ``limit * 3``) can STARVE the
+    post-filter: when the top vector hits share the server-side filters but
+    fail the content filter (e.g. same brand, different metrics), the
+    matching rows sit just below the fetched window and the reader returns
+    fewer than ``limit`` — or nothing — even though matches exist (codex R1
+    on the #883 read-side fix; same shape as the resource_optimizer
+    prefix-filter starvation caught in #884 R1). Fetch a generously larger
+    window, floored at 50 so small ``limit`` values don't starve and capped
+    at 100 to bound the RPC payload and the batched hydration select.
+    """
+    return min(max(limit * 10, 50), 100)
+
+
+async def hydrate_raw_content(
+    results: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Attach each search hit's stored ``raw_content`` dict by ``memory_id``.
+
+    The ``search_episodic_memory`` RPC's TABLE shape (database/memory/035 —
+    re-verified against the live function 2026-06-12) does NOT include
+    ``raw_content``, so any reader that post-filters on
+    ``row.get("raw_content", {})`` sees ``{}`` on every row and silently drops
+    them all (#883 read-side deferral; first observed on cohort_constructor's
+    ``get_prior_cohorts`` in PR #886, then gap_analyzer's three readers).
+
+    Hydration is ONE batched primary-key select for the whole result set —
+    not N+1 — and was chosen over extending the RPC's return shape (a
+    DROP+CREATE migration) on live evidence: the insert path USED to
+    json.dumps ``raw_content``, double-encoding it into a JSON-string SCALAR
+    (628/628 live rows ``jsonb_typeof='string'`` pre-fix). An RPC that
+    returned that column verbatim would have handed every consumer a ``str``
+    whose ``.get`` post-filters would AttributeError-and-swallow into ``[]``.
+    The writers now pass dicts through and migration 073 repaired the
+    historical rows, but the string branch below is KEPT: 073's per-row
+    guard skips unparseable rows, and a pre-073 backup restore would
+    reintroduce legacy-shaped rows — tolerance of both shapes is what keeps
+    this reader from ever silently re-dying.
+
+    Args:
+        results: rows as returned by ``search_episodic_memory`` /
+            ``search_episodic_by_text`` (each carrying ``memory_id``)
+
+    Returns:
+        NEW row dicts (``{**row, "raw_content": dict}``), input order
+        preserved. Rows whose stored raw_content is missing or unparseable
+        hydrate to ``{}`` — never fabricated. Empty input returns ``[]``.
+    """
+    if not results:
+        return []
+
+    ids = [str(r["memory_id"]) for r in results if r.get("memory_id")]
+    if not ids:
+        return [dict(r) for r in results]
+
+    rows = (
+        get_supabase_client()
+        .table("episodic_memories")
+        .select("memory_id, raw_content")
+        .in_("memory_id", ids)
+        .execute()
+    ).data or []
+
+    content_by_id: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        rc = row.get("raw_content")
+        if isinstance(rc, str):
+            try:
+                rc = json.loads(rc)
+            except (TypeError, ValueError):
+                rc = {}
+        content_by_id[str(row["memory_id"])] = rc if isinstance(rc, dict) else {}
+
+    return [{**r, "raw_content": content_by_id.get(str(r.get("memory_id")), {})} for r in results]
+
+
 async def search_episodic_by_e2i_entity(
     entity_type: E2IEntityType,
     entity_id: str,
@@ -508,10 +586,17 @@ async def insert_episodic_memory(
         "event_type": memory.event_type,
         "event_subtype": memory.event_subtype,
         "description": memory.description,
-        "raw_content": json.dumps(memory.raw_content or {}),
-        "entities": json.dumps(memory.entities or {}),
+        # Pass dicts THROUGH for the jsonb columns: postgrest JSON-encodes the
+        # payload itself, so a pre-applied json.dumps double-encodes and the
+        # column stores a JSON string SCALAR instead of an object (628/628
+        # live rows pre-fix — the root cause of the #883 raw_content reader
+        # gap; same writer-bug class migration 072 repaired for procedural/
+        # hpo). Historical rows repaired by migration 073; readers
+        # (hydrate_raw_content) stay tolerant of both shapes.
+        "raw_content": memory.raw_content or {},
+        "entities": memory.entities or {},
         "outcome_type": memory.outcome_type,
-        "outcome_details": json.dumps(memory.outcome_details or {}),
+        "outcome_details": memory.outcome_details or {},
         "user_satisfaction_score": memory.user_satisfaction_score,
         "agent_name": memory.agent_name,
         "importance_score": memory.importance_score,
@@ -622,10 +707,12 @@ async def bulk_insert_episodic_memories(
             "event_type": memory.event_type,
             "event_subtype": memory.event_subtype,
             "description": memory.description,
-            "raw_content": json.dumps(memory.raw_content or {}),
-            "entities": json.dumps(memory.entities or {}),
+            # Dicts pass through — see insert_episodic_memory: json.dumps
+            # here double-encodes into a jsonb string scalar (#883/073).
+            "raw_content": memory.raw_content or {},
+            "entities": memory.entities or {},
             "outcome_type": memory.outcome_type,
-            "outcome_details": json.dumps(memory.outcome_details or {}),
+            "outcome_details": memory.outcome_details or {},
             "user_satisfaction_score": memory.user_satisfaction_score,
             "agent_name": memory.agent_name,
             "importance_score": memory.importance_score,
