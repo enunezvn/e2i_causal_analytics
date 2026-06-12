@@ -40,6 +40,11 @@ vi.mock('@/hooks/api/use-home-executive-insights', () => ({
 vi.mock('@/hooks/api/use-gaps', () => ({
   useOpportunities: vi.fn(),
 }));
+// Alerts come from the monitoring API ONLY (the hardcoded ACTIVE_ALERTS
+// fallback was removed) — mock the hook for deterministic alert states.
+vi.mock('@/hooks/api/use-monitoring', () => ({
+  useAlerts: vi.fn(),
+}));
 // Agent Status uses useQuery(getValidated(...)). Mock the client fn so the
 // query resolves to a deterministic roster (or empty when desired).
 vi.mock('@/lib/api-client', async (importOriginal) => {
@@ -57,6 +62,7 @@ import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
 import { useOpportunities } from '@/hooks/api/use-gaps';
+import { useAlerts } from '@/hooks/api/use-monitoring';
 import { getValidated } from '@/lib/api-client';
 
 /** Reset all Home hooks to their honest "no data yet" defaults. */
@@ -99,8 +105,41 @@ function resetHomeHookDefaults() {
     isLoading: false,
     error: null,
   });
+  (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+  });
   (getValidated as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: [], total: 0 });
 }
+
+/** Real-shaped alerts as returned by GET /monitoring/alerts. */
+const REAL_ALERTS = {
+  total_count: 2,
+  active_count: 2,
+  alerts: [
+    {
+      id: 'alert_001',
+      model_version: 'propensity_v2.1.0',
+      alert_type: 'drift',
+      severity: 'high',
+      title: 'High drift detected in propensity model',
+      description: 'Feature days_since_last_visit shows significant drift',
+      status: 'active',
+      triggered_at: new Date(Date.now() - 3600000).toISOString(),
+    },
+    {
+      id: 'alert_002',
+      model_version: 'churn_v1.2.0',
+      alert_type: 'performance',
+      severity: 'medium',
+      title: 'Performance degradation in churn model',
+      description: 'Accuracy dropped by 3% over the last week',
+      status: 'active',
+      triggered_at: new Date(Date.now() - 7200000).toISOString(),
+    },
+  ],
+};
 
 describe('Home', () => {
   beforeEach(() => {
@@ -476,6 +515,16 @@ describe('Home', () => {
   // =========================================================================
 
   describe('Alerts', () => {
+    // The hardcoded ACTIVE_ALERTS fallback (critical "Claims data feed delayed
+    // by 4 hours" etc., added pre-API in cdda27e1) must NEVER render. States:
+    // real alerts | honest empty | labeled degraded | pending.
+    const FAKE_ALERT_MARKERS = [
+      'Data Pipeline Delay',
+      'Claims data feed delayed by 4 hours',
+      'Model Drift Detected',
+      'New Insights Available',
+    ];
+
     it('renders active alerts section', () => {
       renderWithAllProviders(<Home />);
 
@@ -483,29 +532,77 @@ describe('Home', () => {
       expect(screen.getByText(/Active Alerts/)).toBeInTheDocument();
     });
 
-    it('displays alert items', () => {
+    it('renders an honest empty state (NOT the fake alerts) on an empty-but-successful response', () => {
+      (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { total_count: 0, active_count: 0, alerts: [] },
+        isLoading: false,
+        error: null,
+      });
+
       renderWithAllProviders(<Home />);
 
-      expect(screen.getByText('Data Pipeline Delay')).toBeInTheDocument();
-      expect(screen.getByText('Model Drift Detected')).toBeInTheDocument();
-      expect(screen.getByText('New Insights Available')).toBeInTheDocument();
+      for (const marker of FAKE_ALERT_MARKERS) {
+        expect(screen.queryByText(marker)).not.toBeInTheDocument();
+      }
+      expect(screen.getByText('No active alerts')).toBeInTheDocument();
+      // The green API badge may show, but never above fabricated alerts.
+      expect(screen.getByText(/Active Alerts \(0\)/)).toBeInTheDocument();
     });
 
-    it('shows dismiss buttons', () => {
+    it('renders a labeled degraded state (NOT the fake alerts) when the alerts query errors', () => {
+      (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        error: new Error('monitoring unreachable'),
+      });
+
+      renderWithAllProviders(<Home />);
+
+      for (const marker of FAKE_ALERT_MARKERS) {
+        expect(screen.queryByText(marker)).not.toBeInTheDocument();
+      }
+      expect(screen.getByText(/alerts unavailable/i)).toBeInTheDocument();
+    });
+
+    it('displays REAL alert items from the monitoring API', () => {
+      (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: REAL_ALERTS,
+        isLoading: false,
+        error: null,
+      });
+
+      renderWithAllProviders(<Home />);
+
+      expect(
+        screen.getByText('High drift detected in propensity model')
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText('Performance degradation in churn model')
+      ).toBeInTheDocument();
+      for (const marker of FAKE_ALERT_MARKERS) {
+        expect(screen.queryByText(marker)).not.toBeInTheDocument();
+      }
+    });
+
+    it('can dismiss real alerts (string ids, no Math.random keys)', () => {
+      (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: REAL_ALERTS,
+        isLoading: false,
+        error: null,
+      });
+
       renderWithAllProviders(<Home />);
 
       const dismissButtons = screen.getAllByText('Dismiss');
-      expect(dismissButtons.length).toBe(3);
-    });
-
-    it('can dismiss alerts', () => {
-      renderWithAllProviders(<Home />);
-
-      const dismissButtons = screen.getAllByText('Dismiss');
+      expect(dismissButtons.length).toBe(2);
       fireEvent.click(dismissButtons[0]);
 
-      // After dismissing, should have 2 alerts left
-      expect(screen.queryByText('Data Pipeline Delay')).not.toBeInTheDocument();
+      expect(
+        screen.queryByText('High drift detected in propensity model')
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByText('Performance degradation in churn model')
+      ).toBeInTheDocument();
     });
   });
 
@@ -640,5 +737,58 @@ describe('Sidebar / stats honesty (H1)', () => {
   it('does not fabricate a hardcoded "15/21 agents active" summary', () => {
     renderWithAllProviders(<Home />);
     expect(screen.queryByText('15/21 agents active')).not.toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// SAMPLE_KPIS GREEN-BADGE EDGE (fix/fe-home-fake-data task 5)
+// ===========================================================================
+// The offline Demo Mode (API error -> SAMPLE_KPIS + "API Offline (using
+// sample data)" badge) is an intentional LABELED feature and must be kept.
+// What must die is the connected-but-empty edge: a successful response with
+// zero KPIs previously fell back to SAMPLE_KPIS under a GREEN "API Connected
+// (0 KPIs)" badge. The invariant: the badge is never green while any sample
+// KPI renders.
+
+describe('SAMPLE_KPIS green-badge edge (task 5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetHomeHookDefaults();
+  });
+
+  it('renders an honest empty state (NOT SAMPLE_KPIS) when the API succeeds with zero KPIs', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { kpis: [], total: 0 },
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithAllProviders(<Home />);
+
+    // Green badge is fine here — provided no sample data renders under it.
+    expect(screen.getByText(/API Connected \(0 KPIs\)/)).toBeInTheDocument();
+    // Sample KPI values/names must NOT render on a successful empty response.
+    expect(screen.queryByText('125,430')).not.toBeInTheDocument();
+    expect(screen.queryByText('Total TRx')).not.toBeInTheDocument();
+    expect(screen.queryByText('Net Revenue')).not.toBeInTheDocument();
+    // Honest empty state instead.
+    expect(screen.getByText('No KPIs available')).toBeInTheDocument();
+  });
+
+  it('keeps the labeled Demo Mode fallback when the API is offline (intentional feature)', () => {
+    (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error('API offline'),
+    });
+
+    renderWithAllProviders(<Home />);
+
+    // The destructive badge announces the sample data — this is the
+    // intentional labeled demo mode (investigated: f7d6ce8e kept it by design).
+    expect(screen.getByText('API Offline (using sample data)')).toBeInTheDocument();
+    expect(screen.getByText('Total TRx')).toBeInTheDocument();
+    // The badge must never be green while samples render.
+    expect(screen.queryByText(/API Connected/)).not.toBeInTheDocument();
   });
 });

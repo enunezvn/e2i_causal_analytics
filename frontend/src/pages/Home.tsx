@@ -23,6 +23,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useKPIList, useKPIHealth, useBatchCalculateKPIs, useKPIValue } from '@/hooks/api/use-kpi';
 import { useGraphStats } from '@/hooks/api/use-graph';
 import { useAlerts } from '@/hooks/api/use-monitoring';
+import { AlertStatus } from '@/types/monitoring';
 import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
@@ -64,6 +65,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   KPICard,
 } from '@/components/visualizations/dashboard';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { ExecutiveSummary } from '@/components/dashboard/ExecutiveSummary';
 import { CausalValueChains } from '@/components/dashboard/CausalValueChains';
 import { getNavigationRoutes } from '@/router/routes';
@@ -335,12 +337,10 @@ function QuickStatTile({
 // COMPONENT
 // =============================================================================
 
-// Active Alerts
-const ACTIVE_ALERTS = [
-  { id: 1, severity: 'critical' as const, title: 'Data Pipeline Delay', message: 'Claims data feed delayed by 4 hours', time: '15 min ago' },
-  { id: 2, severity: 'warning' as const, title: 'Model Drift Detected', message: 'Kisqali conversion model requires retraining', time: '2 hours ago' },
-  { id: 3, severity: 'info' as const, title: 'New Insights Available', message: '3 new Gap Analyzer recommendations ready', time: '4 hours ago' },
-];
+// NOTE: the former hardcoded ACTIVE_ALERTS fallback (a fabricated critical
+// "Claims data feed delayed by 4 hours" etc., added pre-API in cdda27e1) was
+// removed. Alerts render EXCLUSIVELY from the monitoring API: real alerts,
+// honest empty state, or a labeled degraded state on query error.
 
 function Home() {
   const navigate = useNavigate();
@@ -350,7 +350,7 @@ function Home() {
   const [selectedDateRange, setSelectedDateRange] = useState<DateRange>('Q4 2025');
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [dismissedAlerts, setDismissedAlerts] = useState<number[]>([]);
+  const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
 
   // ==========================================================================
   // API HOOKS - Wire up to real backend data
@@ -369,8 +369,13 @@ function Home() {
   // Graph statistics for causal metrics
   const { data: graphStatsData } = useGraphStats();
 
-  // System alerts from monitoring
-  const { data: alertsData } = useAlerts();
+  // System alerts from monitoring — the ONLY alert source (no fabricated
+  // fallback). Error state is surfaced as a labeled degraded notice.
+  // status=active keeps the "Active Alerts" header honest (acknowledged/
+  // resolved alerts are not "active").
+  const { data: alertsData, error: alertsError } = useAlerts({
+    status: AlertStatus.ACTIVE,
+  });
 
   // QUICK_STATS: real business_metrics rollup (Total TRx (MTD), HCPs Reached).
   const {
@@ -447,13 +452,19 @@ function Home() {
   // batch endpoint (POST /api/kpis/batch). View-backed KPIs return a real float;
   // the rest return value:null + error → rendered as an honest "Not yet computed"
   // PER CARD (the real backend state, NOT a fabrication). Fall back to SAMPLE_KPIS
-  // only in Demo Mode (API offline) — the header badge announces it.
+  // ONLY when the API gave no response at all (Demo Mode / offline — the header
+  // badge announces it). A SUCCESSFUL response with zero KPIs is real data and
+  // renders an honest empty state: the badge must never be green over samples.
   const effectiveKPIs = useMemo(() => {
     if (apiKPIs.length > 0) {
       return apiKPIs;
     }
+    if (kpiListData) {
+      // Connected but the backend genuinely has no KPI definitions.
+      return [];
+    }
     return SAMPLE_KPIS[selectedBrand];
-  }, [apiKPIs, selectedBrand]);
+  }, [apiKPIs, kpiListData, selectedBrand]);
 
   // True only when we are rendering live metadata (real ids, real values fetched
   // separately via the batch endpoint below).
@@ -517,22 +528,24 @@ function Home() {
     };
   }, [effectiveKPIs, kpiHealthData, kpiListData]);
 
-  // Filter visible alerts (uses API alerts when available)
+  // Visible alerts: REAL monitoring alerts only (no fabricated fallback).
+  // Stable string ids (the old `Number(a.id) || Math.random()` broke
+  // dismissal for non-numeric ids and produced unstable keys).
   const visibleAlerts = useMemo(() => {
-    // Transform API alerts if available
-    if (alertsData?.alerts && alertsData.alerts.length > 0) {
-      return alertsData.alerts
-        .filter(a => !dismissedAlerts.includes(Number(a.id)))
-        .map(a => ({
-          id: Number(a.id) || Math.random(),
-          severity: (a.severity === 'critical' ? 'critical' : a.severity === 'warning' ? 'warning' : 'info') as 'critical' | 'warning' | 'info',
-          title: a.title || a.alert_type || 'Alert',
-          message: a.description || '',
-          time: a.triggered_at ? new Date(a.triggered_at).toLocaleString() : 'recently',
-        }));
-    }
-    // Fall back to sample alerts
-    return ACTIVE_ALERTS.filter(a => !dismissedAlerts.includes(a.id));
+    if (!alertsData?.alerts) return [];
+    return alertsData.alerts
+      .filter((a) => !dismissedAlerts.includes(String(a.id)))
+      .map((a) => ({
+        id: String(a.id),
+        severity: (a.severity === 'critical' || a.severity === 'high'
+          ? 'critical'
+          : a.severity === 'warning' || a.severity === 'medium'
+            ? 'warning'
+            : 'info') as 'critical' | 'warning' | 'info',
+        title: a.title || a.alert_type || 'Alert',
+        message: a.description || '',
+        time: a.triggered_at ? new Date(a.triggered_at).toLocaleString() : 'recently',
+      }));
   }, [alertsData, dismissedAlerts]);
 
   // Derive per-tier agent counts from the real roster (never hardcoded 15/21).
@@ -630,7 +643,7 @@ function Home() {
   const insightsLoading = execInsightsLoading || opportunitiesLoading;
 
   // Dismiss alert handler
-  const handleDismissAlert = (id: number) => {
+  const handleDismissAlert = (id: string) => {
     setDismissedAlerts(prev => [...prev, id]);
   };
 
@@ -809,13 +822,33 @@ function Home() {
         />
       </div>
 
-      {/* Active Alerts */}
-      {visibleAlerts.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-[var(--color-muted-foreground)] flex items-center gap-2">
-            <AlertCircle className="h-4 w-4" />
-            Active Alerts ({visibleAlerts.length})
-          </h3>
+      {/* Active Alerts — real monitoring data | honest empty | labeled error */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-[var(--color-muted-foreground)] flex items-center gap-2">
+          <AlertCircle className="h-4 w-4" />
+          Active Alerts ({visibleAlerts.length})
+        </h3>
+        {alertsError ? (
+          <div
+            role="alert"
+            className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
+          >
+            <AlertCircle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            <span>
+              Alerts unavailable — the monitoring service could not be reached.
+              Live alert data cannot be displayed.
+            </span>
+          </div>
+        ) : !alertsData ? (
+          /* Query pending / unsettled — no claim either way. */
+          <p className="text-sm text-muted-foreground">Checking alerts…</p>
+        ) : visibleAlerts.length === 0 ? (
+          <EmptyState
+            title="No active alerts"
+            description="Monitoring is connected and no alerts are currently firing."
+            className="p-6"
+          />
+        ) : (
           <div className="space-y-2">
             {visibleAlerts.map((alert) => (
               <div
@@ -861,8 +894,8 @@ function Home() {
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Brand Context Card */}
       {selectedBrand !== 'All' && (
@@ -929,6 +962,13 @@ function Home() {
 
                 {KPI_CATEGORIES.map((cat) => (
                   <TabsContent key={cat.id} value={cat.id} className="mt-4">
+                    {filteredKPIs.length === 0 ? (
+                      <EmptyState
+                        title="No KPIs available"
+                        description="The API returned no KPI definitions for this category yet."
+                        className="p-6"
+                      />
+                    ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                       {filteredKPIs.map((kpi) => {
                         // In live mode, read the REAL value fetched via the batch
@@ -971,6 +1011,7 @@ function Home() {
                         );
                       })}
                     </div>
+                    )}
                   </TabsContent>
                 ))}
               </Tabs>
