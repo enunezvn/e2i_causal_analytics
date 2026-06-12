@@ -447,7 +447,25 @@ class PredictionSynthesizerMemoryHooks:
                     "total_latency_ms": result.get("total_latency_ms", 0),
                 },
                 entities=None,
-                outcome_type="prediction_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "prediction_delivered" is a memory_EVENT_type label (migration
+                # 065) misplaced into the outcome column; the enum rejected it
+                # (22P02), the ``except`` below swallowed it, and NO prediction
+                # episodic ever landed (#883; #876/#873 family — map, don't extend).
+                # The domain signal stays recoverable via
+                # event_type='prediction_completed' + agent_name. Terminal statuses:
+                # completed / degraded (#438: 3-5 context deps failed but the
+                # prediction is honest — a PARTIAL success, and the agent.py gate
+                # lets degraded runs reach this write) / failed.
+                outcome_type=(
+                    "failure"
+                    if state.get("status") == "failed"
+                    else "partial_success"
+                    if state.get("status") == "degraded"
+                    else "success"
+                ),
                 agent_name="prediction_synthesizer",
                 importance_score=0.7,  # Predictions are moderately important
                 e2i_refs=E2IEntityReferences(

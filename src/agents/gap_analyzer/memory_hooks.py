@@ -366,7 +366,18 @@ class GapAnalyzerMemoryHooks:
                     "key_insights": result.get("key_insights", [])[:5],
                 },
                 entities=None,
-                outcome_type="gap_analysis_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "gap_analysis_delivered" was rejected by the enum (22P02) and the
+                # ``except`` below swallowed it, so NO gap analysis episodic ever
+                # landed (#883; same bug family as #876/#873/#788, fixed the same
+                # way: map, don't extend the enum). The domain signal stays fully
+                # recoverable via event_type='gap_analysis_completed' (migration
+                # 071) + agent_name. Terminal statuses are completed/failed and
+                # contribute_to_memory skips failed runs, but map defensively in
+                # case this is ever called with a failed state.
+                outcome_type=("failure" if state.get("status") == "failed" else "success"),
                 agent_name="gap_analyzer",
                 importance_score=0.8,  # Gap analyses are high value
                 e2i_refs=E2IEntityReferences(

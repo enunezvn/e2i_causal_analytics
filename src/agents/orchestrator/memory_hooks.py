@@ -514,7 +514,23 @@ class OrchestratorMemoryHooks:
                     "status": result.get("status", "unknown"),
                 },
                 entities=None,
-                outcome_type="response_delivered",
+                # ``outcome_type`` is the constrained ``memory_outcome_type`` enum
+                # (success / partial_success / failure / pending / escalated) — a
+                # generic outcome STATE, NOT a domain descriptor. The prior literal
+                # "response_delivered" was rejected by the enum (22P02) and the
+                # ``except`` below swallowed it, so NO orchestration episodic could
+                # ever land (#883; #876/#873 family — map, don't extend the enum;
+                # latent until the hooks are wired in PR B). The domain signal
+                # stays recoverable via event_type='orchestration_completed'
+                # (migration 071) + agent_name. OrchestratorState.status includes
+                # 'partial_success' — preserve it instead of flattening to success.
+                outcome_type=(
+                    "failure"
+                    if result.get("status") == "failed"
+                    else "partial_success"
+                    if result.get("status") == "partial_success"
+                    else "success"
+                ),
                 agent_name="orchestrator",
                 importance_score=0.7,
                 e2i_refs=E2IEntityReferences(
