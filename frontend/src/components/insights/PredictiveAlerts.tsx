@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { useAlerts } from '@/hooks/api/use-monitoring';
 import { AlertStatus } from '@/types/monitoring';
 import type { AlertItem } from '@/types/monitoring';
@@ -37,45 +38,9 @@ interface AlertDisplay {
   icon: React.ReactNode;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_ALERTS: AlertDisplay[] = [
-  {
-    id: 'alert-1',
-    title: 'Model Drift Detected - SE Region',
-    description:
-      'Feature distribution shift detected in prior authorization rates. P-value: 0.003. Recommend retraining within 14 days.',
-    severity: 'critical',
-    type: 'drift',
-    triggeredAt: '2 hours ago',
-    modelVersion: 'propensity_v2.1.0',
-    icon: <TrendingDown className="h-4 w-4" />,
-  },
-  {
-    id: 'alert-2',
-    title: 'Performance Degradation Warning',
-    description:
-      'Conversion prediction accuracy dropped 3.2% in last 7 days. Current AUC: 0.82 (threshold: 0.85).',
-    severity: 'warning',
-    type: 'performance',
-    triggeredAt: '6 hours ago',
-    modelVersion: 'conversion_v1.3.0',
-    icon: <Activity className="h-4 w-4" />,
-  },
-  {
-    id: 'alert-3',
-    title: 'New High-Value Segment Identified',
-    description:
-      'Clustering analysis discovered untapped HCP segment with 2.1x higher predicted conversion rate.',
-    severity: 'info',
-    type: 'insight',
-    triggeredAt: '1 day ago',
-    modelVersion: 'segmentation_v3.0.0',
-    icon: <Bell className="h-4 w-4" />,
-  },
-];
+// NOTE: SAMPLE_ALERTS (fabricated drift/performance alerts) was DELETED.
+// Empty alert responses render an honest "no active alerts" state and query
+// failures render a labeled error — never fake critical alerts.
 
 // =============================================================================
 // HELPERS
@@ -200,17 +165,17 @@ function AlertCard({ alert }: { alert: AlertDisplay }) {
 
 export function PredictiveAlerts({ className, modelId }: PredictiveAlertsProps) {
   // Fetch alerts from API
-  const { data: alertsResponse, isLoading } = useAlerts({
+  const { data: alertsResponse, isLoading, isError, error } = useAlerts({
     model_id: modelId,
     status: AlertStatus.ACTIVE,
     limit: 10,
   });
 
-  // Transform API alerts or use sample data
-  const alerts: AlertDisplay[] =
-    alertsResponse?.alerts && alertsResponse.alerts.length > 0
-      ? alertsResponse.alerts.slice(0, 5).map(transformAlertToDisplay)
-      : SAMPLE_ALERTS;
+  // Real alerts only — an empty response is an honest "all clear", never
+  // an excuse to substitute fabricated alerts.
+  const alerts: AlertDisplay[] = (alertsResponse?.alerts ?? [])
+    .slice(0, 5)
+    .map(transformAlertToDisplay);
 
   const criticalCount = alerts.filter((a) => a.severity === 'critical').length;
   const warningCount = alerts.filter((a) => a.severity === 'warning').length;
@@ -250,8 +215,27 @@ export function PredictiveAlerts({ className, modelId }: PredictiveAlertsProps) 
           </div>
         )}
 
+        {/* Error State — labeled, never replaced with fake alerts */}
+        {!isLoading && isError && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/5 border border-rose-500/20">
+            <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
+            <div className="text-xs text-[var(--color-muted-foreground)]">
+              <span className="font-medium text-rose-600">Unable to load alerts:</span>{' '}
+              {error?.message ?? 'Monitoring service unavailable'}
+            </div>
+          </div>
+        )}
+
+        {/* Honest empty state */}
+        {!isLoading && !isError && alerts.length === 0 && (
+          <EmptyState
+            title="No active alerts"
+            description="The monitoring system reports no active drift or performance alerts."
+          />
+        )}
+
         {/* Alert Cards */}
-        {!isLoading && (
+        {!isLoading && !isError && alerts.length > 0 && (
           <>
             {alerts.map((alert) => (
               <AlertCard key={alert.id} alert={alert} />
