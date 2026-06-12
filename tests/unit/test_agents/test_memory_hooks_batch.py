@@ -58,6 +58,15 @@ def reset_all_singletons():
     lazy-loading from connecting to real Redis/FalkorDB during tests.
     Tests that need a mock client set hooks._working_memory directly, which
     bypasses the property lazy-load entirely.
+
+    Also blocks the episodic/procedural source-module write+search functions
+    (#883): on a creds-configured dev box an unmocked store path would insert
+    REAL rows into the live Supabase DB mid-unit-run (observed: stray
+    data_preparer qc_report rows during multi-tree runs). In CI those inserts
+    already fail (no reachable DB) and every test here passes, so no test in
+    this file can depend on a real write succeeding — raising deterministically
+    matches CI. Tests wanting specific behavior patch at the hooks-object
+    level (patch.object(hooks, "store_...")), which is unaffected.
     """
     modules = [
         ci_hooks,
@@ -74,15 +83,33 @@ def reset_all_singletons():
     ]
     for mod in modules:
         mod.reset_memory_hooks()
-    with patch(
-        "src.memory.working_memory.get_working_memory",
-        side_effect=Exception("test: working memory unavailable"),
-    ):
-        with patch(
+    with (
+        patch(
+            "src.memory.working_memory.get_working_memory",
+            side_effect=Exception("test: working memory unavailable"),
+        ),
+        patch(
             "src.memory.semantic_memory.get_semantic_memory",
             side_effect=Exception("test: semantic memory unavailable"),
-        ):
-            yield
+        ),
+        patch(
+            "src.memory.episodic_memory.insert_episodic_memory_with_text",
+            side_effect=Exception("test: episodic memory unavailable (#883)"),
+        ),
+        patch(
+            "src.memory.episodic_memory.search_episodic_by_text",
+            side_effect=Exception("test: episodic memory unavailable (#883)"),
+        ),
+        patch(
+            "src.memory.procedural_memory.insert_procedural_memory_with_text",
+            side_effect=Exception("test: procedural memory unavailable (#883)"),
+        ),
+        patch(
+            "src.memory.procedural_memory.find_relevant_procedures_by_text",
+            side_effect=Exception("test: procedural memory unavailable (#883)"),
+        ),
+    ):
+        yield
     for mod in modules:
         mod.reset_memory_hooks()
 
