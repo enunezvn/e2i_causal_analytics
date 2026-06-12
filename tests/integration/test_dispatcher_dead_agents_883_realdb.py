@@ -22,10 +22,11 @@ honestly end-to-end:
   over the live substrate (zero feedback rows in the window is a legitimate,
   non-fabricated result).
 
-Each test self-cleans the rows it creates: session-keyed cleanup where the
-session_id is known, plus the autouse ``_episodic_baseline_bracket`` fixture
-(#892) which deletes any agent-attributed episodic delta the dispatches leave
-behind. Run with the shared-DB lock::
+Each test self-cleans the rows it creates: every minted session id is
+registered with the autouse ``episodic_sessions`` fixture (#892), whose
+teardown deletes the episodic rows for exactly those sessions and then
+asserts (no deletion) that the agent-scoped baseline bracket is restored.
+Run with the shared-DB lock::
 
     flock /tmp/e2i_db_verify.lock -c \\
         'E2I_DB_INTEGRATION=1 PYTHONPATH=$PWD .venv/bin/pytest -n0 \\
@@ -55,21 +56,27 @@ _DISPATCHED_AGENTS = ("health_score", "explainer", "feedback_learner")
 
 
 @pytest.fixture(autouse=True)
-def _episodic_baseline_bracket():
+def episodic_sessions():
     """#892: self-clean every episodic row this suite's REAL dispatches deposit.
 
-    The dispatched agents' memory hooks write ``episodic_memories`` rows that
-    are not all keyable by the test's session_id (observed pre-fix: one
-    explainer ``explanation_generated`` row left behind per run; 16 rows
-    hand-cleaned after the #885 run). Baseline-bracket — the #888 suites'
-    established pattern: snapshot the memory_ids for the dispatched agents in
-    a recent ``created_at`` window before each test, delete the delta in
-    teardown, and assert the bracket is back to baseline. Scoping the delta to
-    these three agent_names plus a minutes-wide window (the suite runs under
-    the shared-DB flock) keeps unrelated production rows out of reach.
+    Pre-fix, one explainer ``explanation_generated`` row was left behind per
+    run (and 16 rows were hand-cleaned after the #885 run). Measured on the
+    live substrate: the leaked row's ``session_id`` EQUALS the session the
+    test minted — the #881/#883 dispatcher wiring propagates the dispatch
+    session into every memory write — so the issue's "can't be keyed by test
+    session" premise is stale and cleanup can use strictly test-owned keys.
+
+    Contract: every test registers each session id it mints
+    (``episodic_sessions.add(session_id)``). Teardown deletes episodic rows
+    ONLY for those registered sessions — it can never touch a production row.
+    The #888 baseline-bracket then verifies (assert-only, no deletion): the
+    agent-scoped ``created_at`` bracket must be back to its pre-test
+    baseline. An un-keyable write would fail that assert loudly with the
+    leaked memory_ids instead of being silently time-bracket-deleted on a
+    shared DB.
     """
     if not (_GATE and _HAS_CREDS):
-        yield
+        yield set()
         return
 
     from src.memory.episodic_memory import get_supabase_client
@@ -88,12 +95,15 @@ def _episodic_baseline_bracket():
         return {row["memory_id"] for row in (resp.data or [])}
 
     baseline = _bracket_ids()
-    yield
+    sessions: set = set()
+    yield sessions
+    if sessions:
+        client.table("episodic_memories").delete().in_("session_id", sorted(sessions)).execute()
     leaked = _bracket_ids() - baseline
-    for memory_id in leaked:
-        client.table("episodic_memories").delete().eq("memory_id", memory_id).execute()
-    assert _bracket_ids() == baseline, (
-        f"episodic self-clean failed to restore baseline (leaked ids: {sorted(leaked)})"
+    assert not leaked, (
+        "episodic rows leaked outside the registered test sessions "
+        f"(memory_ids: {sorted(leaked)}) — register every minted session id "
+        "via episodic_sessions.add(...), or investigate an un-keyable write"
     )
 
 
@@ -140,7 +150,7 @@ def _cleanup_rows(memory_ids: list) -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_score_chat_dispatch_runs_and_lands_memory() -> None:
+async def test_health_score_chat_dispatch_runs_and_lands_memory(episodic_sessions) -> None:
     """'how healthy is the system?' through the REAL dispatcher completes a
     real check (RED pre-#883: TypeError on the generic-payload splat) and the
     #881-wired memory hook lands the episodic row for the dispatch session."""
@@ -148,6 +158,7 @@ async def test_health_score_chat_dispatch_runs_and_lands_memory() -> None:
     from src.agents.orchestrator.nodes.dispatcher import DispatcherNode
 
     session_id = str(uuid.uuid4())  # episodic_memories.session_id is uuid-typed
+    episodic_sessions.add(session_id)
     agent = HealthScoreAgent(enable_mlflow=False, enable_opik=False, enable_memory=True)
     node = DispatcherNode(agent_registry={"health_score": agent})
 
@@ -180,7 +191,7 @@ async def test_health_score_chat_dispatch_runs_and_lands_memory() -> None:
 
 
 @pytest.mark.asyncio
-async def test_explainer_dispatch_binds_seeded_real_upstream_result() -> None:
+async def test_explainer_dispatch_binds_seeded_real_upstream_result(episodic_sessions) -> None:
     """A dispatch state carrying a REAL upstream AgentResult (the shape the
     fallback path and a checkpointer-resumed turn carry) must reach
     ``explain()`` as ``analysis_results`` and produce a real explanation."""
@@ -190,6 +201,7 @@ async def test_explainer_dispatch_binds_seeded_real_upstream_result() -> None:
 
     # Seed: run a REAL upstream agent through the same dispatcher first.
     seed_session = str(uuid.uuid4())
+    episodic_sessions.add(seed_session)
     upstream_agent = HealthScoreAgent(enable_mlflow=False, enable_opik=False, enable_memory=False)
     seed_node = DispatcherNode(agent_registry={"health_score": upstream_agent})
     seed_out = await seed_node.execute(
@@ -199,6 +211,7 @@ async def test_explainer_dispatch_binds_seeded_real_upstream_result() -> None:
     assert upstream_result["success"] is True, upstream_result["error"]
 
     session_id = str(uuid.uuid4())
+    episodic_sessions.add(session_id)
     node = DispatcherNode(
         agent_registry={"explainer": ExplainerAgent(use_llm=False)},
     )
@@ -218,7 +231,9 @@ async def test_explainer_dispatch_binds_seeded_real_upstream_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_feedback_learner_dispatch_binds_real_window_honest_outcome() -> None:
+async def test_feedback_learner_dispatch_binds_real_window_honest_outcome(
+    episodic_sessions,
+) -> None:
     """The 'feedback' intent runs the REAL agent (production store wiring, the
     same builder the 6h beat uses) over the beat's trailing default window.
     Whatever the live substrate holds, the outcome must be HONEST: a completed
@@ -252,6 +267,7 @@ async def test_feedback_learner_dispatch_binds_real_window_honest_outcome() -> N
     )
     node = DispatcherNode(agent_registry={"feedback_learner": agent})
     session_id = str(uuid.uuid4())
+    episodic_sessions.add(session_id)
 
     out = await node.execute(
         _state("feedback_learner", "what have we learned from feedback?", session_id)
