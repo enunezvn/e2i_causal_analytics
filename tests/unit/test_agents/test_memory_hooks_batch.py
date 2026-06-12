@@ -522,21 +522,26 @@ class TestLazyLoadProperties:
     """Test working_memory and semantic_memory lazy-loading properties."""
 
     def test_working_memory_success(self):
-        """Test successful lazy-load of working memory."""
+        """Test successful lazy-load of working memory.
+
+        #892: the old version stacked a vacuous patch on a NONEXISTENT
+        ``memory_hooks.get_working_memory`` attribute (``create=True``) and
+        then pre-set ``hooks._working_memory``, so the lazy-load path was
+        never exercised (canary-proven: deleting both patches left the test
+        green). The property does a call-time ``from
+        src.memory.working_memory import get_working_memory``, so patch THAT
+        real attribute and let the property perform the load.
+        """
         hooks = ci_hooks.CausalImpactMemoryHooks()
         mock_wm = MagicMock()
         with patch(
-            "src.agents.causal_impact.memory_hooks.get_working_memory",
-            create=True,
-        ):
-            with patch(
-                "src.memory.working_memory.get_working_memory",
-                return_value=mock_wm,
-                create=True,
-            ):
-                # Force the import inside the property to use our mock
-                hooks._working_memory = mock_wm
-                assert hooks.working_memory is mock_wm
+            "src.memory.working_memory.get_working_memory",
+            return_value=mock_wm,
+        ) as mock_factory:
+            assert hooks.working_memory is mock_wm
+            mock_factory.assert_called_once()
+        # Cached after the first load -- no re-import, no second factory call.
+        assert hooks.working_memory is mock_wm
 
     def test_working_memory_import_failure(self):
         """Test that import failure returns None gracefully."""
@@ -612,30 +617,36 @@ class TestCausalImpactMemoryHooks:
 
     @pytest.mark.asyncio
     async def test_get_episodic_context_with_filter(self):
+        """#892: the old patches targeted NONEXISTENT attributes on the hooks
+        module (``create=True``) — ``_get_episodic_context`` imports
+        ``search_episodic_by_text``/``EpisodicSearchFilters`` from
+        ``src.memory.episodic_memory`` at call time, so the mock never
+        intercepted (canary-proven: ``mock_search.assert_awaited()`` failed
+        while the test passed) and the ``isinstance(result, list)`` assertion
+        was satisfied by the error-fallback ``[]``. Patch the REAL source
+        module and pin the treatment/outcome filter behavior.
+        """
         hooks = ci_hooks.CausalImpactMemoryHooks()
+        matching = {"raw_content": {"treatment_var": "hcp_visits", "outcome_var": "trx"}}
         mock_search = AsyncMock(
             return_value=[
-                {"raw_content": {"treatment_var": "hcp_visits", "outcome_var": "trx"}},
+                matching,
                 {"raw_content": {"treatment_var": "other", "outcome_var": "trx"}},
             ]
         )
         with patch(
-            "src.agents.causal_impact.memory_hooks.search_episodic_by_text",
+            "src.memory.episodic_memory.search_episodic_by_text",
             mock_search,
-            create=True,
         ):
-            with patch(
-                "src.agents.causal_impact.memory_hooks.EpisodicSearchFilters",
-                create=True,
-            ):
-                # Call with treatment filter -- exercises the filter branch
-                result = await hooks._get_episodic_context(
-                    query="test",
-                    treatment_var="hcp_visits",
-                    outcome_var="trx",
-                )
-                # Should filter to only matching results
-                assert isinstance(result, list)
+            # Call with treatment filter -- exercises the filter branch
+            result = await hooks._get_episodic_context(
+                query="test",
+                treatment_var="hcp_visits",
+                outcome_var="trx",
+            )
+            mock_search.assert_awaited_once()
+            # The non-matching treatment_var result must be filtered out.
+            assert result == [matching]
 
     @pytest.mark.asyncio
     async def test_get_semantic_context_no_client(self):

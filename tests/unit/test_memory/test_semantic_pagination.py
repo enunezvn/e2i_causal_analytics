@@ -27,7 +27,7 @@ class TestPatientNetworkPagination:
         """Test that default pagination parameters are applied."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -43,7 +43,7 @@ class TestPatientNetworkPagination:
         """Test custom limit and offset."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -57,7 +57,7 @@ class TestPatientNetworkPagination:
         """Test that limit is capped at 500."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -71,7 +71,7 @@ class TestPatientNetworkPagination:
         """Test has_more flag when results equal limit."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             # Create mock nodes that match the limit
             mock_nodes = []
             for i in range(10):
@@ -93,7 +93,7 @@ class TestPatientNetworkPagination:
         """Test has_more is False when results under limit."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_nodes = []
             for i in range(5):
                 node = MagicMock()
@@ -122,7 +122,7 @@ class TestHcpInfluenceNetworkPagination:
         """Test that pagination metadata is included in HCP network."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -145,7 +145,7 @@ class TestCausalChainLimit:
         """Test that default limit is 50."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -161,7 +161,7 @@ class TestCausalChainLimit:
         """Test custom limit parameter."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -176,7 +176,7 @@ class TestCausalChainLimit:
         """Test that limit is capped at 200."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -199,7 +199,7 @@ class TestCountMethods:
         """Test count_patient_network returns integer."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = [[42]]
             mock_graph.query.return_value = mock_result
@@ -213,7 +213,7 @@ class TestCountMethods:
         """Test count returns 0 for empty results."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = []
             mock_graph.query.return_value = mock_result
@@ -226,7 +226,7 @@ class TestCountMethods:
         """Test count_hcp_influence_network returns integer."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = [[15]]
             mock_graph.query.return_value = mock_result
@@ -239,7 +239,7 @@ class TestCountMethods:
         """Test count_causal_chains returns integer."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = [[8]]
             mock_graph.query.return_value = mock_result
@@ -252,7 +252,7 @@ class TestCountMethods:
         """Test that max_depth is sanitized in count methods."""
         memory = FalkorDBSemanticMemory()
 
-        with patch.object(memory, "_graph", create=True) as mock_graph:
+        with patch.object(memory, "_graph") as mock_graph:
             mock_result = MagicMock()
             mock_result.result_set = [[0]]
             mock_graph.query.return_value = mock_result

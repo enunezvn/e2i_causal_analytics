@@ -22,7 +22,10 @@ honestly end-to-end:
   over the live substrate (zero feedback rows in the window is a legitimate,
   non-fabricated result).
 
-Each test self-cleans the rows it creates. Run with the shared-DB lock::
+Each test self-cleans the rows it creates: session-keyed cleanup where the
+session_id is known, plus the autouse ``_episodic_baseline_bracket`` fixture
+(#892) which deletes any agent-attributed episodic delta the dispatches leave
+behind. Run with the shared-DB lock::
 
     flock /tmp/e2i_db_verify.lock -c \\
         'E2I_DB_INTEGRATION=1 PYTHONPATH=$PWD .venv/bin/pytest -n0 \\
@@ -47,6 +50,51 @@ pytestmark = [
         reason="faithful real-DB dispatch test; set E2I_DB_INTEGRATION=1 + creds in .env",
     ),
 ]
+
+_DISPATCHED_AGENTS = ("health_score", "explainer", "feedback_learner")
+
+
+@pytest.fixture(autouse=True)
+def _episodic_baseline_bracket():
+    """#892: self-clean every episodic row this suite's REAL dispatches deposit.
+
+    The dispatched agents' memory hooks write ``episodic_memories`` rows that
+    are not all keyable by the test's session_id (observed pre-fix: one
+    explainer ``explanation_generated`` row left behind per run; 16 rows
+    hand-cleaned after the #885 run). Baseline-bracket — the #888 suites'
+    established pattern: snapshot the memory_ids for the dispatched agents in
+    a recent ``created_at`` window before each test, delete the delta in
+    teardown, and assert the bracket is back to baseline. Scoping the delta to
+    these three agent_names plus a minutes-wide window (the suite runs under
+    the shared-DB flock) keeps unrelated production rows out of reach.
+    """
+    if not (_GATE and _HAS_CREDS):
+        yield
+        return
+
+    from src.memory.episodic_memory import get_supabase_client
+
+    client = get_supabase_client()
+    bracket_start = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+
+    def _bracket_ids() -> set:
+        resp = (
+            client.table("episodic_memories")
+            .select("memory_id")
+            .in_("agent_name", list(_DISPATCHED_AGENTS))
+            .gte("created_at", bracket_start)
+            .execute()
+        )
+        return {row["memory_id"] for row in (resp.data or [])}
+
+    baseline = _bracket_ids()
+    yield
+    leaked = _bracket_ids() - baseline
+    for memory_id in leaked:
+        client.table("episodic_memories").delete().eq("memory_id", memory_id).execute()
+    assert _bracket_ids() == baseline, (
+        f"episodic self-clean failed to restore baseline (leaked ids: {sorted(leaked)})"
+    )
 
 
 def _state(agent_name: str, query: str, session_id: str, timeout_ms: int = 60000) -> dict:

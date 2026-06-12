@@ -132,7 +132,7 @@ class TestInsightEnricherEnrich:
         """Test basic enrichment flow."""
         enricher = InsightEnricher(cache_enabled=False)
 
-        with patch.object(enricher, "_client", create=True) as mock_client:
+        with patch.object(enricher, "_client") as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
             enricher._client = mock_client
 
@@ -151,7 +151,7 @@ class TestInsightEnricherEnrich:
         query = Mock()
         query.text = "parsed query text"
 
-        with patch.object(enricher, "_client", create=True) as mock_client:
+        with patch.object(enricher, "_client") as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
             enricher._client = mock_client
 
@@ -164,7 +164,7 @@ class TestInsightEnricherEnrich:
         """Test that results are cached when cache_enabled is True."""
         enricher = InsightEnricher(cache_enabled=True)
 
-        with patch.object(enricher, "_client", create=True) as mock_client:
+        with patch.object(enricher, "_client") as mock_client:
             mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
             enricher._client = mock_client
 
