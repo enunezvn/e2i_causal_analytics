@@ -464,7 +464,12 @@ jobs:
   synthetic-regime-tests:
     name: Synthetic Regime E2E (isolated)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 (was 30): post-#773-W2-fix the two forked tier0 runs train their
+    # Step-5b alternates for real, and hosted-runner CPU variance is extreme
+    # (same commit: 165s suite on run 27443822891, >600s/runner on run
+    # 27444890365). Must cover 2 × the 1200s per-runner subprocess cap in
+    # test_synthetic_regimes.py plus ~8 min setup.
+    timeout-minutes: 45
     env:
       E2I_TESTING_MODE: 'true'
       SUPABASE_URL: 'http://localhost:54321'

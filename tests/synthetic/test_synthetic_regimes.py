@@ -184,7 +184,14 @@ def _run_tier0_subprocess(regime: str, tmp_path: Path) -> dict[str, Any]:
         cmd,
         capture_output=True,
         text=True,
-        timeout=600,
+        # 1200s (was 600): post-#773-W2-fix the Step-5b alternates genuinely
+        # train (they used to fast-crash on XGBoost-illegal feature names),
+        # and hosted-runner CPU variance is extreme — the same commit ran the
+        # full suite in 165s on dispatch run 27443822891 and blew the 600s
+        # per-runner cap on run 27444890365. 1200 matches the sibling cap in
+        # test_synthetic_baseline_invariant.py; the job-level timeout still
+        # bounds a truly pathological run.
+        timeout=1200,
         cwd=str(PROJECT_ROOT),
         env=env,
     )
@@ -201,7 +208,10 @@ def _run_tier0_subprocess(regime: str, tmp_path: Path) -> dict[str, Any]:
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(900)  # 15 min ceiling for the full tier0 run
+# 1500s: must exceed the 1200s subprocess cap in _run_tier0_subprocess (the
+# class fixture forks the runner inside the FIRST test's setup; a smaller
+# pytest-timeout would SIGKILL the worker before the subprocess cap fires).
+@pytest.mark.timeout(1500)
 class TestAdverseRegimeE2E:
     """Run ``run_tier0_test.py --regime adverse`` and assert the imbalance
     remediation path engages without exceptions.
@@ -420,7 +430,7 @@ class TestCleanRegimeGenerator:
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1500)  # see TestAdverseRegimeE2E: > the 1200s subprocess cap
 class TestCleanRegimeE2E:
     """``run_tier0_test.py --regime clean`` produces a deployable model.
 
