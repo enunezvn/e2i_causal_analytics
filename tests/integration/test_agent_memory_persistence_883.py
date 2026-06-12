@@ -580,7 +580,15 @@ async def test_reflector_records_learning_signal(confidence, domain_signal):
     enum member 'implicit_positive' (machine-derived, positive direction) with
     the exact grade in signal_value=confidence and the original domain label
     in signal_details. LATENT site (CognitiveService has no prod consumer);
-    proven via direct call per the #876 pattern."""
+    proven via direct call per the #876 pattern.
+
+    _store_to_graphiti is stubbed out (codex R2): it runs BEFORE the
+    learning-signal write, has its own swallow, and is NOT the persistence
+    under proof here — left real it would seed uncleaned FalkorDB graph
+    episodes (or add external-service flake) on every run. The
+    learning_signals + episodic writes stay fully real."""
+    from unittest.mock import AsyncMock, patch
+
     from src.memory.cognitive_integration import CognitiveService
 
     session_id = str(uuid.uuid4())
@@ -590,16 +598,17 @@ async def test_reflector_records_learning_signal(confidence, domain_signal):
 
     try:
         service = CognitiveService()
-        await service._run_reflector(
-            session_id=session_id,
-            cycle_id=cycle_id,
-            query=query,
-            query_type="causal",
-            response=f"NBRx growth driven by new-writer adoption ({marker})",
-            confidence=confidence,
-            evidence=[{"source": "episodic", "id": marker}],
-            agent_used="orchestrator",
-        )
+        with patch.object(service, "_store_to_graphiti", new_callable=AsyncMock):
+            await service._run_reflector(
+                session_id=session_id,
+                cycle_id=cycle_id,
+                query=query,
+                query_type="causal",
+                response=f"NBRx growth driven by new-writer adoption ({marker})",
+                confidence=confidence,
+                evidence=[{"source": "episodic", "id": marker}],
+                agent_used="orchestrator",
+            )
 
         signals = _signals_for_cycle(cycle_id)
         assert len(signals) == 1, (
@@ -614,7 +623,7 @@ async def test_reflector_records_learning_signal(confidence, domain_signal):
         # The domain label survives in signal_details (map, don't extend).
         assert _signal_details(signal).get("domain_signal") == domain_signal
     finally:
-        _delete_cycle(cycle_id)  # cascades learning_signals
+        _delete_cycle(cycle_id)  # also deletes the signals explicitly
         _cleanup_episodic_by_session(session_id)
 
 

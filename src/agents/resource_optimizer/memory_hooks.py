@@ -484,10 +484,16 @@ class ResourceOptimizerMemoryHooks:
                 trigger_pattern=description,
             )
 
-            # Insert pattern
+            # Insert pattern. The dedup_name_prefix guard (#883 codex R2) keeps
+            # the >0.9-similarity dedup inside insert_procedural_memory from
+            # matching a FOREIGN procedure_type='optimization' row (e.g.
+            # hpo_pattern_memory's) — without it the foreign row would be
+            # "updated" and returned, the pattern silently lost, and the
+            # prefix-filtered read would never see it.
             pattern_id = await insert_procedural_memory_with_text(
                 procedure=memory_input,
                 trigger_text=description,
+                dedup_name_prefix="optimization_pattern_",
             )
 
             logger.info(f"Stored optimization pattern: {pattern_id}")

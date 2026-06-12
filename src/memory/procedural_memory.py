@@ -179,7 +179,9 @@ async def find_relevant_procedures_by_text(
 
 
 async def insert_procedural_memory(
-    procedure: ProceduralMemoryInput, trigger_embedding: List[float]
+    procedure: ProceduralMemoryInput,
+    trigger_embedding: List[float],
+    dedup_name_prefix: Optional[str] = None,
 ) -> str:
     """
     Insert or update procedural memory with E2I context.
@@ -190,6 +192,12 @@ async def insert_procedural_memory(
     Args:
         procedure: ProceduralMemoryInput with procedure details
         trigger_embedding: Embedding of the trigger pattern
+        dedup_name_prefix: When set, the similarity dedup only matches rows
+            whose procedure_name starts with this prefix (#883: the dedup
+            filters by procedure_type only, and types like 'optimization' are
+            shared across writers — without a name guard a high-similarity
+            FOREIGN row would be "updated" and returned, silently dropping the
+            new pattern). Default None preserves the historical behavior.
 
     Returns:
         ID of inserted or updated procedure
@@ -203,10 +211,20 @@ async def insert_procedural_memory(
 
     client = get_supabase_client()
 
-    # Check for existing similar procedure
+    # Check for existing similar procedure. With a name-prefix guard we fetch a
+    # few candidates because the single best match may be a foreign row.
     existing = await find_relevant_procedures(
-        trigger_embedding, procedure.procedure_type, limit=1, min_similarity=0.9
+        trigger_embedding,
+        procedure.procedure_type,
+        limit=5 if dedup_name_prefix is not None else 1,
+        min_similarity=0.9,
     )
+    if dedup_name_prefix is not None:
+        existing = [
+            row
+            for row in existing
+            if str(row.get("procedure_name", "")).startswith(dedup_name_prefix)
+        ]
 
     if existing:
         procedure_id = existing[0]["procedure_id"]
@@ -256,7 +274,9 @@ async def insert_procedural_memory(
 
 
 async def insert_procedural_memory_with_text(
-    procedure: ProceduralMemoryInput, trigger_text: Optional[str] = None
+    procedure: ProceduralMemoryInput,
+    trigger_text: Optional[str] = None,
+    dedup_name_prefix: Optional[str] = None,
 ) -> str:
     """
     Insert procedural memory with auto-generated embedding.
@@ -264,6 +284,8 @@ async def insert_procedural_memory_with_text(
     Args:
         procedure: ProceduralMemoryInput with procedure details
         trigger_text: Text to embed (defaults to trigger_pattern)
+        dedup_name_prefix: Optional name-prefix guard for the similarity dedup
+            (see :func:`insert_procedural_memory`)
 
     Returns:
         ID of inserted or updated procedure
@@ -272,7 +294,11 @@ async def insert_procedural_memory_with_text(
     embedding_service = get_embedding_service()
     embedding = await embedding_service.embed(text)
 
-    return await insert_procedural_memory(procedure=procedure, trigger_embedding=embedding)
+    return await insert_procedural_memory(
+        procedure=procedure,
+        trigger_embedding=embedding,
+        dedup_name_prefix=dedup_name_prefix,
+    )
 
 
 async def get_few_shot_examples(
