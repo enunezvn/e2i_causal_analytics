@@ -5,6 +5,7 @@ import { queryClient, initTabVisibilityListener } from './lib/query-client'
 import { AuthProvider } from './providers'
 import { AppRouter } from './router'
 import { AppErrorBoundary } from './components/ui/error-boundary'
+import { MSWBanner } from './mocks/MSWBanner'
 import './index.css'
 
 /**
@@ -38,6 +39,10 @@ async function initApp() {
             <AppRouter />
           </AuthProvider>
         </QueryClientProvider>
+        {/* Persistent mock-data banner whenever MSW is intercepting requests.
+            DEV-gated so the component is tree-shaken from production builds
+            (MSWBanner itself imports nothing from msw). */}
+        {import.meta.env.DEV && <MSWBanner />}
       </AppErrorBoundary>
     </StrictMode>,
   )
