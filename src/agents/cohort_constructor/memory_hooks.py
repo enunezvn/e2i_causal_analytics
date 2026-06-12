@@ -601,6 +601,7 @@ class CohortConstructorMemoryHooks:
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
                 hydrate_raw_content,
                 search_episodic_by_text,
             )
@@ -614,10 +615,14 @@ class CohortConstructorMemoryHooks:
             if brand:
                 filters.brand = brand
 
+            # Bounded candidate window, NOT a small fixed multiple: the
+            # eligibility/status post-filter below runs on hydrated content,
+            # and a `limit * 2` window starves when high-similarity
+            # non-matching rows fill it (codex R1 on the #883 read-side fix).
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit * 2,
+                limit=content_filter_fetch_limit(limit),
                 min_similarity=0.5,
                 include_entity_context=False,
             )

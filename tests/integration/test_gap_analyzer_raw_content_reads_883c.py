@@ -231,3 +231,82 @@ async def test_opportunity_benchmarks_hydrates_payload_and_filters():
         )
     finally:
         _cleanup_episodic(memory_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(300)  # 8 real-embedding inserts; measured well under 60s, x3+ headroom
+async def test_content_filter_overfetch_window_survives_decoy_starvation():
+    """codex R1 (MED): a FIXED small over-fetch (limit*3) starves the
+    post-filter when high-similarity non-matching rows fill the fetched
+    window — the matching row sits just below it and the reader returns []
+    even though a match EXISTS. RED quoted against the limit*3 window:
+    6 decoys whose embedded text is an exact copy of the query out-ranked
+    the 1 matching row; ``_get_episodic_context(limit=1, metrics=...)``
+    fetched 3 candidates (all decoys) -> []. GREEN: the bounded candidate
+    window (``content_filter_fetch_limit``: >=50, capped 100) reaches past
+    the decoys.
+
+    Determinism: decoys embed the EXACT search query text (similarity ~1.0);
+    the matching row's embedded text carries extra tokens so it ranks below
+    every decoy.
+    """
+    from src.agents.gap_analyzer.memory_hooks import GapAnalyzerMemoryHooks
+
+    session_id = str(uuid.uuid4())
+    marker = f"883c-gap-starve-{uuid.uuid4().hex[:12]}"
+    query = f"TRx opportunity window starvation probe ({marker})"
+
+    from src.agents.gap_analyzer.memory_hooks import GapAnalyzerMemoryHooks as _H
+
+    async def _seed(metrics: list, embed_text: str) -> str | None:
+        hooks = _H()
+        result = {
+            "prioritized_opportunities": [],
+            "total_addressable_value": 10_000,
+            "quick_wins": [],
+            "strategic_bets": [],
+            "confidence": 0.5,
+            "executive_summary": embed_text,
+            "key_insights": [],
+        }
+        state = {
+            "query": embed_text,
+            "brand": "remibrutinib",
+            "metrics": metrics,
+            "segments": ["region"],
+            "status": "completed",
+        }
+        return await hooks.store_gap_analysis(
+            session_id=session_id, result=result, state=state, region="northeast"
+        )
+
+    seeded: list = []
+    try:
+        # 6 decoys: same brand, NON-matching metric, embedded text == query.
+        for _ in range(6):
+            mid = await _seed(metrics=["nbrx_share"], embed_text=query)
+            assert mid, "decoy seed failed"
+            seeded.append(mid)
+        # 1 match: the wanted metric, embedded text ranks BELOW the decoys.
+        match_id = await _seed(
+            metrics=["trx_rate"],
+            embed_text=f"{query} additional benchmark detail northeast specialty mix",
+        )
+        assert match_id, "matching seed failed"
+        seeded.append(match_id)
+
+        hooks = GapAnalyzerMemoryHooks()
+        results = await hooks._get_episodic_context(
+            query=query,
+            brand="remibrutinib",
+            metrics=["trx_rate"],
+            limit=1,
+        )
+        assert str(match_id) in {str(r.get("memory_id")) for r in results}, (
+            "the matching row exists but was starved out of the over-fetch "
+            "window by higher-similarity non-matching rows (codex R1 MED: "
+            "fixed limit*3 window)"
+        )
+    finally:
+        for mid in seeded:
+            _cleanup_episodic(mid)

@@ -204,6 +204,7 @@ class GapAnalyzerMemoryHooks:
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
                 hydrate_raw_content,
                 search_episodic_by_text,
             )
@@ -218,7 +219,7 @@ class GapAnalyzerMemoryHooks:
             results = await search_episodic_by_text(
                 query_text=query,
                 filters=filters,
-                limit=limit * 3 if needs_content_filter else limit,
+                limit=content_filter_fetch_limit(limit) if needs_content_filter else limit,
                 min_similarity=0.6,
                 include_entity_context=False,
             )
@@ -442,6 +443,7 @@ class GapAnalyzerMemoryHooks:
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
                 hydrate_raw_content,
                 search_episodic_by_text,
             )
@@ -461,7 +463,7 @@ class GapAnalyzerMemoryHooks:
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit * 3 if metric else limit,
+                limit=content_filter_fetch_limit(limit) if metric else limit,
                 min_similarity=0.4,
                 include_entity_context=False,
             )
@@ -501,6 +503,7 @@ class GapAnalyzerMemoryHooks:
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
                 hydrate_raw_content,
                 search_episodic_by_text,
             )
@@ -519,7 +522,7 @@ class GapAnalyzerMemoryHooks:
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit * 3,
+                limit=content_filter_fetch_limit(limit),
                 min_similarity=0.5,
                 include_entity_context=False,
             )
