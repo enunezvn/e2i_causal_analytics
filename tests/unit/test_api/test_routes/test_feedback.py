@@ -24,16 +24,16 @@ from fastapi import HTTPException
 def _no_live_supabase_in_route_unit_tests(monkeypatch):
     """Isolate this suite from the live DB (#883 hermetic lesson).
 
-    On this box pytest autoloads ``.env`` (real SUPABASE creds), and
-    ``mock_feedback_learner_agent`` below patches a NONEXISTENT symbol
+    On this box pytest autoloads ``.env`` (real SUPABASE creds). Historically
+    ``mock_feedback_learner_agent`` patched a NONEXISTENT symbol
     (``create_feedback_learner_graph``, create=True) — a vacuous mock — so the
-    sync learning-cycle test runs the REAL graph against REAL production
-    stores: pre-#883-defL it silently deposited one real
-    ``dspy_agent_training_signals`` row per run (verified on clean main), and
-    with the rubric path now armed it could also judge+persist real
-    ``learning_signals`` rows. Pin the production builder to the fail-closed
-    triple and the default persist factory to None; tests that patch the
-    builder explicitly override this.
+    sync learning-cycle test ran the REAL graph against REAL production
+    stores, silently depositing one ``dspy_agent_training_signals`` row per
+    run. #892 repointed the fixture at the real builder
+    (``build_feedback_learner_graph``); this guard stays as defense in depth
+    so no future fixture regression can reach the live DB again: pin the
+    production builder to the fail-closed triple and the default persist
+    factory to None. Tests that patch the builder explicitly override this.
     """
 
     async def _disarmed():
@@ -86,10 +86,16 @@ def mock_opik_feedback():
 
 @pytest.fixture
 def mock_feedback_learner_agent():
-    """Mock the Feedback Learner agent."""
-    # Import the graph module to patch it
-    import src.agents.feedback_learner.graph as graph_module
+    """Mock the Feedback Learner graph at the symbol the route actually uses.
 
+    ``_execute_learning_cycle`` does ``from src.agents.feedback_learner.graph
+    import build_feedback_learner_graph`` at call time, so patching that module
+    attribute intercepts the import. (#892: the old fixture patched a
+    NONEXISTENT ``create_feedback_learner_graph`` with ``create=True`` — the
+    patch bound nothing the route reads, and the sync test silently ran the
+    REAL graph. Proven by canary: ``mock_graph.ainvoke.assert_awaited()``
+    failed while the test passed.)
+    """
     mock_graph = AsyncMock()
     mock_result = {
         "status": "completed",
@@ -106,13 +112,14 @@ def mock_feedback_learner_agent():
     }
     mock_graph.ainvoke.return_value = mock_result
 
-    # Patch the function that the route tries to import (use create=True for non-existent attr)
-    def mock_create():
-        return mock_graph
-
-    with patch.object(graph_module, "create_feedback_learner_graph", mock_create, create=True):
-        with patch("src.agents.feedback_learner.state.FeedbackLearnerState", dict):
-            yield mock_graph
+    # The route calls build_feedback_learner_graph(feedback_store=...,
+    # knowledge_stores=..., db_client=..., persist_signals=True); accept and
+    # ignore those kwargs.
+    with patch(
+        "src.agents.feedback_learner.graph.build_feedback_learner_graph",
+        return_value=mock_graph,
+    ):
+        yield mock_graph
 
 
 @pytest.fixture
@@ -228,6 +235,10 @@ async def test_run_learning_cycle_sync(sample_run_learning_request, mock_feedbac
     assert result.status == LearningStatus.COMPLETED
     assert result.batch_id.startswith("fb_")
     assert isinstance(result.total_latency_ms, int)
+    # #892: pin that the mocked graph is what ran (the old create=True fixture
+    # bound nothing and this test silently exercised the REAL graph).
+    mock_feedback_learner_agent.ainvoke.assert_awaited_once()
+    assert result.learning_summary == "Test summary"
 
 
 @pytest.mark.asyncio
