@@ -4,6 +4,14 @@ E2I Causal Analytics - Semantic Graph Seed Script.
 
 Seeds the FalkorDB `e2i_semantic` graph with E2I domain entities and relationships.
 
+⚠️ LEGACY TARGET (#749, #890): the deployed semantic-memory graph is
+`e2i_causal` (config/005_memory_config.yaml) — no runtime reader uses
+`e2i_semantic`, and the empty `e2i_semantic` shell is slated for removal
+(scripts/cleanup_falkordb_shells.py). This script is no longer invoked by
+any default path (compose seeder, deploy.sh); it remains only for explicit
+manual runs and will populate a graph nothing reads.
+
+Original design (pre-#749), kept for context:
 This script complements `seed_falkordb.py` which seeds `e2i_causal`. Both graphs
 contain similar data but serve different purposes:
 - e2i_causal: Causal inference analysis

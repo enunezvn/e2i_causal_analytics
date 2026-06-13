@@ -2,11 +2,17 @@
 # =============================================================================
 # E2I Causal Analytics - FalkorDB Graph Seeding Wrapper
 # =============================================================================
-# Seeds both FalkorDB graphs (e2i_causal + e2i_semantic) if they're empty.
+# Seeds the FalkorDB e2i_causal graph if it's empty.
+#
+# NOTE (#890): the e2i_semantic seeding step was retired. The deployed semantic
+# graph is e2i_causal (config/005_memory_config.yaml, #749) -- no runtime
+# reader uses e2i_semantic, and even the read-only count probe here re-created
+# the empty e2i_semantic graph shell (FalkorDB creates a graph key on any
+# GRAPH.QUERY). scripts/seed_semantic_graph.py remains for explicit manual runs.
 #
 # Usage:
-#   ./scripts/seed_falkordb_all.sh              # Seed empty graphs (host port 6381)
-#   ./scripts/seed_falkordb_all.sh --force      # Clear and re-seed both graphs
+#   ./scripts/seed_falkordb_all.sh              # Seed if empty (host port 6381)
+#   ./scripts/seed_falkordb_all.sh --force      # Clear and re-seed e2i_causal
 #   ./scripts/seed_falkordb_all.sh --docker     # Use internal port 6379 (inside Docker)
 #
 # Environment:
@@ -28,7 +34,7 @@ while [[ $# -gt 0 ]]; do
         --docker) DOCKER_MODE=true; shift ;;
         --help|-h)
             echo "Usage: $0 [--force] [--docker]"
-            echo "  --force   Clear and re-seed both graphs"
+            echo "  --force   Clear and re-seed e2i_causal"
             echo "  --docker  Use internal port 6379 (for use inside Docker network)"
             exit 0
             ;;
@@ -114,55 +120,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Seed e2i_semantic
-# ---------------------------------------------------------------------------
-SEMANTIC_COUNT=$(count_nodes "e2i_semantic")
-echo ""
-echo "e2i_semantic: $SEMANTIC_COUNT nodes"
-
-if $FORCE || [ "$SEMANTIC_COUNT" -eq 0 ]; then
-    if $FORCE && [ "$SEMANTIC_COUNT" -gt 0 ]; then
-        echo "  Forcing re-seed (clearing $SEMANTIC_COUNT nodes)..."
-        CLEAR_FLAG="--clear-first"
-    else
-        echo "  Graph is empty -- seeding..."
-        CLEAR_FLAG="--clear-first"
-    fi
-
-    FALKORDB_HOST="$FALKORDB_HOST" \
-    FALKORDB_PORT="$FALKORDB_PORT" \
-    FALKORDB_PASSWORD="$FALKORDB_PASSWORD" \
-    python3 "$PROJECT_DIR/scripts/seed_semantic_graph.py" \
-        $CLEAR_FLAG || {
-        echo "ERROR: e2i_semantic seeding failed"
-        exit 1
-    }
-else
-    echo "  Already has $SEMANTIC_COUNT nodes -- skipping"
-fi
-
-# ---------------------------------------------------------------------------
-# Verify both graphs
+# Verify
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Verification ==="
 CAUSAL_FINAL=$(count_nodes "e2i_causal")
-SEMANTIC_FINAL=$(count_nodes "e2i_semantic")
 
 echo "e2i_causal:   $CAUSAL_FINAL nodes"
-echo "e2i_semantic: $SEMANTIC_FINAL nodes"
 
-FAILED=false
 if [ "$CAUSAL_FINAL" -eq 0 ]; then
     echo "ERROR: e2i_causal is still empty!"
-    FAILED=true
-fi
-if [ "$SEMANTIC_FINAL" -eq 0 ]; then
-    echo "ERROR: e2i_semantic is still empty!"
-    FAILED=true
-fi
-
-if $FAILED; then
     echo ""
     echo "Seeding FAILED. Check logs above."
     exit 1
