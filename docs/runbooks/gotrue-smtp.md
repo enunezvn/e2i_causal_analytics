@@ -63,7 +63,37 @@ Then walk the UI flow: `/forgot-password` → receive email → click link → `
 log in with the new password. The reset link must land on the public origin (covered by
 `SITE_URL` + `ADDITIONAL_REDIRECT_URLS` above).
 
+## ⚠️ CRITICAL: DigitalOcean blocks outbound SMTP on this droplet (verified 2026-06-13)
+
+Gmail SMTP creds were added to `/opt/supabase/docker/.env` and the auth container loaded them
+correctly (`GOTRUE_SMTP_HOST=smtp.gmail.com:465`, user `etn3724@gmail.com`, `SITE_URL=https://eznomics.site`).
+But a live `POST /auth/v1/recover` returned **504 (10s timeout, `context deadline exceeded`)** — the
+SMTP send hung. Cheap-disproof from the droplet AND inside the auth container:
+
+```
+port 465: BLOCKED/timeout   port 587: BLOCKED/timeout   port 25: BLOCKED/timeout
+smtp.sendgrid.net:2525: OPEN   smtp.mailgun.org:2525: OPEN   api.sendgrid.com:443: OPEN
+```
+
+**DigitalOcean blocks outbound 25/465/587 by default (anti-spam).** So **Gmail SMTP cannot work
+here** (Gmail offers only 465/587, no 2525). The creds are correct; the network path is blocked.
+
+### Working paths (pick one)
+1. **Provider on port 2525** (RECOMMENDED — 2525 is open, no DO ticket needed). Use SendGrid /
+   Mailgun / Postmark free tier:
+   ```
+   SMTP_HOST=smtp.sendgrid.net   SMTP_PORT=2525   SMTP_USER=apikey   SMTP_PASS=<sendgrid API key>
+   SMTP_ADMIN_EMAIL=<verified sender>   SMTP_SENDER_NAME=E2I Causal Analytics
+   ```
+   then `cd /opt/supabase/docker && docker compose up -d auth` and re-run the recover test.
+2. **Ask DigitalOcean to unblock SMTP** (support ticket; they lift 25/465/587 after account
+   review). Then the current Gmail-on-587 config works (switch `SMTP_PORT=465`→`587`).
+3. **GoTrue Send-Email Hook over HTTPS** (port 443 is open) — call a provider's REST API from a
+   hook instead of SMTP. Most setup; only if 1 & 2 are unavailable.
+
 ## Status
 
-Config-ready (PR #918). **Blocked on the SMTP provider + credentials decision** — these are
-external and the user's to provide. No code/repo change can complete it without creds.
+Config is CORRECT and the auth container loads it; **the live blocker is DO's outbound-SMTP
+firewall, not creds**. Gmail is infeasible on this droplet. Resolution = a 2525 provider (path 1,
+no infra change) or a DO SMTP-unblock ticket (path 2). Low-urgency: signup is locked and the
+reviewer account has known creds, so self-service recovery is rarely exercised.
