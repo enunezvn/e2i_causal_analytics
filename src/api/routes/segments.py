@@ -154,8 +154,20 @@ class CATEResult(BaseModel):
     segment_name: str = Field(..., description="Segment dimension name")
     segment_value: str = Field(..., description="Segment value")
     cate_estimate: float = Field(..., description="Conditional Average Treatment Effect")
-    cate_ci_lower: float = Field(..., description="95% CI lower bound")
-    cate_ci_upper: float = Field(..., description="95% CI upper bound")
+    cate_ci_lower: float = Field(
+        ...,
+        description=(
+            "CATE CI lower bound at the response's confidence_level "
+            "(default 95%; see SegmentAnalysisResponse.confidence_level)"
+        ),
+    )
+    cate_ci_upper: float = Field(
+        ...,
+        description=(
+            "CATE CI upper bound at the response's confidence_level "
+            "(default 95%; see SegmentAnalysisResponse.confidence_level)"
+        ),
+    )
     sample_size: int = Field(..., description="Number of observations in segment")
     statistical_significance: bool = Field(
         ..., description="Whether effect is statistically significant"
@@ -212,6 +224,20 @@ class SegmentAnalysisResponse(BaseModel):
     )
     overall_ate: Optional[float] = Field(
         default=None, description="Overall Average Treatment Effect"
+    )
+    confidence_level: float = Field(
+        default=0.95,
+        gt=0.5,
+        lt=1.0,
+        description=(
+            "Confidence level the CATE CIs (cate_by_segment[*].cate_ci_lower/"
+            "upper) are computed at, e.g. 0.95 => a 95% CI. Derived from the "
+            "request's significance_level (confidence_level = 1 - "
+            "significance_level). Exposed (#27) so the UI labels the intervals "
+            "truthfully instead of assuming 95%. Range mirrors the EXACT inverse "
+            "of RunSegmentAnalysisRequest.significance_level (gt=0.0, lt=0.5) so "
+            "no previously-valid request can fail response validation."
+        ),
     )
     heterogeneity_score: Optional[float] = Field(
         default=None, description="Treatment effect heterogeneity (0-1)"
@@ -858,6 +884,9 @@ async def run_segment_analysis(
         analysis_id=analysis_id,
         status=AnalysisStatus.PENDING if async_mode else AnalysisStatus.ESTIMATING,
         question_type=request.question_type,
+        # #27: carry the requested CI level (alpha=significance_level) from the
+        # start so an async poller sees the level its CATE CIs will use.
+        confidence_level=1.0 - request.significance_level,
     )
 
     if async_mode:
@@ -1156,6 +1185,8 @@ async def _execute_segment_analysis(
             question_type=request.question_type,
             cate_by_segment=_convert_cate_results(result.get("cate_by_segment", {})),
             overall_ate=result.get("overall_ate"),
+            # #27: echo the level the CATE CIs were computed at (alpha=significance_level).
+            confidence_level=1.0 - request.significance_level,
             heterogeneity_score=result.get("heterogeneity_score"),
             feature_importance=result.get("feature_importance"),
             uplift_metrics=_convert_uplift_metrics(result),
@@ -1345,6 +1376,7 @@ def _generate_mock_response(
         question_type=request.question_type,
         cate_by_segment=mock_cate,
         overall_ate=10.5,
+        confidence_level=1.0 - request.significance_level,
         heterogeneity_score=0.65,
         feature_importance={
             request.segment_vars[0]: 0.42,

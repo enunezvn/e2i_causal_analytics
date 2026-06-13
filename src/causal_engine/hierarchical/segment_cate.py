@@ -24,6 +24,8 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+from src.causal.stats import z_score_for_confidence
+
 logger = logging.getLogger(__name__)
 
 
@@ -635,8 +637,11 @@ class SegmentCATECalculator:
         except Exception:
             pass
 
-        # Fallback to normal approximation
-        z = 1.96 if self.config.ci_confidence_level == 0.95 else 2.576
+        # Fallback to normal approximation. #27: derive z from the configured
+        # confidence level (scipy-exact) so a 0.90 request yields ~1.645, not the
+        # old binary 1.96-or-2.576 which silently produced a 99% z for ANY
+        # non-0.95 level (e.g. a 0.90 request got 2.576) -- mislabeling the CI.
+        z = z_score_for_confidence(self.config.ci_confidence_level)
         n = len(cate_values)
         se = cate_std / np.sqrt(n) if n > 0 else cate_std
 
@@ -672,7 +677,8 @@ class SegmentCATECalculator:
         else:
             se = np.std(outcome) / np.sqrt(n) if n > 0 else 0
 
-        z = 1.96 if self.config.ci_confidence_level == 0.95 else 2.576
+        # #27: derive z from the configured confidence level (see _compute_ci).
+        z = z_score_for_confidence(self.config.ci_confidence_level)
         ci_lower = cate_mean - z * se
         ci_upper = cate_mean + z * se
 

@@ -59,6 +59,7 @@ from src.api.schemas.causal import (
     SequentialPipelineResponse,
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.causal.stats import z_score_for_confidence
 
 # #354 C-8: real-pipeline wiring (replaces 503-default short-circuit in
 # non-demo mode). Imported lazily-safely; the LibraryExecutor implementations
@@ -225,6 +226,7 @@ async def run_hierarchical_analysis(
             overall_ate=None,
             overall_ci_lower=None,
             overall_ci_upper=None,
+            confidence_level=request.confidence_level,
             segment_heterogeneity=None,
             n_segments_analyzed=0,
             segmentation_method=request.segmentation_method.value,
@@ -310,6 +312,7 @@ async def _run_hierarchical_analysis_task(
             overall_ate=None,
             overall_ci_lower=None,
             overall_ci_upper=None,
+            confidence_level=request.confidence_level,
             segment_heterogeneity=None,
             n_segments_analyzed=0,
             segmentation_method=request.segmentation_method.value,
@@ -356,6 +359,7 @@ def _build_hierarchical_demo_response(
         overall_ate=0.0,
         overall_ci_lower=0.0,
         overall_ci_upper=0.0,
+        confidence_level=request.confidence_level,
         segment_heterogeneity=0.0,
         n_segments_analyzed=request.n_segments,
         segmentation_method=request.segmentation_method.value,
@@ -532,6 +536,7 @@ async def _execute_hierarchical_analysis(
             overall_ate=result.overall_ate,
             overall_ci_lower=result.overall_ate_ci_lower,
             overall_ci_upper=result.overall_ate_ci_upper,
+            confidence_level=request.confidence_level,
             segment_heterogeneity=result.segment_heterogeneity,
             n_segments_analyzed=result.n_segments,
             segmentation_method=request.segmentation_method.value,
@@ -747,6 +752,7 @@ async def run_sequential_pipeline(
             consensus_effect=None,
             consensus_ci_lower=None,
             consensus_ci_upper=None,
+            confidence_level=request.confidence_level,
             library_agreement_score=None,
             effect_estimate_variance=None,
             total_latency_ms=0,
@@ -798,6 +804,7 @@ async def _run_sequential_pipeline_task(
             consensus_effect=None,
             consensus_ci_lower=None,
             consensus_ci_upper=None,
+            confidence_level=request.confidence_level,
             library_agreement_score=None,
             effect_estimate_variance=None,
             total_latency_ms=0,
@@ -1296,6 +1303,8 @@ def _sequential_output_to_response(
         consensus_effect=consensus_effect,
         consensus_ci_lower=None,  # Not produced by the engine output today
         consensus_ci_upper=None,
+        # #27: report the level the consensus CI WOULD use (CI itself None today).
+        confidence_level=request.confidence_level,
         # H8: a REAL library-agreement metric (mean pairwise concordance), NOT
         # consensus_confidence (the mean of per-library confidences, which the API
         # previously mislabeled as agreement).
@@ -1390,6 +1399,11 @@ def _parallel_output_to_response(
         consensus_effect=consensus_effect,
         consensus_ci_lower=None,
         consensus_ci_upper=None,
+        # #27: report the confidence level the consensus CI WOULD use. The real
+        # engine does not emit a consensus CI today (lower/upper stay None), but
+        # echoing the requested level keeps the field consistent with the demo
+        # path and lets the UI label any future interval truthfully.
+        confidence_level=request.confidence_level,
         # H8: real mean-pairwise-concordance agreement, not consensus_confidence.
         library_agreement_score=(state.get("library_agreement_score") if state else None),
         consensus_method=request.consensus_method,
@@ -1771,6 +1785,7 @@ async def _execute_sequential_pipeline(
         consensus_effect=consensus_effect,
         consensus_ci_lower=consensus_ci_lower,
         consensus_ci_upper=consensus_ci_upper,
+        confidence_level=request.confidence_level,
         library_agreement_score=agreement_score,
         effect_estimate_variance=variance,
         total_latency_ms=total_latency_ms,
@@ -1897,11 +1912,18 @@ async def run_parallel_pipeline(
         if effect_estimates:
             import statistics
 
+            # #27: derive the CI z-score from the requested confidence level
+            # (default 0.95 => z~1.96, preserving the legacy half-width) instead
+            # of a hardcoded magic number, and echo the level in the response so
+            # the UI can label the interval truthfully. NB: this is the demo
+            # path -- every library returns effect_estimate=0.0, so std==0.0 and
+            # the interval is [consensus_effect, consensus_effect] at ANY z.
+            z = z_score_for_confidence(request.confidence_level)
             consensus_effect = statistics.mean(effect_estimates)
             if len(effect_estimates) > 1:
                 std = statistics.stdev(effect_estimates)
-                consensus_ci_lower = consensus_effect - 1.96 * std
-                consensus_ci_upper = consensus_effect + 1.96 * std
+                consensus_ci_lower = consensus_effect - z * std
+                consensus_ci_upper = consensus_effect + z * std
                 cv = std / abs(consensus_effect) if consensus_effect != 0 else 1
                 agreement_score = max(0, 1 - cv)
             else:
@@ -1927,6 +1949,7 @@ async def run_parallel_pipeline(
             consensus_effect=consensus_effect,
             consensus_ci_lower=consensus_ci_lower,
             consensus_ci_upper=consensus_ci_upper,
+            confidence_level=request.confidence_level,
             library_agreement_score=agreement_score,
             consensus_method=request.consensus_method,
             total_latency_ms=total_latency_ms,
