@@ -694,6 +694,10 @@ export const KPIResultWireSchema = z.object({
   cached: z.boolean(),
   cache_expires_at: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
+  // 'database' = real (synthetic-excluded) rows; 'synthetic' = computed over
+  // synthetic-gold rows in E2I_KPI_INCLUDE_SYNTHETIC demo mode. MUST be declared
+  // here or Zod strips it from getKPIValue()'s result before the FE can badge it.
+  data_source: z.string().nullable().optional(),
   causal_library_used: z.string().nullable().optional(),
   confidence_interval: z.array(z.number()).nullable().optional(),
   p_value: z.number().nullable().optional(),

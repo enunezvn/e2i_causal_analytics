@@ -261,6 +261,18 @@ function TimeSeries() {
 
   return (
     <div className="container mx-auto px-4 py-8">
+      {/* Synthetic demo-data disclosure: the KPI-history series is computed over
+          synthetic-gold rows in E2I_KPI_INCLUDE_SYNTHETIC mode — label it so a
+          reviewer never reads the trend as real-world data. */}
+      {kpiValue.data?.data_source === 'synthetic' && (
+        <div
+          role="status"
+          className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          Showing <strong>synthetic demo data</strong> — this KPI series is computed on a
+          synthetic dataset for review, not real-world data.
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>

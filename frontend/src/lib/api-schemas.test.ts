@@ -23,6 +23,7 @@ import {
   schemaRegistry,
   getSchema,
   // C31 wire schemas
+  KPIResultWireSchema,
   KPIListResponseWireSchema,
   ModelsStatusResponseWireSchema,
   AlertListResponseWireSchema,
@@ -140,6 +141,28 @@ describe('KPI Schemas', () => {
 
       const result = KPIResultSchema.safeParse(resultWithStats);
       expect(result.success).toBe(true);
+    });
+
+    it('preserves data_source on both KPI result schemas (no Zod strip)', () => {
+      // Regression: getKPIValue() validates with KPIResultWireSchema and the
+      // batch path with KPIResultSchema. Zod strips unknown keys, so the
+      // synthetic-mode provenance MUST be declared on BOTH or the FE silently
+      // loses the "synthetic" label and renders synthetic figures as real.
+      const synthetic = {
+        kpi_id: 'WS1-MP-001',
+        value: 0.7704,
+        status: 'good',
+        calculated_at: '2026-06-13T10:30:00Z',
+        cached: false,
+        data_source: 'synthetic',
+        metadata: {},
+      };
+      const wire = KPIResultWireSchema.safeParse(synthetic);
+      const batch = KPIResultSchema.safeParse(synthetic);
+      expect(wire.success).toBe(true);
+      expect(batch.success).toBe(true);
+      expect(wire.success && wire.data.data_source).toBe('synthetic');
+      expect(batch.success && batch.data.data_source).toBe('synthetic');
     });
   });
 
