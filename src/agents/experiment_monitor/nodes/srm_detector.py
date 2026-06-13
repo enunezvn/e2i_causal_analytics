@@ -129,9 +129,14 @@ class SRMDetectorNode:
         # Get expected ratio (default 50/50 split)
         expected_ratio = {"control": 0.5, "treatment": 0.5}
 
-        # Get actual counts
+        from src.repositories.provenance import coerce_provenance_flag
+
+        # Get actual counts (#894: strictly parsed state opt-in, real-mode
+        # default-exclude — synthetic assignments must not drive SRM alerts)
         if client:
-            actual_counts = await self._get_variant_counts(client, exp_id)
+            actual_counts = await self._get_variant_counts(
+                client, exp_id, coerce_provenance_flag(state.get("include_synthetic"))
+            )
         else:
             # Mock data for testing
             actual_counts = {"control": 48, "treatment": 52}
@@ -167,23 +172,29 @@ class SRMDetectorNode:
 
         return None
 
-    async def _get_variant_counts(self, client: Any, experiment_id: str) -> Dict[str, int]:
+    async def _get_variant_counts(
+        self, client: Any, experiment_id: str, include_synthetic: bool = False
+    ) -> Dict[str, int]:
         """Get counts by variant for an experiment.
 
         Args:
             client: Supabase client
             experiment_id: Experiment ID
+            include_synthetic: When True, do not exclude synthetic rows
+                (opt-in; ab_experiment_assignments is is_synthetic-tagged, #894)
 
         Returns:
             Dictionary mapping variant names to counts
         """
+        from src.repositories.provenance import apply_provenance_filter
+
         try:
-            result = await (
+            query = (
                 client.table("ab_experiment_assignments")
                 .select("variant")
                 .eq("experiment_id", experiment_id)
-                .execute()
             )
+            result = await apply_provenance_filter(query, include_synthetic).execute()
 
             if not result.data:
                 return {}

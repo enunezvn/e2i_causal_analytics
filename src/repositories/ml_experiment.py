@@ -338,20 +338,30 @@ class MLModelRegistry:
 
 
 class MLExperimentRepository(BaseRepository[MLExperiment]):
-    """Repository for ML Experiments."""
+    """Repository for ML Experiments.
+
+    Provenance (#894): ``ml_experiments`` carries ``is_synthetic`` (migration
+    069) and the synthetic mlops generator stamps 360 perpetually-"running"
+    experiments, so real-mode reads default-exclude synthetic rows —
+    ``include_synthetic=True`` opts in per read.
+    """
 
     table_name = "ml_experiments"
     model_class = MLExperiment
+    HAS_PROVENANCE = True  # migration 069 (#894)
 
     def _to_model(self, data: Dict[str, Any]) -> MLExperiment:
         """Convert database row to model."""
         return MLExperiment.from_dict(data)
 
-    async def get_by_name(self, name: str) -> Optional[MLExperiment]:
-        """Get experiment by name.
+    async def get_by_name(
+        self, name: str, include_synthetic: bool = False
+    ) -> Optional[MLExperiment]:
+        """Get experiment by name (a synthetic name must not resolve in real mode).
 
         Args:
             name: Experiment name
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             MLExperiment or None
@@ -359,20 +369,20 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
         if not self.client:
             return None
 
-        result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("experiment_name", name)
-            .limit(1)
-            .execute()
-        )
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("experiment_name", name)
+        result = await apply_provenance_filter(query, include_synthetic).limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
 
-    async def get_by_mlflow_id(self, mlflow_id: str) -> Optional[MLExperiment]:
+    async def get_by_mlflow_id(
+        self, mlflow_id: str, include_synthetic: bool = False
+    ) -> Optional[MLExperiment]:
         """Get experiment by MLflow ID.
 
         Args:
             mlflow_id: MLflow experiment ID
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             MLExperiment or None
@@ -380,13 +390,10 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
         if not self.client:
             return None
 
-        result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("mlflow_experiment_id", mlflow_id)
-            .limit(1)
-            .execute()
-        )
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("mlflow_experiment_id", mlflow_id)
+        result = await apply_provenance_filter(query, include_synthetic).limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
 
     async def create_experiment(
@@ -466,20 +473,31 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
 
 
 class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
-    """Repository for ML Training Runs."""
+    """Repository for ML Training Runs.
+
+    Provenance (#894): ``ml_training_runs`` carries ``is_synthetic``
+    (migration 069; live substrate 720/720 synthetic at filing time). Real-mode
+    reads default-exclude synthetic runs — notably
+    ``monitoring._verify_success_provenance`` must never certify a manual
+    SUCCESS completion against a synthetic training run.
+    """
 
     table_name = "ml_training_runs"
     model_class = MLTrainingRun
+    HAS_PROVENANCE = True  # migration 069 (#894)
 
     def _to_model(self, data: Dict[str, Any]) -> MLTrainingRun:
         """Convert database row to model."""
         return MLTrainingRun.from_dict(data)
 
-    async def get_by_mlflow_run_id(self, mlflow_run_id: str) -> Optional[MLTrainingRun]:
+    async def get_by_mlflow_run_id(
+        self, mlflow_run_id: str, include_synthetic: bool = False
+    ) -> Optional[MLTrainingRun]:
         """Get training run by MLflow run ID.
 
         Args:
             mlflow_run_id: MLflow run ID
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             MLTrainingRun or None
@@ -487,13 +505,10 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if not self.client:
             return None
 
-        result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("mlflow_run_id", mlflow_run_id)
-            .limit(1)
-            .execute()
-        )
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("mlflow_run_id", mlflow_run_id)
+        result = await apply_provenance_filter(query, include_synthetic).limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
 
     async def create_run(
@@ -763,21 +778,35 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
 
 
 class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
-    """Repository for ML Model Registry."""
+    """Repository for ML Model Registry.
+
+    Provenance (#894): ``ml_model_registry`` carries ``is_synthetic``
+    (migration 069) and the synthetic mlops generator stamps its rows with
+    ``stage='production'`` (720/722 live rows synthetic at filing time — only
+    their NULL ``artifact_path`` kept them out of serving). Real-mode reads
+    default-exclude synthetic rows; the serving reads
+    (:meth:`get_models_for_target` / :meth:`get_model_performance_for_target`)
+    exclude them unconditionally — a synthetic model name must never reach the
+    prediction ensemble.
+    """
 
     table_name = "ml_model_registry"
     model_class = MLModelRegistry
+    HAS_PROVENANCE = True  # migration 069 (#894)
 
     def _to_model(self, data: Dict[str, Any]) -> MLModelRegistry:
         """Convert database row to model."""
         return MLModelRegistry.from_dict(data)
 
-    async def get_by_name_version(self, model_name: str, version: str) -> Optional[MLModelRegistry]:
+    async def get_by_name_version(
+        self, model_name: str, version: str, include_synthetic: bool = False
+    ) -> Optional[MLModelRegistry]:
         """Get model by name and version.
 
         Args:
             model_name: Model name
             version: Model version
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             MLModelRegistry or None
@@ -785,23 +814,25 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return None
 
-        result = await (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("model_name", model_name)
             .eq("model_version", version)
-            .limit(1)
-            .execute()
         )
+        result = await apply_provenance_filter(query, include_synthetic).limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
 
     async def get_champion_model(
-        self, experiment_id: Optional[UUID] = None
+        self, experiment_id: Optional[UUID] = None, include_synthetic: bool = False
     ) -> Optional[MLModelRegistry]:
         """Get the current champion model.
 
         Args:
             experiment_id: Optional experiment filter
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Champion MLModelRegistry or None
@@ -809,10 +840,13 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return None
 
+        from src.repositories.provenance import apply_provenance_filter
+
         query = self.client.table(self.table_name).select("*").eq("is_champion", True)
 
         if experiment_id:
             query = query.eq("experiment_id", str(experiment_id))
+        query = apply_provenance_filter(query, include_synthetic)
 
         result = await query.limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
@@ -871,12 +905,17 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         # an embedded-column equality keeps the URL size independent of the
         # experiment count, and the serving-stage / loadable-artifact filters are
         # pushed server-side.
+        # Provenance (#894): the synthetic generator stamps stage='production'
+        # on its rows (mlops_generator.py:64) — only their NULL artifact_path
+        # kept them out of serving. The predicate is unconditional (no opt-in):
+        # a synthetic model name must never reach the prediction ensemble.
         reg_result = await (
             self.client.table(self.table_name)
             .select("model_name, stage, artifact_path, ml_experiments!inner(prediction_target)")
             .eq("ml_experiments.prediction_target", target)
             .in_("stage", list(self._SERVING_STAGES))
             .not_.is_("artifact_path", "null")
+            .eq("is_synthetic", False)
             .execute()
         )
 
@@ -917,6 +956,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return {}
 
+        # Same unconditional synthetic exclusion as get_models_for_target (#894).
         reg_result = await (
             self.client.table(self.table_name)
             .select(
@@ -927,6 +967,7 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             .eq("ml_experiments.prediction_target", target)
             .in_("stage", list(self._SERVING_STAGES))
             .not_.is_("artifact_path", "null")
+            .eq("is_synthetic", False)
             .execute()
         )
 

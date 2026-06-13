@@ -129,6 +129,11 @@ class ExperimentMonitorState(TypedDict):
     query: str
     experiment_ids: NotRequired[list[str]]
     check_all_active: bool
+    # #894 provenance opt-in: when truthy (strictly parsed via
+    # coerce_provenance_flag), the monitor's ml_experiments /
+    # ab_experiment_assignments reads include synthetic rows. Default
+    # (absent/ambiguous) is real mode — synthetic experiments are excluded.
+    include_synthetic: NotRequired[bool]
 
     # ===== Configuration (8) =====
     srm_threshold: float  # P-value threshold for SRM detection (default: 0.001)

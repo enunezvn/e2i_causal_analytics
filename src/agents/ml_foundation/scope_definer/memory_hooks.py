@@ -476,11 +476,17 @@ class ScopeDefinerMemoryHooks:
             limit: Maximum results to return
 
         Returns:
-            List of prior scope definitions
+            List of prior scope definitions (each row carries the hydrated
+            ``raw_content`` payload — the search RPC itself returns no
+            ``raw_content``, so the original ``validation_passed`` post-filter
+            saw ``{}`` on every row and this reader was permanently empty;
+            #889.)
         """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
@@ -491,18 +497,30 @@ class ScopeDefinerMemoryHooks:
                 agent_name="scope_definer",
             )
 
+            # The validation post-filter ALWAYS runs, so always over-fetch
+            # (bounded window, not a small fixed multiple — codex R1 on the
+            # #883 read-side fix: limit*2 starves when high-similarity
+            # non-matching rows fill the window).
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit * 2,
+                limit=content_filter_fetch_limit(limit),
                 min_similarity=0.5,
                 include_entity_context=False,
             )
+            results = await hydrate_raw_content(results)
 
-            # Filter by validation status
-            filtered = [
-                r for r in results if r.get("raw_content", {}).get("validation_passed", False)
-            ]
+            # Filter on the HYDRATED stored content. problem_type is a
+            # docstring-declared filter that previously only seeded the
+            # embedding text — make it real (the write stores the key).
+            filtered = []
+            for r in results:
+                content = r.get("raw_content", {})
+                if not content.get("validation_passed", False):
+                    continue
+                if problem_type and content.get("problem_type") != problem_type:
+                    continue
+                filtered.append(r)
 
             return filtered[:limit]
         except Exception as e:

@@ -332,7 +332,7 @@ describe('MultiAxisLineChart', () => {
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 
-  it('renders with sample data when no data provided', () => {
+  it('renders an honest empty state (never sample data) when no data provided', () => {
     const { container } = render(
       <MultiAxisLineChart
         data={undefined as unknown as Record<string, unknown>[]}
@@ -340,7 +340,9 @@ describe('MultiAxisLineChart', () => {
         axes={undefined as unknown as AxisConfig[]}
       />
     );
-    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    // The fabricated conversions/revenue series must never render.
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeInTheDocument();
+    expect(screen.getByText('No data available')).toBeInTheDocument();
   });
 
   it('shows loading skeleton when isLoading', () => {

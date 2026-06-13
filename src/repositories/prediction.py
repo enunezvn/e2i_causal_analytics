@@ -58,6 +58,7 @@ class PredictionRepository(SplitAwareRepository):
     """
 
     table_name = "ml_predictions"
+    id_column = "prediction_id"  # live PK (#894: .eq("id") was a latent 42703)
     model_class = None  # Set to Prediction model when available
     # ml_predictions carries the is_synthetic provenance column (migration 063).
     # Setting this True makes the inherited get_many/get_by_id default-exclude

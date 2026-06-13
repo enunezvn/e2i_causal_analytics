@@ -242,15 +242,18 @@ def scheduled_interim_analysis(
             # `control_data = []` placeholder. Bails honestly (no NaN) when there
             # are too few outcome-bearing units to run a sequential test.
             from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+            from src.repositories.provenance import apply_provenance_filter
             from src.services.interim_analysis import InterimAnalysisService, MetricData
 
-            exp_res = (
+            # #894: ml_experiments is is_synthetic-tagged — a synthetic
+            # experiment must not be interim-analyzed as real ("experiment
+            # not found" skip is the honest real-mode outcome).
+            exp_query = (
                 exp_repo.client.table("ml_experiments")
                 .select("brand,prediction_target")
                 .eq("id", experiment_id)
-                .limit(1)
-                .execute()
             )
+            exp_res = apply_provenance_filter(exp_query).limit(1).execute()
             exp_rows = exp_res.data or []
             if not exp_rows:
                 return {
@@ -360,13 +363,14 @@ def enrollment_health_check(
                     "reason": "No database client available",
                 }
 
-            # Get all active experiments
-            result = await (
-                client.table("ml_experiments")
-                .select("id, experiment_name")
-                .eq("status", "running")
-                .execute()
+            from src.repositories.provenance import apply_provenance_filter
+
+            # Get all active experiments (#894: default-exclude the 360
+            # synthetic perpetually-"running" rows from the sweep)
+            query = (
+                client.table("ml_experiments").select("id, experiment_name").eq("status", "running")
             )
+            result = await apply_provenance_filter(query).execute()
 
             if not result.data:
                 return {
@@ -537,13 +541,13 @@ def srm_detection_sweep(
                     "reason": "No database client available",
                 }
 
-            # Get all running experiments
-            result = await (
-                client.table("ml_experiments")
-                .select("id, experiment_name")
-                .eq("status", "running")
-                .execute()
+            from src.repositories.provenance import apply_provenance_filter
+
+            # Get all running experiments (#894: real-mode sweep only)
+            query = (
+                client.table("ml_experiments").select("id, experiment_name").eq("status", "running")
             )
+            result = await apply_provenance_filter(query).execute()
 
             if not result.data:
                 return {
@@ -716,13 +720,17 @@ def compute_experiment_results(
             # via the SYNC Supabase client (A/B-side convention — same client the
             # outcome feed + ABResultsRepository use).
             client = get_supabase_client()
-            exp_res = (
+
+            from src.repositories.provenance import apply_provenance_filter
+
+            # #894: a synthetic experiment must not produce "real" results —
+            # the honest real-mode outcome is the "experiment not found" skip.
+            exp_query = (
                 client.table("ml_experiments")
                 .select("brand,prediction_target")
                 .eq("id", experiment_id)
-                .limit(1)
-                .execute()
             )
+            exp_res = apply_provenance_filter(exp_query).limit(1).execute()
             exp_rows = exp_res.data or []
             if not exp_rows:
                 return {
@@ -928,13 +936,13 @@ def check_all_active_experiments(
                     "reason": "No database client available",
                 }
 
-            # Get all running experiments
-            result = await (
-                client.table("ml_experiments")
-                .select("id, experiment_name")
-                .eq("status", "running")
-                .execute()
+            from src.repositories.provenance import apply_provenance_filter
+
+            # Get all running experiments (#894: real-mode sweep only)
+            query = (
+                client.table("ml_experiments").select("id, experiment_name").eq("status", "running")
             )
+            result = await apply_provenance_filter(query).execute()
 
             if not result.data:
                 return {

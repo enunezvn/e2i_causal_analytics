@@ -125,6 +125,16 @@ logs/
 .env
 .env.*
 !.env.example
+# .dockerignore patterns are ROOTED: the entries above exclude only repo-root
+# env files, NOT frontend/.env. The frontend Dockerfile builder COPYs
+# frontend/ wholesale, so an untracked local frontend/.env (which carries dev
+# values like VITE_SUPABASE_URL=https://localhost:8443) would otherwise enter
+# the build context. frontend/.env.production is tracked and REQUIRED by the
+# production vite build - keep it included.
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/.env.development
 *.pem
 *.key
 *.crt

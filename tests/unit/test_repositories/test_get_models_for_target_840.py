@@ -128,12 +128,15 @@ def _registry_rows() -> List[Dict[str, Any]]:
     experiment, but an ensemble draws on ALL serving models).
     """
     pnh = {"prediction_target": "pnh_persistence"}
+    # is_synthetic is NOT NULL DEFAULT false on the live table, so every row
+    # carries it; the serving query default-excludes synthetic rows (#894).
     return [
         # production + artifact for csu -> RETURN
         {
             "model_name": "csu_model_a",
             "stage": "production",
             "artifact_path": "/a.pkl",
+            "is_synthetic": False,
             "ml_experiments": _csu(),
         },
         # production + artifact, demoted-by-trigger (not champion) -> RETURN
@@ -141,6 +144,7 @@ def _registry_rows() -> List[Dict[str, Any]]:
             "model_name": "csu_model_b",
             "stage": "production",
             "artifact_path": "/b.pkl",
+            "is_synthetic": False,
             "ml_experiments": _csu(),
         },
         # staging + artifact -> EXCLUDE (production is the operator gate)
@@ -148,6 +152,7 @@ def _registry_rows() -> List[Dict[str, Any]]:
             "model_name": "csu_staging",
             "stage": "staging",
             "artifact_path": "/c.pkl",
+            "is_synthetic": False,
             "ml_experiments": _csu(),
         },
         # NULL artifact (the metadata-only synthetic rows) -> EXCLUDE
@@ -155,6 +160,7 @@ def _registry_rows() -> List[Dict[str, Any]]:
             "model_name": "csu_noart",
             "stage": "production",
             "artifact_path": None,
+            "is_synthetic": False,
             "ml_experiments": _csu(),
         },
         # dev stage -> EXCLUDE
@@ -162,6 +168,7 @@ def _registry_rows() -> List[Dict[str, Any]]:
             "model_name": "csu_dev",
             "stage": "development",
             "artifact_path": "/d.pkl",
+            "is_synthetic": False,
             "ml_experiments": _csu(),
         },
         # production + artifact for a DIFFERENT target -> EXCLUDE
@@ -169,6 +176,7 @@ def _registry_rows() -> List[Dict[str, Any]]:
             "model_name": "pnh_model",
             "stage": "production",
             "artifact_path": "/e.pkl",
+            "is_synthetic": False,
             "ml_experiments": pnh,
         },
         # EMPTY-STRING artifact -> EXCLUDE (server `is null` does not catch ""
@@ -177,6 +185,17 @@ def _registry_rows() -> List[Dict[str, Any]]:
             "model_name": "csu_emptyart",
             "stage": "production",
             "artifact_path": "",
+            "is_synthetic": False,
+            "ml_experiments": _csu(),
+        },
+        # SYNTHETIC production + artifact -> EXCLUDE (#894: the generator
+        # stamps stage='production'; a synthetic model name must never reach
+        # the prediction ensemble)
+        {
+            "model_name": "csu_synth_prod",
+            "stage": "production",
+            "artifact_path": "/s.pkl",
+            "is_synthetic": True,
             "ml_experiments": _csu(),
         },
     ]
@@ -204,6 +223,8 @@ async def test_returns_only_production_models_with_artifact_for_target():
     assert "csu_staging" not in names
     assert "csu_dev" not in names
     assert "pnh_model" not in names
+    # synthetic production+artifact row excluded (#894)
+    assert "csu_synth_prod" not in names
 
 
 @pytest.mark.asyncio
@@ -222,12 +243,14 @@ async def test_dedup_model_names():
             "model_name": "csu_model_a",
             "stage": "production",
             "artifact_path": "/a.pkl",
+            "is_synthetic": False,
             "ml_experiments": _csu(),
         },
         {
             "model_name": "csu_model_a",
             "stage": "production",
             "artifact_path": "/a2.pkl",
+            "is_synthetic": False,
             "ml_experiments": _csu(),
         },
     ]

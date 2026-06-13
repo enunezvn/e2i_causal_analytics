@@ -538,6 +538,51 @@ class TestQueryCausalChains:
         assert result["success"] is True
         assert result["count"] == 1
 
+    @pytest.mark.asyncio
+    async def test_query_causal_chains_real_mode_by_default(self):
+        """#893: the chat path must read the repo in real mode (exclude synthetic)."""
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.get_many.return_value = []
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.CausalPathRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_causal_chains(
+                    brand=None,
+                    kpi_name=None,
+                    since=datetime.now(timezone.utc),
+                    limit=10,
+                )
+
+        assert result["success"] is True
+        mock_repo.get_many.assert_awaited_once_with(filters={}, limit=10, include_synthetic=False)
+
+    @pytest.mark.asyncio
+    async def test_query_causal_chains_opt_in_passthrough(self):
+        """#893: explicit include_synthetic=True opt-in reaches the repository."""
+        with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
+            mock_repo = AsyncMock()
+            mock_repo.get_many.return_value = []
+            mock_client.return_value = MagicMock()
+
+            with patch(
+                "src.api.routes.chatbot_tools.CausalPathRepository",
+                return_value=mock_repo,
+            ):
+                result = await _query_causal_chains(
+                    brand=None,
+                    kpi_name=None,
+                    since=datetime.now(timezone.utc),
+                    limit=10,
+                    include_synthetic=True,
+                )
+
+        assert result["success"] is True
+        mock_repo.get_many.assert_awaited_once_with(filters={}, limit=10, include_synthetic=True)
+
 
 # =============================================================================
 # _query_agent_analysis Tests

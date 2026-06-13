@@ -69,17 +69,8 @@ interface WaterfallDataPoint {
 // SAMPLE DATA
 // =============================================================================
 
-const SAMPLE_FEATURES: FeatureContribution[] = [
-  { feature_name: 'days_since_visit', feature_value: 45, shap_value: 0.15, contribution_direction: 'positive', contribution_rank: 1 },
-  { feature_name: 'total_prescriptions', feature_value: 12, shap_value: -0.08, contribution_direction: 'negative', contribution_rank: 2 },
-  { feature_name: 'territory_sales', feature_value: 150000, shap_value: 0.12, contribution_direction: 'positive', contribution_rank: 3 },
-  { feature_name: 'specialty_type', feature_value: 'oncology', shap_value: 0.05, contribution_direction: 'positive', contribution_rank: 4 },
-  { feature_name: 'engagement_score', feature_value: 3, shap_value: -0.04, contribution_direction: 'negative', contribution_rank: 5 },
-  { feature_name: 'competitor_share', feature_value: 0.35, shap_value: -0.06, contribution_direction: 'negative', contribution_rank: 6 },
-  { feature_name: 'formulary_tier', feature_value: 1, shap_value: 0.03, contribution_direction: 'positive', contribution_rank: 7 },
-];
-
-const SAMPLE_BASE = 0.45;
+// NOTE: SAMPLE_FEATURES / SAMPLE_BASE (fabricated SHAP waterfall
+// inputs) were DELETED. Omitted props render the empty state.
 
 // =============================================================================
 // COMPONENT
@@ -115,12 +106,9 @@ export const SHAPWaterfall = React.forwardRef<HTMLDivElement, SHAPWaterfallProps
     },
     ref
   ) => {
-    // Use provided data or sample
-    const baseValue = propBase ?? SAMPLE_BASE;
-    const features = useMemo(
-      () => propFeatures ?? SAMPLE_FEATURES,
-      [propFeatures]
-    );
+    // Data comes ONLY from props — never a sample fallback.
+    const baseValue = propBase ?? 0;
+    const features = useMemo(() => propFeatures ?? [], [propFeatures]);
 
     // Build waterfall data
     const chartData = useMemo<WaterfallDataPoint[]>(() => {

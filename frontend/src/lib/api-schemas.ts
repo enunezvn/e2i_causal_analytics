@@ -1141,10 +1141,13 @@ export const HealthScoreResponseWireSchema = z.object({
   check_scope: z.string(),
   overall_health_score: z.number(),
   health_grade: z.string(),
-  component_health_score: z.number(),
-  model_health_score: z.number(),
-  pipeline_health_score: z.number(),
-  agent_health_score: z.number(),
+  // Per-dimension scores are Optional[float] on the backend (HealthScoreResult:
+  // "None if unmeasured" — unmeasured dimensions must never be fabricated).
+  // The widget renders null as "Not measured in this check".
+  component_health_score: z.number().nullable(),
+  model_health_score: z.number().nullable(),
+  pipeline_health_score: z.number().nullable(),
+  agent_health_score: z.number().nullable(),
   component_statuses: z.array(ComponentHealthWireSchema).nullable().optional(),
   model_metrics: z.array(HealthScoreModelHealthWireSchema).nullable().optional(),
   pipeline_statuses: z.array(PipelineHealthWireSchema).nullable().optional(),
