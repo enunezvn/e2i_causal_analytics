@@ -146,7 +146,9 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
         # the seeded RNG AFTER all other columns, so existing draws are unchanged.
         region_arr = df["geographic_region"].to_numpy()
         terr_idx = self._rng.integers(0, self.TERRITORIES_PER_REGION, size=n)
-        territory_ids = [f"{region}-T{idx:02d}" for region, idx in zip(region_arr, terr_idx)]
+        territory_ids = [
+            f"{region}-T{idx:02d}" for region, idx in zip(region_arr, terr_idx, strict=True)
+        ]
         # Build both as plain lists (not "REP-" + Series) so n_records=0 yields
         # empty columns instead of an empty-Series string-concat type error.
         df["territory_id"] = territory_ids
