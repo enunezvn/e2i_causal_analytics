@@ -237,6 +237,93 @@ class TestEntityFiltering:
             mock_retriever.search.assert_called_once()
 
 
+class TestProvenanceOptIn:
+    """#896: the RAG context node resolves the synthetic-provenance opt-in.
+
+    Mirrors the dispatcher's _resolve_include_synthetic_opt_in contract
+    (#877/#880/#882): the live chat path threads caller intent through
+    state['user_context']; values are strictly parsed via the
+    coerce_provenance_flag SSOT and fail CLOSED to real-mode.
+    """
+
+    @staticmethod
+    async def _search_filters(state):
+        node = RAGContextNode()
+        with patch.object(node, "_retriever") as mock_retriever:
+            mock_retriever.search = AsyncMock(return_value=[])
+            await node.execute(state)
+            mock_retriever.search.assert_called_once()
+            return mock_retriever.search.call_args.kwargs["filters"]
+
+    @pytest.mark.asyncio
+    async def test_default_is_explicit_false(self):
+        filters = await self._search_filters(
+            {
+                "query": "Kisqali performance",
+                "entities_extracted": {"brands": ["Kisqali"]},
+            }
+        )
+        assert filters["include_synthetic"] is False
+
+    @pytest.mark.asyncio
+    async def test_user_context_opt_in(self):
+        filters = await self._search_filters(
+            {
+                "query": "Kisqali performance",
+                "entities_extracted": {"brands": ["Kisqali"]},
+                "user_context": {"include_synthetic": "true"},
+            }
+        )
+        assert filters["include_synthetic"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("loose", ["false", "0", False, None, 0, []])
+    async def test_loose_values_fail_closed(self, loose):
+        filters = await self._search_filters(
+            {
+                "query": "Kisqali performance",
+                "entities_extracted": {"brands": ["Kisqali"]},
+                "user_context": {"include_synthetic": loose},
+            }
+        )
+        assert filters["include_synthetic"] is False
+
+    @pytest.mark.asyncio
+    async def test_opt_in_set_even_without_entities(self):
+        """The provenance flag is request-scoped, not entity-derived: it must
+        reach the RPC even when entity extraction produced no filters."""
+        filters = await self._search_filters(
+            {
+                "query": "overall trends",
+                "entities_extracted": {},
+                "user_context": {"include_synthetic": True},
+            }
+        )
+        assert filters["include_synthetic"] is True
+
+    def test_build_filters_plural_key_contract(self):
+        """Locks the entity-filter contract: plural keys carrying lists.
+
+        Migration rag/004 makes the rag_vector_search RPC honor these plural
+        keys (rag_filter_values normalizer), so this shape is now load-bearing
+        on the SQL side -- a rename here would silently no-op brand filtering
+        again (the #896 bug 3).
+        """
+        from src.rag.types import ExtractedEntities
+
+        node = RAGContextNode()
+        filters = node._build_filters_from_entities(
+            ExtractedEntities(
+                brands=["Kisqali", "Fabhalta"],
+                regions=["West"],
+                kpis=["trx"],
+            )
+        )
+        assert filters["brands"] == ["Kisqali", "Fabhalta"]
+        assert filters["regions"] == ["West"]
+        assert filters["kpis"] == ["trx"]
+
+
 class TestRAGContextIntegration:
     """Integration tests for RAG context in orchestrator workflow."""
 

@@ -188,9 +188,74 @@ class TestVectorBackendSearch:
         mock_supabase_client.rpc.assert_called_once()
         call_args = mock_supabase_client.rpc.call_args
         assert call_args[0][0] == "rag_vector_search"
-        # Second positional argument is the params dict
+        # Second positional argument is the params dict. #896: the RPC boundary
+        # makes the provenance default EXPLICIT (include_synthetic="false")
+        # while preserving every caller-supplied filter key.
         rpc_params = call_args[0][1]
-        assert rpc_params["filters"] == filters
+        assert rpc_params["filters"] == {**filters, "include_synthetic": "false"}
+
+
+class TestVectorBackendProvenance:
+    """#896: rag_vector_search callers pass include_synthetic explicitly.
+
+    The RPC default-excludes synthetic episodic rows via
+    filters->>'include_synthetic' (migration rag/004, mirroring memory/044+045).
+    The Python boundary strict-parses the caller's value through the
+    coerce_provenance_flag SSOT (#883 §4) so loose values ("false", "0",
+    non-bool types) FAIL CLOSED instead of leaking into the jsonb payload.
+    """
+
+    async def _rpc_filters(self, mock_supabase_client, search_config, filters):
+        mock_response = MagicMock()
+        mock_response.data = []
+        mock_supabase_client.rpc.return_value.execute.return_value = mock_response
+        backend = VectorBackend(supabase_client=mock_supabase_client, config=search_config)
+        await backend.search(embedding=[0.1] * 1536, filters=filters)
+        return mock_supabase_client.rpc.call_args[0][1]["filters"]
+
+    @pytest.mark.asyncio
+    async def test_default_is_explicit_false(self, mock_supabase_client, search_config):
+        """No filters at all -> include_synthetic explicitly 'false'."""
+        rpc_filters = await self._rpc_filters(mock_supabase_client, search_config, None)
+        assert rpc_filters == {"include_synthetic": "false"}
+
+    @pytest.mark.asyncio
+    async def test_opt_in_bool_true(self, mock_supabase_client, search_config):
+        rpc_filters = await self._rpc_filters(
+            mock_supabase_client, search_config, {"include_synthetic": True}
+        )
+        assert rpc_filters["include_synthetic"] == "true"
+
+    @pytest.mark.asyncio
+    async def test_opt_in_string_true(self, mock_supabase_client, search_config):
+        rpc_filters = await self._rpc_filters(
+            mock_supabase_client, search_config, {"include_synthetic": "true"}
+        )
+        assert rpc_filters["include_synthetic"] == "true"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("loose", [False, "false", "0", "no", None, 1, [], {}])
+    async def test_loose_values_fail_closed(self, mock_supabase_client, search_config, loose):
+        rpc_filters = await self._rpc_filters(
+            mock_supabase_client, search_config, {"include_synthetic": loose}
+        )
+        assert rpc_filters["include_synthetic"] == "false"
+
+    @pytest.mark.asyncio
+    async def test_caller_filters_dict_not_mutated(self, mock_supabase_client, search_config):
+        filters = {"brands": ["Kisqali"], "include_synthetic": True}
+        snapshot = {"brands": ["Kisqali"], "include_synthetic": True}
+        await self._rpc_filters(mock_supabase_client, search_config, filters)
+        assert filters == snapshot
+
+    @pytest.mark.asyncio
+    async def test_plural_keys_pass_through(self, mock_supabase_client, search_config):
+        """Plural entity-derived keys reach the RPC unchanged (the SQL-side
+        rag_filter_values normalizer honors both shapes; migration rag/004)."""
+        rpc_filters = await self._rpc_filters(
+            mock_supabase_client, search_config, {"brands": ["Kisqali", "Fabhalta"]}
+        )
+        assert rpc_filters["brands"] == ["Kisqali", "Fabhalta"]
 
 
 class TestVectorBackendHealthCheck:

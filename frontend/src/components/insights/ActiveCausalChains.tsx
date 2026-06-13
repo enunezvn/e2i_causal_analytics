@@ -33,29 +33,10 @@ interface SelectedNode {
   type: string;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_ELEMENTS: ElementDefinition[] = [
-  // Nodes - using vizType for styling selectors
-  { data: { id: 'detailing', label: 'Detailing Frequency', type: 'intervention', vizType: 'intervention' } },
-  { data: { id: 'awareness', label: 'HCP Awareness', type: 'mediator', vizType: 'mediator' } },
-  { data: { id: 'prescribing', label: 'Prescribing Intent', type: 'mediator', vizType: 'mediator' } },
-  { data: { id: 'trx', label: 'TRx Volume', type: 'outcome', vizType: 'outcome' } },
-  { data: { id: 'samples', label: 'Sample Distribution', type: 'intervention', vizType: 'intervention' } },
-  { data: { id: 'formulary', label: 'Formulary Status', type: 'moderator', vizType: 'moderator' } },
-  { data: { id: 'access', label: 'Patient Access', type: 'mediator', vizType: 'mediator' } },
-  { data: { id: 'adherence', label: 'Adherence Rate', type: 'outcome', vizType: 'outcome' } },
-  // Edges
-  { data: { id: 'e1', source: 'detailing', target: 'awareness', weight: 0.72 } },
-  { data: { id: 'e2', source: 'awareness', target: 'prescribing', weight: 0.65 } },
-  { data: { id: 'e3', source: 'prescribing', target: 'trx', weight: 0.81 } },
-  { data: { id: 'e4', source: 'samples', target: 'awareness', weight: 0.45 } },
-  { data: { id: 'e5', source: 'formulary', target: 'access', weight: 0.58 } },
-  { data: { id: 'e6', source: 'access', target: 'trx', weight: 0.67 } },
-  { data: { id: 'e7', source: 'trx', target: 'adherence', weight: 0.53 } },
-];
+// NOTE: SAMPLE_ELEMENTS (a fabricated "Detailing Frequency -> ... -> TRx"
+// demo graph with invented edge weights) was DELETED. The graph initializes
+// EMPTY and renders only real chains from POST /api/graph/causal-chains;
+// zero chains shows an honest empty state, failures a labeled error.
 
 // =============================================================================
 // NODE TYPE MAPPING
@@ -82,7 +63,7 @@ const NODE_TYPE_MAP: Record<string, string> = {
   KPI: 'outcome',
   Metric: 'outcome',
   Conversion: 'outcome',
-  // Sample data types (already correct)
+  // Identity mappings for already-canonical visualization types
   intervention: 'intervention',
   mediator: 'mediator',
   moderator: 'moderator',
@@ -140,6 +121,15 @@ const customStyles: StylesheetStyle[] = [
       'opacity': 0.7,
     },
   },
+  {
+    // Edges whose relationship arrived WITHOUT a confidence value: thin and
+    // dashed to signal unknown strength (the value is never invented).
+    selector: 'edge[!weight]',
+    style: {
+      'width': 1,
+      'line-style': 'dashed',
+    },
+  },
 ];
 
 // =============================================================================
@@ -150,9 +140,9 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null);
 
   // Fetch causal chains from API
-  const { mutate: fetchChains, data: chainsResponse, isPending } = useCausalChains();
+  const { mutate: fetchChains, data: chainsResponse, error: chainsError, isPending } = useCausalChains();
 
-  // Initialize Cytoscape
+  // Initialize Cytoscape — EMPTY until real chains arrive.
   const {
     containerRef,
     isLoading,
@@ -163,7 +153,7 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
     getZoom,
   } = useCytoscape(
     {
-      elements: SAMPLE_ELEMENTS,
+      elements: [],
       style: customStyles,
       layout: 'cose',
       autoFit: true,
@@ -186,43 +176,52 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
 
   // Transform API response to Cytoscape elements
   useEffect(() => {
-    if (chainsResponse?.chains && chainsResponse.chains.length > 0) {
-      const elements: ElementDefinition[] = [];
-      const nodeIds = new Set<string>();
+    if (!chainsResponse) return;
 
-      chainsResponse.chains.forEach((chain) => {
-        chain.nodes.forEach((node) => {
-          if (!nodeIds.has(node.id)) {
-            nodeIds.add(node.id);
-            const apiType = node.type || 'entity';
-            elements.push({
-              data: {
-                id: node.id,
-                label: node.name || node.id,
-                type: apiType,
-                vizType: getNodeVisualizationType(apiType),
-              },
-            });
-          }
-        });
+    // Zero chains: explicitly clear the graph so stale elements from a
+    // previous response cannot linger beneath the empty-state overlay.
+    if (chainsResponse.chains.length === 0) {
+      setElements([]);
+      return;
+    }
 
-        chain.relationships.forEach((rel, idx) => {
+    const elements: ElementDefinition[] = [];
+    const nodeIds = new Set<string>();
+
+    chainsResponse.chains.forEach((chain) => {
+      chain.nodes.forEach((node) => {
+        if (!nodeIds.has(node.id)) {
+          nodeIds.add(node.id);
+          const apiType = node.type || 'entity';
           elements.push({
             data: {
-              id: `edge-${chain.nodes[0]?.id}-${idx}`,
-              source: rel.source_id,
-              target: rel.target_id,
-              weight: rel.confidence ?? 0.5,
+              id: node.id,
+              label: node.name || node.id,
+              type: apiType,
+              vizType: getNodeVisualizationType(apiType),
             },
           });
-        });
+        }
       });
 
-      if (elements.length > 0) {
-        setElements(elements);
-        runLayout('cose');
-      }
-    }
+      chain.relationships.forEach((rel, idx) => {
+        // confidence is optional on the wire: when absent it stays absent
+        // (rendered as a thin dashed unknown-strength edge), never invented.
+        elements.push({
+          data: {
+            id: `edge-${chain.nodes[0]?.id}-${idx}`,
+            source: rel.source_id,
+            target: rel.target_id,
+            ...(typeof rel.confidence === 'number'
+              ? { weight: rel.confidence }
+              : {}),
+          },
+        });
+      });
+    });
+
+    setElements(elements);
+    runLayout('cose');
   }, [chainsResponse, setElements, runLayout]);
 
   // Fetch chains on mount
@@ -307,6 +306,28 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
               <div className="flex items-center gap-2 text-[var(--color-muted-foreground)]">
                 <RefreshCw className="h-5 w-5 animate-spin" />
                 <span className="text-sm">Loading graph...</span>
+              </div>
+            </div>
+          )}
+
+          {/* Error Overlay — labeled, never replaced with a fake graph */}
+          {!isPending && chainsError && (
+            <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-[var(--color-background)]/70 p-6">
+              <div className="text-center text-sm text-[var(--color-muted-foreground)]">
+                <span className="font-medium text-rose-600">
+                  Unable to load causal chains:
+                </span>{' '}
+                {chainsError.message}
+              </div>
+            </div>
+          )}
+
+          {/* Honest empty overlay when the KG has no chains */}
+          {!isPending && !chainsError && chainsResponse && chainsResponse.chains.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center rounded-lg p-6">
+              <div className="text-center text-sm text-[var(--color-muted-foreground)]">
+                No causal chains found in the knowledge graph for the current
+                confidence threshold.
               </div>
             </div>
           )}

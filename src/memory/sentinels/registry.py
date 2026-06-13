@@ -330,6 +330,27 @@ def _validate_action_config(action_type: str, cfg: Dict[str, Any]) -> None:
 # ============================================================================
 
 
+def _apply_sentinel_provenance(query: Any, table: str, cfg: Dict[str, Any]) -> Any:
+    """Default-exclude synthetic rows from a sentinel watch query (#894).
+
+    The dispatcher evaluates sentinels every 5 minutes against tables the
+    synthetic loader populates (live ``causal_paths`` was 250/250 synthetic
+    at filing time), so an unfiltered scan fires reanalysis actions from
+    planted ground-truth test rows. Real mode default-excludes; a sentinel's
+    ``pattern_config`` may opt in with ``include_synthetic`` (strictly parsed
+    — ``"false"``/ambiguous values stay real-mode). Untagged watch tables
+    (``executive_insights``) are left unfiltered to avoid a 42703.
+    """
+    from src.repositories.provenance import (
+        apply_provenance_filter_for_table,
+        coerce_provenance_flag,
+    )
+
+    return apply_provenance_filter_for_table(
+        query, table, include_synthetic=coerce_provenance_flag(cfg.get("include_synthetic"))
+    )
+
+
 async def evaluate_sentinel(sentinel: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Evaluate a single sentinel's pattern. Returns a list of "matches" —
@@ -384,6 +405,7 @@ async def _eval_threshold_breach(cfg: Dict[str, Any], brand: str) -> List[Dict[s
     query = getattr(query, method_name)(column, value)
     if brand != "all":
         query = query.eq("brand", brand)
+    query = _apply_sentinel_provenance(query, table, cfg)
     rows = (query.execute().data) or []
     return [
         {"row_id": r[pk_col], "brand": r.get("brand", brand), "value": r.get(column)} for r in rows
@@ -404,6 +426,7 @@ async def _eval_freshness(cfg: Dict[str, Any], brand: str) -> List[Dict[str, Any
     query = client.table(table).select(f"{pk_col}, brand, {ts_column}").lt(ts_column, cutoff)
     if brand != "all":
         query = query.eq("brand", brand)
+    query = _apply_sentinel_provenance(query, table, cfg)
     rows = (query.execute().data) or []
     return [{"row_id": r[pk_col], "brand": r.get("brand", brand)} for r in rows]
 
@@ -431,6 +454,7 @@ async def _eval_new_causal_path(
     )
     if brand != "all":
         query = query.eq("brand", brand)
+    query = _apply_sentinel_provenance(query, "causal_paths", cfg)
     rows = (query.execute().data) or []
     return [{"row_id": r["path_id"], "brand": r.get("brand", brand)} for r in rows]
 
@@ -468,6 +492,7 @@ async def _eval_invalidation_count(cfg: Dict[str, Any], brand: str) -> List[Dict
     query = client.table(table).select(select_cols).not_.is_("invalidated_at", "null")
     if brand != "all":
         query = query.eq("brand", brand)
+    query = _apply_sentinel_provenance(query, table, cfg)
     rows = (query.execute().data) or []
     matches: List[Dict[str, Any]] = []
     for r in rows:

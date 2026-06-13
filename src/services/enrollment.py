@@ -478,12 +478,17 @@ class EnrollmentService:
     async def get_enrollment_stats(
         self,
         experiment_id: UUID,
+        include_synthetic: bool = False,
     ) -> EnrollmentStats:
         """
         Get enrollment statistics for an experiment.
 
         Args:
             experiment_id: Experiment UUID
+            include_synthetic: When True, do not exclude synthetic
+                assignments/enrollments (opt-in for validation runs against
+                the synthetic substrate, #894 codex R1). End-user routes and
+                the real-mode sweeps keep the default-exclude.
 
         Returns:
             Enrollment statistics
@@ -493,7 +498,7 @@ class EnrollmentService:
         repo = ABExperimentRepository()
 
         # Get all assignments and enrollments
-        assignments = await repo.get_assignments(experiment_id)
+        assignments = await repo.get_assignments(experiment_id, include_synthetic=include_synthetic)
         total_assigned = len(assignments)
 
         # Initialize counts
@@ -513,7 +518,9 @@ class EnrollmentService:
             by_variant[variant]["assigned"] += 1
 
             # Get enrollment for this assignment
-            enrollment = await repo.get_enrollment_by_assignment(assignment.id)
+            enrollment = await repo.get_enrollment_by_assignment(
+                assignment.id, include_synthetic=include_synthetic
+            )
             if enrollment:
                 total_enrolled += 1
                 by_variant[variant]["enrolled"] += 1

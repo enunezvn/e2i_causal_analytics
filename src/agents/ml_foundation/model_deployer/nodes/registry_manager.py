@@ -1273,7 +1273,15 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "model_version": model_version,
             "current_stage": current_stage,
             "deployment_id": f"{registered_model_name}:v{model_version}",
-            "deployment_status": "healthy" if mlflow_succeeded else "degraded",
+            # #773: "unhealthy" (NOT "degraded" — absent from the
+            # ModelDeployerState Literal, so LangGraph's pydantic validation
+            # raised literal_error and CRASHED the workflow on every
+            # failed/simulated registration, the opposite of #830's fail-closed
+            # intent). The graph ends right after a failed registration
+            # (_should_continue_after_registration -> "end"), nothing deploys,
+            # and no consumer distinguishes "degraded"; the truth is already in
+            # registration_successful/registration_simulated/mlflow_available.
+            "deployment_status": "healthy" if mlflow_succeeded else "unhealthy",
             "deployed_at": datetime.now(tz=None).isoformat(),
             # Fail CLOSED: only a real MLflow registration counts as success.
             "registration_successful": mlflow_succeeded,

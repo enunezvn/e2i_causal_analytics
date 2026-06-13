@@ -184,14 +184,24 @@ def _run_tier0_subprocess(regime: str, tmp_path: Path) -> dict[str, Any]:
         cmd,
         capture_output=True,
         text=True,
-        timeout=600,
+        # 1200s (was 600): post-#773-W2-fix the Step-5b alternates genuinely
+        # train (they used to fast-crash on XGBoost-illegal feature names),
+        # and hosted-runner CPU variance is extreme — the same commit ran the
+        # full suite in 165s on dispatch run 27443822891 and blew the 600s
+        # per-runner cap on run 27444890365. 1200 matches the sibling cap in
+        # test_synthetic_baseline_invariant.py; the job-level timeout still
+        # bounds a truly pathological run.
+        timeout=1200,
         cwd=str(PROJECT_ROOT),
         env=env,
     )
 
     assert result.returncode == 0, (
         f"Tier-0 e2e ({regime}) exited {result.returncode}. "
-        f"stderr (truncated): {result.stderr[-800:]!r}"
+        # #773: -800 chars truncated the true traceback out of CI logs
+        # (only the terminal RuntimeError survived); keep enough tail to
+        # root-cause from the nightly output alone.
+        f"stderr (truncated): {result.stderr[-8000:]!r}"
     )
     assert json_out.exists(), (
         f"TIER0_E2E_JSON_OUT artifact missing at {json_out}; runner produced no JSON."
@@ -201,7 +211,10 @@ def _run_tier0_subprocess(regime: str, tmp_path: Path) -> dict[str, Any]:
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(900)  # 15 min ceiling for the full tier0 run
+# 1500s: must exceed the 1200s subprocess cap in _run_tier0_subprocess (the
+# class fixture forks the runner inside the FIRST test's setup; a smaller
+# pytest-timeout would SIGKILL the worker before the subprocess cap fires).
+@pytest.mark.timeout(1500)
 class TestAdverseRegimeE2E:
     """Run ``run_tier0_test.py --regime adverse`` and assert the imbalance
     remediation path engages without exceptions.
@@ -238,22 +251,38 @@ class TestAdverseRegimeE2E:
             f"Expected severity=extreme; got {info.get('imbalance_severity')}; full info={info}"
         )
 
-    def test_resampling_strategy_upgrades_to_combined(self, pipeline_state):
-        """Per Block 4 plan: at extreme imbalance with a non-tree model the
-        deterministic strategy matrix upgrades to ``combined`` (SMOTE +
-        class weights).
+    def test_resampling_strategy_class_weight_at_extreme_non_tree(self, pipeline_state):
+        """At extreme imbalance with a non-tree model the deterministic
+        strategy matrix selects ``class_weight`` (cost-sensitive weights,
+        no synthetic oversampling).
 
         Block 6A (`a8069cf`) replaced the LLM-based imbalance strategy
         selection with a deterministic matrix lookup, so any deviation
-        from ``combined`` at extreme imbalance + non-tree model is a real
-        bug rather than transient LLM noise. (4-MIN-4: re-tighten from
-        soft-warn to fail-loud now that the determinism guarantee holds.)
+        from the matrix value at extreme imbalance + non-tree model is a
+        real bug rather than transient LLM noise. (4-MIN-4: re-tighten
+        from soft-warn to fail-loud now that the determinism guarantee
+        holds.)
+
+        Re-pinned 2026-06-12: PR #761 (67be1cbf, merged 2026-06-06)
+        re-tuned ``config/imbalance_strategy.yaml`` extreme.non_tree from
+        ``combined`` (SMOTE 0.5 + class weights) to ``class_weight`` —
+        the HPO objective is already PR-AUC at severe/extreme, and SMOTE
+        measured at/below the no-resampling PR-AUC baseline for linear
+        models (imbalance-methodology review,
+        docs/reports/tier0_imbalance_methodology_review_20260606.md).
+        This pin is XGBoost-alternates-independent: class_imbalance_info
+        is captured from the PRIMARY (non-tree) Step-5 run before the
+        Step-5b champion comparison and is never swapped by a winning
+        alternative (run_tier0_test.py). See #773 (first red nightly
+        2026-06-07 observed strategy='class_weight').
         """
         info = pipeline_state.get("class_imbalance_info", {})
         strategy = info.get("recommended_strategy")
-        assert strategy == "combined", (
-            f"After 6A determinism, extreme imbalance + non-tree model "
-            f"must yield strategy='combined' (SMOTE + class weights). "
+        assert strategy == "class_weight", (
+            f"Per the post-#761 deterministic matrix "
+            f"(config/imbalance_strategy.yaml extreme.non_tree), extreme "
+            f"imbalance + non-tree model must yield strategy='class_weight' "
+            f"(cost-sensitive weights, no SMOTE). "
             f"Got strategy={strategy!r}; full info={info}"
         )
 
@@ -404,7 +433,7 @@ class TestCleanRegimeGenerator:
 
 
 @pytest.mark.slow
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1500)  # see TestAdverseRegimeE2E: > the 1200s subprocess cap
 class TestCleanRegimeE2E:
     """``run_tier0_test.py --regime clean`` produces a deployable model.
 

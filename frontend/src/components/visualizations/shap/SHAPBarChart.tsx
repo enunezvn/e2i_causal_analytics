@@ -62,20 +62,8 @@ interface ChartDataPoint {
   original: FeatureContribution;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_FEATURES: FeatureContribution[] = [
-  { feature_name: 'days_since_visit', feature_value: 45, shap_value: 0.35, contribution_direction: 'positive', contribution_rank: 1 },
-  { feature_name: 'total_prescriptions', feature_value: 12, shap_value: -0.28, contribution_direction: 'negative', contribution_rank: 2 },
-  { feature_name: 'territory_sales', feature_value: 150000, shap_value: 0.22, contribution_direction: 'positive', contribution_rank: 3 },
-  { feature_name: 'specialty_oncology', feature_value: 1, shap_value: 0.18, contribution_direction: 'positive', contribution_rank: 4 },
-  { feature_name: 'recent_engagement', feature_value: 3, shap_value: -0.15, contribution_direction: 'negative', contribution_rank: 5 },
-  { feature_name: 'competitor_share', feature_value: 0.35, shap_value: -0.12, contribution_direction: 'negative', contribution_rank: 6 },
-  { feature_name: 'formulary_status', feature_value: 'preferred', shap_value: 0.10, contribution_direction: 'positive', contribution_rank: 7 },
-  { feature_name: 'experience_years', feature_value: 15, shap_value: 0.08, contribution_direction: 'positive', contribution_rank: 8 },
-];
+// NOTE: SAMPLE_FEATURES (fabricated SHAP contributions) was DELETED.
+// Omitted props render the empty state; data comes only from callers.
 
 // =============================================================================
 // COMPONENT
@@ -110,11 +98,8 @@ export const SHAPBarChart = React.forwardRef<HTMLDivElement, SHAPBarChartProps>(
     },
     ref
   ) => {
-    // Use provided features or sample data
-    const features = useMemo(
-      () => propFeatures ?? SAMPLE_FEATURES,
-      [propFeatures]
-    );
+    // Data comes ONLY from props — never a sample fallback.
+    const features = useMemo(() => propFeatures ?? [], [propFeatures]);
 
     // Transform and sort data
     const chartData = useMemo<ChartDataPoint[]>(() => {

@@ -37,10 +37,10 @@ export interface CausalEffect {
   estimate: number;
   /** Standard error of the estimate */
   standardError?: number;
-  /** Lower bound of confidence interval */
-  ciLower: number;
-  /** Upper bound of confidence interval */
-  ciUpper: number;
+  /** Lower bound of confidence interval (omit when the estimator reports none — rendered as an em dash, never synthesized) */
+  ciLower?: number;
+  /** Upper bound of confidence interval (omit when the estimator reports none) */
+  ciUpper?: number;
   /** Confidence level (e.g., 0.95 for 95% CI) */
   confidenceLevel?: number;
   /** P-value for significance testing */
@@ -159,7 +159,9 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
     // Calculate min/max for CI bar visualization
     const { minValue, maxValue } = useMemo(() => {
       if (effects.length === 0) return { minValue: -1, maxValue: 1 };
-      const allValues = effects.flatMap((e) => [e.ciLower, e.ciUpper, e.estimate]);
+      const allValues = effects
+        .flatMap((e) => [e.ciLower, e.ciUpper, e.estimate])
+        .filter((v): v is number => typeof v === 'number');
       return {
         minValue: Math.min(...allValues),
         maxValue: Math.max(...allValues),
@@ -188,12 +190,12 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
             bValue = b.estimate;
             break;
           case 'ciLower':
-            aValue = a.ciLower;
-            bValue = b.ciLower;
+            aValue = a.ciLower ?? Number.NEGATIVE_INFINITY;
+            bValue = b.ciLower ?? Number.NEGATIVE_INFINITY;
             break;
           case 'ciUpper':
-            aValue = a.ciUpper;
-            bValue = b.ciUpper;
+            aValue = a.ciUpper ?? Number.NEGATIVE_INFINITY;
+            bValue = b.ciUpper ?? Number.NEGATIVE_INFINITY;
             break;
           case 'pValue':
             aValue = a.pValue ?? 1;
@@ -255,6 +257,12 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
     // Render CI bar visualization
     const renderCIBar = useCallback(
       (effect: CausalEffect) => {
+        // No real interval -> no bar (never a synthesized zero-width bar).
+        if (effect.ciLower === undefined || effect.ciUpper === undefined) {
+          return (
+            <span className="text-xs text-[var(--color-muted-foreground)]">—</span>
+          );
+        }
         const estimatePos = calculateCIBarWidth(effect.estimate, minValue, maxValue);
         const lowerPos = calculateCIBarWidth(effect.ciLower, minValue, maxValue);
         const upperPos = calculateCIBarWidth(effect.ciUpper, minValue, maxValue);
@@ -298,6 +306,20 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
       },
       [onRowSelect]
     );
+
+    // The header may only claim a confidence level when every effect
+    // uniformly reports the same one — anything else is fabrication.
+    const uniformLevel = effects.length
+      ? effects.every(
+          (e) =>
+            e.confidenceLevel !== undefined &&
+            e.confidenceLevel === effects[0].confidenceLevel
+        )
+        ? effects[0].confidenceLevel
+        : undefined
+      : undefined;
+    const ciHeader =
+      uniformLevel !== undefined ? `${Math.round(uniformLevel * 100)}% CI` : 'CI';
 
     // Empty state
     if (effects.length === 0 && !isLoading) {
@@ -370,7 +392,7 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
                   {renderSortIcon('estimate')}
                 </div>
               </TableHead>
-              <TableHead className="text-center">95% CI</TableHead>
+              <TableHead className="text-center">{ciHeader}</TableHead>
               {showCIBars && <TableHead className="min-w-[120px]">CI Visualization</TableHead>}
               <TableHead
                 className={cn(
@@ -414,7 +436,9 @@ const EffectsTable = React.forwardRef<HTMLDivElement, EffectsTableProps>(
                     {formatNumber(effect.estimate, decimalPlaces)}
                   </TableCell>
                   <TableCell className="text-center font-mono text-xs text-[var(--color-muted-foreground)]">
-                    [{formatNumber(effect.ciLower, decimalPlaces)}, {formatNumber(effect.ciUpper, decimalPlaces)}]
+                    {effect.ciLower !== undefined && effect.ciUpper !== undefined
+                      ? `[${formatNumber(effect.ciLower, decimalPlaces)}, ${formatNumber(effect.ciUpper, decimalPlaces)}]`
+                      : '—'}
                   </TableCell>
                   {showCIBars && <TableCell>{renderCIBar(effect)}</TableCell>}
                   <TableCell className="text-right font-mono text-xs">
