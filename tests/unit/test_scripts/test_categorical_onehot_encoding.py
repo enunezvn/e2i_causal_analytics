@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from scripts.run_tier0_test import (
     _apply_categorical_onehot,
@@ -76,6 +77,50 @@ class TestApplyCategoricalOnehot:
     def test_no_encoding_info_is_passthrough(self) -> None:
         X = pd.DataFrame({"a": [1.0]})
         assert list(_apply_categorical_onehot(X, None).columns) == ["a"]
+
+
+class TestOnehotNamesXGBoostCompat:
+    """Issue #773 W2 residue (beyond PR #913): the HARNESS one-hot encoder is a
+    second, independent feature-name source. SampleDataGenerator emits
+    ``age_group`` values ``"<50"`` / ``">65"``; verbatim
+    ``get_feature_names_out`` names (``age_group_<50``) crash XGBoost at fit
+    time (``feature_names must not contain [, ] or <``), killing every Step-5b
+    XGBoost alternative in the synthetic nightlies (reproduced locally
+    2026-06-12 and via slow-tests dispatch run 27442656933 / unmasked run
+    27433928193). The harness must sanitize through the shared PR-#913
+    ``sanitize_feature_names``."""
+
+    _AGE_GROUPS = ["<50", ">65", "50-65", "<50", ">65", "50-65"]
+
+    def test_fit_output_has_no_xgboost_illegal_chars(self) -> None:
+        X = pd.DataFrame({"num": [1.0] * 6, "age_group": self._AGE_GROUPS})
+        X_enc, info = _fit_categorical_onehot(X, ["age_group"])
+        for col in X_enc.columns:
+            assert not any(ch in col for ch in "[]<"), (
+                f"XGBoost-illegal character in one-hot column name {col!r}"
+            )
+        # metadata names must match the frame names (re-apply contract)
+        assert info["onehot_columns"] == [c for c in X_enc.columns if c != "num"]
+
+    def test_fit_output_trains_real_xgboost(self) -> None:
+        xgboost = pytest.importorskip("xgboost")
+        X = pd.DataFrame({"num": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], "age_group": self._AGE_GROUPS})
+        y = [0, 1, 0, 1, 0, 1]
+        X_enc, _ = _fit_categorical_onehot(X, ["age_group"])
+        # Pre-fix this raised: ValueError: feature_names must be string, and
+        # may not contain [, ] or <
+        xgboost.XGBClassifier(n_estimators=2).fit(X_enc, y)
+
+    def test_apply_reproduces_sanitized_training_space(self) -> None:
+        Xtr = pd.DataFrame({"age_group": self._AGE_GROUPS})
+        Xtr_enc, info = _fit_categorical_onehot(Xtr, ["age_group"])
+        Xte = pd.DataFrame({"age_group": ["<50", "50-65"]})
+        Xte_enc = _apply_categorical_onehot(Xte, info)
+        assert list(Xte_enc.columns) == list(Xtr_enc.columns)
+        # the "<50" row maps onto the SANITIZED indicator for that category
+        sanitized_lt50 = [c for c in Xtr_enc.columns if c.endswith("_50") and "65" not in c]
+        assert sanitized_lt50, f"no sanitized <50 indicator found in {list(Xtr_enc.columns)}"
+        assert Xte_enc.iloc[0][sanitized_lt50[0]] == 1.0
 
 
 class TestRawFeatureCols:

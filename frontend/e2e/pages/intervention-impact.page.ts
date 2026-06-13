@@ -254,7 +254,9 @@ export class InterventionImpactPage extends BasePage {
     // "summary section rendered correctly."
     try {
       await this.page
-        .getByText(/Average Treatment Effect|No analysis data for this intervention/)
+        .getByText(
+          /Average Treatment Effect|No analysis data for this intervention|No causal impact data available/
+        )
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })
       return true

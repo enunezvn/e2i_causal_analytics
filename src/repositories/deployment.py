@@ -168,10 +168,18 @@ class MLDeployment:
 
 
 class MLDeploymentRepository(BaseRepository[MLDeployment]):
-    """Repository for ML Deployments."""
+    """Repository for ML Deployments.
+
+    Provenance (#894): ``ml_deployments`` carries ``is_synthetic`` (migration
+    069; live substrate 360/360 synthetic at filing time). Real-mode reads
+    default-exclude synthetic deployments so e.g. a REAL deploy never links its
+    rollback chain to a planted synthetic "previous deployment";
+    ``include_synthetic=True`` opts in per read.
+    """
 
     table_name = "ml_deployments"
     model_class = MLDeployment
+    HAS_PROVENANCE = True  # migration 069 (#894)
 
     def _to_model(self, data: Dict[str, Any]) -> MLDeployment:
         """Convert database row to model."""
@@ -238,12 +246,14 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
         self,
         environment: str,
         model_name: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> Optional[MLDeployment]:
         """Get currently active deployment for an environment.
 
         Args:
             environment: Target environment
             model_name: Optional model name filter (requires join)
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Active MLDeployment or None
@@ -251,11 +261,16 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
         if not self.client:
             return None
 
+        from src.repositories.provenance import apply_provenance_filter
+
         query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("environment", environment)
             .eq("status", DeploymentStatus.ACTIVE.value)
+        )
+        query = (
+            apply_provenance_filter(query, include_synthetic)
             .order("deployed_at", desc=True)
             .limit(1)
         )
@@ -269,6 +284,7 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
         environment: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List[MLDeployment]:
         """Get deployment history for a model.
 
@@ -277,12 +293,15 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
             environment: Optional environment filter
             status: Optional status filter
             limit: Maximum results
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of MLDeployment records
         """
         if not self.client:
             return []
+
+        from src.repositories.provenance import apply_provenance_filter
 
         query = (
             self.client.table(self.table_name)
@@ -294,6 +313,7 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
             query = query.eq("environment", environment)
         if status:
             query = query.eq("status", status)
+        query = apply_provenance_filter(query, include_synthetic)
 
         query = query.order("created_at", desc=True).limit(limit)
         result = await query.execute()
@@ -375,12 +395,14 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
         self,
         deployment_name: str,
         environment: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> Optional[MLDeployment]:
         """Get deployment by name.
 
         Args:
             deployment_name: Deployment name
             environment: Optional environment filter
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             MLDeployment or None
@@ -388,12 +410,15 @@ class MLDeploymentRepository(BaseRepository[MLDeployment]):
         if not self.client:
             return None
 
+        from src.repositories.provenance import apply_provenance_filter
+
         query = (
             self.client.table(self.table_name).select("*").eq("deployment_name", deployment_name)
         )
 
         if environment:
             query = query.eq("environment", environment)
+        query = apply_provenance_filter(query, include_synthetic)
 
         result = await query.limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None

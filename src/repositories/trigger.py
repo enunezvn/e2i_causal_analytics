@@ -29,6 +29,7 @@ class TriggerRepository(BaseRepository):
     """
 
     table_name = "triggers"
+    id_column = "trigger_id"  # live PK (#894: .eq("id") was a latent 42703)
     model_class = None  # Set to Trigger model when available
     HAS_PROVENANCE = True  # triggers carries is_synthetic (Shard 01)
 

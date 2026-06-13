@@ -447,3 +447,61 @@ def test_beat_schedule_entry_present() -> None:
     assert entry["task"] == "src.etl.territory_metrics_etl.run_territory_rollup"
     assert entry["schedule"] == 86400.0
     assert entry["options"]["queue"] == "analytics"
+
+
+# =============================================================================
+# Provenance inheritance (issue #895)
+# =============================================================================
+
+
+class TestProvenanceInheritance:
+    """Issue #895: second-order laundering into territory_metrics.
+
+    ``territory_metrics`` gains ``is_synthetic`` in migration 074. The
+    rollup aggregates per-HCP ``business_metrics`` rows (themselves now
+    provenance-tagged by 6B-infra-2a post-#895), raw ``triggers``, and
+    ``hcp_profiles`` volumes -- all three carry is_synthetic, and the
+    derived (territory_id, metric_date) row must inherit
+    ``bool(any synthetic input)``.
+    """
+
+    def test_insert_column_list_includes_is_synthetic(self) -> None:
+        """The INSERT column list must name is_synthetic explicitly so the
+        migration-074 default false can never apply to a derived row."""
+        sql = etl.INSERT_TERRITORY_ROLLUP_SQL
+        stripped = re.sub(r"--[^\n]*", "", sql)
+        insert_clause = stripped.split("INSERT INTO territory_metrics", 1)[1].split("SELECT", 1)[0]
+        assert "is_synthetic" in insert_clause, (
+            "is_synthetic missing from INSERT column list -- derived rows "
+            "would land with the migration-074 default false (laundering)"
+        )
+
+    def test_provenance_aggregated_via_bool_or(self) -> None:
+        """Row-level provenance must be collapsed with BOOL_OR (any synthetic
+        input taints the aggregate)."""
+        sql = etl.INSERT_TERRITORY_ROLLUP_SQL
+        assert re.search(r"BOOL_OR\s*\(", sql, re.IGNORECASE), (
+            "no BOOL_OR aggregation of is_synthetic -- provenance cannot "
+            "be inherited per-cell without it"
+        )
+
+    def test_all_three_aggregate_ctes_contribute_provenance(self) -> None:
+        """per_hcp_in_territory (business_metrics), active_hcp_per_territory_
+        date (triggers) and territory_hcp_volume (hcp_profiles) each feed an
+        aggregate column of the derived row, so each must carry provenance
+        into the final is_synthetic."""
+        sql = etl.INSERT_TERRITORY_ROLLUP_SQL
+        assert "bm.is_synthetic" in sql, "business_metrics provenance not read"
+        assert "t.is_synthetic" in sql, "triggers provenance not read"
+        for alias in ("pht.any_synthetic", "ahd.any_synthetic", "thv.any_synthetic"):
+            assert alias in sql, f"{alias} not propagated to the final SELECT"
+
+    def test_on_conflict_update_arm_preserves_provenance(self) -> None:
+        """Idempotent re-runs go through the DO UPDATE arm; laundered
+        semantics must not survive via that path either."""
+        sql = etl.INSERT_TERRITORY_ROLLUP_SQL
+        on_conflict_block = sql.split("ON CONFLICT (territory_id, metric_date) DO UPDATE SET", 1)[1]
+        assert re.search(r"is_synthetic\s*=\s*EXCLUDED\.is_synthetic", on_conflict_block), (
+            "is_synthetic missing from the ON CONFLICT SET list -- a re-run "
+            "would keep a stale provenance tag"
+        )

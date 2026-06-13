@@ -106,10 +106,19 @@ class ABExperimentRepository(BaseRepository):
     Repository for A/B experiment data access.
 
     Handles assignments, enrollments, and interim analyses.
+
+    Provenance (#894): ``ab_experiment_assignments`` (migration 063) and
+    ``ab_experiment_enrollments`` (migration 069) carry ``is_synthetic`` and
+    the synthetic loader stamps every loaded row (216k live rows at filing
+    time), so all real-mode reads default-exclude synthetic units.
+    Validation/agent-context callers opt in per read with
+    ``include_synthetic=True``. ``ab_interim_analyses`` is untagged —
+    its reads are deliberately unfiltered (a predicate would 42703).
     """
 
     table_name = "ab_experiment_assignments"
     model_class = Assignment
+    HAS_PROVENANCE = True  # migration 063 (#894)
 
     def __init__(self, supabase_client=None):
         """Initialize repository with Supabase client."""
@@ -240,14 +249,16 @@ class ABExperimentRepository(BaseRepository):
     async def get_assignment(
         self,
         assignment_id: UUID,
+        include_synthetic: bool = False,
     ) -> Optional[Assignment]:
-        """Get assignment by ID."""
+        """Get assignment by ID (a synthetic id must not resolve in real mode)."""
         if not self.client:
             return None
 
-        result = (
-            self.client.table(self.table_name).select("*").eq("id", str(assignment_id)).execute()
-        )
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("id", str(assignment_id))
+        result = apply_provenance_filter(query, include_synthetic).execute()
 
         return self._to_assignment(result.data[0]) if result.data else None
 
@@ -258,6 +269,7 @@ class ABExperimentRepository(BaseRepository):
         unit_type: Optional[str] = None,
         limit: int = 10000,
         offset: int = 0,
+        include_synthetic: bool = False,
     ) -> List[Assignment]:
         """
         Get assignments for an experiment.
@@ -268,12 +280,15 @@ class ABExperimentRepository(BaseRepository):
             unit_type: Optional unit type filter
             limit: Maximum records to return
             offset: Pagination offset
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of assignments
         """
         if not self.client:
             return []
+
+        from src.repositories.provenance import apply_provenance_filter
 
         query = (
             self.client.table(self.table_name).select("*").eq("experiment_id", str(experiment_id))
@@ -283,6 +298,7 @@ class ABExperimentRepository(BaseRepository):
             query = query.eq("variant", variant)
         if unit_type:
             query = query.eq("unit_type", unit_type)
+        query = apply_provenance_filter(query, include_synthetic)
 
         query = query.limit(limit).offset(offset)
         result = query.execute()
@@ -293,6 +309,7 @@ class ABExperimentRepository(BaseRepository):
         self,
         experiment_id: UUID,
         unit_id: str,
+        include_synthetic: bool = False,
     ) -> Optional[Assignment]:
         """
         Get assignment for a specific unit in an experiment.
@@ -300,6 +317,7 @@ class ABExperimentRepository(BaseRepository):
         Args:
             experiment_id: Experiment UUID
             unit_id: Unit identifier
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Assignment if found, None otherwise
@@ -307,25 +325,29 @@ class ABExperimentRepository(BaseRepository):
         if not self.client:
             return None
 
-        result = (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("experiment_id", str(experiment_id))
             .eq("unit_id", unit_id)
-            .execute()
         )
+        result = apply_provenance_filter(query, include_synthetic).execute()
 
         return self._to_assignment(result.data[0]) if result.data else None
 
     async def get_assignment_counts(
         self,
         experiment_id: UUID,
+        include_synthetic: bool = False,
     ) -> Dict[str, int]:
         """
         Get assignment counts by variant.
 
         Args:
             experiment_id: Experiment UUID
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dictionary of variant -> count
@@ -333,13 +355,15 @@ class ABExperimentRepository(BaseRepository):
         if not self.client:
             return {}
 
+        from src.repositories.provenance import apply_provenance_filter
+
         # Use SQL function if available, otherwise count manually
-        result = (
+        query = (
             self.client.table(self.table_name)
             .select("variant")
             .eq("experiment_id", str(experiment_id))
-            .execute()
         )
+        result = apply_provenance_filter(query, include_synthetic).execute()
 
         counts: Dict[str, int] = {}
         for row in result.data:
@@ -423,34 +447,38 @@ class ABExperimentRepository(BaseRepository):
     async def get_enrollment(
         self,
         enrollment_id: UUID,
+        include_synthetic: bool = False,
     ) -> Optional[Enrollment]:
-        """Get enrollment by ID."""
+        """Get enrollment by ID (ab_experiment_enrollments is tagged, mig 069)."""
         if not self.client:
             return None
 
-        result = (
-            self.client.table("ab_experiment_enrollments")
-            .select("*")
-            .eq("id", str(enrollment_id))
-            .execute()
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
+            self.client.table("ab_experiment_enrollments").select("*").eq("id", str(enrollment_id))
         )
+        result = apply_provenance_filter(query, include_synthetic).execute()
 
         return self._to_enrollment(result.data[0]) if result.data else None
 
     async def get_enrollment_by_assignment(
         self,
         assignment_id: UUID,
+        include_synthetic: bool = False,
     ) -> Optional[Enrollment]:
         """Get enrollment for an assignment."""
         if not self.client:
             return None
 
-        result = (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table("ab_experiment_enrollments")
             .select("*")
             .eq("assignment_id", str(assignment_id))
-            .execute()
         )
+        result = apply_provenance_filter(query, include_synthetic).execute()
 
         return self._to_enrollment(result.data[0]) if result.data else None
 
@@ -547,6 +575,7 @@ class ABExperimentRepository(BaseRepository):
         experiment_id: UUID,
         status: Optional[str] = None,
         limit: int = 10000,
+        include_synthetic: bool = False,
     ) -> List[Enrollment]:
         """
         Get enrollments for an experiment.
@@ -555,12 +584,15 @@ class ABExperimentRepository(BaseRepository):
             experiment_id: Experiment UUID
             status: Optional status filter
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of enrollments
         """
         if not self.client:
             return []
+
+        from src.repositories.provenance import apply_provenance_filter
 
         # Join with assignments to filter by experiment
         query = (
@@ -571,6 +603,7 @@ class ABExperimentRepository(BaseRepository):
 
         if status:
             query = query.eq("enrollment_status", status)
+        query = apply_provenance_filter(query, include_synthetic)
 
         query = query.limit(limit)
         result = query.execute()

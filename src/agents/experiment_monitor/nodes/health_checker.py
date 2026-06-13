@@ -81,8 +81,11 @@ class HealthCheckerNode:
             enrollment_issues: List[EnrollmentIssue] = []
             stale_data_issues: List[StaleDataIssue] = []
 
+            from src.repositories.provenance import coerce_provenance_flag
+
+            include_synthetic = coerce_provenance_flag(state.get("include_synthetic"))
             for exp in experiments:
-                summary = await self._check_experiment_health(exp, client)
+                summary = await self._check_experiment_health(exp, client, include_synthetic)
                 experiment_summaries.append(summary)
 
                 # Check for enrollment issues (skip if disabled; FE selective-check flag, #825)
@@ -129,23 +132,33 @@ class HealthCheckerNode:
         Returns:
             List of experiment dictionaries
         """
+        from src.repositories.provenance import apply_provenance_filter, coerce_provenance_flag
+
+        # Provenance (#894): ml_experiments is is_synthetic-tagged (migration
+        # 069) and the synthetic generator leaves 360 perpetually-"running"
+        # rows — without the predicate the whole AB sweep chain (assignments,
+        # SRM, interim analyses) runs against planted experiments. Strictly
+        # parsed state opt-in (validation runs), real-mode default-exclude.
+        include_synthetic = coerce_provenance_flag(state.get("include_synthetic"))
+
         try:
             if state.get("check_all_active"):
                 # Get all active experiments
-                result = await (
+                query = (
                     client.table("ml_experiments")
                     .select("id, experiment_name, status, prediction_target, created_at")
                     .eq("status", "running")
-                    .execute()
                 )
+                result = await apply_provenance_filter(query, include_synthetic).execute()
             elif state.get("experiment_ids"):
-                # Get specific experiments
-                result = await (
+                # Get specific experiments (a synthetic id must not resolve in
+                # real mode either — same semantics as BaseRepository.get_by_id)
+                query = (
                     client.table("ml_experiments")
                     .select("id, experiment_name, status, prediction_target, created_at")
                     .in_("id", state["experiment_ids"])
-                    .execute()
                 )
+                result = await apply_provenance_filter(query, include_synthetic).execute()
             else:
                 return []
 
@@ -155,7 +168,7 @@ class HealthCheckerNode:
             return []
 
     async def _check_experiment_health(
-        self, experiment: Dict, client: Optional[Any]
+        self, experiment: Dict, client: Optional[Any], include_synthetic: bool = False
     ) -> ExperimentSummary:
         """Check health of a single experiment.
 
@@ -177,16 +190,19 @@ class HealthCheckerNode:
             start_date = created_at
         days_running = max(1, (datetime.now(timezone.utc) - start_date).days)
 
-        # Get enrollment data
+        # Get enrollment data (#894: ab_experiment_assignments is tagged —
+        # synthetic units must not count as enrollment)
         total_enrolled = 0
         if client:
+            from src.repositories.provenance import apply_provenance_filter
+
             try:
-                result = await (
+                query = (
                     client.table("ab_experiment_assignments")
                     .select("id", count="exact")
                     .eq("experiment_id", exp_id)
-                    .execute()
                 )
+                result = await apply_provenance_filter(query, include_synthetic).execute()
                 total_enrolled = result.count or 0
             except Exception:
                 pass
@@ -302,12 +318,20 @@ class HealthCheckerNode:
         if not client:
             return None
 
+        from src.repositories.provenance import apply_provenance_filter, coerce_provenance_flag
+
+        include_synthetic = coerce_provenance_flag(state.get("include_synthetic"))
+
         try:
             # Get the most recent assignment timestamp for this experiment
-            result = await (
+            # (#894: a synthetic assignment must not mask real-data staleness)
+            query = (
                 client.table("ab_experiment_assignments")
                 .select("assigned_at")
                 .eq("experiment_id", exp_id)
+            )
+            result = await (
+                apply_provenance_filter(query, include_synthetic)
                 .order("assigned_at", desc=True)
                 .limit(1)
                 .execute()

@@ -31,11 +31,18 @@ class AgentActivityRepository(BaseRepository):
 
     table_name = "agent_activities"
     model_class = None  # Set to AgentActivity model when available
+    id_column = "activity_id"  # live PK (#894: .eq("id") was a latent 42703)
+    # Provenance (#894): agent_activities carries is_synthetic (migration 063).
+    # The synthetic loader emits no agent_activities today (0 live rows), but a
+    # future load must never surface planted "agent analyses" through the chat
+    # tool (_query_agent_analysis reads via get_many) or the custom reads below.
+    HAS_PROVENANCE = True
 
     async def get_by_agent(
         self,
         agent_type: str,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get activities for a specific agent type.
@@ -43,6 +50,7 @@ class AgentActivityRepository(BaseRepository):
         Args:
             agent_type: Agent name (e.g., 'orchestrator', 'causal_impact')
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of AgentActivity records ordered by timestamp descending
@@ -50,10 +58,11 @@ class AgentActivityRepository(BaseRepository):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("agent_name", agent_type)
         result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("agent_name", agent_type)
+            apply_provenance_filter(query, include_synthetic)
             .order("activity_timestamp", desc=True)
             .limit(limit)
             .execute()
@@ -65,6 +74,7 @@ class AgentActivityRepository(BaseRepository):
         self,
         tier: str,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get activities for all agents in a tier.
@@ -72,6 +82,7 @@ class AgentActivityRepository(BaseRepository):
         Args:
             tier: Agent tier (workstream_type: 'coordination', 'causal_analytics', etc.)
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of AgentActivity records
@@ -79,10 +90,11 @@ class AgentActivityRepository(BaseRepository):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("agent_tier", tier)
         result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("agent_tier", tier)
+            apply_provenance_filter(query, include_synthetic)
             .order("activity_timestamp", desc=True)
             .limit(limit)
             .execute()
@@ -94,6 +106,7 @@ class AgentActivityRepository(BaseRepository):
         self,
         agent_type: str,
         limit: int = 50,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get analysis results from a specific agent.
@@ -104,6 +117,7 @@ class AgentActivityRepository(BaseRepository):
         Args:
             agent_type: Agent name (e.g., 'causal_impact', 'gap_analyzer')
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of AgentActivity records with analysis_results
@@ -111,11 +125,16 @@ class AgentActivityRepository(BaseRepository):
         if not self.client:
             return []
 
-        result = await (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("agent_name", agent_type)
             .not_.is_("analysis_results", "null")
+        )
+        result = await (
+            apply_provenance_filter(query, include_synthetic)
             .order("activity_timestamp", desc=True)
             .limit(limit)
             .execute()
@@ -127,6 +146,7 @@ class AgentActivityRepository(BaseRepository):
         self,
         hours: int = 24,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get recent agent activities.
@@ -134,6 +154,7 @@ class AgentActivityRepository(BaseRepository):
         Args:
             hours: Number of hours to look back
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Recent activities ordered by timestamp descending
@@ -141,12 +162,17 @@ class AgentActivityRepository(BaseRepository):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        result = await (
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .gte("activity_timestamp", cutoff_time.isoformat())
+        )
+        result = await (
+            apply_provenance_filter(query, include_synthetic)
             .order("activity_timestamp", desc=True)
             .limit(limit)
             .execute()
@@ -158,6 +184,7 @@ class AgentActivityRepository(BaseRepository):
         self,
         workstream: str,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get activities for a specific workstream.
@@ -165,6 +192,7 @@ class AgentActivityRepository(BaseRepository):
         Args:
             workstream: Workstream type (WS1, WS2, WS3)
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of AgentActivity records
@@ -172,10 +200,11 @@ class AgentActivityRepository(BaseRepository):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("workstream", workstream)
         result = await (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("workstream", workstream)
+            apply_provenance_filter(query, include_synthetic)
             .order("activity_timestamp", desc=True)
             .limit(limit)
             .execute()
@@ -186,12 +215,14 @@ class AgentActivityRepository(BaseRepository):
     async def get_agent_activity_summary(
         self,
         hours: int = 24,
+        include_synthetic: bool = False,
     ) -> Dict[str, Any]:
         """
         Get summary of agent activities over a time period.
 
         Args:
             hours: Number of hours to look back
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Dict with activity counts by agent and tier
@@ -204,15 +235,16 @@ class AgentActivityRepository(BaseRepository):
                 "with_results": 0,
             }
 
+        from src.repositories.provenance import apply_provenance_filter
+
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        result = await (
+        query = (
             self.client.table(self.table_name)
             .select("agent_name, agent_tier, analysis_results")
             .gte("activity_timestamp", cutoff_time.isoformat())
-            .limit(10000)
-            .execute()
         )
+        result = await apply_provenance_filter(query, include_synthetic).limit(10000).execute()
 
         if not result.data:
             return {
@@ -250,6 +282,7 @@ class AgentActivityRepository(BaseRepository):
         end_time: datetime,
         agent_type: Optional[str] = None,
         limit: int = 5000,
+        include_synthetic: bool = False,
     ) -> List:
         """
         Get activities within a time range.
@@ -259,12 +292,15 @@ class AgentActivityRepository(BaseRepository):
             end_time: End of range
             agent_type: Optional filter by agent name
             limit: Maximum records
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Activities within range, ordered by timestamp
         """
         if not self.client:
             return []
+
+        from src.repositories.provenance import apply_provenance_filter
 
         query = (
             self.client.table(self.table_name)
@@ -275,6 +311,7 @@ class AgentActivityRepository(BaseRepository):
 
         if agent_type:
             query = query.eq("agent_name", agent_type)
+        query = apply_provenance_filter(query, include_synthetic)
 
         result = await query.order("activity_timestamp", desc=True).limit(limit).execute()
 

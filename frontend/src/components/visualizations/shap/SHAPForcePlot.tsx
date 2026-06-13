@@ -42,20 +42,8 @@ export interface SHAPForcePlotProps {
   showLabels?: boolean;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_FEATURES: FeatureContribution[] = [
-  { feature_name: 'days_since_visit', feature_value: 45, shap_value: 0.18, contribution_direction: 'positive', contribution_rank: 1 },
-  { feature_name: 'total_prescriptions', feature_value: 12, shap_value: -0.12, contribution_direction: 'negative', contribution_rank: 2 },
-  { feature_name: 'territory_sales', feature_value: 150000, shap_value: 0.08, contribution_direction: 'positive', contribution_rank: 3 },
-  { feature_name: 'specialty_oncology', feature_value: 1, shap_value: 0.06, contribution_direction: 'positive', contribution_rank: 4 },
-  { feature_name: 'engagement_score', feature_value: 3, shap_value: -0.05, contribution_direction: 'negative', contribution_rank: 5 },
-];
-
-const SAMPLE_BASE = 0.35;
-const SAMPLE_OUTPUT = 0.5;
+// NOTE: SAMPLE_FEATURES / SAMPLE_BASE / SAMPLE_OUTPUT (fabricated SHAP
+// force-plot inputs) were DELETED. Omitted props render the empty state.
 
 // =============================================================================
 // COMPONENT
@@ -90,13 +78,10 @@ export const SHAPForcePlot = React.forwardRef<HTMLDivElement, SHAPForcePlotProps
     },
     ref
   ) => {
-    // Use provided data or sample
-    const baseValue = propBase ?? SAMPLE_BASE;
-    const outputValue = propOutput ?? SAMPLE_OUTPUT;
-    const features = useMemo(
-      () => propFeatures ?? SAMPLE_FEATURES,
-      [propFeatures]
-    );
+    // Data comes ONLY from props — never a sample fallback.
+    const baseValue = propBase ?? 0;
+    const outputValue = propOutput ?? 0;
+    const features = useMemo(() => propFeatures ?? [], [propFeatures]);
 
     // Process features and calculate layout
     const { positiveFeatures, negativeFeatures, scale } = useMemo(() => {
@@ -128,6 +113,22 @@ export const SHAPForcePlot = React.forwardRef<HTMLDivElement, SHAPForcePlotProps
           style={{ height }}
         >
           <div className="h-full bg-[var(--color-muted)] rounded-md" />
+        </div>
+      );
+    }
+
+    // Honest empty state — never fabricated contributions.
+    if (features.length === 0) {
+      return (
+        <div
+          ref={ref}
+          className={cn(
+            'flex items-center justify-center text-sm text-[var(--color-muted-foreground)]',
+            className
+          )}
+          style={{ height }}
+        >
+          No feature data available
         </div>
       );
     }

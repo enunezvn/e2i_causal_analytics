@@ -350,7 +350,9 @@ def check_all_production_models(
         errors = []
 
         for model in models:
-            model_id = model.get("id") or model.get("name")
+            # #894: the registry projection uses the live column names
+            # (model_name, not name)
+            model_id = model.get("id") or model.get("model_name")
             try:
                 # Trigger individual drift detection
                 result = run_drift_detection.delay(
@@ -942,7 +944,9 @@ def check_retraining_for_all_models(
         errors = []
 
         for model in models:
-            model_id = model.get("id") or model.get("name")
+            # #894: the registry projection uses the live column names
+            # (model_name, not name)
+            model_id = model.get("id") or model.get("model_name")
             try:
                 # Queue evaluation task
                 task = evaluate_retraining_need.delay(

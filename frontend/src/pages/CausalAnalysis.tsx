@@ -393,7 +393,7 @@ export default function CausalAnalysis() {
                         {formatEffect(hierarchicalResult.overall_ate)}
                       </div>
                       <div className="text-sm text-muted-foreground mt-2">
-                        95% CI: {formatCI(hierarchicalResult.overall_ci_lower, hierarchicalResult.overall_ci_upper)}
+                        CI: {formatCI(hierarchicalResult.overall_ci_lower, hierarchicalResult.overall_ci_upper)}
                       </div>
                       <div className="mt-4">
                         {getStatusBadge(hierarchicalResult.status)}
@@ -483,7 +483,7 @@ export default function CausalAnalysis() {
                               <div className="bg-background border rounded-lg p-3 shadow-lg">
                                 <p className="font-semibold">{data.name}</p>
                                 <p>CATE: {data.cate.toFixed(3)}</p>
-                                <p>95% CI: [{data.ci_lower.toFixed(3)}, {data.ci_upper.toFixed(3)}]</p>
+                                <p>CI: [{data.ci_lower.toFixed(3)}, {data.ci_upper.toFixed(3)}]</p>
                                 <p>Samples: {data.samples.toLocaleString()}</p>
                               </div>
                             );
@@ -520,7 +520,7 @@ export default function CausalAnalysis() {
                           <th className="text-left py-2 px-4">Samples</th>
                           <th className="text-left py-2 px-4">Uplift Range</th>
                           <th className="text-left py-2 px-4">CATE</th>
-                          <th className="text-left py-2 px-4">95% CI</th>
+                          <th className="text-left py-2 px-4">CI</th>
                           <th className="text-left py-2 px-4">Contribution</th>
                           <th className="text-left py-2 px-4">Status</th>
                         </tr>
@@ -624,7 +624,7 @@ export default function CausalAnalysis() {
                     <tr className="border-b">
                       <th className="text-left py-2 px-4">Library</th>
                       <th className="text-left py-2 px-4">Effect Estimate</th>
-                      <th className="text-left py-2 px-4">95% CI</th>
+                      <th className="text-left py-2 px-4">CI</th>
                       <th className="text-left py-2 px-4">Latency</th>
                       <th className="text-left py-2 px-4">Status</th>
                     </tr>

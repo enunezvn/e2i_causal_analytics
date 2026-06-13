@@ -2,18 +2,29 @@
  * Executive AI Brief Component
  * ============================
  *
- * Displays a GPT-powered executive summary of key insights.
- * Uses the cognitive query API to generate AI-powered briefs.
+ * Displays an AI-generated executive summary of key insights.
+ *
+ * Data sources, in order of preference (real data only):
+ * 1. Crystallized executive insights for the brand
+ *    (`GET /api/executive-insights`, M5 REWIRE).
+ * 2. The live cognitive-RAG response (`POST /api/cognitive/rag`).
+ *
+ * Honest-state contract: real sections, an explicit empty state, or a
+ * labeled error. SAMPLE_BRIEF (fabricated $2.3M / 847-HCP / beta=0.42
+ * sections with invented confidence badges) was DELETED — its removal was
+ * the deferred "SAMPLE_* phase" flagged in commit 9a6c9404. Confidence
+ * badges render only when a real confidence value exists; none is invented.
  *
  * @module components/insights/ExecutiveAIBrief
  */
 
-import { useState, useEffect } from 'react';
-import { Brain, RefreshCw, Sparkles, Clock, CheckCircle2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Brain, RefreshCw, Sparkles, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { useCognitiveRAG } from '@/hooks/api/use-cognitive';
 import { useExecutiveInsights } from '@/hooks/api/use-executive-insights';
 
@@ -29,66 +40,53 @@ interface ExecutiveAIBriefProps {
 interface BriefSection {
   title: string;
   content: string;
-  confidence: number;
+  /** Real source metadata when available (e.g. crystallization source count). */
+  sourceLabel?: string;
 }
-
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_BRIEF: BriefSection[] = [
-  {
-    title: 'Key Performance Trend',
-    content:
-      'TRx volume for Remibrutinib has increased 12.3% MoM, driven primarily by improved HCP engagement in the Northeast region. Causal analysis indicates detailing frequency is the strongest driver (β=0.42).',
-    confidence: 0.92,
-  },
-  {
-    title: 'Emerging Opportunity',
-    content:
-      'Gap analysis identified 847 high-propensity HCPs with below-target call coverage. Addressing this gap could yield an estimated $2.3M in incremental revenue over Q1.',
-    confidence: 0.87,
-  },
-  {
-    title: 'Risk Alert',
-    content:
-      'Model drift detected in the Southeast region propensity model. Feature distribution shift in prior authorization rates requires attention. Recommend retraining within 14 days.',
-    confidence: 0.78,
-  },
-];
 
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
 export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: ExecutiveAIBriefProps) {
-  const [sections, setSections] = useState<BriefSection[]>(SAMPLE_BRIEF);
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Use cognitive RAG for AI-powered briefs
+  // AI-powered brief via cognitive RAG (real backend response).
   const {
     mutate: generateBrief,
     data: briefResponse,
+    error: briefError,
     isPending: isGenerating,
   } = useCognitiveRAG();
 
   // Real crystallized insights for this brand (M5 REWIRE). When present,
-  // these take precedence over the SAMPLE_BRIEF / cognitive-RAG path.
+  // these take precedence over the cognitive-RAG path.
   const { data: crystallized } = useExecutiveInsights(brand);
 
-  const realSections: BriefSection[] | null =
+  const crystallizedSections: BriefSection[] | null =
     crystallized && crystallized.length > 0
       ? crystallized.slice(0, 3).map((ins) => ({
           title: ins.title,
           content: ins.narrative,
-          confidence:
-            ins.effect_direction === 'positive'
-              ? 0.9
-              : ins.effect_direction === 'negative'
-                ? 0.8
-                : 0.75,
+          sourceLabel: `${ins.source_count} source${ins.source_count === 1 ? '' : 's'}`,
         }))
       : null;
+
+  // The RAG response becomes a single real section — nothing is spliced in.
+  const ragSections: BriefSection[] | null = briefResponse?.response
+    ? [
+        {
+          title: 'AI-Generated Insight',
+          content: briefResponse.response,
+          sourceLabel:
+            briefResponse.hop_count > 0
+              ? `${briefResponse.hop_count} retrieval hop${briefResponse.hop_count === 1 ? '' : 's'}`
+              : undefined,
+        },
+      ]
+    : null;
+
+  const sections: BriefSection[] = crystallizedSections ?? ragSections ?? [];
 
   // Generate initial brief on mount
   useEffect(() => {
@@ -97,19 +95,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     });
   }, [brand, generateBrief]);
 
-  // Update sections when we get a response
+  // Track when a real response arrives
   useEffect(() => {
     if (briefResponse?.response) {
-      // Parse the response into sections (simplified - real implementation would parse structured response)
-      const newSections: BriefSection[] = [
-        {
-          title: 'AI-Generated Insight',
-          content: briefResponse.response,
-          confidence: 0.85, // CognitiveRAGResponse doesn't have direct confidence field
-        },
-        ...SAMPLE_BRIEF.slice(1),
-      ];
-      setSections(newSections);
       setLastUpdated(new Date());
     }
   }, [briefResponse]);
@@ -119,6 +107,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
       query: `Generate an executive brief summary for ${brand}. Include key performance trends, emerging opportunities, and risk alerts.`,
     });
   };
+
+  const showError = !isGenerating && sections.length === 0 && !!briefError;
+  const showEmpty = !isGenerating && sections.length === 0 && !briefError;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -138,7 +129,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="text-xs">
               <Sparkles className="h-3 w-3 mr-1" />
-              GPT-4 Enhanced
+              AI-Generated
             </Badge>
             <Button
               variant="ghost"
@@ -163,10 +154,29 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
           </div>
         )}
 
-        {/* Brief Sections */}
-        {!isGenerating && (
+        {/* Error State — labeled, never replaced with fabricated sections */}
+        {showError && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/5 border border-rose-500/20">
+            <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
+            <div className="text-xs text-[var(--color-muted-foreground)]">
+              <span className="font-medium text-rose-600">Unable to generate brief:</span>{' '}
+              {briefError?.message ?? 'Cognitive engine unavailable'}
+            </div>
+          </div>
+        )}
+
+        {/* Honest empty state */}
+        {showEmpty && (
+          <EmptyState
+            title="No executive brief available"
+            description={`No crystallized insights exist for ${brand} yet and the cognitive engine has not returned a brief. Use refresh to try again.`}
+          />
+        )}
+
+        {/* Brief Sections — real content only */}
+        {!isGenerating && sections.length > 0 && (
           <div className="space-y-4">
-            {(realSections ?? sections).map((section, idx) => (
+            {sections.map((section, idx) => (
               <div
                 key={idx}
                 className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]"
@@ -175,19 +185,11 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
                   <h4 className="text-sm font-medium text-[var(--color-foreground)]">
                     {section.title}
                   </h4>
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      'text-xs',
-                      section.confidence >= 0.9
-                        ? 'border-emerald-500/20 text-emerald-600'
-                        : section.confidence >= 0.8
-                          ? 'border-blue-500/20 text-blue-600'
-                          : 'border-amber-500/20 text-amber-600'
-                    )}
-                  >
-                    {(section.confidence * 100).toFixed(0)}% confidence
-                  </Badge>
+                  {section.sourceLabel && (
+                    <Badge variant="outline" className="text-xs">
+                      {section.sourceLabel}
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-sm text-[var(--color-muted-foreground)] leading-relaxed">
                   {section.content}
@@ -201,11 +203,24 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
         <div className="flex items-center justify-between pt-2 border-t border-[var(--color-border)]">
           <div className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
             <Clock className="h-3 w-3" />
-            <span>Last updated: {lastUpdated.toLocaleTimeString()}</span>
+            <span>
+              {lastUpdated
+                ? `Last updated: ${lastUpdated.toLocaleTimeString()}`
+                : 'Not yet generated'}
+            </span>
           </div>
-          <div className="flex items-center gap-1 text-xs text-emerald-600">
+          <div
+            className={cn(
+              'flex items-center gap-1 text-xs',
+              sections.length > 0
+                ? 'text-emerald-600'
+                : 'text-[var(--color-muted-foreground)]'
+            )}
+          >
             <CheckCircle2 className="h-3 w-3" />
-            <span>3 insights generated</span>
+            <span>
+              {sections.length} insight{sections.length === 1 ? '' : 's'} generated
+            </span>
           </div>
         </div>
       </CardContent>

@@ -2,48 +2,39 @@
  * Executive Intelligence Summary Component
  * =========================================
  *
- * Displays real-time causal impact analysis summary for the E2I dashboard.
- * Shows system status, key metrics, and causal insights from the graph.
+ * Displays a live system summary for the E2I dashboard, built EXCLUSIVELY
+ * from real API substrate:
  *
- * Features:
- * - System health status with active agents
- * - Data-to-Value Pipeline metrics
- * - Model-to-Impact Bridge metrics
- * - Fairness & Trust metrics
- * - Causal chain summary
+ * - Graph metrics ............ useGraphStats() (relationships, nodes,
+ *                              communities, episodes)
+ * - System health ............ useQuickHealthCheck() (Health Score agent's
+ *                              real overall_health_score + grade)
+ * - Agent roster ............. GET /agents/status (real active/total counts)
+ *
+ * Anything without live data renders an honest placeholder ('—') or is
+ * omitted. The former fabrications — numeric fallbacks (142/847/12/1.47M),
+ * hardcoded activeAgents=8, a healthScore invented from a KPI status string
+ * (84/72), an undocumented dollar-impact formula (total_relationships *
+ * 0.167 shown as "$X.XM Est. Impact"), and three hardcoded "causal insight"
+ * cards ported from the static mock design (commit fbf84df7) — were removed:
+ * they presented plausible-wrong values as real-time analysis.
  *
  * @module components/dashboard/ExecutiveSummary
  */
 
 import { useMemo } from 'react';
-import {
-  Activity,
-  Brain,
-  TrendingUp,
-  DollarSign,
-  Shield,
-  CheckCircle2,
-  Target,
-} from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Activity, Brain, Target, CheckCircle2, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { useGraphStats } from '@/hooks/api/use-graph';
-import { useKPIHealth } from '@/hooks/api/use-kpi';
-import type { GraphStatsResponse } from '@/types/graph';
+import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
+import { getValidated } from '@/lib/api-client';
+import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 
 // =============================================================================
 // TYPES
 // =============================================================================
-
-interface MetricCardProps {
-  title: string;
-  value: string;
-  status: 'optimized' | 'opportunity' | 'monitored' | 'warning';
-  insight: string;
-  highlightedEffect: string;
-  icon: React.ReactNode;
-}
 
 interface ExecutiveSummaryProps {
   className?: string;
@@ -53,56 +44,18 @@ interface ExecutiveSummaryProps {
 // HELPERS
 // =============================================================================
 
-function getStatusBadge(status: MetricCardProps['status']) {
-  const config = {
-    optimized: { label: 'OPTIMIZED', className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
-    opportunity: { label: 'OPPORTUNITY', className: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
-    monitored: { label: 'MONITORED', className: 'bg-blue-500/10 text-blue-600 border-blue-500/20' },
-    warning: { label: 'WARNING', className: 'bg-rose-500/10 text-rose-600 border-rose-500/20' },
-  };
-  return config[status];
-}
-
 function formatNumber(num: number): string {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
   return num.toString();
 }
 
-// =============================================================================
-// SUB-COMPONENTS
-// =============================================================================
-
-function MetricCard({ title, value, status, insight, highlightedEffect, icon }: MetricCardProps) {
-  const statusConfig = getStatusBadge(status);
-
-  return (
-    <Card className="bg-[var(--color-card)] border-[var(--color-border)]">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-[var(--color-muted)]">{icon}</div>
-            <CardTitle className="text-sm font-medium">{title}</CardTitle>
-          </div>
-          <Badge variant="outline" className={cn('text-xs', statusConfig.className)}>
-            {statusConfig.label}
-          </Badge>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold text-[var(--color-foreground)] mb-3">{value}</div>
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-[var(--color-muted-foreground)]">
-            Causal Intelligence Finding
-          </div>
-          <p className="text-sm text-[var(--color-muted-foreground)]">
-            {insight}{' '}
-            <span className="text-emerald-600 font-medium">{highlightedEffect}</span>
-          </p>
-        </div>
-      </CardContent>
-    </Card>
-  );
+interface QuickStat {
+  label: string;
+  /** Pre-formatted display value; '—' is the honest "no data" placeholder. */
+  display: string;
+  icon: React.ReactNode;
+  iconBg: string;
 }
 
 // =============================================================================
@@ -110,67 +63,124 @@ function MetricCard({ title, value, status, insight, highlightedEffect, icon }: 
 // =============================================================================
 
 export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
-  // Fetch graph statistics for causal metrics
-  const { data: graphStats, isLoading: graphLoading } = useGraphStats();
-  const { data: kpiHealth } = useKPIHealth();
+  // Real graph statistics (FalkorDB-backed).
+  const {
+    data: graphStats,
+    isLoading: graphLoading,
+    error: graphError,
+  } = useGraphStats();
 
-  // Compute summary metrics from graph stats
-  const summaryMetrics = useMemo(() => {
-    const stats = graphStats as GraphStatsResponse | undefined;
+  // Real system health from the Health Score agent (same source as the Home
+  // System Health card) — NOT a number invented from a KPI status string.
+  const { data: health, error: healthError } = useQuickHealthCheck({
+    refetchInterval: 30000,
+  });
 
-    // Default values when API is loading or unavailable
-    const totalRelationships = stats?.total_relationships ?? 142;
-    const totalNodes = stats?.total_nodes ?? 847;
-    const totalCommunities = stats?.total_communities ?? 12;
-    const activeAgents = 8; // Could come from monitoring API
-    const healthScore = kpiHealth?.status === 'healthy' ? 84 : 72;
-    const patientJourneys = stats?.total_episodes ?? 1470000;
+  // Real agent roster (same source as the Home Agent Status card).
+  const { data: agentStatus, error: agentsError } = useQuery({
+    queryKey: ['agent-status'],
+    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
+    refetchInterval: 30000,
+    retry: false,
+  });
 
-    // Calculate estimated value based on relationships
-    const estimatedValue = totalRelationships * 0.167; // ~$M per relationship
+  // Failed sources get a LABELED degraded notice — a query error must be
+  // distinguishable from honest "no data yet" ('—').
+  const failedSources = [
+    ...(graphError ? ['graph metrics'] : []),
+    ...(healthError ? ['health score'] : []),
+    ...(agentsError ? ['agent roster'] : []),
+  ];
 
-    return {
-      totalRelationships,
-      totalNodes,
-      totalCommunities,
-      activeAgents,
-      healthScore,
-      patientJourneys,
-      estimatedValue: estimatedValue.toFixed(1),
-      topChainStrength: 0.88, // Mock - would come from causal chain API
-    };
-  }, [graphStats, kpiHealth]);
+  const totalAgents = agentStatus?.agents?.length ?? null;
+  const activeAgents = useMemo(
+    () =>
+      agentStatus
+        ? agentStatus.agents.filter((a) => a.status === 'active').length
+        : null,
+    [agentStatus]
+  );
+  const healthScore =
+    health?.overall_health_score != null
+      ? Math.round(health.overall_health_score)
+      : null;
 
-  // Generate dynamic insight text
-  const systemStatusText = useMemo(() => {
-    const m = summaryMetrics;
-    return (
-      <>
-        The E2I Causal Analytics platform is operating at{' '}
-        <span className="text-emerald-600 font-medium">
-          {m.healthScore}% health with {m.activeAgents} active AI agents
-        </span>{' '}
-        processing {formatNumber(m.patientJourneys)} patient journeys. Real-time causal analysis has
-        identified{' '}
-        <span className="text-emerald-600 font-medium">
-          {m.totalCommunities} high-impact optimization vectors worth ${m.estimatedValue}M in annual
-          value
-        </span>
-        . The system&apos;s causal inference engine has traced {m.totalRelationships} significant
-        pathways.
-      </>
-    );
-  }, [summaryMetrics]);
+  // Quick stats — real values only; '—' when the source has no data.
+  const quickStats: QuickStat[] = [
+    {
+      label: 'Causal Paths',
+      display:
+        graphStats?.total_relationships != null
+          ? formatNumber(graphStats.total_relationships)
+          : '—',
+      icon: <Brain className="h-3.5 w-3.5 text-purple-500" />,
+      iconBg: 'bg-purple-500/10',
+    },
+    {
+      label: 'Graph Nodes',
+      display:
+        graphStats?.total_nodes != null
+          ? formatNumber(graphStats.total_nodes)
+          : '—',
+      icon: <Target className="h-3.5 w-3.5 text-blue-500" />,
+      iconBg: 'bg-blue-500/10',
+    },
+    {
+      label: 'System Health',
+      display: healthScore != null ? `${healthScore}%` : '—',
+      icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />,
+      iconBg: 'bg-emerald-500/10',
+    },
+    {
+      label: 'Agents Active',
+      display:
+        activeAgents != null && totalAgents != null
+          ? `${activeAgents}/${totalAgents}`
+          : '—',
+      icon: <Users className="h-3.5 w-3.5 text-amber-500" />,
+      iconBg: 'bg-amber-500/10',
+    },
+  ];
+
+  // System-status prose assembled ONLY from clauses with real data behind
+  // them; honest fallback sentence when nothing is available yet.
+  const statusClauses = useMemo(() => {
+    const clauses: string[] = [];
+    if (healthScore != null) {
+      clauses.push(
+        `The platform health score is ${healthScore}%${
+          health?.health_grade ? ` (grade ${health.health_grade})` : ''
+        }.`
+      );
+    }
+    if (activeAgents != null && totalAgents != null) {
+      clauses.push(`${activeAgents} of ${totalAgents} AI agents are active.`);
+    }
+    if (graphStats) {
+      const parts: string[] = [];
+      if (graphStats.total_relationships != null) {
+        parts.push(`${formatNumber(graphStats.total_relationships)} causal relationships`);
+      }
+      if (graphStats.total_nodes != null) {
+        parts.push(`${formatNumber(graphStats.total_nodes)} nodes`);
+      }
+      if (graphStats.total_communities != null) {
+        parts.push(`${formatNumber(graphStats.total_communities)} communities`);
+      }
+      if (graphStats.total_episodes != null) {
+        parts.push(`${formatNumber(graphStats.total_episodes)} episodes`);
+      }
+      if (parts.length > 0) {
+        clauses.push(`The causal knowledge graph tracks ${parts.join(', ')}.`);
+      }
+    }
+    return clauses;
+  }, [healthScore, health?.health_grade, activeAgents, totalAgents, graphStats]);
 
   if (graphLoading) {
     return (
       <div className={cn('space-y-4', className)}>
         <div className="h-32 bg-[var(--color-muted)] animate-pulse rounded-lg" />
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-48 bg-[var(--color-muted)] animate-pulse rounded-lg" />
-          ))}
-        </div>
       </div>
     );
   }
@@ -183,7 +193,7 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
           <div className="flex items-center gap-2">
             <Brain className="h-5 w-5 text-purple-500" />
             <CardTitle className="text-lg">
-              Executive Intelligence Summary - Real-time Causal Impact Analysis
+              Executive Intelligence Summary
             </CardTitle>
           </div>
         </CardHeader>
@@ -194,81 +204,36 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
               <span className="font-medium">Current System Status</span>
             </div>
             <p className="text-sm leading-relaxed text-[var(--color-foreground)]">
-              {systemStatusText}
+              {statusClauses.length > 0
+                ? statusClauses.join(' ')
+                : 'Live system metrics are currently unavailable.'}
             </p>
 
-            {/* Quick Stats Row */}
+            {failedSources.length > 0 && (
+              <p role="alert" className="text-xs text-amber-600 dark:text-amber-400">
+                Degraded: {failedSources.join(', ')}{' '}
+                {failedSources.length === 1 ? 'request' : 'requests'} failed —
+                affected figures show '—'.
+              </p>
+            )}
+
+            {/* Quick Stats Row — real values or honest '—'. */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-              <div className="flex items-center gap-2 text-sm">
-                <div className="p-1.5 rounded bg-purple-500/10">
-                  <Brain className="h-3.5 w-3.5 text-purple-500" />
+              {quickStats.map((stat) => (
+                <div key={stat.label} className="flex items-center gap-2 text-sm">
+                  <div className={cn('p-1.5 rounded', stat.iconBg)}>{stat.icon}</div>
+                  <div>
+                    <div className="font-medium">{stat.display}</div>
+                    <div className="text-xs text-[var(--color-muted-foreground)]">
+                      {stat.label}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <div className="font-medium">{summaryMetrics.totalRelationships}</div>
-                  <div className="text-xs text-[var(--color-muted-foreground)]">Causal Paths</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <div className="p-1.5 rounded bg-blue-500/10">
-                  <Target className="h-3.5 w-3.5 text-blue-500" />
-                </div>
-                <div>
-                  <div className="font-medium">{summaryMetrics.totalNodes}</div>
-                  <div className="text-xs text-[var(--color-muted-foreground)]">Graph Nodes</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <div className="p-1.5 rounded bg-emerald-500/10">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                </div>
-                <div>
-                  <div className="font-medium">{summaryMetrics.healthScore}%</div>
-                  <div className="text-xs text-[var(--color-muted-foreground)]">System Health</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <div className="p-1.5 rounded bg-amber-500/10">
-                  <DollarSign className="h-3.5 w-3.5 text-amber-500" />
-                </div>
-                <div>
-                  <div className="font-medium">${summaryMetrics.estimatedValue}M</div>
-                  <div className="text-xs text-[var(--color-muted-foreground)]">Est. Impact</div>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
         </CardContent>
       </Card>
-
-      {/* Metrics Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <MetricCard
-          title="Data-to-Value Pipeline"
-          value="3.2x ROI"
-          status="optimized"
-          icon={<TrendingUp className="h-4 w-4 text-emerald-500" />}
-          insight="DoWhy structural analysis reveals optimal configuration at 3 sources - 4th source adds only 3% marginal value. Cross-source matching is the hidden multiplier:"
-          highlightedEffect="1% improvement → 1.8x cascade effect through journey completeness."
-        />
-
-        <MetricCard
-          title="Model-to-Impact Bridge"
-          value="58% → 75%"
-          status="opportunity"
-          icon={<Target className="h-4 w-4 text-amber-500" />}
-          insight="Causal Forests identify explanation quality as primary lever. SHAP visualization alone drives +25% acceptance. Combined with contextual patient history:"
-          highlightedEffect="multiplicative effect yields +35% total lift."
-        />
-
-        <MetricCard
-          title="Fairness & Trust Nexus"
-          value="4.2pp gap"
-          status="monitored"
-          icon={<Shield className="h-4 w-4 text-blue-500" />}
-          insight="DiD analysis: South region gap causes 70% of fairness degradation → 15% trust decline → 6pp acceptance drop. Targeted acquisition yields"
-          highlightedEffect="3x ROI through trust restoration pathway."
-        />
-      </div>
     </div>
   );
 }

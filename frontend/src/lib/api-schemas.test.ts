@@ -929,6 +929,36 @@ describe('Wire Schemas (disputed sweep #4)', () => {
       );
     });
 
+    it('HealthScoreResponseWireSchema accepts null per-dimension scores (backend: Optional, None = unmeasured)', () => {
+      // HealthScoreResult (health_score/agent.py) declares every per-dimension
+      // score Optional[float] — "None if unmeasured", designed so unmeasured
+      // dimensions are never fabricated. The widget renders these as
+      // "Not measured in this check"; the wire schema must let them through.
+      const payload = {
+        check_id: 'hs_2',
+        check_scope: 'full',
+        overall_health_score: 72.0,
+        health_grade: 'C',
+        component_health_score: 0.9,
+        model_health_score: null,
+        pipeline_health_score: null,
+        agent_health_score: null,
+        component_statuses: null,
+        model_metrics: null,
+        pipeline_statuses: null,
+        agent_statuses: null,
+        critical_issues: [],
+        warnings: [],
+        recommendations: [],
+        health_summary: 'Partial check: only components measured.',
+        check_latency_ms: 310,
+        timestamp: new Date().toISOString(),
+      };
+      expect(HealthScoreResponseWireSchema.safeParse(payload).success).toBe(
+        true
+      );
+    });
+
     it('ComponentHealthResponseWireSchema accepts payload with data_provenance', () => {
       const payload = {
         component_health_score: 0.9,
