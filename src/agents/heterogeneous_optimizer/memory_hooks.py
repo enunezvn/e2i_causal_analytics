@@ -205,10 +205,25 @@ class HeterogeneousOptimizerMemoryHooks:
         outcome_var: Optional[str] = None,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Search episodic memory for similar past CATE analyses."""
+        """Search episodic memory for similar past CATE analyses.
+
+        The search RPC's TABLE shape does NOT include ``raw_content``, so the
+        original post-filter (``result.get("raw_content", {})``) saw ``{}`` on
+        every row and dropped them ALL whenever treatment_var/outcome_var were
+        passed — which the production caller (``get_memory_context``) does
+        whenever the state carries the vars, leaving the episodic context
+        permanently empty even though the writes land (#889; same family as
+        the gap_analyzer readers fixed in #888). Fix, per that precedent:
+        hydrate ``raw_content`` by memory_id (one batched select via the
+        shared helper) and post-filter on the real stored content,
+        over-fetching so high-similarity non-matching rows cannot starve the
+        trimmed result.
+        """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
@@ -217,16 +232,18 @@ class HeterogeneousOptimizerMemoryHooks:
                 agent_name="heterogeneous_optimizer",
             )
 
+            needs_content_filter = bool(treatment_var or outcome_var)
             results = await search_episodic_by_text(
                 query_text=query,
                 filters=filters,
-                limit=limit,
+                limit=content_filter_fetch_limit(limit) if needs_content_filter else limit,
                 min_similarity=0.6,
                 include_entity_context=False,
             )
+            results = await hydrate_raw_content(results)
 
-            # Further filter by treatment/outcome if specified
-            if treatment_var or outcome_var:
+            # Filter by treatment/outcome on the HYDRATED stored content
+            if needs_content_filter:
                 filtered_results = []
                 for result in results:
                     content = result.get("raw_content", {})
@@ -235,7 +252,7 @@ class HeterogeneousOptimizerMemoryHooks:
                     if outcome_var and content.get("outcome_var") != outcome_var:
                         continue
                     filtered_results.append(result)
-                return filtered_results
+                return filtered_results[:limit]
 
             return results
         except Exception as e:
