@@ -11,7 +11,7 @@ The connector queries:
 Example:
     connector = SupabaseDataConnector(
         supabase_url=os.getenv("SUPABASE_URL"),
-        supabase_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+        supabase_key=os.getenv("SUPABASE_SERVICE_KEY"),  # or SUPABASE_SERVICE_ROLE_KEY
     )
 
     data = await connector.query_features(
@@ -34,6 +34,7 @@ from src.agents.drift_monitor.connectors.base import (
     PredictionData,
     TimeWindow,
 )
+from src.utils.supabase_env import resolve_supabase_service_key
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,10 @@ class SupabaseDataConnector(BaseDataConnector):
             supabase_key: Supabase API key (defaults to env var)
         """
         self.supabase_url = supabase_url or os.getenv("SUPABASE_URL")
-        self.supabase_key = (
-            supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-        )
+        # Prefer the service-role key (any of its deployment env-var names) so
+        # reads of the service_role-only ml_* tables are not denied (42501);
+        # anon is a dev/test fallback only. See src/utils/supabase_env.py.
+        self.supabase_key = resolve_supabase_service_key(supabase_key)
 
         self._client: Any = None
         self._initialized = False

@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from src.causal.stats import z_score_for_alpha
+from src.utils.supabase_env import resolve_supabase_service_key
 
 from ..state import CATEResult, HeterogeneousOptimizerState
 
@@ -62,7 +63,7 @@ def _get_default_data_connector():
       configuration error instead of synthetic data (F-013, issue #431).
     """
     supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    supabase_key = resolve_supabase_service_key()
 
     if supabase_url and supabase_key:
         try:

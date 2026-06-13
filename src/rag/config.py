@@ -14,6 +14,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from src.utils.supabase_env import resolve_supabase_service_key
+
 
 @dataclass
 class HybridSearchConfig:
@@ -277,7 +279,10 @@ class RAGConfig:
         if not self.supabase_url:
             self.supabase_url = os.getenv("SUPABASE_URL")
         if not self.supabase_key:
-            self.supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            # Service-role only (RAG needs elevated reads); never downgrade to
+            # anon — fail closed in validate() if unset. Accepts either the
+            # SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY deployment name.
+            self.supabase_key = resolve_supabase_service_key(allow_anon=False)
 
     def validate(self) -> None:
         """Validate all configurations."""
@@ -287,7 +292,7 @@ class RAGConfig:
         if not self.supabase_url:
             raise ValueError("SUPABASE_URL must be set")
         if not self.supabase_key:
-            raise ValueError("SUPABASE_SERVICE_ROLE_KEY must be set")
+            raise ValueError("SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY must be set")
 
     @classmethod
     def from_env(cls) -> "RAGConfig":
@@ -298,7 +303,7 @@ class RAGConfig:
             falkordb=FalkorDBConfig.from_env(),
             health=HealthMonitorConfig(),
             supabase_url=os.getenv("SUPABASE_URL"),
-            supabase_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+            supabase_key=resolve_supabase_service_key(allow_anon=False),
             enable_graph_search=os.getenv("RAG_ENABLE_GRAPH", "true").lower() == "true",
             enable_fulltext_search=os.getenv("RAG_ENABLE_FULLTEXT", "true").lower() == "true",
             enable_vector_search=os.getenv("RAG_ENABLE_VECTOR", "true").lower() == "true",
