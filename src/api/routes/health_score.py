@@ -133,8 +133,14 @@ class ModelHealth(BaseModel):
     prediction_latency_p99_ms: Optional[int] = Field(
         default=None, description="99th percentile prediction latency"
     )
-    predictions_last_24h: int = Field(default=0, description="Predictions in last 24 hours")
-    error_rate: float = Field(default=0.0, description="Error rate (0-1)")
+    # Optional: None = UNMEASURED (no ml_performance_metrics source), not a real
+    # zero. A 0/0.0 default here would fabricate a count/rate never observed.
+    predictions_last_24h: Optional[int] = Field(
+        default=None, description="Predictions in last 24 hours, null if unmeasured"
+    )
+    error_rate: Optional[float] = Field(
+        default=None, description="Error rate (0-1), null if unmeasured"
+    )
     status: ModelStatus = Field(..., description="Model health status")
 
 
@@ -967,33 +973,28 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
             or []
         )
         models: List[ModelHealth] = []
-        missing_metric = False
         for r in rows:
             metric_val = r.get("latest_metric_value")
             primary = (r.get("primary_metric") or "").strip().lower()
             auc = None
             acc = None
-            if metric_val is None:
-                missing_metric = True
-            else:
+            if metric_val is not None:
                 try:
                     v = float(metric_val)
                     if "auc" in primary:
                         auc = v
                     elif primary in ("accuracy", "acc"):
                         acc = v
-                    else:
-                        # A metric we don't surface as a typed field -> the typed
-                        # perf fields stay null, so this row is not fully sourced.
-                        missing_metric = True
                 except (ValueError, TypeError):
-                    missing_metric = True
+                    pass
             models.append(
                 ModelHealth(
                     model_id=str(r.get("model_id") or r.get("model_name") or "unknown"),
                     model_name=str(r.get("model_name") or "unknown"),
                     accuracy=acc,
                     auc_roc=auc,
+                    # precision/recall/f1/latencies/predictions/error_rate have
+                    # NO source (ml_performance_metrics empty) -> left null.
                     status=_map_model_status(r.get("health_status")),
                 )
             )
@@ -1002,10 +1003,11 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
         return [], None
     if not models:
         return [], DataProvenance.UNKNOWN
-    # MEASURED only if EVERY model row carried a real, surfaced metric value;
-    # otherwise some perf sub-fields are null -> PARTIAL (honest, not fabricated).
-    prov = DataProvenance.PARTIAL if missing_metric else DataProvenance.MEASURED
-    return models, prov
+    # ALWAYS PARTIAL: the dashboard view sources status/drift and at most one
+    # metric (auc/accuracy), but precision/recall/f1/latency/predictions/
+    # error_rate have no source, so the dimension is never fully measured. Never
+    # MEASURED here -> we never present those null/structural fields as real.
+    return models, DataProvenance.PARTIAL
 
 
 def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvenance]]:
@@ -1096,13 +1098,18 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
         # Roster is real; telemetry is just unavailable -> partial with null metrics.
         logger.warning(f"agent health: telemetry query failed ({e})")
         telemetry = []
+    # invocations_24h must mean the last 24h (its name), distinct from the wider
+    # window used to aggregate success_rate/latency over more samples.
+    cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     try:
         agg: Dict[str, Dict[str, Any]] = {}
         for e in telemetry:
             name = e.get("agent_name")
             if not name:
                 continue
-            d = agg.setdefault(name, {"latencies": [], "ok": 0, "total": 0, "last": None})
+            d = agg.setdefault(
+                name, {"latencies": [], "ok": 0, "total": 0, "last": None, "count_24h": 0}
+            )
             d["total"] += 1
             dur = e.get("duration_ms")
             if isinstance(dur, (int, float)) and dur > 0:
@@ -1110,25 +1117,34 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
             if e.get("validation_passed") is not False:  # True or None -> counted ok
                 d["ok"] += 1
             ts = e.get("created_at")
-            if ts and (d["last"] is None or str(ts) > str(d["last"])):
-                d["last"] = ts
+            if ts:
+                if d["last"] is None or str(ts) > str(d["last"]):
+                    d["last"] = ts
+                if str(ts) >= cutoff_24h:
+                    d["count_24h"] += 1
 
         agents: List[AgentHealth] = []
         missing_telemetry = False
         for r in roster:
             name = str(r.get("agent_name") or "unknown")
             a = agg.get(name)
+            lat = a["latencies"] if a else []
             if a and a["total"] > 0:
-                lat = a["latencies"]
+                avg_latency = int(sum(lat) / len(lat)) if lat else None
+                # Fully sourced only if BOTH the rate and a latency are measured;
+                # telemetry rows without any valid duration leave latency null ->
+                # the agent is not fully sourced -> dimension is PARTIAL.
+                if avg_latency is None:
+                    missing_telemetry = True
                 agents.append(
                     AgentHealth(
                         agent_name=name,
                         tier=_agent_tier_int(r),
                         available=bool(r.get("is_active")),
-                        avg_latency_ms=int(sum(lat) / len(lat)) if lat else None,
+                        avg_latency_ms=avg_latency,
                         success_rate=round(a["ok"] / a["total"], 4),
                         last_invocation=str(a["last"]) if a["last"] else None,
-                        invocations_24h=a["total"],
+                        invocations_24h=a["count_24h"],
                     )
                 )
             else:
@@ -1149,8 +1165,8 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
     except Exception as e:
         logger.warning(f"agent health: build failed ({e})")
         return [], None
-    # MEASURED only if EVERY roster agent had recent telemetry; if any agent's
-    # runtime metrics are null -> PARTIAL (honest, not fabricated).
+    # MEASURED only if EVERY roster agent had recent telemetry AND a measured
+    # latency; any null runtime field -> PARTIAL (honest, not fabricated).
     prov = DataProvenance.PARTIAL if missing_telemetry else DataProvenance.MEASURED
     return agents, prov
 

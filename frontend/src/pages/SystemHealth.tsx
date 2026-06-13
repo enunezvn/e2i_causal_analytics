@@ -227,13 +227,10 @@ function SystemHealth() {
   }, [healthHistory]);
 
   const componentScoreData = useMemo(() => {
+    // No fabricated fallback scores: until a real health check loads, show no
+    // bars rather than invented 95/88/82/92 values presented as real.
     if (!quickHealthData) {
-      return [
-        { name: 'Components', score: 95, fill: '#10b981' },
-        { name: 'Models', score: 88, fill: '#3b82f6' },
-        { name: 'Pipelines', score: 82, fill: '#8b5cf6' },
-        { name: 'Agents', score: 92, fill: '#f59e0b' },
-      ];
+      return [];
     }
     return [
       { name: 'Components', score: Math.round(quickHealthData.component_health_score * 100), fill: '#10b981' },

@@ -4,7 +4,7 @@ Tests all endpoints and helper functions in src/api/routes/health_score.py.
 Mocks all external dependencies to ensure unit test isolation.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1280,8 +1280,11 @@ def test_fetch_model_health_partial_when_no_metric_values():
     assert all(m.accuracy != 0.89 for m in models)
 
 
-def test_fetch_model_health_measured_when_metric_present():
-    """A real auc metric value -> MEASURED, auc_roc populated from the row."""
+def test_fetch_model_health_partial_even_with_auc_metric():
+    """A real auc value populates auc_roc, but precision/recall/f1/latency/
+    predictions/error_rate have no source (ml_performance_metrics empty), so the
+    dimension is honestly PARTIAL — never MEASURED — and the unsourced count/rate
+    fields are NULL, not a fabricated 0."""
     db = _FakeDB(
         {
             "ml_model_health_dashboard": [
@@ -1298,8 +1301,10 @@ def test_fetch_model_health_measured_when_metric_present():
     )
     with _patch_health_client(db):
         models, prov = _fetch_model_health()
-    assert prov == DataProvenance.MEASURED
+    assert prov == DataProvenance.PARTIAL
     assert models[0].auc_roc == 0.83
+    assert models[0].predictions_last_24h is None
+    assert models[0].error_rate is None
 
 
 def test_fetch_model_health_unknown_when_empty():
@@ -1362,7 +1367,11 @@ def test_fetch_agent_health_partial_null_metrics_without_telemetry():
 
 
 def test_fetch_agent_health_measured_with_telemetry():
-    """Recent telemetry -> MEASURED with computed success_rate / latency."""
+    """Telemetry with valid latencies -> MEASURED. success_rate/latency aggregate
+    the wider window; invocations_24h counts ONLY the last 24h (its name)."""
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(hours=2)).isoformat()  # within 24h
+    older = (now - timedelta(days=10)).isoformat()  # within 30d window, not 24h
     db = _FakeDB(
         {
             "agent_registry": [
@@ -1373,13 +1382,13 @@ def test_fetch_agent_health_measured_with_telemetry():
                     "agent_name": "gap_analyzer",
                     "duration_ms": 100,
                     "validation_passed": True,
-                    "created_at": "2026-06-12T00:00:00+00:00",
+                    "created_at": recent,
                 },
                 {
                     "agent_name": "gap_analyzer",
                     "duration_ms": 300,
                     "validation_passed": False,
-                    "created_at": "2026-06-12T01:00:00+00:00",
+                    "created_at": older,
                 },
             ],
         }
@@ -1388,9 +1397,35 @@ def test_fetch_agent_health_measured_with_telemetry():
         agents, prov = _fetch_agent_health()
     assert prov == DataProvenance.MEASURED
     a = agents[0]
-    assert a.invocations_24h == 2
-    assert a.success_rate == 0.5
-    assert a.avg_latency_ms == 200
+    assert a.invocations_24h == 1  # only the recent (<24h) entry
+    assert a.success_rate == 0.5  # 1 ok / 2 total over the wider window
+    assert a.avg_latency_ms == 200  # mean(100, 300)
+
+
+def test_fetch_agent_health_partial_when_telemetry_lacks_latency():
+    """Telemetry rows but NO valid duration -> avg_latency null -> the agent is
+    not fully sourced -> PARTIAL (not MEASURED with a null latency)."""
+    now = datetime.now(timezone.utc)
+    db = _FakeDB(
+        {
+            "agent_registry": [
+                {"agent_name": "gap_analyzer", "agent_tier": 2, "is_active": True},
+            ],
+            "audit_chain_entries": [
+                {
+                    "agent_name": "gap_analyzer",
+                    "duration_ms": 0,  # non-positive -> not a measured latency
+                    "validation_passed": True,
+                    "created_at": (now - timedelta(hours=1)).isoformat(),
+                },
+            ],
+        }
+    )
+    with _patch_health_client(db):
+        agents, prov = _fetch_agent_health()
+    assert prov == DataProvenance.PARTIAL
+    assert agents[0].avg_latency_ms is None
+    assert agents[0].success_rate == 1.0  # rate is still measured
 
 
 def test_fetch_agent_health_none_when_no_client():

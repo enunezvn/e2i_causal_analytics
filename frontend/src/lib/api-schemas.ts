@@ -1116,8 +1116,9 @@ export const HealthScoreModelHealthWireSchema = z.object({
   auc_roc: z.number().nullable().optional(),
   prediction_latency_p50_ms: z.number().int().nullable().optional(),
   prediction_latency_p99_ms: z.number().int().nullable().optional(),
-  predictions_last_24h: z.number().int().nonnegative(),
-  error_rate: z.number(),
+  // null = UNMEASURED (no ml_performance_metrics source), not a real zero.
+  predictions_last_24h: z.number().int().nonnegative().nullable(),
+  error_rate: z.number().nullable(),
   status: z.string(),
 });
 

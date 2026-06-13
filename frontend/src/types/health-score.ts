@@ -112,10 +112,10 @@ export interface ModelHealth {
   prediction_latency_p50_ms?: number;
   /** 99th percentile prediction latency */
   prediction_latency_p99_ms?: number;
-  /** Predictions in last 24 hours */
-  predictions_last_24h: number;
-  /** Error rate (0-1) */
-  error_rate: number;
+  /** Predictions in last 24 hours; null when unmeasured */
+  predictions_last_24h: number | null;
+  /** Error rate (0-1); null when unmeasured */
+  error_rate: number | null;
   /** Model health status */
   status: ModelStatus;
 }
