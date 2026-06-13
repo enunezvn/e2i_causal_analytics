@@ -21,6 +21,7 @@ from typing import Literal, cast
 from src.agents.drift_monitor.connectors.base import BaseDataConnector
 from src.agents.drift_monitor.connectors.mock_connector import MockDataConnector
 from src.agents.drift_monitor.connectors.supabase_connector import SupabaseDataConnector
+from src.utils.supabase_env import resolve_supabase_service_key
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def _auto_detect_connector_type() -> Literal["supabase", "mock"]:
         "supabase" if credentials available, "mock" otherwise
     """
     supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    supabase_key = resolve_supabase_service_key()
 
     if supabase_url and supabase_key:
         logger.info("Auto-detected Supabase credentials, using SupabaseDataConnector")

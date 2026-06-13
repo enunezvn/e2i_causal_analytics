@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import pandas as pd
 
+from src.utils.supabase_env import resolve_supabase_service_key
+
 if TYPE_CHECKING:
     from src.repositories.ml_data_loader import MLDataLoader
 
@@ -62,9 +64,9 @@ class HeterogeneousOptimizerDataConnector:
             supabase_key: Supabase API key (defaults to env var)
         """
         self.supabase_url = supabase_url or os.getenv("SUPABASE_URL")
-        self.supabase_key = (
-            supabase_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-        )
+        # Service-role key (any deployment env-var name) so the service_role-only
+        # ml_* / CATE tables are readable; anon is a dev/test fallback only.
+        self.supabase_key = resolve_supabase_service_key(supabase_key)
 
         self._loader: Optional["MLDataLoader"] = None
         self._initialized = False
