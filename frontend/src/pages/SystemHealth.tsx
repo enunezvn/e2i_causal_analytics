@@ -232,12 +232,17 @@ function SystemHealth() {
     if (!quickHealthData) {
       return [];
     }
-    return [
-      { name: 'Components', score: Math.round(quickHealthData.component_health_score * 100), fill: '#10b981' },
-      { name: 'Models', score: Math.round(quickHealthData.model_health_score * 100), fill: '#3b82f6' },
-      { name: 'Pipelines', score: Math.round(quickHealthData.pipeline_health_score * 100), fill: '#8b5cf6' },
-      { name: 'Agents', score: Math.round(quickHealthData.agent_health_score * 100), fill: '#f59e0b' },
+    // Only chart dimensions a real backend MEASURED. A null dimension score is
+    // unmeasured and is omitted (not rendered as a fabricated 0% bar).
+    const dims: Array<{ name: string; score: number | null | undefined; fill: string }> = [
+      { name: 'Components', score: quickHealthData.component_health_score, fill: '#10b981' },
+      { name: 'Models', score: quickHealthData.model_health_score, fill: '#3b82f6' },
+      { name: 'Pipelines', score: quickHealthData.pipeline_health_score, fill: '#8b5cf6' },
+      { name: 'Agents', score: quickHealthData.agent_health_score, fill: '#f59e0b' },
     ];
+    return dims
+      .filter((d) => d.score != null)
+      .map((d) => ({ name: d.name, score: Math.round((d.score as number) * 100), fill: d.fill }));
   }, [quickHealthData]);
 
   // Convert API alerts to AlertCard format

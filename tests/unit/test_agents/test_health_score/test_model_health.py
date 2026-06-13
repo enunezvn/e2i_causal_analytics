@@ -173,3 +173,19 @@ class TestModelMetricsFields:
         assert metrics["predictions_last_24h"] >= 0
         assert metrics["error_rate"] >= 0
         assert metrics["status"] in ["healthy", "degraded", "unhealthy"]
+
+
+@pytest.mark.asyncio
+async def test_model_health_exception_fails_closed_to_unmeasured(initial_state):
+    """codex R3: a FAILED model check measured nothing. The node must mark the
+    dimension UNMEASURED (so the composer excludes it), NOT emit a fabricated
+    0.5 score with measured=True presented to the dashboard as real."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = MagicMock()
+    store.get_active_models = AsyncMock(side_effect=RuntimeError("boom"))
+    node = ModelHealthNode(metrics_store=store)
+    result = await node.execute(initial_state)
+
+    assert result["model_health_measured"] is False
+    assert result.get("model_health_score") is None

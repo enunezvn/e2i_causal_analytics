@@ -112,3 +112,19 @@ class TestPipelineStatusFields:
         assert status["rows_processed"] >= 0
         assert status["freshness_hours"] >= 0 or status["freshness_hours"] == -1
         assert status["status"] in ["healthy", "stale", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_health_exception_fails_closed_to_unmeasured(initial_state):
+    """codex R3: a FAILED pipeline check measured nothing. The node must mark the
+    dimension UNMEASURED (so the composer excludes it), NOT emit a fabricated
+    0.5 score with measured=True presented to the dashboard as real."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = MagicMock()
+    store.get_all_pipelines = AsyncMock(side_effect=RuntimeError("boom"))
+    node = PipelineHealthNode(pipeline_store=store)
+    result = await node.execute(initial_state)
+
+    assert result["pipeline_health_measured"] is False
+    assert result.get("pipeline_health_score") is None

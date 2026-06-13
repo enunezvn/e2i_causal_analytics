@@ -118,7 +118,7 @@ class ModelHealthNode:
                 "model_metrics": metrics_list,
                 "model_health_score": health_score,
                 "model_health_measured": True,
-                "total_latency_ms": state.get("total_latency_ms", 0) + check_time,
+                "total_latency_ms": (state.get("total_latency_ms") or 0) + check_time,
             }
 
         except Exception as e:
@@ -126,8 +126,11 @@ class ModelHealthNode:
             return {
                 **state,
                 "errors": [{"node": "model_health", "error": str(e)}],
-                "model_health_score": 0.5,  # Unknown = degraded
-                "model_health_measured": True,
+                # A check that FAILED measured nothing: mark unmeasured so the
+                # composer excludes this dimension (-> partial/unknown) rather
+                # than counting a fabricated 0.5 as a real measurement.
+                "model_health_score": None,
+                "model_health_measured": False,
                 "model_metrics": [],
             }
 

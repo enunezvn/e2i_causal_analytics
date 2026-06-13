@@ -116,7 +116,7 @@ class PipelineHealthNode:
                 "pipeline_statuses": statuses,
                 "pipeline_health_score": health_score,
                 "pipeline_health_measured": True,
-                "total_latency_ms": state.get("total_latency_ms", 0) + check_time,
+                "total_latency_ms": (state.get("total_latency_ms") or 0) + check_time,
             }
 
         except Exception as e:
@@ -124,8 +124,10 @@ class PipelineHealthNode:
             return {
                 **state,
                 "errors": [{"node": "pipeline_health", "error": str(e)}],
-                "pipeline_health_score": 0.5,  # Unknown = degraded
-                "pipeline_health_measured": True,
+                # A failed check measured nothing -> unmeasured, so the composer
+                # excludes it rather than counting a fabricated 0.5 as real.
+                "pipeline_health_score": None,
+                "pipeline_health_measured": False,
                 "pipeline_statuses": [],
             }
 
