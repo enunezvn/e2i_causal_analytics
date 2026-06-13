@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from src.rag.config import HybridSearchConfig
 from src.rag.exceptions import VectorSearchError
 from src.rag.types import RetrievalResult, RetrievalSource
+from src.repositories.provenance import coerce_provenance_flag
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +140,24 @@ class VectorBackend:
         Execute the Supabase RPC call synchronously.
 
         This is called in a thread to allow async timeout.
+
+        #896: the rag_vector_search RPC default-excludes synthetic episodic
+        rows via ``filters->>'include_synthetic'`` (migration rag/004,
+        mirroring memory/044+045 on the chatbot-path RPCs). Make the platform
+        default EXPLICIT at the RPC boundary: the caller's value is strictly
+        parsed through the :func:`coerce_provenance_flag` SSOT (#883 §4) so a
+        loose value (``"false"``, ``0``, non-bool types) FAILS CLOSED to
+        real-mode instead of riding into the jsonb payload verbatim.
         """
+        rpc_filters = {
+            **filters,
+            "include_synthetic": (
+                "true" if coerce_provenance_flag(filters.get("include_synthetic")) else "false"
+            ),
+        }
         return self.client.rpc(
             "rag_vector_search",
-            {"query_embedding": embedding, "match_count": match_count, "filters": filters},
+            {"query_embedding": embedding, "match_count": match_count, "filters": rpc_filters},
         ).execute()
 
     async def health_check(self) -> Dict[str, Any]:

@@ -13,6 +13,7 @@ import time
 from typing import Any, Dict, List, Optional, cast
 
 from src.rag.types import ExtractedEntities, RetrievalResult
+from src.repositories.provenance import coerce_provenance_flag
 
 from ..state import OrchestratorState
 
@@ -126,8 +127,11 @@ class RAGContextNode:
             # Generate embedding if embedding service available
             embedding = await self._generate_embedding(query)
 
-            # Build filters from entities
+            # Build filters from entities + the request-scoped provenance
+            # opt-in (#896): the rag_vector_search RPC default-excludes
+            # synthetic episodic rows; the flag must be explicit either way.
             filters = self._build_filters_from_entities(entities)
+            filters["include_synthetic"] = self._resolve_include_synthetic(state)
 
             # Execute hybrid search
             results = await self._retriever.search(
@@ -205,12 +209,35 @@ class RAGContextNode:
             logger.warning(f"Embedding generation failed: {e}")
             return None
 
+    @staticmethod
+    def _resolve_include_synthetic(state: OrchestratorState) -> bool:
+        """Resolve the per-request synthetic-provenance opt-in (#896).
+
+        Mirrors the dispatcher's ``_resolve_include_synthetic_opt_in``
+        channels (#877/#880/#882) for the slice of them that exists on the
+        orchestrator state: ``user_context`` is the only caller-stash field
+        the live chat path threads through to this node. Values are STRICTLY
+        parsed via the :func:`coerce_provenance_flag` SSOT (#883 §4), so an
+        ambiguous value (``"false"``, ``"0"``, non-bool/non-str types) fails
+        CLOSED to the real-mode default-exclude predicate.
+        """
+        user_context = state.get("user_context") or {}
+        return coerce_provenance_flag(user_context.get("include_synthetic"))
+
     def _build_filters_from_entities(self, entities: Optional[ExtractedEntities]) -> Dict[str, Any]:
-        """Build search filters from extracted entities."""
+        """Build search filters from extracted entities.
+
+        Contract note (#896): the PLURAL list keys emitted here
+        (``brands``/``regions``) are load-bearing — migration rag/004 makes
+        the ``rag_vector_search`` RPC normalize both the singular text keys
+        (``brand``) and these plural list keys via ``rag_filter_values``.
+        Renaming a key here would silently no-op entity-derived filtering
+        again (the original bug 3).
+        """
         if not entities:
             return {}
 
-        filters = {}
+        filters: Dict[str, Any] = {}
 
         if entities.brands:
             filters["brands"] = entities.brands
