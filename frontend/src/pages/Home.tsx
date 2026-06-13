@@ -308,8 +308,11 @@ interface QuickStatTileProps {
   display: string;
   loading?: boolean;
   error?: boolean;
-  /** Show a small "sample data" badge when the value is fallback (not real DB). */
-  sampleBadge?: boolean;
+  /** Provenance chip for the value's source, omitted (null) when it is real DB
+   *  data: 'synthetic' = computed over synthetic-gold rows (demo/review mode);
+   *  'sample' = a non-DB fallback. Distinct labels so a reviewer is never misled
+   *  into reading synthetic figures as real-world data. */
+  provenanceBadge?: 'synthetic' | 'sample' | null;
   /** Render `display` as smaller muted prose (e.g. "No recent activity — data
    *  through Dec 2025") instead of a large stat number. */
   muted?: boolean;
@@ -321,7 +324,7 @@ function QuickStatTile({
   display,
   loading,
   error,
-  sampleBadge,
+  provenanceBadge,
   muted,
 }: QuickStatTileProps) {
   return (
@@ -332,8 +335,10 @@ function QuickStatTile({
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground flex items-center gap-1.5">
               {label}
-              {sampleBadge && (
-                <Badge variant="outline" className="text-[10px] px-1 py-0">sample data</Badge>
+              {provenanceBadge && (
+                <Badge variant="outline" className="text-[10px] px-1 py-0">
+                  {provenanceBadge === 'synthetic' ? 'synthetic data' : 'sample data'}
+                </Badge>
               )}
             </div>
             <div
@@ -411,6 +416,16 @@ function Home() {
   // <date>" when 0/null (no recent data, not a fabrication).
   const trxTile = kpiTileDisplay(kpiSummary?.metrics?.trx_volume, kpiSummary);
   const hcpReachTile = kpiTileDisplay(kpiSummary?.metrics?.hcp_reach, kpiSummary);
+
+  // KPI provenance chip: real DB values get no badge; 'synthetic' = demo/review
+  // mode (figures over synthetic-gold rows); anything else non-DB = 'sample'.
+  const kpiProvenance: 'synthetic' | 'sample' | null =
+    !kpiSummary || kpiSummary.data_source === 'database'
+      ? null
+      : kpiSummary.data_source === 'synthetic'
+        ? 'synthetic'
+        : 'sample';
+  const isSyntheticKpis = kpiSummary?.data_source === 'synthetic';
 
   // QUICK_STATS: Active Campaigns = count of running experiments.
   const { data: activeExp, isLoading: activeExpLoading } = useActiveExperimentCount();
@@ -726,6 +741,19 @@ function Home() {
 
   return (
     <div className="space-y-6">
+      {/* Synthetic demo-data banner: shown only when the backend reports the
+          KPI summary was computed in E2I_KPI_INCLUDE_SYNTHETIC mode, so a
+          reviewer is never misled into reading synthetic figures as real-world
+          market data. Absent in true production (data_source='database'). */}
+      {isSyntheticKpis && (
+        <div
+          role="status"
+          className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          Showing <strong>synthetic demo data</strong> — KPI figures are computed on a
+          synthetic dataset for review, not real-world market data.
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
@@ -851,7 +879,7 @@ function Home() {
           error={!!summaryError}
           display={trxTile.display}
           muted={trxTile.muted}
-          sampleBadge={!!kpiSummary && kpiSummary.data_source !== 'database'}
+          provenanceBadge={kpiProvenance}
         />
         <QuickStatTile
           label="Active Campaigns"
@@ -866,7 +894,7 @@ function Home() {
           error={!!summaryError}
           display={hcpReachTile.display}
           muted={hcpReachTile.muted}
-          sampleBadge={!!kpiSummary && kpiSummary.data_source !== 'database'}
+          provenanceBadge={kpiProvenance}
         />
         <QuickStatTile
           label="Model Accuracy"

@@ -43,6 +43,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
+from src.kpi.synthetic_mode import resolve_kpi_query_id
 
 
 class ModelPerformanceCalculator(KPICalculatorBase):
@@ -335,6 +336,9 @@ class ModelPerformanceCalculator(KPICalculatorBase):
           - `(None, "<ExceptionClass>:<msg[:200]>")` on any execution failure.
         """
         try:
+            # Demo/review: swap to the _include_synthetic twin under the
+            # E2I_KPI_INCLUDE_SYNTHETIC flag (no-op otherwise). See synthetic_mode.py.
+            query_id = resolve_kpi_query_id(query_id)
             response = self.db_client.rpc(
                 "kpi_query", {"query_id": query_id, "params": params}
             ).execute()

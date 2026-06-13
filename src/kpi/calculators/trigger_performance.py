@@ -21,6 +21,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
+from src.kpi.synthetic_mode import resolve_kpi_query_id
 
 
 class TriggerPerformanceCalculator(KPICalculatorBase):
@@ -225,6 +226,9 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         # fabricating a zero KPI on a dead/misconfigured backend. Let exceptions propagate
         # to calculate(), which surfaces them as KPIResult(error=...). A successful query
         # with no rows still returns [] (a genuine empty, not an error).
+        # Demo/review: swap to the _include_synthetic twin under the
+        # E2I_KPI_INCLUDE_SYNTHETIC flag (no-op otherwise). See synthetic_mode.py.
+        query_id = resolve_kpi_query_id(query_id)
         response = self.db_client.rpc(
             "kpi_query", {"query_id": query_id, "params": params}
         ).execute()

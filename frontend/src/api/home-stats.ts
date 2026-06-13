@@ -24,8 +24,9 @@ export interface KpiSummaryResponse {
     patient_starts?: number;
     [key: string]: number | string | string[] | undefined;
   };
-  /** 'database' = real DB values; 'fallback' = sample data. */
-  data_source: 'database' | 'fallback' | string;
+  /** 'database' = real DB values; 'synthetic' = computed over synthetic-gold
+   *  rows (E2I_KPI_INCLUDE_SYNTHETIC demo/review mode); 'fallback' = sample data. */
+  data_source: 'database' | 'synthetic' | 'fallback' | string;
   /** Latest treatment_events prescription date (data-coverage end), ISO `YYYY-MM-DD`,
    *  or null when unavailable. Used to render "No recent activity — data through
    *  <date>" on empty (0/null) tiles with a dynamic date. */

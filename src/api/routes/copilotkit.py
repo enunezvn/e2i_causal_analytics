@@ -251,6 +251,7 @@ from src.api.dependencies.auth import (
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
 from src.utils.llm_factory import MODEL_MAPPINGS, get_chat_llm, get_llm_provider
 
 logger = logging.getLogger(__name__)
@@ -1230,7 +1231,8 @@ def _fetch_data_through(client: Any) -> Optional[str]:
         return None
     try:
         response = client.rpc(
-            "kpi_query", {"query_id": "business_impact_data_through", "params": []}
+            "kpi_query",
+            {"query_id": resolve_kpi_query_id("business_impact_data_through"), "params": []},
         ).execute()
         rows = response.data or []
         value = rows[0].get("data_through") if rows else None
@@ -1251,8 +1253,12 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
     the DB is unreachable or every query fails the result is fail-closed with
     ``data_source="unavailable"`` and ``None`` metrics. Values are NEVER fabricated.
 
-    NOTE (data freshness, not a code bug): prod ``treatment_events`` currently ends
-    2025-12-22, so the 30-day-window KPIs read 0 until fresh data lands.
+    DEMO/REVIEW (``E2I_KPI_INCLUDE_SYNTHETIC``): on a synthetic-gold instance the
+    production gate (migration 066 default-excludes ``is_synthetic=true`` rows)
+    leaves these tiles honest-empty. With the flag set, the underlying queries
+    swap to their ``_include_synthetic`` twins so the tiles render from the
+    synthetic data, and ``data_source`` becomes ``"synthetic"`` so the FE labels
+    them as such -- still never fabricated, just explicitly synthetic-sourced.
 
     Args:
         brand: Brand name (Remibrutinib, Fabhalta, Kisqali, or All)
@@ -1298,7 +1304,8 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
             params = [brand_param] if brand_scoped else []
             try:
                 response = client.rpc(
-                    "kpi_query", {"query_id": query_id, "params": params}
+                    "kpi_query",
+                    {"query_id": resolve_kpi_query_id(query_id), "params": params},
                 ).execute()
                 rows = response.data or []
                 metrics[field] = _coerce_metric(rows[0].get(result_key)) if rows else None
@@ -1314,7 +1321,16 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
         "brand": brand,
         "period": "Last 30 days",
         "metrics": metrics,
-        "data_source": "database" if any_ok else "unavailable",
+        # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
+        # computed over synthetic-gold rows (the _include_synthetic twins) rather
+        # than real-world data -> surface "synthetic" so the FE badges them
+        # honestly (Home QuickStatTile shows a "synthetic data" chip), never
+        # passing synthetic figures off as production "database" values.
+        "data_source": (
+            "synthetic"
+            if (any_ok and kpi_include_synthetic())
+            else ("database" if any_ok else "unavailable")
+        ),
         # Data-coverage end (latest treatment_events prescription date) so the FE
         # renders a 0/null tile as "No recent activity -- data through <date>" with
         # a DYNAMIC date, not a bare 0. None when unavailable.
