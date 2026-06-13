@@ -12,6 +12,17 @@ dist
 dist-ssr
 *.local
 
+# Test / coverage output (vitest --coverage, playwright)
+coverage
+playwright-report
+test-results
+.playwright
+blob-report
+
+# Auto-generated API types (regenerated via `npm run generate:types`;
+# also ignored at repo root). The hand-written index.ts/README stay tracked.
+src/types/generated/api.ts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
