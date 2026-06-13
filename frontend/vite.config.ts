@@ -45,6 +45,74 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), dropMswWorkerInProd()],
+    build: {
+      rollupOptions: {
+        output: {
+          /**
+           * Split the heavy shared vendors out of the single ~3MB `index`
+           * chunk. Routes are already React.lazy()-loaded (src/router/routes.tsx),
+           * but vendors imported by 2+ lazy routes (recharts in 17 pages,
+           * @copilotkit in the chat shell, etc.) get hoisted into one common
+           * `index` chunk. manualChunks forces each vendor family into its own
+           * cacheable chunk regardless of the route graph.
+           *
+           * recharts + d3 MUST stay in the SAME chunk: recharts re-exports
+           * cartesian components (Bar, etc.) through its barrel while those
+           * modules also depend back on it. Splitting them across chunks
+           * produces the circular-dependency-between-chunks warning Rollup
+           * emits and risks broken execution order, so they share `vendor-charts`.
+           */
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined
+
+            // React core: shared by every route, keep it isolated + tiny.
+            if (
+              /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(
+                id,
+              )
+            ) {
+              return 'vendor-react'
+            }
+            // Charts: recharts + d3 + victory-vendor (recharts' d3 shim) together
+            // to avoid the cross-chunk circular dependency warned about above.
+            if (
+              /[\\/]node_modules[\\/](recharts|d3-[^\\/]+|d3|victory-vendor|internmap|delaunator|robust-predicates)[\\/]/.test(
+                id,
+              )
+            ) {
+              return 'vendor-charts'
+            }
+            // CopilotKit chat SDK (largest single dependency family on disk).
+            if (/[\\/]node_modules[\\/]@copilotkit[\\/]/.test(id)) {
+              return 'vendor-copilotkit'
+            }
+            // Supabase client + its gotrue/realtime/postgrest sub-packages.
+            if (/[\\/]node_modules[\\/]@supabase[\\/]/.test(id)) {
+              return 'vendor-supabase'
+            }
+            // TanStack Query.
+            if (/[\\/]node_modules[\\/]@tanstack[\\/]/.test(id)) {
+              return 'vendor-query'
+            }
+            // Animation library.
+            if (/[\\/]node_modules[\\/]framer-motion[\\/]/.test(id)) {
+              return 'vendor-motion'
+            }
+            // Radix UI primitives (many small packages -> one shared chunk).
+            if (/[\\/]node_modules[\\/]@radix-ui[\\/]/.test(id)) {
+              return 'vendor-radix'
+            }
+            // Form stack.
+            if (
+              /[\\/]node_modules[\\/](react-hook-form|@hookform|zod)[\\/]/.test(id)
+            ) {
+              return 'vendor-forms'
+            }
+            return undefined
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

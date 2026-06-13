@@ -159,6 +159,12 @@ jobs:
           # Disable CopilotKit in E2E test builds since there's no backend
           VITE_COPILOT_ENABLED: 'false'
 
+      - name: Assert production bundle is clean (no MSW / dev artifacts)
+        working-directory: frontend
+        # Mirrors the docker/frontend/Dockerfile guard (PR #908) in CI so the
+        # invariant is enforced on every PR, not only when the prod image builds.
+        run: npm run check:dist
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
