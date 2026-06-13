@@ -129,6 +129,16 @@ class KPIResultResponse(BaseModel):
     cached: bool = Field(False, description="Whether result was from cache")
     cache_expires_at: datetime | None = Field(None, description="When cache entry expires")
     error: str | None = Field(None, description="Error message if calculation failed")
+    data_source: str = Field(
+        default="database",
+        description=(
+            "Provenance of the value: 'database' = real (synthetic-excluded) rows; "
+            "'synthetic' = computed over synthetic-gold rows in "
+            "E2I_KPI_INCLUDE_SYNTHETIC demo/review mode (the FE badges these so a "
+            "synthetic figure is never read as real-world data)."
+        ),
+        examples=["database", "synthetic"],
+    )
 
     # Causal analysis details
     causal_library_used: str | None = Field(None, description="Causal library used for calculation")

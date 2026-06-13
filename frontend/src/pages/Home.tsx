@@ -425,7 +425,6 @@ function Home() {
       : kpiSummary.data_source === 'synthetic'
         ? 'synthetic'
         : 'sample';
-  const isSyntheticKpis = kpiSummary?.data_source === 'synthetic';
 
   // QUICK_STATS: Active Campaigns = count of running experiments.
   const { data: activeExp, isLoading: activeExpLoading } = useActiveExperimentCount();
@@ -535,18 +534,33 @@ function Home() {
     // batchCalc is a stable mutation fn from react-query.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kpiListIds, selectedBrand]);
-  // Map kpi_id → { value, status, error } from the batch result (real values).
+  // Map kpi_id → { value, status, error, dataSource } from the batch result.
+  // dataSource carries provenance ('synthetic' in demo mode) so the grid can
+  // badge synthetic-sourced values rather than passing them off as real.
   const valueByKpiId = useMemo(() => {
-    const m = new Map<string, { value: number | null; status: string; error: string | null }>();
+    const m = new Map<
+      string,
+      { value: number | null; status: string; error: string | null; dataSource: string }
+    >();
     batchData?.results?.forEach((r) => {
       m.set(r.kpi_id, {
         value: r.value ?? null,
         status: r.status,
         error: r.error ?? null,
+        dataSource: r.data_source ?? 'database',
       });
     });
     return m;
   }, [batchData]);
+
+  // Page-level synthetic disclosure: true when ANY KPI surface on this page was
+  // computed in E2I_KPI_INCLUDE_SYNTHETIC demo mode — the Home tiles (summary),
+  // the Model Accuracy tile (roc-auc), or the KPI grid (batch). Drives the banner
+  // so the whole dashboard (incl. the grid) is labelled, never read as real data.
+  const isSyntheticKpis =
+    kpiSummary?.data_source === 'synthetic' ||
+    rocAucResult?.data_source === 'synthetic' ||
+    (batchData?.results?.some((r) => r.data_source === 'synthetic') ?? false);
 
   // Get navigation routes for quick actions
   const navRoutes = getNavigationRoutes().filter((route) => route.path !== '/');
@@ -905,6 +919,7 @@ function Home() {
               ? `${(rocAucResult.value * 100).toFixed(1)}%`
               : '—'
           }
+          provenanceBadge={rocAucResult?.data_source === 'synthetic' ? 'synthetic' : null}
         />
       </div>
 

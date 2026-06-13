@@ -152,6 +152,13 @@ def _result_to_response(result: Any) -> KPIResultResponse:
             else str(result.causal_library_used)
         )
 
+    # Provenance: 'synthetic' when the value was computed in the
+    # E2I_KPI_INCLUDE_SYNTHETIC demo/review mode (stamped by KPICalculator and
+    # carried through the cache), else 'database'. Lets the FE badge synthetic
+    # figures rather than reading them as real-world data.
+    metadata = result.metadata or {}
+    data_source = "synthetic" if metadata.get("include_synthetic") else "database"
+
     return KPIResultResponse(
         kpi_id=result.kpi_id,
         value=result.value,
@@ -160,6 +167,7 @@ def _result_to_response(result: Any) -> KPIResultResponse:
         cached=result.cached,
         cache_expires_at=result.cache_expires_at,
         error=result.error,
+        data_source=data_source,
         causal_library_used=causal_lib,
         confidence_interval=ci,
         p_value=result.p_value,

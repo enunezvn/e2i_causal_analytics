@@ -197,6 +197,9 @@ export interface KPIResult {
   p_value?: number;
   /** Effect size if applicable */
   effect_size?: number;
+  /** Provenance: 'database' = real (synthetic-excluded) rows; 'synthetic' =
+   *  computed over synthetic-gold rows in demo/review mode (badged in the UI). */
+  data_source?: string;
   /** Additional calculation metadata */
   metadata: Record<string, unknown>;
 }

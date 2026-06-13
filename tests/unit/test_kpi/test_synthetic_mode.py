@@ -99,9 +99,9 @@ def test_resolver_is_idempotent_on_a_twin_id(monkeypatch):
 
 
 def test_twinned_set_matches_migration_066():
-    assert SYNTHETIC_TWINNED_QUERY_IDS == _twin_bases_from_migration()
-
-
-def test_migration_066_defines_expected_twin_count():
-    # Guards against a partial/empty parse silently passing the equality test.
-    assert len(SYNTHETIC_TWINNED_QUERY_IDS) == 36
+    parsed = _twin_bases_from_migration()
+    # Non-vacuous guard on the PARSED set first: a partial/empty regex match
+    # would make the equality below pass for the wrong reason, so assert the
+    # migration actually yielded the expected 36 twins before comparing.
+    assert len(parsed) == 36, f"migration 066 parse found {len(parsed)} twins, expected 36"
+    assert parsed == SYNTHETIC_TWINNED_QUERY_IDS

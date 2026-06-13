@@ -23,6 +23,7 @@ from src.kpi.models import (
 )
 from src.kpi.registry import KPIRegistry, get_registry
 from src.kpi.router import CausalLibraryRouter
+from src.kpi.synthetic_mode import kpi_include_synthetic
 
 
 class KPICalculatorBase(ABC):
@@ -150,19 +151,31 @@ class KPICalculator:
                 error=f"KPI not found: {kpi_id}",
             )
 
+        # Synthetic-visibility mode (E2I_KPI_INCLUDE_SYNTHETIC) changes the
+        # underlying SQL (base vs _include_synthetic twin), so it MUST be part of
+        # the cache key -- otherwise a synthetic value could be served after the
+        # flag is unset (or vice versa), breaking the reversible gate. We add it
+        # to the cache context only (not the calculator context, which the
+        # calculators echo into metadata["context"]).
+        include_synthetic = kpi_include_synthetic()
+        cache_context = {**context, "_include_synthetic": include_synthetic}
+
         # Check cache (unless force_refresh)
         if use_cache and not force_refresh and self._cache.enabled:
-            cached = self._cache.get(kpi_id, **context)
+            cached = self._cache.get(kpi_id, **cache_context)
             if cached is not None:
                 return cached
 
         # Calculate the KPI
         result = self._calculate_kpi(kpi, context)
+        # Provenance travels with the (cached) result so the API/FE can label a
+        # synthetic-sourced figure honestly rather than passing it off as real.
+        result.metadata["include_synthetic"] = include_synthetic
 
         # Cache the result
         if use_cache and result.error is None:
             ttl = self._get_cache_ttl(kpi)
-            self._cache.set(result, ttl=ttl, **context)
+            self._cache.set(result, ttl=ttl, **cache_context)
 
         return result
 

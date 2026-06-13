@@ -211,6 +211,9 @@ export const KPIResultSchema = z.object({
   cached: z.boolean(),
   cache_expires_at: z.string().optional(),
   error: z.string().optional(),
+  // 'database' = real (synthetic-excluded) rows; 'synthetic' = computed over
+  // synthetic-gold rows in E2I_KPI_INCLUDE_SYNTHETIC demo mode (badged in the UI).
+  data_source: z.string().optional(),
   causal_library_used: z.string().optional(),
   confidence_interval: z.array(z.number()).length(2).optional(),
   p_value: z.number().optional(),
