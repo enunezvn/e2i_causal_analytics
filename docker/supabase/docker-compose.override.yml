@@ -79,21 +79,18 @@ services:
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: "true"  # Auto-confirm for development; disable in production
       GOTRUE_DISABLE_SIGNUP: "true"  # Locked 2026-06-12: reviewer accounts are admin-provisioned (see docs/runbooks/reviewer-provisioning.md)
-      # --- #22 SMTP scaffolding (recovery/password-reset emails) ---
-      # Values interpolate from the live /opt/supabase/docker/.env — NO creds in this
-      # tracked file. Until GOTRUE_SMTP_HOST is set, the recovery-email leg is inert
-      # (POST /auth/v1/recover returns 500). Signup itself does NOT need SMTP because
-      # GOTRUE_MAILER_AUTOCONFIRM=true and signup is locked; only password RECOVERY does.
-      # Activation procedure + provider options: docs/runbooks/gotrue-smtp.md.
-      GOTRUE_SITE_URL: ${GOTRUE_SITE_URL:-https://eznomics.site}
-      GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST:-https://eznomics.site/reset-password}
-      GOTRUE_MAILER_URLPATHS_RECOVERY: ${GOTRUE_MAILER_URLPATHS_RECOVERY:-/reset-password}
-      GOTRUE_SMTP_HOST: ${GOTRUE_SMTP_HOST:-}
-      GOTRUE_SMTP_PORT: ${GOTRUE_SMTP_PORT:-587}
-      GOTRUE_SMTP_USER: ${GOTRUE_SMTP_USER:-}
-      GOTRUE_SMTP_PASS: ${GOTRUE_SMTP_PASS:-}
-      GOTRUE_SMTP_ADMIN_EMAIL: ${GOTRUE_SMTP_ADMIN_EMAIL:-}
-      GOTRUE_SMTP_SENDER_NAME: ${GOTRUE_SMTP_SENDER_NAME:-E2I Causal Analytics}
+      # --- #22 SMTP (recovery/password-reset emails) ---
+      # DO NOT redefine GOTRUE_SMTP_* here. The base supabase docker-compose.yml already
+      # maps the auth service's GOTRUE_SMTP_* / GOTRUE_SITE_URL / GOTRUE_MAILER_URLPATHS_*
+      # from the .env vars SMTP_HOST/PORT/USER/PASS/ADMIN_EMAIL/SENDER_NAME, SITE_URL,
+      # ADDITIONAL_REDIRECT_URLS, MAILER_URLPATHS_RECOVERY. Redefining them here with
+      # empty defaults would CLOBBER that mapping (an override merges on top of the base).
+      # To enable recovery email, set REAL values in /opt/supabase/docker/.env (the live
+      # defaults are placeholders: SMTP_HOST=supabase-mail / admin@example.com / fake_sender,
+      # and the supabase-mail dev catcher is not running -> POST /auth/v1/recover 500s).
+      # Also set SITE_URL=https://eznomics.site + MAILER_URLPATHS_RECOVERY=/reset-password
+      # so the reset link lands on the public origin (live default is http://138.197.4.36).
+      # Full procedure + provider options: docs/runbooks/gotrue-smtp.md.
     labels:
       - "com.e2i.service=supabase-auth"
     deploy:

@@ -271,12 +271,16 @@ JWT_EXPIRY=3600
 DISABLE_SIGNUP=false
 API_EXTERNAL_URL=http://138.197.4.36:54321
 
-# Email settings (optional)
-GOTRUE_SMTP_HOST=
-GOTRUE_SMTP_PORT=587
-GOTRUE_SMTP_USER=
-GOTRUE_SMTP_PASS=
-GOTRUE_SMTP_SENDER_NAME=E2I Analytics
+# Email settings (for password recovery). Use SMTP_* — the base supabase
+# compose maps these to GOTRUE_SMTP_*; GOTRUE_SMTP_* set here would be ignored.
+# Blank = no email (recovery 500s); fill with a real provider to enable.
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_SENDER_NAME=E2I Analytics
+SMTP_ADMIN_EMAIL=admin@example.com
+MAILER_URLPATHS_RECOVERY=/reset-password
 
 ############
 # Studio Configuration
