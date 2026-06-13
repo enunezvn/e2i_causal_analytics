@@ -117,6 +117,9 @@ TABLE_COLUMNS = {
         "peer_influence_score",
         "influence_network_size",
         "adoption_category",
+        # Sales territory + rep (territory_metrics ETL groups on territory_id).
+        "territory_id",
+        "sales_rep_id",
         "is_synthetic",
     ],
     "patient_journeys": [

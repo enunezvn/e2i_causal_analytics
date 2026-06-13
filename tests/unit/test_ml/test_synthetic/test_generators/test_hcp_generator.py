@@ -219,3 +219,50 @@ class TestHCPGeneratorDistributions:
 
         # Academic practice should have higher academic HCP rate
         assert academic_rate_in_academic > academic_rate_in_other
+
+
+class TestHCPTerritoryAssignment:
+    """Territory/sales-rep assignment on hcp_profiles.
+
+    The territory_metrics panel/ETL keys off hcp_profiles.territory_id (the ETL's
+    `territories` CTE = SELECT DISTINCT territory_id WHERE territory_id IS NOT NULL).
+    Historically the generator left territory_id/sales_rep_id NULL, so the panel
+    was always empty. Territories nest within geographic_region: each of the 4
+    regions is split into TERRITORIES_PER_REGION territories.
+    """
+
+    def _gen(self, seed=42, n=400, brand=None):
+        cfg = GeneratorConfig(seed=seed, n_records=n, brand=brand)
+        return HCPGenerator(cfg).generate()
+
+    def test_every_hcp_has_territory_and_rep(self):
+        df = self._gen()
+        assert df["territory_id"].notna().all()
+        assert df["sales_rep_id"].notna().all()
+        assert (df["territory_id"].astype(str).str.len() > 0).all()
+
+    def test_territory_nests_within_region(self):
+        # territory_id is "<region>-T<NN>"; its region prefix must equal the row's
+        # geographic_region (no cross-region leakage).
+        df = self._gen()
+        prefix = df["territory_id"].astype(str).str.rsplit("-T", n=1).str[0]
+        assert (prefix == df["geographic_region"].astype(str)).all()
+
+    def test_territory_id_format_and_count(self):
+        df = self._gen(n=2000)
+        assert df["territory_id"].astype(str).str.match(r"^[a-z]+-T\d{2}$").all()
+        # 4 regions x K territories; never more distinct territories than that.
+        k = HCPGenerator.TERRITORIES_PER_REGION
+        assert df["territory_id"].nunique() <= 4 * k
+        # Per region, no more than K distinct territories.
+        per_region = df.groupby("geographic_region")["territory_id"].nunique()
+        assert (per_region <= k).all()
+
+    def test_sales_rep_derived_from_territory(self):
+        df = self._gen()
+        assert (df["sales_rep_id"].astype(str) == "REP-" + df["territory_id"].astype(str)).all()
+
+    def test_assignment_is_deterministic(self):
+        a = self._gen(seed=7)
+        b = self._gen(seed=7)
+        assert a["territory_id"].tolist() == b["territory_id"].tolist()
