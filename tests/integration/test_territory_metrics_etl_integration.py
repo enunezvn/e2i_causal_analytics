@@ -85,6 +85,32 @@ def db_conn() -> Any:
     conn.close()
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _require_migration_074(db_conn: Any) -> None:
+    """Skip the module on a pre-074 schema (issue #895).
+
+    The rollup SQL now inherits provenance and names
+    ``territory_metrics.is_synthetic`` (added by migration 074) in its
+    INSERT column list; on a pre-074 schema the ETL fails closed (42703
+    undefined_column, no rows written) by design. Skipping keeps local
+    runs green until the migration batch is applied; the provenance
+    behaviour itself is covered by
+    ``test_etl_provenance_inheritance_895.py``.
+    """
+    with db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_schema = 'public'
+               AND table_name = 'territory_metrics'
+               AND column_name = 'is_synthetic'
+            """
+        )
+        row = cur.fetchone()
+    if not (row and row[0]):
+        pytest.skip("territory_metrics.is_synthetic absent (migration 074 not applied)")
+
+
 @pytest.fixture(scope="module")
 def test_run_id() -> str:
     """Unique prefix per pytest run so parallel suites do not collide."""

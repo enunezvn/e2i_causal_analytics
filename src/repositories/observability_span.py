@@ -48,6 +48,13 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
     table_name = "ml_observability_spans"
     model_class = ObservabilitySpan
+    # Provenance (#894): ml_observability_spans carries is_synthetic (migration
+    # 069; 600/816 live rows synthetic at filing time). Real-mode reads
+    # default-exclude synthetic spans so they never aggregate into agent-visible
+    # quality/latency metrics; include_synthetic=True opts in per read.
+    # delete_old_spans intentionally stays unfiltered: retention cleanup must
+    # reap synthetic spans too.
+    HAS_PROVENANCE = True
 
     # =========================================================================
     # INSERT OPERATIONS
@@ -140,6 +147,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         agent_name: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 1000,
+        include_synthetic: bool = False,
     ) -> List[ObservabilitySpan]:
         """
         Get spans within a time window.
@@ -149,12 +157,15 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
             agent_name: Optional filter by agent name
             status: Optional filter by status (success, error, timeout)
             limit: Maximum spans to return
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of ObservabilitySpan instances
         """
         if not self.client:
             return []
+
+        from src.repositories.provenance import apply_provenance_filter
 
         # Parse time window
         hours = self._parse_time_window(window)
@@ -171,6 +182,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         if status:
             query = query.eq("status", status)
+        query = apply_provenance_filter(query, include_synthetic)
 
         # Note: Using sync Supabase client, no await needed
         result = query.order("started_at", desc=True).limit(limit).execute()
@@ -207,7 +219,9 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
     # TRACE QUERIES
     # =========================================================================
 
-    async def get_spans_by_trace_id(self, trace_id: str) -> List[ObservabilitySpan]:
+    async def get_spans_by_trace_id(
+        self, trace_id: str, include_synthetic: bool = False
+    ) -> List[ObservabilitySpan]:
         """
         Get all spans for a trace.
 
@@ -215,6 +229,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
 
         Args:
             trace_id: Trace identifier
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of spans in the trace, ordered by start time
@@ -222,11 +237,12 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = self.client.table(self.table_name).select("*").eq("trace_id", trace_id)
         # Note: Using sync Supabase client, no await needed
         result = (
-            self.client.table(self.table_name)
-            .select("*")
-            .eq("trace_id", trace_id)
+            apply_provenance_filter(query, include_synthetic)
             .order("started_at", desc=False)
             .execute()
         )
@@ -300,6 +316,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         agent_name: str,
         hours: int = 24,
         limit: int = 500,
+        include_synthetic: bool = False,
     ) -> List[ObservabilitySpan]:
         """
         Get spans for a specific agent.
@@ -308,6 +325,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
             agent_name: Agent name
             hours: Number of hours to look back
             limit: Maximum spans
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of spans for the agent
@@ -315,14 +333,19 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        # Note: Using sync Supabase client, no await needed
-        result = (
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("agent_name", agent_name)
             .gte("started_at", cutoff_time.isoformat())
+        )
+        # Note: Using sync Supabase client, no await needed
+        result = (
+            apply_provenance_filter(query, include_synthetic)
             .order("started_at", desc=True)
             .limit(limit)
             .execute()
@@ -335,6 +358,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         agent_tier: str,
         hours: int = 24,
         limit: int = 1000,
+        include_synthetic: bool = False,
     ) -> List[ObservabilitySpan]:
         """
         Get spans for all agents in a tier.
@@ -343,6 +367,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
             agent_tier: Agent tier
             hours: Number of hours to look back
             limit: Maximum spans
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of spans for agents in the tier
@@ -350,14 +375,19 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        # Note: Using sync Supabase client, no await needed
-        result = (
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("agent_tier", agent_tier)
             .gte("started_at", cutoff_time.isoformat())
+        )
+        # Note: Using sync Supabase client, no await needed
+        result = (
+            apply_provenance_filter(query, include_synthetic)
             .order("started_at", desc=True)
             .limit(limit)
             .execute()
@@ -658,6 +688,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         self,
         hours: int = 24,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List[ObservabilitySpan]:
         """
         Get recent error spans for analysis.
@@ -665,6 +696,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         Args:
             hours: Number of hours to look back
             limit: Maximum spans
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of error spans
@@ -672,14 +704,19 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        # Note: Using sync Supabase client, no await needed
-        result = (
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("status", "error")
             .gte("started_at", cutoff_time.isoformat())
+        )
+        # Note: Using sync Supabase client, no await needed
+        result = (
+            apply_provenance_filter(query, include_synthetic)
             .order("started_at", desc=True)
             .limit(limit)
             .execute()
@@ -691,6 +728,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         self,
         hours: int = 24,
         limit: int = 100,
+        include_synthetic: bool = False,
     ) -> List[ObservabilitySpan]:
         """
         Get recent spans where fallback was used.
@@ -698,6 +736,7 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         Args:
             hours: Number of hours to look back
             limit: Maximum spans
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of spans with fallback_used=True
@@ -705,14 +744,19 @@ class ObservabilitySpanRepository(BaseRepository[ObservabilitySpan]):
         if not self.client:
             return []
 
+        from src.repositories.provenance import apply_provenance_filter
+
         cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-        # Note: Using sync Supabase client, no await needed
-        result = (
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("fallback_used", True)
             .gte("started_at", cutoff_time.isoformat())
+        )
+        # Note: Using sync Supabase client, no await needed
+        result = (
+            apply_provenance_filter(query, include_synthetic)
             .order("started_at", desc=True)
             .limit(limit)
             .execute()

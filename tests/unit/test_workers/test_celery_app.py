@@ -288,25 +288,20 @@ class TestBeatSchedule:
         assert schedule["schedule"] == 21600.0  # 6 hours
         assert schedule["options"]["queue"] == "analytics"
 
-    def test_health_check_scheduled(self):
-        """Test health check is scheduled every hour."""
+    def test_dangling_scaffold_entries_removed(self):
+        """The scaffolded health-check / cache-cleanup entries stay removed (#897).
+
+        Neither src.tasks.health_check nor src.tasks.cleanup_old_cache was ever
+        defined in any commit; each beat tick enqueued a message the worker
+        rejected with KeyError ("Received unregistered task of type ...").
+        The general guard lives in test_beat_schedule_registration.py — this
+        test only pins the two known-vestigial keys so they don't come back
+        dangling under the same names.
+        """
         from src.workers.celery_app import celery_app
 
-        schedule = celery_app.conf.beat_schedule.get("health-check")
-        assert schedule is not None
-        assert schedule["task"] == "src.tasks.health_check"
-        assert schedule["schedule"] == 3600.0  # 1 hour
-        assert schedule["options"]["queue"] == "quick"
-
-    def test_cache_cleanup_scheduled(self):
-        """Test cache cleanup is scheduled daily."""
-        from src.workers.celery_app import celery_app
-
-        schedule = celery_app.conf.beat_schedule.get("cache-cleanup")
-        assert schedule is not None
-        assert schedule["task"] == "src.tasks.cleanup_old_cache"
-        assert schedule["schedule"] == 86400.0  # 24 hours
-        assert schedule["options"]["queue"] == "quick"
+        assert "health-check" not in celery_app.conf.beat_schedule
+        assert "cache-cleanup" not in celery_app.conf.beat_schedule
 
     def test_queue_metrics_scheduled(self):
         """Test queue metrics collection scheduled every 5 minutes."""

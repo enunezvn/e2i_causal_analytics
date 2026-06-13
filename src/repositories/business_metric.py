@@ -27,6 +27,7 @@ class BusinessMetricRepository(BaseRepository):
     """
 
     table_name = "business_metrics"
+    id_column = "metric_id"  # live PK (#894: .eq("id") was a latent 42703)
     model_class = None  # Set to BusinessMetric model when available
     HAS_PROVENANCE = True  # business_metrics carries is_synthetic (Shard 01)
 

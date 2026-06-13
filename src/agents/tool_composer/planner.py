@@ -342,6 +342,10 @@ class ToolPlanner:
             return []
 
         try:
+            # find_similar_compositions hydrates raw_content by memory_id
+            # (#889): the search RPC's TABLE shape carries no raw_content, so
+            # before the hook-side fix every row here read {} and the
+            # tool_sequence/confidence below were always the defaults.
             similar = await self.memory_hooks.find_similar_compositions(query=query, limit=limit)
 
             if similar:
@@ -521,7 +525,16 @@ class ToolPlanner:
         return "\n".join(lines)
 
     def _format_episodic_context(self, similar_compositions: List[Dict[str, Any]]) -> str:
-        """Format similar compositions as context for the LLM."""
+        """Format similar compositions as context for the LLM.
+
+        The rows arrive from ``_check_episodic_memory`` →
+        ``find_similar_compositions``, which hydrates ``raw_content`` by
+        memory_id (#889) — the search RPC itself returns no ``raw_content``,
+        so before the hook-side fix this formatter rendered all-default
+        zeros into the prompt. The ``.get(..., {})`` stays as tolerance for
+        rows whose stored content is missing/unparseable (hydration yields
+        ``{}`` for those — never fabricated values).
+        """
         if not similar_compositions:
             return ""
 

@@ -236,10 +236,15 @@ class ModelTrainerMemoryHooks:
             return False
 
         try:
+            from src.memory.jsonb_sanitize import sanitize_jsonb_payload
+
             cache_key = f"model_trainer:result:{session_id}"
+            # #891: training metrics can be non-finite (NaN brier_*/rmse etc.);
+            # sanitize to JSON null and dump strictly so the cached value is
+            # always standard JSON (never bare NaN tokens).
             await self.working_memory.set(
                 cache_key,
-                json.dumps(training_result),
+                json.dumps(sanitize_jsonb_payload(training_result), allow_nan=False),
                 ex=self.CACHE_TTL_SECONDS,
             )
             logger.debug(f"Cached training result for session {session_id}")

@@ -13,6 +13,7 @@
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import type { Session, User } from '@supabase/supabase-js';
+import { isSupabaseConfigured } from '@/lib/supabase';
 
 /**
  * Auth error type for consistent error handling
@@ -154,9 +155,15 @@ export const useAuthStore = create<AuthStore>()(
 
 /**
  * Selector: Check if user is authenticated
+ *
+ * FAIL CLOSED: false when Supabase is unconfigured (mirrors useAuth) - a
+ * persisted session from an older configured build must not read as
+ * authenticated.
  */
 export const useIsAuthenticated = () =>
-  useAuthStore((state) => Boolean(state.session?.access_token && state.user));
+  useAuthStore((state) =>
+    isSupabaseConfigured() ? Boolean(state.session?.access_token && state.user) : false
+  );
 
 /**
  * Selector: Check if user is admin
@@ -208,8 +215,16 @@ export const useAuthError = () =>
 
 /**
  * Selector: Get access token for API requests
+ *
+ * FAIL CLOSED: returns null when Supabase is unconfigured even if a session
+ * was rehydrated from persisted storage (written by an older configured
+ * build) - shell integrations (CopilotKitWrapper) mount outside
+ * ProtectedRoute and must never send a stale bearer token in an
+ * unconfigured build.
  */
 export const useAccessToken = () =>
-  useAuthStore((state) => state.session?.access_token ?? null);
+  useAuthStore((state) =>
+    isSupabaseConfigured() ? (state.session?.access_token ?? null) : null
+  );
 
 export default useAuthStore;

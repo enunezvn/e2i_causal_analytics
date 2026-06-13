@@ -176,13 +176,18 @@ class ExperimentOutcomeRepository:
         if self.client is None:
             return np.asarray([], dtype=float), np.asarray([], dtype=float)
 
-        # 1) assignments for the experiment (unit_id, variant)
-        assign_res = (
+        from src.repositories.provenance import apply_provenance_filter
+
+        # 1) assignments for the experiment (unit_id, variant). The table is
+        # is_synthetic-tagged (migration 063) — without the predicate a real
+        # experiment's pooled test could ingest synthetic units (#894); the
+        # same include_synthetic opt-in governs both legs of the join.
+        assign_query = (
             self.client.table("ab_experiment_assignments")
             .select("unit_id,variant")
             .eq("experiment_id", str(experiment_id))
-            .execute()
         )
+        assign_res = apply_provenance_filter(assign_query, include_synthetic).execute()
         assignments = [
             (r["unit_id"], r["variant"]) for r in (assign_res.data or []) if r.get("unit_id")
         ]

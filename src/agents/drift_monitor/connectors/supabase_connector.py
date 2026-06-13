@@ -94,6 +94,7 @@ class SupabaseDataConnector(BaseDataConnector):
         feature_names: list[str],
         time_window: TimeWindow,
         filters: dict[str, Any] | None = None,
+        include_synthetic: bool = False,
     ) -> dict[str, FeatureData]:
         """Query feature values from Supabase feature store.
 
@@ -104,11 +105,17 @@ class SupabaseDataConnector(BaseDataConnector):
             feature_names: List of feature names to retrieve
             time_window: Time window for the query
             filters: Optional filters (brand, geography_id, etc.)
+            include_synthetic: When False (default) synthetic feature_values
+                rows are excluded (#894 codex R2 — feature_values is tagged by
+                migration 069; real drift checks must not ingest planted
+                values). Validation runs opt in, mirroring get_predictions.
 
         Returns:
             Dictionary mapping feature name to FeatureData
         """
         await self._ensure_initialized()
+
+        from src.repositories.provenance import apply_provenance_filter
 
         result = {}
 
@@ -128,6 +135,7 @@ class SupabaseDataConnector(BaseDataConnector):
                     for key, value in filters.items():
                         # Filter on entity_values JSONB field
                         query = query.contains("entity_values", {key: value})
+                query = apply_provenance_filter(query, include_synthetic=include_synthetic)
 
                 response = query.order("event_timestamp", desc=False).execute()
 
@@ -389,11 +397,16 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
+            from src.repositories.provenance import apply_provenance_filter
+
+            # #894 codex R2: features is is_synthetic-tagged (migration 069) —
+            # the sweep must not auto-select planted feature names.
             query = self._client.table("features").select("name, feature_group_id")
 
             if source_table:
                 # Filter by feature group's source table
                 query = query.eq("feature_groups.source_table", source_table)
+            query = apply_provenance_filter(query)
 
             response = query.execute()
 
@@ -420,14 +433,26 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
+            from src.repositories.provenance import apply_provenance_filter
+
+            # #894: ml_model_registry is is_synthetic-tagged and the synthetic
+            # generator stamps stage='production' — the drift sweep must never
+            # enumerate planted models. Codex R1 also surfaced that the old
+            # projection named columns that do not exist on the live schema
+            # (name/version/metrics/created_at vs the canonical model_name/
+            # model_version/registered_at — see explain.py's note and
+            # database/ml/mlops_tables.sql), so every call 42703'd into the
+            # except-branch [] and the 6-hourly production sweep reported
+            # "No production models found" forever. Realigned to live columns.
             query = self._client.table("ml_model_registry").select(
-                "id, name, version, stage, metrics, created_at"
+                "id, model_name, model_version, stage, registered_at"
             )
 
             if stage:
                 query = query.eq("stage", stage)
+            query = apply_provenance_filter(query)
 
-            response = query.order("created_at", desc=True).execute()
+            response = query.order("registered_at", desc=True).execute()
 
             if response.data:
                 return response.data  # type: ignore[no-any-return]
@@ -460,8 +485,12 @@ class SupabaseDataConnector(BaseDataConnector):
             health["database"] = True
             health["models_table"] = len(response.data) >= 0
 
-            # Check ml_predictions table
-            response = self._client.table("ml_predictions").select("id").limit(1).execute()
+            # Check ml_predictions table (#894 codex R2: the live PK is
+            # prediction_id — probing "id" was a reachable 42703 that aborted
+            # the whole try block, leaving predictions/features flags False)
+            response = (
+                self._client.table("ml_predictions").select("prediction_id").limit(1).execute()
+            )
             health["predictions_table"] = len(response.data) >= 0
 
             # Check features table

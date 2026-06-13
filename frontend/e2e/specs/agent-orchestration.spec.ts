@@ -55,6 +55,30 @@ test.describe('Agent Orchestration Page', () => {
         }),
       })
     })
+    // Telemetry stub for GET /api/analytics/summary (QueryMetricsSummary,
+    // verified against the live OpenAPI spec). The page renders
+    // Queries (24h)/Avg Response Time/Success Rate from this — an em dash
+    // when unavailable, never fabricated values.
+    await page.route('**/api/analytics/summary*', async (route: Route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          period_start: '2026-06-11T00:00:00Z',
+          period_end: '2026-06-12T00:00:00Z',
+          total_queries: 412,
+          successful_queries: 398,
+          failed_queries: 14,
+          success_rate: 96.6,
+          avg_latency_ms: 742.5,
+          p50_latency_ms: 510.0,
+          p95_latency_ms: 1920.0,
+          p99_latency_ms: 3100.0,
+          intent_distribution: { causal_analysis: 201, kpi_query: 211 },
+          top_agents: [],
+        }),
+      })
+    })
     agentPage = new AgentOrchestrationPage(page)
     await agentPage.goto()
   })
@@ -95,8 +119,8 @@ test.describe('Agent Orchestration Page', () => {
       await expect(agentPage.totalAgentsCard).toBeVisible()
     })
 
-    test('should show Tasks Today stat', async () => {
-      await expect(agentPage.tasksTodayCard).toBeVisible()
+    test('should show Queries (24h) stat from real telemetry', async () => {
+      await expect(agentPage.queries24hCard).toBeVisible()
     })
 
     test('should show Avg Response Time stat', async () => {

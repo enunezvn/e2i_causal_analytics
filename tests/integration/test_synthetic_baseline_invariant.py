@@ -71,6 +71,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # ── LOCAL baseline (Ubuntu local machine, AVX2 CPU, Python 3.12.3) ──────────
 # Re-measured 2026-05-06 with --regime scenario_a (synthetic_v2 β-prime swap).
 # Bit-identical across two local runs (≥6 decimal match, all metrics).
+# ⚠️ business_utility is STALE pre-#761/#760 (measured 2026-05-06): the
+# 2026-06-06 merges shifted the CI value 99.20 → 84.85 (see BASELINE_CI note)
+# and the AVX2-local twin has not been re-measured since. Re-measure locally
+# (two seeded runs) and update in the same commit as the next local run —
+# CI (the nightly arbiter) uses BASELINE_CI, not this dict.
 BASELINE_LOCAL = {
     "roc_auc": 0.7689,  # ±0.01 — val side; calibrated band [0.78, 0.83] is on test
     "pr_auc": 0.4734,  # ±0.02
@@ -91,7 +96,18 @@ BASELINE_CI = {
     "pr_auc": 0.4734,  # ±0.02 — placeholder
     "brier_score": 0.1811,  # ±0.01 — placeholder
     "mcc": 0.3355,  # ±0.03 — placeholder
-    "business_utility": 99.20,  # ±0.5 — placeholder
+    # Re-pinned 2026-06-12 (#773 W1): PR #761 (67be1cbf) re-routed the LR
+    # solver (l2/None saga→lbfgs) + re-tuned severe/extreme non_tree
+    # resampling to class_weight, and PR #760 (5a9e3e5b) fixed param-less QC
+    # remediation drops — both merged 2026-06-06 and deliberately changed the
+    # trained-model path, shifting the dollar-utility at the headline
+    # threshold from the 2026-05-06 pin 99.20 to 84.85. Faithfulness:
+    # scenario_a is ALL-NUMERIC (no one-hot, so the #773 W2 XGBoost
+    # feature-name crash never degraded this run's Step-5b alternates) and
+    # 84.8500 reproduced bit-identically across independent nightly runs
+    # 27087062518 (2026-06-07, first red) and 27404434136 (2026-06-12).
+    # Tolerance width unchanged (±0.5).
+    "business_utility": 84.85,  # ±0.5 — re-pinned post-#761/#760, see above
 }
 
 # Select the baseline for this environment.

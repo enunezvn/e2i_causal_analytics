@@ -42,9 +42,10 @@ describe('SHAPBarChart', () => {
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 
-  it('renders with sample data when no features provided', () => {
+  it('renders an honest empty state (never sample data) when no features provided', () => {
     const { container } = render(<SHAPBarChart features={undefined as unknown as FeatureContribution[]} />);
-    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeInTheDocument();
+    expect(screen.getByText('No feature data available')).toBeInTheDocument();
   });
 
   it('limits features based on maxFeatures prop', () => {
@@ -156,9 +157,10 @@ describe('SHAPBeeswarm', () => {
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 
-  it('renders with sample data when no data provided', () => {
+  it('renders an honest empty state (never generated sample data) when no data provided', () => {
     const { container } = render(<SHAPBeeswarm data={undefined as unknown as BeeswarmDataPoint[]} />);
-    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeInTheDocument();
+    expect(screen.getByText('No data available for beeswarm plot')).toBeInTheDocument();
   });
 
   it('shows loading skeleton when isLoading', () => {
@@ -283,10 +285,12 @@ describe('SHAPForcePlot', () => {
     expect(screen.getByText(/Output:/)).toBeInTheDocument();
   });
 
-  it('uses sample data when props not provided', () => {
+  it('renders an honest empty state (never sample data) when props not provided', () => {
     render(<SHAPForcePlot baseValue={undefined as unknown as number} outputValue={undefined as unknown as number} features={undefined as unknown as FeatureContribution[]} />);
-    expect(screen.getByText(/Base:/)).toBeInTheDocument();
-    expect(screen.getByText(/Output:/)).toBeInTheDocument();
+    // The fabricated days_since_visit/total_prescriptions contributions
+    // must never render.
+    expect(screen.queryByText(/days since visit/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/no feature data/i)).toBeInTheDocument();
   });
 
   it('shows loading skeleton when isLoading', () => {
@@ -365,9 +369,10 @@ describe('SHAPWaterfall', () => {
     expect(screen.getByText('Output')).toBeInTheDocument();
   });
 
-  it('uses sample data when props not provided', () => {
+  it('renders an honest empty state (never sample data) when props not provided', () => {
     render(<SHAPWaterfall baseValue={undefined as unknown as number} features={undefined as unknown as FeatureContribution[]} />);
-    expect(screen.getByText('Base Value')).toBeInTheDocument();
+    expect(screen.queryByText('Base Value')).not.toBeInTheDocument();
+    expect(screen.getByText(/no feature data/i)).toBeInTheDocument();
   });
 
   it('shows loading skeleton when isLoading', () => {

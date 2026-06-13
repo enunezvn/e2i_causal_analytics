@@ -44,6 +44,29 @@ This mirrors how 6B-infra-2a left ``engagement_score`` and
 yet, and how 6B-infra-2b left ``refill_count`` NULL because the canonical
 v3 schema has no first-class refill concept.
 
+Provenance inheritance (issue #895)
+-----------------------------------
+``territory_metrics`` had NO ``is_synthetic`` column until migration 074
+(031 predates the 063/069 provenance family), so this rollup used to write
+provenance-less rows derived from tagged inputs — second-order laundering.
+Post-074 the SQL inherits ``is_synthetic = bool(any synthetic input)``:
+
+* ``per_hcp_in_territory`` BOOL_ORs the (already-inherited, post-#895)
+  ``business_metrics.is_synthetic`` plus ``hcp_profiles.is_synthetic`` —
+  inheritance composes across the two-stage rollup;
+* ``active_hcp_per_territory_date`` taints only on triggers that actually
+  contribute to the DISTINCT count (non-NULL after the LEFT JOIN);
+* ``territory_hcp_volume`` BOOL_ORs profile provenance (every profile row
+  contributes to the covered_lives SUM).
+
+Mixed-substrate semantics match 6B-infra-2a: an aggregate mixing real and
+synthetic inputs is tagged synthetic (fail-closed, #872 direction). The ON
+CONFLICT update arm recomputes the tag with the values.
+
+DEPLOY ORDERING: migration 074 must be applied before this code runs in
+production — the INSERT names ``is_synthetic`` and fails closed (42703
+undefined_column, no rows written) on a pre-074 schema.
+
 Window semantics
 ----------------
 Two windows operate in the SQL:
@@ -186,7 +209,12 @@ per_hcp_in_territory AS (
         hp.territory_id,
         bm.metric_date,
         SUM(COALESCE(bm.trx_count, 0))::BIGINT AS total_trx,
-        SUM(COALESCE(bm.nrx_count, 0))::BIGINT AS total_nrx
+        SUM(COALESCE(bm.nrx_count, 0))::BIGINT AS total_nrx,
+        -- Provenance inheritance (issue #895): the per-HCP rollup rows are
+        -- themselves provenance-tagged (6B-infra-2a post-#895), so this
+        -- composes -- any synthetic input row (or synthetic HCP profile)
+        -- taints the territory aggregate.
+        BOOL_OR(bm.is_synthetic OR hp.is_synthetic) AS any_synthetic
     FROM business_metrics bm
     JOIN hcp_profiles      hp ON bm.hcp_id = hp.hcp_id
     WHERE bm.metric_type = %(per_hcp_metric_type)s
@@ -208,7 +236,13 @@ active_hcp_per_territory_date AS (
     SELECT
         td.territory_id,
         td.metric_date,
-        COUNT(DISTINCT t.hcp_id)::BIGINT AS active_hcp_count
+        COUNT(DISTINCT t.hcp_id)::BIGINT AS active_hcp_count,
+        -- Provenance inheritance (issue #895): only triggers that actually
+        -- contribute to the DISTINCT count (t.hcp_id IS NOT NULL after the
+        -- LEFT JOIN) can taint it. The guard also keeps the BOOL_OR input
+        -- non-NULL on anchor rows with no matching trigger.
+        BOOL_OR(t.hcp_id IS NOT NULL AND (t.is_synthetic OR hp.is_synthetic))
+            AS any_synthetic
     FROM territory_dates td
     LEFT JOIN hcp_profiles hp ON hp.territory_id = td.territory_id
     LEFT JOIN triggers     t  ON t.hcp_id = hp.hcp_id
@@ -223,7 +257,11 @@ territory_hcp_volume AS (
     -- (territory, date) row of the rollup.
     SELECT
         territory_id,
-        SUM(COALESCE(total_patient_volume, 0))::BIGINT AS covered_lives
+        SUM(COALESCE(total_patient_volume, 0))::BIGINT AS covered_lives,
+        -- Provenance inheritance (issue #895): every profile row in the
+        -- territory contributes to the covered_lives SUM, so any synthetic
+        -- profile taints it.
+        BOOL_OR(is_synthetic) AS any_synthetic
     FROM hcp_profiles
     WHERE territory_id IS NOT NULL
     GROUP BY territory_id
@@ -244,6 +282,7 @@ INSERT INTO territory_metrics (
     -- re-runs untouched until a real source ETL replaces this.
     market_potential,
     resource_allocation_score,
+    is_synthetic,
     created_at
 )
 SELECT
@@ -255,6 +294,14 @@ SELECT
     COALESCE(thv.covered_lives, 0)           AS covered_lives,
     CAST(NULL AS DOUBLE PRECISION)           AS market_potential,
     CAST(NULL AS DOUBLE PRECISION)           AS resource_allocation_score,
+    -- Inherited provenance (issue #895, column added by migration 074):
+    -- synthetic if ANY of the three aggregate sources mixed in a synthetic
+    -- input row. COALESCE because the LEFT JOINs yield NULL for territory/
+    -- date cells with no matching aggregate (those contribute zeros, not
+    -- contamination).
+    (COALESCE(pht.any_synthetic, false)
+     OR COALESCE(ahd.any_synthetic, false)
+     OR COALESCE(thv.any_synthetic, false))  AS is_synthetic,
     NOW()                                    AS created_at
 FROM territory_dates td
 LEFT JOIN per_hcp_in_territory          pht ON pht.territory_id = td.territory_id
@@ -266,7 +313,12 @@ ON CONFLICT (territory_id, metric_date) DO UPDATE SET
     total_trx        = EXCLUDED.total_trx,
     total_nrx        = EXCLUDED.total_nrx,
     active_hcp_count = EXCLUDED.active_hcp_count,
-    covered_lives    = EXCLUDED.covered_lives;
+    covered_lives    = EXCLUDED.covered_lives,
+    -- Re-runs recompute every aggregate from the base tables; the
+    -- provenance tag tracks the same recomputation (issue #895). Keeping a
+    -- stale tag here would let laundered semantics survive via the update
+    -- arm.
+    is_synthetic     = EXCLUDED.is_synthetic;
 """
 
 

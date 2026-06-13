@@ -213,9 +213,26 @@ async def test_register_persists(fake_supabase: FakeSupabase):
 async def test_threshold_breach_returns_matches(fake_supabase: FakeSupabase):
     fake_supabase.rows["causal_paths"].extend(
         [
-            {"path_id": "p1", "brand": "Kisqali", "causal_effect_size": 0.02},
-            {"path_id": "p2", "brand": "Kisqali", "causal_effect_size": 0.10},
-            {"path_id": "p3", "brand": "Fabhalta", "causal_effect_size": 0.01},
+            # is_synthetic is NOT NULL DEFAULT false on the live table (#894:
+            # the evaluators now default-exclude synthetic rows)
+            {
+                "path_id": "p1",
+                "brand": "Kisqali",
+                "causal_effect_size": 0.02,
+                "is_synthetic": False,
+            },
+            {
+                "path_id": "p2",
+                "brand": "Kisqali",
+                "causal_effect_size": 0.10,
+                "is_synthetic": False,
+            },
+            {
+                "path_id": "p3",
+                "brand": "Fabhalta",
+                "causal_effect_size": 0.01,
+                "is_synthetic": False,
+            },
         ]
     )
     sentinel = {
@@ -275,7 +292,12 @@ async def test_dispatcher_fires_and_invalidates_only_in_brand(fake_supabase: Fak
     )
     fake_supabase.rows["causal_paths"].extend(
         [
-            {"path_id": "cp-k", "brand": "Kisqali", "causal_effect_size": 0.01},
+            {
+                "path_id": "cp-k",
+                "brand": "Kisqali",
+                "causal_effect_size": 0.01,
+                "is_synthetic": False,
+            },
         ]
     )
     # A Fabhalta trigger that COULD be invalidated if brand were sloppy.

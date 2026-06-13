@@ -148,8 +148,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.gte.return_value = mock_query
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_spans_by_time_window(window="24h")
 
@@ -162,9 +163,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=[])
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value.limit.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_client.table.return_value.select.return_value.gte.return_value = mock_query
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         await repo.get_spans_by_time_window(window="1h", agent_name="orchestrator")
 
@@ -201,8 +202,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_query
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_spans_by_trace_id("trace-123")
 
@@ -214,8 +216,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=[])
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_query
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_spans_by_trace_id("non-existent")
 
@@ -254,8 +257,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_query
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_trace_summary("trace-123")
 
@@ -286,10 +290,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
-            mock_query
-        )
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_spans_by_agent("orchestrator")
 
@@ -301,10 +304,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=[])
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
-            mock_query
-        )
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_spans_by_tier("coordination")
 
@@ -378,9 +380,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value.limit.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_client.table.return_value.select.return_value.gte.return_value = mock_query
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_quality_metrics(time_window="24h")
 
@@ -441,10 +443,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
-            mock_query
-        )
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_error_spans()
 
@@ -470,10 +471,9 @@ class TestObservabilitySpanRepository:
         mock_response = MagicMock(data=mock_data)
         mock_query = MagicMock()
         mock_query.execute.return_value = mock_response
-        mock_query.order.return_value.limit.return_value = mock_query
-        mock_client.table.return_value.select.return_value.eq.return_value.gte.return_value = (
-            mock_query
-        )
+        for _m in ("eq", "gte", "order", "limit"):
+            getattr(mock_query, _m).return_value = mock_query
+        mock_client.table.return_value.select.return_value = mock_query
 
         result = await repo.get_fallback_spans()
 
