@@ -227,9 +227,10 @@ function SystemHealth() {
   }, [healthHistory]);
 
   const componentScoreData = useMemo(() => {
-    // No fabricated fallback scores: until a real health check loads, show no
-    // bars rather than invented 95/88/82/92 values presented as real.
-    if (!quickHealthData) {
+    // No fabricated scores: show no bars until a real health check loads, and
+    // never chart dev-offline placeholder data (data_provenance="placeholder")
+    // as if it were measured.
+    if (!quickHealthData || quickHealthData.data_provenance === 'placeholder') {
       return [];
     }
     // Only chart dimensions a real backend MEASURED. A null dimension score is

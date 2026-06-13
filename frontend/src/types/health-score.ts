@@ -214,6 +214,8 @@ export interface HealthScoreResponse {
   check_latency_ms: number;
   /** Check timestamp */
   timestamp: string;
+  /** Provenance: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**

@@ -1292,6 +1292,12 @@ def _generate_mock_health_response(
         "All core systems operational.",
         check_latency_ms=check_latency,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        # This is the dev-offline ImportError fallback (#429): the scores above
+        # are hardcoded sample data, NOT measured. Tag PLACEHOLDER explicitly so
+        # it is never mislabeled "unknown" and consumers (the dashboard chart)
+        # can refuse to render it as real. Production fails closed (503) before
+        # reaching here.
+        data_provenance=DataProvenance.PLACEHOLDER.value,
     )
 
 

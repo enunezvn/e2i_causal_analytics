@@ -1079,6 +1079,16 @@ def test_generate_mock_health_response_grade_A():
                     assert result.overall_health_score >= 80
 
 
+def test_generate_mock_health_response_tagged_placeholder():
+    """The dev-offline mock fallback MUST tag data_provenance='placeholder' (not
+    the 'unknown' default) so its hardcoded sample scores are never mistaken for
+    real measurements by consumers / the dashboard chart."""
+    import time
+
+    result = _generate_mock_health_response(CheckScope.FULL, time.time())
+    assert result.data_provenance == "placeholder"
+
+
 def test_generate_mock_health_response_includes_recommendations():
     """Test mock response includes recommendations."""
     import time
