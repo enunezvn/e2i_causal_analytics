@@ -76,6 +76,15 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
+// Mock supabase configuration check (default: configured, preserving the
+// behavior of the pre-existing tests; individual tests flip it to false)
+const { mockIsSupabaseConfigured } = vi.hoisted(() => ({
+  mockIsSupabaseConfigured: vi.fn(() => true),
+}));
+vi.mock('@/lib/supabase', () => ({
+  isSupabaseConfigured: () => mockIsSupabaseConfigured(),
+}));
+
 // Mock env
 vi.mock('@/config/env', () => ({
   env: {
@@ -219,6 +228,30 @@ describe('useWebSocket', () => {
         .replace(/\//g, '_')
         .replace(/=+$/, '');
       expect(flat[1]).toBe(expectedEncoded);
+    });
+
+    it('should NOT pass a subprotocol when Supabase is unconfigured, even with a persisted session', async () => {
+      // FAIL CLOSED (codex iter1 MED family): the store may hold a stale
+      // session rehydrated from persisted storage (older configured build);
+      // an unconfigured build must never convey it to the backend.
+      mockIsSupabaseConfigured.mockReturnValue(false);
+      try {
+        const onMessage = vi.fn();
+        renderHook(() =>
+          useWebSocket({
+            endpoint: '/graph/stream',
+            onMessage,
+            withAuth: true,
+          })
+        );
+
+        await waitForConnection();
+
+        expect(MockWebSocket.instances.length).toBe(1);
+        expect(MockWebSocket.instances[0].protocols).toBeUndefined();
+      } finally {
+        mockIsSupabaseConfigured.mockReturnValue(true);
+      }
     });
 
     it('should NOT pass a subprotocol when withAuth is true but no session exists', async () => {

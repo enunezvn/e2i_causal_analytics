@@ -80,11 +80,14 @@ describe('MetricTrend', () => {
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 
-  it('renders with sample data when no data provided', () => {
+  it('renders an honest empty state (never sample data) when no data provided', () => {
     const { container } = render(
       <MetricTrend name="Test Metric" data={undefined as unknown as MetricDataPoint[]} />
     );
-    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    // The fabricated SAMPLE_DATA trend (0.85..0.94 + 'Model retrained'
+    // annotation) must never render; absence of data is shown explicitly.
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeInTheDocument();
+    expect(screen.getByText(/no metric data/i)).toBeInTheDocument();
   });
 
   it('shows metric name in header', () => {
@@ -218,12 +221,13 @@ describe('MetricTrend', () => {
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 
-  it('handles empty data array', () => {
+  it('handles empty data array with an honest empty state (no chart)', () => {
     const { container } = render(
       <MetricTrend name="Empty Metric" data={[]} showHeader />
     );
-    // Should still render even with empty data
-    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    // No data -> explicit empty state instead of an empty/fabricated chart.
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeInTheDocument();
+    expect(screen.getByText(/no metric data/i)).toBeInTheDocument();
   });
 
   it('shows negative trend percentage', () => {
@@ -474,9 +478,12 @@ describe('ConfusionMatrix', () => {
     expect(screen.getByText('Confusion Matrix')).toBeInTheDocument();
   });
 
-  it('renders with sample data when no data provided', () => {
+  it('renders an honest empty state (never sample data) when no data provided', () => {
     render(<ConfusionMatrix data={undefined as unknown as ConfusionMatrixData} />);
-    expect(screen.getByText('Confusion Matrix')).toBeInTheDocument();
+    // The fabricated 3x3 risk matrix (85/82/85 diagonal, Low/Medium/High
+    // Risk labels) must never render.
+    expect(screen.queryByText('Low Risk')).not.toBeInTheDocument();
+    expect(screen.getByText(/no confusion matrix data/i)).toBeInTheDocument();
   });
 
   it('displays custom title', () => {
@@ -654,7 +661,7 @@ describe('MultiAxisLineChart', () => {
     expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
   });
 
-  it('renders with sample data when no data provided', () => {
+  it('renders an honest empty state (never sample data) when no data provided', () => {
     const { container } = render(
       <MultiAxisLineChart
         data={undefined as unknown as Record<string, unknown>[]}
@@ -662,7 +669,9 @@ describe('MultiAxisLineChart', () => {
         axes={undefined as unknown as AxisConfig[]}
       />
     );
-    expect(container.querySelector('.recharts-responsive-container')).toBeInTheDocument();
+    // The fabricated conversions/revenue series must never render.
+    expect(container.querySelector('.recharts-responsive-container')).not.toBeInTheDocument();
+    expect(screen.getByText('No data available')).toBeInTheDocument();
   });
 
   it('shows loading skeleton when isLoading', () => {

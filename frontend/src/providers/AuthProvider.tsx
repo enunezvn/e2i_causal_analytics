@@ -229,12 +229,29 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // -------------------------------------------------------------------------
 
   /**
+   * Fail an auth action VISIBLY when Supabase is unconfigured.
+   *
+   * Pages catch action rejections and display the store error ("Error is
+   * already set in auth store"), so throwing without setError made form
+   * submissions fail silently when unconfigured. Sets the error, then throws.
+   */
+  const failUnconfigured = React.useCallback((): never => {
+    const error = {
+      code: 'auth_not_configured',
+      message:
+        'Authentication is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY at build time.',
+    };
+    setError(error);
+    throw new Error(error.message);
+  }, [setError]);
+
+  /**
    * Sign in with email and password
    */
   const login = React.useCallback(
     async ({ email, password }: LoginCredentials): Promise<void> => {
       if (!supabaseConfigured) {
-        throw new Error('Authentication is not configured');
+        failUnconfigured();
       }
       setLoading(true);
       setError(null);
@@ -257,7 +274,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw err;
       }
     },
-    [supabaseConfigured, setLoading, setError]
+    [supabaseConfigured, failUnconfigured, setLoading, setError]
   );
 
   /**
@@ -294,7 +311,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signup = React.useCallback(
     async ({ email, password, name }: SignupCredentials): Promise<void> => {
       if (!supabaseConfigured) {
-        throw new Error('Authentication is not configured');
+        failUnconfigured();
       }
       setLoading(true);
       setError(null);
@@ -327,7 +344,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw err;
       }
     },
-    [supabaseConfigured, setLoading, setError]
+    [supabaseConfigured, failUnconfigured, setLoading, setError]
   );
 
   /**
@@ -336,7 +353,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const resetPassword = React.useCallback(
     async (email: string): Promise<void> => {
       if (!supabaseConfigured) {
-        throw new Error('Authentication is not configured');
+        failUnconfigured();
       }
       setLoading(true);
       setError(null);
@@ -356,7 +373,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setLoading(false);
       }
     },
-    [supabaseConfigured, setLoading, setError]
+    [supabaseConfigured, failUnconfigured, setLoading, setError]
   );
 
   /**
@@ -365,7 +382,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const updatePassword = React.useCallback(
     async (newPassword: string): Promise<void> => {
       if (!supabaseConfigured) {
-        throw new Error('Authentication is not configured');
+        failUnconfigured();
       }
       setLoading(true);
       setError(null);
@@ -385,7 +402,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setLoading(false);
       }
     },
-    [supabaseConfigured, setLoading, setError]
+    [supabaseConfigured, failUnconfigured, setLoading, setError]
   );
 
   // -------------------------------------------------------------------------
