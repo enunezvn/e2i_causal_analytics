@@ -263,7 +263,9 @@ class TestGetExperiments:
         result = await node._get_experiments(mock_client, state)
 
         assert len(result) == 2
-        mock_query.eq.assert_called_with("status", "running")
+        mock_query.eq.assert_any_call("status", "running")
+        # #894: the enumeration default-excludes synthetic experiments
+        mock_query.eq.assert_any_call("is_synthetic", False)
 
     @pytest.mark.asyncio
     async def test_get_experiments_specific_ids(self, node):
@@ -275,6 +277,7 @@ class TestGetExperiments:
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
         mock_query.in_ = MagicMock(return_value=mock_query)
+        mock_query.eq = MagicMock(return_value=mock_query)  # #894 provenance predicate
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table = MagicMock(return_value=mock_query)
 
@@ -295,6 +298,8 @@ class TestGetExperiments:
 
         assert len(result) == 1
         mock_query.in_.assert_called_with("id", ["exp-1"])
+        # #894: a synthetic id must not resolve in real mode either
+        mock_query.eq.assert_any_call("is_synthetic", False)
 
     @pytest.mark.asyncio
     async def test_get_experiments_no_filters_returns_empty(self, node):

@@ -98,10 +98,18 @@ class ABResultsRepository(BaseRepository):
     Repository for A/B experiment results.
 
     Handles results, SRM checks, and fidelity comparisons.
+
+    Provenance (#894): ``ab_experiment_results`` carries ``is_synthetic``
+    (migration 069; live substrate 360/360 synthetic at filing time), so
+    real-mode result reads default-exclude synthetic rows —
+    ``include_synthetic=True`` opts in. ``ab_srm_checks`` and
+    ``ab_fidelity_comparisons`` are untagged and stay unfiltered (a predicate
+    would 42703).
     """
 
     table_name = "ab_experiment_results"
     model_class = ExperimentResultRecord
+    HAS_PROVENANCE = True  # migration 069 (#894)
 
     def __init__(self, supabase_client=None):
         """Initialize repository with Supabase client."""
@@ -198,6 +206,7 @@ class ABResultsRepository(BaseRepository):
         experiment_id: UUID,
         analysis_type: Optional[str] = None,
         analysis_method: Optional[str] = None,
+        include_synthetic: bool = False,
     ) -> List[ExperimentResultRecord]:
         """
         Get results for an experiment.
@@ -206,12 +215,15 @@ class ABResultsRepository(BaseRepository):
             experiment_id: Experiment UUID
             analysis_type: Optional type filter
             analysis_method: Optional method filter
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             List of result records
         """
         if not self.client:
             return []
+
+        from src.repositories.provenance import apply_provenance_filter
 
         query = (
             self.client.table(self.table_name).select("*").eq("experiment_id", str(experiment_id))
@@ -221,6 +233,7 @@ class ABResultsRepository(BaseRepository):
             query = query.eq("analysis_type", analysis_type)
         if analysis_method:
             query = query.eq("analysis_method", analysis_method)
+        query = apply_provenance_filter(query, include_synthetic)
 
         query = query.order("computed_at", desc=True)
         result = query.execute()
@@ -231,6 +244,7 @@ class ABResultsRepository(BaseRepository):
         self,
         experiment_id: UUID,
         analysis_method: str = "itt",
+        include_synthetic: bool = False,
     ) -> Optional[ExperimentResultRecord]:
         """
         Get most recent results for an experiment.
@@ -238,6 +252,7 @@ class ABResultsRepository(BaseRepository):
         Args:
             experiment_id: Experiment UUID
             analysis_method: Analysis method
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
         Returns:
             Latest result record or None
@@ -245,11 +260,16 @@ class ABResultsRepository(BaseRepository):
         if not self.client:
             return None
 
-        result = (
+        from src.repositories.provenance import apply_provenance_filter
+
+        query = (
             self.client.table(self.table_name)
             .select("*")
             .eq("experiment_id", str(experiment_id))
             .eq("analysis_method", analysis_method)
+        )
+        result = (
+            apply_provenance_filter(query, include_synthetic)
             .order("computed_at", desc=True)
             .limit(1)
             .execute()

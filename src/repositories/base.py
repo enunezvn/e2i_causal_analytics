@@ -28,6 +28,11 @@ class BaseRepository(ABC, Generic[T]):
     # Subclasses whose table is taggable set this True so ``get_many`` default-excludes
     # synthetic rows; tables without the column keep it False to avoid a 42703 error.
     HAS_PROVENANCE: bool = False
+    # Primary-key column used by get_by_id/update/delete. Most E2I tables use a
+    # UUID ``id``; tables with a natural-key PK override this (#894:
+    # ``causal_paths`` keys on ``path_id`` — ``.eq("id", ...)`` was a latent
+    # 42703 on every id-scoped call).
+    id_column: str = "id"
 
     def __init__(self, supabase_client=None):
         """
@@ -62,7 +67,7 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return None
 
-        query = self.client.table(self.table_name).select("*").eq("id", id)
+        query = self.client.table(self.table_name).select("*").eq(self.id_column, id)
         if split:
             query = query.eq("split_assignment", split)
 
@@ -150,7 +155,12 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return None
 
-        result = await self.client.table(self.table_name).update(updates).eq("id", id).execute()
+        result = (
+            await self.client.table(self.table_name)
+            .update(updates)
+            .eq(self.id_column, id)
+            .execute()
+        )
 
         return self._to_model(parse_supabase_row(result.data[0])) if result.data else None
 
@@ -167,7 +177,7 @@ class BaseRepository(ABC, Generic[T]):
         if not self.client:
             return False
 
-        result = await self.client.table(self.table_name).delete().eq("id", id).execute()
+        result = await self.client.table(self.table_name).delete().eq(self.id_column, id).execute()
 
         return len(result.data) > 0
 

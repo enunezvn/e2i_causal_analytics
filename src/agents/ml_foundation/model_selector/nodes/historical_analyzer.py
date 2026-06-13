@@ -61,6 +61,7 @@ async def _query_historical_experiments(
     """
     try:
         from src.repositories.ml_data_loader import MLDataLoader
+        from src.repositories.provenance import apply_provenance_filter
 
         loader = MLDataLoader()
         client = loader.client
@@ -76,6 +77,10 @@ async def _query_historical_experiments(
         # silently swallowed, so the historical query never actually ran. PostgREST
         # cannot express the ml_training_runs JOIN ml_experiments, so we run two
         # simple filtered queries and join in Python.
+
+        # #894: both tables are is_synthetic-tagged (migration 069) — planted
+        # experiments/runs must not skew historical success rates that drive
+        # real model selection.
         exp_query = (
             client.table("ml_experiments")
             .select("id,problem_type,kpi_category,created_at")
@@ -83,6 +88,7 @@ async def _query_historical_experiments(
         )
         if kpi_category:
             exp_query = exp_query.eq("kpi_category", kpi_category)
+        exp_query = apply_provenance_filter(exp_query)
         # The original SQL applied ORDER BY ex.created_at DESC LIMIT 100 to the JOINED
         # rows, so we must NOT cap the per-table fetches at 100 (capping each side
         # independently would drop valid completed runs of slightly-older experiments).
@@ -98,15 +104,13 @@ async def _query_historical_experiments(
         if not exp_by_id:
             return []
 
-        runs = (
+        runs_query = (
             client.table("ml_training_runs")
             .select("algorithm_name,algorithm_family,primary_metric_value,status,experiment_id")
             .in_("experiment_id", list(exp_by_id.keys()))
             .eq("status", "completed")
-            .execute()
-            .data
-            or []
         )
+        runs = apply_provenance_filter(runs_query).execute().data or []
 
         records: List[Dict[str, Any]] = []
         for run in runs:
@@ -336,6 +340,7 @@ async def _query_algorithm_trends(
 
     try:
         from src.repositories.ml_data_loader import MLDataLoader
+        from src.repositories.provenance import apply_provenance_filter
 
         loader = MLDataLoader()
         client = loader.client
@@ -352,16 +357,17 @@ async def _query_algorithm_trends(
         # JSONB-AVG / GROUP BY, so fetch the completed runs in the window and
         # aggregate per (algorithm, time_period) in Python — producing the same
         # {algorithm, time_period, avg_metric, run_count} shape the SQL returned.
-        runs = (
+        # #894 codex R2: ml_training_runs is is_synthetic-tagged (migration
+        # 069; 720/720 live rows synthetic) — planted runs must not skew
+        # algorithm trend output that drives real model selection.
+        trends_query = (
             client.table("ml_training_runs")
             .select("algorithm,started_at,test_metrics,validation_metrics,status")
             .in_("algorithm", algorithm_names)
             .eq("status", "completed")
             .gte("started_at", older_cutoff.isoformat())
-            .execute()
-            .data
-            or []
         )
+        runs = apply_provenance_filter(trends_query).execute().data or []
 
         metrics_by_group: Dict[tuple, List[float]] = {}
         for run in runs:

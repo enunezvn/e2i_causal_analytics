@@ -366,10 +366,14 @@ async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
         # per-type round-trips. ``ml_model_registry.registered_at`` is the
         # canonical timestamp column (see database/ml/mlops_tables.sql:166);
         # there is no ``created_at`` column on this table.
+        # Provenance (#894): ml_model_registry is is_synthetic-tagged
+        # (migration 069; 720/722 live rows synthetic) — without the predicate
+        # a synthetic row wins the latest-version race on this user route.
         result = await (
             client.table("ml_model_registry")
             .select("model_name,model_version,registered_at")
             .in_("model_name", list(versions.keys()))
+            .eq("is_synthetic", False)
             .order("registered_at", desc=True)
             .execute()
         )

@@ -87,7 +87,7 @@ class TestGetPathsForCause(TestCausalPathRepository):
 
         assert len(result) == 2
         mock_client.table.assert_called_with("causal_paths")
-        query.eq.assert_any_call("cause", "HCP_engagement")
+        query.eq.assert_any_call("start_node", "HCP_engagement")
 
     @pytest.mark.asyncio
     async def test_respects_limit(self, repo, mock_client, sample_paths):
@@ -112,7 +112,7 @@ class TestGetPathsForEffect(TestCausalPathRepository):
         result = await repo.get_paths_for_effect(effect="TRx_growth")
 
         assert len(result) == 1
-        query.eq.assert_any_call("effect", "TRx_growth")
+        query.eq.assert_any_call("end_node", "TRx_growth")
 
     @pytest.mark.asyncio
     async def test_respects_limit(self, repo, mock_client, sample_paths):
@@ -137,7 +137,7 @@ class TestGetPathBetween(TestCausalPathRepository):
         result = await repo.get_path_between(cause="HCP_engagement", effect="TRx_growth")
 
         assert result is not None
-        query.eq.assert_any_call("effect", "TRx_growth")
+        query.eq.assert_any_call("end_node", "TRx_growth")
 
     @pytest.mark.asyncio
     async def test_returns_none_when_not_exists(self, repo, mock_client):
@@ -156,8 +156,8 @@ class TestGetPathBetween(TestCausalPathRepository):
         result = await repo.get_path_between(cause="HCP_engagement", effect="TRx_growth")
 
         assert result is not None
-        query.eq.assert_any_call("cause", "HCP_engagement")
-        query.eq.assert_any_call("effect", "TRx_growth")
+        query.eq.assert_any_call("start_node", "HCP_engagement")
+        query.eq.assert_any_call("end_node", "TRx_growth")
 
     @pytest.mark.asyncio
     async def test_limits_to_one_result(self, repo, mock_client, sample_paths):
