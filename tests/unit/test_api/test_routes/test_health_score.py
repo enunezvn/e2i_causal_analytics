@@ -13,12 +13,21 @@ from fastapi import HTTPException
 # Import route functions and models
 from src.api.routes.health_score import (
     # Enums
+    AgentHealth,
     CheckScope,
+    ComponentHealth,
+    ComponentStatus,
+    DataProvenance,
     HealthGrade,
+    ModelHealth,
     ModelStatus,
+    PipelineHealth,
     PipelineStatus,
     # Helper functions
     _execute_health_check,
+    _fetch_agent_health,
+    _fetch_model_health,
+    _fetch_pipeline_health,
     _generate_mock_health_response,
     _generate_recommendations,
     _get_mock_agent_health,
@@ -50,6 +59,17 @@ def reset_health_history():
     _health_history.clear()
     yield
     _health_history.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_live_health_sources():
+    """Unit tests have no live Supabase. Default the health-source client to None
+    so the dimension fetchers report 'backend unavailable' and the /models,
+    /pipelines, /agents endpoints take the deterministic mock-fallback path.
+    Tests exercising the real-data path patch _health_source_client (fetcher
+    tests) or the fetcher itself (endpoint tests) — the inner patch wins."""
+    with patch("src.api.routes.health_score._health_source_client", return_value=None):
+        yield
 
 
 @pytest.fixture
@@ -274,49 +294,86 @@ async def test_execute_health_check_wires_real_health_client():
 # =============================================================================
 
 
+def _measured_components() -> list:
+    now = datetime.now(timezone.utc).isoformat()
+    return [
+        ComponentHealth(
+            component_name="postgresql",
+            status=ComponentStatus.HEALTHY,
+            latency_ms=11,
+            last_check=now,
+        ),
+        ComponentHealth(
+            component_name="redis", status=ComponentStatus.HEALTHY, latency_ms=2, last_check=now
+        ),
+        ComponentHealth(
+            component_name="falkordb",
+            status=ComponentStatus.DEGRADED,
+            latency_ms=210,
+            last_check=now,
+        ),
+    ]
+
+
+def _patch_measured_component_check():
+    """Patch _execute_health_check to return a MEASURED result with real
+    component_statuses (mirrors the live agent path)."""
+    result = MagicMock(
+        data_provenance="measured",
+        component_statuses=_measured_components(),
+    )
+    return patch(
+        "src.api.routes.health_score._execute_health_check",
+        new=AsyncMock(return_value=result),
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_component_health_success():
-    """Test get_component_health returns component details."""
-    result = await get_component_health()
+    """/components returns MEASURED component details from the real agent path."""
+    with _patch_measured_component_check():
+        result = await get_component_health()
 
-    assert result.total_components > 0
-    assert result.component_health_score >= 0.0
-    assert result.component_health_score <= 1.0
+    assert result.total_components == 3
+    assert 0.0 <= result.component_health_score <= 1.0
     assert len(result.components) == result.total_components
     assert result.check_latency_ms >= 0
+    assert result.data_provenance == DataProvenance.MEASURED
 
 
 @pytest.mark.asyncio
 async def test_get_component_health_score_calculation():
-    """Test component health score is calculated correctly."""
-    result = await get_component_health()
+    """Component health score = (healthy + 0.5*degraded) / total over real data."""
+    with _patch_measured_component_check():
+        result = await get_component_health()
 
-    # Score should be (healthy * 1.0 + degraded * 0.5) / total
     expected_score = (
         result.healthy_count * 1.0 + result.degraded_count * 0.5
     ) / result.total_components
-
     assert abs(result.component_health_score - expected_score) < 0.01
 
 
 @pytest.mark.asyncio
 async def test_get_component_health_counts():
     """Test component health counts are correct."""
-    result = await get_component_health()
+    with _patch_measured_component_check():
+        result = await get_component_health()
 
     total = result.healthy_count + result.degraded_count + result.unhealthy_count
     assert total == result.total_components
 
 
 @pytest.mark.asyncio
-async def test_get_component_health_includes_all_components():
-    """Test all expected components are included."""
-    result = await get_component_health()
+async def test_get_component_health_includes_real_components():
+    """Components come from the real check, not the hardcoded mock list."""
+    with _patch_measured_component_check():
+        result = await get_component_health()
 
     component_names = [c.component_name for c in result.components]
     assert "postgresql" in component_names
     assert "redis" in component_names
-    assert "falkordb" in component_names
+    # The fabricated mock-only component 'opik' (latency 250) must NOT appear.
+    assert not any(c.latency_ms == 250 for c in result.components)
 
 
 # -----------------------------------------------------------------------------
@@ -352,15 +409,15 @@ async def test_get_component_health_discloses_placeholder_provenance(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_get_component_health_serves_placeholder_even_when_agent_available(mock_agent_result):
-    """F1b: /components serves hardcoded _get_mock_component_health() data; it
-    does NOT actually invoke the agent. Mere agent importability is NOT a
-    measurement, so the response must be tagged 'placeholder', never 'measured'."""
-    mock_agent = MagicMock()
-    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
-    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+async def test_get_component_health_measured_when_agent_runs():
+    """REWIRED (was 'serves_placeholder_even_when_agent_available'): /components
+    now INVOKES the real agent and tags genuinely measured component data
+    'measured', never 'placeholder'."""
+    with _patch_measured_component_check():
         result = await get_component_health()
-    assert result.data_provenance == "placeholder"
+    assert result.data_provenance == DataProvenance.MEASURED
+    # No fabricated 'opik @ 250ms' mock component leaks through.
+    assert not any(c.latency_ms == 250 for c in result.components)
 
 
 @pytest.mark.asyncio
@@ -387,15 +444,25 @@ async def test_get_model_health_discloses_placeholder_provenance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_model_health_serves_placeholder_even_when_agent_available(mock_agent_result):
-    """F1b: /models serves hardcoded _get_mock_model_health() (accuracy=0.89,
-    auc=0.92). Mere agent importability is NOT a measurement, so the response
-    must be tagged 'placeholder', never 'measured'."""
-    mock_agent = MagicMock()
-    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
-    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+async def test_get_model_health_measured_from_dashboard():
+    """REWIRED: /models now reads real rows from ml_model_health_dashboard and
+    tags them measured/partial — NEVER the old hardcoded accuracy=0.89/auc=0.92."""
+    real_models = [
+        ModelHealth(
+            model_id="d765b451", model_name="csu_lr_balanced_v1", status=ModelStatus.HEALTHY
+        ),
+        ModelHealth(model_id="5fd7826b", model_name="csu_lr_full_v1", status=ModelStatus.DEGRADED),
+    ]
+    with patch(
+        "src.api.routes.health_score._fetch_model_health",
+        return_value=(real_models, DataProvenance.PARTIAL),
+    ):
         result = await get_model_health()
-    assert result.data_provenance == "placeholder"
+    assert result.data_provenance == DataProvenance.PARTIAL
+    assert result.total_models == 2
+    assert not any(m.model_id == "churn_predictor_v2" for m in result.models)
+    assert not any(m.accuracy == 0.89 for m in result.models)
+    assert not any(m.auc_roc == 0.92 for m in result.models)
 
 
 # -----------------------------------------------------------------------------
@@ -433,15 +500,28 @@ async def test_get_pipeline_health_discloses_placeholder_provenance(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_get_pipeline_health_serves_placeholder_even_when_agent_available(mock_agent_result):
-    """F1b: /pipelines serves hardcoded _get_mock_pipeline_health() data. Mere
-    agent importability is NOT a measurement, so the response must be tagged
-    'placeholder', never 'measured'."""
-    mock_agent = MagicMock()
-    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
-    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+async def test_get_pipeline_health_measured_from_etl():
+    """REWIRED: /pipelines now reads real latest-run-per-pipeline from
+    etl_pipeline_metrics, tagged measured — never the hardcoded mock rows."""
+    real_pipelines = [
+        PipelineHealth(
+            pipeline_name="rwd_ingest",
+            last_run="2026-06-12T00:00:00+00:00",
+            last_success="2026-06-12T00:00:00+00:00",
+            rows_processed=10000,
+            freshness_hours=12.0,
+            status=PipelineStatus.HEALTHY,
+        ),
+    ]
+    with patch(
+        "src.api.routes.health_score._fetch_pipeline_health",
+        return_value=(real_pipelines, DataProvenance.MEASURED),
+    ):
         result = await get_pipeline_health()
-    assert result.data_provenance == "placeholder"
+    assert result.data_provenance == DataProvenance.MEASURED
+    assert result.total_pipelines == 1
+    # The fabricated mock pipelines must not appear.
+    assert not any(p.pipeline_name == "hcp_data_ingestion" for p in result.pipelines)
 
 
 @pytest.mark.asyncio
@@ -468,15 +548,40 @@ async def test_get_agent_health_discloses_placeholder_provenance(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_agent_health_serves_placeholder_even_when_agent_available(mock_agent_result):
-    """F1b: /agents serves hardcoded _get_mock_agent_health() data. Mere agent
-    importability is NOT a measurement, so the response must be tagged
-    'placeholder', never 'measured'."""
-    mock_agent = MagicMock()
-    mock_agent.check_health = AsyncMock(return_value=mock_agent_result)
-    with patch("src.agents.health_score.HealthScoreAgent", return_value=mock_agent):
+async def test_get_agent_health_partial_when_no_recent_telemetry():
+    """REWIRED: /agents now reads the real agent_registry roster; with no recent
+    telemetry it reports PARTIAL with NULL runtime metrics (never a fabricated
+    success_rate=0.98 / latency=150)."""
+    roster_agents = [
+        AgentHealth(
+            agent_name="gap_analyzer",
+            tier=2,
+            available=True,
+            avg_latency_ms=None,
+            success_rate=None,
+            last_invocation=None,
+            invocations_24h=0,
+        ),
+        AgentHealth(
+            agent_name="causal_impact",
+            tier=3,
+            available=True,
+            avg_latency_ms=None,
+            success_rate=None,
+            last_invocation=None,
+            invocations_24h=0,
+        ),
+    ]
+    with patch(
+        "src.api.routes.health_score._fetch_agent_health",
+        return_value=(roster_agents, DataProvenance.PARTIAL),
+    ):
         result = await get_agent_health()
-    assert result.data_provenance == "placeholder"
+    assert result.data_provenance == DataProvenance.PARTIAL
+    assert result.total_agents == 2
+    # Runtime metrics are honestly null, not fabricated.
+    assert all(a.success_rate is None for a in result.agents)
+    assert all(a.avg_latency_ms is None for a in result.agents)
 
 
 # =============================================================================
@@ -1081,3 +1186,211 @@ def test_generate_recommendations_multiple_issues():
     recommendations = _generate_recommendations(0.7, 0.7, 0.7, 0.7)
 
     assert len(recommendations) == 4
+
+
+# =============================================================================
+# REAL-DATA FETCHERS - _fetch_model_health / _fetch_pipeline_health /
+# _fetch_agent_health (the rewire that replaces the hardcoded placeholders)
+# =============================================================================
+
+
+class _FakeQuery:
+    """Minimal stub of the supabase-py query builder; ignores filters and
+    returns the canned rows for the table on execute()."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def gte(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        return MagicMock(data=list(self._rows))
+
+
+class _FakeDB:
+    def __init__(self, tables):
+        self._tables = tables
+
+    def table(self, name):
+        return _FakeQuery(self._tables.get(name, []))
+
+
+def _patch_health_client(db):
+    return patch("src.api.routes.health_score._health_source_client", return_value=db)
+
+
+def test_fetch_model_health_none_when_no_client():
+    """No client -> (empty, None) so the endpoint fails closed, not 500."""
+    with _patch_health_client(None):
+        models, prov = _fetch_model_health()
+    assert models == []
+    assert prov is None
+
+
+def test_fetch_model_health_partial_when_no_metric_values():
+    """Real rows but empty ml_performance_metrics (latest_metric_value NULL):
+    perf fields stay null, provenance is PARTIAL, status is mapped — NEVER the
+    hardcoded accuracy=0.89."""
+    db = _FakeDB(
+        {
+            "ml_model_health_dashboard": [
+                {
+                    "model_id": "d765b451",
+                    "model_name": "csu_lr_balanced_v1",
+                    "model_stage": "production",
+                    "health_status": "healthy",
+                    "latest_metric_value": None,
+                    "primary_metric": "auc",
+                },
+                {
+                    "model_id": "5fd7826b",
+                    "model_name": "csu_lr_full_v1",
+                    "model_stage": "production",
+                    "health_status": "critical",
+                    "latest_metric_value": None,
+                    "primary_metric": "auc",
+                },
+            ]
+        }
+    )
+    with _patch_health_client(db):
+        models, prov = _fetch_model_health()
+    assert prov == DataProvenance.PARTIAL
+    assert len(models) == 2
+    assert models[0].status == ModelStatus.HEALTHY
+    assert models[1].status == ModelStatus.UNHEALTHY
+    assert all(m.accuracy is None and m.auc_roc is None for m in models)
+    assert all(m.accuracy != 0.89 for m in models)
+
+
+def test_fetch_model_health_measured_when_metric_present():
+    """A real auc metric value -> MEASURED, auc_roc populated from the row."""
+    db = _FakeDB(
+        {
+            "ml_model_health_dashboard": [
+                {
+                    "model_id": "m1",
+                    "model_name": "m1",
+                    "model_stage": "production",
+                    "health_status": "healthy",
+                    "latest_metric_value": 0.83,
+                    "primary_metric": "auc",
+                },
+            ]
+        }
+    )
+    with _patch_health_client(db):
+        models, prov = _fetch_model_health()
+    assert prov == DataProvenance.MEASURED
+    assert models[0].auc_roc == 0.83
+
+
+def test_fetch_model_health_unknown_when_empty():
+    """Client present but zero production rows -> UNKNOWN (honest empty)."""
+    with _patch_health_client(_FakeDB({"ml_model_health_dashboard": []})):
+        models, prov = _fetch_model_health()
+    assert models == []
+    assert prov == DataProvenance.UNKNOWN
+
+
+def test_fetch_pipeline_health_latest_per_pipeline_and_status():
+    """Latest run per pipeline; failed status maps FAILED; stale run maps STALE."""
+    db = _FakeDB(
+        {
+            "etl_pipeline_metrics": [
+                {
+                    "pipeline_name": "rwd_ingest",
+                    "run_end": "2019-01-01T00:00:00+00:00",
+                    "run_start": "2019-01-01T00:00:00+00:00",
+                    "records_processed": 5,
+                    "status": "completed",
+                },
+                {
+                    "pipeline_name": "broken",
+                    "run_end": "2026-06-12T00:00:00+00:00",
+                    "run_start": "2026-06-12T00:00:00+00:00",
+                    "records_processed": 0,
+                    "status": "failed",
+                },
+            ]
+        }
+    )
+    with _patch_health_client(db):
+        pipelines, prov = _fetch_pipeline_health()
+    assert prov == DataProvenance.MEASURED
+    by_name = {p.pipeline_name: p for p in pipelines}
+    assert by_name["rwd_ingest"].status == PipelineStatus.STALE  # 2019 run -> very stale
+    assert by_name["broken"].status == PipelineStatus.FAILED
+
+
+def test_fetch_agent_health_partial_null_metrics_without_telemetry():
+    """Roster present, no telemetry rows -> PARTIAL with NULL runtime metrics,
+    NOT a fabricated success_rate."""
+    db = _FakeDB(
+        {
+            "agent_registry": [
+                {"agent_name": "gap_analyzer", "agent_tier": 2, "is_active": True},
+                {"agent_name": "explainer", "agent_tier": 5, "is_active": False},
+            ],
+            "audit_chain_entries": [],
+        }
+    )
+    with _patch_health_client(db):
+        agents, prov = _fetch_agent_health()
+    assert prov == DataProvenance.PARTIAL
+    assert len(agents) == 2
+    assert all(a.success_rate is None and a.avg_latency_ms is None for a in agents)
+    assert agents[0].available is True
+    assert agents[1].available is False
+
+
+def test_fetch_agent_health_measured_with_telemetry():
+    """Recent telemetry -> MEASURED with computed success_rate / latency."""
+    db = _FakeDB(
+        {
+            "agent_registry": [
+                {"agent_name": "gap_analyzer", "agent_tier": 2, "is_active": True},
+            ],
+            "audit_chain_entries": [
+                {
+                    "agent_name": "gap_analyzer",
+                    "duration_ms": 100,
+                    "validation_passed": True,
+                    "created_at": "2026-06-12T00:00:00+00:00",
+                },
+                {
+                    "agent_name": "gap_analyzer",
+                    "duration_ms": 300,
+                    "validation_passed": False,
+                    "created_at": "2026-06-12T01:00:00+00:00",
+                },
+            ],
+        }
+    )
+    with _patch_health_client(db):
+        agents, prov = _fetch_agent_health()
+    assert prov == DataProvenance.MEASURED
+    a = agents[0]
+    assert a.invocations_24h == 2
+    assert a.success_rate == 0.5
+    assert a.avg_latency_ms == 200
+
+
+def test_fetch_agent_health_none_when_no_client():
+    with _patch_health_client(None):
+        agents, prov = _fetch_agent_health()
+    assert agents == []
+    assert prov is None
