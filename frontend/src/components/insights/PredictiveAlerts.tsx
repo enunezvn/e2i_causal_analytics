@@ -10,6 +10,7 @@
 
 import { AlertTriangle, Bell, TrendingDown, Activity, Clock, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toUiSeverity } from '@/lib/severity';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -68,17 +69,15 @@ function getSeverityConfig(severity: AlertDisplay['severity']) {
 }
 
 function transformAlertToDisplay(alert: AlertItem): AlertDisplay {
-  const severityMap: Record<string, AlertDisplay['severity']> = {
-    critical: 'critical',
-    warning: 'warning',
-    info: 'info',
-  };
-
   return {
     id: alert.id,
     title: alert.title,
     description: alert.description ?? '',
-    severity: severityMap[alert.severity] ?? 'info',
+    // `alert.severity` is a bare string on the wire and can carry the
+    // DriftSeverity vocabulary (none/low/medium/high/critical), not just
+    // critical/warning/info. The shared mapper collapses it correctly —
+    // notably "high"/"medium" -> "warning" instead of silently -> "info".
+    severity: toUiSeverity(alert.severity),
     type: alert.alert_type,
     triggeredAt: alert.triggered_at
       ? new Date(alert.triggered_at).toLocaleString()

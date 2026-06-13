@@ -29,6 +29,7 @@ import * as React from 'react';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth-store';
 import { queryClient } from '@/lib/query-client';
+import { logger } from '@/lib/logger';
 import type { AuthError as SupabaseAuthError } from '@supabase/supabase-js';
 
 // =============================================================================
@@ -185,7 +186,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
 
-      console.debug('[Auth] State change:', event);
+      logger.debug('[Auth] State change:', event);
 
       switch (event) {
         case 'SIGNED_IN':
@@ -268,7 +269,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         }
 
         // Auth state change listener will handle setting the session
-        console.debug('[Auth] Login successful:', data.user?.email);
+        logger.debug('[Auth] Login successful:', data.user?.email);
       } catch (err) {
         setLoading(false);
         throw err;
@@ -298,7 +299,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       // Auth state change listener will handle clearing state
-      console.debug('[Auth] Logout successful');
+      logger.debug('[Auth] Logout successful');
     } catch (err) {
       setLoading(false);
       throw err;
@@ -335,9 +336,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // Check if email confirmation is required
         if (data.user && !data.session) {
           // User needs to confirm email
-          console.debug('[Auth] Signup successful, email confirmation required');
+          logger.debug('[Auth] Signup successful, email confirmation required');
         } else {
-          console.debug('[Auth] Signup successful:', data.user?.email);
+          logger.debug('[Auth] Signup successful:', data.user?.email);
         }
       } catch (err) {
         setLoading(false);
@@ -368,7 +369,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           throw new Error(error.message);
         }
 
-        console.debug('[Auth] Password reset email sent to:', email);
+        logger.debug('[Auth] Password reset email sent to:', email);
       } finally {
         setLoading(false);
       }
@@ -397,7 +398,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           throw new Error(error.message);
         }
 
-        console.debug('[Auth] Password updated successfully');
+        logger.debug('[Auth] Password updated successfully');
       } finally {
         setLoading(false);
       }

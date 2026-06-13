@@ -32,9 +32,32 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: '^_',
         },
       ],
+      // Console hygiene (#18): raw console.log/debug/info leak dev-noise and
+      // payloads to the production console. Route them through `@/lib/logger`
+      // (which no-ops in prod) instead. warn/error are allowed — genuine error
+      // reporting must survive production. A `warn` (not `error`) keeps this
+      // non-disruptive: it surfaces regressions without breaking the build.
+      'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
-  // Relaxed rules for test files
+  // The logger is the single sanctioned console boundary.
+  {
+    files: ['src/lib/logger.ts'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
+  // Dev-only tooling. src/mocks/** is the MSW harness whose console.info
+  // diagnostics are structurally gated to MODE === 'development' (see
+  // initMSW) and can never reach a production browser — they are intentional
+  // dev tooling, not production noise.
+  {
+    files: ['src/mocks/**/*.{ts,tsx}'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
+  // Relaxed rules for test files (tests legitimately spy on/assert console).
   {
     files: ['**/*.test.{ts,tsx}', '**/*.spec.{ts,tsx}', 'e2e/**/*.ts'],
     rules: {
@@ -42,6 +65,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': 'warn',
       '@typescript-eslint/no-unsafe-function-type': 'warn',
       '@typescript-eslint/no-this-alias': 'warn',
+      'no-console': 'off',
     },
   },
 )

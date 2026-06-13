@@ -443,16 +443,29 @@ describe('useModelDetail', () => {
   });
 
   it('reports loading state correctly', async () => {
-    vi.mocked(predictionsApi.getModelHealth).mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve(mockModelHealthResponse), 100))
-    );
+    // Use a deferred promise we resolve explicitly instead of an arbitrary
+    // setTimeout. A real timer races the synchronous `isLoading === true`
+    // assertion under load (the timer can fire — or the query can flush —
+    // before/after the assertion non-deterministically), which made this
+    // test load-sensitive/flaky. Holding the promise open keeps the loading
+    // state deterministic until we choose to resolve it.
+    let resolveHealth!: (value: typeof mockModelHealthResponse) => void;
+    const healthPromise = new Promise<typeof mockModelHealthResponse>((resolve) => {
+      resolveHealth = resolve;
+    });
+    vi.mocked(predictionsApi.getModelHealth).mockReturnValueOnce(healthPromise);
     vi.mocked(predictionsApi.getModelInfo).mockResolvedValueOnce(mockModelInfoResponse);
     const { wrapper } = createWrapper();
 
     const { result } = renderHook(() => useModelDetail('churn_model'), { wrapper });
 
+    // Loading is held deterministically while the health request is in-flight
+    // (the deferred promise never settles until we resolve it below), so this
+    // synchronous assertion no longer races a timer.
     expect(result.current.isLoading).toBe(true);
 
+    // Resolve the in-flight request; loading must clear via an event-based wait.
+    resolveHealth(mockModelHealthResponse);
     await waitFor(() => expect(result.current.isLoading).toBe(false));
   });
 

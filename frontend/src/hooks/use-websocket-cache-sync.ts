@@ -17,7 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { useGraphWebSocket, type UseWebSocketReturn } from './use-websocket';
 import { queryKeys } from '@/lib/query-client';
-import { env } from '@/config/env';
+import { logger } from '@/lib/logger';
 
 // =============================================================================
 // TYPES
@@ -188,9 +188,7 @@ function getQueryKeysForEvent(event: GraphStreamPayload): QueryKey[] {
 
     default:
       // Unknown event type - log for debugging but don't invalidate
-      if (env.isDev) {
-        console.debug(`[CacheSync] Unknown event type: ${event_type}`);
-      }
+      logger.debug(`[CacheSync] Unknown event type: ${event_type}`);
   }
 
   return keysToInvalidate;
@@ -259,9 +257,7 @@ export function useWebSocketCacheSync(
     // Parse keys back from JSON strings
     const queryKeys = keysToInvalidate.map((k) => JSON.parse(k) as QueryKey);
 
-    if (env.isDev) {
-      console.debug(`[CacheSync] Invalidating ${queryKeys.length} query keys:`, queryKeys);
-    }
+    logger.debug(`[CacheSync] Invalidating ${queryKeys.length} query keys:`, queryKeys);
 
     // Invalidate each key
     for (const key of queryKeys) {
@@ -286,9 +282,7 @@ export function useWebSocketCacheSync(
         data === null ||
         !('event_type' in data)
       ) {
-        if (env.isDev) {
-          console.debug('[CacheSync] Ignoring non-graph message:', data);
-        }
+        logger.debug('[CacheSync] Ignoring non-graph message:', data);
         return;
       }
 
@@ -296,9 +290,7 @@ export function useWebSocketCacheSync(
       // Finding #2: expose the last event as reactive state so consumers re-render.
       setLastEvent(event);
 
-      if (env.isDev) {
-        console.debug(`[CacheSync] Received event: ${event.event_type}`, event.payload);
-      }
+      logger.debug(`[CacheSync] Received event: ${event.event_type}`, event.payload);
 
       // Call custom event handler
       onEvent?.(event);
@@ -393,9 +385,7 @@ export function invalidateCacheForEvent(
 
   const keysToInvalidate = getQueryKeysForEvent(event);
 
-  if (env.isDev) {
-    console.debug(`[CacheSync] Manual invalidation for ${eventType}:`, keysToInvalidate);
-  }
+  logger.debug(`[CacheSync] Manual invalidation for ${eventType}:`, keysToInvalidate);
 
   for (const key of keysToInvalidate) {
     void queryClient.invalidateQueries({ queryKey: key });
