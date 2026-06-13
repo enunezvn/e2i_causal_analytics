@@ -11,8 +11,17 @@ non-admin user relies on self-service recovery.
 ## What's already in place (PR #918)
 
 The tracked `docker/supabase/docker-compose.override.yml` `auth:` service now interpolates the
-SMTP vars from the live `/opt/supabase/docker/.env`. **No credentials live in git.** Until
-`GOTRUE_SMTP_HOST` is set, the block is inert (defaults are empty) and behavior is unchanged.
+the `.env` vars `SMTP_*`, `SITE_URL`, `ADDITIONAL_REDIRECT_URLS`, `MAILER_URLPATHS_RECOVERY`.
+**No credentials live in git.** The DIAGNOSED root cause (2026-06-13): the live `.env` `SMTP_*`
+values are Supabase's template **placeholders** — `SMTP_HOST=supabase-mail` (the Inbucket dev
+catcher), `SMTP_ADMIN_EMAIL=admin@example.com`, `SMTP_SENDER_NAME=fake_sender` — and the
+`supabase-mail` container is **not running**, so GoTrue can't connect → `POST /auth/v1/recover`
+returns 500. `SITE_URL=http://138.197.4.36` (the droplet IP), so even with working SMTP the reset
+link would point at the wrong origin instead of `https://eznomics.site`.
+
+> NOTE: configure SMTP via the **`SMTP_*`** env vars (the base `docker-compose.yml` already maps
+> them to the auth service's `GOTRUE_SMTP_*`). Do NOT add `GOTRUE_SMTP_*` to the override — that
+> would clobber the base mapping with empties.
 
 ## Activation (requires an SMTP provider + credentials — a USER decision)
 
@@ -25,18 +34,19 @@ Pick a provider and obtain SMTP creds. Options, cheapest-faithful first:
 | **Mailgun / Postmark** | Similar transactional model; Postmark has good deliverability. |
 | **Gmail SMTP** | `smtp.gmail.com:587` + an App Password. Fine for a single low-volume reviewer flow; not for production scale. |
 
-Then, on the droplet, add to `/opt/supabase/docker/.env` (NOT the repo):
+Then, on the droplet, REPLACE the placeholders in `/opt/supabase/docker/.env` (NOT the repo):
 
 ```
-GOTRUE_SMTP_HOST=smtp.sendgrid.net
-GOTRUE_SMTP_PORT=587
-GOTRUE_SMTP_USER=apikey
-GOTRUE_SMTP_PASS=<provider secret>
-GOTRUE_SMTP_ADMIN_EMAIL=no-reply@eznomics.site   # verified sender
-GOTRUE_SMTP_SENDER_NAME=E2I Causal Analytics
-# Optional overrides (defaults already point at the public origin):
-# GOTRUE_SITE_URL=https://eznomics.site
-# GOTRUE_MAILER_URLPATHS_RECOVERY=/reset-password
+SMTP_HOST=smtp.sendgrid.net
+SMTP_PORT=587
+SMTP_USER=apikey
+SMTP_PASS=<provider secret>
+SMTP_ADMIN_EMAIL=no-reply@eznomics.site   # verified sender
+SMTP_SENDER_NAME=E2I Causal Analytics
+# Fix the reset-link origin (live default is the bare droplet IP):
+SITE_URL=https://eznomics.site
+MAILER_URLPATHS_RECOVERY=/reset-password
+ADDITIONAL_REDIRECT_URLS=https://eznomics.site/reset-password
 ```
 
 Apply + verify:
@@ -51,7 +61,7 @@ curl -s -X POST https://eznomics.site/auth/v1/recover \
 
 Then walk the UI flow: `/forgot-password` → receive email → click link → `/reset-password` →
 log in with the new password. The reset link must land on the public origin (covered by
-`GOTRUE_SITE_URL` / `GOTRUE_URI_ALLOW_LIST`).
+`SITE_URL` + `ADDITIONAL_REDIRECT_URLS` above).
 
 ## Status
 
