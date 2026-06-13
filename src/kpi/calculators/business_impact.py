@@ -130,7 +130,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         result = self._execute_query("business_impact_mau_fallback", [])
         if result and result[0].get("mau") is not None:
             return float(result[0]["mau"])
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-001 unavailable: no data for monthly active users")
 
     def _calc_wau(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-002: Weekly Active Users.
@@ -146,7 +146,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         result = self._execute_query("business_impact_wau_fallback", [])
         if result and result[0].get("wau") is not None:
             return float(result[0]["wau"])
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-002 unavailable: no data for weekly active users")
 
     def _calc_patient_touch_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-003: Patient Touch Rate.
@@ -185,7 +185,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         result = self._execute_query("business_impact_hcp_coverage", [])
         if result and result[0].get("coverage") is not None:
             return float(result[0]["coverage"])
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-004 unavailable: no data for HCP coverage")
 
     def _calc_trx(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-005: Total Prescriptions (TRx).
@@ -196,7 +196,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         result = self._execute_query("business_impact_trx", [brand])
         if result and result[0].get("trx") is not None:
             return float(result[0]["trx"])
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-005 unavailable: no data for total prescriptions (TRx)")
 
     def _calc_nrx(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-006: New Prescriptions (NRx).
@@ -207,7 +207,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         result = self._execute_query("business_impact_nrx", [brand])
         if result and result[0].get("nrx") is not None:
             return float(result[0]["nrx"])
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-006 unavailable: no data for new prescriptions (NRx)")
 
     def _calc_nbrx(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-007: New-to-Brand Prescriptions (NBRx).
@@ -217,12 +217,18 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         brand = context.get("brand")
         if not brand:
-            return 0.0
+            # NBRx is new-to-brand by definition: with no brand the metric is undefined,
+            # not zero. Fail loud rather than fabricate a plausible 0 prescriptions.
+            raise RuntimeError(
+                "KPI WS3-BI-007 unavailable: no brand specified for new-to-brand prescriptions (NBRx)"
+            )
 
         result = self._execute_query("business_impact_nbrx", [brand])
         if result and result[0].get("nbrx") is not None:
             return float(result[0]["nbrx"])
-        return 0.0
+        raise RuntimeError(
+            "KPI WS3-BI-007 unavailable: no data for new-to-brand prescriptions (NBRx)"
+        )
 
     def _calc_trx_share(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-008: TRx Share.
@@ -231,12 +237,14 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """
         brand = context.get("brand")
         if not brand:
-            return 0.0
+            # TRx Share is a brand's share of category: with no brand the metric is
+            # undefined, not zero. Fail loud rather than fabricate a plausible 0% share.
+            raise RuntimeError("KPI WS3-BI-008 unavailable: no brand specified for TRx share")
 
         result = self._execute_query("business_impact_trx_share", [brand])
         if result and result[0].get("share") is not None:
             return float(result[0]["share"])
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-008 unavailable: no data for TRx share")
 
     def _calc_conversion_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-009: Conversion Rate.
@@ -246,7 +254,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         result = self._execute_query("business_impact_conversion_rate", [])
         if result and result[0].get("conversion_rate") is not None:
             return float(result[0]["conversion_rate"])
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-009 unavailable: no data for conversion rate")
 
     def _calc_roi(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-010: Return on Investment.
@@ -263,7 +271,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         if result and result[0].get("avg_roi") is not None:
             return float(result[0]["avg_roi"])
 
-        return 0.0
+        raise RuntimeError("KPI WS3-BI-010 unavailable: no data for return on investment (ROI)")
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a vetted KPI query by id and return results.

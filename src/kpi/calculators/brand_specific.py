@@ -139,7 +139,13 @@ class BrandSpecificCalculator(KPICalculatorBase):
         result = self._execute_query("brand_specific_remi_intent_delta_fallback", [])
         if result and result[0].get("intent_delta") is not None:
             return float(result[0]["intent_delta"])
-        return 0.0
+        # Both the primary view and the fallback yielded no intent-delta row -> fail loud.
+        # A genuine 0.0 delta (HCPs scored, no net change) is returned by the branches
+        # above; this path means there is no scored intent cohort at all, NOT a real zero.
+        raise RuntimeError(
+            "KPI BR-002 unavailable: no intent-to-prescribe data "
+            "(primary view and fallback both returned nothing)"
+        )
 
     def _calc_fabhalta_pnh_tested(self, context: dict[str, Any]) -> float:
         """Calculate BR-003: Fabhalta - % PNH Tested.
@@ -169,7 +175,12 @@ class BrandSpecificCalculator(KPICalculatorBase):
         result = self._execute_query("brand_specific_kisqali_dx_adoption", [])
         if result and result[0].get("median_days") is not None:
             return float(result[0]["median_days"])
-        return 0.0
+        # No dx->first-Rx pairs -> fail loud (a fabricated 0 days would read as an instant,
+        # perfect adoption under the lower-is-better band). A genuine median of 0.0 from the
+        # query is still returned by the branch above.
+        raise RuntimeError(
+            "KPI BR-004 unavailable: no data for Kisqali dx-to-prescription median days"
+        )
 
     def _calc_kisqali_oncologist_reach(self, context: dict[str, Any]) -> float:
         """Calculate BR-005: Kisqali - Oncologist Reach.
@@ -179,7 +190,10 @@ class BrandSpecificCalculator(KPICalculatorBase):
         result = self._execute_query("brand_specific_kisqali_oncologist_reach", [])
         if result and result[0].get("reach") is not None:
             return float(result[0]["reach"])
-        return 0.0
+        # No oncologist universe -> fail loud (a fabricated 0% reach would be mistaken for
+        # a real "no oncologist engaged"). A genuine 0.0 reach (universe exists, none
+        # engaged) is returned by the branch above.
+        raise RuntimeError("KPI BR-005 unavailable: no data for Kisqali oncologist reach")
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Run a vetted statement from kpi_query_registry by id.

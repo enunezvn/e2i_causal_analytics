@@ -101,12 +101,19 @@ class TestDataQualityCalculator:
         assert result.status == KPIStatus.CRITICAL
 
     def test_calculate_handles_empty_result(self, calculator, sample_kpi):
-        """Test graceful handling of empty query results."""
+        """Empty / no-reference-universe result now FAILS LOUD (honest error),
+        never a fabricated 0.0 (#421/#439/#574 hardening). total<=0 means no
+        reference universe -> the coverage ratio is undefined, so the calculator
+        raises and `calculate()` surfaces it as KPIResult(value=None, error=...).
+        (A genuine 0 covered over a real total>0 still returns 0.0 -- locked in
+        test_data_quality_failloud.py.)"""
         calculator._execute_query = Mock(return_value=[{"covered": 0, "total": 0}])
 
         result = calculator.calculate(sample_kpi)
 
-        assert result.value == 0.0
+        assert result.value is None
+        assert result.error is not None
+        assert "unavailable" in result.error
 
     def test_calculate_handles_exception(self, calculator, sample_kpi):
         """Test graceful handling of calculation exceptions."""

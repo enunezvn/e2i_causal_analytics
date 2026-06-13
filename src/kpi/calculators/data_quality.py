@@ -139,9 +139,13 @@ class DataQualityCalculator(KPICalculatorBase):
         """
         brand = context.get("brand")
         result = self._execute_query("data_quality_source_coverage_patients", [brand])
-        if result and result[0]["total"] > 0:
-            return float(result[0]["covered"] / result[0]["total"])
-        return 0.0
+        if not result or result[0].get("total") is None or result[0]["total"] <= 0:
+            raise RuntimeError(
+                "KPI WS1-DQ-001 unavailable: no reference patients to compute "
+                "source coverage over (empty result or zero reference universe)"
+            )
+        # A genuine 0 covered over a real reference universe is a legitimate 0.0 coverage.
+        return float(result[0]["covered"] / result[0]["total"])
 
     def _calc_source_coverage_hcps(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-002: Source Coverage - HCPs.
@@ -157,9 +161,13 @@ class DataQualityCalculator(KPICalculatorBase):
         HCP coverage needs a brand-attributable coverage source (future).
         """
         result = self._execute_query("data_quality_source_coverage_hcps", [])
-        if result and result[0]["total"] > 0:
-            return float(result[0]["covered"] / result[0]["total"])
-        return 0.0
+        if not result or result[0].get("total") is None or result[0]["total"] <= 0:
+            raise RuntimeError(
+                "KPI WS1-DQ-002 unavailable: no reference HCP universe to compute "
+                "source coverage over (empty result or zero reference universe)"
+            )
+        # A genuine 0 covered over a real reference universe is a legitimate 0.0 coverage.
+        return float(result[0]["covered"] / result[0]["total"])
 
     def _calc_cross_source_match(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-003: Cross-source Match Rate.
@@ -167,9 +175,10 @@ class DataQualityCalculator(KPICalculatorBase):
         Uses v_kpi_cross_source_match view.
         """
         result = self._execute_query("data_quality_cross_source_match", [])
-        if result:
-            return float(result[0]["match_rate"])
-        return 0.0
+        if not result or result[0].get("match_rate") is None:
+            raise RuntimeError("KPI WS1-DQ-003 unavailable: no data for cross-source match rate")
+        # A genuine 0.0 match_rate (sources exist but none matched) is legitimate.
+        return float(result[0]["match_rate"])
 
     def _calc_stacking_lift(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-004: Stacking Lift.
@@ -177,9 +186,10 @@ class DataQualityCalculator(KPICalculatorBase):
         Uses v_kpi_stacking_lift view.
         """
         result = self._execute_query("data_quality_stacking_lift", [])
-        if result:
-            return float(result[0]["lift_score"])
-        return 1.0  # Neutral lift
+        if not result or result[0].get("lift_score") is None:
+            raise RuntimeError("KPI WS1-DQ-004 unavailable: no data for stacking lift")
+        # A genuine realized lift_score (including a real 1.0 neutral or < 1.0) is returned.
+        return float(result[0]["lift_score"])
 
     def _calc_completeness_pass_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-005: Completeness Pass Rate.
@@ -187,9 +197,10 @@ class DataQualityCalculator(KPICalculatorBase):
         Formula: records_passing_completeness / total_records
         """
         result = self._execute_query("data_quality_completeness_pass_rate", [])
-        if result:
-            return result[0]["pass_rate"] or 0.0
-        return 0.0
+        if not result or result[0].get("pass_rate") is None:
+            raise RuntimeError("KPI WS1-DQ-005 unavailable: no data for completeness pass rate")
+        # A genuine 0.0 pass_rate (records exist but none passed) is a legitimate value.
+        return float(result[0]["pass_rate"])
 
     def _calc_geographic_consistency(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-006: Geographic Consistency.
@@ -207,9 +218,11 @@ class DataQualityCalculator(KPICalculatorBase):
         """
         brand = context.get("brand")
         result = self._execute_query("data_quality_geographic_consistency", [brand])
-        if result and result[0]["max_gap"] is not None:
-            return float(result[0]["max_gap"])
-        return 0.0
+        if not result or result[0].get("max_gap") is None:
+            raise RuntimeError("KPI WS1-DQ-006 unavailable: no data for geographic consistency gap")
+        # A genuine 0.0 max_gap (source distribution perfectly matches the universe) is
+        # a legitimate best-case value and is returned, not raised.
+        return float(result[0]["max_gap"])
 
     def _calc_data_lag(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-007: Data Lag (Median).
@@ -218,9 +231,10 @@ class DataQualityCalculator(KPICalculatorBase):
         Returns median lag in days (lower is better).
         """
         result = self._execute_query("data_quality_data_lag", [])
-        if result:
-            return float(result[0]["median_lag_days"])
-        return 0.0
+        if not result or result[0].get("median_lag_days") is None:
+            raise RuntimeError("KPI WS1-DQ-007 unavailable: no data for median data lag")
+        # A genuine 0.0 median lag (data lands same-day) is a legitimate best-case value.
+        return float(result[0]["median_lag_days"])
 
     def _calc_label_quality(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-008: Label Quality (IAA) as the corpus-level GENERALIZED
@@ -315,9 +329,10 @@ class DataQualityCalculator(KPICalculatorBase):
         as a 'median'.
         """
         result = self._execute_query("data_quality_time_to_release", [])
-        if result:
-            return float(result[0]["avg_ttr_hours"])
-        return 0.0
+        if not result or result[0].get("avg_ttr_hours") is None:
+            raise RuntimeError("KPI WS1-DQ-009 unavailable: no data for time-to-release")
+        # A genuine 0.0 hours (instantaneous release) is a legitimate best-case value.
+        return float(result[0]["avg_ttr_hours"])
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Run a vetted KPI statement via the `kpi_query` allowlist RPC.

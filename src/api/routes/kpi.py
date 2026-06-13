@@ -41,6 +41,12 @@ from src.api.schemas.kpi import (
     WorkstreamListResponse,
 )
 from src.kpi.calculator import KPICalculator
+from src.kpi.calculators.brand_specific import BrandSpecificCalculator
+from src.kpi.calculators.business_impact import BusinessImpactCalculator
+from src.kpi.calculators.causal_metrics import CausalMetricsCalculator
+from src.kpi.calculators.data_quality import DataQualityCalculator
+from src.kpi.calculators.model_performance import ModelPerformanceCalculator
+from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
 from src.kpi.models import CausalLibrary, Workstream
 from src.kpi.registry import get_registry
 
@@ -63,14 +69,42 @@ router = APIRouter(
 # =============================================================================
 
 
+#: Workstream -> per-workstream calculator class. Registered on every
+#: KPICalculator so the KPI grid / single-KPI / batch endpoints compute real
+#: values instead of falling through to the unimplemented generic table path
+#: (which returns honest None+error). The calculators were hardened to FAIL-LOUD
+#: on missing data (no fabricated 0.0/0.5 placeholders — #421/#439/#574/#577),
+#: so registering them cannot resurface the masked-failure risk that originally
+#: kept them unregistered. Under E2I_KPI_INCLUDE_SYNTHETIC they read the
+#: synthetic-gold twins (see src/kpi/synthetic_mode.py).
+_WORKSTREAM_CALCULATORS = {
+    Workstream.WS1_DATA_QUALITY: DataQualityCalculator,
+    Workstream.WS1_MODEL_PERFORMANCE: ModelPerformanceCalculator,
+    Workstream.WS2_TRIGGERS: TriggerPerformanceCalculator,
+    Workstream.WS3_BUSINESS: BusinessImpactCalculator,
+    Workstream.BRAND_SPECIFIC: BrandSpecificCalculator,
+    Workstream.CAUSAL_METRICS: CausalMetricsCalculator,
+}
+
+
 def get_kpi_calculator() -> KPICalculator:
-    """Get KPI calculator instance.
+    """Get KPI calculator instance with all per-workstream calculators registered.
 
     Returns:
         KPICalculator instance
     """
-    # In production, this would be a singleton or use proper DI
-    return KPICalculator(db_connection=get_supabase())
+    # In production, this would be a singleton or use proper DI.
+    db = get_supabase()
+    calc = KPICalculator(db_connection=db)
+    for workstream, calculator_cls in _WORKSTREAM_CALCULATORS.items():
+        # Pass the SAME api-layer client (get_supabase supports SUPABASE_KEY, the
+        # calculators' lazy get_supabase_client() does NOT — the #845 key-surface
+        # trap) so a SUPABASE_KEY-only deployment doesn't fail at lazy client
+        # creation. db may be None when unconfigured -> the calculator's lazy
+        # db_client property still applies as a fallback. Calculators fail-loud on
+        # missing data, never a fabricated placeholder.
+        calc.register_calculator(workstream, calculator_cls(db_client=db))
+    return calc
 
 
 # =============================================================================
