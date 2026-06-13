@@ -742,13 +742,14 @@ async def test_get_agent_health_empty_agents():
 
 @pytest.mark.asyncio
 async def test_get_health_history_empty():
-    """Test get_health_history with empty history."""
+    """Empty history must report avg=None and trend='unknown' (NOT a fabricated
+    0.0 average / 'stable' trend the dashboard would render as a real metric)."""
     result = await get_health_history(limit=20)
 
     assert result.total_checks == 0
     assert len(result.checks) == 0
-    assert result.avg_health_score == 0.0
-    assert result.trend == "stable"
+    assert result.avg_health_score is None
+    assert result.trend == "unknown"
 
 
 @pytest.mark.asyncio

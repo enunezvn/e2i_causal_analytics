@@ -1230,7 +1230,8 @@ export const HealthHistoryItemWireSchema = z.object({
 export const HealthHistoryResponseWireSchema = z.object({
   total_checks: z.number().int().nonnegative(),
   checks: z.array(HealthHistoryItemWireSchema),
-  avg_health_score: z.number(),
+  // null when there is no history (not a fabricated 0.0).
+  avg_health_score: z.number().nullable(),
   trend: z.string(),
 });
 

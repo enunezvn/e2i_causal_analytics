@@ -356,8 +356,13 @@ class HealthHistoryResponse(BaseModel):
 
     total_checks: int = Field(..., description="Total checks in history")
     checks: List[HealthHistoryItem] = Field(..., description="Historical records")
-    avg_health_score: float = Field(..., description="Average health score")
-    trend: str = Field(..., description="Trend direction (improving, stable, declining)")
+    avg_health_score: Optional[float] = Field(
+        default=None, description="Average health score, null when there is no history"
+    )
+    trend: str = Field(
+        default="unknown",
+        description="Trend direction (improving, stable, declining, unknown)",
+    )
 
 
 class HealthServiceStatus(BaseModel):
@@ -725,10 +730,13 @@ async def get_health_history(
         for h in history
     ]
 
-    avg_score = sum(h.overall_health_score for h in history) / len(history) if history else 0.0
+    # No history -> no average (None), NOT a fabricated 0.0 the dashboard would
+    # render as a real metric.
+    avg_score = sum(h.overall_health_score for h in history) / len(history) if history else None
 
-    # Calculate trend
-    trend = "stable"
+    # Trend is "unknown" until there are enough checks (>=3) to compute one — a
+    # default "stable" would fabricate a trend from zero/one/two data points.
+    trend = "unknown"
     if len(history) >= 3:
         recent_avg = sum(h.overall_health_score for h in history[-3:]) / 3
         earlier_avg = sum(h.overall_health_score for h in history[:3]) / 3
@@ -736,6 +744,8 @@ async def get_health_history(
             trend = "improving"
         elif recent_avg < earlier_avg - 5:
             trend = "declining"
+        else:
+            trend = "stable"
 
     return HealthHistoryResponse(
         total_checks=len(history),

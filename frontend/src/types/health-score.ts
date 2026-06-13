@@ -323,9 +323,9 @@ export interface HealthHistoryResponse {
   /** Historical records */
   checks: HealthHistoryItem[];
   /** Average health score */
-  avg_health_score: number;
-  /** Trend direction */
-  trend: 'improving' | 'stable' | 'declining';
+  avg_health_score: number | null;
+  /** Trend direction; 'unknown' when there are too few checks to compute one */
+  trend: 'improving' | 'stable' | 'declining' | 'unknown';
 }
 
 /**
