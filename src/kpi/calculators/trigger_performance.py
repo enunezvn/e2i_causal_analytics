@@ -119,7 +119,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         result = self._execute_query("trigger_performance_precision", [])
         if result and result[0].get("precision") is not None:
             return float(result[0]["precision"])
-        return 0.0
+        raise RuntimeError("KPI WS2-TR-001 unavailable: no data for trigger precision")
 
     def _calc_trigger_recall(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-002: Trigger Recall.
@@ -129,7 +129,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         result = self._execute_query("trigger_performance_recall", [])
         if result and result[0].get("recall") is not None:
             return float(result[0]["recall"])
-        return 0.0
+        raise RuntimeError("KPI WS2-TR-002 unavailable: no data for trigger recall")
 
     def _calc_action_rate_uplift(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-003: Action Rate Uplift.
@@ -170,7 +170,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         result = self._execute_query("trigger_performance_acceptance_rate", [])
         if result and result[0].get("acceptance_rate") is not None:
             return float(result[0]["acceptance_rate"])
-        return 0.0
+        raise RuntimeError("KPI WS2-TR-004 unavailable: no data for acceptance rate")
 
     def _calc_false_alert_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-005: False Alert Rate.
@@ -181,7 +181,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         result = self._execute_query("trigger_performance_false_alert_rate", [])
         if result and result[0].get("false_alert_rate") is not None:
             return float(result[0]["false_alert_rate"])
-        return 0.0
+        raise RuntimeError("KPI WS2-TR-005 unavailable: no data for false alert rate")
 
     def _calc_override_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-006: Override Rate.
@@ -192,7 +192,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         result = self._execute_query("trigger_performance_override_rate", [])
         if result and result[0].get("override_rate") is not None:
             return float(result[0]["override_rate"])
-        return 0.0
+        raise RuntimeError("KPI WS2-TR-006 unavailable: no data for override rate")
 
     def _calc_lead_time(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-007: Lead Time.
@@ -203,7 +203,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         result = self._execute_query("trigger_performance_lead_time", [])
         if result and result[0].get("median_lead_time") is not None:
             return float(result[0]["median_lead_time"])
-        return 0.0
+        raise RuntimeError("KPI WS2-TR-007 unavailable: no data for lead time")
 
     def _calc_change_fail_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-008: Change-Fail Rate (CFR).
@@ -214,7 +214,7 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         result = self._execute_query("trigger_performance_cfr", [])
         if result and result[0].get("cfr") is not None:
             return float(result[0]["cfr"])
-        return 0.0
+        raise RuntimeError("KPI WS2-TR-008 unavailable: no data for change-fail rate")
 
     def _execute_query(self, query_id: str, params: list[Any]) -> list[dict[str, Any]] | None:
         """Execute a vetted KPI query via the kpi_query allowlist RPC.
