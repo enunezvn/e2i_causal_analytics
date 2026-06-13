@@ -1113,20 +1113,20 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
     cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     try:
         agg: Dict[str, Dict[str, Any]] = {}
-        for e in telemetry:
-            name = e.get("agent_name")
+        for entry in telemetry:
+            name = entry.get("agent_name")
             if not name:
                 continue
             d = agg.setdefault(
                 name, {"latencies": [], "ok": 0, "total": 0, "last": None, "count_24h": 0}
             )
             d["total"] += 1
-            dur = e.get("duration_ms")
+            dur = entry.get("duration_ms")
             if isinstance(dur, (int, float)) and dur > 0:
                 d["latencies"].append(dur)
-            if e.get("validation_passed") is not False:  # True or None -> counted ok
+            if entry.get("validation_passed") is not False:  # True or None -> counted ok
                 d["ok"] += 1
-            ts = e.get("created_at")
+            ts = entry.get("created_at")
             if ts:
                 if d["last"] is None or str(ts) > str(d["last"]):
                     d["last"] = ts
