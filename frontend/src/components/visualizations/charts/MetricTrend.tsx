@@ -75,27 +75,9 @@ export interface MetricTrendProps {
   valueFormatter?: (value: number) => string;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_DATA: MetricDataPoint[] = [
-  { timestamp: '2024-01-01', value: 0.85 },
-  { timestamp: '2024-01-08', value: 0.87 },
-  { timestamp: '2024-01-15', value: 0.84 },
-  { timestamp: '2024-01-22', value: 0.89 },
-  { timestamp: '2024-01-29', value: 0.91 },
-  { timestamp: '2024-02-05', value: 0.88 },
-  { timestamp: '2024-02-12', value: 0.92 },
-  { timestamp: '2024-02-19', value: 0.90, annotation: 'Model retrained' },
-  { timestamp: '2024-02-26', value: 0.93 },
-  { timestamp: '2024-03-04', value: 0.94 },
-];
-
-const SAMPLE_THRESHOLDS: MetricThreshold[] = [
-  { value: 0.90, label: 'Target', type: 'target', color: '#22c55e' },
-  { value: 0.80, label: 'Minimum', type: 'lower', color: '#ef4444' },
-];
+// NOTE: SAMPLE_DATA / SAMPLE_THRESHOLDS (a fabricated improving accuracy
+// trend with a 'Model retrained' annotation) were DELETED. Omitted props
+// render the empty state.
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -183,10 +165,10 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
     },
     ref
   ) => {
-    // Use provided data or sample
+    // Data comes ONLY from props — never a sample fallback.
     const name = propName ?? 'Metric';
-    const data = propData ?? SAMPLE_DATA;
-    const thresholds = propThresholds ?? SAMPLE_THRESHOLDS;
+    const data = useMemo(() => propData ?? [], [propData]);
+    const thresholds = useMemo(() => propThresholds ?? [], [propThresholds]);
 
     // Analyze trend
     const trend = useMemo(() => analyzeTrend(data, thresholds), [data, thresholds]);
@@ -271,6 +253,22 @@ export const MetricTrend = React.forwardRef<HTMLDivElement, MetricTrendProps>(
           style={{ height: compact ? 60 : height + (showHeader ? 50 : 0) }}
         >
           <div className="h-full bg-[var(--color-muted)] rounded-md" />
+        </div>
+      );
+    }
+
+    // Honest empty state — never a fabricated trend.
+    if (data.length === 0) {
+      return (
+        <div
+          ref={ref}
+          className={cn(
+            'flex items-center justify-center text-sm text-[var(--color-muted-foreground)]',
+            className
+          )}
+          style={{ height: compact ? 60 : height }}
+        >
+          No metric data available
         </div>
       );
     }

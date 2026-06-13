@@ -566,6 +566,24 @@ async def evaluate_model(state: Dict[str, Any]) -> Dict[str, Any]:
     Raises:
         No exceptions - returns error in state if evaluation fails
     """
+    # #773: an upstream node (train_model et al.) already failed — emit
+    # NOTHING so the true ``error``/``error_type`` (training_failed,
+    # instantiation_failed, unsupported_algorithm, ...) survives to the
+    # caller (agent.py raises "Training error (<error_type>)" from the
+    # merged state). The graph wires train_model -> evaluate_model
+    # unconditionally, so without this guard every training failure was
+    # re-masked here as "missing_trained_model" by the guard below. Same
+    # F2 skip-on-upstream-error idiom as augment_training_data /
+    # learning_curve; downstream conditionals route to END on the
+    # pre-existing error regardless.
+    if state.get("error"):
+        logger.info(
+            "Skipping evaluation: upstream error already set (%s) — "
+            "preserving it instead of masking as missing_trained_model",
+            state.get("error_type", "unknown"),
+        )
+        return {}
+
     # Extract trained model and data
     trained_model = state.get("trained_model")
     problem_type = state.get("problem_type", "binary_classification")
