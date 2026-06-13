@@ -93,12 +93,17 @@ def get_kpi_calculator() -> KPICalculator:
     Returns:
         KPICalculator instance
     """
-    # In production, this would be a singleton or use proper DI
-    calc = KPICalculator(db_connection=get_supabase())
+    # In production, this would be a singleton or use proper DI.
+    db = get_supabase()
+    calc = KPICalculator(db_connection=db)
     for workstream, calculator_cls in _WORKSTREAM_CALCULATORS.items():
-        # Each calculator lazily resolves its own Supabase client (db_client
-        # property); fail-loud on missing data, never a fabricated placeholder.
-        calc.register_calculator(workstream, calculator_cls())
+        # Pass the SAME api-layer client (get_supabase supports SUPABASE_KEY, the
+        # calculators' lazy get_supabase_client() does NOT — the #845 key-surface
+        # trap) so a SUPABASE_KEY-only deployment doesn't fail at lazy client
+        # creation. db may be None when unconfigured -> the calculator's lazy
+        # db_client property still applies as a fallback. Calculators fail-loud on
+        # missing data, never a fabricated placeholder.
+        calc.register_calculator(workstream, calculator_cls(db_client=db))
     return calc
 
 
