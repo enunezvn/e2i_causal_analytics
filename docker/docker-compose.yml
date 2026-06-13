@@ -61,6 +61,12 @@ x-common-env: &common-env
   # every service that merges *common-env. Operator opt-in for the Haiku
   # evaluator itself is still ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1.
   ADAPTIVE_VALIDITY_ARTIFACTS_DIR: /app/data/audit_artifacts
+  # KPI synthetic-visibility (demo/review). Default OFF -> production's
+  # migration-066 synthetic-exclusion gate stands. A synthetic-gold-only
+  # instance opts in by setting E2I_KPI_INCLUDE_SYNTHETIC=true in its host .env:
+  # KPI reads then swap to the *_include_synthetic twins and the FE badges the
+  # figures as synthetic. Forwarded to api + scheduler + workers via *common-env.
+  E2I_KPI_INCLUDE_SYNTHETIC: ${E2I_KPI_INCLUDE_SYNTHETIC:-0}
 
 x-common-worker: &common-worker
   build:
