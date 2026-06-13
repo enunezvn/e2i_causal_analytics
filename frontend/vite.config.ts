@@ -1,6 +1,38 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv, type Plugin, type ResolvedConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
+import fs from 'node:fs'
+
+/**
+ * Drop the MSW service worker from production builds.
+ *
+ * public/mockServiceWorker.js is a dev-only artifact (required for `npm run
+ * dev` API mocking) but Vite copies public/ verbatim into dist/, so without
+ * this plugin every production build ships the mock service worker (the
+ * dev-flavored container bundle audited 2026-06 shipped AND invoked it).
+ *
+ * Gated on config.isProduction (effective NODE_ENV at build time) so an
+ * intentional dev-flavored build (NODE_ENV=development vite build), whose
+ * bundle actually invokes MSW, keeps its worker.
+ */
+function dropMswWorkerInProd(): Plugin {
+  let config: ResolvedConfig
+  return {
+    name: 'e2i:drop-msw-worker-in-prod',
+    apply: 'build',
+    configResolved(resolved) {
+      config = resolved
+    },
+    closeBundle() {
+      if (!config.isProduction) return
+      const workerPath = path.resolve(config.root, config.build.outDir, 'mockServiceWorker.js')
+      if (fs.existsSync(workerPath)) {
+        fs.rmSync(workerPath)
+        config.logger.info('[e2i] removed dev-only mockServiceWorker.js from production bundle')
+      }
+    },
+  }
+}
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -12,7 +44,7 @@ export default defineConfig(({ mode }) => {
   const apiTarget = env.VITE_API_URL || 'http://localhost:8000'
 
   return {
-    plugins: [react()],
+    plugins: [react(), dropMswWorkerInProd()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

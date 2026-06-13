@@ -213,6 +213,41 @@ async function mockInsightsEndpoints(page: Page): Promise<void> {
     });
   });
 
+  // SystemHealthScore → GET /api/health-score/full (real Tier-3 health-score
+  // agent; HealthScoreResponse schema verified against the live OpenAPI spec).
+  // The widget renders Component/Model/Pipeline/Agent Health rows from these
+  // scores — '—' + "Not measured in this check" when a dimension is null.
+  await page.route('**/api/health-score/full**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        check_id: 'e2e-health-check',
+        check_scope: 'full',
+        // overall is 0-100; per-dimension scores are 0-1 fractions
+        // (None = unmeasured) per the HealthScoreResult contract.
+        overall_health_score: 87.5,
+        health_grade: 'B',
+        component_health_score: 0.92,
+        model_health_score: 0.84,
+        pipeline_health_score: 0.885,
+        agent_health_score: 0.85,
+        // HealthScoreResponseWireSchema requires arrays here (nullable)
+        component_statuses: [],
+        model_metrics: [],
+        pipeline_statuses: [],
+        agent_statuses: [],
+        critical_issues: [],
+        warnings: [],
+        recommendations: [],
+        health_summary: 'All systems nominal',
+        check_latency_ms: 1240,
+        timestamp: new Date().toISOString(),
+        data_provenance: 'measured',
+      }),
+    });
+  });
+
   // HeterogeneousTreatmentEffects → POST /api/explain/predict/batch
   await page.route('**/api/explain/predict/batch', async (route: Route) => {
     await route.fulfill({
@@ -353,13 +388,13 @@ test.describe('AI Agent Insights Page', () => {
     });
 
     test('should display health metrics', async ({ page }) => {
-      // `Model Drift` is one of the SAMPLE_METRICS rows; only renders once
-      // `isLoading` is false, which the mocked health endpoint resolves
-      // quickly above. Match exactly so the predictive-alert text
-      // "Model Drift Detected - SE Region" doesn't collide under strict mode.
-      await expect(
-        page.getByText('Model Drift', { exact: true }),
-      ).toBeVisible();
+      // The widget renders REAL dimension rows from the stubbed
+      // /api/health-score/full response (SAMPLE_METRICS is gone) —
+      // assert the rows and one stubbed score so a regression back to
+      // fabricated values cannot pass.
+      await expect(page.getByText('Pipeline Health', { exact: true })).toBeVisible();
+      await expect(page.getByText('Model Health', { exact: true })).toBeVisible();
+      await expect(page.getByText('89%', { exact: true })).toBeVisible();
     });
   });
 

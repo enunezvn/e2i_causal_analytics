@@ -71,35 +71,9 @@ export interface SHAPBeeswarmProps {
   showLegend?: boolean;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_FEATURES = ['days_since_visit', 'total_prescriptions', 'territory_sales', 'specialty_type', 'engagement_score'];
-
-function generateSampleData(): BeeswarmDataPoint[] {
-  const data: BeeswarmDataPoint[] = [];
-  const random = (min: number, max: number) => Math.random() * (max - min) + min;
-
-  SAMPLE_FEATURES.forEach((feature) => {
-    // Generate 30 sample points per feature
-    for (let i = 0; i < 30; i++) {
-      const featureValue = Math.random();
-      // SHAP values tend to correlate with feature values
-      const baseShap = (featureValue - 0.5) * 0.6;
-      const noise = random(-0.1, 0.1);
-      data.push({
-        feature,
-        shapValue: baseShap + noise,
-        featureValue,
-        originalValue: Math.round(featureValue * 100),
-        instanceId: `instance_${i}`,
-      });
-    }
-  });
-
-  return data;
-}
+// NOTE: generateSampleData() (Math.random()-fabricated SHAP points) was
+// DELETED. Omitted props render the empty state; data comes only from
+// callers.
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -166,7 +140,7 @@ export const SHAPBeeswarm = React.forwardRef<HTMLDivElement, SHAPBeeswarmProps>(
   ) => {
     // Use provided data or generate sample
     const rawData = useMemo(
-      () => propData ?? generateSampleData(),
+      () => propData ?? [],
       [propData]
     );
 

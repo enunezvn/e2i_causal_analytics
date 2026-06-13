@@ -101,7 +101,7 @@ function CATEBarChart({ cateResults, segmentName: _segmentName }: CATEChartProps
                 <p className="font-medium">{data.name}</p>
                 <p className="text-sm">CATE: {data.cate.toFixed(3)}</p>
                 <p className="text-sm text-muted-foreground">
-                  95% CI: [{(data.cate - data.ci_lower).toFixed(3)}, {(data.cate + data.ci_upper).toFixed(3)}]
+                  CI: [{(data.cate - data.ci_lower).toFixed(3)}, {(data.cate + data.ci_upper).toFixed(3)}]
                 </p>
                 <p className="text-sm text-muted-foreground">n = {data.sample_size}</p>
                 <p className={`text-sm ${data.significant ? 'text-green-600' : 'text-yellow-600'}`}>

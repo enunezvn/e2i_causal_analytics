@@ -16,6 +16,35 @@ vi.mock('@/providers/E2ICopilotProvider', () => ({
   useE2ICopilot: vi.fn(),
 }));
 
+// Mutable per-test state for the live telemetry summary hook
+const summaryState: {
+  data:
+    | {
+        period_start: string;
+        period_end: string;
+        total_queries: number;
+        successful_queries: number;
+        failed_queries: number;
+        success_rate: number;
+        avg_latency_ms: number;
+        p50_latency_ms: number;
+        p95_latency_ms: number;
+        p99_latency_ms: number;
+        intent_distribution: Record<string, number>;
+        top_agents: string[];
+      }
+    | undefined;
+  isLoading: boolean;
+} = { data: undefined, isLoading: false };
+
+vi.mock('@/hooks/api/use-analytics', () => ({
+  useMetricsSummary: () => ({
+    data: summaryState.data,
+    isLoading: summaryState.isLoading,
+    refetch: vi.fn(),
+  }),
+}));
+
 // Mock the child components that have complex dependencies
 vi.mock('@/components/visualizations/agents/AgentTierBadge', () => ({
   TierOverview: ({ onTierClick, activeTier }: { onTierClick?: (tier: number) => void; activeTier?: number }) => (
@@ -84,6 +113,8 @@ const mockAgents = [
 describe('AgentOrchestration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    summaryState.data = undefined;
+    summaryState.isLoading = false;
 
     // Default mock implementation
     (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -104,7 +135,7 @@ describe('AgentOrchestration', () => {
     render(<AgentOrchestration />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Total Agents')).toBeInTheDocument();
-    expect(screen.getByText('Tasks Today')).toBeInTheDocument();
+    expect(screen.getByText('Queries (24h)')).toBeInTheDocument();
     expect(screen.getByText('Avg Response Time')).toBeInTheDocument();
     expect(screen.getByText('Success Rate')).toBeInTheDocument();
   });
@@ -179,7 +210,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for agent cards to be visible (agents come from mocked context)
     await waitFor(() => {
-      expect(screen.getByText('All 21 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 15 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -194,7 +225,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for tab content to load by checking for agent cards
     await waitFor(() => {
-      expect(screen.getByText('All 21 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 15 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
 
     // Check for some agent names (our mock has these)
@@ -213,7 +244,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for tab content to load
     await waitFor(() => {
-      expect(screen.getByText('All 21 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 15 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
 
     // Find the select element after content loads
@@ -228,10 +259,12 @@ describe('AgentOrchestration', () => {
     }, { timeout: 5000 });
   });
 
-  it('shows pause and refresh buttons in header', () => {
+  it('shows a refresh button but NO no-op "Pause All" control', () => {
     render(<AgentOrchestration />, { wrapper: createWrapper() });
 
-    expect(screen.getByRole('button', { name: /Pause All/i })).toBeInTheDocument();
+    // "Pause All" had no backend endpoint — a dead control implying live
+    // orchestration management. It must not render.
+    expect(screen.queryByRole('button', { name: /Pause All/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Refresh/i })).toBeInTheDocument();
   });
 
@@ -255,11 +288,14 @@ describe('AgentOrchestration', () => {
     expect(screen.getByText('0 active, 0 processing')).toBeInTheDocument();
   });
 
-  it('renders view all button in recent activity section', () => {
+  it('renders NO dead controls in the activity sections (View All / Filter / Export)', () => {
     render(<AgentOrchestration />, { wrapper: createWrapper() });
 
-    const viewAllButtons = screen.getAllByRole('button', { name: /View All/i });
-    expect(viewAllButtons.length).toBeGreaterThan(0);
+    // The activity endpoint is explicitly unwired; buttons with no handler
+    // would fake capability. They must not render.
+    expect(screen.queryByRole('button', { name: /View All/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Filter$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Export$/i })).not.toBeInTheDocument();
   });
 
   it('shows tier metrics with utilization progress bars', async () => {
@@ -303,7 +339,7 @@ describe('AgentOrchestration', () => {
 
     // Wait for tab content to load
     await waitFor(() => {
-      expect(screen.getByText('All 21 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 15 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
 
     // Find the select element and change it to filter
@@ -325,7 +361,7 @@ describe('AgentOrchestration', () => {
 
     // Verify filter is cleared - should show all agents again
     await waitFor(() => {
-      expect(screen.getByText('All 21 agents across 6 tiers')).toBeInTheDocument();
+      expect(screen.getByText('All 15 agents across 6 tiers')).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -350,5 +386,95 @@ describe('AgentOrchestration', () => {
     expect(screen.queryByText('98.5%')).not.toBeInTheDocument();
     expect(screen.queryByText('450ms')).not.toBeInTheDocument();
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// FABRICATED ORCHESTRATION_STATS GUARDS
+// =============================================================================
+// The header stat cards formerly rendered ORCHESTRATION_STATS literals
+// (tasksToday 3,010 / avgResponseTime 680ms / successRate 97.5% /
+// totalAgents 21) plus hardcoded trend arrows (+12% / -5% / +0.3% "from
+// last hour") with no telemetry substrate. Real values come from
+// /analytics/summary; absence renders an em dash; trends are gone.
+
+describe('AgentOrchestration — no fabricated stats', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    summaryState.data = undefined;
+    summaryState.isLoading = false;
+    (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({
+      agents: mockAgents,
+      filters: { brand: 'All' },
+      preferences: { detailLevel: 'detailed' },
+    });
+  });
+
+  it('never renders the fabricated stat literals or trend arrows', () => {
+    render(<AgentOrchestration />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText('3,010')).not.toBeInTheDocument();
+    expect(screen.queryByText('680ms')).not.toBeInTheDocument();
+    expect(screen.queryByText('97.5%')).not.toBeInTheDocument();
+    expect(screen.queryByText(/from last hour/)).not.toBeInTheDocument();
+  });
+
+  it('derives Total Agents from the live roster, not a hardcoded 21', () => {
+    render(<AgentOrchestration />, { wrapper: createWrapper() });
+
+    // mockAgents has 15 entries; the stat card must reflect the roster.
+    const totalCard = screen.getByText('Total Agents').closest('[data-slot="card"], .card, div');
+    expect(totalCard).toBeTruthy();
+    expect(screen.getByText('15')).toBeInTheDocument();
+  });
+
+  it('renders em dashes for telemetry stats when /analytics/summary is unavailable', () => {
+    render(<AgentOrchestration />, { wrapper: createWrapper() });
+
+    // Three telemetry cards (queries / latency / success rate) show "—".
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('renders NO per-agent Play button (no run-agent endpoint exists)', async () => {
+    const user = userEvent.setup();
+    render(<AgentOrchestration />, { wrapper: createWrapper() });
+
+    await act(async () => {
+      await user.click(screen.getByRole('tab', { name: 'All Agents' }));
+    });
+    await waitFor(() => {
+      expect(screen.getByText('Scope Definer')).toBeInTheDocument();
+    }, { timeout: 5000 });
+
+    // The handler-less Play icon implied agents could be launched from
+    // this page — the same fake-capability class as the removed Pause All.
+    expect(screen.queryByRole('button', { name: /play/i })).not.toBeInTheDocument();
+    const playIcons = document.querySelectorAll('svg.lucide-play');
+    expect(playIcons.length).toBe(0);
+  });
+
+  it('renders REAL telemetry from /analytics/summary when available', () => {
+    summaryState.data = {
+      period_start: '2026-06-11T00:00:00Z',
+      period_end: '2026-06-12T00:00:00Z',
+      total_queries: 1234,
+      successful_queries: 1190,
+      failed_queries: 44,
+      success_rate: 96.4,
+      avg_latency_ms: 512.3,
+      p50_latency_ms: 300,
+      p95_latency_ms: 900,
+      p99_latency_ms: 1500,
+      intent_distribution: {},
+      top_agents: ['orchestrator'],
+    };
+
+    render(<AgentOrchestration />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('1,234')).toBeInTheDocument();
+    expect(screen.getByText('512ms')).toBeInTheDocument();
+    expect(screen.getByText('96.4%')).toBeInTheDocument();
+    // Honest card semantics: these are cognitive queries, not "tasks".
+    expect(screen.getByText(/queries \(24h\)/i)).toBeInTheDocument();
   });
 });

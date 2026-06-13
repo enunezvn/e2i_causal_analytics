@@ -21,14 +21,13 @@ import { TierOverview, type AgentTier } from '@/components/visualizations/agents
 import { AgentStatusPanel } from '@/components/chat/AgentStatusPanel';
 import { getValidated } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { useMetricsSummary } from '@/hooks/api/use-analytics';
 import {
   Activity,
   Bot,
   CheckCircle2,
   Clock,
   AlertTriangle,
-  Play,
-  Pause,
   RefreshCw,
   Zap,
   Brain,
@@ -71,9 +70,12 @@ interface OrchestrationStats {
   activeAgents: number;
   processingAgents: number;
   errorAgents: number;
-  avgResponseTime: number;
-  tasksToday: number;
-  successRate: number;
+  /** From /analytics/summary; null when telemetry is unavailable. */
+  avgResponseTime: number | null;
+  /** Cognitive queries processed in the period; null when unavailable. */
+  queries24h: number | null;
+  /** Percent (0-100); null when unavailable. */
+  successRate: number | null;
 }
 
 // =============================================================================
@@ -98,15 +100,10 @@ const TIER_NAMES: Record<number, string> = {
   5: 'Self-Improvement',
 };
 
-const ORCHESTRATION_STATS: OrchestrationStats = {
-  totalAgents: 21,
-  activeAgents: 18,
-  processingAgents: 3,
-  errorAgents: 0,
-  avgResponseTime: 680,
-  tasksToday: 3010,
-  successRate: 97.5,
-};
+// NOTE: ORCHESTRATION_STATS (fabricated tasksToday 3,010 / 680ms /
+// 97.5% / 21 agents) and the hardcoded trend arrows were DELETED.
+// Telemetry now comes from GET /analytics/summary (real query counts,
+// latency, and success rate); absence renders an em dash, never a fake.
 
 // =============================================================================
 // TIER ICONS
@@ -130,14 +127,12 @@ function StatCard({
   value,
   subtitle,
   icon,
-  trend,
   className,
 }: {
   title: string;
   value: string | number;
   subtitle?: string;
   icon: React.ReactNode;
-  trend?: { value: number; positive: boolean };
   className?: string;
 }) {
   return (
@@ -149,11 +144,6 @@ function StatCard({
       <CardContent>
         <div className="text-2xl font-bold">{value}</div>
         {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
-        {trend && (
-          <p className={cn('text-xs mt-1', trend.positive ? 'text-green-600' : 'text-red-600')}>
-            {trend.positive ? '+' : ''}{trend.value}% from last hour
-          </p>
-        )}
       </CardContent>
     </Card>
   );
@@ -263,7 +253,7 @@ export default function AgentOrchestration() {
 
   // Fetch agent status from API (with fallback to context data)
   // Uses apiClient for auth headers, correlation IDs, and response validation
-  const { data: agentStatus, isLoading: _isLoading } = useQuery({
+  const { data: agentStatus, isLoading: _isLoading, refetch: refetchAgents } = useQuery({
     queryKey: ['agent-status'],
     queryFn: () => getValidated(
       AgentStatusResponseSchema,
@@ -272,6 +262,10 @@ export default function AgentOrchestration() {
     refetchInterval: 30000, // Refresh every 30 seconds
     retry: false,
   });
+
+  // Real 24h telemetry from /analytics/summary (query counts, latency,
+  // success rate). When unavailable the stat cards render an em dash.
+  const { data: summary, refetch: refetchSummary } = useMetricsSummary('24h');
 
   // Use context agents if API not available
   const displayAgents = agentStatus?.agents ?? agents;
@@ -299,18 +293,30 @@ export default function AgentOrchestration() {
     ? displayAgents.filter((a: { tier: number }) => a.tier === selectedTier)
     : displayAgents;
 
-  // Calculate stats from agents
-  const stats = React.useMemo(() => {
+  // Stats: roster counts from the live agent list; telemetry from
+  // /analytics/summary. Nothing is fabricated — missing data is null.
+  const stats: OrchestrationStats = React.useMemo(() => {
     const active = displayAgents.filter((a: { status: string }) => a.status === 'active').length;
     const processing = displayAgents.filter((a: { status: string }) => a.status === 'processing').length;
     const error = displayAgents.filter((a: { status: string }) => a.status === 'error').length;
     return {
-      ...ORCHESTRATION_STATS,
+      totalAgents: agentStatus?.total ?? displayAgents.length,
       activeAgents: active,
       processingAgents: processing,
       errorAgents: error,
+      queries24h: summary?.total_queries ?? null,
+      avgResponseTime:
+        typeof summary?.avg_latency_ms === 'number'
+          ? Math.round(summary.avg_latency_ms)
+          : null,
+      successRate: typeof summary?.success_rate === 'number' ? summary.success_rate : null,
     };
-  }, [displayAgents]);
+  }, [displayAgents, agentStatus, summary]);
+
+  const handleRefresh = React.useCallback(() => {
+    refetchAgents();
+    refetchSummary();
+  }, [refetchAgents, refetchSummary]);
 
   return (
     <div className="space-y-6">
@@ -323,18 +329,17 @@ export default function AgentOrchestration() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            <Pause className="h-4 w-4 mr-2" />
-            Pause All
-          </Button>
-          <Button variant="outline" size="sm">
+          {/* "Pause All" was removed: no pause/resume endpoint exists, so a
+              dead control would fake orchestration management capability. */}
+          <Button variant="outline" size="sm" onClick={handleRefresh}>
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
         </div>
       </div>
 
-      {/* Stats Overview */}
+      {/* Stats Overview — roster counts are live; telemetry comes from
+          /analytics/summary and renders an em dash when unavailable. */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Total Agents"
@@ -343,25 +348,22 @@ export default function AgentOrchestration() {
           icon={<Bot className="h-4 w-4" />}
         />
         <StatCard
-          title="Tasks Today"
-          value={stats.tasksToday.toLocaleString()}
-          subtitle="Across all tiers"
+          title="Queries (24h)"
+          value={stats.queries24h === null ? '—' : stats.queries24h.toLocaleString()}
+          subtitle="Cognitive queries processed"
           icon={<Zap className="h-4 w-4" />}
-          trend={{ value: 12, positive: true }}
         />
         <StatCard
           title="Avg Response Time"
-          value={`${stats.avgResponseTime}ms`}
-          subtitle="Last hour average"
+          value={stats.avgResponseTime === null ? '—' : `${stats.avgResponseTime}ms`}
+          subtitle="24h average latency"
           icon={<Clock className="h-4 w-4" />}
-          trend={{ value: 5, positive: false }}
         />
         <StatCard
           title="Success Rate"
-          value={`${stats.successRate}%`}
-          subtitle="Task completion rate"
+          value={stats.successRate === null ? '—' : `${stats.successRate}%`}
+          subtitle="24h query success rate"
           icon={<CheckCircle2 className="h-4 w-4" />}
-          trend={{ value: 0.3, positive: true }}
         />
       </div>
 
@@ -408,18 +410,12 @@ export default function AgentOrchestration() {
             </Card>
           </div>
 
-          {/* Recent Activity Preview */}
+          {/* Recent Activity Preview — no action buttons until the activity
+              endpoint exists (dead controls would fake capability). */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Recent Activity</CardTitle>
-                  <CardDescription>Latest agent actions and events</CardDescription>
-                </div>
-                <Button variant="ghost" size="sm">
-                  View All
-                </Button>
-              </div>
+              <CardTitle>Recent Activity</CardTitle>
+              <CardDescription>Latest agent actions and events</CardDescription>
             </CardHeader>
             <CardContent>
               {ACTIVITIES.length === 0 ? (
@@ -442,20 +438,11 @@ export default function AgentOrchestration() {
         <TabsContent value="activity" className="space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Activity Feed</CardTitle>
-                  <CardDescription>Complete log of agent actions</CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm">
-                    Filter
-                  </Button>
-                  <Button variant="outline" size="sm">
-                    Export
-                  </Button>
-                </div>
-              </div>
+              {/* Filter/Export controls intentionally absent: the activity
+                  endpoint is unwired, so there is nothing to filter or
+                  export — dead buttons would fake capability. */}
+              <CardTitle>Activity Feed</CardTitle>
+              <CardDescription>Complete log of agent actions</CardDescription>
             </CardHeader>
             <CardContent>
               {ACTIVITIES.length === 0 ? (
@@ -493,7 +480,7 @@ export default function AgentOrchestration() {
                   <CardDescription>
                     {selectedTier !== null
                       ? `Showing Tier ${selectedTier} agents`
-                      : 'All 21 agents across 6 tiers'}
+                      : `All ${displayAgents.length} agents across 6 tiers`}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -523,6 +510,8 @@ export default function AgentOrchestration() {
                 {filteredAgents.map((agent: { id: string; name: string; tier: number; status: string; capabilities: string[] }) => (
                   <Card key={agent.id} className="hover:shadow-md transition-shadow">
                     <CardContent className="p-4">
+                      {/* No per-agent Play control: no run-agent endpoint
+                          exists, so a launch button would fake capability. */}
                       <div className="flex items-start justify-between">
                         <div>
                           <div className="flex items-center gap-2">
@@ -545,9 +534,6 @@ export default function AgentOrchestration() {
                             </Badge>
                           </div>
                         </div>
-                        <Button variant="ghost" size="sm">
-                          <Play className="h-4 w-4" />
-                        </Button>
                       </div>
                       <div className="mt-3">
                         <p className="text-xs text-muted-foreground">Capabilities:</p>
