@@ -18,6 +18,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from src.repositories.base import SplitAwareRepository
+from src.repositories.provenance import (
+    PROVENANCE_TAGGED_TABLES as _PROVENANCE_TAGGED_TABLES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,24 +28,23 @@ logger = logging.getLogger(__name__)
 # Supported tables for ML data loading
 ML_TABLES = [
     "business_metrics",
-    "predictions",
+    "ml_predictions",  # #894: was "predictions" — a table that does not exist
+    # in the live schema, so the allowlist both blocked the REAL tagged
+    # prediction table and let "predictions" loads 404 into empty DataFrames.
     "triggers",
     "causal_paths",
     "patient_journeys",
     "agent_activities",
 ]
 
-# Tables in ML_TABLES that carry the is_synthetic provenance column (Shard 01) and
-# are therefore safe to default-exclude synthetic rows from. causal_paths and
-# agent_activities are NOT treated as taggable here (they are bookkeeping/derived
-# tables outside the synthetic dataset's blast radius), so filtering them is skipped
-# to avoid a 42703 if the column is absent for the resolved schema.
-PROVENANCE_TAGGED_TABLES = {
-    "business_metrics",
-    "predictions",
-    "triggers",
-    "patient_journeys",
-}
+# Tables that carry the is_synthetic provenance column, re-derived from
+# migrations 063/067/069 via the provenance SSOT (#894). The previous local
+# subset hard-excluded causal_paths and agent_activities on a stale pre-063
+# "avoid a 42703" rationale — both ARE tagged (063:17-18), so real-mode loads
+# of those tables leaked synthetic rows. (The old set also listed a
+# "predictions" table that does not exist in the live schema — the tagged
+# table is ml_predictions.)
+PROVENANCE_TAGGED_TABLES = _PROVENANCE_TAGGED_TABLES
 
 
 @dataclass

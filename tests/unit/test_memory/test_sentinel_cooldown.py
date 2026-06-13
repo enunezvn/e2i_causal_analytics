@@ -98,7 +98,11 @@ class _FakeQuery:
             return mock
         rows = list(self.store.rows.get(self.table_name, []))
         for col, want in self._filters.items():
-            rows = [r for r in rows if r.get(col) == want]
+            # Model the live `is_synthetic NOT NULL DEFAULT false` column: a
+            # planted row without the key is a REAL row (#894 sentinel reads
+            # default-exclude synthetic via .eq('is_synthetic', False)).
+            default = False if col == "is_synthetic" else None
+            rows = [r for r in rows if r.get(col, default) == want]
         for col, threshold in self._lt.items():
             rows = [r for r in rows if (r.get(col) or 0) < threshold]
         if self._mode == "update":

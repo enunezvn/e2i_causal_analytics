@@ -105,9 +105,9 @@ export interface CATEResult {
   segment_value: string;
   /** Conditional Average Treatment Effect */
   cate_estimate: number;
-  /** 95% CI lower bound */
+  /** CI lower bound (the API does not report a confidence level) */
   cate_ci_lower: number;
-  /** 95% CI upper bound */
+  /** CI upper bound (the API does not report a confidence level) */
   cate_ci_upper: number;
   /** Number of observations in segment */
   sample_size: number;

@@ -78,7 +78,7 @@ services:
       # E2I-specific auth configuration
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: "true"  # Auto-confirm for development; disable in production
-      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_DISABLE_SIGNUP: "true"  # Locked 2026-06-12: reviewer accounts are admin-provisioned (see docs/runbooks/reviewer-provisioning.md)
     labels:
       - "com.e2i.service=supabase-auth"
     deploy:

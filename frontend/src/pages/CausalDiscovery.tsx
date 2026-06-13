@@ -17,10 +17,12 @@
  * @module pages/CausalDiscovery
  */
 
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { Brain, FlaskConical, GitBranch, Shield, Loader2 } from 'lucide-react';
 
 import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
+import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
+import type { CausalEffect } from '@/components/visualizations/causal/EffectsTable';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -186,7 +188,109 @@ function CausalDiscovery() {
       ? Math.round(routeData.routing_confidence * 100)
       : null;
 
-  const chains = chainsData?.chains ?? [];
+  const chains = useMemo(() => chainsData?.chains ?? [], [chainsData]);
+
+  // Backend reports a human-readable caveat when the DoWhy refutation /
+  // sensitivity suite did NOT run for this estimate. (Field exists on the
+  // wire schema; the local ParallelPipelineResponse type predates it.)
+  const robustnessWarning = (
+    pipelineData as { robustness_warning?: string | null } | undefined
+  )?.robustness_warning;
+
+  // ---------------------------------------------------------------------
+  // Real-data threading into the DAG visualization (fix: the viz formerly
+  // received NO data props and fell back to a fabricated SAMPLE_ analysis).
+  // ---------------------------------------------------------------------
+
+  /** DAG nodes/edges derived from the real KG chain-discovery results. */
+  const { vizNodes, vizEdges } = useMemo((): {
+    vizNodes: CausalNode[];
+    vizEdges: CausalEdge[];
+  } => {
+    const nodes: CausalNode[] = [];
+    const edges: CausalEdge[] = [];
+    const seenNodes = new Set<string>();
+    const seenEdges = new Set<string>();
+
+    for (const chain of chains) {
+      for (const node of chain.nodes) {
+        const id = node.id ?? node.name;
+        if (!id || seenNodes.has(id)) continue;
+        seenNodes.add(id);
+        nodes.push({ id, label: node.name ?? id, type: 'variable' });
+      }
+      for (const rel of chain.relationships ?? []) {
+        const edgeId = `${rel.source_id}->${rel.target_id}`;
+        if (seenEdges.has(edgeId)) continue;
+        seenEdges.add(edgeId);
+        edges.push({
+          id: edgeId,
+          source: rel.source_id,
+          target: rel.target_id,
+          type: 'causal',
+          confidence: rel.confidence,
+        });
+      }
+    }
+    return { vizNodes: nodes, vizEdges: edges };
+  }, [chains]);
+
+  /**
+   * Effect estimates derived from the real parallel-pipeline run:
+   * one row per library result plus the consensus row. Fields the API does
+   * not return (e.g. p-values) are simply omitted — never invented.
+   */
+  const vizEffects = useMemo((): CausalEffect[] => {
+    if (!pipelineData) return [];
+    const effects: CausalEffect[] = [];
+
+    // CI bounds are included ONLY when the backend reports both of them —
+    // a missing interval stays missing (rendered as an em dash), never
+    // synthesized from the point estimate. No confidence level is labeled
+    // either: the pipeline schema carries no confidence_level field, so
+    // asserting "95%" would be fabrication.
+    const realCI = (
+      lower: unknown,
+      upper: unknown
+    ): { ciLower: number; ciUpper: number } | undefined =>
+      typeof lower === 'number' && typeof upper === 'number'
+        ? { ciLower: lower, ciUpper: upper }
+        : undefined;
+
+    for (const [library, raw] of Object.entries(
+      pipelineData.library_results ?? {}
+    )) {
+      const result = raw as {
+        effect_estimate?: number;
+        ci_lower?: number;
+        ci_upper?: number;
+      };
+      if (typeof result?.effect_estimate !== 'number') continue;
+      effects.push({
+        id: `lib-${library}`,
+        treatment: treatmentVar,
+        outcome: outcomeVar,
+        estimate: result.effect_estimate,
+        ...realCI(result.ci_lower, result.ci_upper),
+        metadata: { library },
+      });
+    }
+
+    if (typeof pipelineData.consensus_effect === 'number') {
+      effects.push({
+        id: 'consensus',
+        treatment: treatmentVar,
+        outcome: outcomeVar,
+        estimate: pipelineData.consensus_effect,
+        ...realCI(
+          pipelineData.consensus_ci_lower,
+          pipelineData.consensus_ci_upper
+        ),
+        metadata: { library: 'consensus' },
+      });
+    }
+    return effects;
+  }, [pipelineData, treatmentVar, outcomeVar]);
 
   return (
     <div className="container mx-auto px-4 py-8 space-y-6">
@@ -421,7 +525,9 @@ function CausalDiscovery() {
                     <th className="text-left p-2 font-medium">
                       Effect estimate
                     </th>
-                    <th className="text-left p-2 font-medium">95% CI</th>
+                    {/* The pipeline schema reports raw ci_lower/ci_upper with no
+                        confidence-level field — claiming 95% would be fabrication. */}
+                    <th className="text-left p-2 font-medium">CI</th>
                     <th className="text-left p-2 font-medium">Confidence</th>
                   </tr>
                 </thead>
@@ -505,7 +611,7 @@ function CausalDiscovery() {
                 <Badge variant="default">
                   {fmtNumber(pipelineData.consensus_effect)}
                 </Badge>
-                <span className="font-medium">95% CI:</span>
+                <span className="font-medium">CI:</span>
                 <span>
                   {fmtCI(
                     pipelineData.consensus_ci_lower,
@@ -584,13 +690,28 @@ function CausalDiscovery() {
       )}
 
       {/* ===================================================================
-          DAG VISUALIZATION
+          DAG VISUALIZATION — fed exclusively by the real runs above.
+          Nodes/edges come from KG chain discovery; effect rows from the
+          parallel pipeline. Refutation details are not returned by the
+          pipeline endpoint, so that table stays honestly empty (the
+          robustness caveat, when reported, is surfaced as a warning).
           =================================================================== */}
+      {robustnessWarning && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-muted-foreground">
+          <span className="font-medium text-amber-600">Robustness caveat:</span>{' '}
+          {robustnessWarning}
+        </div>
+      )}
       <CausalDiscoveryViz
         showControls
         showDetails
         showEffectsTable
         showRefutationTests
+        nodes={vizNodes}
+        edges={vizEdges}
+        effects={vizEffects}
+        refutationResults={[]}
+        isLoading={isRunningPipeline || isDiscoveringChains}
       />
     </div>
   );

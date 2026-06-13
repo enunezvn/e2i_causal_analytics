@@ -69,7 +69,9 @@ def _run_tier0(env_overrides: Dict[str, str], regime: str) -> Dict[str, Any]:
     if completed.returncode != 0:
         pytest.fail(
             f"runner failed with exit code {completed.returncode}\n"
-            f"stderr (tail):\n{completed.stderr[-2000:]}"
+            # #773: -2000 chars truncated the true traceback out of CI logs;
+            # keep enough tail to root-cause from the nightly output alone.
+            f"stderr (tail):\n{completed.stderr[-8000:]}"
         )
     if not artifact_path.exists():
         pytest.fail(

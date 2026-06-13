@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { env, buildApiUrl } from '@/config/env';
 import { useAuthStore } from '@/stores/auth-store';
+import { isSupabaseConfigured } from '@/lib/supabase';
 
 // =============================================================================
 // TYPES
@@ -352,8 +353,10 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     // token character per RFC 6455, so it must be encoded).
     let protocols: string[] | undefined;
     if (withAuth) {
+      // FAIL CLOSED: never convey a token when Supabase is unconfigured -
+      // the store may hold a stale session rehydrated from persisted storage.
       const session = useAuthStore.getState().session;
-      if (session?.access_token) {
+      if (isSupabaseConfigured() && session?.access_token) {
         protocols = ['bearer', encodeTokenForSubprotocol(session.access_token)];
       }
     }

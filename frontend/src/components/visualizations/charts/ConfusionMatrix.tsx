@@ -46,18 +46,8 @@ export interface ConfusionMatrixProps {
   onCellClick?: (actual: string, predicted: string, value: number) => void;
 }
 
-// =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_DATA: ConfusionMatrixData = {
-  matrix: [
-    [85, 10, 5],
-    [8, 82, 10],
-    [3, 12, 85],
-  ],
-  labels: ['Low Risk', 'Medium Risk', 'High Risk'],
-};
+// NOTE: SAMPLE_DATA (a fabricated 3x3 risk confusion matrix) was DELETED.
+// An omitted data prop renders the empty state.
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -133,11 +123,21 @@ export const ConfusionMatrix = React.forwardRef<HTMLDivElement, ConfusionMatrixP
     },
     ref
   ) => {
-    // Use provided data or sample
-    const data = propData ?? SAMPLE_DATA;
+    // Data comes ONLY from props — never a sample fallback.
+    const data = propData ?? null;
 
     // Calculate normalized values and metrics
     const { normalizedMatrix, metrics } = useMemo(() => {
+      if (!data) {
+        return {
+          normalizedMatrix: [] as number[][],
+          metrics: {
+            accuracy: 0,
+            classMetrics: [] as { precision: number; recall: number; f1: number }[],
+            total: 0,
+          },
+        };
+      }
       const { matrix, labels } = data;
       const numClasses = labels.length;
 
@@ -180,6 +180,7 @@ export const ConfusionMatrix = React.forwardRef<HTMLDivElement, ConfusionMatrixP
 
     // Get cell value for display
     const getCellDisplay = (row: number, col: number): string => {
+      if (!data) return '';
       const rawValue = data.matrix[row][col];
       if (showPercentages) {
         const pct = normalizedMatrix[row][col] * 100;
@@ -204,6 +205,21 @@ export const ConfusionMatrix = React.forwardRef<HTMLDivElement, ConfusionMatrixP
           className={cn('animate-pulse', className)}
         >
           <div className="h-64 bg-[var(--color-muted)] rounded-md" />
+        </div>
+      );
+    }
+
+    // Honest empty state — never a fabricated matrix.
+    if (!data) {
+      return (
+        <div
+          ref={ref}
+          className={cn(
+            'flex h-64 items-center justify-center text-sm text-[var(--color-muted-foreground)]',
+            className
+          )}
+        >
+          No confusion matrix data available
         </div>
       );
     }

@@ -285,11 +285,16 @@ class TestProvenanceDefaultExclude:
         assert ("is_synthetic", False) in eq_log
 
     @pytest.mark.asyncio
-    async def test_load_table_sample_skips_predicate_on_nontaggable_table(self):
+    async def test_load_table_sample_excludes_synthetic_on_agent_activities(self):
+        """#894: agent_activities IS tagged (migration 063:17) — the old
+        'non-taggable' premise was the stale pre-063 rationale. The untagged-
+        table skip behavior is pinned by
+        test_apply_provenance_filter_for_table_skips_untagged
+        (tests/unit/test_repositories/test_has_provenance_family_894.py)."""
         eq_log: list = []
         loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
         await loader.load_table_sample("agent_activities", columns=["id"])
-        assert ("is_synthetic", False) not in eq_log
+        assert ("is_synthetic", False) in eq_log
 
     @pytest.mark.asyncio
     async def test_load_table_sample_includes_synthetic_when_opted_in(self):

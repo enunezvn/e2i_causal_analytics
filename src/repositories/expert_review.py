@@ -54,6 +54,8 @@ class ExpertReviewRepository(BaseRepository):
     """
 
     table_name = "expert_reviews"
+    id_column = "review_id"  # live PK (#894 codex R1: create_renewal_review's
+    # get_by_id queried a nonexistent "id" column -> latent 42703)
     model_class = None  # Using raw dicts
 
     # Default validity period for expert reviews (90 days = quarterly)

@@ -60,6 +60,32 @@ describe('CausalAnalysis — F-002 empty state', () => {
     ).toBeInTheDocument();
   }, 20000);
 
+  it('does not claim a 95% confidence level the schema never reports', () => {
+    // HierarchicalAnalysisResponse exposes raw overall_ci_lower/upper with NO
+    // confidence-level field — the UI must render "CI:" without inventing 95%.
+    (useRunHierarchicalAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        overall_ate: 0.18,
+        overall_ci_lower: 0.12,
+        overall_ci_upper: 0.24,
+        status: 'completed',
+        segment_results: [],
+        segment_heterogeneity: null,
+        nested_ci: null,
+        n_segments_analyzed: 0,
+        segmentation_method: 'tree',
+        estimator_type: 'dml',
+        latency_ms: 1200,
+      },
+      mutateAsync: vi.fn(),
+      isPending: false,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText(/95% CI/)).not.toBeInTheDocument();
+    expect(screen.getByText(/^CI:/)).toBeInTheDocument();
+  }, 20000);
+
   it('does NOT render hardcoded SAMPLE_HIERARCHICAL_RESULT values (0.245 ATE)', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });
 
