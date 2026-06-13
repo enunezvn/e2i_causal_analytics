@@ -846,3 +846,58 @@ class TestBuildGraphContract:
 # Suppress unused-import lint by exporting; keeps `defaultdict` from
 # being eagerly imported if test runner trims (not strictly needed).
 _ = defaultdict
+
+
+class TestTargetGraphResolution:
+    """The writer must target the SAME graph the semantic-memory readers use (#890).
+
+    #169's intent: persist the HCP influence graph so that
+    FalkorDBSemanticMemory.get_hcp_influence_network() (which resolves
+    get_config().semantic.graph_name, deployed: e2i_causal per #749) returns
+    data. The hardcoded "e2i_semantic" target re-created the very split-brain
+    #169 was filed to close: writer writes an orphan graph, readers read empty.
+    """
+
+    def test_resolve_target_graph_name_uses_semantic_config(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from scripts.persist_hcp_influence_to_falkordb import _resolve_target_graph_name
+
+        cfg = MagicMock()
+        cfg.semantic.graph_name = "configured_graph_xyz"
+        with patch("src.memory.services.config.get_config", return_value=cfg):
+            assert _resolve_target_graph_name() == "configured_graph_xyz"
+
+    def test_main_selects_configured_graph(self, tmp_path: Any) -> None:
+        from unittest.mock import MagicMock, patch
+
+        import scripts.persist_hcp_influence_to_falkordb as mod
+
+        fake_nx_graph = MagicMock()
+        fake_nx_graph.number_of_nodes.return_value = 1
+        fake_nx_graph.number_of_edges.return_value = 0
+
+        client = MagicMock()
+        cfg = MagicMock()
+        cfg.semantic.graph_name = "configured_graph_xyz"
+
+        with (
+            patch.object(mod, "load_cohort_inputs", return_value=({1}, {}, None, None)),
+            patch.object(mod, "build_hcp_influence_graph", return_value=fake_nx_graph),
+            patch.object(mod, "persist_graph_to_falkordb", return_value=(1, 0)),
+            patch("src.memory.services.factories.get_falkordb_client", return_value=client),
+            patch("src.memory.services.config.get_config", return_value=cfg),
+        ):
+            exit_code = mod.main(
+                [
+                    "--parquet-dir",
+                    str(tmp_path),
+                    "--cohort-dir",
+                    str(tmp_path),
+                    "--cohort-id",
+                    "smoke",
+                ]
+            )
+
+        assert exit_code == 0
+        client.select_graph.assert_called_once_with("configured_graph_xyz")

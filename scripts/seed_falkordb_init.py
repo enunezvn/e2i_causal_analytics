@@ -2,10 +2,13 @@
 """
 E2I Causal Analytics - Docker Init Seeder for FalkorDB.
 
-Auto-seeds both FalkorDB graphs (e2i_causal + e2i_semantic) on container startup.
+Auto-seeds the FalkorDB e2i_causal graph on container startup.
 Designed to run as a one-shot init container in Docker Compose.
 
-Only seeds graphs that are empty — safe to run on every `docker compose up`.
+Only seeds when the graph is empty — safe to run on every `docker compose up`.
+
+The former e2i_semantic seeding step was retired in #890: the deployed
+semantic graph is e2i_causal (#749) and nothing reads e2i_semantic.
 
 Environment variables:
     FALKORDB_HOST       FalkorDB hostname (default: falkordb)
@@ -102,36 +105,12 @@ def seed_causal_graph() -> bool:
     return final > 0
 
 
-def seed_semantic_graph() -> bool:
-    """Seed e2i_semantic graph using seed_semantic_graph.py."""
-    count = count_nodes("e2i_semantic")
-    if count > 0:
-        logger.info("e2i_semantic: already has %d nodes -- skipping", count)
-        return True
-
-    logger.info("e2i_semantic: empty -- seeding...")
-    result = subprocess.run(
-        [
-            sys.executable,
-            os.path.join(SCRIPTS_DIR, "seed_semantic_graph.py"),
-            "--clear-first",
-        ],
-        cwd=PROJECT_DIR,
-        env={
-            **os.environ,
-            "FALKORDB_HOST": FALKORDB_HOST,
-            "FALKORDB_PORT": str(FALKORDB_PORT),
-            "FALKORDB_PASSWORD": FALKORDB_PASSWORD,
-        },
-        capture_output=False,
-    )
-    if result.returncode != 0:
-        logger.error("e2i_semantic seeding failed (exit code %d)", result.returncode)
-        return False
-
-    final = count_nodes("e2i_semantic")
-    logger.info("e2i_semantic: seeded -- %d nodes", final)
-    return final > 0
+# NOTE (#890): the e2i_semantic seeding step was retired. The deployed
+# semantic graph is e2i_causal (config/005_memory_config.yaml, #749) — no
+# runtime reader uses e2i_semantic, and even this seeder's read-only count
+# probe re-created the empty e2i_semantic graph shell (FalkorDB creates a
+# graph key on any GRAPH.QUERY). scripts/seed_semantic_graph.py remains
+# available for explicit manual runs against the legacy graph.
 
 
 def main() -> int:
@@ -142,9 +121,7 @@ def main() -> int:
         logger.error("FALKORDB_PASSWORD is not set")
         return 1
 
-    success = True
-    success = seed_causal_graph() and success
-    success = seed_semantic_graph() and success
+    success = seed_causal_graph()
 
     if success:
         logger.info("=== Init seeding complete ===")

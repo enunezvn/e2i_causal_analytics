@@ -779,7 +779,7 @@ class TestEnrollmentStats:
         mock_repo.get_assignments.return_value = mock_assignments
 
         # Create mock enrollments
-        def get_enrollment_by_assignment(assignment_id):
+        def get_enrollment_by_assignment(assignment_id, include_synthetic=False):
             enrollment = MagicMock()
             enrollment.enrollment_status = EnrollmentStatus.ACTIVE.value
             return enrollment
@@ -812,7 +812,7 @@ class TestEnrollmentStats:
         # 8 enrolled, 2 withdrawn
         enrollment_count = [0]
 
-        def get_enrollment(assignment_id):
+        def get_enrollment(assignment_id, include_synthetic=False):
             enrollment_count[0] += 1
             enrollment = MagicMock()
             if enrollment_count[0] <= 8:

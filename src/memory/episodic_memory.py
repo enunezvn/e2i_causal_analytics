@@ -43,6 +43,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+from src.memory.jsonb_sanitize import sanitize_jsonb_payload
 from src.memory.services.config import get_config
 from src.memory.services.factories import (
     get_embedding_service,
@@ -593,10 +594,14 @@ async def insert_episodic_memory(
         # gap; same writer-bug class migration 072 repaired for procedural/
         # hpo). Historical rows repaired by migration 073; readers
         # (hydrate_raw_content) stay tolerant of both shapes.
-        "raw_content": memory.raw_content or {},
-        "entities": memory.entities or {},
+        # Sanitize non-finite floats first (#891): supabase-py's strict JSON
+        # encoder raises on NaN/Infinity BEFORE the request is sent, and the
+        # agent hooks swallow that into a silent drop — map them to JSON null
+        # at the writer so NaN-bearing payloads (model_trainer metrics) persist.
+        "raw_content": sanitize_jsonb_payload(memory.raw_content or {}),
+        "entities": sanitize_jsonb_payload(memory.entities or {}),
         "outcome_type": memory.outcome_type,
-        "outcome_details": memory.outcome_details or {},
+        "outcome_details": sanitize_jsonb_payload(memory.outcome_details or {}),
         "user_satisfaction_score": memory.user_satisfaction_score,
         "agent_name": memory.agent_name,
         "importance_score": memory.importance_score,
@@ -709,10 +714,11 @@ async def bulk_insert_episodic_memories(
             "description": memory.description,
             # Dicts pass through — see insert_episodic_memory: json.dumps
             # here double-encodes into a jsonb string scalar (#883/073).
-            "raw_content": memory.raw_content or {},
-            "entities": memory.entities or {},
+            # Non-finite floats -> JSON null (#891), same as the single insert.
+            "raw_content": sanitize_jsonb_payload(memory.raw_content or {}),
+            "entities": sanitize_jsonb_payload(memory.entities or {}),
             "outcome_type": memory.outcome_type,
-            "outcome_details": memory.outcome_details or {},
+            "outcome_details": sanitize_jsonb_payload(memory.outcome_details or {}),
             "user_satisfaction_score": memory.user_satisfaction_score,
             "agent_name": memory.agent_name,
             "importance_score": memory.importance_score,

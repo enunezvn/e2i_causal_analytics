@@ -405,8 +405,17 @@ async def _query_causal_chains(
     since: datetime,
     limit: int,
     min_confidence: float = 0.5,
+    include_synthetic: bool = False,
 ) -> Dict[str, Any]:
-    """Query causal relationships from causal_paths table."""
+    """Query causal relationships from causal_paths table.
+
+    Chat is an end-user real-mode surface: ``include_synthetic`` defaults to
+    False so synthetic causal paths (planted ground-truth validation data,
+    migration 063 provenance) never surface as real insight (#893). The opt-in
+    exists for agent-context/validation callers only and is deliberately NOT
+    exposed in the LLM tool schema. On an all-synthetic substrate the honest
+    real-mode answer is empty (same fail-closed semantics as #872).
+    """
     try:
         client = await get_async_supabase_client()
         repo = CausalPathRepository(client)
@@ -439,7 +448,9 @@ async def _query_causal_chains(
                 "kpi_analyzed": kpi_name,
             }
 
-        paths = await repo.get_many(filters=filters, limit=limit)
+        paths = await repo.get_many(
+            filters=filters, limit=limit, include_synthetic=include_synthetic
+        )
         return {
             "success": True,
             "query_type": "causal_chain",

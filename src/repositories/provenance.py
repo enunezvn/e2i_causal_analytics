@@ -17,6 +17,47 @@ PROVENANCE_COLUMN = "is_synthetic"
 # treatment/outcome derivation would otherwise capture them as constant covariates).
 PROVENANCE_DROP_COLS: tuple[str, ...] = (PROVENANCE_COLUMN,)
 
+# Every table carrying the ``is_synthetic`` column, derived from the three
+# migrations that added it (#894 SSOT — when a migration tags a new table, add
+# it HERE; table-aware readers like MLDataLoader and the sentinel evaluators
+# gate on this set so untagged tables never hit a 42703):
+#   database/migrations/063_is_synthetic_provenance.sql        (M1, 12 tables)
+#   database/migrations/067_kpi_view_synthetic_exclusion.sql   (3 view-backed)
+#   database/migrations/069_synthetic_provenance_shard09_tables.sql (Shard 09, 11)
+PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
+    {
+        # 063
+        "triggers",
+        "business_metrics",
+        "ml_predictions",
+        "agent_activities",
+        "causal_paths",
+        "patient_journeys",
+        "treatment_events",
+        "hcp_profiles",
+        "user_sessions",
+        "hcp_intent_surveys",
+        "episodic_memories",
+        "ab_experiment_assignments",
+        # 067
+        "data_source_tracking",
+        "etl_pipeline_metrics",
+        "ml_annotations",
+        # 069
+        "ml_experiments",
+        "ml_model_registry",
+        "ml_training_runs",
+        "ml_deployments",
+        "ab_experiment_enrollments",
+        "ab_experiment_results",
+        "ml_observability_spans",
+        "learning_signals",
+        "feature_groups",
+        "features",
+        "feature_values",
+    }
+)
+
 
 def coerce_provenance_flag(value: Any) -> bool:
     """Strictly parse a provenance opt-in value (``include_synthetic``/``synthetic``).
@@ -53,6 +94,22 @@ def apply_provenance_filter(query: Any, include_synthetic: bool = False) -> Any:
     if include_synthetic:
         return query
     return query.eq(PROVENANCE_COLUMN, False)
+
+
+def apply_provenance_filter_for_table(
+    query: Any, table: str, include_synthetic: bool = False
+) -> Any:
+    """Table-aware variant of :func:`apply_provenance_filter` (#894).
+
+    Applies the default-exclude predicate only when ``table`` is in
+    :data:`PROVENANCE_TAGGED_TABLES` — readers that take an operator- or
+    config-supplied table name (sentinel evaluators, MLDataLoader) would
+    otherwise raise a REAL 42703 on untagged tables (e.g.
+    ``executive_insights``).
+    """
+    if table in PROVENANCE_TAGGED_TABLES:
+        return apply_provenance_filter(query, include_synthetic)
+    return query
 
 
 def drop_provenance_cols(frame: pd.DataFrame, extra: Iterable[str] = ()) -> pd.DataFrame:

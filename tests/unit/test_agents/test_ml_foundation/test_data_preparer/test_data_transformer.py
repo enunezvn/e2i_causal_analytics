@@ -1386,3 +1386,155 @@ class TestNominalCategoricalEncodingDefault:
             "one-hot + standard-scaled output should passthrough, not re-preprocess; "
             f"got {pp['preprocessing_statistics']['preprocessing_type']}"
         )
+
+
+class TestOneHotFeatureNameXGBoostCompat:
+    """Issue #773 PR-3: one-hot feature names must be XGBoost-legal.
+
+    ``OneHotEncoder.get_feature_names_out`` embeds raw category VALUES into
+    the output column names (``col_value``). Nominal categories like
+    ``"<65"`` or ``"[18-34]"`` therefore yield column names containing
+    ``[``, ``]`` or ``<`` — characters XGBoost hard-rejects with
+    ``ValueError: feature_names must not contain [, ] or <``. Any such
+    cohort crashes model training downstream of data_preparer.
+
+    Red-first proof: before the sanitizer fix, the fit below raises the
+    XGBoost feature_names ValueError.
+    """
+
+    @staticmethod
+    def _bracket_state() -> dict:
+        n = 40
+        brackets = (["<65", "[18-34]", "65+", "[35-49]"] * (n // 4 + 1))[:n]
+        frame = pd.DataFrame(
+            {
+                "age_bracket": brackets,
+                "value": [float(i % 7) for i in range(n)],
+                "target": [i % 2 for i in range(n)],
+            }
+        )
+        return {
+            "experiment_id": "exp_issue773_onehot_xgb_names",
+            "scope_spec": {
+                "prediction_target": "target",
+                "imputation_strategy": "mean",
+                "extract_datetime_features": False,
+            },
+            "train_df": frame.copy(),
+            "validation_df": frame.copy(),
+            "test_df": frame.copy(),
+        }
+
+    @pytest.mark.asyncio
+    async def test_onehot_output_trains_real_xgboost(self) -> None:
+        """Transformed frame with bracket-valued categories must fit XGBoost."""
+        import xgboost as xgb
+
+        out = await transform_data(self._bracket_state())
+        assert out.get("error") is None, out.get("error")
+
+        X_train, y_train = out["X_train"], out["y_train"]
+
+        # The real-world crash: XGBoost rejects DataFrame column names
+        # containing [, ] or < at fit time. Pre-fix this raises
+        # ``ValueError: feature_names must not contain [, ] or <``.
+        model = xgb.XGBClassifier(n_estimators=2, max_depth=2, tree_method="hist")
+        model.fit(X_train, y_train)
+        preds = model.predict(X_train)
+        assert len(preds) == len(X_train)
+
+        forbidden = set("[]<")
+        bad = [c for c in X_train.columns if forbidden & set(str(c))]
+        assert not bad, f"XGBoost-illegal column names survived: {bad}"
+
+    @pytest.mark.asyncio
+    async def test_metadata_new_columns_match_frame_and_are_legal(self) -> None:
+        """``transformations_applied`` onehot entry must mirror the REAL
+        (sanitized) frame columns; ``original_columns`` stays the raw input
+        column list."""
+        out = await transform_data(self._bracket_state())
+        assert out.get("error") is None, out.get("error")
+
+        onehot_entries = [
+            t
+            for t in out["transformations_applied"]
+            if t.get("type") == "encoding" and t.get("method") == "onehot"
+        ]
+        assert len(onehot_entries) == 1
+        entry = onehot_entries[0]
+
+        assert entry["original_columns"] == ["age_bracket"]
+
+        new_columns = entry["new_columns"]
+        forbidden = set("[]<")
+        bad = [c for c in new_columns if forbidden & set(str(c))]
+        assert not bad, f"metadata new_columns contains XGBoost-illegal names: {bad}"
+
+        # Metadata must match the actual frame columns (no drift between
+        # what we record and what the trainer sees).
+        assert set(new_columns) <= set(out["X_train"].columns)
+        # All splits share the sanitized schema.
+        assert list(out["X_train"].columns) == list(out["X_val"].columns)
+        assert list(out["X_train"].columns) == list(out["X_test"].columns)
+
+
+class TestSanitizeFeatureNames:
+    """Pure-function tests for ``sanitize_feature_names`` (issue #773 PR-3)."""
+
+    def test_replaces_xgboost_illegal_chars(self) -> None:
+        from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+            sanitize_feature_names,
+        )
+
+        out = sanitize_feature_names(["age_<65", "age_[18-34]", "age_65+"])
+        assert out == ["age__65", "age__18-34_", "age_65+"]
+        forbidden = set("[]<")
+        assert not [c for c in out if forbidden & set(c)]
+
+    def test_clean_names_pass_through_unchanged(self) -> None:
+        from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+            sanitize_feature_names,
+        )
+
+        names = ["payer_HMO", "payer_PPO", "value", "region_NE"]
+        assert sanitize_feature_names(names) == names
+
+    def test_distinct_raw_names_never_collide(self) -> None:
+        """Two distinct raw names sanitizing identically get deterministic
+        dedup suffixes — first keeps the base, later ones get _2, _3..."""
+        from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+            sanitize_feature_names,
+        )
+
+        out = sanitize_feature_names(["a[b", "a]b", "a<b"])
+        assert out == ["a_b", "a_b_2", "a_b_3"]
+        assert len(set(out)) == len(out)
+
+    def test_preexisting_clean_name_not_clobbered(self) -> None:
+        """A raw name that is ALREADY the sanitized form of a later name must
+        keep its identity; the later name gets the suffix."""
+        from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+            sanitize_feature_names,
+        )
+
+        out = sanitize_feature_names(["a_b", "a[b"])
+        assert out == ["a_b", "a_b_2"]
+
+    def test_suffixed_name_colliding_with_later_base_still_unique(self) -> None:
+        """Dedup suffixes are re-checked against every emitted name, so a
+        suffixed output colliding with a later raw base stays unique."""
+        from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+            sanitize_feature_names,
+        )
+
+        out = sanitize_feature_names(["a_b", "a[b", "a_b_2"])
+        assert out == ["a_b", "a_b_2", "a_b_2_2"]
+        assert len(set(out)) == len(out)
+
+    def test_deterministic_across_calls(self) -> None:
+        from src.agents.ml_foundation.data_preparer.nodes.data_transformer import (
+            sanitize_feature_names,
+        )
+
+        names = ["x[1]", "x]1[", "x<1>", "x_1_"]
+        assert sanitize_feature_names(names) == sanitize_feature_names(names)

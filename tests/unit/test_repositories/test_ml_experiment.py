@@ -22,6 +22,22 @@ from src.repositories.ml_experiment import (
 )
 
 
+def _install_select_chain(mock_client, mock_execute):
+    """Self-chaining supabase-style SELECT query mock.
+
+    #894 mock refactor: the provenance predicate adds an ``.eq("is_synthetic",
+    False)`` to most read chains, so pinning the exact builder order breaks on
+    every filter change — a self-chaining query records calls regardless of
+    chain depth (the #893 ``test_causal_path.py`` idiom).
+    """
+    query = MagicMock()
+    for m in ("eq", "limit", "offset", "order", "gte", "lte", "in_", "is_"):
+        getattr(query, m).return_value = query
+    query.execute = mock_execute
+    mock_client.table.return_value.select.return_value = query
+    return query
+
+
 @pytest.mark.unit
 class TestMLExperimentDataClass:
     """Tests for MLExperiment data class."""
@@ -181,7 +197,7 @@ class TestMLExperimentRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_experiment_data]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.get_by_name("test_experiment")
 
@@ -195,7 +211,7 @@ class TestMLExperimentRepository:
         mock_result = MagicMock()
         mock_result.data = []
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.get_by_name("nonexistent")
 
@@ -209,7 +225,7 @@ class TestMLExperimentRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_experiment_data]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.get_by_mlflow_id("mlflow-123")
 
@@ -245,7 +261,7 @@ class TestMLExperimentRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_experiment_data, {**sample_experiment_data, "id": str(uuid4())}]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.list_experiments()
 
@@ -259,7 +275,7 @@ class TestMLExperimentRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_experiment_data]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.list_experiments(brand="Kisqali")
 
@@ -304,7 +320,7 @@ class TestMLTrainingRunRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_run_data]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.get_by_mlflow_run_id("run-123")
 
@@ -384,7 +400,7 @@ class TestMLTrainingRunRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_run_data, {**sample_run_data, "id": str(uuid4())}]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         experiment_id = UUID(sample_run_data["experiment_id"])
         result = await repo.get_runs_for_experiment(experiment_id=experiment_id)
@@ -400,15 +416,7 @@ class TestMLTrainingRunRepository:
         mock_result.data = [sample_run_data]
         mock_execute = AsyncMock(return_value=mock_result)
 
-        mock_offset = MagicMock()
-        mock_offset.execute = mock_execute
-        mock_limit = MagicMock()
-        mock_limit.offset.return_value = mock_offset
-        mock_eq_status = MagicMock()
-        mock_eq_status.limit.return_value = mock_limit
-        mock_eq_exp = MagicMock()
-        mock_eq_exp.eq.return_value = mock_eq_status
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_exp
+        _install_select_chain(mock_client, mock_execute)
 
         experiment_id = UUID(sample_run_data["experiment_id"])
         result = await repo.get_runs_for_experiment(experiment_id=experiment_id, status="finished")
@@ -541,13 +549,7 @@ class TestMLModelRegistryRepository:
         mock_result.data = [sample_model_data]
         mock_execute = AsyncMock(return_value=mock_result)
 
-        mock_limit = MagicMock()
-        mock_limit.execute = mock_execute
-        mock_eq_version = MagicMock()
-        mock_eq_version.limit.return_value = mock_limit
-        mock_eq_name = MagicMock()
-        mock_eq_name.eq.return_value = mock_eq_version
-        mock_client.table.return_value.select.return_value.eq.return_value = mock_eq_name
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.get_by_name_version("churn_predictor", "v1.0.0")
 
@@ -561,7 +563,7 @@ class TestMLModelRegistryRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_model_data]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.get_champion_model()
 
@@ -627,7 +629,7 @@ class TestMLModelRegistryRepository:
         mock_result = MagicMock()
         mock_result.data = [sample_model_data, {**sample_model_data, "id": str(uuid4())}]
         mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.offset.return_value.execute = mock_execute
+        _install_select_chain(mock_client, mock_execute)
 
         result = await repo.get_models_by_stage(stage="production")
 

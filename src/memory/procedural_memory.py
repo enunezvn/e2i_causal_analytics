@@ -563,21 +563,33 @@ async def record_learning_signal(
 
 
 async def get_training_examples_for_agent(
-    agent_name: str, brand: Optional[str] = None, min_score: float = 0.7, limit: int = 100
+    agent_name: str,
+    brand: Optional[str] = None,
+    min_score: float = 0.7,
+    limit: int = 100,
+    include_synthetic: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Get high-quality training examples for a specific agent.
     Used for DSPy optimization.
+
+    #894: ``learning_signals`` is is_synthetic-tagged (migration 069; live
+    substrate 300/300 synthetic at filing time) — recalling planted signals
+    into DSPy optimization would train self-learning on a synthetic twin.
+    Real mode default-excludes; validation runs opt in.
 
     Args:
         agent_name: Name of the agent
         brand: Optional brand filter
         min_score: Minimum metric value threshold
         limit: Maximum results
+        include_synthetic: When True, do not exclude synthetic rows (opt-in).
 
     Returns:
         List of training examples
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
     query = (
@@ -592,31 +604,37 @@ async def get_training_examples_for_agent(
 
     if brand:
         query = query.eq("brand", brand)
+    query = apply_provenance_filter(query, include_synthetic)
 
     result = query.execute()
     logger.debug(f"Retrieved {len(result.data or [])} training examples for {agent_name}")
     return result.data or []
 
 
-async def get_feedback_summary_for_trigger(trigger_id: str) -> Dict[str, Any]:
+async def get_feedback_summary_for_trigger(
+    trigger_id: str, include_synthetic: bool = False
+) -> Dict[str, Any]:
     """
     Get aggregated feedback for a specific trigger.
     Useful for evaluating trigger effectiveness.
 
     Args:
         trigger_id: ID of the trigger
+        include_synthetic: When True, do not exclude synthetic rows (opt-in, #894).
 
     Returns:
         Summary dict with feedback counts and ratings
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
-    result = (
+    query = (
         client.table("learning_signals")
         .select("signal_type, signal_value")
         .eq("related_trigger_id", trigger_id)
-        .execute()
     )
+    result = apply_provenance_filter(query, include_synthetic).execute()
 
     signals = result.data or []
 
@@ -638,24 +656,29 @@ async def get_feedback_summary_for_trigger(trigger_id: str) -> Dict[str, Any]:
     return summary
 
 
-async def get_feedback_summary_for_agent(agent_name: str) -> Dict[str, Any]:
+async def get_feedback_summary_for_agent(
+    agent_name: str, include_synthetic: bool = False
+) -> Dict[str, Any]:
     """
     Get aggregated feedback for a specific agent.
 
     Args:
         agent_name: Name of the agent
+        include_synthetic: When True, do not exclude synthetic rows (opt-in, #894).
 
     Returns:
         Summary dict with feedback counts and ratings
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
-    result = (
+    query = (
         client.table("learning_signals")
         .select("signal_type, signal_value")
         .eq("rated_agent", agent_name)
-        .execute()
     )
+    result = apply_provenance_filter(query, include_synthetic).execute()
 
     signals = result.data or []
 
@@ -679,7 +702,10 @@ async def get_feedback_summary_for_agent(agent_name: str) -> Dict[str, Any]:
 
 
 async def get_recent_signals(
-    limit: int = 50, signal_type: Optional[str] = None, agent_name: Optional[str] = None
+    limit: int = 50,
+    signal_type: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    include_synthetic: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Get recent learning signals.
@@ -688,10 +714,13 @@ async def get_recent_signals(
         limit: Maximum results
         signal_type: Filter by signal type
         agent_name: Filter by agent
+        include_synthetic: When True, do not exclude synthetic rows (opt-in, #894).
 
     Returns:
         List of recent signals
     """
+    from src.repositories.provenance import apply_provenance_filter
+
     client = get_supabase_client()
 
     query = client.table("learning_signals").select("*").order("created_at", desc=True).limit(limit)
@@ -700,6 +729,7 @@ async def get_recent_signals(
         query = query.eq("signal_type", signal_type)
     if agent_name:
         query = query.eq("rated_agent", agent_name)
+    query = apply_provenance_filter(query, include_synthetic)
 
     result = query.execute()
     return result.data or []

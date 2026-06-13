@@ -1273,7 +1273,13 @@ class Consolidator:
 
         client = get_supabase_client()
 
+        from src.repositories.provenance import apply_provenance_filter
+
         # Pull candidate causal_paths: not yet consolidated, not overturned.
+        # #894: default-exclude synthetic paths unconditionally — they are
+        # planted ground-truth test rows (migration 063 tag; live table was
+        # 250/250 synthetic at filing time) and promoting one would launder it
+        # into the semantic tier as confirmed real-world knowledge.
         query = (
             client.table("causal_paths")
             .select("path_id, brand, validation_status, confirmation_count, consolidated_at")
@@ -1281,6 +1287,7 @@ class Consolidator:
         )
         if brand:
             query = query.eq("brand", brand)
+        query = apply_provenance_filter(query)
         candidates = (query.execute().data) or []
         result.causal_paths_examined += len(candidates)
 

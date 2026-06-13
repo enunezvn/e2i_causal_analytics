@@ -208,7 +208,8 @@ def persist_graph_to_falkordb(
     Args:
         graph: ``networkx.Graph`` from :func:`build_hcp_influence_graph`.
         falkordb_graph: a FalkorDB ``Graph`` handle (i.e.
-            ``client.select_graph("e2i_semantic")``). Tests inject a mock.
+            ``client.select_graph(get_config().semantic.graph_name)`` — the
+            graph the semantic-memory readers use, #890). Tests inject a mock.
         cohort_id: e.g. ``"optum_initiation_v3"``. Set on every node + edge
             so cohorts stay queryable independently.
         batch_size: number of rows per ``UNWIND`` batch. Defaults to
@@ -419,6 +420,24 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _resolve_target_graph_name() -> str:
+    """Resolve the FalkorDB graph the semantic-memory READERS use.
+
+    #169's intent is that ``FalkorDBSemanticMemory.get_hcp_influence_network``
+    / ``count_hcp_influence_network`` return the persisted data. Those readers
+    resolve ``get_config().semantic.graph_name`` (deployed: ``e2i_causal``,
+    see #749), so the writer must target the same graph. The previous
+    hardcoded ``"e2i_semantic"`` wrote into an orphan graph nothing reads
+    (issue #890).
+
+    Raises if the memory config cannot be loaded — failing closed beats
+    silently writing to the wrong graph.
+    """
+    from src.memory.services.config import get_config
+
+    return str(get_config().semantic.graph_name)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     logging.basicConfig(
@@ -468,7 +487,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         client = get_falkordb_client()
-        falkordb_graph = client.select_graph("e2i_semantic")
+        target_graph = _resolve_target_graph_name()
+        logger.info("Persisting into semantic graph: %s", target_graph)
+        falkordb_graph = client.select_graph(target_graph)
     except Exception as exc:  # noqa: BLE001 — surface any connection error
         logger.error("FalkorDB unreachable: %s", exc)
         return 1

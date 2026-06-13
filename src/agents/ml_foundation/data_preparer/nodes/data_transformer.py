@@ -5,9 +5,10 @@ Applies transformations consistently across train/val/test splits.
 """
 
 import logging
+import re
 import warnings
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,53 @@ _EXCLUDE_COLUMNS_DEPRECATION_MESSAGE = (
     "instead. Both keys are honored today, but 'exclude_columns' will be "
     "removed in a future tier-0 release."
 )
+
+# Issue #773 PR-3: XGBoost hard-rejects feature names containing ``[``, ``]``
+# or ``<`` (``ValueError: feature_names must be string, and may not contain
+# [, ] or <``). ``>`` is included for symmetry with ``<`` so range-style
+# categories like ``"<65"`` / ``">65"`` sanitize consistently.
+_XGB_ILLEGAL_NAME_CHARS = re.compile(r"[\[\]<>]")
+
+
+def sanitize_feature_names(names: Iterable[Any]) -> List[str]:
+    """Sanitize encoder-derived feature names so XGBoost accepts them.
+
+    ``OneHotEncoder.get_feature_names_out`` embeds raw category VALUES into
+    the output column names (``f"{column}_{value}"``). Nominal category
+    values like ``"<65"`` or ``"[18-34]"`` therefore produce column names
+    containing ``[``, ``]`` or ``<`` — characters XGBoost rejects at fit
+    time, crashing model training downstream of data_preparer (issue #773).
+
+    Each illegal character is replaced with ``_``. Because two DISTINCT raw
+    names may sanitize to the same string (``"a[b"`` and ``"a]b"`` both ->
+    ``"a_b"``), collisions are deduplicated deterministically in input
+    order: the first occurrence keeps the base name, later collisions get
+    ``_2``, ``_3``, ... suffixes (re-checked against all names emitted so
+    far, so a suffixed name can never collide either).
+
+    Any future path that re-derives names from the stored
+    ``encoders["onehot"]`` via ``get_feature_names_out`` (e.g. an inference
+    or export surface) MUST run those names through this same function,
+    otherwise its names will diverge from the sanitized training columns.
+
+    Args:
+        names: Raw feature names (e.g. from ``get_feature_names_out``).
+
+    Returns:
+        Sanitized, collision-free names, same length/order as the input.
+    """
+    sanitized: List[str] = []
+    used: set[str] = set()
+    for raw in names:
+        base = _XGB_ILLEGAL_NAME_CHARS.sub("_", str(raw))
+        candidate = base
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        sanitized.append(candidate)
+    return sanitized
 
 
 async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
@@ -353,8 +401,13 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
                 encoder.fit(train_df[nominal_cols])
                 encoders["onehot"] = encoder
 
-                # Get new column names
-                new_cols = encoder.get_feature_names_out(nominal_cols)
+                # Get new column names. Issue #773 PR-3: sanitize them —
+                # ``get_feature_names_out`` embeds raw category values, and
+                # values like "<65" / "[18-34]" yield names XGBoost rejects
+                # at fit time. The sanitized names are used consistently for
+                # the DataFrame columns of ALL splits and the
+                # ``transformations_applied`` metadata below.
+                new_cols = sanitize_feature_names(encoder.get_feature_names_out(nominal_cols))
 
                 def _apply_onehot(frame: pd.DataFrame) -> pd.DataFrame:
                     encoded = pd.DataFrame(
