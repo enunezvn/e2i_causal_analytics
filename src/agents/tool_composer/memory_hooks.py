@@ -526,11 +526,21 @@ class ToolComposerMemoryHooks:
             limit: Maximum results to return
 
         Returns:
-            List of similar past compositions with their plans
+            List of similar past compositions with their plans (each row
+            carries the hydrated ``raw_content`` payload — the search RPC
+            itself returns no ``raw_content``, so the original ``success``
+            post-filter saw ``{}`` on every row, ``successful`` was
+            permanently empty, and the planner's G1/G2 episodic context
+            (``planner._check_episodic_memory`` →
+            ``planner._format_episodic_context``, which read
+            ``tool_sequence``/``confidence``/``total_duration_ms`` off
+            ``raw_content``) never fired; #889.)
         """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
@@ -539,15 +549,20 @@ class ToolComposerMemoryHooks:
                 agent_name="tool_composer",
             )
 
+            # The success post-filter ALWAYS runs, so always over-fetch
+            # (bounded window, not a small fixed multiple — codex R1 on the
+            # #883 read-side fix: limit*2 starves when high-similarity
+            # non-matching rows fill the window).
             results = await search_episodic_by_text(
                 query_text=query,
                 filters=filters,
-                limit=limit * 2,  # Get more to filter by success
+                limit=content_filter_fetch_limit(limit),
                 min_similarity=0.7,
                 include_entity_context=False,
             )
+            results = await hydrate_raw_content(results)
 
-            # Filter to successful compositions only
+            # Filter to successful compositions only — on the HYDRATED content
             successful = [r for r in results if r.get("raw_content", {}).get("success", False)]
 
             return successful[:limit]

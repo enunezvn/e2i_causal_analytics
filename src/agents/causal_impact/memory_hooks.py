@@ -203,10 +203,25 @@ class CausalImpactMemoryHooks:
         outcome_var: Optional[str] = None,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Search episodic memory for similar past causal analyses."""
+        """Search episodic memory for similar past causal analyses.
+
+        The search RPC's TABLE shape does NOT include ``raw_content``, so the
+        original post-filter (``result.get("raw_content", {})``) saw ``{}`` on
+        every row and dropped them ALL whenever treatment_var/outcome_var were
+        passed — the production ``get_memory_context`` call shape — leaving
+        the episodic context permanently empty even though the writes land
+        (#889 in-file family; the issue table listed ``get_prior_analyses``,
+        this is the identical pattern fixed together, per the #888
+        gap_analyzer precedent). Hydrate ``raw_content`` by memory_id (one
+        batched select via the shared helper) and post-filter on the real
+        stored content, over-fetching so high-similarity non-matching rows
+        cannot starve the trimmed result.
+        """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
@@ -215,16 +230,18 @@ class CausalImpactMemoryHooks:
                 agent_name="causal_impact",
             )
 
+            needs_content_filter = bool(treatment_var or outcome_var)
             results = await search_episodic_by_text(
                 query_text=query,
                 filters=filters,
-                limit=limit,
+                limit=content_filter_fetch_limit(limit) if needs_content_filter else limit,
                 min_similarity=0.6,
                 include_entity_context=True,
             )
+            results = await hydrate_raw_content(results)
 
-            # Further filter by treatment/outcome if specified
-            if treatment_var or outcome_var:
+            # Filter by treatment/outcome on the HYDRATED stored content
+            if needs_content_filter:
                 filtered_results = []
                 for result in results:
                     content = result.get("raw_content", {})
@@ -233,7 +250,7 @@ class CausalImpactMemoryHooks:
                     if outcome_var and content.get("outcome_var") != outcome_var:
                         continue
                     filtered_results.append(result)
-                return filtered_results
+                return filtered_results[:limit]
 
             return results
         except Exception as e:
@@ -451,6 +468,14 @@ class CausalImpactMemoryHooks:
                     "outcome_var": outcome_var,
                     "confounders": state.get("confounders", []),
                     "ate_estimate": ate,
+                    # Persist the gate confidence already computed for the
+                    # description: ``get_prior_analyses`` filters stored rows
+                    # on ``raw_content["confidence"] >= min_confidence``, and
+                    # without this key no row could EVER pass — the reader's
+                    # raw_content hydration fix (#889) is inert if the value
+                    # is never written. Rows written before this fix lack the
+                    # key and are honestly excluded (no fabricated 0-or-1).
+                    "confidence": confidence,
                     "confidence_interval": result.get("confidence_interval"),
                     "refutation_passed": refutation,
                     "gate_decision": gate_decision,
@@ -599,11 +624,19 @@ class CausalImpactMemoryHooks:
             limit: Maximum results to return
 
         Returns:
-            List of prior causal analyses
+            List of prior causal analyses (each row carries the hydrated
+            ``raw_content`` payload — the search RPC itself returns no
+            ``raw_content``, so the original confidence post-filter saw ``{}``
+            on every row and this reader was permanently empty; #889. DOUBLE
+            bug: the write path also never stored ``confidence`` — fixed in
+            ``store_causal_analysis`` — so hydration alone could not have made
+            the threshold pass.)
         """
         try:
             from src.memory.episodic_memory import (
                 EpisodicSearchFilters,
+                content_filter_fetch_limit,
+                hydrate_raw_content,
                 search_episodic_by_text,
             )
 
@@ -614,20 +647,32 @@ class CausalImpactMemoryHooks:
                 agent_name="causal_impact",
             )
 
+            # The confidence post-filter ALWAYS runs, so always over-fetch
+            # (bounded window, not a small fixed multiple — codex R1 on the
+            # #883 read-side fix: limit*2 starves when high-similarity
+            # non-matching rows fill the window).
             results = await search_episodic_by_text(
                 query_text=query_text,
                 filters=filters,
-                limit=limit * 2,  # Fetch more to filter
+                limit=content_filter_fetch_limit(limit),
                 min_similarity=0.5,
                 include_entity_context=False,
             )
+            results = await hydrate_raw_content(results)
 
-            # Filter by confidence
-            filtered = [
-                r
-                for r in results
-                if r.get("raw_content", {}).get("confidence", 0) >= min_confidence
-            ]
+            # Filter on the HYDRATED stored content. treatment/outcome are
+            # docstring-declared filters that previously only seeded the
+            # embedding text — make them real (the write stores both keys).
+            filtered = []
+            for r in results:
+                content = r.get("raw_content", {})
+                if content.get("confidence", 0) < min_confidence:
+                    continue
+                if treatment_var and content.get("treatment_var") != treatment_var:
+                    continue
+                if outcome_var and content.get("outcome_var") != outcome_var:
+                    continue
+                filtered.append(r)
 
             return filtered[:limit]
         except Exception as e:

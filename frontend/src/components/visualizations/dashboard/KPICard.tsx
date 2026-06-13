@@ -64,12 +64,6 @@ export interface KPICardProps {
 }
 
 // =============================================================================
-// SAMPLE DATA
-// =============================================================================
-
-const SAMPLE_SPARKLINE = [45, 52, 48, 55, 60, 58, 62, 65, 63, 68];
-
-// =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
 
@@ -160,8 +154,11 @@ export const KPICard = React.forwardRef<HTMLDivElement, KPICardProps>(
     },
     ref
   ) => {
-    // Use provided sparkline or sample
-    const sparklineData = propSparkline ?? SAMPLE_SPARKLINE;
+    // Only real, caller-provided history renders a sparkline. There is NO
+    // sample fallback: an absent prop means no trend data exists, so no
+    // trend chart is drawn (a fabricated upward trend behind a real value
+    // is silently-fake data).
+    const sparklineData = propSparkline ?? [];
 
     // Calculate trend
     const trend = useMemo(() => {

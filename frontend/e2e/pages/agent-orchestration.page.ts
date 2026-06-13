@@ -47,8 +47,10 @@ export class AgentOrchestrationPage extends BasePage {
     return this.page.getByText('Total Agents').first()
   }
 
-  get tasksTodayCard(): Locator {
-    return this.page.getByText('Tasks Today').first()
+  // "Tasks Today" (the fabricated ORCHESTRATION_STATS card) was replaced by
+  // real 24h telemetry from /analytics/summary.
+  get queries24hCard(): Locator {
+    return this.page.getByText('Queries (24h)').first()
   }
 
   get avgResponseTimeCard(): Locator {
@@ -123,7 +125,7 @@ export class AgentOrchestrationPage extends BasePage {
       await this.page.getByText('Total Agents').first().waitFor({ state: 'visible', timeout: 5000 })
       return true
     } catch {
-      const stats = ['Tasks Today', 'Avg Response Time', 'Success Rate']
+      const stats = ['Queries (24h)', 'Avg Response Time', 'Success Rate']
       for (const stat of stats) {
         if (await this.page.getByText(stat).first().isVisible().catch(() => false)) {
           return true

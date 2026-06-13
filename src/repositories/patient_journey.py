@@ -20,6 +20,7 @@ class PatientJourneyRepository(SplitAwareRepository):
     """
 
     table_name = "patient_journeys"
+    id_column = "patient_journey_id"  # live PK (#894: .eq("id") was a latent 42703)
     model_class = None  # Set to PatientJourney model when available
     HAS_PROVENANCE = True  # patient_journeys carries is_synthetic (Shard 01)
 
