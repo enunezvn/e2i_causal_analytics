@@ -266,3 +266,22 @@ class TestHCPTerritoryAssignment:
         a = self._gen(seed=7)
         b = self._gen(seed=7)
         assert a["territory_id"].tolist() == b["territory_id"].tolist()
+
+    def test_zero_records_is_empty_not_error(self):
+        # n_records=0 must return an empty frame (with the columns), not raise on
+        # the territory/rep assignment.
+        df = self._gen(n=0)
+        assert len(df) == 0
+        assert "territory_id" in df.columns
+        assert "sales_rep_id" in df.columns
+
+    def test_preexisting_columns_unchanged_by_territory_draw(self):
+        # Golden pin: the territory RNG draw happens AFTER all other columns, so
+        # pre-existing draws (ids, the lognormal network/centrality) are
+        # bit-identical. If the territory draw were moved earlier it would shift
+        # these and this test would fail (catches the regression the coherence/
+        # determinism tests cannot).
+        df = self._gen(seed=42, n=100)
+        assert df["hcp_id"].iloc[0] == "hcp_00000"
+        assert round(float(df["peer_influence_score"].iloc[0]), 4) == 2.9501
+        assert int(df["influence_network_size"].iloc[0]) == 18
