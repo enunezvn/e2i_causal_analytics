@@ -170,7 +170,7 @@ export function Signup() {
             </CardDescription>
           </CardHeader>
 
-          <form onSubmit={handleSubmit(onSubmit)}>
+          <form onSubmit={handleSubmit(onSubmit)} noValidate>
             <CardContent className="space-y-4">
               {/* Auth Error */}
               {error && (

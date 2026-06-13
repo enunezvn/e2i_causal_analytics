@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { env, buildApiUrl } from '@/config/env';
+import { logger } from '@/lib/logger';
 import { useAuthStore } from '@/stores/auth-store';
 import { isSupabaseConfigured } from '@/lib/supabase';
 
@@ -263,9 +264,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     heartbeatIntervalRef.current = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(heartbeatMessage);
-        if (env.isDev) {
-          console.debug('[WebSocket] Heartbeat sent');
-        }
+        logger.debug('[WebSocket] Heartbeat sent');
       }
     }, heartbeatInterval);
   }, [heartbeatInterval, heartbeatMessage, clearHeartbeat]);
@@ -304,9 +303,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     const delay = getNextReconnectDelay();
     const nextAttempt = reconnectAttempts + 1;
 
-    if (env.isDev) {
-      console.debug(`[WebSocket] Scheduling reconnect in ${delay}ms (attempt ${nextAttempt}/${maxReconnectAttempts})`);
-    }
+    logger.debug(`[WebSocket] Scheduling reconnect in ${delay}ms (attempt ${nextAttempt}/${maxReconnectAttempts})`);
 
     setState('reconnecting');
     onReconnectRef.current?.(nextAttempt, maxReconnectAttempts);
@@ -361,9 +358,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       }
     }
 
-    if (env.isDev) {
-      console.debug('[WebSocket] Connecting to:', wsUrl, protocols ? '(auth via subprotocol)' : '');
-    }
+    logger.debug('[WebSocket] Connecting to:', wsUrl, protocols ? '(auth via subprotocol)' : '');
 
     try {
       const ws = protocols ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
@@ -374,9 +369,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
           return;
         }
 
-        if (env.isDev) {
-          console.debug('[WebSocket] Connected');
-        }
+        logger.debug('[WebSocket] Connected');
 
         setState('connected');
         setReconnectAttempts(0);
@@ -395,9 +388,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
 
           // Ignore pong responses
           if (data.type === 'pong') {
-            if (env.isDev) {
-              console.debug('[WebSocket] Pong received');
-            }
+            logger.debug('[WebSocket] Pong received');
             return;
           }
 
@@ -422,9 +413,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       ws.onclose = (event) => {
         if (isUnmountedRef.current) return;
 
-        if (env.isDev) {
-          console.debug('[WebSocket] Closed:', event.code, event.reason);
-        }
+        logger.debug('[WebSocket] Closed:', event.code, event.reason);
 
         clearHeartbeat();
         wsRef.current = null;
@@ -476,9 +465,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     clearHeartbeat();
 
     if (wsRef.current) {
-      if (env.isDev) {
-        console.debug('[WebSocket] Disconnecting');
-      }
+      logger.debug('[WebSocket] Disconnecting');
       wsRef.current.close(1000, 'Client disconnected');
       wsRef.current = null;
     }

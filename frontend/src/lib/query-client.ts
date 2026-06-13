@@ -12,6 +12,7 @@
 
 import { QueryClient } from '@tanstack/react-query';
 import { env } from '@/config/env';
+import { logger } from '@/lib/logger';
 
 /**
  * Default stale time for queries (5 minutes)
@@ -151,23 +152,17 @@ function handleVisibilityChange(): void {
   const wasVisible = isTabVisible;
   isTabVisible = !document.hidden;
 
-  if (env.isDev) {
-    console.debug(`[Query] Tab visibility changed: ${wasVisible ? 'visible' : 'hidden'} → ${isTabVisible ? 'visible' : 'hidden'}`);
-  }
+  logger.debug(`[Query] Tab visibility changed: ${wasVisible ? 'visible' : 'hidden'} → ${isTabVisible ? 'visible' : 'hidden'}`);
 
   if (!isTabVisible) {
     // Tab became hidden. Interval polling is paused by TanStack's
     // focusManager (refetchIntervalInBackground defaults to false); nothing
     // to cancel here. In-flight, non-interval fetches are left to complete.
-    if (env.isDev) {
-      console.debug('[Query] Tab hidden - background polling paused by focusManager');
-    }
+    logger.debug('[Query] Tab hidden - background polling paused by focusManager');
   } else if (wasVisible === false && isTabVisible) {
     // Tab became visible again - invalidate stale queries to refetch
     // This triggers a refetch for queries that became stale while hidden
-    if (env.isDev) {
-      console.debug('[Query] Tab visible - resuming queries');
-    }
+    logger.debug('[Query] Tab visible - resuming queries');
     // Refetch queries that may have become stale while hidden
     // Only refetch if refetchOnWindowFocus is enabled (production)
     if (env.isProd) {
@@ -189,9 +184,7 @@ export function initTabVisibilityListener(): void {
 
   document.addEventListener('visibilitychange', handleVisibilityChange);
 
-  if (env.isDev) {
-    console.debug('[Query] Tab visibility listener initialized');
-  }
+  logger.debug('[Query] Tab visibility listener initialized');
 }
 
 /**

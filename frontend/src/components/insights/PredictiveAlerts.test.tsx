@@ -106,4 +106,33 @@ describe('PredictiveAlerts — no SAMPLE_ALERTS fallback', () => {
     const { container } = render(<PredictiveAlerts />);
     expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
   });
+
+  // #26: alert.severity carries the DriftSeverity vocabulary (high/medium/low),
+  // not just critical/warning/info. The old local map silently collapsed
+  // "high" -> "info" (blue), under-stating a high-severity drift alert. The
+  // shared mapper must render it as "Warning".
+  it('renders a backend "high" drift severity as a Warning (not Info)', () => {
+    const HIGH_DRIFT: AlertListResponse = {
+      total_count: 1,
+      active_count: 1,
+      alerts: [
+        {
+          id: 'al_high',
+          model_version: 'churn_v3.0.0',
+          alert_type: 'drift',
+          severity: 'high',
+          title: 'Feature drift on region',
+          description: 'High drift detected.',
+          status: AlertStatus.ACTIVE,
+          triggered_at: '2026-06-12T01:00:00Z',
+        },
+      ],
+    };
+    mockAlerts({ data: HIGH_DRIFT } as unknown as Partial<AlertsQuery>);
+    render(<PredictiveAlerts />);
+
+    expect(screen.getByText('Feature drift on region')).toBeInTheDocument();
+    expect(screen.getByText('Warning')).toBeInTheDocument();
+    expect(screen.queryByText('Info')).not.toBeInTheDocument();
+  });
 });

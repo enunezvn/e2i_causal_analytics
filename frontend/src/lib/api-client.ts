@@ -18,6 +18,7 @@ import axios, {
 } from 'axios';
 import type { ZodTypeAny } from 'zod';
 import { env, buildApiUrl } from '@/config/env';
+import { logger } from '@/lib/logger';
 import { useAuthStore } from '@/stores/auth-store';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { validateApiResponse } from './api-schemas';
@@ -159,16 +160,14 @@ function requestInterceptor(
   const correlationId = generateUUID();
   config.headers['X-Correlation-ID'] = correlationId;
 
-  // Log request in development
-  if (env.isDev) {
-    const method = config.method?.toUpperCase() ?? 'GET';
-    const url = config.url ?? '';
-    console.debug(`[API] ${method} ${url}`, {
-      correlationId,
-      params: config.params,
-      hasAuth: !!session?.access_token,
-    });
-  }
+  // Log request (gated to dev / VITE_DEBUG by the logger)
+  const method = config.method?.toUpperCase() ?? 'GET';
+  const url = config.url ?? '';
+  logger.debug(`[API] ${method} ${url}`, {
+    correlationId,
+    params: config.params,
+    hasAuth: !!session?.access_token,
+  });
 
   return config;
 }
@@ -177,15 +176,13 @@ function requestInterceptor(
  * Response interceptor for logging and transformation
  */
 function responseInterceptor(response: AxiosResponse): AxiosResponse {
-  // Log response in development
-  if (env.isDev) {
-    const method = response.config.method?.toUpperCase() ?? 'GET';
-    const url = response.config.url ?? '';
-    const status = response.status;
-    console.debug(`[API] ${method} ${url} -> ${status}`, {
-      data: response.data,
-    });
-  }
+  // Log response (gated to dev / VITE_DEBUG by the logger)
+  const method = response.config.method?.toUpperCase() ?? 'GET';
+  const url = response.config.url ?? '';
+  const status = response.status;
+  logger.debug(`[API] ${method} ${url} -> ${status}`, {
+    data: response.data,
+  });
 
   return response;
 }
@@ -657,9 +654,7 @@ export function createGraphWebSocket(
   };
 
   ws.onclose = (event) => {
-    if (env.isDev) {
-      console.debug('[WebSocket] Closed:', event.code, event.reason);
-    }
+    logger.debug('[WebSocket] Closed:', event.code, event.reason);
     onClose?.(event);
   };
 

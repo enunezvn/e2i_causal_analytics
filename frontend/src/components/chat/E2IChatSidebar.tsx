@@ -26,6 +26,7 @@ import {
   Check,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { logger } from '@/lib/logger';
 import { Button } from '@/components/ui/button';
 import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
 import { AgentStatusPanel } from './AgentStatusPanel';
@@ -96,15 +97,14 @@ export function E2IChatSidebar({
     return id.length > 16 ? `...${id.slice(-12)}` : id;
   }, []);
 
-  // Feedback handlers for CopilotKit thumbs up/down buttons
-  // DEBUG: Log when handlers are created
-  console.log('[E2IChatSidebar] Creating feedback handlers, submitFeedback available:', !!submitFeedback);
+  // Feedback handlers for CopilotKit thumbs up/down buttons.
+  // (Removed a per-render console.log here that ran on every render and leaked
+  //  to the production console — #18 console hygiene.)
 
   const handleThumbsUp = React.useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (message: any) => {
-      // DEBUG: Immediate log to verify callback is invoked
-      console.log('[E2IChatSidebar] handleThumbsUp CALLED with message:', message);
+      logger.debug('[E2IChatSidebar] handleThumbsUp CALLED with message:', message);
 
       try {
         const messageId = message.id ? parseInt(message.id, 10) || Date.now() : Date.now();
@@ -120,7 +120,7 @@ export function E2IChatSidebar({
           responsePreview: content.substring(0, 500),
           agentName: 'copilotkit',
         }).then(() => {
-          console.log('[E2IChatSidebar] Thumbs up feedback submitted for message:', messageId);
+          logger.debug('[E2IChatSidebar] Thumbs up feedback submitted for message:', messageId);
         }).catch((error) => {
           console.error('[E2IChatSidebar] Failed to submit thumbs up feedback:', error);
         });
@@ -134,8 +134,7 @@ export function E2IChatSidebar({
   const handleThumbsDown = React.useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (message: any) => {
-      // DEBUG: Immediate log to verify callback is invoked
-      console.log('[E2IChatSidebar] handleThumbsDown CALLED with message:', message);
+      logger.debug('[E2IChatSidebar] handleThumbsDown CALLED with message:', message);
 
       try {
         const messageId = message.id ? parseInt(message.id, 10) || Date.now() : Date.now();
@@ -151,7 +150,7 @@ export function E2IChatSidebar({
           responsePreview: content.substring(0, 500),
           agentName: 'copilotkit',
         }).then(() => {
-          console.log('[E2IChatSidebar] Thumbs down feedback submitted for message:', messageId);
+          logger.debug('[E2IChatSidebar] Thumbs down feedback submitted for message:', messageId);
         }).catch((error) => {
           console.error('[E2IChatSidebar] Failed to submit thumbs down feedback:', error);
         });
