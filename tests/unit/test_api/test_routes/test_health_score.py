@@ -62,12 +62,18 @@ def reset_health_history():
 
 
 @pytest.fixture(autouse=True)
-def _no_live_health_sources():
+def _no_live_health_sources(monkeypatch):
     """Unit tests have no live Supabase. Default the health-source client to None
     so the dimension fetchers report 'backend unavailable' and the /models,
     /pipelines, /agents endpoints take the deterministic mock-fallback path.
+
+    Also default to dev mock-fallback ALLOWED (E2I_REQUIRE_AGENT_IMPORT=0) so the
+    backend-down guard serves clearly-tagged placeholder instead of 503 — unit
+    tests are not production. Fail-closed tests override with "1".
+
     Tests exercising the real-data path patch _health_source_client (fetcher
     tests) or the fetcher itself (endpoint tests) — the inner patch wins."""
+    monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
     with patch("src.api.routes.health_score._health_source_client", return_value=None):
         yield
 
@@ -422,14 +428,14 @@ async def test_get_component_health_measured_when_agent_runs():
 
 @pytest.mark.asyncio
 async def test_get_model_health_fails_closed_in_production(monkeypatch):
-    """In a fail-closed environment, /models must raise 503 rather than return
-    fabricated model accuracy/metrics."""
+    """In a fail-closed environment, /models must raise 503 when the real data
+    source is unavailable, rather than return fabricated model accuracy/metrics.
+    (_health_source_client is None via the autouse fixture.)"""
     monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
-    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
-        with pytest.raises(HTTPException) as exc_info:
-            await get_model_health()
+    with pytest.raises(HTTPException) as exc_info:
+        await get_model_health()
     assert exc_info.value.status_code == 503
-    assert exc_info.value.detail["error"] == "agent_unavailable"
+    assert exc_info.value.detail["error"] == "health_source_unavailable"
 
 
 @pytest.mark.asyncio
@@ -478,14 +484,13 @@ async def test_get_model_health_measured_from_dashboard():
 
 @pytest.mark.asyncio
 async def test_get_pipeline_health_fails_closed_in_production(monkeypatch):
-    """In a fail-closed environment, /pipelines must raise 503 rather than
-    return fabricated pipeline freshness/row-count data."""
+    """In a fail-closed environment, /pipelines must raise 503 when the real data
+    source is unavailable, rather than return fabricated freshness/row-counts."""
     monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
-    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
-        with pytest.raises(HTTPException) as exc_info:
-            await get_pipeline_health()
+    with pytest.raises(HTTPException) as exc_info:
+        await get_pipeline_health()
     assert exc_info.value.status_code == 503
-    assert exc_info.value.detail["error"] == "agent_unavailable"
+    assert exc_info.value.detail["error"] == "health_source_unavailable"
 
 
 @pytest.mark.asyncio
@@ -526,14 +531,13 @@ async def test_get_pipeline_health_measured_from_etl():
 
 @pytest.mark.asyncio
 async def test_get_agent_health_fails_closed_in_production(monkeypatch):
-    """In a fail-closed environment, /agents must raise 503 rather than return
-    fabricated agent success-rate/latency data."""
+    """In a fail-closed environment, /agents must raise 503 when the real data
+    source is unavailable, rather than return fabricated success-rate/latency."""
     monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
-    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
-        with pytest.raises(HTTPException) as exc_info:
-            await get_agent_health()
+    with pytest.raises(HTTPException) as exc_info:
+        await get_agent_health()
     assert exc_info.value.status_code == 503
-    assert exc_info.value.detail["error"] == "agent_unavailable"
+    assert exc_info.value.detail["error"] == "health_source_unavailable"
 
 
 @pytest.mark.asyncio

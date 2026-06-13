@@ -552,8 +552,10 @@ async def get_model_health() -> ModelHealthResponse:
 
     models, provenance = _fetch_model_health()
     if provenance is None:
-        # Backend unreachable: fail closed in prod, clearly-tagged placeholder in dev.
-        provenance = _resolve_health_provenance(agent_name="Health Score")
+        # Backend unreachable: fail closed in prod (503), clearly-tagged
+        # placeholder only in an explicit dev/test environment.
+        _fail_closed_if_no_backend()
+        provenance = DataProvenance.PLACEHOLDER
         models = _get_mock_model_health()
     check_latency = int((time.time() - start_time) * 1000)
 
@@ -603,7 +605,8 @@ async def get_pipeline_health() -> PipelineHealthResponse:
 
     pipelines, provenance = _fetch_pipeline_health()
     if provenance is None:
-        provenance = _resolve_health_provenance(agent_name="Health Score")
+        _fail_closed_if_no_backend()
+        provenance = DataProvenance.PLACEHOLDER
         pipelines = _get_mock_pipeline_health()
     check_latency = int((time.time() - start_time) * 1000)
 
@@ -655,7 +658,8 @@ async def get_agent_health() -> AgentHealthResponse:
 
     agents, provenance = _fetch_agent_health()
     if provenance is None:
-        provenance = _resolve_health_provenance(agent_name="Health Score")
+        _fail_closed_if_no_backend()
+        provenance = DataProvenance.PLACEHOLDER
         agents = _get_mock_agent_health()
     check_latency = int((time.time() - start_time) * 1000)
 
@@ -877,17 +881,31 @@ def _map_model_status(health_status: Any) -> ModelStatus:
     return ModelStatus.DEGRADED
 
 
+# agent_registry.agent_tier is a TEXT category enum; this is its numeric tier
+# (the same number tier_v2 embeds: 'tier_2_causal' -> 2). Used as the fallback
+# when tier_v2 is null (it is nullable in the schema).
+_AGENT_TIER_BY_CATEGORY = {
+    "coordination": 1,
+    "causal_analytics": 2,
+    "monitoring": 3,
+    "ml_predictions": 4,
+    "self_improvement": 5,
+}
+
+
 def _agent_tier_int(row: Dict[str, Any]) -> int:
-    """Numeric tier from agent_registry. Both ``agent_tier`` ('coordination') and
-    ``tier_v2`` ('tier_2_causal') are TEXT enums; tier_v2 embeds the number.
-    Returns 0 when no digit is present."""
-    for key in ("tier_v2", "agent_tier"):
-        val = row.get(key)
-        if val is None:
-            continue
-        m = re.search(r"(\d+)", str(val))
+    """Numeric tier (0-5) from agent_registry. ``tier_v2`` ('tier_2_causal')
+    embeds the number; when it is null, map the ``agent_tier`` TEXT category
+    ('coordination', 'causal_analytics', ...). Returns 0 only when neither
+    resolves (genuinely unknown tier)."""
+    tier_v2 = row.get("tier_v2")
+    if tier_v2 is not None:
+        m = re.search(r"(\d+)", str(tier_v2))
         if m:
             return int(m.group(1))
+    category = row.get("agent_tier")
+    if category is not None:
+        return _AGENT_TIER_BY_CATEGORY.get(str(category).strip().lower(), 0)
     return 0
 
 
@@ -900,6 +918,28 @@ def _map_pipeline_status(status: Any, freshness_hours: float) -> PipelineStatus:
     return PipelineStatus.HEALTHY
 
 
+def _fail_closed_if_no_backend() -> None:
+    """A dimension's real backend is unreachable (fetcher returned None).
+
+    Fail closed in production (503) so fabricated placeholder data is NEVER served
+    as real when the source is down. In an explicit dev/test environment, return
+    so the caller serves clearly-tagged placeholder (mirrors the #429 import-guard
+    policy, extended from 'agent import failed' to 'data source unavailable')."""
+    from src.api.utils.agent_import_guard import should_fail_closed_on_import_error
+
+    if should_fail_closed_on_import_error():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "health_source_unavailable",
+                "message": (
+                    "Health data source is unavailable; refusing to serve "
+                    "placeholder data as real in production."
+                ),
+            },
+        )
+
+
 def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
     """Real model health from ml_model_health_dashboard (production stage).
 
@@ -910,6 +950,9 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
     db = _health_source_client()
     if db is None:
         return [], None
+    # The query AND the row->model construction are both inside the try: a bad
+    # row (e.g. non-numeric metric) must fail closed (None -> 503/placeholder),
+    # never 500 the endpoint.
     try:
         rows = (
             db.table("ml_model_health_dashboard")
@@ -923,42 +966,45 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
             .data
             or []
         )
-    except Exception as e:
-        # Backend unreachable/query failed: signal None so the caller fails
-        # closed (503 in prod / placeholder in dev) rather than 500.
-        logger.warning(f"model health: live query failed ({e})")
-        return [], None
-    models: List[ModelHealth] = []
-    any_metric = False
-    for r in rows:
-        metric_val = r.get("latest_metric_value")
-        primary = (r.get("primary_metric") or "").strip().lower()
-        auc = None
-        acc = None
-        if metric_val is not None:
-            any_metric = True
-            try:
-                v = float(metric_val)
-                if "auc" in primary:
-                    auc = v
-                elif primary in ("accuracy", "acc"):
-                    acc = v
-            except (ValueError, TypeError):
-                pass
-        models.append(
-            ModelHealth(
-                model_id=str(r.get("model_id") or r.get("model_name") or "unknown"),
-                model_name=str(r.get("model_name") or "unknown"),
-                accuracy=acc,
-                auc_roc=auc,
-                status=_map_model_status(r.get("health_status")),
+        models: List[ModelHealth] = []
+        missing_metric = False
+        for r in rows:
+            metric_val = r.get("latest_metric_value")
+            primary = (r.get("primary_metric") or "").strip().lower()
+            auc = None
+            acc = None
+            if metric_val is None:
+                missing_metric = True
+            else:
+                try:
+                    v = float(metric_val)
+                    if "auc" in primary:
+                        auc = v
+                    elif primary in ("accuracy", "acc"):
+                        acc = v
+                    else:
+                        # A metric we don't surface as a typed field -> the typed
+                        # perf fields stay null, so this row is not fully sourced.
+                        missing_metric = True
+                except (ValueError, TypeError):
+                    missing_metric = True
+            models.append(
+                ModelHealth(
+                    model_id=str(r.get("model_id") or r.get("model_name") or "unknown"),
+                    model_name=str(r.get("model_name") or "unknown"),
+                    accuracy=acc,
+                    auc_roc=auc,
+                    status=_map_model_status(r.get("health_status")),
+                )
             )
-        )
+    except Exception as e:
+        logger.warning(f"model health: live query/build failed ({e})")
+        return [], None
     if not models:
         return [], DataProvenance.UNKNOWN
-    # MEASURED only if every model carried a real metric value; otherwise the
-    # perf sub-fields are null -> PARTIAL (honest, not fabricated).
-    prov = DataProvenance.MEASURED if any_metric else DataProvenance.PARTIAL
+    # MEASURED only if EVERY model row carried a real, surfaced metric value;
+    # otherwise some perf sub-fields are null -> PARTIAL (honest, not fabricated).
+    prov = DataProvenance.PARTIAL if missing_metric else DataProvenance.MEASURED
     return models, prov
 
 
@@ -967,6 +1013,7 @@ def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvena
     db = _health_source_client()
     if db is None:
         return [], None
+    # Query + build both inside the try so a malformed row fails closed, not 500.
     try:
         rows = (
             db.table("etl_pipeline_metrics")
@@ -977,29 +1024,33 @@ def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvena
             .data
             or []
         )
-    except Exception as e:
-        logger.warning(f"pipeline health: live query failed ({e})")
-        return [], None
-    now = datetime.now(timezone.utc)
-    latest: Dict[str, Dict[str, Any]] = {}
-    for r in rows:
-        name = r.get("pipeline_name") or "unknown"
-        if name not in latest:
-            latest[name] = r
-    pipelines: List[PipelineHealth] = []
-    for name, r in latest.items():
-        run_end = r.get("run_end") or r.get("created_at")
-        freshness = _hours_since(run_end, now)
-        pipelines.append(
-            PipelineHealth(
-                pipeline_name=str(name),
-                last_run=str(r.get("run_start") or run_end or ""),
-                last_success=str(run_end or ""),
-                rows_processed=int(r.get("records_processed") or 0),
-                freshness_hours=round(freshness, 2),
-                status=_map_pipeline_status(r.get("status"), freshness),
+        now = datetime.now(timezone.utc)
+        latest: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            name = r.get("pipeline_name") or "unknown"
+            if name not in latest:
+                latest[name] = r
+        pipelines: List[PipelineHealth] = []
+        for name, r in latest.items():
+            run_end = r.get("run_end") or r.get("created_at")
+            freshness = _hours_since(run_end, now)
+            try:
+                rows_processed = int(r.get("records_processed") or 0)
+            except (ValueError, TypeError):
+                rows_processed = 0
+            pipelines.append(
+                PipelineHealth(
+                    pipeline_name=str(name),
+                    last_run=str(r.get("run_start") or run_end or ""),
+                    last_success=str(run_end or ""),
+                    rows_processed=rows_processed,
+                    freshness_hours=round(freshness, 2),
+                    status=_map_pipeline_status(r.get("status"), freshness),
+                )
             )
-        )
+    except Exception as e:
+        logger.warning(f"pipeline health: live query/build failed ({e})")
+        return [], None
     if not pipelines:
         return [], DataProvenance.UNKNOWN
     return pipelines, DataProvenance.MEASURED
@@ -1045,56 +1096,62 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
         # Roster is real; telemetry is just unavailable -> partial with null metrics.
         logger.warning(f"agent health: telemetry query failed ({e})")
         telemetry = []
-    agg: Dict[str, Dict[str, Any]] = {}
-    for e in telemetry:
-        name = e.get("agent_name")
-        if not name:
-            continue
-        d = agg.setdefault(name, {"latencies": [], "ok": 0, "total": 0, "last": None})
-        d["total"] += 1
-        dur = e.get("duration_ms")
-        if isinstance(dur, (int, float)) and dur > 0:
-            d["latencies"].append(dur)
-        if e.get("validation_passed") is not False:  # True or None -> counted ok
-            d["ok"] += 1
-        ts = e.get("created_at")
-        if ts and (d["last"] is None or str(ts) > str(d["last"])):
-            d["last"] = ts
+    try:
+        agg: Dict[str, Dict[str, Any]] = {}
+        for e in telemetry:
+            name = e.get("agent_name")
+            if not name:
+                continue
+            d = agg.setdefault(name, {"latencies": [], "ok": 0, "total": 0, "last": None})
+            d["total"] += 1
+            dur = e.get("duration_ms")
+            if isinstance(dur, (int, float)) and dur > 0:
+                d["latencies"].append(dur)
+            if e.get("validation_passed") is not False:  # True or None -> counted ok
+                d["ok"] += 1
+            ts = e.get("created_at")
+            if ts and (d["last"] is None or str(ts) > str(d["last"])):
+                d["last"] = ts
 
-    agents: List[AgentHealth] = []
-    have_telemetry = False
-    for r in roster:
-        name = str(r.get("agent_name") or "unknown")
-        a = agg.get(name)
-        if a and a["total"] > 0:
-            have_telemetry = True
-            lat = a["latencies"]
-            agents.append(
-                AgentHealth(
-                    agent_name=name,
-                    tier=_agent_tier_int(r),
-                    available=bool(r.get("is_active")),
-                    avg_latency_ms=int(sum(lat) / len(lat)) if lat else None,
-                    success_rate=round(a["ok"] / a["total"], 4),
-                    last_invocation=str(a["last"]) if a["last"] else None,
-                    invocations_24h=a["total"],
+        agents: List[AgentHealth] = []
+        missing_telemetry = False
+        for r in roster:
+            name = str(r.get("agent_name") or "unknown")
+            a = agg.get(name)
+            if a and a["total"] > 0:
+                lat = a["latencies"]
+                agents.append(
+                    AgentHealth(
+                        agent_name=name,
+                        tier=_agent_tier_int(r),
+                        available=bool(r.get("is_active")),
+                        avg_latency_ms=int(sum(lat) / len(lat)) if lat else None,
+                        success_rate=round(a["ok"] / a["total"], 4),
+                        last_invocation=str(a["last"]) if a["last"] else None,
+                        invocations_24h=a["total"],
+                    )
                 )
-            )
-        else:
-            # Registered, but no recent telemetry: availability is real, runtime
-            # metrics are UNMEASURED (null), not a fabricated success rate.
-            agents.append(
-                AgentHealth(
-                    agent_name=name,
-                    tier=_agent_tier_int(r),
-                    available=bool(r.get("is_active")),
-                    avg_latency_ms=None,
-                    success_rate=None,
-                    last_invocation=None,
-                    invocations_24h=0,
+            else:
+                # Registered, but no recent telemetry: availability is real, runtime
+                # metrics are UNMEASURED (null), not a fabricated success rate.
+                missing_telemetry = True
+                agents.append(
+                    AgentHealth(
+                        agent_name=name,
+                        tier=_agent_tier_int(r),
+                        available=bool(r.get("is_active")),
+                        avg_latency_ms=None,
+                        success_rate=None,
+                        last_invocation=None,
+                        invocations_24h=0,
+                    )
                 )
-            )
-    prov = DataProvenance.MEASURED if have_telemetry else DataProvenance.PARTIAL
+    except Exception as e:
+        logger.warning(f"agent health: build failed ({e})")
+        return [], None
+    # MEASURED only if EVERY roster agent had recent telemetry; if any agent's
+    # runtime metrics are null -> PARTIAL (honest, not fabricated).
+    prov = DataProvenance.PARTIAL if missing_telemetry else DataProvenance.MEASURED
     return agents, prov
 
 

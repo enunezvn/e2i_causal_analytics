@@ -1136,8 +1136,9 @@ export const AgentHealthWireSchema = z.object({
   agent_name: z.string(),
   tier: z.number().int(),
   available: z.boolean(),
-  avg_latency_ms: z.number().int(),
-  success_rate: z.number(),
+  // null = UNMEASURED (no recent telemetry; provenance "partial"), not a zero.
+  avg_latency_ms: z.number().int().nullable(),
+  success_rate: z.number().nullable(),
   last_invocation: z.string().nullable().optional(),
   invocations_24h: z.number().int().nonnegative(),
 });

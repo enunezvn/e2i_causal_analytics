@@ -148,10 +148,10 @@ export interface AgentHealth {
   tier: number;
   /** Whether agent is available */
   available: boolean;
-  /** Average response latency */
-  avg_latency_ms: number;
-  /** Success rate (0-1) */
-  success_rate: number;
+  /** Average response latency; null when unmeasured (provenance "partial") */
+  avg_latency_ms: number | null;
+  /** Success rate (0-1); null when unmeasured (provenance "partial") */
+  success_rate: number | null;
   /** Last invocation timestamp */
   last_invocation?: string;
   /** Invocations in last 24 hours */

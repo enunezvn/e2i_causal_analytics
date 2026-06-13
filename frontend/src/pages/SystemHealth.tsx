@@ -642,11 +642,11 @@ function SystemHealth() {
                         <div className="grid grid-cols-2 gap-2 text-xs text-[var(--color-muted-foreground)]">
                           <div>
                             <p>Latency</p>
-                            <p className="font-medium text-[var(--color-foreground)]">{agent.avg_latency_ms}ms</p>
+                            <p className="font-medium text-[var(--color-foreground)]">{agent.avg_latency_ms != null ? `${agent.avg_latency_ms}ms` : '—'}</p>
                           </div>
                           <div>
                             <p>Success</p>
-                            <p className="font-medium text-[var(--color-foreground)]">{(agent.success_rate * 100).toFixed(0)}%</p>
+                            <p className="font-medium text-[var(--color-foreground)]">{agent.success_rate != null ? `${(agent.success_rate * 100).toFixed(0)}%` : '—'}</p>
                           </div>
                           <div className="col-span-2">
                             <p>24h Invocations: <span className="font-medium text-[var(--color-foreground)]">{agent.invocations_24h}</span></p>
