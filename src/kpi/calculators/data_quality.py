@@ -23,6 +23,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
+from src.kpi.synthetic_mode import resolve_kpi_query_id
 
 
 class DataQualityCalculator(KPICalculatorBase):
@@ -361,6 +362,9 @@ class DataQualityCalculator(KPICalculatorBase):
             raise RuntimeError(
                 "DataQualityCalculator has no Supabase client; cannot execute KPI query"
             )
+        # Demo/review: swap to the _include_synthetic twin under the
+        # E2I_KPI_INCLUDE_SYNTHETIC flag (no-op otherwise). See synthetic_mode.py.
+        query_id = resolve_kpi_query_id(query_id)
         response = self.db_client.rpc(
             "kpi_query", {"query_id": query_id, "params": params}
         ).execute()

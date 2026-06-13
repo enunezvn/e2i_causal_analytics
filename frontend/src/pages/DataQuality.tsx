@@ -209,6 +209,13 @@ function KPIDrilldownRow({
             {effectiveMeta.unit ?? ''}
           </span>
         )}
+        {/* Synthetic-mode provenance: label the figure so a reviewer never reads
+            a synthetic-gold value as real data (E2I_KPI_INCLUDE_SYNTHETIC). */}
+        {value?.data_source === 'synthetic' && numericValue !== undefined && (
+          <Badge variant="outline" className="ml-2 text-[10px] px-1 py-0">
+            synthetic data
+          </Badge>
+        )}
       </td>
       <td className="py-3 px-4 text-sm text-muted-foreground">
         {formatTimestamp(value?.calculated_at)}

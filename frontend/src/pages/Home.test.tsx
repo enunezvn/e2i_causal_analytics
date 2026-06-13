@@ -201,6 +201,43 @@ describe('Home', () => {
     // The old fabricated values must be absent.
     expect(screen.queryByText('125,430')).not.toBeInTheDocument();
     expect(screen.queryByText('94.2%')).not.toBeInTheDocument();
+    // Real DB data => no synthetic banner and no provenance badge.
+    expect(screen.queryByText(/synthetic demo data/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('synthetic data')).not.toBeInTheDocument();
+  });
+
+  it('labels synthetic-sourced KPIs honestly (banner + "synthetic data" badge)', () => {
+    // E2I_KPI_INCLUDE_SYNTHETIC demo mode: the backend reports data_source
+    // 'synthetic' so the figures are populated AND clearly labelled as synthetic
+    // (never passed off as real-world data).
+    (useKpiSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'All',
+        period: 'Last 30 days',
+        metrics: { trx_volume: 42642, hcp_reach: 321 },
+        data_source: 'synthetic',
+      },
+      isLoading: false,
+      error: null,
+    });
+    (useActiveExperimentCount as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { active_count: 693 },
+      isLoading: false,
+    });
+    (useKPIValue as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { kpi_id: 'WS1-MP-001', value: 0.7704, status: 'good' },
+      isLoading: false,
+    });
+
+    renderWithAllProviders(<Home />);
+
+    // Populated synthetic-gold values render...
+    expect(screen.getByText('42,642')).toBeInTheDocument();
+    expect(screen.getByText('321')).toBeInTheDocument();
+    // ...and are explicitly labelled synthetic, not real DB or generic "sample".
+    expect(screen.getByText(/synthetic demo data/i)).toBeInTheDocument();
+    expect(screen.getAllByText('synthetic data').length).toBeGreaterThan(0);
+    expect(screen.queryByText('sample data')).not.toBeInTheDocument();
   });
 
   // =========================================================================
