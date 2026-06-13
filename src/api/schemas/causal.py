@@ -222,6 +222,18 @@ class HierarchicalAnalysisResponse(BaseModel):
     overall_ate: Optional[float] = Field(None, description="Overall ATE estimate")
     overall_ci_lower: Optional[float] = Field(None, description="Overall CI lower")
     overall_ci_upper: Optional[float] = Field(None, description="Overall CI upper")
+    confidence_level: float = Field(
+        default=0.95,
+        ge=0.80,
+        le=0.99,
+        description=(
+            "Confidence level the CATE/overall CIs (cate_ci_lower/upper, "
+            "overall_ci_lower/upper) are computed at, e.g. 0.95 => a 95% CI "
+            "(z=1.96). Mirrors the request's confidence_level (alpha = "
+            "1 - confidence_level). Exposed so consumers can label the interval "
+            "truthfully instead of assuming 95%."
+        ),
+    )
     segment_heterogeneity: Optional[float] = Field(None, description="Heterogeneity score (I²)")
     n_segments_analyzed: int = Field(0, description="Number of segments analyzed")
     segmentation_method: str = Field(..., description="Segmentation method used")
@@ -400,6 +412,18 @@ class SequentialPipelineRequest(BaseModel):
         le=1.0,
         description="Minimum agreement threshold for validation",
     )
+    confidence_level: float = Field(
+        default=0.95,
+        ge=0.80,
+        le=0.99,
+        description=(
+            "Confidence level for the consensus CI, e.g. 0.95 => a 95% CI "
+            "(z=1.96). Echoed back in the response so the UI labels the interval "
+            "truthfully. Default 0.95 keeps the legacy +/-1.96*std behavior. "
+            "SCOPE: governs the consensus CI only; per-library engine CIs are "
+            "computed independently (currently fixed at 95% upstream)."
+        ),
+    )
     run_refutation: bool = Field(
         default=False,
         description=(
@@ -467,6 +491,22 @@ class SequentialPipelineResponse(BaseModel):
     )
     consensus_ci_lower: Optional[float] = Field(None, description="Consensus CI lower")
     consensus_ci_upper: Optional[float] = Field(None, description="Consensus CI upper")
+    confidence_level: float = Field(
+        default=0.95,
+        ge=0.80,
+        le=0.99,
+        description=(
+            "Confidence level the consensus CI (consensus_ci_lower/upper) is "
+            "computed at, e.g. 0.95 => a 95% CI (z=1.96). Exposed so consumers "
+            "can label the interval truthfully instead of assuming 95%. The CI "
+            "half-width is z*std where z is derived from this level. SCOPE: this "
+            "labels the CONSENSUS CI only -- per-stage CIs in stage_results "
+            "carry their own engine-computed bounds (currently fixed at 95% "
+            "upstream). NOTE: the real (non-demo) path does not emit a consensus "
+            "CI today (consensus_ci_lower/upper are None); this field still "
+            "reports the level the CI would use."
+        ),
+    )
     library_agreement_score: Optional[float] = Field(
         None, ge=0.0, le=1.0, description="Agreement between libraries"
     )
@@ -577,6 +617,18 @@ class ParallelPipelineRequest(BaseModel):
         default="variance_weighted",
         description="Method for consensus computation",
     )
+    confidence_level: float = Field(
+        default=0.95,
+        ge=0.80,
+        le=0.99,
+        description=(
+            "Confidence level for the consensus CI, e.g. 0.95 => a 95% CI "
+            "(z=1.96). Echoed back in the response so the UI labels the interval "
+            "truthfully. Default 0.95 keeps the legacy +/-1.96*std behavior. "
+            "SCOPE: governs the consensus CI only; per-library engine CIs are "
+            "computed independently (currently fixed at 95% upstream)."
+        ),
+    )
     timeout_seconds: int = Field(
         default=120,
         ge=30,
@@ -630,6 +682,22 @@ class ParallelPipelineResponse(BaseModel):
     consensus_effect: Optional[float] = Field(None, description="Consensus effect")
     consensus_ci_lower: Optional[float] = Field(None, description="Consensus CI lower")
     consensus_ci_upper: Optional[float] = Field(None, description="Consensus CI upper")
+    confidence_level: float = Field(
+        default=0.95,
+        ge=0.80,
+        le=0.99,
+        description=(
+            "Confidence level the consensus CI (consensus_ci_lower/upper) is "
+            "computed at, e.g. 0.95 => a 95% CI (z=1.96). Exposed so consumers "
+            "can label the interval truthfully instead of assuming 95%. The CI "
+            "half-width is z*std where z is derived from this level. SCOPE: this "
+            "labels the CONSENSUS CI only -- per-library CIs in library_results "
+            "carry their own engine-computed bounds (currently fixed at 95% "
+            "upstream). NOTE: the real (non-demo) path does not emit a consensus "
+            "CI today (consensus_ci_lower/upper are None); this field still "
+            "reports the level the CI would use."
+        ),
+    )
     library_agreement_score: Optional[float] = Field(None, description="Agreement score")
     consensus_method: str = Field(..., description="Consensus method used")
 

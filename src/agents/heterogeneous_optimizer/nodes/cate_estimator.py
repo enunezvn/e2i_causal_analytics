@@ -14,6 +14,8 @@ from typing import Any, Dict, List, cast
 import numpy as np
 import pandas as pd
 
+from src.causal.stats import z_score_for_alpha
+
 from ..state import CATEResult, HeterogeneousOptimizerState
 
 logger = logging.getLogger(__name__)
@@ -649,8 +651,15 @@ class CATEEstimatorNode:
                     ci_lower = float(np.mean(cate_interval[0]))
                     ci_upper = float(np.mean(cate_interval[1]))
                 except Exception:
-                    ci_lower = cate_mean - 1.96 * float(np.std(cate))
-                    ci_upper = cate_mean + 1.96 * float(np.std(cate))
+                    # #27: derive the fallback z-score from the requested
+                    # significance level (alpha) instead of a hardcoded 1.96, so
+                    # the fallback CI is at the SAME level as the primary
+                    # ``effect_interval(alpha=...)`` path. At the default
+                    # alpha=0.05 this is ~1.96 (legacy behavior unchanged); a
+                    # 90% request (alpha=0.10) now correctly yields ~1.645*sigma.
+                    z = z_score_for_alpha(alpha)
+                    ci_lower = cate_mean - z * float(np.std(cate))
+                    ci_upper = cate_mean + z * float(np.std(cate))
 
                 # Determine statistical significance
                 significant = (ci_lower > 0) or (ci_upper < 0)
