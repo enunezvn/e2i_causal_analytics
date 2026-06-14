@@ -72,8 +72,25 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
         }))
       : null;
 
-  // The RAG response becomes a single real section — nothing is spliced in.
-  const ragSections: BriefSection[] | null = briefResponse?.response
+  // The cognitive-RAG endpoint reports failures IN-BAND: an HTTP 200 whose
+  // payload carries a non-empty `error` (with `response` holding the error
+  // STRING, `hop_count === 0`, and `evidence === []`). Rendering that
+  // `response` as an insight would surface a backend error string to the user
+  // as if it were genuine AI content (the #932/#939 "error-as-data" class).
+  // Treat the error flag — and the zero-hop / zero-evidence degenerate shape —
+  // as "no real brief" so the honest error/empty states below take over.
+  const ragHasError = !!briefResponse?.error;
+  const ragIsDegenerate =
+    !!briefResponse &&
+    briefResponse.hop_count === 0 &&
+    (briefResponse.evidence?.length ?? 0) === 0;
+  const ragHasRealAnswer =
+    !!briefResponse?.response && !ragHasError && !ragIsDegenerate;
+
+  // The RAG response becomes a single real section — nothing is spliced in,
+  // and only when it is a genuine grounded answer (not an error payload and
+  // not a zero-hop / zero-evidence degenerate result).
+  const ragSections: BriefSection[] | null = ragHasRealAnswer
     ? [
         {
           title: 'AI-Generated Insight',
@@ -88,6 +105,12 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
 
   const sections: BriefSection[] = crystallizedSections ?? ragSections ?? [];
 
+  // An in-band error (HTTP 200 with `error` set) is a real failure even
+  // though TanStack's transport-level `briefError` is null. Fold it into the
+  // error state so the user sees an honest "unable to generate" message rather
+  // than the raw error string masquerading as an insight.
+  const ragErrorMessage = ragHasError ? briefResponse?.error ?? null : null;
+
   // Generate initial brief on mount
   useEffect(() => {
     generateBrief({
@@ -95,12 +118,16 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     });
   }, [brand, generateBrief]);
 
-  // Track when a real response arrives
+  // Track when a real (non-error) response arrives. A 200 carrying an in-band
+  // error is NOT a successful update, so it must not stamp "Last updated".
+  // Depend on the response OBJECT (not just the derived boolean) so a SECOND
+  // real refresh after an earlier real answer still re-stamps the timestamp —
+  // the boolean alone would stay `true` across refreshes and skip the update.
   useEffect(() => {
-    if (briefResponse?.response) {
+    if (ragHasRealAnswer) {
       setLastUpdated(new Date());
     }
-  }, [briefResponse]);
+  }, [briefResponse, ragHasRealAnswer]);
 
   const handleRefresh = () => {
     generateBrief({
@@ -108,8 +135,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     });
   };
 
-  const showError = !isGenerating && sections.length === 0 && !!briefError;
-  const showEmpty = !isGenerating && sections.length === 0 && !briefError;
+  const hasAnyError = !!briefError || ragHasError;
+  const showError = !isGenerating && sections.length === 0 && hasAnyError;
+  const showEmpty = !isGenerating && sections.length === 0 && !hasAnyError;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -160,7 +188,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
             <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
             <div className="text-xs text-[var(--color-muted-foreground)]">
               <span className="font-medium text-rose-600">Unable to generate brief:</span>{' '}
-              {briefError?.message ?? 'Cognitive engine unavailable'}
+              {briefError?.message ?? ragErrorMessage ?? 'Cognitive engine unavailable'}
             </div>
           </div>
         )}
