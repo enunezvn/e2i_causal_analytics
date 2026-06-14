@@ -11,12 +11,21 @@ The Health Score agent is a DSPy Recipient agent that:
 
 from __future__ import annotations
 
+import functools
+import importlib.util
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    # Resolved lazily at runtime via PEP 562 ``__getattr__`` so importing dspy
+    # stays off the Fast Path. Declaring them here lets static tools (ruff F822
+    # on ``__all__``, mypy) see them without an eager import.
+    HealthSummarySignature: Any
+    HealthRecommendationSignature: Any
 
 
 # =============================================================================
@@ -82,7 +91,34 @@ class HealthReportPrompts:
 # 2. DSPy SIGNATURES (for feedback_learner optimization)
 # =============================================================================
 
-try:
+# DSPy availability is probed WITHOUT importing dspy. ``import dspy`` loads
+# ~714 MB; the Health Score agent is a Fast Path computational agent ("Zero LLM
+# usage in critical path") so it must never pull dspy in at import time. The
+# Signature subclasses below are needed ONLY by feedback_learner's MIPROv2/GEPA
+# optimizer paths, so they are built lazily on first attribute access (PEP 562
+# module ``__getattr__``) and ``dspy`` is imported only then.
+DSPY_AVAILABLE: bool = importlib.util.find_spec("dspy") is not None
+if DSPY_AVAILABLE:
+    logger.info("DSPy detected for Health Score agent (Recipient); import deferred until needed")
+else:
+    logger.warning("DSPy not available - using default health templates")
+
+
+@functools.lru_cache(maxsize=1)
+def _get_health_signatures() -> Dict[str, Any]:
+    """Build (once) and return the health_score DSPy Signature classes.
+
+    Importing dspy here keeps the ~714 MB import off the fast-path module-import
+    chain; it happens only when an optimizer actually requests these signatures.
+    Returns an all-``None`` mapping when dspy is not installed (mirrors the
+    historical placeholder behavior).
+    """
+    if not DSPY_AVAILABLE:
+        return {
+            "HealthSummarySignature": None,
+            "HealthRecommendationSignature": None,
+        }
+
     import dspy
 
     class HealthSummarySignature(dspy.Signature):
@@ -116,14 +152,23 @@ try:
         urgency_assessment: str = dspy.OutputField(desc="Urgency level and rationale")
         expected_improvement: str = dspy.OutputField(desc="Expected improvement from actions")
 
-    DSPY_AVAILABLE = True
-    logger.info("DSPy signatures loaded for Health Score agent (Recipient)")
+    logger.info("DSPy signatures built for Health Score agent (Recipient)")
+    return {
+        "HealthSummarySignature": HealthSummarySignature,
+        "HealthRecommendationSignature": HealthRecommendationSignature,
+    }
 
-except ImportError:
-    DSPY_AVAILABLE = False
-    logger.warning("DSPy not available - using default health templates")
-    HealthSummarySignature = None  # type: ignore[assignment,misc]
-    HealthRecommendationSignature = None  # type: ignore[assignment,misc]
+
+# Names resolved lazily via PEP 562: ``from ...dspy_integration import
+# HealthSummarySignature`` (and attribute access) builds the class on first use
+# without importing dspy at module import time.
+_LAZY_SIGNATURE_NAMES = frozenset({"HealthSummarySignature", "HealthRecommendationSignature"})
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_SIGNATURE_NAMES:
+        return _get_health_signatures()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # =============================================================================
