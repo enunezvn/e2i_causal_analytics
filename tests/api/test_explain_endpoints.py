@@ -803,3 +803,24 @@ class TestSHAPGetPredictionFailClosed:
         with pytest.raises(HTTPException) as ei:
             await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
         assert ei.value.status_code == 502
+
+    @pytest.mark.asyncio
+    async def test_returns_canonical_features_ignoring_extras(self):
+        """get_prediction returns a canonical model_features dict (model order,
+        validated) that EXCLUDES extra non-model request fields, so SHAP/audit
+        never receive a fabricated value for an off-contract key."""
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock(
+            return_value={"predictions": [1.0], "probabilities": [0.9], "model_id": "m1"}
+        )
+        svc = self._service(bento)
+
+        out = await svc.get_prediction(
+            features={"a": 1.0, "b": 2.0, "extra_string": "north", "extra_obj": {"x": 1}},
+            model_type=ModelType.PROPENSITY,
+        )
+        # Only the model's two features, in order, as floats — extras dropped.
+        assert out["model_features"] == {"a": 1.0, "b": 2.0}

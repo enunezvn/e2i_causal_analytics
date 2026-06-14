@@ -555,6 +555,68 @@ class RealTimeSHAPService:
             "comorbidity_count": 2,
         }
 
+    async def resolve_canonical_model_features(
+        self,
+        features: Dict[str, Any],
+        model_type: ModelType,
+    ) -> Dict[str, float]:
+        """Resolve the strictly-validated, model-ordered feature dict.
+
+        Returns ``{feature_name: float}`` for exactly the model's
+        ``/model_info.feature_columns``, in order. FAILS CLOSED:
+          - 503 if the model exposes no feature order;
+          - 422 if a required feature is missing, null, or non-numeric.
+
+        Extra non-model fields in the request are IGNORED (not passed into
+        prediction / SHAP / audit). No hash-encoding or zero-fill is applied to
+        a required feature — that would fabricate an audit-grade value.
+        """
+        if not self.bentoml_client:
+            raise HTTPException(
+                status_code=503,
+                detail="Model serving unavailable: BentoML client not configured",
+            )
+        try:
+            info = await self.bentoml_client.get_model_info(model_type.value)
+        except Exception as e:
+            logger.error("Could not fetch model_info for SHAP prediction: %s", e)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Model metadata unavailable for '{model_type.value}'",
+            )
+        feature_order = info.get("feature_columns")
+        if not feature_order or not isinstance(feature_order, list):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Model '{model_type.value}' exposes no feature order; cannot "
+                    "produce an audit-grade prediction for SHAP"
+                ),
+            )
+
+        missing = [name for name in feature_order if name not in features or features[name] is None]
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Missing/null required feature(s) for SHAP prediction: {missing}",
+            )
+
+        canonical: Dict[str, float] = {}
+        for name in feature_order:
+            raw = features[name]
+            # Only genuine numerics/bools pass. Strings (which would be
+            # hash-encoded) and objects (zero-filled) FAIL CLOSED.
+            if not isinstance(raw, (int, float, bool)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Required feature '{name}' must be numeric for an "
+                        f"audit-grade SHAP prediction (got {type(raw).__name__})"
+                    ),
+                )
+            canonical[name] = float(raw)
+        return canonical
+
     async def get_prediction(
         self,
         features: Dict[str, Any],
@@ -581,56 +643,16 @@ class RealTimeSHAPService:
                 detail="Model serving unavailable: BentoML client not configured",
             )
 
-        # Coerce values to numeric (string categoricals -> stable encoding) so a
-        # mixed feature dict can be ordered into a numeric row.
-        numeric_features = self._prepare_numeric_features(features)
-
-        # Resolve the model's authoritative feature order from /model_info.
-        try:
-            info = await self.bentoml_client.get_model_info(model_type.value)
-        except Exception as e:
-            logger.error("Could not fetch model_info for SHAP prediction: %s", e)
-            raise HTTPException(
-                status_code=503,
-                detail=f"Model metadata unavailable for '{model_type.value}'",
-            )
-        feature_order = info.get("feature_columns")
-        if not feature_order or not isinstance(feature_order, list):
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    f"Model '{model_type.value}' exposes no feature order; cannot "
-                    "produce an audit-grade prediction for SHAP"
-                ),
-            )
-
-        # STRICT validation against the RAW features (not the lossy numeric
-        # coercion): a required feature that is missing, null, or non-numeric
-        # FAILS CLOSED (422). We do NOT fall back to a fabricated 0.0 / hash
-        # encoding for a required model feature, because this vector feeds
-        # audit-grade SHAP and the stored audit record.
-        missing = [name for name in feature_order if name not in features or features[name] is None]
-        if missing:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Missing/null required feature(s) for SHAP prediction: {missing}",
-            )
-        ordered_row: List[float] = []
-        for name in feature_order:
-            raw = features[name]
-            coerced = numeric_features.get(name)
-            # Reject string/object required features: _prepare_numeric_features
-            # hash-encodes strings and zero-fills objects, which would fabricate
-            # an audit-grade feature value. Only genuine numerics/bools pass.
-            if not isinstance(raw, (int, float, bool)) or coerced is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"Required feature '{name}' must be numeric for an "
-                        f"audit-grade SHAP prediction (got {type(raw).__name__})"
-                    ),
-                )
-            ordered_row.append(float(coerced))
+        # Resolve the canonical, strictly-validated model feature dict
+        # ({name: float} in /model_info order). This is the SINGLE source of
+        # truth for the prediction, the SHAP inputs, and the audit record — so
+        # no fabricated (hash/zero-filled) value or extra non-model field can
+        # leak into audit-grade output.
+        canonical_features = await self.resolve_canonical_model_features(features, model_type)
+        ordered_row = [
+            canonical_features[name]
+            for name in canonical_features  # already in model order
+        ]
 
         try:
             result = await self.bentoml_client.predict(
@@ -672,6 +694,10 @@ class RealTimeSHAPService:
                 or model_version_id
                 or "unknown"
             ),
+            # The canonical validated feature dict — callers MUST use this for
+            # SHAP and audit storage, not the raw request dict (which may carry
+            # extra/non-model or non-numeric fields).
+            "model_features": canonical_features,
         }
 
     def _prepare_numeric_features(self, features: Dict[str, Any]) -> Dict[str, float]:
@@ -985,9 +1011,15 @@ async def explain_prediction(
                 model_version_id=request.model_version_id,
             )
 
+            # Use the canonical, strictly-validated model feature dict for SHAP
+            # and audit — NOT the raw request dict, which may carry extra or
+            # non-numeric fields that _prepare_numeric_features would fabricate
+            # (hash/zero-fill) into audit-grade output.
+            model_features = prediction.get("model_features", features)
+
             # 3. Compute SHAP values
             shap_result = await service.compute_shap(
-                features=features,
+                features=model_features,
                 model_type=request.model_type,
                 model_version_id=prediction["model_version_id"],
                 top_k=request.top_k,
@@ -1011,7 +1043,7 @@ async def explain_prediction(
                     patient_id=request.patient_id,
                     model_type=request.model_type.value,
                     model_version_id=prediction["model_version_id"],
-                    features=features,
+                    features=model_features,
                     shap_values={
                         c.feature_name: c.shap_value for c in shap_result["contributions"]
                     },
