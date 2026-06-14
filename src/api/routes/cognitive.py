@@ -1027,18 +1027,27 @@ async def cognitive_rag_search(
             conversation_history=request.conversation_history,
         )
 
+        # Defense-in-depth: ``result.get(key, default)`` returns a
+        # present-but-None value (the default only applies when the key is
+        # ABSENT). cognitive_search always emits these keys, so a graph node
+        # writing None into a List/Dict channel would yield None here, and
+        # CognitiveRAGResponse requires List/Dict -> pydantic
+        # list_type/dict_type -> the live HTTP 400 (#953). The source
+        # (SummarizerModule / summarizer_node) is fixed to emit a correctly
+        # typed List[str] for entities; this ``or default`` boundary guards
+        # every other list/dict/required-str field against a future None.
         return CognitiveRAGResponse(
-            response=result.get("response", ""),
-            evidence=result.get("evidence", []),
-            hop_count=result.get("hop_count", 0),
-            visualization_config=result.get("visualization_config", {}),
-            routed_agents=result.get("routed_agents", []),
-            entities=result.get("entities", []),
-            intent=result.get("intent", ""),
-            rewritten_query=result.get("rewritten_query", request.query),
-            dspy_signals=result.get("dspy_signals", []),
-            worth_remembering=result.get("worth_remembering", False),
-            latency_ms=result.get("latency_ms", 0.0),
+            response=result.get("response") or "",
+            evidence=result.get("evidence") or [],
+            hop_count=result.get("hop_count") or 0,
+            visualization_config=result.get("visualization_config") or {},
+            routed_agents=result.get("routed_agents") or [],
+            entities=result.get("entities") or [],
+            intent=result.get("intent") or "",
+            rewritten_query=result.get("rewritten_query") or request.query,
+            dspy_signals=result.get("dspy_signals") or [],
+            worth_remembering=bool(result.get("worth_remembering")),
+            latency_ms=result.get("latency_ms") or 0.0,
             error=result.get("error"),
         )
 

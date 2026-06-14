@@ -228,24 +228,44 @@ class SummarizerModule(dspy.Module):
             domain_vocabulary=domain_vocabulary,
         )
 
-        # Step 3: Classify intent
-        entities_json = str(
-            {
-                "brands": entities.brands,
-                "regions": entities.regions,
-                "hcp_types": entities.hcp_types,
-                "patient_stages": entities.patient_stages,
-                "time_references": entities.time_references,
-            }
-        )
+        # Step 3: Classify intent. The classify signature takes a STRING
+        # (extracted_entities: str dspy.InputField), so keep the JSON-ish
+        # rendering for the LM input only.
+        entities_dict = {
+            "brands": entities.brands,
+            "regions": entities.regions,
+            "hcp_types": entities.hcp_types,
+            "patient_stages": entities.patient_stages,
+            "time_references": entities.time_references,
+        }
+        entities_json = str(entities_dict)
 
         intent = self.classify(query=original_query, extracted_entities=entities_json)
+
+        # CognitiveState.extracted_entities is typed List[str] and is surfaced
+        # verbatim as CognitiveRAGResponse.entities (List[str]). Returning the
+        # str(dict) rendering here put a STRING into that List[str] channel,
+        # which propagated to the response and made pydantic reject it with
+        # ``list_type`` -> the live HTTP 400 (#953). Flatten the per-category
+        # LM outputs into a single de-duplicated List[str] of entity values so
+        # the state field and the response field are correctly typed at the
+        # source. Each category OutputField is a list; tolerate a non-list LM
+        # return defensively (an LM can emit null/str for a list field).
+        extracted_entities: List[str] = []
+        for value in entities_dict.values():
+            if isinstance(value, (list, tuple, set)):
+                extracted_entities.extend(str(v) for v in value if v is not None)
+            elif value not in (None, ""):
+                extracted_entities.append(str(value))
+        # De-duplicate while preserving first-seen order (dict keys are ordered
+        # and unique; clearer than a side-effecting set comprehension).
+        deduped_entities: List[str] = list(dict.fromkeys(extracted_entities))
 
         return {  # type: ignore[return-value]
             "rewritten_query": rewritten.rewritten_query,
             "search_keywords": rewritten.search_keywords,
             "graph_entities": rewritten.graph_entities,
-            "extracted_entities": entities_json,
+            "extracted_entities": deduped_entities,
             "primary_intent": intent.primary_intent,
             "secondary_intents": intent.secondary_intents,
             "requires_visualization": intent.requires_visualization,
@@ -934,9 +954,19 @@ def create_dspy_cognitive_workflow(
             domain_vocabulary=domain_vocabulary,
         )
 
-        state.rewritten_query = result["rewritten_query"]  # type: ignore[index]
-        state.extracted_entities = result["extracted_entities"]  # type: ignore[index]
-        state.detected_intent = result["primary_intent"]  # type: ignore[index]
+        # Defensive coercion at the channel-write boundary: an LM can return
+        # null/non-list for a list field, and CognitiveState is a plain
+        # @dataclass that does not coerce. extracted_entities is surfaced
+        # verbatim as CognitiveRAGResponse.entities (List[str]); a None or
+        # non-list here would make the response fail pydantic validation (the
+        # #953 list_type 400). SummarizerModule.forward already returns a flat
+        # List[str], but coerce again so this channel is never None/non-list.
+        state.rewritten_query = result["rewritten_query"] or ""  # type: ignore[index]
+        entities_out = result["extracted_entities"]  # type: ignore[index]
+        state.extracted_entities = (
+            list(entities_out) if isinstance(entities_out, (list, tuple)) else []
+        )
+        state.detected_intent = result["primary_intent"] or ""  # type: ignore[index]
 
         return state
 
