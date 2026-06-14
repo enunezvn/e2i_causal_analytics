@@ -516,8 +516,17 @@ class SignalCollector:
                     signal_details={**signal, "domain_signal": "dspy_signal"},
                 )
 
+                # cycle_id maps onto learning_signals.cycle_id, a NULLABLE UUID
+                # column with an FK to cognitive_cycles (008_agentic_memory_schema
+                # .sql). Cognitive-RAG DSPy signals carry no cycle_id, and the
+                # prior literal "unknown" default was inserted as a UUID ->
+                # ``22P02 invalid input syntax for type uuid`` -> the row was
+                # swallowed into _pending_signals, so NO DSPy training signal
+                # EVER persisted for cognitive RAG (#953). Pass the real cycle_id
+                # when present, else None: record_learning_signal strips None
+                # values, leaving the column NULL, which the nullable FK accepts.
                 await record_learning_signal(
-                    signal=learning_signal, cycle_id=signal.get("cycle_id", "unknown")
+                    signal=learning_signal, cycle_id=signal.get("cycle_id")
                 )
 
                 logger.debug(f"Collected signal for {signal.get('signature_name')}")
