@@ -90,8 +90,11 @@ KEEP_COLUMNS: tuple[str, ...] = (
     "geographic_region",
 )
 
-# Identity / split columns that are never predictive features.
-_ID_COLS = frozenset({"patient_id", "patient_hash", "data_split", "split_config_id"})
+# Identity / split columns that are never predictive features. ``hcp_id`` is the
+# HCP-grain primary key (added for the HCP adoption cohort, HCP-T3); it must be
+# dropped for BOTH grains and is harmless on the patient path (patient_journeys
+# has no hcp_id column, so the drop is a no-op there).
+_ID_COLS = frozenset({"patient_id", "patient_hash", "data_split", "split_config_id", "hcp_id"})
 
 
 class FeatureBuilder:
@@ -117,9 +120,21 @@ class FeatureBuilder:
 
     def __init__(self, spec: CohortSpec, keep_columns: tuple[str, ...] | None = None) -> None:
         self.spec = spec
-        # ``None`` → use the module-level locked allowlist; pass () to disable
-        # the allowlist (keep all non-denylisted columns), e.g. for ad-hoc probes.
-        self.keep_columns: tuple[str, ...] = KEEP_COLUMNS if keep_columns is None else keep_columns
+        # ``keep_columns`` resolution:
+        #   * explicit value (incl. ()) → use it verbatim (() disables the
+        #     allowlist → keep all non-denylisted columns, e.g. ad-hoc probes).
+        #   * None → grain-aware default so ``FeatureBuilder(spec)`` (the
+        #     ``_run_one_cohort`` call shape) gets the right allowlist per grain:
+        #       - grain == "hcp": the HCP covariates JOIN-embedded from
+        #         hcp_profiles (the patient KEEP_COLUMNS do not exist on the HCP
+        #         frame).
+        #       - else: the locked patient allowlist (UNCHANGED).
+        if keep_columns is not None:
+            self.keep_columns: tuple[str, ...] = keep_columns
+        elif spec.grain == "hcp":
+            self.keep_columns = tuple(spec.base_covariates)
+        else:
+            self.keep_columns = KEEP_COLUMNS
         self.feature_columns: list[str] = []
         # Numeric medians learned at fit time so transform() imputes eval frames
         # with TRAIN statistics (not the eval frame's own median → no train/eval
@@ -233,6 +248,33 @@ class FeatureBuilder:
         splits: Sequence[str] | None = None,
         before_month: str | None = None,
     ) -> pd.DataFrame:
+        """Load the raw cohort frame from the live DB, dispatching on grain.
+
+        Both grains return a frame with the SAME downstream contract — at least
+        ``journey_start_date`` (walk_forward._DATE_COL), ``data_split``,
+        ``self.spec.label_column``, and the cohort covariates — so
+        ``_run_one_cohort`` / ``walk_forward`` / ``build_from_frame`` consume
+        either grain unchanged.
+
+          * ``grain == "hcp"`` → :meth:`_load_hcp_frame` (hcp_brand_adoption +
+            embedded hcp_profiles; ``consideration_date`` aliased to
+            ``journey_start_date``).
+          * else → :meth:`_load_patient_frame` (patient_journeys; the original
+            patient load path, unchanged).
+
+        See the per-grain helpers for the full parameter / pagination semantics.
+        """
+        if self.spec.grain == "hcp":
+            return await self._load_hcp_frame(db, splits=splits, before_month=before_month)
+        return await self._load_patient_frame(db, splits=splits, before_month=before_month)
+
+    async def _load_patient_frame(
+        self,
+        db: Any,
+        *,
+        splits: Sequence[str] | None = None,
+        before_month: str | None = None,
+    ) -> pd.DataFrame:
         """Load patient_journeys rows for ``self.spec.brand`` with ``is_synthetic=True``.
 
         Mirrors the cap-agnostic PK-ordered ``.range()`` pagination idiom from
@@ -319,6 +361,120 @@ class FeatureBuilder:
             return pd.DataFrame()
 
         return pd.DataFrame(all_rows)
+
+    async def _load_hcp_frame(
+        self,
+        db: Any,
+        *,
+        splits: Sequence[str] | None = None,
+        before_month: str | None = None,
+    ) -> pd.DataFrame:
+        """Load hcp_brand_adoption rows for ``self.spec.brand`` (``is_synthetic=True``).
+
+        The HCP cohort's grain is ``(hcp_id, brand)`` on ``hcp_brand_adoption``
+        (migration 076), but the predictive features live on ``hcp_profiles``
+        (single SSOT for HCP attributes). We therefore embed hcp_profiles via the
+        PostgREST FK-embed select, then FLATTEN the nested ``hcp_profiles`` dict
+        up to the row and RENAME ``consideration_date`` → ``journey_start_date``
+        so the rest of the pipeline (``walk_forward._DATE_COL``, ``recorder``,
+        ``cohort_deployer``) is reused untouched.
+
+        Pagination mirrors :meth:`_load_patient_frame` exactly: cap-agnostic,
+        PK-ordered ``.range()`` windows (by ``hcp_id``, the HCP-grain PK),
+        advancing by rows ACTUALLY returned and stopping on an EMPTY page.
+
+        Parameters
+        ----------
+        db, splits, before_month:
+            As in :meth:`_load_patient_frame`. ``before_month`` applies the same
+            ``journey_start_date < before_month`` predicate, expressed against the
+            underlying ``consideration_date`` column (the pre-alias name).
+
+        Returns
+        -------
+        pandas.DataFrame:
+            Columns: ``hcp_id``, ``journey_start_date`` (aliased from
+            ``consideration_date``), ``data_split``, ``self.spec.label_column``
+            (``adopted``), and the 5 covariates flattened from hcp_profiles.
+            Empty frame when no rows match.
+        """
+        # PostgREST FK-embed: hcp_brand_adoption row columns + the joined
+        # hcp_profiles covariate subset (the base covariates, which are exactly
+        # self.keep_columns for the HCP default).
+        embed_cols = ",".join(self.keep_columns)
+        select_expr = (
+            f"hcp_id,consideration_date,data_split,{self.spec.label_column},"
+            f"hcp_profiles({embed_cols})"
+        )
+
+        all_rows: list[dict[str, Any]] = []
+        exhausted = False
+        offset = 0
+
+        for _page in range(_MAX_PAGES):
+            query = (
+                db.table("hcp_brand_adoption")
+                .select(select_expr)
+                # Gold-standard eval REQUIRES synthetic rows (opt-in explicit):
+                # hcp_brand_adoption.is_synthetic=True marks the gold-standard
+                # cohort (the table default is FALSE = "real").
+                .eq("is_synthetic", True)
+            )
+            if self.spec.brand is not None:
+                # HCP cohorts are always per-brand, but keep the None guard so a
+                # hypothetical all-brands HCP spec degrades to no partition filter.
+                query = query.eq("brand", self.spec.brand)
+
+            if splits is not None:
+                query = query.in_("data_split", list(splits))
+
+            if before_month is not None:
+                # Predicate is on the underlying column name (pre-alias).
+                query = query.lt("consideration_date", before_month)
+
+            # PK-ordered range window by the HCP-grain PK — cap-agnostic.
+            query = query.order("hcp_id").range(offset, offset + _PAGE_SIZE - 1)
+
+            result = await query.execute()
+            page_rows: list[dict[str, Any]] = result.data or []
+
+            if not page_rows:
+                exhausted = True
+                break
+
+            all_rows.extend(page_rows)
+            offset += len(page_rows)
+
+        if not exhausted:
+            logger.warning(
+                "FeatureBuilder._load_hcp_frame hit the max_pages=%d runaway guard "
+                "for brand=%s splits=%s before_month=%s; rows beyond page %d are "
+                "omitted.",
+                _MAX_PAGES,
+                self.spec.brand,
+                splits,
+                before_month,
+                _MAX_PAGES,
+            )
+
+        if not all_rows:
+            return pd.DataFrame()
+
+        # Flatten the embedded hcp_profiles dict up to each row, then alias the
+        # temporal column. We do this row-wise (not via json_normalize) so a
+        # missing/None embed degrades to NaN covariates rather than crashing.
+        flat_rows: list[dict[str, Any]] = []
+        for row in all_rows:
+            merged = dict(row)
+            profile = merged.pop("hcp_profiles", None) or {}
+            if isinstance(profile, dict):
+                merged.update(profile)
+            flat_rows.append(merged)
+
+        frame = pd.DataFrame(flat_rows)
+        if "consideration_date" in frame.columns:
+            frame = frame.rename(columns={"consideration_date": "journey_start_date"})
+        return frame
 
     async def build_for_split(
         self,
