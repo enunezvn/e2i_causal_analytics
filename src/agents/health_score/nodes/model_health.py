@@ -142,8 +142,14 @@ class ModelHealthNode:
                 model_id=model_id, time_window="24h"
             )
 
-            # Determine health status
-            status = self._determine_status(metrics)
+            # Honor an authoritative status the store already computed (e.g. the
+            # route adapter mapping ml_model_health_dashboard.health_status) so
+            # the node does NOT re-derive a divergent status from sub-fields that
+            # may be null/unsourced. Fall back to threshold inference only when
+            # the store does not provide one.
+            precomputed = metrics.get("status")
+            valid = {"healthy", "degraded", "unhealthy"}
+            status = precomputed if precomputed in valid else self._determine_status(metrics)
 
             return ModelMetrics(
                 model_id=model_id,
@@ -154,8 +160,9 @@ class ModelHealthNode:
                 auc_roc=metrics.get("auc_roc"),
                 prediction_latency_p50_ms=metrics.get("latency_p50"),
                 prediction_latency_p99_ms=metrics.get("latency_p99"),
-                predictions_last_24h=metrics.get("prediction_count", 0),
-                error_rate=metrics.get("error_rate", 0),
+                # None (unmeasured) is preserved, NOT coerced to a fabricated 0.
+                predictions_last_24h=metrics.get("prediction_count"),
+                error_rate=metrics.get("error_rate"),
                 status=cast(Literal["healthy", "degraded", "unhealthy"], status),
             )
 

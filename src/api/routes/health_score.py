@@ -1181,6 +1181,207 @@ def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
     return agents, prov
 
 
+# =============================================================================
+# STORE ADAPTERS — bridge the REAL per-dimension readers into the agent graph
+#
+# The full health SCORE (/health-score/full) is computed by HealthScoreAgent
+# whose model/pipeline/agent nodes consume *stores* satisfying the node Protocols
+# (get_active_models/get_model_metrics, get_all_pipelines/get_pipeline_status,
+# get_all_agents/get_agent_metrics). Before this wiring the route constructed the
+# agent with only a health_client, so those three dimensions fail-closed to null.
+#
+# These adapters REUSE the already-wired _fetch_model_health / _fetch_pipeline_health
+# / _fetch_agent_health readers (single source of truth: the same live tables the
+# /models, /pipelines, /agents endpoints read) and translate their output into the
+# node Protocol shape. They carry the readers' AUTHORITATIVE per-item status through
+# the metrics dict so the node's aggregate scoring reproduces the per-dimension
+# endpoint scores exactly — no duplicated status logic, no fabrication.
+#
+# Each adapter raises ``HealthSourceUnavailable`` when its reader signals the
+# backend is unreachable (provenance is None), so the node fails closed
+# (model_health_measured=False -> honest null) instead of fabricating a healthy
+# score. An empty-but-reachable table (provenance UNKNOWN) yields an empty roster,
+# which the node treats as a measured idle fleet (score 1.0) — that is a real
+# measurement, distinct from "backend down".
+# =============================================================================
+
+
+class HealthSourceUnavailable(RuntimeError):
+    """Raised by a store adapter when its real backend is unreachable.
+
+    The agent's per-dimension node catches it, marks the dimension UNMEASURED
+    (``*_health_measured=False``) and the composer emits an honest null/partial
+    — never a fabricated healthy score."""
+
+
+class _ModelMetricsStoreAdapter:
+    """MetricsStore adapter backed by ``_fetch_model_health`` (ml_model_health_dashboard).
+
+    Calls the reader ONCE and caches per the node's get_active_models ->
+    get_model_metrics(model_id) access pattern, carrying the reader's
+    authoritative ``status`` so the node scores identically to /models."""
+
+    def __init__(self) -> None:
+        self._by_id: Dict[str, ModelHealth] = {}
+        self._loaded = False
+        # The reader's source provenance, captured at load so the route can
+        # downgrade the composite to "partial" when sub-fields are unsourced
+        # (PARTIAL) even though the dimension SCORE is a real measurement.
+        self.provenance: Optional[DataProvenance] = None
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        models, provenance = _fetch_model_health()
+        if provenance is None:
+            raise HealthSourceUnavailable("model health backend unreachable")
+        self._by_id = {m.model_id: m for m in models}
+        self.provenance = provenance
+        self._loaded = True
+
+    async def get_active_models(self) -> List[str]:
+        self._load()
+        return list(self._by_id.keys())
+
+    async def get_model_metrics(self, model_id: str, time_window: str) -> Dict[str, Any]:
+        self._load()
+        m = self._by_id.get(model_id)
+        if m is None:
+            return {"status": "unhealthy"}
+        # Carry the reader's authoritative status (mapped from the dashboard
+        # health_status) so the node does NOT re-derive a divergent one. Sub-fields
+        # that have no source remain null/absent — never fabricated.
+        return {
+            "status": m.status.value,
+            "accuracy": m.accuracy,
+            "precision": m.precision,
+            "recall": m.recall,
+            "f1": m.f1_score,
+            "auc_roc": m.auc_roc,
+            "latency_p50": m.prediction_latency_p50_ms,
+            "latency_p99": m.prediction_latency_p99_ms,
+            "prediction_count": m.predictions_last_24h,
+            "error_rate": m.error_rate,
+        }
+
+
+class _PipelineStoreAdapter:
+    """PipelineStore adapter backed by ``_fetch_pipeline_health`` (etl_pipeline_metrics)."""
+
+    def __init__(self) -> None:
+        self._by_name: Dict[str, PipelineHealth] = {}
+        self._loaded = False
+        self.provenance: Optional[DataProvenance] = None
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        pipelines, provenance = _fetch_pipeline_health()
+        if provenance is None:
+            raise HealthSourceUnavailable("pipeline health backend unreachable")
+        self._by_name = {p.pipeline_name: p for p in pipelines}
+        self.provenance = provenance
+        self._loaded = True
+
+    async def get_all_pipelines(self) -> List[str]:
+        self._load()
+        return list(self._by_name.keys())
+
+    async def get_pipeline_status(self, pipeline_name: str) -> Dict[str, Any]:
+        self._load()
+        p = self._by_name.get(pipeline_name)
+        if p is None:
+            return {"status": "failed", "failed": True}
+        # Carry the reader's authoritative status AND its already-computed
+        # freshness_hours so the node honors both instead of recomputing freshness
+        # from timestamps (which yields a -1 sentinel when a row lacks a usable
+        # run_end, then formats as "(-1.0 hours)" in diagnosis — a false reading).
+        return {
+            "status": p.status.value,
+            "failed": p.status == PipelineStatus.FAILED,
+            "last_run": p.last_run,
+            "last_success": p.last_success,
+            "rows_processed": p.rows_processed,
+            "freshness_hours": p.freshness_hours,
+        }
+
+
+class _AgentRegistryAdapter:
+    """AgentRegistry adapter backed by ``_fetch_agent_health`` (agent_registry +
+    audit_chain_entries). The reader already measures availability and (where
+    telemetry exists) success_rate/latency; unmeasured runtime metrics stay null."""
+
+    def __init__(self) -> None:
+        self._by_name: Dict[str, AgentHealth] = {}
+        self._loaded = False
+        self.provenance: Optional[DataProvenance] = None
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        agents, provenance = _fetch_agent_health()
+        if provenance is None:
+            raise HealthSourceUnavailable("agent health backend unreachable")
+        self._by_name = {a.agent_name: a for a in agents}
+        self.provenance = provenance
+        self._loaded = True
+
+    async def get_all_agents(self) -> List[Dict[str, Any]]:
+        self._load()
+        return [{"name": a.agent_name, "tier": a.tier} for a in self._by_name.values()]
+
+    async def get_agent_metrics(self, agent_name: str) -> Dict[str, Any]:
+        self._load()
+        a = self._by_name.get(agent_name)
+        if a is None:
+            return {"available": False, "success_rate": None, "avg_latency_ms": None}
+        # Pass the reader's HONEST values through. success_rate/avg_latency_ms are
+        # None when the agent has no recent telemetry (UNMEASURED) — NOT fabricated
+        # to 1.0/0. The agent node treats a None success_rate as "available =>
+        # not penalized" (matching the /agents endpoint, which scores on
+        # availability), so the score is real without inventing a measurement.
+        return {
+            "available": a.available,
+            "success_rate": a.success_rate,
+            "avg_latency_ms": a.avg_latency_ms,
+            "last_invocation": a.last_invocation or "",
+        }
+
+
+def _build_real_health_stores() -> tuple[
+    "_ModelMetricsStoreAdapter", "_PipelineStoreAdapter", "_AgentRegistryAdapter"
+]:
+    """Construct the three real-table store adapters for the full health graph.
+
+    Returns ``(metrics_store, pipeline_store, agent_registry)``. Cheap to build
+    (no I/O until the node first calls them); each adapter reads its live table
+    lazily and fails closed (UNMEASURED -> honest null) if the backend is down."""
+    return (
+        _ModelMetricsStoreAdapter(),
+        _PipelineStoreAdapter(),
+        _AgentRegistryAdapter(),
+    )
+
+
+def _reconcile_full_provenance(composite: str, *adapters: Any) -> str:
+    """Downgrade a "measured" composite to "partial" when any wired source was PARTIAL.
+
+    The score composer reports "measured" once all four dimension SCORES are real.
+    But a dimension's SCORE can be a genuine measurement while its underlying reader
+    is PARTIAL — e.g. model status is sourced (score is real) yet accuracy/latency
+    sub-fields are unsourced, and agent availability is sourced yet runtime telemetry
+    is null. Surfacing "measured" then would mislead a consumer comparing /full to
+    /models or /agents (which honestly report "partial"). So: if the composer says
+    "measured" but any loaded adapter saw PARTIAL, report "partial". "unknown"/
+    "partial" composites are left untouched (already conservative)."""
+    if composite != "measured":
+        return composite
+    for adapter in adapters:
+        if getattr(adapter, "provenance", None) == DataProvenance.PARTIAL:
+            return "partial"
+    return composite
+
+
 async def _execute_health_check(scope: CheckScope) -> HealthScoreResponse:
     """Execute health check using Health Score agent."""
     import time
@@ -1190,17 +1391,40 @@ async def _execute_health_check(scope: CheckScope) -> HealthScoreResponse:
     try:
         # Try to use the actual Health Score agent.
         # F1: wire the REAL SupabaseHealthClient so component health is genuinely
-        # measured (not the fail-open mock path). The other dimensions have no
-        # real backend yet, so the agent fails them closed to "unknown" and the
-        # composite provenance becomes "partial" — surfaced honestly below.
+        # measured (not the fail-open mock path).
+        # Wire the REAL model/pipeline/agent stores so the full health SCORE
+        # computes those three dimensions from the same live tables the
+        # /models, /pipelines, /agents endpoints already read
+        # (ml_model_health_dashboard / etl_pipeline_metrics / agent_registry +
+        # audit_chain_entries). Each store reuses the route's _fetch_* readers
+        # (DRY — single source of truth) and fails CLOSED to an honest null when
+        # its backend is unreachable, never a fabricated healthy score. The QUICK
+        # graph is component-only by design and ignores these stores, so /quick
+        # legitimately keeps model/pipeline/agent null for its <1s budget.
         from src.agents.health_score import HealthScoreAgent, SupabaseHealthClient
 
-        agent = HealthScoreAgent(health_client=SupabaseHealthClient())
+        metrics_store, pipeline_store, agent_registry = _build_real_health_stores()
+        agent = HealthScoreAgent(
+            health_client=SupabaseHealthClient(),
+            metrics_store=metrics_store,
+            pipeline_store=pipeline_store,
+            agent_registry=agent_registry,
+        )
 
         if scope == CheckScope.QUICK:
             result = await agent.quick_check()
         else:
             result = await agent.check_health(scope=scope.value)
+
+        # Honesty reconciliation: the composer reports "measured" once all four
+        # dimension SCORES are real, but the model/agent readers are PARTIAL
+        # (unsourced sub-fields / null telemetry). Downgrade to "partial" so /full
+        # never claims a fuller provenance than the per-dimension endpoints. QUICK
+        # is component-only and never touched these stores (adapters unloaded ->
+        # provenance None), so this is a no-op there.
+        reconciled_provenance = _reconcile_full_provenance(
+            result.data_provenance, metrics_store, pipeline_store, agent_registry
+        )
 
         return HealthScoreResponse(
             check_id="",  # Will be set by caller
@@ -1221,8 +1445,9 @@ async def _execute_health_check(scope: CheckScope) -> HealthScoreResponse:
             health_summary=result.health_summary,
             check_latency_ms=result.total_latency_ms,
             timestamp=result.timestamp,
-            # F1: propagate the agent's ACTUAL provenance, not a hardcoded value.
-            data_provenance=result.data_provenance,
+            # F1: propagate the agent's ACTUAL provenance, reconciled with the
+            # adapter source provenance so /full never overclaims vs /models|/agents.
+            data_provenance=reconciled_provenance,
         )
 
     except ImportError as e:

@@ -96,13 +96,19 @@ class AgentHealthNode:
             # agents IS a measurement, so 1.0 here is measured, not fabricated.
             if statuses:
                 available_count = sum(1 for s in statuses if s["available"])
+                # A None success_rate means "available but NO recent telemetry"
+                # (unmeasured). It is NOT a measured low rate, so it must not be
+                # penalized — treat it as meeting the bar (matches the /agents
+                # endpoint, which scores purely on availability). A measured rate
+                # below the threshold IS penalized.
                 high_success_count = sum(
                     1
                     for s in statuses
-                    if s["available"] and s["success_rate"] >= self.min_success_rate
+                    if s["available"]
+                    and (s["success_rate"] is None or s["success_rate"] >= self.min_success_rate)
                 )
-                # Available with good success rate = 1.0
-                # Available with low success rate = 0.5
+                # Available with good/unmeasured success rate = 1.0
+                # Available with measured low success rate = 0.5
                 # Unavailable = 0.0
                 score_sum = high_success_count + ((available_count - high_success_count) * 0.5)
                 health_score = score_sum / len(statuses)
@@ -148,8 +154,9 @@ class AgentHealthNode:
                 agent_name=agent_name,
                 tier=agent.get("tier", 0),
                 available=metrics.get("available", False),
-                avg_latency_ms=metrics.get("avg_latency_ms", 0),
-                success_rate=metrics.get("success_rate", 0.0),
+                # None (unmeasured) is preserved, NOT coerced to a fabricated 0/1.0.
+                avg_latency_ms=metrics.get("avg_latency_ms"),
+                success_rate=metrics.get("success_rate"),
                 last_invocation=metrics.get("last_invocation", ""),
             )
 

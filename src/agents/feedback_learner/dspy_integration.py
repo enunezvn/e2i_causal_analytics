@@ -19,12 +19,32 @@ GEPA Migration (v4.3):
 
 from __future__ import annotations
 
+import functools
+import importlib.util
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, TypedDict, Union
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    # These names are resolved lazily at runtime via PEP 562 ``__getattr__`` (so
+    # importing dspy stays off the fast path). Declaring them here lets static
+    # tools (ruff F822 on ``__all__``, mypy) see them without an eager import.
+    from src.optimization.gepa import (  # noqa: F401
+        create_gepa_optimizer,
+        get_metric_for_agent,
+        load_optimized_module,
+        save_optimized_module,
+    )
+    from src.optimization.gepa.metrics import FeedbackLearnerGEPAMetric  # noqa: F401
+
+    PatternDetectionSignature: Any
+    RecommendationGenerationSignature: Any
+    KnowledgeUpdateSignature: Any
+    LearningSummarySignature: Any
 
 # Type alias for optimizer selection
 OptimizerType = Literal["miprov2", "gepa"]
@@ -338,9 +358,39 @@ class FeedbackLearnerTrainingSignal:
 # =============================================================================
 
 # Note: These signatures require dspy to be installed.
-# Import is conditional to allow module to work without dspy.
+#
+# DSPy availability is probed WITHOUT importing dspy. ``import dspy`` loads
+# ~714 MB; this module sits on the import chain of the Health Score Fast Path
+# agent ("Zero LLM usage in critical path") via ``recipient_emit`` ->
+# ``feedback_learner.__init__`` -> ``feedback_learner.agent`` -> here, so it must
+# not pull dspy in at import time. The Signature subclasses below are needed ONLY
+# by the GEPA/MIPROv2 optimizer paths, so they are built lazily on first
+# attribute access (PEP 562 module ``__getattr__``) and ``dspy`` is imported only
+# then.
+DSPY_AVAILABLE: bool = importlib.util.find_spec("dspy") is not None
+if DSPY_AVAILABLE:
+    logger.info("DSPy detected for Feedback Learner agent; import deferred until needed")
+else:
+    logger.warning("DSPy not available - using deterministic pattern detection")
 
-try:
+
+@functools.lru_cache(maxsize=1)
+def _get_feedback_signatures() -> Dict[str, Any]:
+    """Build (once) and return the feedback_learner DSPy Signature classes.
+
+    Importing dspy here keeps the ~714 MB import off the fast-path module-import
+    chain; it happens only when a GEPA/MIPROv2 optimizer path actually requests
+    these signatures. Returns an all-``None`` mapping when dspy is not installed
+    (mirrors the historical placeholder behavior).
+    """
+    if not DSPY_AVAILABLE:
+        return {
+            "PatternDetectionSignature": None,
+            "RecommendationGenerationSignature": None,
+            "KnowledgeUpdateSignature": None,
+            "LearningSummarySignature": None,
+        }
+
     import dspy
 
     class PatternDetectionSignature(dspy.Signature):
@@ -432,46 +482,111 @@ try:
         key_insights: list = dspy.OutputField(desc="Top 3-5 key insights from this learning cycle")
         next_steps: list = dspy.OutputField(desc="Recommended follow-up actions")
 
-    DSPY_AVAILABLE = True
-    logger.info("DSPy signatures loaded for Feedback Learner agent")
+    logger.info("DSPy signatures built for Feedback Learner agent")
+    return {
+        "PatternDetectionSignature": PatternDetectionSignature,
+        "RecommendationGenerationSignature": RecommendationGenerationSignature,
+        "KnowledgeUpdateSignature": KnowledgeUpdateSignature,
+        "LearningSummarySignature": LearningSummarySignature,
+    }
 
-except ImportError:
-    DSPY_AVAILABLE = False
-    logger.warning("DSPy not available - using deterministic pattern detection")
 
-    # Placeholder classes when dspy is not available
-    PatternDetectionSignature = None  # type: ignore[assignment,misc]
-    RecommendationGenerationSignature = None  # type: ignore[assignment,misc]
-    KnowledgeUpdateSignature = None  # type: ignore[assignment,misc]
-    LearningSummarySignature = None  # type: ignore[assignment,misc]
+# Names resolved lazily via PEP 562: ``from ...dspy_integration import
+# PatternDetectionSignature`` (and attribute access) builds the class on first
+# use without importing dspy at module import time.
+_LAZY_SIGNATURE_NAMES = frozenset(
+    {
+        "PatternDetectionSignature",
+        "RecommendationGenerationSignature",
+        "KnowledgeUpdateSignature",
+        "LearningSummarySignature",
+    }
+)
 
 
 # =============================================================================
 # 4.1 GEPA OPTIMIZER SUPPORT
 # =============================================================================
 
-# Conditional GEPA import
-try:
-    from src.optimization.gepa import (
-        create_gepa_optimizer,
-        get_metric_for_agent,
-        load_optimized_module,
-        save_optimized_module,
-    )
-    from src.optimization.gepa.metrics import FeedbackLearnerGEPAMetric
-
-    GEPA_AVAILABLE = True
-    logger.info("GEPA optimizer loaded for Feedback Learner agent")
-except ImportError:
-    GEPA_AVAILABLE = False
+# Conditional GEPA support.
+#
+# ``src.optimization.gepa`` eagerly imports dspy (~714 MB) when its package
+# ``__init__`` executes — and even ``importlib.util.find_spec("src.optimization.
+# gepa")`` would trigger that, because resolving a DOTTED name imports the parent
+# packages (``src.optimization/__init__.py`` eagerly imports gepa -> dspy). So we
+# avoid importlib entirely here and probe GEPA availability the only fully
+# import-free way: GEPA requires dspy, and its (first-party) package source must
+# exist on disk. The real symbols are loaded lazily on first optimizer use via
+# ``_get_gepa_symbols()`` / PEP 562 ``__getattr__``.
+_GEPA_PKG_INIT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),  # src/
+    "optimization",
+    "gepa",
+    "__init__.py",
+)
+GEPA_AVAILABLE: bool = DSPY_AVAILABLE and os.path.isfile(_GEPA_PKG_INIT)
+if GEPA_AVAILABLE:
+    logger.info("GEPA optimizer detected for Feedback Learner agent; import deferred until needed")
+else:
     logger.info("GEPA not available - using MIPROv2 optimizer")
 
-    # Placeholder functions when GEPA is not available
-    create_gepa_optimizer = None  # type: ignore[assignment]
-    get_metric_for_agent = None  # type: ignore[assignment]
-    save_optimized_module = None  # type: ignore[assignment]
-    load_optimized_module = None  # type: ignore[assignment]
-    FeedbackLearnerGEPAMetric = None  # type: ignore[assignment,misc]
+_GEPA_SYMBOL_NAMES = frozenset(
+    {
+        "create_gepa_optimizer",
+        "get_metric_for_agent",
+        "load_optimized_module",
+        "save_optimized_module",
+        "FeedbackLearnerGEPAMetric",
+    }
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _get_gepa_symbols() -> Dict[str, Any]:
+    """Import (once) and return the GEPA optimizer symbols.
+
+    Deferred so the eager dspy import inside ``src.optimization.gepa`` stays off
+    the fast-path module-import chain. Returns an all-``None`` mapping when GEPA
+    is not importable (mirrors the historical placeholder behavior).
+    """
+    if not GEPA_AVAILABLE:
+        return dict.fromkeys(_GEPA_SYMBOL_NAMES)
+
+    try:
+        from src.optimization.gepa import (
+            create_gepa_optimizer,
+            get_metric_for_agent,
+            load_optimized_module,
+            save_optimized_module,
+        )
+        from src.optimization.gepa.metrics import FeedbackLearnerGEPAMetric
+
+        logger.info("GEPA optimizer symbols loaded for Feedback Learner agent")
+        return {
+            "create_gepa_optimizer": create_gepa_optimizer,
+            "get_metric_for_agent": get_metric_for_agent,
+            "load_optimized_module": load_optimized_module,
+            "save_optimized_module": save_optimized_module,
+            "FeedbackLearnerGEPAMetric": FeedbackLearnerGEPAMetric,
+        }
+    except ImportError:
+        logger.info("GEPA import failed at use time - using MIPROv2 optimizer")
+        return dict.fromkeys(_GEPA_SYMBOL_NAMES)
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily resolve DSPy Signature classes and GEPA symbols (PEP 562).
+
+    Keeps the public import surface unchanged
+    (``from ...dspy_integration import PatternDetectionSignature`` /
+    ``save_optimized_module`` still work) while deferring the ~714 MB dspy import
+    until a name is actually accessed.
+    """
+    if name in _LAZY_SIGNATURE_NAMES:
+        return _get_feedback_signatures()[name]
+    if name in _GEPA_SYMBOL_NAMES:
+        return _get_gepa_symbols()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # =============================================================================
@@ -823,6 +938,13 @@ class FeedbackLearnerOptimizer:
 
         import dspy
 
+        # Resolve dspy-backed Signature classes and GEPA symbols lazily (the
+        # import that loads dspy happens here, not at module import time).
+        _sigs = _get_feedback_signatures()
+        _gepa = _get_gepa_symbols()
+        get_metric_for_agent = _gepa["get_metric_for_agent"]
+        create_gepa_optimizer = _gepa["create_gepa_optimizer"]
+
         # Convert signals to examples
         examples = self._signals_to_examples(training_signals, phase)
         trainset = examples[: int(len(examples) * 0.8)]
@@ -833,10 +955,10 @@ class FeedbackLearnerOptimizer:
             return None
 
         signatures = {
-            "pattern": PatternDetectionSignature,
-            "recommendation": RecommendationGenerationSignature,
-            "update": KnowledgeUpdateSignature,
-            "summary": LearningSummarySignature,
+            "pattern": _sigs["PatternDetectionSignature"],
+            "recommendation": _sigs["RecommendationGenerationSignature"],
+            "update": _sigs["KnowledgeUpdateSignature"],
+            "summary": _sigs["LearningSummarySignature"],
         }
 
         if phase not in signatures or signatures[phase] is None:
@@ -902,6 +1024,10 @@ class FeedbackLearnerOptimizer:
         import dspy
         from dspy.teleprompt import MIPROv2
 
+        # Resolve dspy-backed Signature classes lazily (loads dspy here, not at
+        # module import time).
+        _sigs = _get_feedback_signatures()
+
         # Convert signals to examples
         examples = self._signals_to_examples(training_signals, phase)
 
@@ -910,9 +1036,9 @@ class FeedbackLearnerOptimizer:
             return None
 
         signatures = {
-            "pattern": PatternDetectionSignature,
-            "recommendation": RecommendationGenerationSignature,
-            "summary": LearningSummarySignature,
+            "pattern": _sigs["PatternDetectionSignature"],
+            "recommendation": _sigs["RecommendationGenerationSignature"],
+            "summary": _sigs["LearningSummarySignature"],
         }
         metrics = {
             "pattern": self.pattern_metric,

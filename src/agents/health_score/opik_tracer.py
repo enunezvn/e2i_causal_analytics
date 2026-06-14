@@ -21,6 +21,7 @@ Health Dimensions Traced:
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -33,6 +34,26 @@ if TYPE_CHECKING:
     from opik.api_objects.span import Span
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_opik_enabled(explicit: Optional[bool]) -> bool:
+    """Resolve whether Opik tracing is enabled for the Health Score agent.
+
+    An explicit ``enabled=`` argument always wins. Otherwise honor the canonical
+    ``OPIK_ENABLED`` switch (opt-out, default ``"true"``) — the same env contract
+    as :mod:`src.mlops.opik_connector`.
+
+    Why this matters (#952): Opik is intentionally STOPPED on the prod droplet
+    (memory relief) and OFF by design in CI (``OPIK_URL`` points at a dead port).
+    Against that dead endpoint the Opik SDK's background uploader thread does NOT
+    no-op — it raises ``httpx.ConnectTimeout`` and retries forever, leaking
+    threads on every prod health check and deterministically hanging the
+    serviceless CI unit shard's xdist worker. Honoring ``OPIK_ENABLED=false`` lets
+    the operator turn tracing off so a health check never constructs that client.
+    """
+    if explicit is not None:
+        return explicit
+    return os.getenv("OPIK_ENABLED", "true").strip().lower() == "true"
 
 
 # ============================================================================
@@ -348,7 +369,7 @@ class HealthScoreOpikTracer:
         self,
         project_name: str = "e2i-health-score",
         sampling_rate: float = 1.0,
-        enabled: bool = True,
+        enabled: Optional[bool] = None,
     ):
         """
         Initialize the Opik tracer.
@@ -356,14 +377,16 @@ class HealthScoreOpikTracer:
         Args:
             project_name: Opik project name for traces
             sampling_rate: Fraction of traces to capture (0.0-1.0)
-            enabled: Whether tracing is enabled
+            enabled: Whether tracing is enabled. ``None`` (the default) resolves
+                from the ``OPIK_ENABLED`` env switch (opt-out, default on); an
+                explicit bool overrides the env. See :func:`_resolve_opik_enabled`.
         """
         if self._initialized:
             return
 
         self.project_name = project_name
         self.sampling_rate = sampling_rate
-        self.enabled = enabled
+        self.enabled = _resolve_opik_enabled(enabled)
         self._client: Optional["Opik"] = None
         self._initialized = True
 
@@ -528,7 +551,7 @@ _tracer_instance: Optional[HealthScoreOpikTracer] = None
 def get_health_score_tracer(
     project_name: str = "e2i-health-score",
     sampling_rate: float = 1.0,
-    enabled: bool = True,
+    enabled: Optional[bool] = None,
 ) -> HealthScoreOpikTracer:
     """
     Get or create the singleton Health Score Opik tracer.
@@ -536,7 +559,9 @@ def get_health_score_tracer(
     Args:
         project_name: Opik project name
         sampling_rate: Fraction of traces to capture
-        enabled: Whether tracing is enabled
+        enabled: Whether tracing is enabled. ``None`` (the default — and what the
+            agent's run path passes) resolves from the ``OPIK_ENABLED`` env switch
+            so a deployment/CI lane with Opik stopped never constructs the client.
 
     Returns:
         HealthScoreOpikTracer instance

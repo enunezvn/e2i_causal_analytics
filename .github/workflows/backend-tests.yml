@@ -407,6 +407,15 @@ jobs:
       # logging a noisy ECONNREFUSED.
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
+      # Opik is OFF by design in CI (no opik container; the URL above points at a
+      # dead port). Honored by the health_score tracer + opik_connector via the
+      # OPIK_ENABLED opt-out switch: with it false the SDK never constructs a
+      # client, so its background uploader can't retry httpx.ConnectTimeout
+      # forever and hang teardown — the recurring Integration-lane Opik flake
+      # (opik_intentionally_stopped). Also lets the re-homed real-graph health
+      # tests (test_health_score_full_graph_948.py) run here without hanging on
+      # the dead Opik endpoint (issue #952 / PR #948).
+      OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
       OPENAI_API_KEY: 'test-key'
       # Pin BLAS/OpenMP thread counts to 1 so the synthetic baseline e2e
