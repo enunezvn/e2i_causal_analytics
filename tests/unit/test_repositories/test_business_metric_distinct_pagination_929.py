@@ -129,8 +129,10 @@ async def test_distinct_values_applies_brand_filter_across_pages():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_distinct_values_terminates_on_short_final_page():
-    """A run whose total is an exact multiple of page_size still terminates and is complete."""
+async def test_distinct_values_exact_multiple_of_page_size_terminates_cleanly():
+    """A run whose total is an exact multiple of page_size still terminates and is
+    complete — cap-agnostic paging (#938) ends on the trailing EMPTY page (one extra
+    round trip), not on a short page."""
     rows = [
         {"metric_id": f"{i:04d}", "region": reg, "brand": "Remibrutinib"}
         for i, reg in enumerate(["northeast", "south", "midwest", "west"], start=1)
@@ -230,3 +232,42 @@ async def test_distinct_values_reraises_42703_mid_scan_not_partial():
         await repo.get_distinct_values(
             "region", brand="Remibrutinib", include_synthetic=True, page_size=2
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_distinct_values_robust_to_server_row_cap_below_page_size():
+    """Cap-agnostic paging (#938): if PostgREST caps a response BELOW page_size (a
+    DIFFERENT environment — CI's fresh DB, a future prod config), distinct discovery must
+    STILL exhaust the slice, never stop early on the first short (capped) page. The loop
+    must advance by the rows ACTUALLY returned and terminate ONLY on an EMPTY page, so it
+    is correct for ANY server cap — not just one >= page_size."""
+
+    class _CappedTable(_FakePagedTable):
+        SERVER_CAP = 1
+
+        async def execute(self):
+            res = await super().execute()
+            res.data = res.data[: _CappedTable.SERVER_CAP]  # server returns <= cap rows
+            return res
+
+    class _CappedClient(_FakeClient):
+        def table(self, _name: str):
+            return _CappedTable(self._rows)
+
+    # 3 distinct regions; server caps EVERY response at 1 row; page_size requested = 10.
+    repo = BusinessMetricRepository(_CappedClient(_rows_spanning_pages()))
+
+    values = await repo.get_distinct_values(
+        "region", brand="Remibrutinib", include_synthetic=True, page_size=10
+    )
+
+    assert values == ["northeast", "south", "west"]  # all 3 despite cap(1) < page_size(10)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_distinct_values_rejects_nonpositive_page_size():
+    repo = BusinessMetricRepository(_FakeClient(_rows_spanning_pages()))
+    with pytest.raises(ValueError):
+        await repo.get_distinct_values("region", page_size=0)
