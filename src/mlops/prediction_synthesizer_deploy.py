@@ -146,6 +146,47 @@ def serialize_model(model: Any, artifact_dir: Path, model_name: str) -> str:
     return str(pkl_path)
 
 
+def serialize_model_bundle(
+    model: Any,
+    preprocessor: Any,
+    feature_columns: List[str],
+    artifact_dir: Path,
+    model_name: str,
+) -> str:
+    """Pickle a SERVING BUNDLE (model + fitted preprocessor + encoded columns).
+
+    Unlike :func:`serialize_model` (which pickles a bare estimator), this writes
+    the dict shape that ``scripts/bentoml/e2i_serving_service.py`` already
+    unwraps in ``E2IModelService.__init__``::
+
+        {"model": estimator, "preprocessor": fitted_preprocessor,
+         "feature_columns": [<encoded feature names>]}
+
+    Use this for the gold-standard cohort models (#39): they train on the
+    FeatureBuilder-encoded 9-column frame, so a bare estimator cannot serve a
+    RAW 3-covariate request — the bundled ``preprocessor`` (a fitted
+    ``FeatureBuilder``) turns raw covariates into the encoded matrix at serve
+    time. ``feature_columns`` is the ENCODED column order (the numeric vector
+    SHAP runs over).
+
+    The file is written as ``<model_name>.bundle.pkl`` (distinct extension from
+    the bare-estimator ``<model_name>.pkl``) so the two artifact kinds never
+    collide on disk. The path is resolved to absolute so it loads regardless of
+    the app's CWD.
+    """
+    artifact_dir = Path(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    pkl_path = (artifact_dir / f"{model_name}.bundle.pkl").resolve()
+    bundle = {
+        "model": model,
+        "preprocessor": preprocessor,
+        "feature_columns": list(feature_columns),
+    }
+    with open(pkl_path, "wb") as fh:
+        pickle.dump(bundle, fh)
+    return str(pkl_path)
+
+
 def serialize_and_write_manifest(
     models: List[TrainedModel],
     artifact_dir: Path,

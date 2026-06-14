@@ -52,6 +52,26 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
         "patient_nba_features:response_history",
         "patient_nba_features:timing_preference",
     ],
+    # Gold-standard cohort families (#39): the real ``*_goldstd_lr_v1`` models
+    # consume the 3 RAW leakage-safe KEEP_COLUMNS covariates served by the
+    # ``goldstd_cohort_features`` Feast view (feature_repo/features/
+    # goldstd_cohort_features.py). The served model's bundled FeatureBuilder
+    # one-hot/median-encodes these into the 9 numeric features SHAP runs over.
+    "initiation": [
+        "goldstd_cohort_features:disease_severity",
+        "goldstd_cohort_features:academic_hcp",
+        "goldstd_cohort_features:geographic_region",
+    ],
+    "persistence": [
+        "goldstd_cohort_features:disease_severity",
+        "goldstd_cohort_features:academic_hcp",
+        "goldstd_cohort_features:geographic_region",
+    ],
+    "discontinuation": [
+        "goldstd_cohort_features:disease_severity",
+        "goldstd_cohort_features:academic_hcp",
+        "goldstd_cohort_features:geographic_region",
+    ],
 }
 
 

@@ -75,6 +75,20 @@ class PredictionInput(BaseModel):
             "feature_view are provided — features will be fetched from Feast."
         ),
     )
+    raw_features: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "RAW covariate rows (samples) as {name: value} dicts — e.g. "
+            "{'disease_severity': 5.61, 'academic_hcp': 0, "
+            "'geographic_region': 'northeast'}. Used for gold-standard cohort "
+            "models whose bundled preprocessor is a FeatureBuilder: the service "
+            "applies preprocessor.transform(raw_df) (raw -> encoded) before "
+            "inference. Categorical strings (e.g. geographic_region) are "
+            "one-hot-encoded by the preprocessor, NOT coerced to float. Takes "
+            "precedence over ``features`` when both are present; ignored on the "
+            "Feast path."
+        ),
+    )
     model_type: str = Field(
         default="classification",
         description="Type of prediction: classification or regression",
@@ -133,6 +147,24 @@ class PredictionOutput(BaseModel):
             "Telemetry tag describing where the features came from: "
             "'feast_online' when fetched via Feast HTTP, 'user_provided' when "
             "passed directly in the request, or None for batch/legacy paths."
+        ),
+    )
+    encoded_features: List[List[float]] = Field(
+        default_factory=list,
+        description=(
+            "The ENCODED numeric feature matrix the model actually scored "
+            "(samples x len(encoded_feature_columns)). Populated on the RAW "
+            "covariate path (#39) after the bundled FeatureBuilder transforms "
+            "raw -> encoded, so the SHAP caller can run SHAP over the audit-grade "
+            "encoded vector. Empty on the legacy/Feast paths (the caller already "
+            "holds the encoded matrix)."
+        ),
+    )
+    encoded_feature_columns: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Names for ``encoded_features`` columns (the model's encoded "
+            "feature_columns order). Empty when ``encoded_features`` is empty."
         ),
     )
 
@@ -345,6 +377,118 @@ class E2IModelService:
             except TypeError:
                 return None
         return None
+
+    def _resolve_keep_columns(self) -> Optional[List[str]]:
+        """Resolve the RAW covariate names a caller must supply, if any.
+
+        Returns the bundled preprocessor's ``keep_columns`` when the preprocessor
+        is a FeatureBuilder (the gold-standard #39 path) — these are the RAW
+        covariate names (e.g. ``disease_severity``, ``academic_hcp``,
+        ``geographic_region``) the caller supplies, which the FeatureBuilder
+        encodes into the numeric ``feature_columns`` SHAP runs over.
+
+        Returns ``None`` for a bare estimator / ColumnTransformer (no raw
+        covariate contract — the caller supplies the encoded matrix directly).
+        Best-effort: any unexpected shape yields ``None`` so model_info never
+        raises.
+        """
+        pre = self._preprocessor
+        if pre is None:
+            return None
+        keep = getattr(pre, "keep_columns", None)
+        if not keep:
+            return None
+        try:
+            return [str(c) for c in keep]
+        except TypeError:
+            return None
+
+    def _preprocessor_is_feature_builder(self) -> bool:
+        """True when the bundled preprocessor is a FeatureBuilder (raw-covariate
+        contract): it exposes both ``keep_columns`` and a ``transform`` method.
+
+        Detected structurally (duck-typed) rather than by import — the BentoML
+        container deliberately cannot import ``src.*``.
+        """
+        pre = self._preprocessor
+        return (
+            pre is not None
+            and getattr(pre, "keep_columns", None) is not None
+            and callable(getattr(pre, "transform", None))
+        )
+
+    def _run_raw_prediction(self, raw_rows: List[Dict[str, Any]]) -> PredictionOutput:
+        """Encode RAW covariate rows via the FeatureBuilder, then predict.
+
+        Builds a raw DataFrame (preserving each covariate's native dtype so a
+        categorical string is one-hot-encoded, not float-coerced), applies
+        ``preprocessor.transform`` (raw -> encoded), and runs the model. FAILS
+        CLOSED if no FeatureBuilder preprocessor is bundled — a raw request has
+        no meaning without one, and silently treating dicts as a numeric matrix
+        would fabricate a prediction.
+        """
+        import numpy as np
+        import pandas as pd
+
+        if self._model is None:
+            return PredictionOutput(
+                predictions=[],
+                probabilities=[],
+                model_id="no_model",
+                prediction_time_ms=0.0,
+                is_mock=False,
+                feature_source="raw_covariates",
+            )
+
+        if not self._preprocessor_is_feature_builder():
+            raise RuntimeError(
+                "raw_features supplied but the served model has no FeatureBuilder "
+                "preprocessor; refusing to fabricate a prediction from raw "
+                "covariates without an encoder."
+            )
+
+        start = time.time()
+        raw_df = pd.DataFrame(list(raw_rows))
+        try:
+            encoded = self._preprocessor.transform(raw_df)
+        except Exception as e:
+            # FAIL CLOSED — a raw->encoded transform failure must not fall back
+            # to predicting on raw values (plausible-but-wrong audit-grade output).
+            logger.error("Raw-covariate preprocessor transform failed: %s", e)
+            raise RuntimeError(f"Preprocessor transform failed: {e}") from e
+
+        arr = np.asarray(encoded)
+        predictions = self._model.predict(arr).tolist()
+
+        probabilities: List[float] = []
+        if hasattr(self._model, "predict_proba"):
+            try:
+                proba = self._model.predict_proba(arr)
+                if proba.ndim == 2 and proba.shape[1] == 2:
+                    probabilities = proba[:, 1].tolist()
+                else:
+                    probabilities = proba.tolist()
+            except Exception:
+                pass
+
+        elapsed_ms = (time.time() - start) * 1000
+        self._prediction_count += len(raw_rows)
+
+        # Surface the ENCODED vector the model scored so the SHAP caller runs
+        # SHAP over the audit-grade encoded features (not the 3 raw covariates).
+        encoded_cols = self._resolve_feature_columns() or []
+        encoded_matrix = np.asarray(encoded).tolist()
+
+        return PredictionOutput(
+            predictions=predictions,
+            probabilities=probabilities,
+            model_id=self._model_tag or "unknown",
+            prediction_time_ms=elapsed_ms,
+            is_mock=False,
+            feature_source="raw_covariates",
+            encoded_features=encoded_matrix,
+            encoded_feature_columns=list(encoded_cols),
+        )
 
     def _apply_preprocessor(self, arr: Any) -> Any:
         """Apply the bundled preprocessor to a feature matrix, if present.
@@ -578,6 +722,12 @@ class E2IModelService:
             )
             return self._run_prediction(features, feature_source="feast_online")
 
+        # RAW covariate path (#39): gold-standard cohort models bundle a
+        # FeatureBuilder preprocessor and expect the 3 RAW covariates. Takes
+        # precedence over the legacy numeric ``features`` matrix when present.
+        if input_data.raw_features:
+            return self._run_raw_prediction(input_data.raw_features)
+
         feature_source = "user_provided" if input_data.features else None
         return self._run_prediction(input_data.features, feature_source=feature_source)
 
@@ -686,6 +836,14 @@ class E2IModelService:
             # feature contract — callers MUST then fail closed rather than
             # guess an order.
             "feature_columns": self._resolve_feature_columns(),
+            # The RAW covariate names a caller must supply for a gold-standard
+            # cohort model (#39): the bundled FeatureBuilder's ``keep_columns``
+            # (e.g. ['disease_severity', 'academic_hcp', 'geographic_region']).
+            # The service encodes these into the numeric ``feature_columns``
+            # (the SHAP vector) at serve time. None for a bare estimator /
+            # ColumnTransformer (no raw-covariate contract — supply the encoded
+            # matrix directly).
+            "keep_columns": self._resolve_keep_columns(),
         }
 
         # Add model metadata if available
