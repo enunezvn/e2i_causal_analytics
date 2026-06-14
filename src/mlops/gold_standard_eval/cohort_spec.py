@@ -66,3 +66,47 @@ DISCONTINUATION = CohortSpec(
     grain="patient",
     base_covariates=("disease_severity", "academic_hcp", "geographic_region"),
 )
+
+# ---------------------------------------------------------------------------
+# Per-brand patient cohort factory (P3 — 9 slots: cohort × brand)
+# ---------------------------------------------------------------------------
+
+BRANDS = ("Remibrutinib", "Fabhalta", "Kisqali")
+PATIENT_COHORTS = ("initiation", "persistence", "discontinuation")
+_PATIENT_LABELS: dict[str, str] = {
+    "initiation": "treatment_initiated",
+    "persistence": "persistent_180d",
+    "discontinuation": "discontinued_180d",
+}
+_BASE3 = ("disease_severity", "academic_hcp", "geographic_region")
+
+
+def make_patient_spec(cohort: str, brand: str) -> CohortSpec:
+    """Build a per-brand CohortSpec for a patient-grain cohort.
+
+    cohort in PATIENT_COHORTS; brand in BRANDS.  target/name are uniform
+    f"{cohort}_{brand.lower()}" so the 9 per-brand models register cleanly.
+    """
+    if cohort not in _PATIENT_LABELS:
+        raise ValueError(f"unknown patient cohort {cohort!r}")
+    if brand not in BRANDS:
+        raise ValueError(f"unknown brand {brand!r}")
+    key = f"{cohort}_{brand.lower()}"
+    return CohortSpec(
+        name=key,
+        target=key,
+        brand=brand,
+        label_column=_PATIENT_LABELS[cohort],
+        grain="patient",
+        base_covariates=_BASE3,
+    )
+
+
+def goldstd_model_name(cohort: str, brand: str) -> str:
+    """Return the canonical ml_model_registry model_name for a per-brand slot."""
+    return f"{cohort}_{brand.lower()}_goldstd_lr_v1"
+
+
+def goldstd_experiment_name(cohort: str, brand: str) -> str:
+    """Return the canonical ml_experiments experiment_name for a per-brand slot."""
+    return f"{cohort}_{brand.lower()}_goldstd_eval_v1"
