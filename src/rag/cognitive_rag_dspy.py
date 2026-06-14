@@ -1208,9 +1208,16 @@ def create_production_cognitive_workflow(
             memory_connector=connector,
         )
 
-        result = await workflow.ainvoke(CognitiveState(
-            user_query="Why did Kisqali adoption increase?"
-        ))
+        # The workflow is compiled with a MemorySaver checkpointer, so a
+        # thread_id config is REQUIRED (omitting it raises ValueError).
+        state = CognitiveState(
+            user_query="Why did Kisqali adoption increase?",
+            conversation_id="session-123",
+        )
+        result = await workflow.ainvoke(
+            state,
+            config={"configurable": {"thread_id": state.conversation_id}},
+        )
     """
     # Import adapters here to avoid circular imports
     from src.rag.memory_adapters import (
@@ -1292,13 +1299,18 @@ async def main():
         domain_vocabulary="brands: [Remibrutinib, Fabhalta, Kisqali]...",
     )
 
-    # Run cognitive cycle
+    # Run cognitive cycle. The workflow is compiled with a MemorySaver
+    # checkpointer, so ainvoke REQUIRES a thread_id config; we seed it from the
+    # same conversation_id the state carries.
     initial_state = CognitiveState(
         user_query="Why did Kisqali adoption increase in the Northeast last quarter?",
         conversation_id="demo-123",
     )
 
-    result = await workflow.ainvoke(initial_state)
+    result = await workflow.ainvoke(
+        initial_state,
+        config={"configurable": {"thread_id": initial_state.conversation_id}},
+    )
 
     print(f"Response: {result.response}")
     print(f"Hops: {result.hop_count}")
