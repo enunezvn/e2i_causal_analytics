@@ -176,6 +176,7 @@ async def _get_or_create_experiment(
     *,
     created_by: str = "prediction_synthesizer_deploy",
     description: str = "Real deployable models backing live chat predictions (#840).",
+    prediction_target: str | None = None,
 ) -> str:
     """Resolve (or create) the dedicated real deploy experiment id.
 
@@ -188,25 +189,30 @@ async def _get_or_create_experiment(
     reuse this helper for a different experiment (e.g. the gold-standard eval
     deployer) should pass their own values so the DB row carries the correct
     provenance on first creation.
+
+    ``prediction_target`` overrides the module-level ``PREDICTION_TARGET`` constant.
+    Existing callers that omit this argument retain unchanged behaviour
+    (back-compat): the serving deploy path always resolves the initiation target.
     """
+    target = prediction_target or PREDICTION_TARGET
     existing = await (
         client.table("ml_experiments")
         .select("id")
         .eq("experiment_name", experiment_name)
-        .eq("prediction_target", PREDICTION_TARGET)
+        .eq("prediction_target", target)
         .execute()
     )
     if existing.data:
         if len(existing.data) > 1:
             raise RuntimeError(
                 f"ambiguous experiment '{experiment_name}' for target "
-                f"'{PREDICTION_TARGET}' ({len(existing.data)} rows) — refusing to guess"
+                f"'{target}' ({len(existing.data)} rows) — refusing to guess"
             )
         return str(existing.data[0]["id"])
 
     row = {
         "experiment_name": experiment_name,
-        "prediction_target": PREDICTION_TARGET,
+        "prediction_target": target,
         "brand": BRAND,
         "is_synthetic": False,
         "created_by": created_by,

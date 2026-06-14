@@ -193,27 +193,18 @@ async def register_cohort_model(
 async def _resolve_goldstd_experiment(client: Any, spec: Any, experiment_name: str) -> str:
     """Resolve/create the gold-standard experiment for ``spec.target``.
 
-    Delegates to the deploy module's ``_get_or_create_experiment``, which matches
-    on ``(experiment_name, prediction_target)``. That helper reads its target
-    from the deploy module's module-level ``PREDICTION_TARGET`` constant — which
-    is the SAME ``csu_treatment_initiation`` target as the initiation cohort, so
-    reuse is correct here. The assertion documents (and enforces) that coupling
-    so a future non-initiation cohort cannot silently register under the wrong
-    target.
+    Delegates to the deploy module's ``_get_or_create_experiment``, passing
+    ``spec.target`` explicitly so each cohort's experiment is registered under
+    its own ``prediction_target`` (e.g. ``pnh_persistence``, ``pnh_discontinuation``),
+    not the serving-deploy module-level constant.
     """
-    from src.mlops import prediction_synthesizer_deploy as _deploy
-
     target = getattr(spec, "target", None)
-    if target != _deploy.PREDICTION_TARGET:
-        raise ValueError(
-            f"register_cohort_model currently supports only the "
-            f"{_deploy.PREDICTION_TARGET!r} target (got {target!r}); "
-            "_get_or_create_experiment resolves that target. Extend the helper "
-            "before deploying another cohort."
-        )
+    if not target:
+        raise ValueError("register_cohort_model requires spec.target to be set.")
     return await _get_or_create_experiment(
         client,
         experiment_name,
         created_by="gold_standard_eval",
-        description="Gold-standard eval pipeline for the initiation cohort.",
+        description=f"Gold-standard eval pipeline for the {getattr(spec, 'name', target)} cohort.",
+        prediction_target=target,
     )
