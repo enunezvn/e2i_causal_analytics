@@ -282,7 +282,7 @@ async def test_feast_path_fails_closed_on_null_or_non_numeric_values(
                 entity_key="patient_id",
             )
     # The error names the offending feature(s) and refuses the fabrication.
-    assert "null/non-numeric" in str(ei.value)
+    assert "refusing to fabricate" in str(ei.value)
     assert "score" in str(ei.value) and "label" in str(ei.value)
 
 
@@ -347,3 +347,70 @@ async def test_preprocessor_failure_fails_closed_no_raw_predict(
     with pytest.raises(RuntimeError) as ei:
         service._apply_preprocessor(np.array([[1.0, 2.0]]))
     assert "Preprocessor transform failed" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_feast_path_orders_by_model_feature_columns_not_feast_order(
+    serving_module: Any,
+) -> None:
+    """The matrix must be built in the MODEL's feature_columns order, not Feast's
+    response order — else a mis-ordered (plausible-but-wrong) vector would be
+    labeled feast_online. Feast returns [patient_id, b, a]; the model expects
+    [a, b]; the row must be [a_value, b_value]."""
+    feast_body = {
+        "metadata": {"feature_names": ["patient_id", "b", "a"]},
+        "results": [
+            {"values": ["P001"], "statuses": ["PRESENT"]},
+            {"values": [20.0], "statuses": ["PRESENT"]},  # b
+            {"values": [10.0], "statuses": ["PRESENT"]},  # a
+        ],
+    }
+    response_mock = MagicMock()
+    response_mock.raise_for_status = MagicMock(return_value=None)
+    response_mock.json = MagicMock(return_value=feast_body)
+    http_client_mock = MagicMock()
+    http_client_mock.post = AsyncMock(return_value=response_mock)
+
+    with patch("httpx.AsyncClient", return_value=_FakeAsyncContext(http_client_mock)):
+        service = serving_module.E2IModelService()
+        service._feature_columns = ["a", "b"]  # model's authoritative order
+        matrix = await service._fetch_features_from_feast(
+            entity_ids=["P001"],
+            feature_view="patient_engagement_features",
+            entity_key="patient_id",
+        )
+
+    # Ordered as the model expects: a (10.0) then b (20.0), NOT Feast's b, a.
+    assert matrix == [[10.0, 20.0]]
+
+
+@pytest.mark.asyncio
+async def test_feast_path_fails_closed_when_expected_feature_absent(
+    serving_module: Any,
+) -> None:
+    """A model-expected feature absent from the Feast payload FAILS CLOSED —
+    it is not silently dropped or zero-filled."""
+    feast_body = {
+        "metadata": {"feature_names": ["patient_id", "a"]},  # no "b"
+        "results": [
+            {"values": ["P001"], "statuses": ["PRESENT"]},
+            {"values": [10.0], "statuses": ["PRESENT"]},
+        ],
+    }
+    response_mock = MagicMock()
+    response_mock.raise_for_status = MagicMock(return_value=None)
+    response_mock.json = MagicMock(return_value=feast_body)
+    http_client_mock = MagicMock()
+    http_client_mock.post = AsyncMock(return_value=response_mock)
+
+    with patch("httpx.AsyncClient", return_value=_FakeAsyncContext(http_client_mock)):
+        service = serving_module.E2IModelService()
+        service._feature_columns = ["a", "b"]
+        with pytest.raises(RuntimeError) as ei:
+            await service._fetch_features_from_feast(
+                entity_ids=["P001"],
+                feature_view="patient_engagement_features",
+                entity_key="patient_id",
+            )
+    assert "b" in str(ei.value)
+    assert "missing" in str(ei.value)

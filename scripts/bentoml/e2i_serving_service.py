@@ -500,43 +500,56 @@ class E2IModelService:
             )
 
         # Drop the entity-key column from feature columns; we want feature values only.
-        feature_columns = {
+        feast_values: Dict[str, List[Any]] = {
             name: results[idx].get("values", [])
             for idx, name in enumerate(feature_names)
             if name != entity_key
         }
 
+        # Build each row in the MODEL's authoritative feature_columns order, not
+        # Feast's response order — Feast may return columns in a different order
+        # than the bundled model expects, which would silently produce a
+        # plausible-but-WRONG vector labeled feature_source='feast_online'.
+        # Extra Feast columns are ignored. When the model exposes no feature
+        # order, fall back to Feast order (no model contract to enforce against).
+        expected_order = self._resolve_feature_columns() or list(feast_values.keys())
+
         n_rows = len(entity_ids)
         matrix: List[List[float]] = []
-        # FAIL CLOSED on null/missing/non-numeric Feast values. A Feast 200 can
-        # carry PRESENT-but-null values; zero-filling them and then labeling the
-        # response feature_source='feast_online' feeds the model a fabricated
-        # vector presented as real, audit-grade Feast data (the #576/#532 harm —
-        # mirrors the FastAPI route's anti-null-trap guard). A real 0.0 from
-        # Feast is a legitimate value and passes; only null/non-numeric raises.
-        invalid: Dict[str, int] = {}
+        # FAIL CLOSED on missing/null/non-numeric values. A Feast 200 can carry
+        # PRESENT-but-null values; zero-filling them and labeling the response
+        # feature_source='feast_online' feeds the model a fabricated vector
+        # presented as real, audit-grade Feast data (the #576/#532 harm —
+        # mirrors the FastAPI route's anti-null-trap guard). A real 0.0 passes;
+        # missing/null/non-numeric raises.
+        invalid: Dict[str, str] = {}
         for row_idx in range(n_rows):
             row: List[float] = []
-            for col_name, col_values in feature_columns.items():
+            for col_name in expected_order:
+                col_values = feast_values.get(col_name)
+                if col_values is None:
+                    invalid[col_name] = "missing"
+                    row.append(0.0)  # placeholder; request fails below
+                    continue
                 raw = col_values[row_idx] if row_idx < len(col_values) else None
                 if raw is None:
-                    invalid[col_name] = invalid.get(col_name, 0) + 1
+                    invalid[col_name] = "null"
                     row.append(0.0)  # placeholder; request fails below
                     continue
                 try:
                     row.append(float(raw))
                 except (TypeError, ValueError):
-                    invalid[col_name] = invalid.get(col_name, 0) + 1
+                    invalid[col_name] = "non-numeric"
                     row.append(0.0)  # placeholder; request fails below
             matrix.append(row)
 
         if invalid:
-            # Do NOT run inference over a fabricated vector mislabeled
+            # Do NOT run inference over a fabricated/mis-ordered vector mislabeled
             # feast_online. Fail loud so the caller sees an honest error.
             raise RuntimeError(
-                "Feast returned null/non-numeric values for "
-                f"{sorted(invalid)}; refusing to fabricate a 'feast_online' "
-                "prediction over zero-filled features"
+                "Feast features unusable for an audit-grade 'feast_online' "
+                f"prediction: {dict(sorted(invalid.items()))}; refusing to "
+                "fabricate over zero-filled features"
             )
 
         return matrix
