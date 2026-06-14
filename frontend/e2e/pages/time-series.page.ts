@@ -194,6 +194,18 @@ export class TimeSeriesPage extends BasePage {
     await this.exportButton.click()
   }
 
+  /**
+   * Enter a model ID into the free-text "Model ID" field (performance mode).
+   * `usePerformanceTrend` is `enabled: !!model_id` and `DEFAULT_MODEL_ID` is
+   * '', so the performance view — KPI summary stats, the chart line, and the
+   * "Trend Summary" card — stays empty until a model is entered. Driving this
+   * the way a real user does is what enables the trend fetch (and lets the
+   * spec's inline `/trend` mock fulfil it).
+   */
+  async enterModelId(modelId: string): Promise<void> {
+    await this.modelIdInput.fill(modelId)
+  }
+
   // Verification helpers
   async verifyKPICardsDisplayed(): Promise<boolean> {
     try {

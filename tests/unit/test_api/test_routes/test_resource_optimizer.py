@@ -26,7 +26,7 @@ from src.api.routes.resource_optimizer import (
     _convert_scenarios,
     _execute_optimization,
     _generate_mock_response,
-    # Module-level storage
+    # Module-level storage (durable / cross-worker, async API)
     _optimizations_store,
     # Helper functions
     _run_optimization_task,
@@ -42,12 +42,26 @@ from src.api.routes.resource_optimizer import (
 # =============================================================================
 
 
+async def _no_redis():
+    """Redis factory that always fails, forcing the in-memory fallback.
+
+    The live store is the Redis-backed durable store. For unit isolation we
+    pin its factory to one that raises so every test exercises the bounded
+    in-process fallback deterministically (no live Redis required), mirroring
+    ``tests/unit/test_api/test_routes/test_segments.py``.
+    """
+    raise ConnectionError("redis disabled for unit isolation")
+
+
 @pytest.fixture(autouse=True)
 def reset_optimizations_store():
-    """Clear optimizations store before each test."""
+    """Clear the optimizations store and pin it to the in-memory fallback."""
+    original_factory = _optimizations_store._redis_factory
+    _optimizations_store._redis_factory = _no_redis
     _optimizations_store.clear()
     yield
     _optimizations_store.clear()
+    _optimizations_store._redis_factory = original_factory
 
 
 @pytest.fixture
@@ -143,7 +157,7 @@ async def test_run_optimization_async_mode(sample_request):
 
     assert result.status == OptimizationStatus.PENDING
     assert result.optimization_id.startswith("opt_")
-    assert result.optimization_id in _optimizations_store
+    assert await _optimizations_store.contains(result.optimization_id)
 
 
 @pytest.mark.asyncio
@@ -205,8 +219,10 @@ async def test_run_optimization_stores_result(sample_request):
             async_mode=False,
         )
 
-        assert result.optimization_id in _optimizations_store
-        assert _optimizations_store[result.optimization_id].status == OptimizationStatus.COMPLETED
+        assert await _optimizations_store.contains(result.optimization_id)
+        stored = await _optimizations_store.get(result.optimization_id)
+        assert stored is not None
+        assert stored.status == OptimizationStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -244,7 +260,7 @@ async def test_get_optimization_success():
         optimization_id=optimization_id,
         status=OptimizationStatus.COMPLETED,
     )
-    _optimizations_store[optimization_id] = mock_optimization
+    await _optimizations_store.set(optimization_id, mock_optimization)
 
     result = await get_optimization(optimization_id)
 
@@ -292,8 +308,7 @@ async def test_list_scenarios_with_data():
         status=OptimizationStatus.COMPLETED,
         scenarios=[mock_scenario],
     )
-    _optimizations_store["opt_1"] = mock_optimization
-
+    await _optimizations_store.set("opt_1", mock_optimization)
     result = await list_scenarios(min_roi=None, limit=20)
 
     assert result.total_count == 1
@@ -325,8 +340,7 @@ async def test_list_scenarios_filters_by_min_roi():
         status=OptimizationStatus.COMPLETED,
         scenarios=[mock_scenario_high, mock_scenario_low],
     )
-    _optimizations_store["opt_1"] = mock_optimization
-
+    await _optimizations_store.set("opt_1", mock_optimization)
     result = await list_scenarios(min_roi=2.0, limit=20)
 
     assert result.total_count == 1
@@ -354,8 +368,7 @@ async def test_list_scenarios_respects_limit():
         status=OptimizationStatus.COMPLETED,
         scenarios=scenarios,
     )
-    _optimizations_store["opt_1"] = mock_optimization
-
+    await _optimizations_store.set("opt_1", mock_optimization)
     result = await list_scenarios(min_roi=None, limit=5)
 
     assert len(result.scenarios) == 5
@@ -394,8 +407,7 @@ async def test_list_scenarios_sorts_by_roi():
         status=OptimizationStatus.COMPLETED,
         scenarios=scenarios,
     )
-    _optimizations_store["opt_1"] = mock_optimization
-
+    await _optimizations_store.set("opt_1", mock_optimization)
     result = await list_scenarios(min_roi=None, limit=20)
 
     assert result.scenarios[0].scenario_name == "High"
@@ -420,8 +432,7 @@ async def test_list_scenarios_skips_pending_optimizations():
         status=OptimizationStatus.PENDING,
         scenarios=[mock_scenario],
     )
-    _optimizations_store["opt_1"] = mock_pending
-
+    await _optimizations_store.set("opt_1", mock_pending)
     result = await list_scenarios(min_roi=None, limit=20)
 
     assert result.total_count == 0
@@ -434,14 +445,46 @@ async def test_list_scenarios_skips_pending_optimizations():
 
 @pytest.mark.asyncio
 async def test_get_resource_health_all_available():
-    """Test get_resource_health when all dependencies available."""
+    """Test get_resource_health when all dependencies available.
+
+    Durable (cross-worker) storage is part of "healthy": when Redis is
+    reachable the store reports ``storage_mode='durable'`` and, with the agent
+    and scipy available, the service is healthy. (The autouse fixture pins the
+    store to the in-memory fallback, so this test temporarily restores a
+    reachable fake-Redis factory to exercise the durable path.)
+    """
+    shared = _FakeAsyncRedis()
+
+    async def _factory():
+        return shared
+
+    original_factory = _optimizations_store._redis_factory
+    _optimizations_store._redis_factory = _factory
+    try:
+        with patch("src.agents.resource_optimizer.ResourceOptimizerAgent"):
+            with patch("scipy.optimize"):
+                result = await get_resource_health()
+
+                assert result.status == "healthy"
+                assert result.agent_available is True
+                assert result.scipy_available is True
+                assert result.storage_mode == "durable"
+    finally:
+        _optimizations_store._redis_factory = original_factory
+
+
+@pytest.mark.asyncio
+async def test_get_resource_health_reports_degraded_storage():
+    """When Redis is unavailable the store falls back to the in-memory dict;
+    health must surface this as 'degraded' (cross-worker reads can 404)."""
+    # The autouse fixture already pins the store to the failing _no_redis
+    # factory, so the durable probe fails and storage degrades.
     with patch("src.agents.resource_optimizer.ResourceOptimizerAgent"):
         with patch("scipy.optimize"):
             result = await get_resource_health()
 
-            assert result.status == "healthy"
-            assert result.agent_available is True
-            assert result.scipy_available is True
+            assert result.storage_mode == "degraded"
+            assert result.status == "degraded"
 
 
 @pytest.mark.asyncio
@@ -471,8 +514,7 @@ async def test_get_resource_health_counts_recent_optimizations():
         objective=OptimizationObjective.MAXIMIZE_OUTCOME,
         timestamp=datetime.now(timezone.utc),
     )
-    _optimizations_store["opt_1"] = recent_optimization
-
+    await _optimizations_store.set("opt_1", recent_optimization)
     with patch("src.agents.resource_optimizer.ResourceOptimizerAgent"):
         result = await get_resource_health()
 
@@ -491,8 +533,7 @@ async def test_get_resource_health_last_optimization():
         objective=OptimizationObjective.MAXIMIZE_OUTCOME,
         timestamp=datetime.now(timezone.utc),
     )
-    _optimizations_store["opt_1"] = optimization
-
+    await _optimizations_store.set("opt_1", optimization)
     with patch("src.agents.resource_optimizer.ResourceOptimizerAgent"):
         result = await get_resource_health()
 
@@ -511,11 +552,14 @@ async def test_run_optimization_task_success(sample_request, mock_agent_result):
 
     from src.api.routes.resource_optimizer import OptimizationResponse
 
-    _optimizations_store[optimization_id] = OptimizationResponse(
-        optimization_id=optimization_id,
-        status=OptimizationStatus.PENDING,
-        resource_type=ResourceType.BUDGET,
-        objective=OptimizationObjective.MAXIMIZE_OUTCOME,
+    await _optimizations_store.set(
+        optimization_id,
+        OptimizationResponse(
+            optimization_id=optimization_id,
+            status=OptimizationStatus.PENDING,
+            resource_type=ResourceType.BUDGET,
+            objective=OptimizationObjective.MAXIMIZE_OUTCOME,
+        ),
     )
 
     with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
@@ -527,7 +571,9 @@ async def test_run_optimization_task_success(sample_request, mock_agent_result):
 
         await _run_optimization_task(optimization_id, sample_request)
 
-        assert _optimizations_store[optimization_id].status == OptimizationStatus.COMPLETED
+        stored = await _optimizations_store.get(optimization_id)
+        assert stored is not None
+        assert stored.status == OptimizationStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -537,11 +583,14 @@ async def test_run_optimization_task_handles_error(sample_request):
 
     from src.api.routes.resource_optimizer import OptimizationResponse
 
-    _optimizations_store[optimization_id] = OptimizationResponse(
-        optimization_id=optimization_id,
-        status=OptimizationStatus.PENDING,
-        resource_type=ResourceType.BUDGET,
-        objective=OptimizationObjective.MAXIMIZE_OUTCOME,
+    await _optimizations_store.set(
+        optimization_id,
+        OptimizationResponse(
+            optimization_id=optimization_id,
+            status=OptimizationStatus.PENDING,
+            resource_type=ResourceType.BUDGET,
+            objective=OptimizationObjective.MAXIMIZE_OUTCOME,
+        ),
     )
 
     with patch("src.api.routes.resource_optimizer._execute_optimization") as mock_execute:
@@ -549,8 +598,10 @@ async def test_run_optimization_task_handles_error(sample_request):
 
         await _run_optimization_task(optimization_id, sample_request)
 
-        assert _optimizations_store[optimization_id].status == OptimizationStatus.FAILED
-        assert len(_optimizations_store[optimization_id].warnings) > 0
+        stored = await _optimizations_store.get(optimization_id)
+        assert stored is not None
+        assert stored.status == OptimizationStatus.FAILED
+        assert len(stored.warnings) > 0
 
 
 # =============================================================================
@@ -853,3 +904,414 @@ def test_generate_mock_response_calculates_roi(sample_request):
 
     assert result.projected_roi is not None
     assert result.projected_roi > 0
+
+
+# =============================================================================
+# DURABLE (REDIS-BACKED) STORE — durable / cross-worker shared store
+# =============================================================================
+#
+# Production runs gunicorn with --workers 2 (docker/docker-compose.yml). A
+# process-local dict means a POST handled by worker A is invisible to a GET
+# handled by worker B (legitimate 404 ~50% of the time) and ALL state is lost
+# on redeploy. The durable store backs the data in Redis (reusing the app's
+# existing async client) so it is shared across workers and survives restarts,
+# falling back to the bounded in-memory dict ONLY when Redis is unavailable
+# (mirrors src/api/routes/segments.py and the app's graceful-degradation
+# posture). This is the regression suite for the live-reproduced 404 flicker.
+
+
+def _make_opt_resp(optimization_id: str) -> "object":
+    """Build a minimal COMPLETED OptimizationResponse for store tests."""
+    from src.api.routes.resource_optimizer import (
+        OptimizationResponse,
+        OptimizationStatus,
+        ResourceType,
+    )
+
+    return OptimizationResponse(
+        optimization_id=optimization_id,
+        status=OptimizationStatus.COMPLETED,
+        resource_type=ResourceType.BUDGET,
+        objective=OptimizationObjective.MAXIMIZE_OUTCOME,
+    )
+
+
+class _FakeAsyncRedis:
+    """Faithful in-process stand-in for ``redis.asyncio.Redis``.
+
+    Hand-rolled (consistent with the repo's other Redis tests, e.g.
+    ``tests/unit/test_api/test_routes/test_segments.py``) because ``fakeredis``
+    is not a test dependency. Faithful to redis 7.x: ``set(..., ex=N)`` honors
+    a (clock-controllable) TTL; ZSET ``zrange`` orders by ``(score, member)``
+    with lexicographic tie-break; string reads return ``str`` (the app's client
+    uses ``decode_responses=True``); ``mget`` / ``pipeline`` are supported so
+    the batched-read and atomic-write paths are exercised.
+    """
+
+    def __init__(self, now: float = 0.0) -> None:
+        self.strings: dict = {}
+        self._expires: dict = {}
+        self.zset: dict = {}
+        self._now = now
+
+    def advance(self, seconds: float) -> None:
+        self._now += seconds
+
+    def _expire_if_due(self, key) -> None:  # noqa: ANN001
+        exp = self._expires.get(key)
+        if exp is not None and self._now >= exp:
+            self.strings.pop(key, None)
+            self._expires.pop(key, None)
+
+    async def set(self, key, value, ex=None):  # noqa: ANN001
+        self.strings[key] = value
+        if ex is not None:
+            self._expires[key] = self._now + ex
+        else:
+            self._expires.pop(key, None)
+
+    async def get(self, key):  # noqa: ANN001
+        self._expire_if_due(key)
+        return self.strings.get(key)
+
+    async def mget(self, keys):  # noqa: ANN001
+        out = []
+        for k in keys:
+            self._expire_if_due(k)
+            out.append(self.strings.get(k))
+        return out
+
+    async def delete(self, *keys):  # noqa: ANN001
+        removed = 0
+        for k in keys:
+            if k in self.strings:
+                removed += 1
+            self.strings.pop(k, None)
+            self._expires.pop(k, None)
+        return removed
+
+    async def zadd(self, key, mapping):  # noqa: ANN001
+        self.zset.setdefault(key, {}).update(mapping)
+
+    async def zrem(self, key, *members):  # noqa: ANN001
+        z = self.zset.get(key, {})
+        for m in members:
+            z.pop(m, None)
+
+    async def zcard(self, key):  # noqa: ANN001
+        return len(self.zset.get(key, {}))
+
+    async def zscore(self, key, member):  # noqa: ANN001
+        return self.zset.get(key, {}).get(member)
+
+    async def zrange(self, key, start, end):  # noqa: ANN001
+        members = [
+            m for m, _ in sorted(self.zset.get(key, {}).items(), key=lambda kv: (kv[1], kv[0]))
+        ]
+        if end == -1:
+            return members[start:]
+        return members[start : end + 1]
+
+    def pipeline(self, transaction: bool = True):  # noqa: ANN001
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    """Minimal pipeline: queue set/zadd, apply on execute (no rollback, like
+    real Redis MULTI/EXEC for runtime errors)."""
+
+    def __init__(self, client: "_FakeAsyncRedis") -> None:
+        self._client = client
+        self._ops: list = []
+
+    def set(self, key, value, ex=None):  # noqa: ANN001
+        self._ops.append(("set", (key, value), {"ex": ex}))
+        return self
+
+    def zadd(self, key, mapping):  # noqa: ANN001
+        self._ops.append(("zadd", (key, mapping), {}))
+        return self
+
+    async def execute(self):
+        for name, args, kwargs in self._ops:
+            await getattr(self._client, name)(*args, **kwargs)
+        self._ops = []
+        return []
+
+
+class TestDurableOptimizationsStore:
+    """The durable store must share state across processes via Redis and fall
+    back to the bounded in-memory dict when Redis is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_cross_worker_read_via_shared_redis(self):
+        """A value written through one store instance (worker A) is readable
+        through a DIFFERENT instance sharing the same Redis (worker B).
+
+        This is the exact 404-flicker the live repro showed: with a
+        process-local dict, worker B 404s on an id that worker A wrote.
+        """
+        from src.api.routes.resource_optimizer import (
+            OptimizationStatus,
+            _DurableOptimizationsStore,
+        )
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        worker_a = _DurableOptimizationsStore(redis_factory=_factory)
+        worker_b = _DurableOptimizationsStore(redis_factory=_factory)
+
+        resp = _make_opt_resp("opt_shared")
+        await worker_a.set("opt_shared", resp)
+
+        # Worker B's in-memory fallback is empty; it must read from Redis.
+        assert "opt_shared" not in worker_b._memory
+        assert await worker_b.contains("opt_shared") is True
+        got = await worker_b.get("opt_shared")
+        assert got is not None
+        assert got.optimization_id == "opt_shared"
+        assert got.status == OptimizationStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_values_enumerates_from_redis(self):
+        from src.api.routes.resource_optimizer import _DurableOptimizationsStore
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+        await store.set("opt_1", _make_opt_resp("opt_1"))
+        await store.set("opt_2", _make_opt_resp("opt_2"))
+
+        values = await store.values()
+        ids = sorted(v.optimization_id for v in values)
+        assert ids == ["opt_1", "opt_2"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_memory_when_redis_unavailable(self):
+        """When the Redis factory fails, the store transparently uses the
+        bounded in-memory fallback (no exception bubbles to the route)."""
+        from src.api.routes.resource_optimizer import _DurableOptimizationsStore
+
+        async def _factory():
+            raise ConnectionError("redis down")
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+
+        await store.set("opt_local", _make_opt_resp("opt_local"))
+        assert await store.contains("opt_local") is True
+        got = await store.get("opt_local")
+        assert got is not None and got.optimization_id == "opt_local"
+        values = await store.values()
+        assert [v.optimization_id for v in values] == ["opt_local"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_redis_command_errors(self):
+        """A mid-operation Redis error degrades to the in-memory fallback."""
+        from src.api.routes.resource_optimizer import _DurableOptimizationsStore
+
+        class _BrokenRedis(_FakeAsyncRedis):
+            async def get(self, key):  # noqa: ANN001
+                raise ConnectionError("boom")
+
+        broken = _BrokenRedis()
+
+        async def _factory():
+            return broken
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+        await store.set("opt_x", _make_opt_resp("opt_x"))
+        got = await store.get("opt_x")
+        assert got is not None and got.optimization_id == "opt_x"
+
+    @pytest.mark.asyncio
+    async def test_redis_eviction_bounds_index(self):
+        """The Redis index is FIFO-bounded so it cannot grow without limit."""
+        from src.api.routes.resource_optimizer import _DurableOptimizationsStore
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableOptimizationsStore(redis_factory=_factory, max_entries=3)
+        for i in range(5):
+            await store.set(f"opt_{i}", _make_opt_resp(f"opt_{i}"))
+
+        values = await store.values()
+        ids = sorted(v.optimization_id for v in values)
+        assert ids == ["opt_2", "opt_3", "opt_4"]
+        assert await store.contains("opt_0") is False
+
+    @pytest.mark.asyncio
+    async def test_status_update_preserves_creation_score(self):
+        """A later status update must NOT re-score the record as newest
+        (FIFO would degrade to LRU and evict the wrong record)."""
+        from src.api.routes.resource_optimizer import (
+            OptimizationStatus,
+            _DurableOptimizationsStore,
+        )
+
+        shared = _FakeAsyncRedis(now=1000.0)
+
+        async def _factory():
+            return shared
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+        await store.set("opt_old", _make_opt_resp("opt_old"))
+        score_after_create = await shared.zscore("resources:optimization:index", "opt_old")
+
+        # Advance the clock, then update status (read-modify-write).
+        shared.advance(500.0)
+        updated = _make_opt_resp("opt_old")
+        updated.status = OptimizationStatus.PENDING
+        await store.set("opt_old", updated)
+
+        score_after_update = await shared.zscore("resources:optimization:index", "opt_old")
+        assert score_after_update == score_after_create
+
+    @pytest.mark.asyncio
+    async def test_module_store_is_durable_instance(self):
+        """The live module-level store is the durable (Redis-backed) store."""
+        from src.api.routes.resource_optimizer import (
+            _DurableOptimizationsStore,
+            _optimizations_store,
+        )
+
+        assert isinstance(_optimizations_store, _DurableOptimizationsStore)
+
+    @pytest.mark.asyncio
+    async def test_clean_redis_miss_is_authoritative_not_stale_memory(self):
+        """When Redis is REACHABLE, a clean miss returns None and does NOT
+        serve a stale in-process mirror.
+
+        Reproduces the codex MEDIUM: after the Redis key is gone (TTL expiry /
+        eviction / delete by another worker), the memory mirror still holds the
+        record. ``get`` must NOT serve it (Redis is authoritative) — else a GET
+        would return a record that Redis-backed ``values()`` omits, re-creating
+        the cross-worker split-brain.
+        """
+        from src.api.routes.resource_optimizer import _DurableOptimizationsStore
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+        await store.set("opt_gone", _make_opt_resp("opt_gone"))
+        # The record is mirrored in memory AND in Redis.
+        assert "opt_gone" in store._memory
+
+        # Simulate the Redis key disappearing (TTL/eviction/another worker).
+        await shared.delete("resources:optimization:opt_gone")
+        await shared.zrem("resources:optimization:index", "opt_gone")
+
+        # Redis is reachable + clean miss -> authoritative absence (404),
+        # despite the stale memory mirror.
+        assert await store.get("opt_gone") is None
+
+    @pytest.mark.asyncio
+    async def test_poison_record_returns_none_and_self_heals(self):
+        """An unreadable (corrupt) persisted payload must not 500: it returns
+        None and the poison key + index member are lazily removed."""
+        from src.api.routes.resource_optimizer import (
+            _REDIS_INDEX_KEY,
+            _DurableOptimizationsStore,
+        )
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+        # Write a corrupt payload directly (not valid OptimizationResponse JSON).
+        await shared.set("resources:optimization:opt_poison", "{not valid json")
+        await shared.zadd(_REDIS_INDEX_KEY, {"opt_poison": 1.0})
+
+        assert await store.get("opt_poison") is None
+        # Poison key + index member removed (self-heal).
+        assert await shared.get("resources:optimization:opt_poison") is None
+        assert await shared.zscore(_REDIS_INDEX_KEY, "opt_poison") is None
+
+    @pytest.mark.asyncio
+    async def test_non_finite_result_persisted_as_failed_not_unreadable(self):
+        """A NaN/inf result must be stored as an honest FAILED record (no
+        fabricated finite numbers), and must round-trip cleanly on read.
+
+        Without the write-side guard, ``model_dump_json`` serialises the NaN to
+        ``null`` and the record becomes UNREADABLE — a real optimization id that
+        404s on every GET. The guard sanitises to FAILED instead.
+        """
+        from src.api.routes.resource_optimizer import (
+            AllocationResult,
+            OptimizationResponse,
+            OptimizationStatus,
+            ResourceType,
+            _DurableOptimizationsStore,
+        )
+
+        shared = _FakeAsyncRedis()
+
+        async def _factory():
+            return shared
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+
+        degenerate = OptimizationResponse(
+            optimization_id="opt_nan",
+            status=OptimizationStatus.COMPLETED,
+            resource_type=ResourceType.BUDGET,
+            objective=OptimizationObjective.MAXIMIZE_OUTCOME,
+            optimal_allocations=[
+                AllocationResult(
+                    entity_id="territory_x",
+                    entity_type="territory",
+                    current_allocation=50000.0,
+                    optimized_allocation=float("nan"),  # degenerate solve
+                    change=float("inf"),
+                    change_percentage=0.0,
+                    expected_impact=0.0,
+                )
+            ],
+            objective_value=float("nan"),
+        )
+
+        await store.set("opt_nan", degenerate)
+
+        # Must round-trip cleanly (not 404 / poison-prune) and be honest FAILED.
+        got = await store.get("opt_nan")
+        assert got is not None
+        assert got.status == OptimizationStatus.FAILED
+        assert got.optimal_allocations == []
+        assert got.objective_value is None
+        assert any("non-finite" in w.lower() for w in got.warnings)
+
+    @pytest.mark.asyncio
+    async def test_is_durable_false_when_redis_commands_fail(self):
+        """A REACHABLE Redis whose commands fail must report NOT durable.
+
+        Reproduces the codex iter-2 MEDIUM: a factory-only probe would report
+        durable while reads/writes silently degrade to memory. ``is_durable``
+        exercises a real command so health honestly surfaces the degradation.
+        """
+        from src.api.routes.resource_optimizer import _DurableOptimizationsStore
+
+        class _CommandBrokenRedis(_FakeAsyncRedis):
+            async def zcard(self, key):  # noqa: ANN001
+                raise ConnectionError("commands down")
+
+        broken = _CommandBrokenRedis()
+
+        async def _factory():
+            return broken  # factory SUCCEEDS (client is reachable)
+
+        store = _DurableOptimizationsStore(redis_factory=_factory)
+        # Factory returns a client, but the durability probe command fails.
+        assert await store.is_durable() is False

@@ -29,8 +29,6 @@ import {
   PieChart,
   Pie,
   Cell,
-  LineChart,
-  Line,
   ScatterChart,
   Scatter,
 } from 'recharts';
@@ -245,35 +243,33 @@ function ImpactBySegmentChart({ impactBySegment }: ImpactChartProps) {
 // =============================================================================
 // ALLOCATION TREND CHART
 // =============================================================================
+//
+// The backend optimization result currently has no time-series / historical
+// allocation-trend field (OptimizationResponse exposes only the before/after
+// snapshot in `optimal_allocations`). The previous implementation FABRICATED a
+// "Q1/Q2/Q3/Q4" trend client-side from hardcoded 0.9/0.95 multipliers of the
+// current allocation — presenting invented quarters as "Historical and
+// projected allocation by territory". That is fabricated data and has been
+// removed (see PR: anti-fabrication discipline).
+//
+// Until the backend emits a real allocation trend, render an honest empty
+// state rather than inventing one. The `allocations` prop is retained so the
+// real series can be wired in here the moment the backend provides it.
 
 interface AllocationTrendProps {
   allocations: AllocationResult[];
 }
 
-function AllocationTrendChart({ allocations }: AllocationTrendProps) {
-  // Simulate trend data
-  const trendData = allocations.map((a) => ({
-    territory: a.entity_id.replace('territory_', ''),
-    q1: a.current_allocation * 0.9 / 1000,
-    q2: a.current_allocation * 0.95 / 1000,
-    q3: a.current_allocation / 1000,
-    q4_projected: a.optimized_allocation / 1000,
-  }));
-
+function AllocationTrendChart(_props: AllocationTrendProps) {
   return (
-    <ResponsiveContainer width="100%" height={300}>
-      <LineChart data={trendData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="territory" />
-        <YAxis label={{ value: 'Allocation ($K)', angle: -90, position: 'insideLeft' }} />
-        <Tooltip formatter={(value) => [`$${(value as number)?.toFixed(0) ?? 0}K`, '']} />
-        <Legend />
-        <Line type="monotone" dataKey="q1" stroke={COLORS.muted} name="Q1" />
-        <Line type="monotone" dataKey="q2" stroke={COLORS.muted} name="Q2" strokeDasharray="5 5" />
-        <Line type="monotone" dataKey="q3" stroke={COLORS.secondary} name="Q3 (Current)" />
-        <Line type="monotone" dataKey="q4_projected" stroke={COLORS.primary} name="Q4 (Optimized)" strokeWidth={2} />
-      </LineChart>
-    </ResponsiveContainer>
+    <div className="flex h-[300px] flex-col items-center justify-center text-center">
+      <p className="text-sm font-medium text-muted-foreground">No allocation trend data</p>
+      <p className="mt-1 max-w-md text-xs text-muted-foreground">
+        Historical allocation trend is not available from the optimizer. Only the current
+        vs optimized snapshot above is real; a time-series trend will appear here once the
+        backend provides one.
+      </p>
+    </div>
   );
 }
 
@@ -298,6 +294,10 @@ export default function ResourceOptimization() {
 
   // Health status
   const isHealthy = healthData?.agent_available && healthData?.scipy_available;
+  // Storage degraded -> the optimizations store fell back to a process-local
+  // in-memory dict, so cross-worker reads can 404 (the page polls GET by id).
+  // Surface this honestly rather than showing an unqualified "Solver Ready".
+  const storageDegraded = healthData?.storage_mode === 'degraded';
 
   // Handle optimization run
   const handleRunOptimization = () => {
@@ -334,6 +334,11 @@ export default function ResourceOptimization() {
           <Badge variant={isHealthy ? 'default' : 'destructive'}>
             {healthLoading ? 'Checking...' : isHealthy ? 'Solver Ready' : 'Solver Unavailable'}
           </Badge>
+          {!healthLoading && storageDegraded && (
+            <Badge variant="destructive" title="Optimization results store fell back to in-memory; cross-worker reads can fail until Redis is restored.">
+              Storage Degraded
+            </Badge>
+          )}
           {healthData?.optimizations_24h !== undefined && (
             <Badge variant="outline">{healthData.optimizations_24h} optimizations today</Badge>
           )}
@@ -461,7 +466,7 @@ export default function ResourceOptimization() {
           <Card>
             <CardHeader>
               <CardTitle>Allocation Trend</CardTitle>
-              <CardDescription>Historical and projected allocation by territory</CardDescription>
+              <CardDescription>Allocation trend over time (when available from the optimizer)</CardDescription>
             </CardHeader>
             <CardContent>
               <AllocationTrendChart allocations={optimizationResult.optimal_allocations} />

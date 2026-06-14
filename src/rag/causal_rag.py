@@ -210,14 +210,27 @@ class CausalRAG:
             # Initialize cognitive state
             import uuid
 
+            # Resolve a stable conversation/thread identifier. The compiled
+            # LangGraph workflow uses a MemorySaver checkpointer, which REQUIRES
+            # a `thread_id` in the run config; without it, `ainvoke` raises
+            # "Checkpointer requires one or more of the following 'configurable'
+            # keys: thread_id, checkpoint_ns, checkpoint_id" and the whole
+            # request fails (returning an error string to the caller). We seed
+            # both the state and the checkpointer thread from the same id so a
+            # real conversation maps to a single LangGraph thread.
+            resolved_conversation_id = conversation_id or str(uuid.uuid4())
+
             initial_state = CognitiveState(
                 user_query=query,
-                conversation_id=conversation_id or str(uuid.uuid4()),
+                conversation_id=resolved_conversation_id,
                 compressed_history=conversation_history or "",
             )
 
-            # Execute cognitive cycle
-            result_state = await workflow.ainvoke(initial_state)  # type: ignore[attr-defined]
+            # Execute cognitive cycle. The thread_id config is MANDATORY here
+            # because the workflow is compiled with a checkpointer (see
+            # create_dspy_cognitive_workflow); omitting it raises a ValueError.
+            run_config = {"configurable": {"thread_id": resolved_conversation_id}}
+            result_state = await workflow.ainvoke(initial_state, config=run_config)  # type: ignore[attr-defined]
 
             elapsed_ms = (time.time() - start_time) * 1000
 
