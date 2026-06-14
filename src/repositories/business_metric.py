@@ -4,9 +4,12 @@ Business Metric Repository.
 Handles KPI snapshots and metric queries.
 """
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from src.repositories.base import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 
 class BusinessMetricRepository(BaseRepository):
@@ -188,7 +191,8 @@ class BusinessMetricRepository(BaseRepository):
         column: str,
         brand: Optional[str] = None,
         include_synthetic: bool = False,
-        limit: int = 5000,
+        page_size: int = 5000,
+        max_pages: int = 1000,
     ) -> List[str]:
         """
         Discover the distinct values of a column present in the data (data-driven).
@@ -201,11 +205,31 @@ class BusinessMetricRepository(BaseRepository):
         which this table does not carry), the query returns no rows → ``[]``, and the
         gap math then yields no gaps for that segment rather than fabricating any.
 
+        **Completeness (#929).** A single ``.limit()`` window with no ``ORDER BY``
+        SILENTLY drops any distinct value whose rows fall outside that arbitrary
+        window once a brand exceeds the window size (Remibrutinib has 7289 rows /
+        4 regions; the old ``.limit(5000)`` read omitted ``west`` entirely, so the
+        cross-segment P75/P90 benchmark was computed over only 3 of 4 regions). We
+        therefore page through ``.range()`` windows **ordered by the PK** until a
+        short page proves the slice is exhausted — the same blessed idiom the
+        gap-orchestration probe uses (``dispatcher._resolve_gap_inputs``, #874 R2)
+        and the crystallizer candidate scan (#694). PK ordering makes OFFSET paging
+        deterministic (no skip/duplicate across pages, even under concurrent writes).
+
+        ``page_size`` must be ``<=`` PostgREST's ``db-max-rows`` so that a full page
+        reliably means "more rows remain"; it is ``5000`` on this instance (the
+        original ``.limit(5000)`` returned a full 5000-row window). Paging is bounded
+        by ``max_pages`` purely as a runaway guard — for any real brand the slice is
+        exhausted in a couple of pages; hitting the bound emits a WARNING so a
+        truncated result is **never silent** (failing closed on the bound would be
+        worse — MORE data must never disable a bindable substrate; #874 R2).
+
         Args:
             column: The column to extract distinct values from (e.g. "region").
             brand: Optional brand filter.
             include_synthetic: When True, do not exclude synthetic rows (opt-in).
-            limit: Cap on scanned rows for distinct extraction.
+            page_size: Rows per ``.range()`` window (<= PostgREST ``db-max-rows``).
+            max_pages: Runaway guard on the number of windows paged; warns if hit.
 
         Returns:
             Sorted list of distinct non-null values as strings.
@@ -215,39 +239,67 @@ class BusinessMetricRepository(BaseRepository):
 
         from src.repositories.provenance import apply_provenance_filter
 
-        try:
-            query = self.client.table(self.table_name).select(column)
-            if brand:
-                query = query.eq("brand", brand)
-            query = apply_provenance_filter(query, include_synthetic)
-            result = await query.limit(limit).execute()
-        except Exception as e:
-            # ONLY swallow the specific "undefined column" case (PostgREST 42703):
-            # a requested segment like specialty/hcp_tier that this table does not
-            # carry → fail soft to [] so the caller treats it as an unsupported
-            # segment. EVERY OTHER failure (connection, auth, provenance-filter, any
-            # operational error) MUST surface — laundering it into [] would re-open
-            # the #845/#851 fail-OPEN hole ("no benchmark data" == "DB is down").
-            if getattr(e, "code", None) == "42703":
-                return []
-            raise
+        values: set[str] = set()
+        exhausted = False
+        for page in range(max_pages):
+            offset = page * page_size
+            try:
+                query = self.client.table(self.table_name).select(column)
+                if brand:
+                    query = query.eq("brand", brand)
+                query = apply_provenance_filter(query, include_synthetic)
+                # PK-ordered .range() window — see the completeness note above.
+                query = query.order(self.id_column).range(offset, offset + page_size - 1)
+                result = await query.execute()
+            except Exception as e:
+                # ONLY swallow the specific "undefined column" case (PostgREST 42703)
+                # AND only on the FIRST page: a missing column raises 42703 on the very
+                # first ``.select()``, so a requested segment like specialty/hcp_tier
+                # that this table does not carry always fails soft to [] here and the
+                # caller treats it as an unsupported segment. A 42703 surfacing AFTER a
+                # page has succeeded is anomalous; it — and EVERY other failure
+                # (connection, auth, provenance-filter, any operational error) — MUST
+                # surface rather than return a silently-PARTIAL set. Laundering it would
+                # re-open the #845/#851 fail-OPEN hole ("no benchmark data" == "DB is down").
+                if getattr(e, "code", None) == "42703" and page == 0:
+                    return []
+                raise
 
-        values = set()
-        for row in result.data or []:
-            val = row.get(column) if isinstance(row, dict) else getattr(row, column, None)
-            if val:
-                values.add(str(val))
+            rows = result.data or []
+            for row in rows:
+                val = row.get(column) if isinstance(row, dict) else getattr(row, column, None)
+                if val:
+                    values.add(str(val))
+            if len(rows) < page_size:
+                exhausted = True
+                break
+
+        if not exhausted:
+            logger.warning(
+                "business_metrics distinct '%s' scan for brand=%s hit the "
+                "max_pages=%d x page_size=%d bound before exhausting the slice; "
+                "distinct values beyond it may be missed.",
+                column,
+                brand,
+                max_pages,
+                page_size,
+            )
         return sorted(values)
 
     async def get_distinct_regions(
         self,
         brand: Optional[str] = None,
         include_synthetic: bool = False,
-        limit: int = 5000,
+        page_size: int = 5000,
+        max_pages: int = 1000,
     ) -> List[str]:
         """Convenience wrapper: distinct ``region`` values (see get_distinct_values)."""
         return await self.get_distinct_values(
-            "region", brand=brand, include_synthetic=include_synthetic, limit=limit
+            "region",
+            brand=brand,
+            include_synthetic=include_synthetic,
+            page_size=page_size,
+            max_pages=max_pages,
         )
 
     async def get_achievement_summary(

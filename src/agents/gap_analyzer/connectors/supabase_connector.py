@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import pandas as pd
 
@@ -100,6 +100,7 @@ class SupabaseDataConnector:
         segments: List[str],
         time_period: str,
         filters: Optional[Dict[str, Any]] = None,
+        period_role: Literal["current", "prior"] = "current",
     ) -> pd.DataFrame:
         """
         Fetch current period performance data from business_metrics.
@@ -110,6 +111,9 @@ class SupabaseDataConnector:
             segments: List of segment dimensions (e.g., ['region', 'specialty'])
             time_period: Time period string (e.g., 'Q4_2024', 'YTD')
             filters: Optional additional filters
+            period_role: ``"current"`` (default) or ``"prior"`` — labels the empty-fetch
+                log so a benign YoY-window miss is not reported as a current-period
+                alarm (#929 observability). See the empty-fetch branch below.
 
         Returns:
             DataFrame with performance data indexed by segment
@@ -163,7 +167,31 @@ class SupabaseDataConnector:
                 all_data.append(row)
 
         if not all_data:
-            logger.warning(f"No data found for brand={brand}, metrics={metrics}")
+            # #929 observability: distinguish the CURRENT fetch from the PRIOR (YoY)
+            # fetch. ``fetch_prior_period`` shifts the window back by one period
+            # length; for any wide ``time_period`` that shifted window predates the
+            # data, so the prior fetch is empty on EVERY successful run. Emitting the
+            # same "No data found" WARNING for it reads like fabrication when it is
+            # the expected, benign case — so the prior miss is a labelled INFO and a
+            # genuine current-period miss stays a WARNING.
+            if period_role == "prior":
+                logger.info(
+                    "No prior-period (YoY) data for brand=%s metrics=%s window=%s..%s "
+                    "— expected when the comparison window predates available data; "
+                    "not an error.",
+                    brand,
+                    metrics,
+                    start_date,
+                    end_date,
+                )
+            else:
+                logger.warning(
+                    "No current-period data found for brand=%s metrics=%s window=%s..%s",
+                    brand,
+                    metrics,
+                    start_date,
+                    end_date,
+                )
             return pd.DataFrame()
 
         df = pd.DataFrame(all_data)
@@ -213,13 +241,15 @@ class SupabaseDataConnector:
 
         prior_period = f"{prior_start.strftime('%Y-%m-%d')}_{prior_end.strftime('%Y-%m-%d')}"
 
-        # Fetch prior period using same logic (propagates read errors)
+        # Fetch prior period using same logic (propagates read errors). Tag the role
+        # so an empty YoY window is logged as a benign INFO, not a false alarm (#929).
         return await self.fetch_performance_data(
             brand=brand,
             metrics=metrics,
             segments=segments,
             time_period=prior_period,
             filters=None,
+            period_role="prior",
         )
 
     async def health_check(self) -> bool:
