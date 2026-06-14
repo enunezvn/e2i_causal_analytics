@@ -241,13 +241,13 @@ class ScoreComposerNode:
 
         # Check agents
         for agent in state.get("agent_statuses") or []:
+            sr = agent["success_rate"]
             if not agent["available"]:
                 critical.append(f"Agent '{agent['agent_name']}' is unavailable")
-            elif agent["success_rate"] < 0.9:
-                warnings.append(
-                    f"Agent '{agent['agent_name']}' has low success rate "
-                    f"({agent['success_rate']:.1%})"
-                )
+            elif sr is not None and sr < 0.9:
+                # Only warn on a MEASURED low rate. A None rate is unmeasured
+                # (no recent telemetry) — not a low rate, so no warning.
+                warnings.append(f"Agent '{agent['agent_name']}' has low success rate ({sr:.1%})")
 
         # Check accumulated errors
         for error in state.get("errors") or []:
@@ -417,12 +417,16 @@ class ScoreComposerNode:
             for model in state.get("model_metrics") or []:
                 if model["status"] in ("unhealthy", "degraded"):
                     accuracy = model.get("accuracy")
-                    error_rate = model.get("error_rate", 0)
+                    # error_rate may be None (UNMEASURED — the dashboard sources
+                    # status but not error_rate). Guard the comparison/format so a
+                    # null sub-field never crashes diagnosis (which would turn a
+                    # real partial measurement into a failed composite).
+                    error_rate = model.get("error_rate")
 
                     root_cause = "Unknown model issue"
-                    if accuracy and accuracy < 0.7:
+                    if accuracy is not None and accuracy < 0.7:
                         root_cause = f"Model accuracy ({accuracy:.1%}) below threshold"
-                    elif error_rate > 0.1:
+                    elif error_rate is not None and error_rate > 0.1:
                         root_cause = f"High error rate ({error_rate:.1%})"
 
                     issue = {
@@ -482,11 +486,14 @@ class ScoreComposerNode:
 
         if agent_score < 0.9:
             for agent in state.get("agent_statuses") or []:
-                if not agent["available"] or agent["success_rate"] < 0.9:
+                sr = agent["success_rate"]
+                # A None success_rate is unmeasured (no recent telemetry), NOT a
+                # measured low rate — it raises no issue on its own.
+                if not agent["available"] or (sr is not None and sr < 0.9):
                     if not agent["available"]:
                         root_cause = "Agent unavailable - may be down or unreachable"
                     else:
-                        root_cause = f"Low success rate ({agent['success_rate']:.1%})"
+                        root_cause = f"Low success rate ({sr:.1%})"
 
                     issue = {
                         "dimension": "agent",
