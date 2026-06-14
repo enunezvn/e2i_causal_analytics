@@ -62,10 +62,15 @@ import {
 // CONSTANTS
 // =============================================================================
 
+// Brand `value` is sent verbatim to the API as the `brand` filter and must use
+// the system's canonical CAPITALIZED casing — it matches the Supabase
+// `brand_type` ENUM, the synthetic `Brand` enum, and the copilot provider's
+// `VALID_BRANDS`. The grounded `gap_analyses` rows are stored capitalized, so
+// sending lowercase here previously returned nothing and emptied the page.
 const BRANDS = [
-  { value: 'kisqali', label: 'Kisqali' },
-  { value: 'fabhalta', label: 'Fabhalta' },
-  { value: 'remibrutinib', label: 'Remibrutinib' },
+  { value: 'Kisqali', label: 'Kisqali' },
+  { value: 'Fabhalta', label: 'Fabhalta' },
+  { value: 'Remibrutinib', label: 'Remibrutinib' },
 ];
 
 const DIFFICULTY_COLORS: Record<string, string> = {
@@ -112,7 +117,7 @@ function getDifficultyBadge(difficulty: string) {
 // =============================================================================
 
 function GapAnalysis() {
-  const [selectedBrand, setSelectedBrand] = useState<string>('kisqali');
+  const [selectedBrand, setSelectedBrand] = useState<string>('Kisqali');
   const [searchQuery, setSearchQuery] = useState('');
   const [difficultyFilter, setDifficultyFilter] = useState<string>('all');
   const [isRefreshing, setIsRefreshing] = useState(false);

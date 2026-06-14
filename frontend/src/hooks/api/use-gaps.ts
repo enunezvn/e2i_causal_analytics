@@ -80,7 +80,10 @@ export function useOpportunities(
   options?: Omit<UseQueryOptions<OpportunityListResponse, ApiError>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<OpportunityListResponse, ApiError>({
-    queryKey: [...queryKeys.gaps.opportunities(), params?.min_roi, params?.limit],
+    // `brand` MUST be part of the cache key: it is forwarded to the API as a
+    // filter, so omitting it made react-query serve one brand's cached result
+    // for every brand (switching the dropdown appeared to do nothing).
+    queryKey: [...queryKeys.gaps.opportunities(), params?.brand, params?.min_roi, params?.limit],
     queryFn: () => listOpportunities(params),
     staleTime: 60 * 1000, // 1 minute
     ...options,

@@ -472,7 +472,12 @@ async def list_opportunities(
         if analysis.status != AnalysisStatus.COMPLETED:
             continue
 
-        if brand and analysis.brand != brand:
+        # Case-insensitive brand match, matching GapsRepository.list_completed's
+        # ``.ilike`` filter. Brand casing is canonically capitalized ("Kisqali")
+        # but stored values (and the in-memory fallback path that skips the repo
+        # filter) may carry other casing; comparing case-insensitively keeps the
+        # grounded analyses from being silently filtered out here.
+        if brand and analysis.brand.lower() != brand.lower():
             continue
 
         for opp in analysis.prioritized_opportunities:
