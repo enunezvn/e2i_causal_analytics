@@ -30,6 +30,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { EmptyState } from '@/components/ui/EmptyState';
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -38,6 +46,7 @@ import {
 } from '@/components/ui/select';
 import {
   useCausalHealth,
+  useCausalAnalysisHistory,
   useRunHierarchicalAnalysis,
 } from '@/hooks/api';
 import {
@@ -152,6 +161,11 @@ export default function CausalAnalysis() {
 
   // API hooks
   const { data: healthData } = useCausalHealth();
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    isError: historyError,
+  } = useCausalAnalysisHistory();
   const runAnalysisMutation = useRunHierarchicalAnalysis();
 
   // Use API data or fall back to neutral defaults (no fabricated SAMPLE_).
@@ -728,15 +742,65 @@ export default function CausalAnalysis() {
         <TabsContent value="history" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Analysis History (7 Days)</CardTitle>
-              <CardDescription>Daily analysis count and average treatment effect</CardDescription>
+              <CardTitle>Analysis History</CardTitle>
+              <CardDescription>
+                Recent completed causal analyses, newest first
+                {historyData ? ` (${historyData.total})` : ''}
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {/* F-002: history requires an API endpoint not yet wired; show empty state. */}
-              <EmptyState
-                title="Analysis history not yet available"
-                description="Run analyses and the daily count + average ATE will appear here once the history endpoint is wired."
-              />
+              {/* #931: real recent causal_analysis_completed events from the
+                  episodic store (was an unwired empty state). */}
+              {historyLoading ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  Loading analysis history…
+                </div>
+              ) : historyError ? (
+                <EmptyState
+                  title="Could not load analysis history"
+                  description="A server error occurred while reading recent analyses. Try refreshing the page."
+                />
+              ) : historyData && historyData.items.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Completed</TableHead>
+                      <TableHead>Summary</TableHead>
+                      <TableHead>Agent</TableHead>
+                      <TableHead className="text-right">ATE</TableHead>
+                      <TableHead className="text-right">Confidence</TableHead>
+                      <TableHead>Model</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {historyData.items.map((item) => (
+                      <TableRow key={item.memory_id}>
+                        <TableCell className="whitespace-nowrap text-sm">
+                          {new Date(item.occurred_at).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="max-w-md truncate text-sm">
+                          {item.description ?? '—'}
+                        </TableCell>
+                        <TableCell className="text-sm">{item.agent_name ?? '—'}</TableCell>
+                        <TableCell className="text-right text-sm">
+                          {formatEffect(item.ate_estimate)}
+                        </TableCell>
+                        <TableCell className="text-right text-sm">
+                          {item.confidence === null || item.confidence === undefined
+                            ? 'N/A'
+                            : `${(item.confidence * 100).toFixed(0)}%`}
+                        </TableCell>
+                        <TableCell className="text-sm">{item.model_used ?? '—'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              ) : (
+                <EmptyState
+                  title="No analyses recorded yet"
+                  description="Completed causal analyses will appear here as they are run."
+                />
+              )}
             </CardContent>
           </Card>
         </TabsContent>

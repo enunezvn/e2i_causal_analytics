@@ -53,6 +53,7 @@ export {
   useHierarchicalAnalysis,
   useEstimators,
   useCausalHealth,
+  useCausalAnalysisHistory,
   useRunHierarchicalAnalysis,
   useRunHierarchicalAnalysisAndWait,
   useRouteQuery,

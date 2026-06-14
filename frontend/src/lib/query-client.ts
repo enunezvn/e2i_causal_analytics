@@ -452,6 +452,8 @@ export const queryKeys = {
     estimators: (library?: string) =>
       [...queryKeys.causal.all(), 'estimators', library ?? 'all'] as const,
     health: () => [...queryKeys.causal.all(), 'health'] as const,
+    history: (limit?: number) =>
+      [...queryKeys.causal.all(), 'history', limit ?? 20] as const,
   },
 
   /**

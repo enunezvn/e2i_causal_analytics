@@ -559,3 +559,36 @@ export interface CausalHealthResponse {
   /** Error message if unhealthy */
   error?: string;
 }
+
+/**
+ * A single completed causal-analysis event from episodic_memories.
+ *
+ * Real recorded analyses (not a fabricated series). Numeric fields are
+ * `null`/absent when the source row did not carry them.
+ */
+export interface CausalAnalysisHistoryItem {
+  /** Episodic memory id of the analysis event */
+  memory_id: string;
+  /** Episodic event type */
+  event_type: string;
+  /** Human-readable analysis summary */
+  description?: string | null;
+  /** When the analysis completed (ISO timestamp) */
+  occurred_at: string;
+  /** Agent that produced the analysis */
+  agent_name?: string | null;
+  /** Average treatment effect, if recorded */
+  ate_estimate?: number | null;
+  /** Confidence in the estimate, if recorded */
+  confidence?: number | null;
+  /** Estimator/model used, if recorded */
+  model_used?: string | null;
+}
+
+/** Recent completed causal analyses for the Analysis History tab. */
+export interface CausalAnalysisHistoryResponse {
+  /** Recent completed causal analyses (newest first) */
+  items: CausalAnalysisHistoryItem[];
+  /** Number of items returned */
+  total: number;
+}

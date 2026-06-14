@@ -855,6 +855,24 @@ export const CausalHealthResponseWireSchema = z.object({
   error: z.string().nullable().optional(),
 });
 
+/** Faithful mirror of `CausalAnalysisHistoryItem` (types/causal.ts). */
+export const CausalAnalysisHistoryItemWireSchema = z.object({
+  memory_id: z.string(),
+  event_type: z.string(),
+  description: z.string().nullable().optional(),
+  occurred_at: z.string(),
+  agent_name: z.string().nullable().optional(),
+  ate_estimate: z.number().nullable().optional(),
+  confidence: z.number().nullable().optional(),
+  model_used: z.string().nullable().optional(),
+});
+
+/** Faithful mirror of `CausalAnalysisHistoryResponse` (types/causal.ts). */
+export const CausalAnalysisHistoryResponseWireSchema = z.object({
+  items: z.array(CausalAnalysisHistoryItemWireSchema),
+  total: z.number().int().nonnegative(),
+});
+
 /** Faithful mirror of `EstimatorInfo` (types/causal.ts). */
 export const EstimatorInfoWireSchema = z.object({
   name: z.string(),
