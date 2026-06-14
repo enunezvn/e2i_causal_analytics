@@ -733,33 +733,84 @@ class E2IGraphitiService:
             return []
 
     def _path_to_chain(self, path: Any) -> Dict[str, Any]:
-        """Convert a graph path to a chain dictionary."""
-        nodes = []
-        edges = []
+        """Convert a FalkorDB graph path to a chain dictionary.
+
+        The FalkorDB client's ``Path`` exposes its nodes via ``path.nodes()`` and
+        its edges via ``path.edges()`` (there is NO ``relationships`` attribute --
+        an earlier guard on ``hasattr(path, "relationships")`` was always False
+        for a real Path, so every chain came back edgeless with a null
+        ``total_confidence``). Each ``Edge`` carries ``src_node``/``dest_node`` as
+        the INTERNAL integer node ids, so we resolve them back to the node ``id``
+        property the rest of the graph API keys on (``GraphRelationship`` and the
+        Cytoscape DAG need ``source_id``/``target_id`` to draw the edge).
+        """
+        nodes: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
+        # Map FalkorDB's internal integer node id -> the external ``id`` property,
+        # so edge endpoints reference the same id we emit on the nodes.
+        internal_id_to_external: Dict[Any, str] = {}
 
         if hasattr(path, "nodes"):
             for node in path.nodes():
+                external_id = node.properties.get("id", "")
+                internal_id = getattr(node, "id", None)
+                if internal_id is not None:
+                    internal_id_to_external[internal_id] = external_id
                 nodes.append(
                     {
-                        "id": node.properties.get("id", ""),
+                        "id": external_id,
                         "type": list(node.labels)[0] if node.labels else "Unknown",
                         "name": node.properties.get("name", ""),
                     }
                 )
 
-        if hasattr(path, "relationships"):
-            for rel in path.relationships():
+        # Real FalkorDB Path -> .edges(); keep .relationships() as a fallback for
+        # any other path-like object that might expose that name.
+        path_edges: Any = None
+        if hasattr(path, "edges"):
+            path_edges = path.edges()
+        elif hasattr(path, "relationships"):
+            path_edges = path.relationships()
+
+        edge_confidences: List[float] = []
+        if path_edges:
+            for rel in path_edges:
+                rel_props = getattr(rel, "properties", {}) or {}
+                # Confidence first, then weight (standalone CAUSES edges store
+                # only ``weight``). No fabricated default: an unscored edge stays
+                # None so the UI honestly renders 'confidence unavailable'.
+                confidence = rel_props.get("confidence")
+                if confidence is None:
+                    confidence = rel_props.get("weight")
+                if confidence is not None:
+                    edge_confidences.append(confidence)
+
+                # Resolve endpoints from the edge's internal src/dest node ids.
+                src_internal = getattr(rel, "src_node", None)
+                dest_internal = getattr(rel, "dest_node", None)
+                source_id = internal_id_to_external.get(src_internal, "")
+                target_id = internal_id_to_external.get(dest_internal, "")
+
                 edges.append(
                     {
-                        "type": rel.relation,
-                        "confidence": rel.properties.get("confidence", 1.0),
-                        "effect_size": rel.properties.get("effect_size"),
+                        "type": getattr(rel, "relation", None),
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "confidence": confidence,
+                        "effect_size": rel_props.get("effect_size"),
+                        "ate_estimate": rel_props.get("ate_estimate"),
                     }
                 )
+
+        # Combined path confidence == the weakest link (min of known edge
+        # confidences). The route maps this to ``GraphPath.total_confidence``;
+        # leave it None when no edge reports a score (honest null, not 1.0).
+        chain_confidence: Optional[float] = min(edge_confidences) if edge_confidences else None
 
         return {
             "nodes": nodes,
             "edges": edges,
+            "confidence": chain_confidence,
             "length": len(nodes) - 1,
         }
 

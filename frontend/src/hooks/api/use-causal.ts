@@ -21,12 +21,14 @@ import {
   runCrossValidation,
   listEstimators,
   getCausalHealth,
+  getCausalAnalysisHistory,
   runHierarchicalAnalysisAndWait,
   routeAndRunAnalysis,
   quickEffectEstimate,
   fullCausalAnalysis,
 } from '@/api/causal';
 import type {
+  CausalAnalysisHistoryResponse,
   CausalLibrary,
   CrossValidationRequest,
   CrossValidationResponse,
@@ -118,6 +120,34 @@ export function useCausalHealth(
   return useQuery<CausalHealthResponse, ApiError>({
     queryKey: queryKeys.causal.health(),
     queryFn: () => getCausalHealth(),
+    staleTime: 30 * 1000,
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch recent completed causal analyses for the Analysis History tab.
+ *
+ * Returns REAL `causal_analysis_completed` episodic events (newest first), or an
+ * honest empty list when none exist.
+ *
+ * @param limit - Maximum history items to return (1-100, default 20)
+ * @param options - Additional query options
+ * @returns Query result with recent causal analyses
+ *
+ * @example
+ * ```tsx
+ * const { data: history } = useCausalAnalysisHistory();
+ * console.log(`${history?.total ?? 0} recent analyses`);
+ * ```
+ */
+export function useCausalAnalysisHistory(
+  limit: number = 20,
+  options?: Omit<UseQueryOptions<CausalAnalysisHistoryResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<CausalAnalysisHistoryResponse, ApiError>({
+    queryKey: queryKeys.causal.history(limit),
+    queryFn: () => getCausalAnalysisHistory(limit),
     staleTime: 30 * 1000,
     ...options,
   });

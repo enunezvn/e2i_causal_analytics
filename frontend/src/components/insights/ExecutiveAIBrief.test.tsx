@@ -141,3 +141,127 @@ describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
     expect(screen.queryByText('Key Performance Trend')).not.toBeInTheDocument();
   });
 });
+
+describe('ExecutiveAIBrief — in-band error payload must never render as an insight', () => {
+  // The cognitive-RAG endpoint reports failures IN-BAND: HTTP 200 whose
+  // payload carries a non-empty `error` and whose `response` field holds the
+  // error STRING (hop_count 0, evidence []). This is the exact shape observed
+  // live when the LangGraph checkpointer rejected a missing thread_id:
+  //   "Unable to complete cognitive search: Checkpointer requires one or more
+  //    of the following 'configurable' keys: thread_id, checkpoint_ns, ..."
+  // Rendering that string as an "AI-Generated Insight" is the #932/#939
+  // error-as-data anti-fabrication defect.
+  const ERROR_STRING =
+    "Unable to complete cognitive search: Checkpointer requires one or more " +
+    "of the following 'configurable' keys: thread_id, checkpoint_ns, checkpoint_id";
+
+  it('does NOT render the backend error string as an insight', () => {
+    mockRag({
+      data: {
+        response: ERROR_STRING,
+        evidence: [],
+        hop_count: 0,
+        visualization_config: {},
+        routed_agents: [],
+        error: ERROR_STRING,
+      },
+    } as unknown as Partial<RagMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+
+    // The error string must NOT appear as a rendered insight section.
+    expect(screen.queryByText('AI-Generated Insight')).not.toBeInTheDocument();
+    // The footer must NOT claim an insight was generated.
+    expect(screen.queryByText(/1 insight generated/)).not.toBeInTheDocument();
+    expect(screen.getByText(/0 insights generated/)).toBeInTheDocument();
+  });
+
+  it('shows an honest labeled error state carrying the real backend message', () => {
+    mockRag({
+      data: {
+        response: ERROR_STRING,
+        evidence: [],
+        hop_count: 0,
+        visualization_config: {},
+        routed_agents: [],
+        error: ERROR_STRING,
+      },
+    } as unknown as Partial<RagMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+
+    expect(screen.getByText(/unable to generate brief/i)).toBeInTheDocument();
+    // The honest error state surfaces the real backend message (the error key),
+    // labeled as a failure — not dressed up as a generated insight.
+    expect(screen.getByText(/Checkpointer requires/)).toBeInTheDocument();
+    // And the success footer styling/claim must not fire.
+    expect(screen.queryByText(/1 insight generated/)).not.toBeInTheDocument();
+  });
+
+  it('treats a zero-hop / zero-evidence response as no-insight, not a real brief', () => {
+    // Defense in depth: even without an explicit `error`, a degenerate result
+    // (no retrieval hops AND no evidence) is not a grounded answer and must
+    // not be presented as one.
+    mockRag({
+      data: {
+        response: 'placeholder-shaped response with no grounding',
+        evidence: [],
+        hop_count: 0,
+        visualization_config: {},
+        routed_agents: [],
+      },
+    } as unknown as Partial<RagMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+
+    expect(screen.queryByText('AI-Generated Insight')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/placeholder-shaped response/)
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 insight generated/)).not.toBeInTheDocument();
+    // No transport error + no real answer => honest empty state.
+    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
+  });
+
+  it('still renders a genuine grounded answer (hop_count>0, no error)', () => {
+    // Guardrail against over-gating: a real answer must still render.
+    mockRag({
+      data: {
+        response: 'Top prescribing gaps are concentrated in the West region.',
+        evidence: [{ content: 'West region NBRx lag', source: 'kpi' }],
+        hop_count: 2,
+        visualization_config: {},
+        routed_agents: [],
+      },
+    } as unknown as Partial<RagMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+
+    expect(screen.getByText('AI-Generated Insight')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Top prescribing gaps are concentrated in the West region/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/1 insight generated/)).toBeInTheDocument();
+    // A real answer stamps the footer timestamp (not "Not yet generated").
+    expect(screen.getByText(/Last updated:/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not yet generated/)).not.toBeInTheDocument();
+  });
+
+  it('does NOT stamp "Last updated" when the response is an in-band error', () => {
+    mockRag({
+      data: {
+        response: ERROR_STRING,
+        evidence: [],
+        hop_count: 0,
+        visualization_config: {},
+        routed_agents: [],
+        error: ERROR_STRING,
+      },
+    } as unknown as Partial<RagMutation>);
+
+    render(<ExecutiveAIBrief brand="Remibrutinib" />);
+    // An error payload is not a successful update.
+    expect(screen.getByText(/Not yet generated/)).toBeInTheDocument();
+    expect(screen.queryByText(/Last updated:/)).not.toBeInTheDocument();
+  });
+});

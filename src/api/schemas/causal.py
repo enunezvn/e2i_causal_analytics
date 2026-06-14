@@ -978,3 +978,56 @@ class CausalHealthResponse(BaseModel):
             }
         }
     )
+
+
+class CausalAnalysisHistoryItem(BaseModel):
+    """A single completed causal-analysis event, sourced from episodic_memories.
+
+    These are REAL recorded analyses (``event_type='causal_analysis_completed'``),
+    not a fabricated series. Numeric fields are ``None`` when the source row did
+    not carry them — never defaulted to a plausible-looking value.
+    """
+
+    memory_id: str = Field(..., description="Episodic memory id of the analysis event")
+    event_type: str = Field(..., description="Episodic event type")
+    description: Optional[str] = Field(None, description="Human-readable analysis summary")
+    occurred_at: datetime = Field(..., description="When the analysis completed")
+    agent_name: Optional[str] = Field(None, description="Agent that produced the analysis")
+    ate_estimate: Optional[float] = Field(
+        None, description="Average treatment effect, if recorded in raw_content"
+    )
+    confidence: Optional[float] = Field(
+        None, description="Confidence in the estimate, if recorded in raw_content"
+    )
+    model_used: Optional[str] = Field(
+        None, description="Estimator/model used, if recorded in raw_content"
+    )
+
+
+class CausalAnalysisHistoryResponse(BaseModel):
+    """Recent completed causal analyses for the Analysis History tab."""
+
+    items: List[CausalAnalysisHistoryItem] = Field(
+        default_factory=list, description="Recent completed causal analyses (newest first)"
+    )
+    total: int = Field(0, description="Number of items returned")
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "total": 1,
+                "items": [
+                    {
+                        "memory_id": "92c7da7b-7fa8-4b94-a161-30033bc8780f",
+                        "event_type": "causal_analysis_completed",
+                        "description": "Causal analysis: treatment -> outcome, ATE=0.185",
+                        "occurred_at": "2026-06-13T11:35:11.002171+00:00",
+                        "agent_name": "causal_impact",
+                        "ate_estimate": 0.1849,
+                        "confidence": 0.78,
+                        "model_used": "linear_regression",
+                    }
+                ],
+            }
+        }
+    )
