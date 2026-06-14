@@ -16,7 +16,7 @@
  * @module pages/Monitoring
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Activity,
   RefreshCw,
@@ -59,6 +59,7 @@ import {
 import { KPICard, StatusBadge } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { useAlerts, useMonitoringRuns, useModelHealth } from '@/hooks/api/use-monitoring';
+import { useModelsStatus } from '@/hooks/api/use-predictions';
 import { AlertStatus } from '@/types/monitoring';
 import type { AlertItem, MonitoringRunItem } from '@/types/monitoring';
 
@@ -67,17 +68,18 @@ import type { AlertItem, MonitoringRunItem } from '@/types/monitoring';
 // =============================================================================
 
 /**
- * Models the user can monitor.
+ * Model option shown in the monitoring selector.
  *
- * Kept page-local on purpose: sibling agents may also need a model selector
- * for their pages and should not collide on a shared `ModelSelector` export.
- * See dispatch contract for issue #297.
+ * The list is driven live from the backend `/api/models/status` endpoint
+ * (registry-backed: `ml_model_registry` production rows) via
+ * {@link useModelsStatus}. It is NO LONGER a hardcoded set of fictional
+ * handles (`propensity_v2.1.0`, `churn_v1.5.2`, ...), none of which were
+ * registered models. See dispatch contract for issue #297.
  */
-const MONITORING_MODELS: Array<{ id: string; label: string }> = [
-  { id: 'propensity_v2.1.0', label: 'Propensity Model (v2.1.0)' },
-  { id: 'churn_v1.5.2', label: 'Churn Prediction (v1.5.2)' },
-  { id: 'conversion_v3.0.1', label: 'Conversion Model (v3.0.1)' },
-];
+interface MonitoringModelOption {
+  id: string;
+  label: string;
+}
 
 /**
  * Map a UI time-range string → API `days` parameter.
@@ -176,11 +178,32 @@ function getErrorLevelStyle(level: string): { bg: string; text: string } {
 
 function Monitoring() {
   const [timeRange, setTimeRange] = useState<string>('24h');
-  const [selectedModelId, setSelectedModelId] = useState<string>(MONITORING_MODELS[0].id);
+  const [selectedModelId, setSelectedModelId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [errorLevelFilter, setErrorLevelFilter] = useState<string>('all');
 
   const days = useMemo(() => timeRangeToDays(timeRange), [timeRange]);
+
+  // --- Registry-driven model selector ----------------------------------------
+  // The list of selectable models comes from the backend `/api/models/status`
+  // endpoint, which is backed by `ml_model_registry` production rows. No more
+  // hardcoded fictional handles.
+  const { data: modelsStatus, isLoading: isLoadingModels } = useModelsStatus();
+  const monitoringModels: MonitoringModelOption[] = useMemo(
+    () =>
+      (modelsStatus?.models ?? []).map((m) => ({
+        id: m.model_name,
+        label: m.model_name,
+      })),
+    [modelsStatus?.models]
+  );
+
+  // Default the selection to the first registered model once it resolves.
+  useEffect(() => {
+    if (!selectedModelId && monitoringModels.length > 0) {
+      setSelectedModelId(monitoringModels[0].id);
+    }
+  }, [selectedModelId, monitoringModels]);
 
   // --- Live data hooks --------------------------------------------------------
   const {
@@ -341,14 +364,26 @@ function Monitoring() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Model selector (page-local) */}
-          <Select value={selectedModelId} onValueChange={setSelectedModelId}>
+          {/* Model selector — driven from ml_model_registry via /api/models/status */}
+          <Select
+            value={selectedModelId}
+            onValueChange={setSelectedModelId}
+            disabled={isLoadingModels || monitoringModels.length === 0}
+          >
             <SelectTrigger className="w-56" aria-label="Model">
               <Brain className="h-4 w-4 mr-2" />
-              <SelectValue placeholder="Model" />
+              <SelectValue
+                placeholder={
+                  isLoadingModels
+                    ? 'Loading models…'
+                    : monitoringModels.length === 0
+                      ? 'No registered models'
+                      : 'Model'
+                }
+              />
             </SelectTrigger>
             <SelectContent>
-              {MONITORING_MODELS.map((model) => (
+              {monitoringModels.map((model) => (
                 <SelectItem key={model.id} value={model.id}>
                   {model.label}
                 </SelectItem>

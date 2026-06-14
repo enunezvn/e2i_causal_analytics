@@ -62,11 +62,21 @@ def mock_shap_result():
 
 @pytest.fixture
 def mock_prediction():
-    """Mock prediction result."""
+    """Mock prediction result.
+
+    Includes the canonical ``model_features`` dict the endpoint requires —
+    get_prediction is contracted to return the strictly-validated, model-ordered
+    {name: float} features that feed SHAP + the audit record.
+    """
     return {
         "prediction_class": "high_propensity",
         "prediction_probability": 0.78,
         "model_version_id": "v2.3.1-prod",
+        "model_features": {
+            "days_since_last_hcp_visit": 45.0,
+            "total_hcp_interactions_90d": 12.0,
+            "therapy_adherence_score": 0.72,
+        },
     }
 
 
@@ -167,6 +177,64 @@ class TestExplainPrediction:
         assert response.status_code == 200
         # Should not call get_features when features are provided
         mock_shap_service.get_features.assert_not_called()
+
+    def test_endpoint_feeds_canonical_features_to_shap_and_audit(self, mock_shap_service):
+        """compute_shap + store_audit_record must receive the canonical
+        ``model_features`` from get_prediction (validated, model-ordered), NOT
+        the raw request features (which may carry extra/non-numeric fields)."""
+        with patch(
+            "src.api.routes.explain.get_shap_service",
+            new=AsyncMock(return_value=mock_shap_service),
+        ):
+            response = client.post(
+                "/api/explain/predict",
+                json={
+                    "patient_id": "PAT-2024-001234",
+                    "model_type": "propensity",
+                    "features": {
+                        "days_since_last_hcp_visit": 30,
+                        "therapy_adherence_score": 0.85,
+                        "extra_string_field": "north",  # must NOT reach SHAP/audit
+                    },
+                    "store_for_audit": True,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        # compute_shap got the canonical dict from get_prediction, not the raw
+        # request features (no extra_string_field).
+        shap_kwargs = mock_shap_service.compute_shap.call_args.kwargs
+        assert "extra_string_field" not in shap_kwargs["features"]
+        assert shap_kwargs["features"] == {
+            "days_since_last_hcp_visit": 45.0,
+            "total_hcp_interactions_90d": 12.0,
+            "therapy_adherence_score": 0.72,
+        }
+        audit_kwargs = mock_shap_service.store_audit_record.call_args.kwargs
+        assert "extra_string_field" not in audit_kwargs["features"]
+
+    def test_endpoint_fails_closed_when_prediction_lacks_model_features(
+        self, mock_shap_service, mock_prediction
+    ):
+        """If get_prediction returns no validated model_features, the endpoint
+        must FAIL CLOSED (500) rather than run SHAP/audit over raw features."""
+        broken = dict(mock_prediction)
+        broken.pop("model_features")
+        mock_shap_service.get_prediction = AsyncMock(return_value=broken)
+        with patch(
+            "src.api.routes.explain.get_shap_service",
+            new=AsyncMock(return_value=mock_shap_service),
+        ):
+            response = client.post(
+                "/api/explain/predict",
+                json={
+                    "patient_id": "PAT-2024-001234",
+                    "model_type": "propensity",
+                    "features": {"days_since_last_hcp_visit": 30},
+                },
+            )
+        assert response.status_code == 500, response.text
+        mock_shap_service.compute_shap.assert_not_called()
 
     def test_explain_prediction_with_narrative(self, mock_shap_service):
         """Should generate narrative when format=narrative."""
@@ -665,3 +733,162 @@ class TestExplainFailLoud:
         assert body["prediction_probability"] == mock_prediction["prediction_probability"]
         # The audit record was scheduled and executed (TestClient runs bg tasks).
         service.store_audit_record.assert_awaited_once()
+
+
+# =============================================================================
+# get_prediction: real vectorization + fail-closed (no fabricated 0.78)
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestSHAPGetPredictionFailClosed:
+    """The SHAP prediction feeds audit-grade output, so it must vectorize via
+    the model's real feature order and FAIL CLOSED — never fabricate 0.78."""
+
+    def _service(self, bentoml_client):
+        from src.api.routes.explain import RealTimeSHAPService
+
+        svc = RealTimeSHAPService(bentoml_client=bentoml_client)
+        svc._ensure_initialized = AsyncMock()
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_vectorizes_in_model_feature_order(self):
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(
+            return_value={"feature_columns": ["a", "b", "c"], "model_id": "m1"}
+        )
+        bento.predict = AsyncMock(
+            return_value={"predictions": [1.0], "probabilities": [0.9], "model_id": "m1"}
+        )
+        svc = self._service(bento)
+
+        out = await svc.get_prediction(
+            features={"c": 3.0, "a": 1.0, "b": 2.0},  # deliberately unordered
+            model_type=ModelType.PROPENSITY,
+        )
+        sent = bento.predict.call_args.kwargs["input_data"]
+        assert sent["features"] == [[1.0, 2.0, 3.0]]  # reordered to a,b,c
+        assert out["prediction_probability"] == 0.9
+        assert out["model_version_id"] == "m1"
+
+    @pytest.mark.asyncio
+    async def test_no_client_fails_closed(self):
+        from src.api.routes.explain import ModelType
+
+        svc = self._service(None)
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_no_feature_order_fails_closed(self):
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"model_id": "m1"})  # no columns
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 503
+        bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_feature_fails_closed(self):
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 422
+        bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_null_feature_fails_closed_not_zero_filled(self):
+        """A required feature present as null must 422, NOT be fabricated as 0.0."""
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(
+                features={"a": 1.0, "b": None}, model_type=ModelType.PROPENSITY
+            )
+        assert ei.value.status_code == 422
+        bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_feature_fails_closed_not_hash_encoded(self):
+        """A required string feature must 422, NOT be silently hash-encoded."""
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(
+                features={"a": 1.0, "b": "Northeast"}, model_type=ModelType.PROPENSITY
+            )
+        assert ei.value.status_code == 422
+        bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_probabilities_fails_closed_not_fabricated(self):
+        """A response with no probabilities must 502, NOT fabricate a 0.0
+        audit-grade probability from class predictions."""
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a"]})
+        bento.predict = AsyncMock(return_value={"predictions": [0.0]})  # no probabilities
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 502
+
+    @pytest.mark.asyncio
+    async def test_returns_canonical_features_ignoring_extras(self):
+        """get_prediction returns a canonical model_features dict (model order,
+        validated) that EXCLUDES extra non-model request fields, so SHAP/audit
+        never receive a fabricated value for an off-contract key."""
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock(
+            return_value={"predictions": [1.0], "probabilities": [0.9], "model_id": "m1"}
+        )
+        svc = self._service(bento)
+
+        out = await svc.get_prediction(
+            features={"a": 1.0, "b": 2.0, "extra_string": "north", "extra_obj": {"x": 1}},
+            model_type=ModelType.PROPENSITY,
+        )
+        # Only the model's two features, in order, as floats — extras dropped.
+        assert out["model_features"] == {"a": 1.0, "b": 2.0}

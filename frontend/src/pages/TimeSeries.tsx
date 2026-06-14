@@ -58,7 +58,12 @@ import { useKPIValue, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
 // CONSTANTS
 // =============================================================================
 
-const DEFAULT_MODEL_ID = 'propensity_v2.1.0';
+// Model ID is a free-text field on this page (forecasting/performance for an
+// operator-supplied model). Start empty rather than pre-filling a fictional
+// handle; the example placeholder uses a real registered production model
+// (`ml_model_registry`) so users know the expected format.
+const DEFAULT_MODEL_ID = '';
+const EXAMPLE_MODEL_ID = 'csu_treatment_initiation_lr_balanced_v1';
 const DEFAULT_METRIC = 'accuracy';
 const DEFAULT_KPI_ID = 'WS1-DQ-001';
 
@@ -579,7 +584,7 @@ function TimeSeries() {
               value={modelId}
               onChange={(e) => setModelId(e.target.value)}
               className="w-full p-2 border rounded-md text-sm"
-              placeholder="propensity_v2.1.0"
+              placeholder={EXAMPLE_MODEL_ID}
             />
           </CardContent>
         </Card>

@@ -198,7 +198,9 @@ class ModelEndpointsConfig:
         for model_id, model_config in data.get("endpoints", {}).items():
             endpoints[model_id] = ModelEndpointConfig(
                 model_id=model_id,
-                endpoint_url=model_config.get("url", f"{base_url}/{model_id}"),
+                endpoint_url=model_config.get(
+                    "url", base_url
+                ),  # flat single-model service: no /{model_id} suffix
                 client_type=model_config.get("client_type", "http"),
                 timeout=model_config.get("timeout", data.get("default_timeout", 5.0)),
                 max_retries=model_config.get("max_retries", data.get("default_max_retries", 3)),
@@ -219,7 +221,9 @@ class ModelEndpointsConfig:
                 for model_id, model_config in dev_data.get("endpoints", {}).items():
                     endpoints[model_id] = ModelEndpointConfig(
                         model_id=model_id,
-                        endpoint_url=model_config.get("url", f"{base_url}/{model_id}"),
+                        endpoint_url=model_config.get(
+                            "url", base_url
+                        ),  # flat single-model service: no /{model_id} suffix
                         client_type=model_config.get("client_type", "http"),
                         timeout=model_config.get("timeout", data.get("default_timeout", 5.0)),
                         max_retries=model_config.get(
@@ -484,7 +488,9 @@ def configure_model_endpoints(config: Dict[str, Any]) -> None:
     for model_id, model_config in config.get("endpoints", {}).items():
         endpoints[model_id] = ModelEndpointConfig(
             model_id=model_id,
-            endpoint_url=model_config.get("url", f"http://localhost:3000/{model_id}"),
+            endpoint_url=model_config.get(
+                "url", config.get("default_base_url", "http://localhost:3000")
+            ),  # flat: no /{model_id}
             client_type=model_config.get("client_type", "http"),
             timeout=model_config.get("timeout", 5.0),
             max_retries=model_config.get("max_retries", 3),

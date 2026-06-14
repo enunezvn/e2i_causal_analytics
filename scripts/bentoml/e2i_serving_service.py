@@ -46,10 +46,9 @@ logger = logging.getLogger(__name__)
 def _resolve_feast_endpoint() -> str:
     """Return the Feast online-features HTTP base URL, with fallbacks."""
     return (
-        os.environ.get("FEAST_HTTP_ENDPOINT")
-        or os.environ.get("FEAST_URL")
-        or "http://feast:6566"
+        os.environ.get("FEAST_HTTP_ENDPOINT") or os.environ.get("FEAST_URL") or "http://feast:6566"
     )
+
 
 # =============================================================================
 # Request/Response Models (matching mock_service.py contract)
@@ -324,6 +323,56 @@ class E2IModelService:
         else:
             logger.warning("E2I Model Service initialized in degraded mode (no model)")
 
+    def _resolve_feature_columns(self) -> Optional[List[str]]:
+        """Resolve the model's authoritative ordered feature names.
+
+        Order of preference:
+          1. The bundled ``feature_columns`` (the preprocessor input order) —
+             this is what ``_run_prediction`` uses to build the DataFrame fed
+             to the ColumnTransformer.
+          2. The estimator's ``feature_names_in_`` (set by scikit-learn when
+             the model was fit on a named DataFrame).
+
+        Returns ``None`` when neither is available so callers fail closed
+        instead of guessing a positional order.
+        """
+        if self._feature_columns:
+            return list(self._feature_columns)
+        names = getattr(self._model, "feature_names_in_", None)
+        if names is not None:
+            try:
+                return [str(n) for n in names]
+            except TypeError:
+                return None
+        return None
+
+    def _apply_preprocessor(self, arr: Any) -> Any:
+        """Apply the bundled preprocessor to a feature matrix, if present.
+
+        Builds a named DataFrame (using ``feature_columns``) when the column
+        count matches so a ColumnTransformer/preprocessor receives the named
+        features it was fit on; otherwise transforms the raw array. Used by BOTH
+        single and batch prediction so batch inference is not run on raw,
+        un-preprocessed rows (which would error or silently mis-predict for
+        bundled models with a preprocessor).
+        """
+        if self._preprocessor is None:
+            return arr
+        try:
+            import pandas as pd
+
+            if self._feature_columns and len(self._feature_columns) == arr.shape[1]:
+                df = pd.DataFrame(arr, columns=self._feature_columns)
+                return self._preprocessor.transform(df)
+            return self._preprocessor.transform(arr)
+        except Exception as e:
+            # FAIL CLOSED: a bundled preprocessor exists but its transform
+            # failed. Running model.predict on the RAW (un-preprocessed) matrix
+            # would emit a plausible-but-wrong prediction the explain path then
+            # treats as audit-grade truth. Raise instead of returning raw input.
+            logger.error("Preprocessor transform failed: %s", e)
+            raise RuntimeError(f"Preprocessor transform failed: {e}") from e
+
     def _run_prediction(
         self,
         features: List[List[float]],
@@ -352,20 +401,7 @@ class E2IModelService:
             )
 
         start = time.time()
-        arr = np.array(features)
-
-        # Apply preprocessor if bundled with model
-        if self._preprocessor is not None:
-            try:
-                import pandas as pd
-
-                if self._feature_columns and len(self._feature_columns) == arr.shape[1]:
-                    df = pd.DataFrame(arr, columns=self._feature_columns)
-                    arr = self._preprocessor.transform(df)
-                else:
-                    arr = self._preprocessor.transform(arr)
-            except Exception as e:
-                logger.warning("Preprocessor transform failed, using raw input: %s", e)
+        arr = self._apply_preprocessor(np.array(features))
 
         predictions = self._model.predict(arr).tolist()
 
@@ -449,9 +485,7 @@ class E2IModelService:
                 response.raise_for_status()
                 body = response.json()
         except Exception as e:
-            raise RuntimeError(
-                f"Feast online-features call failed ({url}): {e}"
-            ) from e
+            raise RuntimeError(f"Feast online-features call failed ({url}): {e}") from e
 
         # Feast 0.43 response shape (column-oriented):
         #   {"metadata": {"feature_names": [...]},
@@ -466,47 +500,56 @@ class E2IModelService:
             )
 
         # Drop the entity-key column from feature columns; we want feature values only.
-        feature_columns = {
+        feast_values: Dict[str, List[Any]] = {
             name: results[idx].get("values", [])
             for idx, name in enumerate(feature_names)
             if name != entity_key
         }
 
+        # Build each row in the MODEL's authoritative feature_columns order, not
+        # Feast's response order — Feast may return columns in a different order
+        # than the bundled model expects, which would silently produce a
+        # plausible-but-WRONG vector labeled feature_source='feast_online'.
+        # Extra Feast columns are ignored. When the model exposes no feature
+        # order, fall back to Feast order (no model contract to enforce against).
+        expected_order = self._resolve_feature_columns() or list(feast_values.keys())
+
         n_rows = len(entity_ids)
         matrix: List[List[float]] = []
-        # Track which features had any null/non-numeric values coerced to 0.0
-        # so we can emit ONE aggregate WARNING per request rather than spamming
-        # one log line per coerced value (3A-I-1).
-        coerced_features: Dict[str, int] = {}
+        # FAIL CLOSED on missing/null/non-numeric values. A Feast 200 can carry
+        # PRESENT-but-null values; zero-filling them and labeling the response
+        # feature_source='feast_online' feeds the model a fabricated vector
+        # presented as real, audit-grade Feast data (the #576/#532 harm —
+        # mirrors the FastAPI route's anti-null-trap guard). A real 0.0 passes;
+        # missing/null/non-numeric raises.
+        invalid: Dict[str, str] = {}
         for row_idx in range(n_rows):
             row: List[float] = []
-            for col_name, col_values in feature_columns.items():
+            for col_name in expected_order:
+                col_values = feast_values.get(col_name)
+                if col_values is None:
+                    invalid[col_name] = "missing"
+                    row.append(0.0)  # placeholder; request fails below
+                    continue
                 raw = col_values[row_idx] if row_idx < len(col_values) else None
                 if raw is None:
-                    row.append(0.0)
-                    coerced_features[col_name] = (
-                        coerced_features.get(col_name, 0) + 1
-                    )
+                    invalid[col_name] = "null"
+                    row.append(0.0)  # placeholder; request fails below
                     continue
                 try:
                     row.append(float(raw))
                 except (TypeError, ValueError):
-                    row.append(0.0)
-                    coerced_features[col_name] = (
-                        coerced_features.get(col_name, 0) + 1
-                    )
+                    invalid[col_name] = "non-numeric"
+                    row.append(0.0)  # placeholder; request fails below
             matrix.append(row)
 
-        if coerced_features:
-            total_coerced = sum(coerced_features.values())
-            logger.warning(
-                "Feast online-features call returned %d null/non-numeric "
-                "values across %d feature(s); coerced to 0.0. Feature names: "
-                "%s. Investigate Feast feature view configuration if this "
-                "persists across requests.",
-                total_coerced,
-                len(coerced_features),
-                sorted(coerced_features.keys()),
+        if invalid:
+            # Do NOT run inference over a fabricated/mis-ordered vector mislabeled
+            # feast_online. Fail loud so the caller sees an honest error.
+            raise RuntimeError(
+                "Feast features unusable for an audit-grade 'feast_online' "
+                f"prediction: {dict(sorted(invalid.items()))}; refusing to "
+                "fabricate over zero-filled features"
             )
 
         return matrix
@@ -539,9 +582,7 @@ class E2IModelService:
         return self._run_prediction(input_data.features, feature_source=feature_source)
 
     @bentoml.api
-    async def predict_batch(
-        self, input_data: BatchPredictionInput
-    ) -> BatchPredictionOutput:
+    async def predict_batch(self, input_data: BatchPredictionInput) -> BatchPredictionOutput:
         """Run batch predictions.
 
         Args:
@@ -562,7 +603,9 @@ class E2IModelService:
 
         import numpy as np
 
-        arr = np.array(input_data.features)
+        # Apply the bundled preprocessor (same path as single predict) so batch
+        # inference is not run on raw, un-preprocessed rows.
+        arr = self._apply_preprocessor(np.array(input_data.features))
         predictions = self._model.predict(arr).tolist()
         elapsed_ms = (time.time() - start) * 1000
         self._prediction_count += len(input_data.features)
@@ -634,6 +677,15 @@ class E2IModelService:
                 "/metrics",
                 "/model_info",
             ],
+            # Expose the model's authoritative feature ORDER so callers can
+            # vectorize a feature dict into the positional ``features`` matrix
+            # the model expects. Prefer the bundled ``feature_columns`` (the
+            # ColumnTransformer/preprocessor input order); fall back to the
+            # estimator's own ``feature_names_in_`` (set when fit on a
+            # DataFrame). Omitted (None) when the model carries no named
+            # feature contract — callers MUST then fail closed rather than
+            # guess an order.
+            "feature_columns": self._resolve_feature_columns(),
         }
 
         # Add model metadata if available

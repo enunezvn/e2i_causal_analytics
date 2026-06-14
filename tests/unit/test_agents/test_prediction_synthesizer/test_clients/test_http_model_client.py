@@ -161,14 +161,19 @@ class TestHTTPModelClient:
 
     @pytest.mark.asyncio
     async def test_predict_success(self, client):
-        """Test successful prediction request."""
+        """Test successful prediction request (flat contract).
+
+        The client now vectorizes the feature dict into the model's positional
+        order (resolved from /model_info, pre-seeded here via the cache) and the
+        live service returns flat ``predictions``/``probabilities`` lists.
+        """
         mock_response = make_response(
             200,
             {
-                "prediction": 0.85,
-                "confidence": 0.92,
+                "predictions": [0.85],
+                "probabilities": [0.92],
                 "model_type": "xgboost",
-                "model_version": "1.0.0",
+                "model_id": "tier0_df99c7ba:abc",
             },
         )
 
@@ -176,6 +181,7 @@ class TestHTTPModelClient:
             mock_post.return_value = mock_response
 
             await client.initialize()
+            client._feature_order = ["recency", "frequency"]  # cache: skip model_info
             result = await client.predict(
                 entity_id="HCP001",
                 features={"recency": 10, "frequency": 5},
@@ -187,18 +193,20 @@ class TestHTTPModelClient:
             assert result["model_type"] == "xgboost"
             assert "latency_ms" in result
             assert "timestamp" in result
+            # Vectorized into a 2D ordered matrix wrapped in input_data.
+            sent = mock_post.call_args.kwargs["json"]
+            assert sent["input_data"]["features"] == [[10.0, 5.0]]
 
         await client.close()
 
     @pytest.mark.asyncio
     async def test_predict_transforms_response(self, client):
-        """Test prediction transforms BentoML response correctly."""
+        """Test prediction transforms the flat BentoML response correctly."""
         mock_response = make_response(
             200,
             {
-                "prediction": 0.75,
-                "probabilities": {"positive": 0.75, "negative": 0.25},
-                "confidence": 0.88,
+                "predictions": [0.75],
+                "probabilities": [0.75],
                 "features_used": ["recency", "frequency"],
             },
         )
@@ -207,6 +215,7 @@ class TestHTTPModelClient:
             mock_post.return_value = mock_response
 
             await client.initialize()
+            client._feature_order = ["recency"]  # cache: skip model_info
             result = await client.predict(
                 entity_id="HCP001",
                 features={"recency": 10},
@@ -214,8 +223,9 @@ class TestHTTPModelClient:
             )
 
             assert result["prediction"] == 0.75
-            assert result["proba"]["positive"] == 0.75
-            assert result["confidence"] == 0.88
+            # Flat probabilities list is surfaced under ``proba``.
+            assert result["proba"] == [0.75]
+            assert result["confidence"] == 0.75  # positive-class proba
             assert "recency" in result["features_used"]
 
         await client.close()
@@ -224,7 +234,7 @@ class TestHTTPModelClient:
     async def test_predict_retries_on_server_error(self, client):
         """Test prediction retries on server errors."""
         error_response = make_response(500, {"error": "Internal error"})
-        success_response = make_response(200, {"prediction": 0.5, "confidence": 0.8})
+        success_response = make_response(200, {"predictions": [0.5], "probabilities": [0.8]})
 
         call_count = 0
 
@@ -241,6 +251,7 @@ class TestHTTPModelClient:
 
         with patch.object(httpx.AsyncClient, "post", side_effect=mock_post):
             await client.initialize()
+            client._feature_order = ["x"]  # cache: skip model_info
             result = await client.predict(
                 entity_id="HCP001",
                 features={"x": 1},
@@ -270,12 +281,13 @@ class TestHTTPModelClient:
 
         with patch.object(httpx.AsyncClient, "post", side_effect=mock_post):
             await client.initialize()
+            client._feature_order = ["a"]  # cache: skip model_info
 
             # First call should fail after retries
             with pytest.raises(httpx.HTTPStatusError):
                 await client.predict(
                     entity_id="HCP001",
-                    features={},
+                    features={"a": 1.0},
                     time_horizon="30d",
                 )
 
@@ -283,7 +295,7 @@ class TestHTTPModelClient:
             with pytest.raises(httpx.HTTPStatusError):
                 await client.predict(
                     entity_id="HCP001",
-                    features={},
+                    features={"a": 1.0},
                     time_horizon="30d",
                 )
 

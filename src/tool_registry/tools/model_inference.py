@@ -277,12 +277,38 @@ class ModelInferenceTool:
         return_explanation: bool = False,
         trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Call the BentoML endpoint."""
+        """Call the BentoML endpoint.
+
+        The live flat service needs an ordered numeric 2D ``features`` matrix
+        (ordered by the model's own ``feature_columns``, resolved from
+        ``/model_info``), wrapped as ``{"input_data": {"features": [[...]],
+        "model_type": ...}}``. We FAIL CLOSED (RuntimeError) when the order is
+        unavailable or a required feature is missing rather than sending a raw
+        dict the service rejects, or fabricating a vector.
+        """
         if self._client is None:
             raise RuntimeError("BentoML client not initialized")
 
+        # Resolve the model's authoritative feature order.
+        info = await self._client.get_model_info(model_name)
+        feature_order = info.get("feature_columns")
+        if not feature_order or not isinstance(feature_order, list):
+            raise RuntimeError(
+                f"Model '{model_name}' exposes no feature_columns order via "
+                "/model_info; cannot vectorize features for inference"
+            )
+
+        missing = [name for name in feature_order if name not in features or features[name] is None]
+        if missing:
+            raise RuntimeError(f"Missing required feature(s) for model '{model_name}': {missing}")
+        try:
+            ordered_row = [float(features[name]) for name in feature_order]
+        except (TypeError, ValueError) as e:
+            raise RuntimeError(f"Non-numeric feature for model '{model_name}': {e}")
+
         input_data = {
-            "features": features,
+            "features": [ordered_row],
+            "model_type": "classification",
             "return_proba": return_proba,
             "return_explanation": return_explanation,
         }
@@ -292,8 +318,28 @@ class ModelInferenceTool:
             input_data=input_data,
             trace_id=trace_id,
         )
+        result = cast(Dict[str, Any], result)
 
-        return cast(Dict[str, Any], result)
+        # Normalize the flat single-model contract (predictions/probabilities as
+        # flat lists) into the singular ``prediction``/``confidence`` keys and
+        # the labeled ``probabilities`` dict the tool's output schema reads. A
+        # legacy/mock response (singular prediction / dict probabilities) passes
+        # through unchanged.
+        if "prediction" not in result:
+            preds = result.get("predictions")
+            if isinstance(preds, list) and preds:
+                first = preds[0]
+                result["prediction"] = first[0] if isinstance(first, list) else first
+        probs = result.get("probabilities")
+        if isinstance(probs, list) and probs:
+            positive = float(probs[0])
+            result["probabilities"] = {"positive_class": positive}
+            if result.get("confidence") is None:
+                result["confidence"] = positive
+        if result.get("model_version") is None and result.get("model_id"):
+            result["model_version"] = result["model_id"]
+
+        return result
 
     async def _fetch_feast_features(
         self,

@@ -17,10 +17,18 @@ default_timeout: 5.0
 default_max_retries: 3
 
 # Model endpoint definitions
+#
+# IMPORTANT: the deployed BentoML service is FLAT and single-model — it serves
+# the bundled model at the ROOT of BENTOML_SERVICE_URL (POST /predict, /healthz,
+# /model_info). There is NO ``/{model_id}`` path prefix. The per-model URLs that
+# previously appended ``/churn_model`` etc. 404'd against the real service, so
+# every ``url`` here points at the flat base. (When a model is genuinely
+# deployed as its OWN BentoML service on a distinct host/port, set ``url`` to
+# that service's flat base URL — still no /{model_id} suffix.)
 endpoints:
   # Churn prediction model
   churn_model:
-    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/churn_model
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}
     client_type: http
     timeout: 5.0
     max_retries: 3
@@ -28,7 +36,7 @@ endpoints:
 
   # Conversion prediction model
   conversion_model:
-    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/conversion_model
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}
     client_type: http
     timeout: 5.0
     max_retries: 3
@@ -36,7 +44,7 @@ endpoints:
 
   # Adoption prediction model
   adoption_model:
-    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/adoption_model
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}
     client_type: http
     timeout: 5.0
     max_retries: 3
@@ -44,7 +52,7 @@ endpoints:
 
   # Causal effect model
   causal_model:
-    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/causal_model
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}
     client_type: http
     timeout: 10.0  # Higher timeout for causal models
     max_retries: 3
@@ -52,7 +60,7 @@ endpoints:
 
   # ROI prediction model
   roi_model:
-    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}/roi_model
+    url: ${BENTOML_SERVICE_URL:-http://localhost:3000}
     client_type: http
     timeout: 5.0
     max_retries: 3

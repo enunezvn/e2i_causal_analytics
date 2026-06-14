@@ -28,18 +28,24 @@ client = TestClient(app)
 
 @pytest.fixture
 def mock_prediction_result():
-    """Mock prediction result from BentoML."""
+    """Mock prediction result matching the live flat contract.
+
+    Verified live (e2i_bentoml_dev): POST /predict returns
+    ``{predictions, probabilities (flat list), model_id, prediction_time_ms,
+    is_mock}``. The route maps the flat positive-class ``probabilities`` list to
+    ``{"positive_class": p}`` and surfaces it as ``confidence``. The service does
+    NOT return prediction intervals or per-prediction feature_importance.
+    """
     return {
-        "prediction": 0.85,
-        "confidence": 0.92,
-        "probabilities": {"high": 0.85, "low": 0.15},
-        "prediction_interval": {"lower": 0.78, "upper": 0.92},
-        "feature_importance": {"feature_a": 0.4, "feature_b": 0.3, "feature_c": 0.3},
-        "model_version": "v2.1.0",
+        "predictions": [0.85],
+        "probabilities": [0.85],
+        "model_id": "tier0_df99c7ba:abc",
+        "prediction_time_ms": 15.5,
+        "is_mock": False,
         "_metadata": {
             "model_name": "churn_model",
             "latency_ms": 15.5,
-            "endpoint": "http://localhost:3000/churn_model",
+            "endpoint": "http://localhost:3000",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     }
@@ -47,22 +53,20 @@ def mock_prediction_result():
 
 @pytest.fixture
 def mock_batch_result():
-    """Mock batch prediction result from BentoML."""
+    """Mock batch prediction result matching the live flat contract.
+
+    Verified live (e2i_bentoml_dev, 2026-06-14): ``POST /predict_batch`` returns
+    ``{"batch_id", "total_samples", "predictions": [number, ...],
+    "processing_time_ms", "is_mock"}`` — ``predictions`` is a FLAT list of
+    scalar predictions (one per instance), NOT a list of per-instance dicts.
+    """
     return {
-        "predictions": [
-            {
-                "prediction": 0.85,
-                "confidence": 0.92,
-                "model_version": "v2.1.0",
-                "latency_ms": 10.0,
-            },
-            {
-                "prediction": 0.42,
-                "confidence": 0.88,
-                "model_version": "v2.1.0",
-                "latency_ms": 12.0,
-            },
-        ]
+        "batch_id": "batch-test-1",
+        "total_samples": 2,
+        "predictions": [0.85, 0.42],
+        "processing_time_ms": 22.0,
+        "is_mock": False,
+        "model_id": "tier0_df99c7ba:abc",
     }
 
 
@@ -76,17 +80,35 @@ def mock_health_result():
     }
 
 
+# Canonical test feature ORDER. Mirrors the propensity model's feature fields
+# (the same names mock_feast_client returns), so a Feast-resolved feature dict
+# vectorizes cleanly and the route's /model_info-driven feature order is
+# deterministic in tests.
+TEST_FEATURE_COLUMNS = [
+    "days_since_last_hcp_visit",
+    "total_hcp_interactions_90d",
+    "therapy_adherence_score",
+]
+
+
 @pytest.fixture
 def mock_model_info():
-    """Mock model info result."""
+    """Mock model info result matching the live flat contract.
+
+    Crucially exposes ``feature_columns`` — the authoritative ordered feature
+    names the route uses to vectorize a feature dict into the positional matrix
+    the service expects.
+    """
     return {
-        "name": "churn_model",
-        "version": "v2.1.0",
-        "framework": "sklearn",
-        "created_at": "2024-01-15T00:00:00Z",
-        "features": ["feature_a", "feature_b", "feature_c"],
-        "target": "churn",
-        "metrics": {"accuracy": 0.92, "auc": 0.95},
+        "model_id": "tier0_df99c7ba:abc",
+        "model_type": "pickle",
+        "framework": "pickle",
+        "version": "1.0.0",
+        "is_mock": False,
+        "model_loaded": True,
+        "supported_endpoints": ["/predict", "/predict_batch", "/health", "/model_info"],
+        "feature_columns": list(TEST_FEATURE_COLUMNS),
+        "metadata": {"algorithm": "RandomForestClassifier"},
     }
 
 
@@ -101,6 +123,15 @@ def mock_bentoml_client(
     client_mock.health_check = AsyncMock(return_value=mock_health_result)
     client_mock.get_model_info = AsyncMock(return_value=mock_model_info)
     return client_mock
+
+
+# A complete user-provided feature dict that satisfies TEST_FEATURE_COLUMNS.
+def _full_features():
+    return {
+        "days_since_last_hcp_visit": 12.0,
+        "total_hcp_interactions_90d": 5.0,
+        "therapy_adherence_score": 0.83,
+    }
 
 
 @pytest.fixture
@@ -150,56 +181,65 @@ class TestSinglePrediction:
     """Tests for POST /api/models/predict/{model_name}."""
 
     def test_predict_success(self, mock_bentoml_client):
-        """Should return prediction result."""
+        """Should return prediction result (feature dict vectorized to a row)."""
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/churn_model",
             json={
-                "features": {"hcp_id": "HCP001", "territory": "Northeast"},
+                "features": _full_features(),
                 "time_horizon": "short_term",
             },
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         data = response.json()
         assert data["model_name"] == "churn_model"
         assert "prediction" in data
         assert "confidence" in data
         assert "latency_ms" in data
         assert "timestamp" in data
+        # The feature dict was vectorized into a positional ordered row.
+        sent = mock_bentoml_client.predict.call_args[0][1]
+        assert sent["features"] == [[12.0, 5.0, 0.83]]
+        assert sent["model_type"] == "classification"
 
-    def test_predict_with_probabilities(self, mock_bentoml_client):
-        """Should return class probabilities when requested."""
+    def test_predict_maps_flat_probabilities_to_positive_class(self, mock_bentoml_client):
+        """The live flat ``probabilities`` list maps to {"positive_class": p}."""
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/churn_model",
             json={
-                "features": {"hcp_id": "HCP001"},
+                "features": _full_features(),
                 "return_probabilities": True,
             },
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         data = response.json()
         assert data["probabilities"] is not None
-        assert "high" in data["probabilities"]
+        assert data["probabilities"]["positive_class"] == 0.85
+        # Positive-class probability is surfaced as confidence too.
+        assert data["confidence"] == 0.85
 
-    def test_predict_with_intervals(self, mock_bentoml_client):
-        """Should return prediction intervals when requested."""
+    def test_predict_legacy_dict_probabilities_pass_through(self, mock_bentoml_client):
+        """A legacy/mock server returning a dict ``probabilities`` is preserved."""
+        mock_bentoml_client.predict = AsyncMock(
+            return_value={
+                "predictions": [0.85],
+                "probabilities": {"high": 0.85, "low": 0.15},
+                "confidence": 0.92,
+                "_metadata": {"latency_ms": 1.0},
+            }
+        )
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
-            "/api/models/predict/regression_model",
-            json={
-                "features": {"feature_a": 0.5},
-                "return_intervals": True,
-            },
+            "/api/models/predict/churn_model",
+            json={"features": _full_features(), "return_probabilities": True},
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         data = response.json()
-        assert data["prediction_interval"] is not None
-        assert "lower" in data["prediction_interval"]
-        assert "upper" in data["prediction_interval"]
+        assert data["probabilities"] == {"high": 0.85, "low": 0.15}
 
     def test_predict_preserves_falsy_zero_prediction(self, mock_bentoml_client):
         """A legitimate prediction value of 0.0 must NOT be dropped by an ``or``.
@@ -224,7 +264,7 @@ class TestSinglePrediction:
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/churn_model",
-            json={"features": {"x": 1}},
+            json={"features": _full_features()},
         )
 
         assert response.status_code == 200
@@ -243,7 +283,7 @@ class TestSinglePrediction:
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/churn_model",
-            json={"features": {"x": 1}},
+            json={"features": _full_features()},
         )
 
         assert response.status_code == 200
@@ -299,14 +339,11 @@ class TestSinglePrediction:
         assert len(feast_kwargs["feature_refs"]) > 0
         assert feast_kwargs["full_feature_names"] is False
 
-        # BentoML received the resolved Feast features, not the empty dict.
+        # BentoML received the resolved Feast features, vectorized into the
+        # model's positional order (days_since, total_interactions, adherence).
         bento_payload = mock_bentoml_client.predict.call_args[0][1]
         assert bento_payload["feature_source"] == "feast_online"
-        assert bento_payload["features"] == {
-            "days_since_last_hcp_visit": 12.0,
-            "total_hcp_interactions_90d": 5.0,
-            "therapy_adherence_score": 0.83,
-        }
+        assert bento_payload["features"] == [[12.0, 5.0, 0.83]]
 
     def test_predictions_user_provided_when_no_entity_id(
         self, mock_bentoml_client, mock_feast_client
@@ -316,7 +353,7 @@ class TestSinglePrediction:
 
         response = client.post(
             "/api/models/predict/churn_model",
-            json={"features": {"hcp_id": "HCP001"}},
+            json={"features": _full_features()},
         )
 
         assert response.status_code == 200
@@ -327,7 +364,7 @@ class TestSinglePrediction:
         mock_feast_client.get_online_features.assert_not_called()
 
         bento_payload = mock_bentoml_client.predict.call_args[0][1]
-        assert bento_payload["features"] == {"hcp_id": "HCP001"}
+        assert bento_payload["features"] == [[12.0, 5.0, 0.83]]
         assert bento_payload["feature_source"] == "user_provided"
 
     def test_predictions_feast_wins_when_both_features_and_entity_id_provided(
@@ -364,17 +401,12 @@ class TestSinglePrediction:
         # Feast.get_online_features was actually invoked.
         mock_feast_client.get_online_features.assert_awaited_once()
 
-        # The payload sent to BentoML carries the Feast-resolved features,
-        # NOT the caller-supplied ones — proving the override happened.
+        # The payload sent to BentoML carries the Feast-resolved features
+        # (vectorized to a positional row), NOT the caller-supplied 99999.0 —
+        # proving the override happened.
         bento_payload = mock_bentoml_client.predict.call_args[0][1]
         assert bento_payload["feature_source"] == "feast_online"
-        assert bento_payload["features"] == {
-            "days_since_last_hcp_visit": 12.0,
-            "total_hcp_interactions_90d": 5.0,
-            "therapy_adherence_score": 0.83,
-        }
-        # Defensive: ensure the stale caller key is gone.
-        assert "stale_value" not in bento_payload["features"]
+        assert bento_payload["features"] == [[12.0, 5.0, 0.83]]
 
     def test_predictions_feature_source_route_is_source_of_truth(
         self, mock_bentoml_client, mock_feast_client
@@ -438,7 +470,7 @@ class TestSinglePrediction:
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/failing_model",
-            json={"features": {"x": 1}},
+            json={"features": _full_features()},
         )
 
         assert response.status_code == 503
@@ -459,7 +491,7 @@ class TestSinglePrediction:
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/broken_model",
-            json={"features": {"x": 1}},
+            json={"features": _full_features()},
         )
 
         assert response.status_code == 500
@@ -561,8 +593,8 @@ class TestBatchPrediction:
             "/api/models/predict/churn_model/batch",
             json={
                 "instances": [
-                    {"features": {"hcp_id": "HCP001"}},
-                    {"features": {"hcp_id": "HCP002"}},
+                    {"features": _full_features()},
+                    {"features": _full_features()},
                 ]
             },
         )
@@ -575,15 +607,26 @@ class TestBatchPrediction:
         assert "success_count" in data
         assert "failed_count" in data
         assert "total_latency_ms" in data
+        # Each instance's feature dict was vectorized into a positional row.
+        sent = mock_bentoml_client.predict_batch.call_args[0][1]
+        assert sent["features"] == [[12.0, 5.0, 0.83], [12.0, 5.0, 0.83]]
 
-    def test_batch_predict_partial_failure(self, mock_bentoml_client):
-        """Should handle partial failures gracefully."""
+    def test_batch_predict_maps_flat_scalar_predictions(self, mock_bentoml_client):
+        """Each flat scalar prediction maps to one per-instance response.
+
+        The live ``/predict_batch`` contract returns a flat list of scalar
+        predictions (no per-item error objects), so every returned scalar is a
+        successful per-instance prediction. This pins the route's mapping of
+        ``predictions: [number, ...]`` -> ``BatchPredictionResponse.predictions``.
+        """
         mock_bentoml_client.predict_batch = AsyncMock(
             return_value={
-                "predictions": [
-                    {"prediction": 0.8, "confidence": 0.9},
-                    {"error": "Invalid features"},
-                ]
+                "batch_id": "b-2",
+                "total_samples": 2,
+                "predictions": [0.8, 0.1],
+                "processing_time_ms": 15.0,
+                "is_mock": False,
+                "model_id": "tier0_df99c7ba:abc",
             }
         )
 
@@ -592,15 +635,17 @@ class TestBatchPrediction:
             "/api/models/predict/churn_model/batch",
             json={
                 "instances": [
-                    {"features": {"x": 1}},
-                    {"features": {"invalid": "data"}},
+                    {"features": _full_features()},
+                    {"features": _full_features()},
                 ]
             },
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["failed_count"] >= 1
+        assert data["success_count"] == 2
+        assert data["failed_count"] == 0
+        assert [p["prediction"] for p in data["predictions"]] == [0.8, 0.1]
 
     def test_batch_predict_empty_request(self):
         """Should reject empty batch request."""
@@ -620,7 +665,7 @@ class TestBatchPrediction:
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/broken_model/batch",
-            json={"instances": [{"features": {"x": 1}}]},
+            json={"instances": [{"features": _full_features()}]},
         )
 
         assert response.status_code == 500
@@ -630,15 +675,22 @@ class TestModelInfo:
     """Tests for GET /api/models/{model_name}/info."""
 
     def test_get_model_info_success(self, mock_bentoml_client):
-        """Should return model metadata."""
+        """Should return model metadata in the live flat-contract shape."""
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.get("/api/models/churn_model/info")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["name"] == "churn_model"
+        # Live /model_info exposes model_id (not name), version, framework,
+        # and the authoritative feature_columns order.
+        assert data["model_id"] == "tier0_df99c7ba:abc"
         assert "version" in data
         assert "framework" in data
+        assert data["feature_columns"] == [
+            "days_since_last_hcp_visit",
+            "total_hcp_interactions_90d",
+            "therapy_adherence_score",
+        ]
 
     def test_get_model_info_not_found(self, mock_bentoml_client):
         """Should return 404 for unknown model."""
@@ -697,18 +749,58 @@ class TestModelHealth:
 class TestModelsStatus:
     """Tests for GET /api/models/status."""
 
-    def test_models_status_success(self, mock_bentoml_client):
-        """Should return status of all models."""
+    def test_models_status_success(self, mock_bentoml_client, monkeypatch):
+        """Default model list is resolved from ml_model_registry, not hardcoded.
+
+        Patches the registry resolver to return real production model names and
+        asserts the status response is built over exactly those models.
+        """
+        from src.api.routes import predictions as predictions_module
+
+        monkeypatch.setattr(
+            predictions_module,
+            "_resolve_production_model_names",
+            AsyncMock(
+                return_value=[
+                    "csu_treatment_initiation_lr_balanced_v1",
+                    "csu_treatment_initiation_lr_full_v1",
+                ]
+            ),
+        )
+
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.get("/api/models/status")
 
         assert response.status_code == 200
         data = response.json()
-        assert "total_models" in data
+        assert data["total_models"] == 2
+        returned = {m["model_name"] for m in data["models"]}
+        assert returned == {
+            "csu_treatment_initiation_lr_balanced_v1",
+            "csu_treatment_initiation_lr_full_v1",
+        }
         assert "healthy_count" in data
         assert "unhealthy_count" in data
-        assert "models" in data
         assert "timestamp" in data
+
+    def test_models_status_empty_registry_is_honest(self, mock_bentoml_client, monkeypatch):
+        """When no production models are registered, return an honest empty
+        status rather than fabricating fictional handles."""
+        from src.api.routes import predictions as predictions_module
+
+        monkeypatch.setattr(
+            predictions_module,
+            "_resolve_production_model_names",
+            AsyncMock(return_value=[]),
+        )
+
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.get("/api/models/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_models"] == 0
+        assert data["models"] == []
 
     def test_models_status_with_filter(self, mock_bentoml_client):
         """Should filter to specific models when provided."""
@@ -722,8 +814,16 @@ class TestModelsStatus:
         data = response.json()
         assert data["total_models"] == 2
 
-    def test_models_status_mixed_health(self, mock_bentoml_client):
+    def test_models_status_mixed_health(self, mock_bentoml_client, monkeypatch):
         """Should report mixed health status correctly."""
+        from src.api.routes import predictions as predictions_module
+
+        monkeypatch.setattr(
+            predictions_module,
+            "_resolve_production_model_names",
+            AsyncMock(return_value=["model_a", "model_b", "model_c"]),
+        )
+
         call_count = [0]
 
         async def alternating_health(*args, **kwargs):
@@ -731,13 +831,13 @@ class TestModelsStatus:
             if call_count[0] % 2 == 0:
                 return {
                     "status": "unhealthy",
-                    "endpoint": "http://localhost:3000/model",
+                    "endpoint": "http://localhost:3000",
                     "error": "Down",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             return {
                 "status": "healthy",
-                "endpoint": "http://localhost:3000/model",
+                "endpoint": "http://localhost:3000",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -748,8 +848,9 @@ class TestModelsStatus:
 
         assert response.status_code == 200
         data = response.json()
-        # With 3 default models: healthy_count + unhealthy_count = total_models
+        # 3 resolved models: healthy_count + unhealthy_count = total_models
         assert data["healthy_count"] + data["unhealthy_count"] == data["total_models"]
+        assert data["total_models"] == 3
 
 
 # =============================================================================

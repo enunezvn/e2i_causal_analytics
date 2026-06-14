@@ -219,14 +219,26 @@ async def lifespan(app: FastAPI):
         await get_bentoml_client()
         logger.info("BentoML client initialized successfully")
 
-        # Configure model endpoints from environment or defaults
-        configure_bentoml_endpoints(
-            {
-                "churn_model": os.environ.get("CHURN_MODEL_URL", "http://localhost:3000"),
-                "conversion_model": os.environ.get("CONVERSION_MODEL_URL", "http://localhost:3001"),
-                "causal_model": os.environ.get("CAUSAL_MODEL_URL", "http://localhost:3002"),
-            }
-        )
+        # The deployed BentoML service is FLAT and single-model: it serves one
+        # bundled model at the root of ``BENTOML_SERVICE_URL`` (default
+        # http://localhost:3000). The client talks to that flat base directly,
+        # so no per-model endpoint map is required. Only register explicit
+        # overrides when separate model services are actually deployed on
+        # distinct hosts/ports (each its own flat base URL). The previous
+        # ``conversion_model``->:3001 / ``causal_model``->:3002 defaults pointed
+        # at unrelated services (supabase-studio / the frontend) and produced
+        # false-degraded health and 404 predictions.
+        extra_endpoints: Dict[str, str] = {}
+        for model_name, env_var in (
+            ("churn_model", "CHURN_MODEL_URL"),
+            ("conversion_model", "CONVERSION_MODEL_URL"),
+            ("causal_model", "CAUSAL_MODEL_URL"),
+        ):
+            url = os.environ.get(env_var)
+            if url:
+                extra_endpoints[model_name] = url
+        if extra_endpoints:
+            configure_bentoml_endpoints(extra_endpoints)
     except Exception as e:
         logger.warning(f"BentoML client initialization failed (non-critical): {e}")
 

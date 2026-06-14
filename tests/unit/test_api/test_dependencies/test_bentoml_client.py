@@ -148,12 +148,16 @@ class TestBentoMLClientConfig:
             assert config.enable_tracing is False
 
     def test_config_get_endpoint_url_default(self):
-        """Test get_endpoint_url returns default pattern."""
+        """get_endpoint_url returns the FLAT base, never base/{model_name}.
+
+        The deployed service is single-model and flat (verified live): the
+        model name must NOT be appended as a path segment or every call 404s.
+        """
         config = BentoMLClientConfig(base_url="http://localhost:3000")
 
         url = config.get_endpoint_url("churn_model")
 
-        assert url == "http://localhost:3000/churn_model"
+        assert url == "http://localhost:3000"
 
     def test_config_get_endpoint_url_custom_mapping(self):
         """Test get_endpoint_url uses custom mapping if provided."""
@@ -384,12 +388,13 @@ class TestBentoMLClient:
         with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
 
-            batch_data = [{"features": [[0.1]]}, {"features": [[0.2]]}]
+            batch_data = {"batch_id": "b1", "features": [[0.1], [0.2]]}
             result = await client.predict_batch("churn_model", batch_data)
 
             assert "predictions" in result
-            # Verify endpoint
+            # Flat contract: POST {base}/predict_batch with {"input_data": {...}}.
             assert "predict_batch" in mock_post.call_args.args[0]
+            assert mock_post.call_args.kwargs["json"] == {"input_data": batch_data}
 
         await client.close()
 
@@ -410,7 +415,7 @@ class TestBentoMLClient:
 
         with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             with pytest.raises(RuntimeError, match="Circuit breaker open"):
-                await client.predict_batch("churn_model", [{"features": [[0.1]]}])
+                await client.predict_batch("churn_model", {"batch_id": "b1", "features": [[0.1]]})
             mock_post.assert_not_called()
 
         await client.close()
@@ -429,7 +434,7 @@ class TestBentoMLClient:
 
         with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
-            await client.predict_batch("churn_model", [{"features": [[0.1]]}])
+            await client.predict_batch("churn_model", {"batch_id": "b1", "features": [[0.1]]})
 
         assert cb.failure_count == 0
 
@@ -487,10 +492,9 @@ class TestBentoMLClient:
             result = await client.health_check(model_name="churn_model")
 
             assert result["status"] == "healthy"
-            # Verify correct endpoint
+            # Flat contract: GET {base}/healthz, NOT {base}/{model}/healthz.
             call_args = mock_get.call_args.args[0]
-            assert "churn_model" in call_args
-            assert "healthz" in call_args
+            assert call_args == "http://localhost:3000/healthz"
 
         await client.close()
 
@@ -512,28 +516,33 @@ class TestBentoMLClient:
 
     @pytest.mark.asyncio
     async def test_get_model_info(self):
-        """Test get model info request."""
-        config = BentoMLClientConfig()
+        """get_model_info POSTs to the flat {base}/model_info endpoint.
+
+        The deployed service exposes model metadata at ``POST /model_info``
+        (verified live: ``GET /metadata`` -> 404, ``GET /model_info`` -> 405).
+        """
+        config = BentoMLClientConfig(base_url="http://localhost:3000")
         client = BentoMLClient(config)
 
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "name": "churn_model",
+            "model_id": "tier0_df99c7ba:abc",
             "version": "1.0.0",
-            "framework": "sklearn",
+            "framework": "pickle",
+            "model_loaded": True,
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch.object(httpx.AsyncClient, "get", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = mock_response
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
 
             result = await client.get_model_info("churn_model")
 
-            assert result["name"] == "churn_model"
+            assert result["model_id"] == "tier0_df99c7ba:abc"
             assert result["version"] == "1.0.0"
-            # Verify metadata endpoint
-            assert "metadata" in mock_get.call_args.args[0]
+            # Flat contract: POST {base}/model_info (NOT GET {base}/{model}/metadata).
+            assert mock_post.call_args.args[0] == "http://localhost:3000/model_info"
 
         await client.close()
 

@@ -23,11 +23,22 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
   useModelHealth: vi.fn(),
 }));
 
+// The model selector is driven from the registry-backed /api/models/status
+// endpoint via useModelsStatus — mock it so the page resolves a deterministic
+// model list (no more hardcoded handles).
+vi.mock('@/hooks/api/use-predictions', () => ({
+  useModelsStatus: vi.fn(),
+}));
+
 import {
   useAlerts,
   useMonitoringRuns,
   useModelHealth,
 } from '@/hooks/api/use-monitoring';
+import { useModelsStatus } from '@/hooks/api/use-predictions';
+
+// First registered production model the page should default its selection to.
+const PRIMARY_MODEL = 'csu_treatment_initiation_lr_balanced_v1';
 
 // QueryClient wrapper for tests (required because the page uses TanStack
 // Query under the hood through these hooks).
@@ -138,6 +149,32 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
       error: null,
       refetch: vi.fn().mockResolvedValue({}),
     });
+
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        total_models: 2,
+        healthy_count: 2,
+        unhealthy_count: 0,
+        models: [
+          {
+            model_name: PRIMARY_MODEL,
+            status: 'healthy',
+            endpoint: 'http://localhost:3000',
+            last_check: HOUR_AGO_ISO,
+          },
+          {
+            model_name: 'csu_treatment_initiation_lr_full_v1',
+            status: 'healthy',
+            endpoint: 'http://localhost:3000',
+            last_check: HOUR_AGO_ISO,
+          },
+        ],
+        timestamp: HOUR_AGO_ISO,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
   });
 
   it('calls useAlerts, useMonitoringRuns, and useModelHealth (live-data wiring)', () => {
@@ -148,25 +185,31 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
     expect(useModelHealth).toHaveBeenCalled();
   });
 
-  it('passes selected model_id and time-range-derived days into the hooks', () => {
+  it('defaults selection to the first REGISTERED model and passes it + days into the hooks', async () => {
     render(<Monitoring />, { wrapper: createWrapper() });
 
-    // The page defaults to the first MONITORING_MODELS entry (propensity_v2.1.0)
-    // and the "24h" time range (which maps to days=1).
-    const alertsCall = (useAlerts as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    expect(alertsCall).toMatchObject({
-      model_id: 'propensity_v2.1.0',
+    // The page resolves its model list from useModelsStatus and defaults the
+    // selection (via effect) to the first registered production model — NOT a
+    // hardcoded fictional handle. The "24h" time range maps to days=1.
+    await waitFor(() => {
+      const healthCalls = (useModelHealth as ReturnType<typeof vi.fn>).mock.calls;
+      const lastHealth = healthCalls[healthCalls.length - 1]?.[0];
+      expect(lastHealth).toBe(PRIMARY_MODEL);
+    });
+
+    const alertsCalls = (useAlerts as ReturnType<typeof vi.fn>).mock.calls;
+    const lastAlerts = alertsCalls[alertsCalls.length - 1]?.[0];
+    expect(lastAlerts).toMatchObject({
+      model_id: PRIMARY_MODEL,
       status: AlertStatus.ACTIVE,
     });
 
-    const runsCall = (useMonitoringRuns as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    expect(runsCall).toMatchObject({
-      model_id: 'propensity_v2.1.0',
+    const runsCalls = (useMonitoringRuns as ReturnType<typeof vi.fn>).mock.calls;
+    const lastRuns = runsCalls[runsCalls.length - 1]?.[0];
+    expect(lastRuns).toMatchObject({
+      model_id: PRIMARY_MODEL,
       days: 1,
     });
-
-    const healthCall = (useModelHealth as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    expect(healthCall).toBe('propensity_v2.1.0');
   });
 
   it('"Total Runs" KPI reflects displayed runs.length (not unfiltered total_runs)', () => {

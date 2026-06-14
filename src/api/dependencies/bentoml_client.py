@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -87,15 +87,30 @@ class BentoMLClientConfig:
         default_factory=lambda: os.environ.get("BENTOML_ENABLE_TRACING", "true").lower() == "true"
     )
 
-    # Model endpoint mapping (model_name -> endpoint_url)
+    # Optional per-model endpoint override (model_name -> service base URL).
+    #
+    # The deployed BentoML service is a FLAT, single-model service: it serves
+    # one bundled model at the ROOT (``/predict``, ``/healthz``,
+    # ``/model_info`` — verified live against ``e2i_bentoml_dev`` 2026-06-14).
+    # There is NO ``/{model_name}`` path prefix. This map therefore holds the
+    # service *base URL* per model (e.g. when different models are deployed as
+    # separate BentoML services on different hosts/ports), NOT a per-model
+    # sub-path on a shared host. When a model is absent, all calls go to the
+    # default ``base_url`` flat service.
     model_endpoints: Dict[str, str] = field(default_factory=dict)
 
     def get_endpoint_url(self, model_name: str) -> str:
-        """Get endpoint URL for a model."""
+        """Resolve the FLAT service base URL for a model.
+
+        Returns the per-model service base URL if explicitly configured,
+        otherwise the default ``base_url``. The model name is NEVER appended as
+        a path segment — the deployed service is flat and single-model, so
+        ``{base}/{model_name}/predict`` would 404. The model name is retained
+        by callers only for tracing and circuit-breaker keying.
+        """
         if model_name in self.model_endpoints:
             return self.model_endpoints[model_name]
-        # Default pattern: base_url/model_name
-        return f"{self.base_url}/{model_name}"
+        return self.base_url
 
 
 # =============================================================================
@@ -320,21 +335,27 @@ class BentoMLClient:
     async def predict_batch(
         self,
         model_name: str,
-        batch_data: List[Dict[str, Any]],
+        batch_data: Dict[str, Any],
         *,
         timeout: Optional[float] = None,
         trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Make batch prediction requests.
+        """Make a batch prediction request.
 
         Args:
-            model_name: Name of the model to call
-            batch_data: List of input data dictionaries
+            model_name: Name of the model to call (for tracing / breaker keying)
+            batch_data: Batch input matching the service's ``BatchPredictionInput``
+                schema, e.g. ``{"batch_id": "...", "features": [[...], ...]}``.
+                It is wrapped as ``{"input_data": batch_data}`` to match the
+                BentoML method-parameter convention (verified live: the service
+                rejects the legacy ``{"instances": [...]}`` shape).
             timeout: Optional request timeout override
             trace_id: Optional trace ID for observability
 
         Returns:
-            List of prediction results
+            Batch prediction result, e.g.
+            ``{"batch_id", "total_samples", "predictions", "processing_time_ms",
+            "is_mock"}``.
         """
         if not self._initialized:
             await self.initialize()
@@ -351,12 +372,17 @@ class BentoMLClient:
 
         start_time = time.time()
 
+        headers = {}
+        if trace_id:
+            headers["X-Trace-ID"] = trace_id
+
         try:
             assert self._client is not None
             response = await self._client.post(
                 f"{endpoint_url}/predict_batch",
-                json={"instances": batch_data},
+                json={"input_data": batch_data},
                 timeout=timeout or self.config.timeout * 2,  # Longer timeout for batch
+                headers=headers,
             )
             response.raise_for_status()
         except (httpx.HTTPStatusError, httpx.RequestError):
@@ -371,7 +397,7 @@ class BentoMLClient:
         if self.config.enable_tracing:
             self._log_trace(
                 model_name,
-                {"batch_size": len(batch_data)},
+                {"batch_size": len(batch_data.get("features", []))},
                 {"batch_results": len(results.get("predictions", []))},
                 latency_ms,
                 trace_id,
@@ -417,10 +443,15 @@ class BentoMLClient:
             }
 
     async def get_model_info(self, model_name: str) -> Dict[str, Any]:
-        """Get information about a deployed model.
+        """Get information about the deployed model.
+
+        The deployed BentoML service exposes model metadata at ``POST
+        /model_info`` (verified live: ``GET /model_info`` -> 405, ``GET
+        /metadata`` -> 404). The response includes ``model_id``,
+        ``model_loaded``, ``supported_endpoints`` and free-form ``metadata``.
 
         Args:
-            model_name: Name of the model
+            model_name: Name of the model (for tracing / breaker keying)
 
         Returns:
             Model metadata and configuration
@@ -439,8 +470,11 @@ class BentoMLClient:
 
         try:
             assert self._client is not None
-            response = await self._client.get(
-                f"{endpoint_url}/metadata",
+            # The BentoML service-method ``model_info`` takes no arguments; an
+            # empty JSON object satisfies its IO descriptor.
+            response = await self._client.post(
+                f"{endpoint_url}/model_info",
+                json={},
                 timeout=5.0,
             )
             response.raise_for_status()
