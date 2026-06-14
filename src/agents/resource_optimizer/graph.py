@@ -10,11 +10,15 @@ Observability:
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.utils.audit_chain import AgentTier
 
 from .nodes import (
@@ -75,12 +79,16 @@ def build_resource_optimizer_graph() -> Any:
     # Build graph
     workflow = StateGraph(ResourceOptimizerState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("formulate", formulator.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("optimize", optimizer.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("scenario", scenario.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("project", projector.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node, agent_name="resource_optimizer", agent_tier=AgentTier.ML_PREDICTIONS
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "formulate", formulator.execute)
+    timed(workflow, "optimize", optimizer.execute)
+    timed(workflow, "scenario", scenario.execute)
+    timed(workflow, "project", projector.execute)
     workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point - start with audit initialization
@@ -132,11 +140,17 @@ def build_simple_optimizer_graph() -> Any:
     # Build graph
     workflow = StateGraph(ResourceOptimizerState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("formulate", formulator.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("optimize", optimizer.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("project", projector.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node,
+        agent_name="resource_optimizer_simple",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "formulate", formulator.execute)
+    timed(workflow, "optimize", optimizer.execute)
+    timed(workflow, "project", projector.execute)
     workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point - start with audit initialization

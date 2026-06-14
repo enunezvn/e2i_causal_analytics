@@ -20,12 +20,16 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 """
 
 import asyncio
+from functools import partial
 from typing import Any, Callable
 
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    audited_node,
+    create_workflow_initializer,
+)
 from src.agents.experiment_designer.nodes import (
     ContextLoaderNode,
     DesignReasoningNode,
@@ -182,20 +186,42 @@ def create_experiment_designer_graph(
     # Initialize graph
     workflow = StateGraph(ExperimentDesignState)
 
-    # Add nodes to graph (wrapped for sync compatibility)
+    # Add nodes to graph (wrapped for sync compatibility). Each business node is
+    # composed as wrap_async_node(audited_node(...)): audited_node (inner) MEASURES
+    # real duration_ms and records a timed audit entry so the analytics latency
+    # panel is populated; wrap_async_node (outer) preserves sync graph.invoke()
+    # compatibility, which this graph relies on (agent.py uses .invoke()).
+    timed = partial(audited_node, agent_name="experiment_designer", agent_tier=AgentTier.MONITORING)
     workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("context_loader", wrap_async_node(context_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node(
+        "context_loader", wrap_async_node(timed(context_node.execute, node_name="context_loader"))
+    )  # type: ignore[type-var,arg-type,call-overload]
     if enable_twin_simulation:
         # H8: wire the twin pre-screen node only when enabled at graph-build time.
         # The node ALSO self-guards at runtime on state["enable_twin_simulation"]
         # (default False), so even when wired it stays dark unless the caller opts
         # in. This flag controls whether the node is part of the graph AT ALL.
-        workflow.add_node("twin_simulation", wrap_async_node(twin_node.execute))  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("design_reasoning", wrap_async_node(design_node.execute))  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("power_analysis", wrap_async_node(power_node.execute))  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("validity_audit", wrap_async_node(validity_node.execute))  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("redesign", wrap_async_node(redesign_node.execute))  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("template_generator", wrap_async_node(template_node.execute))  # type: ignore[type-var,arg-type,call-overload]
+        workflow.add_node(
+            "twin_simulation",
+            wrap_async_node(timed(twin_node.execute, node_name="twin_simulation")),
+        )  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node(
+        "design_reasoning",
+        wrap_async_node(timed(design_node.execute, node_name="design_reasoning")),
+    )  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node(
+        "power_analysis", wrap_async_node(timed(power_node.execute, node_name="power_analysis"))
+    )  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node(
+        "validity_audit", wrap_async_node(timed(validity_node.execute, node_name="validity_audit"))
+    )  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node(
+        "redesign", wrap_async_node(timed(redesign_node.execute, node_name="redesign"))
+    )  # type: ignore[type-var,arg-type,call-overload]
+    workflow.add_node(
+        "template_generator",
+        wrap_async_node(timed(template_node.execute, node_name="template_generator")),
+    )  # type: ignore[type-var,arg-type,call-overload]
     workflow.add_node("error_handler", error_handler_node)  # type: ignore[call-overload]
 
     # Set entry point - start with audit initialization

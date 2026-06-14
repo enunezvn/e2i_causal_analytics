@@ -25,10 +25,12 @@ Version: 4.1
 Date: December 2025
 """
 
+import asyncio
 import functools
+import inspect
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, cast
 from uuid import UUID
 
 from src.mlops.opik_connector import get_opik_connector
@@ -511,6 +513,168 @@ def create_workflow_initializer(
     return initializer
 
 
+# The conventional result keys a node may set to report whether its own
+# validation/robustness checks passed. We read these ONLY if present and never
+# invent a value — a missing key means "unmeasured" (None), not a fabricated
+# pass/fail. Mirrors the honest-null convention used by the analytics latency
+# panel (avg_latency_ms null == unmeasured, not zero).
+_VALIDATION_RESULT_KEYS = ("validation_passed", "validation_result", "validated")
+
+
+def _elapsed_ms(start: float) -> int:
+    """Whole-millisecond elapsed time since ``start`` (time.perf_counter), floored
+    to 1 for any positive duration.
+
+    The node DID execute, so a real sub-millisecond run should record 1ms, not 0.
+    Recording 0 is indistinguishable downstream from "no measurement" — the
+    analytics aggregator drops ``duration_ms`` that is falsy/<=0 and the UI treats
+    0 as unmeasured — which would silently lose fast nodes from the latency panel.
+    This is millisecond-resolution quantization of a REAL measurement, not a
+    fabricated timing.
+    """
+    elapsed = time.perf_counter() - start
+    ms = int(elapsed * 1000)
+    if ms <= 0 and elapsed > 0:
+        return 1
+    return ms
+
+
+def audited_node(
+    func: Callable[[Dict[str, Any]], Any],
+    *,
+    agent_name: str,
+    agent_tier: AgentTier,
+    node_name: str,
+) -> Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]:
+    """Wrap a LangGraph node so its execution emits a REAL timed audit entry.
+
+    This is the shared, *node-agnostic* counterpart to causal_impact's inline
+    ``traced_node`` (graph.py): it measures wall-clock ``duration_ms`` around the
+    node, runs the node, and records an ``add_entry`` against the workflow's audit
+    chain. The 11 non-causal_impact agent graphs only emitted a genesis
+    ``workflow_start`` entry (no ``duration_ms``) via ``create_workflow_initializer``,
+    so once they ran the analytics latency panel had nothing to average and showed
+    a fake "0ms". Wrapping their nodes with ``audited_node`` makes them record real
+    per-node latency.
+
+    Behaviour contract (honest, fail-open on audit, never on the node):
+
+    * Timing is REAL: ``duration_ms = int((perf_counter end - start) * 1000)``.
+    * Audit is best-effort. If the audit service is unavailable, or the state
+      carries no ``audit_workflow_id`` (the genesis ``audit_init`` node was a
+      no-op because no service was configured), the node still runs and NO entry
+      is fabricated.
+    * ``validation_passed`` is read from a conventional result key only if the
+      node actually set one; otherwise it stays ``None`` (unmeasured).
+    * On exception the wrapper records a timed ``{node_name}_error`` entry with
+      ``validation_passed=False`` and then re-raises — execution semantics are
+      unchanged, telemetry is added.
+
+    Accepts sync or async node callables and always returns an async node, so
+    graph wiring is uniform regardless of how the underlying node is defined.
+
+    Args:
+        func: The node callable (``state -> dict`` or ``async state -> dict``).
+        agent_name: Audit ``agent_name`` (e.g. "gap_analyzer").
+        agent_tier: Audit ``AgentTier`` for the agent.
+        node_name: Logical node name, recorded as ``action_type``.
+
+    Returns:
+        An async node ``state -> dict`` suitable for ``workflow.add_node``.
+    """
+
+    is_async = inspect.iscoroutinefunction(func)
+
+    @functools.wraps(func)
+    async def wrapper(state: Dict[str, Any]) -> Dict[str, Any]:
+        service = get_audit_chain_service()
+        workflow_id = state.get("audit_workflow_id")
+
+        start = time.perf_counter()
+        try:
+            if is_async:
+                result = await func(state)
+            else:
+                # Run sync node off the event loop so a slow node does not block
+                # other concurrent agent graphs.
+                result = await asyncio.to_thread(func, state)
+
+            duration_ms = _elapsed_ms(start)
+            result_dict = cast(Dict[str, Any], result if isinstance(result, dict) else {})
+
+            if workflow_id and service is not None:
+                validation_passed: Optional[bool] = None
+                for key in _VALIDATION_RESULT_KEYS:
+                    if key in result_dict:
+                        raw = result_dict[key]
+                        validation_passed = bool(raw) if raw is not None else None
+                        break
+                try:
+                    service.add_entry(
+                        workflow_id=workflow_id,
+                        agent_name=agent_name,
+                        agent_tier=agent_tier,
+                        action_type=node_name,
+                        input_data={"node": node_name},
+                        output_data={
+                            "status": result_dict.get("status"),
+                            "has_error": bool(result_dict.get(f"{node_name}_error")),
+                        },
+                        duration_ms=duration_ms,
+                        validation_passed=validation_passed,
+                    )
+                except Exception as audit_err:  # pragma: no cover - defensive
+                    logger.warning(
+                        "Failed to record audit entry for %s/%s: %s",
+                        agent_name,
+                        node_name,
+                        audit_err,
+                    )
+
+            return cast(Dict[str, Any], result)
+
+        except Exception as exc:
+            duration_ms = _elapsed_ms(start)
+            if workflow_id and service is not None:
+                try:
+                    service.add_entry(
+                        workflow_id=workflow_id,
+                        agent_name=agent_name,
+                        agent_tier=agent_tier,
+                        action_type=f"{node_name}_error",
+                        input_data={"node": node_name},
+                        output_data={"error": str(exc)},
+                        duration_ms=duration_ms,
+                        validation_passed=False,
+                    )
+                except Exception:  # pragma: no cover - defensive
+                    pass  # never let audit failure mask the real error
+            raise
+
+    return wrapper
+
+
+def add_audited_node(
+    workflow: Any,
+    name: str,
+    func: Callable[[Dict[str, Any]], Any],
+    *,
+    agent_name: str,
+    agent_tier: AgentTier,
+) -> None:
+    """Register ``func`` on ``workflow`` as a node wrapped by :func:`audited_node`.
+
+    Thin convenience so each agent graph can swap a bare
+    ``workflow.add_node(name, func)`` for one timed call without repeating the
+    wrapper boilerplate. ``name`` is used as both the LangGraph node name and the
+    audit ``action_type`` (``node_name``).
+    """
+    workflow.add_node(
+        name,
+        audited_node(func, agent_name=agent_name, agent_tier=agent_tier, node_name=name),
+    )
+
+
 # Re-export key types for convenience
 __all__ = [
     "AuditChainMixin",
@@ -520,6 +684,8 @@ __all__ = [
     "ChainVerificationResult",
     "RefutationResults",
     "audited_traced_node",
+    "audited_node",
+    "add_audited_node",
     "create_workflow_initializer",
     "get_audit_chain_service",
     "set_audit_chain_service",

@@ -10,11 +10,15 @@ Observability:
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Any, Optional
 
 from langgraph.graph import END, StateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.utils.audit_chain import AgentTier
 
 from .nodes.agent_health import AgentHealthNode
@@ -66,13 +70,15 @@ def build_health_score_graph(
     # Build graph
     workflow = StateGraph(HealthScoreState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("component", component.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("model", model.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("pipeline", pipeline.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("agent", agent.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("compose", composer.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(add_audited_node, agent_name="health_score", agent_tier=AgentTier.MONITORING)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "component", component.execute)
+    timed(workflow, "model", model.execute)
+    timed(workflow, "pipeline", pipeline.execute)
+    timed(workflow, "agent", agent.execute)
+    timed(workflow, "compose", composer.execute)
 
     # Sequential flow starting with audit initialization
     workflow.set_entry_point("audit_init")
@@ -118,10 +124,14 @@ def build_quick_check_graph(
     # Build graph
     workflow = StateGraph(HealthScoreState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("component", component.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("compose", composer.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node, agent_name="health_score_quick", agent_tier=AgentTier.MONITORING
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "component", component.execute)
+    timed(workflow, "compose", composer.execute)
 
     # Minimal flow starting with audit initialization
     workflow.set_entry_point("audit_init")

@@ -16,7 +16,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.utils.audit_chain import AgentTier
 
 from .nodes import (
@@ -67,14 +70,32 @@ def create_orchestrator_graph(
     # Add audit init node
     workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]
 
-    # Add nodes
-    workflow.add_node("classify", classify_intent)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes (wrapped so each emits a real timed audit entry -> latency telemetry)
+    add_audited_node(
+        workflow,
+        "classify",
+        classify_intent,
+        agent_name="orchestrator",
+        agent_tier=AgentTier.COORDINATION,
+    )
 
     # Conditionally add RAG node
     if enable_rag:
-        workflow.add_node("rag_context", retrieve_rag_context)  # type: ignore[type-var,arg-type,call-overload]
+        add_audited_node(
+            workflow,
+            "rag_context",
+            retrieve_rag_context,
+            agent_name="orchestrator",
+            agent_tier=AgentTier.COORDINATION,
+        )
 
-    workflow.add_node("route", route_to_agents)  # type: ignore[type-var,arg-type,call-overload]
+    add_audited_node(
+        workflow,
+        "route",
+        route_to_agents,
+        agent_name="orchestrator",
+        agent_tier=AgentTier.COORDINATION,
+    )
 
     # Dispatcher node. Always a DispatcherNode so the test-only mock scaffold is
     # gated by allow_mock: with a (possibly partial) registry and allow_mock=False
@@ -86,9 +107,21 @@ def create_orchestrator_graph(
     async def dispatch_node(state):
         return await dispatcher.execute(state)
 
-    workflow.add_node("dispatch", dispatch_node)  # type: ignore[type-var,arg-type,call-overload]
+    add_audited_node(
+        workflow,
+        "dispatch",
+        dispatch_node,
+        agent_name="orchestrator",
+        agent_tier=AgentTier.COORDINATION,
+    )
 
-    workflow.add_node("synthesize", synthesize_response)  # type: ignore[type-var,arg-type,call-overload]
+    add_audited_node(
+        workflow,
+        "synthesize",
+        synthesize_response,
+        agent_name="orchestrator",
+        agent_tier=AgentTier.COORDINATION,
+    )
 
     # Linear flow (no conditionals for speed) - start with audit_init
     workflow.set_entry_point("audit_init")

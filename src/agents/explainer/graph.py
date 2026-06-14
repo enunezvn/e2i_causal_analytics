@@ -14,12 +14,16 @@ Observability:
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Any, Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.utils.audit_chain import AgentTier
 
 from .nodes import ContextAssemblerNode, DeepReasonerNode, NarrativeGeneratorNode
@@ -104,11 +108,13 @@ def build_explainer_graph(
     # Build graph
     workflow = StateGraph(ExplainerState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("assemble", assembler.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("reason", reasoner.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("generate", generator.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(add_audited_node, agent_name="explainer", agent_tier=AgentTier.SELF_IMPROVEMENT)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "assemble", assembler.execute)
+    timed(workflow, "reason", reasoner.execute)
+    timed(workflow, "generate", generator.execute)
     workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Set entry point - start with audit initialization
