@@ -263,4 +263,10 @@ export interface ResourceHealthResponse {
   last_optimization?: string;
   /** Optimizations in last 24 hours */
   optimizations_24h: number;
+  /**
+   * Optimizations-store backing: 'durable' (Redis, shared across workers) or
+   * 'degraded' (process-local in-memory fallback — cross-worker reads can 404).
+   * Optional for backward compatibility with older backends.
+   */
+  storage_mode?: string;
 }

@@ -21,14 +21,17 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import json
 import logging
+import math
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from redis.exceptions import RedisError
 
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
@@ -283,13 +286,484 @@ class ResourceHealthResponse(BaseModel):
         default=None, description="Last optimization timestamp"
     )
     optimizations_24h: int = Field(default=0, description="Optimizations in last 24 hours")
+    storage_mode: str = Field(
+        default="durable",
+        description=(
+            "Optimizations-store backing: 'durable' (Redis, shared across workers) "
+            "or 'degraded' (process-local in-memory fallback — Redis unavailable, "
+            "so cross-worker reads can 404)."
+        ),
+    )
 
 
 # =============================================================================
-# IN-MEMORY STORAGE (replace with Supabase in production)
+# OPTIMIZATIONS STORAGE (durable / cross-worker)
 # =============================================================================
+#
+# The optimizations store must be DURABLE and SHARED ACROSS WORKERS.
+#
+# Production runs gunicorn with ``--workers 2`` (docker/docker-compose.yml,
+# docker-compose.secure.yml). A process-local dict therefore has two real,
+# user-visible failures:
+#   - A POST handled by worker A is invisible to a GET handled by worker B, so
+#     a legitimate optimization 404s roughly half the time. The page polls
+#     ``GET /resources/{id}`` and intermittently 404s (reproduced live: ~50%
+#     of polls 404 against the same id while the other worker serves 200).
+#   - All state is lost on process restart / redeploy.
+#
+# This mirrors the sibling fix in ``src/api/routes/segments.py`` (the segment
+# analyses store, C21): back the data in Redis, REUSING the app's existing
+# async Redis client (``src.api.dependencies.redis_client.get_redis``, already
+# wired into the FastAPI lifespan in ``src/api/main.py``). When Redis is
+# unavailable it transparently falls back to a BOUNDED in-process dict —
+# mirroring the app's existing graceful-degradation posture
+# (``app.state.redis_available``) rather than failing the request. The fallback
+# is FIFO-bounded so memory cannot grow without limit, and the Redis index is
+# bounded the same way.
 
-_optimizations_store: Dict[str, OptimizationResponse] = {}
+# Maximum number of optimizations retained (both in Redis and in the fallback).
+OPTIMIZATIONS_STORE_MAX_ENTRIES = 1000
+
+# How long an optimization record lives in Redis. Generous relative to the 24h
+# window the health endpoint reports on, while still letting abandoned records
+# expire so the store cannot accumulate stale entries indefinitely.
+OPTIMIZATIONS_STORE_TTL_SECONDS = 7 * 24 * 60 * 60
+
+# Redis key namespace.
+_REDIS_KEY_PREFIX = "resources:optimization:"
+_REDIS_INDEX_KEY = "resources:optimization:index"
+
+# Redis errors that should trigger graceful degradation rather than a 500.
+#
+# The app's Redis client is ``redis.asyncio`` (see
+# ``src/api/dependencies/redis_client.py``), whose connection/timeout failures
+# are ``redis.exceptions.ConnectionError`` / ``redis.exceptions.TimeoutError``
+# — NOT the builtin ``ConnectionError`` / ``TimeoutError``. They both subclass
+# ``redis.exceptions.RedisError``, so catching ``RedisError`` covers every
+# client-raised Redis failure. ``OSError`` covers socket-level failures;
+# ``RuntimeError`` covers "redis not initialised" from get_redis().
+_REDIS_DEGRADE_ERRORS = (RedisError, OSError, RuntimeError)
+
+# Read-side deserialisation failures that must fail SOFT (skip/None + cleanup)
+# rather than 500: a truncated/corrupt payload or a record written by an older
+# build that no longer round-trips through the current schema.
+_RECORD_DECODE_ERRORS = (ValidationError, json.JSONDecodeError, ValueError)
+
+
+def _has_non_finite_floats(response: "OptimizationResponse") -> bool:
+    """Return ``True`` if any float in ``response`` is NaN or +-inf.
+
+    ``model_dump_json`` serialises non-finite floats to JSON ``null``; on read
+    ``model_validate_json`` then raises ``ValidationError`` because the affected
+    fields (e.g. ``AllocationResult.optimized_allocation`` / ``ScenarioResult.roi``)
+    are non-Optional floats. Such a record is therefore WRITTEN successfully but
+    UNREADABLE — it would 404 the real optimization id on every later GET and be
+    silently pruned from enumeration. We detect this before persisting (mirrors
+    ``src/api/routes/segments.py``) and refuse to store an unreadable record.
+    """
+
+    def _walk(obj: Any) -> bool:
+        if isinstance(obj, float):
+            return not math.isfinite(obj)
+        if isinstance(obj, dict):
+            return any(_walk(v) for v in obj.values())
+        if isinstance(obj, (list, tuple)):
+            return any(_walk(v) for v in obj)
+        return False
+
+    # mode="python" keeps native floats so NaN/inf are detectable (JSON mode
+    # would have already coerced them to null).
+    return _walk(response.model_dump(mode="python"))
+
+
+def _sanitize_non_finite(
+    optimization_id: str, response: "OptimizationResponse"
+) -> "OptimizationResponse":
+    """Return an honest FAILED record for a degenerate (non-finite) result.
+
+    We do NOT fabricate finite numbers (anti-mocking) and we do NOT persist the
+    unreadable original. Instead we drop the degenerate numeric payloads and
+    mark the optimization FAILED with a clear warning — a state the schema
+    already represents (empty ``optimal_allocations`` / ``scenarios`` +
+    ``status=failed``). All Optional float fields drop to ``None``;
+    ``solve_time_ms`` is a non-Optional int (already finite). The result is
+    provably finite and round-trips cleanly.
+    """
+    logger.warning(
+        "Resource optimizer store: optimization %s has non-finite (NaN/inf) "
+        "values (degenerate result); persisting as FAILED rather than an "
+        "unreadable record.",
+        optimization_id,
+    )
+    sanitized = response.model_copy(deep=True)
+    sanitized.status = OptimizationStatus.FAILED
+    sanitized.optimal_allocations = []
+    sanitized.scenarios = []
+    sanitized.sensitivity_analysis = None
+    sanitized.impact_by_segment = None
+    sanitized.objective_value = None
+    sanitized.projected_total_outcome = None
+    sanitized.projected_roi = None
+    if not any("non-finite" in w.lower() for w in sanitized.warnings):
+        sanitized.warnings.append(
+            "Optimization produced non-finite (NaN/inf) values; marked as failed."
+        )
+    # Guard against regression: the whole point is a record that round-trips
+    # cleanly. If a future field carries a non-finite float, fail loudly here
+    # rather than silently persisting another unreadable record.
+    assert not _has_non_finite_floats(sanitized), (
+        "sanitize_non_finite left a non-finite float; record would be unreadable"
+    )
+    return sanitized
+
+
+class _BoundedOptimizationsStore(Dict[str, OptimizationResponse]):
+    """A dict that evicts the oldest entry once it exceeds ``max_entries``.
+
+    Used as the in-process fallback for :class:`_DurableOptimizationsStore`
+    when Redis is unavailable. Python dicts preserve insertion order, so
+    ``next(iter(self))`` is the oldest key. Re-assigning an existing key updates
+    in place and does NOT grow the store.
+    """
+
+    def __init__(self, *args: Any, max_entries: int = OPTIMIZATIONS_STORE_MAX_ENTRIES) -> None:
+        super().__init__(*args)
+        self.max_entries = max_entries
+
+    def __setitem__(self, key: str, value: OptimizationResponse) -> None:
+        super().__setitem__(key, value)
+        while len(self) > self.max_entries:
+            oldest_key = next(iter(self))
+            if oldest_key == key:
+                break
+            del self[oldest_key]
+
+
+# Type of the zero-arg async factory that yields a Redis client. Defaults to the
+# app's canonical ``get_redis`` (lazily imported to keep this module importable
+# without a live Redis and to avoid import cycles).
+RedisFactory = Callable[[], Awaitable[Any]]
+
+
+async def _default_redis_factory() -> Any:
+    """Return the app's canonical async Redis client.
+
+    Imported lazily so the module imports cleanly in environments without Redis
+    configured (tests, CLI tools); failures here are caught by the durable
+    store and trigger the in-memory fallback.
+    """
+    from src.api.dependencies.redis_client import get_redis
+
+    return await get_redis()
+
+
+class _DurableOptimizationsStore:
+    """Durable, cross-worker optimizations store backed by Redis.
+
+    Each optimization is stored as a JSON string under
+    ``resources:optimization:<id>`` with a TTL, and indexed in a sorted set
+    scored by CREATION time (preserved across later status updates) so the full
+    collection can be enumerated (for ``/scenarios`` and ``/health``) and TRUE
+    FIFO-evicted once the count of LIVE records exceeds ``max_entries``.
+
+    All methods are ``async``. When Redis is unavailable (or any command
+    fails), they transparently fall back to a bounded in-process dict so a
+    request degrades gracefully instead of 500-ing. Writes are mirrored to the
+    fallback so a later read can still succeed within the same process if Redis
+    is only intermittently reachable.
+    """
+
+    def __init__(
+        self,
+        redis_factory: Optional[RedisFactory] = None,
+        max_entries: int = OPTIMIZATIONS_STORE_MAX_ENTRIES,
+        ttl_seconds: int = OPTIMIZATIONS_STORE_TTL_SECONDS,
+    ) -> None:
+        self._redis_factory: RedisFactory = redis_factory or _default_redis_factory
+        self.max_entries = max_entries
+        self.ttl_seconds = ttl_seconds
+        # In-process fallback used when Redis is unavailable.
+        self._memory: _BoundedOptimizationsStore = _BoundedOptimizationsStore(
+            max_entries=max_entries
+        )
+
+    async def _redis(self) -> Optional[Any]:
+        """Return a live Redis client, or ``None`` if unavailable."""
+        try:
+            return await self._redis_factory()
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(
+                f"Resource optimizer store: Redis unavailable, using in-memory fallback: {e}"
+            )
+            return None
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(
+                f"Resource optimizer store: unexpected Redis factory error, degrading: {e}"
+            )
+            return None
+
+    async def is_durable(self) -> bool:
+        """Return ``True`` if this worker can currently reach Redis AND run a
+        store command against it.
+
+        A reachable client whose COMMANDS fail (stale connection, mid-flight
+        outage) silently degrades reads/writes to the in-process memory mirror
+        — re-creating the cross-worker 404 this store exists to fix. A
+        factory-only probe would still report ``durable`` in that case, hiding
+        the degradation the ``storage_mode`` field is meant to surface. So we
+        exercise a real, cheap Redis command (``zcard`` on the index key — the
+        same command ``set``/``values`` rely on) and treat a command failure as
+        degraded, exactly as the read/write paths do.
+        """
+        client = await self._redis()
+        if client is None:
+            return False
+        try:
+            await client.zcard(_REDIS_INDEX_KEY)
+            return True
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(
+                f"Resource optimizer store: Redis durability probe failed, reporting degraded: {e}"
+            )
+            return False
+
+    @staticmethod
+    def _key(optimization_id: str) -> str:
+        return f"{_REDIS_KEY_PREFIX}{optimization_id}"
+
+    @staticmethod
+    async def _existing_score(client: Any, optimization_id: str) -> Optional[float]:
+        """Return the current index score for ``optimization_id`` (or None)."""
+        try:
+            score = await client.zscore(_REDIS_INDEX_KEY, optimization_id)
+            return float(score) if score is not None else None
+        except _REDIS_DEGRADE_ERRORS:
+            return None
+
+    async def set(self, optimization_id: str, response: OptimizationResponse) -> None:
+        """Persist ``response`` under ``optimization_id`` (Redis + memory mirror).
+
+        Write-side guards:
+
+        * never persist a record containing NaN/+-inf floats. Such a record
+          serialises to JSON ``null`` and is UNREADABLE on the way back (a
+          ``ValidationError`` that would 404 the real id on every later GET and
+          silently prune it from enumeration). A non-finite result is a
+          DEGENERATE solve, so we store an honest FAILED record (no fabricated
+          finite numbers) instead. Mirrors ``src/api/routes/segments.py``.
+        * the key SET and index ZADD commit together in a pipeline/transaction
+          so a ZADD failure never leaves a record fetchable-by-id yet invisible
+          to enumeration. The index score preserves CREATION time (read-existing
+          / add-only) so a later status update does not re-score the record into
+          "newest", which would make eviction behave like LRU instead of FIFO.
+        """
+        # Write-side guard: never persist an unreadable (non-finite) record.
+        # ``_has_non_finite_floats`` only inspects real floats, so MagicMock /
+        # non-model values used in tests pass through untouched.
+        if isinstance(response, OptimizationResponse) and _has_non_finite_floats(response):
+            response = _sanitize_non_finite(optimization_id, response)
+
+        # Always mirror to the in-process fallback first so an intermittent
+        # Redis failure on a later read can still be served in-process.
+        self._memory[optimization_id] = response
+
+        client = await self._redis()
+        if client is None:
+            return
+        try:
+            payload = response.model_dump_json()
+            key = self._key(optimization_id)
+
+            # FIFO: preserve the original creation score across status updates.
+            existing_score = await self._existing_score(client, optimization_id)
+            score = (
+                existing_score
+                if existing_score is not None
+                else datetime.now(timezone.utc).timestamp()
+            )
+
+            try:
+                pipe = client.pipeline(transaction=True)
+                pipe.set(key, payload, ex=self.ttl_seconds)
+                pipe.zadd(_REDIS_INDEX_KEY, {optimization_id: score})
+                await pipe.execute()
+            except _REDIS_DEGRADE_ERRORS:
+                await self._restore_consistency_after_failed_write(client, optimization_id)
+                raise
+
+            await self._evict_if_needed(client, keep_id=optimization_id)
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(
+                f"Resource optimizer store: Redis write failed for {optimization_id}, degraded: {e}"
+            )
+
+    async def _restore_consistency_after_failed_write(
+        self, client: Any, optimization_id: str
+    ) -> None:
+        """Undo a partial write so a key never outlives its index entry."""
+        try:
+            indexed = await client.zscore(_REDIS_INDEX_KEY, optimization_id)
+            if indexed is None:
+                await client.delete(self._key(optimization_id))
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(
+                f"Resource optimizer store: consistency restore failed for "
+                f"{optimization_id}, degraded: {e}"
+            )
+
+    async def _prune_orphans(self, client: Any) -> None:
+        """Remove index members whose underlying key no longer exists.
+
+        TTL-expired records (and records evicted by Redis ``maxmemory`` before
+        TTL) leave their index member behind as an orphan. Those orphans inflate
+        the count used by FIFO eviction and can cause a LIVE, in-TTL,
+        under-capacity record to be evicted while a dead orphan survives. We
+        prune purely by KEY EXISTENCE, the only correct signal once the index
+        score is frozen at CREATION time while every ``set()`` resets the TTL.
+        """
+        try:
+            members = await client.zrange(_REDIS_INDEX_KEY, 0, -1)
+            if not members:
+                return
+            keys = [self._key(m) for m in members]
+            present = await client.mget(keys)
+            stale = [m for m, raw in zip(members, present, strict=False) if raw is None]
+            if stale:
+                await client.zrem(_REDIS_INDEX_KEY, *stale)
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(f"Resource optimizer store: Redis orphan-prune failed, degraded: {e}")
+
+    async def _evict_if_needed(self, client: Any, keep_id: str) -> None:
+        """FIFO-evict oldest LIVE entries so the Redis index stays bounded.
+
+        Orphans are pruned FIRST so the count reflects LIVE records only.
+        """
+        try:
+            await self._prune_orphans(client)
+
+            count = await client.zcard(_REDIS_INDEX_KEY)
+            overflow = count - self.max_entries
+            if overflow <= 0:
+                return
+            oldest = await client.zrange(_REDIS_INDEX_KEY, 0, overflow - 1)
+            for member in oldest:
+                if member == keep_id:
+                    continue
+                await client.delete(self._key(member))
+                await client.zrem(_REDIS_INDEX_KEY, member)
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(f"Resource optimizer store: Redis eviction failed, degraded: {e}")
+
+    async def get(self, optimization_id: str) -> Optional[OptimizationResponse]:
+        """Return the stored optimization, or ``None`` if absent.
+
+        When Redis is REACHABLE it is AUTHORITATIVE: a clean miss returns
+        ``None`` and does NOT fall through to the in-process mirror. Falling
+        through on a clean miss would let one worker serve a stale mirrored
+        record by id (e.g. after TTL expiry / Redis eviction / a delete by
+        another worker) while Redis-backed ``values()`` omits it — re-creating
+        the very cross-worker split-brain this store exists to fix. The memory
+        mirror is therefore consulted ONLY when Redis is unavailable or a Redis
+        command errored.
+
+        Read-side fail-soft: if the persisted payload cannot be decoded /
+        validated (e.g. a record written by an older build), return ``None`` and
+        lazily remove the poison (key + index member) instead of letting a
+        ``ValidationError`` 500 the request.
+        """
+        client = await self._redis()
+        if client is not None:
+            try:
+                raw = await client.get(self._key(optimization_id))
+            except _REDIS_DEGRADE_ERRORS as e:
+                # Redis command errored -> degrade to the in-process mirror.
+                logger.warning(
+                    f"Resource optimizer store: Redis read failed for "
+                    f"{optimization_id}, degraded: {e}"
+                )
+                return self._memory.get(optimization_id)
+            if raw is None:
+                # Redis reachable + clean miss -> authoritative absence.
+                return None
+            try:
+                return OptimizationResponse.model_validate_json(raw)
+            except _RECORD_DECODE_ERRORS as e:
+                logger.warning(
+                    "Resource optimizer store: unreadable record %s (%s); "
+                    "removing poison and returning None.",
+                    optimization_id,
+                    type(e).__name__,
+                )
+                await self._remove_poison(client, optimization_id)
+                return None
+        # Redis unavailable -> serve from the in-process fallback.
+        return self._memory.get(optimization_id)
+
+    async def _remove_poison(self, client: Any, optimization_id: str) -> None:
+        """Lazily delete an unreadable record's key + index member."""
+        try:
+            await client.delete(self._key(optimization_id))
+            await client.zrem(_REDIS_INDEX_KEY, optimization_id)
+        except _REDIS_DEGRADE_ERRORS as e:
+            logger.warning(
+                f"Resource optimizer store: failed to remove poison record "
+                f"{optimization_id}, degraded: {e}"
+            )
+
+    async def contains(self, optimization_id: str) -> bool:
+        """Return ``True`` if an optimization exists for ``optimization_id``."""
+        return (await self.get(optimization_id)) is not None
+
+    async def values(self) -> List[OptimizationResponse]:
+        """Return all stored optimizations (Redis-backed, falling back to memory).
+
+        Batches the per-record reads with a single ``mget`` after the
+        ``zrange``. A single unreadable (poison/corrupt) record is SKIPPED and
+        its index member pruned; it never breaks enumeration of the rest.
+        """
+        client = await self._redis()
+        if client is not None:
+            try:
+                ids = await client.zrange(_REDIS_INDEX_KEY, 0, -1)
+                if not ids:
+                    return []
+                keys = [self._key(optimization_id) for optimization_id in ids]
+                raws = await client.mget(keys)
+
+                results: List[OptimizationResponse] = []
+                stale_ids: List[str] = []
+                for optimization_id, raw in zip(ids, raws, strict=False):
+                    if raw is None:
+                        stale_ids.append(optimization_id)
+                        continue
+                    try:
+                        results.append(OptimizationResponse.model_validate_json(raw))
+                    except _RECORD_DECODE_ERRORS as e:
+                        logger.warning(
+                            "Resource optimizer store: skipping unreadable record "
+                            "%s (%s) during enumeration; pruning it.",
+                            optimization_id,
+                            type(e).__name__,
+                        )
+                        await client.delete(self._key(optimization_id))
+                        stale_ids.append(optimization_id)
+                if stale_ids:
+                    await client.zrem(_REDIS_INDEX_KEY, *stale_ids)
+                return results
+            except _REDIS_DEGRADE_ERRORS as e:
+                logger.warning(f"Resource optimizer store: Redis enumerate failed, degraded: {e}")
+        return list(self._memory.values())
+
+    def clear(self) -> None:
+        """Clear the in-process fallback (used by tests).
+
+        Note: this clears only the in-process mirror, not Redis. Tests that
+        exercise Redis behaviour use a fresh fake client per test.
+        """
+        self._memory.clear()
+
+
+_optimizations_store: _DurableOptimizationsStore = _DurableOptimizationsStore()
 
 
 # =============================================================================
@@ -339,8 +813,8 @@ async def run_optimization(
     )
 
     if async_mode:
-        # Store pending optimization
-        _optimizations_store[optimization_id] = response
+        # Store pending optimization (durable / cross-worker)
+        await _optimizations_store.set(optimization_id, response)
 
         # Schedule background task
         background_tasks.add_task(
@@ -356,7 +830,7 @@ async def run_optimization(
     try:
         result = await _execute_optimization(request)
         result.optimization_id = optimization_id
-        _optimizations_store[optimization_id] = result
+        await _optimizations_store.set(optimization_id, result)
         return result
     except HTTPException:
         # F-010-backend (#429, codex iter-1 M1): preserve 503 from
@@ -366,7 +840,7 @@ async def run_optimization(
         logger.error(f"Optimization failed: {e}")
         response.status = OptimizationStatus.FAILED
         response.warnings.append(str(e))
-        _optimizations_store[optimization_id] = response
+        await _optimizations_store.set(optimization_id, response)
         raise HTTPException(status_code=500, detail=f"Optimization failed: {e}")
 
 
@@ -393,7 +867,7 @@ async def list_scenarios(
     """
     all_scenarios: List[ScenarioResult] = []
 
-    for opt in _optimizations_store.values():
+    for opt in await _optimizations_store.values():
         if opt.status != OptimizationStatus.COMPLETED:
             continue
 
@@ -444,17 +918,29 @@ async def get_resource_health() -> ResourceHealthResponse:
 
     # Count recent optimizations
     now = datetime.now(timezone.utc)
+    all_optimizations = await _optimizations_store.values()
     optimizations_24h = sum(
-        1 for o in _optimizations_store.values() if (now - o.timestamp).total_seconds() < 86400
+        1 for o in all_optimizations if (now - o.timestamp).total_seconds() < 86400
     )
 
     # Get last optimization
     last_optimization = None
-    if _optimizations_store:
-        last_optimization = max(o.timestamp for o in _optimizations_store.values())
+    if all_optimizations:
+        last_optimization = max(o.timestamp for o in all_optimizations)
+
+    # Surface whether this worker is serving DURABLE (Redis, cross-worker) or
+    # DEGRADED (process-local in-memory) state. A silent per-worker fallback
+    # re-introduces the cross-worker 404 this store exists to fix, so it must
+    # be observable rather than invisible.
+    durable = await _optimizations_store.is_durable()
+    storage_mode = "durable" if durable else "degraded"
 
     status = "healthy"
     if not agent_available:
+        status = "degraded"
+    elif not durable:
+        # Storage degraded to the in-memory fallback -> cross-worker reads can
+        # 404. This is a real, user-visible degradation, so report it.
         status = "degraded"
     elif not scipy_available:
         status = "partial"
@@ -465,6 +951,7 @@ async def get_resource_health() -> ResourceHealthResponse:
         scipy_available=scipy_available,
         last_optimization=last_optimization,
         optimizations_24h=optimizations_24h,
+        storage_mode=storage_mode,
     )
 
 
@@ -488,13 +975,14 @@ async def get_optimization(optimization_id: str) -> OptimizationResponse:
     Raises:
         HTTPException: If optimization not found
     """
-    if optimization_id not in _optimizations_store:
+    optimization = await _optimizations_store.get(optimization_id)
+    if optimization is None:
         raise HTTPException(
             status_code=404,
             detail=f"Optimization {optimization_id} not found",
         )
 
-    return _optimizations_store[optimization_id]
+    return optimization
 
 
 # =============================================================================
@@ -510,24 +998,28 @@ async def _run_optimization_task(
     try:
         logger.info(f"Starting optimization task {optimization_id}")
 
-        # Update status
-        if optimization_id in _optimizations_store:
-            _optimizations_store[optimization_id].status = OptimizationStatus.FORMULATING
+        # Update status (read-modify-write so the change persists to the store).
+        pending = await _optimizations_store.get(optimization_id)
+        if pending is not None:
+            pending.status = OptimizationStatus.FORMULATING
+            await _optimizations_store.set(optimization_id, pending)
 
         # Execute optimization
         result = await _execute_optimization(request)
         result.optimization_id = optimization_id
 
         # Store result
-        _optimizations_store[optimization_id] = result
+        await _optimizations_store.set(optimization_id, result)
 
         logger.info(f"Optimization {optimization_id} completed successfully")
 
     except Exception as e:
         logger.error(f"Optimization {optimization_id} failed: {e}")
-        if optimization_id in _optimizations_store:
-            _optimizations_store[optimization_id].status = OptimizationStatus.FAILED
-            _optimizations_store[optimization_id].warnings.append(str(e))
+        existing = await _optimizations_store.get(optimization_id)
+        if existing is not None:
+            existing.status = OptimizationStatus.FAILED
+            existing.warnings.append(str(e))
+            await _optimizations_store.set(optimization_id, existing)
 
 
 async def _execute_optimization(
