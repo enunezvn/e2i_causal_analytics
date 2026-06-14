@@ -18,10 +18,12 @@
 
 import { get, post } from '@/lib/api-client';
 import {
+  CausalAnalysisHistoryResponseWireSchema,
   CausalHealthResponseWireSchema,
   EstimatorListResponseWireSchema,
 } from '@/lib/api-schemas';
 import type {
+  CausalAnalysisHistoryResponse,
   CausalLibrary,
   CrossValidationRequest,
   CrossValidationResponse,
@@ -329,6 +331,31 @@ export async function getCausalHealth(): Promise<CausalHealthResponse> {
   return get<CausalHealthResponse>(`${CAUSAL_BASE}/health`, undefined, {
     schema: CausalHealthResponseWireSchema,
   });
+}
+
+/**
+ * Get recent completed causal analyses for the Analysis History tab.
+ *
+ * Returns REAL `causal_analysis_completed` episodic events (newest first),
+ * or an honest empty list when none exist.
+ *
+ * @param limit - Maximum history items to return (1-100, default 20)
+ * @returns Recent completed causal analyses
+ *
+ * @example
+ * ```typescript
+ * const history = await getCausalAnalysisHistory(20);
+ * console.log(`${history.total} recent analyses`);
+ * ```
+ */
+export async function getCausalAnalysisHistory(
+  limit: number = 20
+): Promise<CausalAnalysisHistoryResponse> {
+  return get<CausalAnalysisHistoryResponse>(
+    `${CAUSAL_BASE}/history`,
+    { limit },
+    { schema: CausalAnalysisHistoryResponseWireSchema }
+  );
 }
 
 // =============================================================================

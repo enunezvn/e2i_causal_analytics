@@ -33,11 +33,13 @@ from typing import Any, Dict, List, Mapping, NamedTuple, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
-from src.api.dependencies.auth import require_analyst
+from src.api.dependencies.auth import require_analyst, require_viewer
 from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
 from src.api.schemas.causal import (
     AggregationMethod,
     AnalysisStatus,
+    CausalAnalysisHistoryItem,
+    CausalAnalysisHistoryResponse,
     CausalHealthResponse,
     CausalLibrary,
     CrossValidationRequest,
@@ -74,7 +76,29 @@ from src.causal_engine.pipeline.state import (
     PipelineState,
 )
 
+# #931: the health check's analysis-activity fields and the Analysis History tab
+# read REAL completed causal-analysis events from episodic_memories (the
+# canonical store written by the causal_impact agent's
+# ``causal_analysis_completed`` episodic hook). Reuse the episodic repository
+# rather than issuing raw SQL from the route. Imported at module level so the
+# read functions are patchable in tests as ``causal.count_memories_by_type`` /
+# ``causal.get_recent_memories``.
+from src.memory.episodic_memory import count_memories_by_type, get_recent_memories
+
 logger = logging.getLogger(__name__)
+
+# #931: the episodic event_type the causal_impact agent emits when an analysis
+# completes. Used by both the health-check activity fields and the history
+# endpoint so the KPI count and the History tab share one source of truth.
+CAUSAL_COMPLETED_EVENT_TYPE = "causal_analysis_completed"
+
+# #931 (review M1): /causal/health is a PUBLIC, unauthenticated endpoint the
+# dashboard polls every ~30s. The activity fields now read episodic_memories,
+# so memoize the result for a short window to keep repeated/unauthenticated
+# polls from amplifying into two DB reads each. The cache holds the REAL value
+# (or the honest fallback) — it never serves a fabricated number.
+_ACTIVITY_CACHE_TTL_SECONDS = 30.0
+_activity_cache: dict[str, Any] = {"expires_at": 0.0, "value": (0, None)}
 
 # Generic 5xx detail. Raw exception text MUST NOT be echoed to clients: it can
 # leak stack-internal paths, library/module names, table/column names, and other
@@ -2364,14 +2388,171 @@ async def causal_health_check() -> CausalHealthResponse:
         "healthy" if all_libs else "degraded" if any(libraries_available.values()) else "unhealthy"
     )
 
+    # #931: surface REAL recent causal-analysis activity from episodic_memories
+    # (was a hardcoded 0/None stub from the original phase-B scaffold). The
+    # count is the number of completed causal analyses in the last 24h; the
+    # most-recent event's timestamp is ``last_analysis``. A read failure
+    # degrades to an honest 0/None (never a fabricated value) so a transient
+    # episodic-store issue can't take the whole health check down.
+    analysis_count_24h, last_analysis = await _recent_causal_activity()
+
     return CausalHealthResponse(
         status=status,
         libraries_available=libraries_available,
         estimators_loaded=12,  # Count from list_estimators
         pipeline_orchestrator_ready=pipeline_ready,
         hierarchical_analyzer_ready=hierarchical_ready,
-        last_analysis=None,
-        analysis_count_24h=0,
+        last_analysis=last_analysis,
+        analysis_count_24h=analysis_count_24h,
         average_latency_ms=None,
         error=None if status == "healthy" else "Some libraries unavailable",
     )
+
+
+async def _recent_causal_activity() -> tuple[int, Optional[datetime]]:
+    """Return ``(count_last_24h, last_analysis_timestamp)`` for completed causal
+    analyses, cached for a short window (review M1).
+
+    The cache exists only to keep the public, frequently-polled health endpoint
+    from amplifying into repeated DB reads; the cached value is the REAL reading
+    (or the honest fallback), never a fabricated number.
+    """
+    now = time.monotonic()
+    if now < _activity_cache["expires_at"]:
+        return cast("tuple[int, Optional[datetime]]", _activity_cache["value"])
+
+    value = await _read_causal_activity()
+    _activity_cache["value"] = value
+    _activity_cache["expires_at"] = now + _ACTIVITY_CACHE_TTL_SECONDS
+    return value
+
+
+async def _read_causal_activity() -> tuple[int, Optional[datetime]]:
+    """Read ``(count_last_24h, last_analysis_timestamp)`` for completed causal
+    analyses from episodic_memories.
+
+    Both values are REAL (traced to ``causal_analysis_completed`` episodic rows)
+    or an honest fallback (``0`` / ``None``) — never fabricated. On any read
+    error we log and fall back so the health check stays available.
+    """
+    try:
+        # ``days_back=1`` is the 24h window; provenance filter defaults to
+        # excluding synthetic rows so the KPI reflects real activity.
+        count = await count_memories_by_type(
+            event_type=CAUSAL_COMPLETED_EVENT_TYPE,
+            days_back=1,
+        )
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("causal health: 24h analysis count read failed", exc_info=True)
+        count = 0
+
+    last_analysis: Optional[datetime] = None
+    try:
+        recent = await get_recent_memories(
+            limit=1,
+            event_types=[CAUSAL_COMPLETED_EVENT_TYPE],
+        )
+        if recent:
+            last_analysis = _parse_occurred_at(recent[0].get("occurred_at"))
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("causal health: last-analysis read failed", exc_info=True)
+        last_analysis = None
+
+    return count, last_analysis
+
+
+def _parse_occurred_at(value: Any) -> Optional[datetime]:
+    """Coerce an episodic ``occurred_at`` (ISO string or datetime) to datetime.
+
+    Returns ``None`` for missing/unparseable values rather than fabricating a
+    timestamp.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _as_float(value: Any) -> Optional[float]:
+    """Coerce a raw_content numeric field to float, or ``None`` if absent/invalid.
+
+    Returns ``None`` (honest unknown) rather than a fabricated default so a
+    missing ATE/confidence never renders as a plausible-looking number. Accepts
+    native numbers and numeric strings (a JSONB round-trip or a non-canonical
+    writer can encode a float as ``"0.185"``); a non-numeric value is ``None``.
+    """
+    if isinstance(value, bool):  # bool is an int subclass; reject it explicitly
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+@router.get(
+    "/history",
+    response_model=CausalAnalysisHistoryResponse,
+    summary="Recent completed causal analyses",
+    operation_id="get_causal_analysis_history",
+)
+async def get_causal_analysis_history(
+    limit: int = Query(20, ge=1, le=100, description="Maximum history items to return"),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> CausalAnalysisHistoryResponse:
+    """Return recent completed causal analyses for the Analysis History tab.
+
+    #931: feeds the previously-unwired History tab from REAL
+    ``causal_analysis_completed`` episodic_memories rows (newest first). ATE,
+    confidence and model are read from each row's ``raw_content`` when present;
+    when a field is missing it stays ``None`` (never fabricated). An empty store
+    yields an honest empty history rather than a synthesized series.
+    """
+    try:
+        rows = await get_recent_memories(
+            limit=limit,
+            event_types=[CAUSAL_COMPLETED_EVENT_TYPE],
+        )
+    except Exception as exc:
+        logger.error("Failed to read causal analysis history: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from exc
+
+    items: List[CausalAnalysisHistoryItem] = []
+    for row in rows:
+        memory_id = row.get("memory_id")
+        if not memory_id:
+            # memory_id is the PK; a row without one can't be keyed honestly on
+            # the client (empty keys collide). Skip rather than emit a blank id.
+            logger.warning("causal history: skipping row with missing memory_id")
+            continue
+        occurred_at = _parse_occurred_at(row.get("occurred_at"))
+        if occurred_at is None:
+            # A row without a parseable timestamp can't be placed on the history
+            # timeline honestly; skip it rather than invent a time.
+            continue
+        raw_content = row.get("raw_content")
+        if not isinstance(raw_content, dict):
+            raw_content = {}
+        items.append(
+            CausalAnalysisHistoryItem(
+                memory_id=str(memory_id),
+                event_type=str(row.get("event_type", CAUSAL_COMPLETED_EVENT_TYPE)),
+                description=row.get("description"),
+                occurred_at=occurred_at,
+                agent_name=row.get("agent_name"),
+                ate_estimate=_as_float(raw_content.get("ate_estimate")),
+                confidence=_as_float(raw_content.get("confidence")),
+                model_used=raw_content.get("model_used"),
+            )
+        )
+
+    return CausalAnalysisHistoryResponse(items=items, total=len(items))

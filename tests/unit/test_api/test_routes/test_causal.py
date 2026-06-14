@@ -926,3 +926,258 @@ class TestDataSourceDefaultIsNeutral:
         assert "method" not in neutral["parameters"]
         assert "refutation_config" not in neutral["parameters"]
         assert neutral["data_source"] == "default"
+
+
+# =============================================================================
+# HEALTH ANALYSIS-ACTIVITY TESTS (#931 wire-to-real-episodic-data)
+# =============================================================================
+
+
+class TestHealthAnalysisActivity:
+    """The health check's ``analysis_count_24h`` / ``last_analysis`` must reflect
+    REAL completed causal-analysis episodic_memories, not a hardcoded 0/None stub.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_activity_cache(self):
+        """The health activity read is memoized (review M1); clear the cache
+        before each test so per-test monkeypatched values are read fresh."""
+        import src.api.routes.causal as causal_route
+
+        causal_route._activity_cache["expires_at"] = 0.0
+        causal_route._activity_cache["value"] = (0, None)
+        yield
+        causal_route._activity_cache["expires_at"] = 0.0
+        causal_route._activity_cache["value"] = (0, None)
+
+    def test_health_surfaces_real_24h_count_and_last_analysis(self, client, monkeypatch):
+        """The handler must read the live episodic count + most-recent timestamp,
+        not return the hardcoded ``analysis_count_24h=0`` / ``last_analysis=None``.
+        """
+        import src.api.routes.causal as causal_route
+
+        recorded: dict = {}
+
+        async def fake_count(**kwargs):
+            recorded["count_kwargs"] = kwargs
+            return 15
+
+        async def fake_recent(**kwargs):
+            recorded["recent_kwargs"] = kwargs
+            return [
+                {
+                    "memory_id": "92c7da7b-7fa8-4b94-a161-30033bc8780f",
+                    "event_type": "causal_analysis_completed",
+                    "description": "Causal analysis: treatment -> outcome, ATE=0.185",
+                    "occurred_at": "2026-06-13T11:35:11.002171+00:00",
+                    "agent_name": "causal_impact",
+                }
+            ]
+
+        monkeypatch.setattr(causal_route, "count_memories_by_type", fake_count)
+        monkeypatch.setattr(causal_route, "get_recent_memories", fake_recent)
+
+        response = client.get("/causal/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        # REAL count, not the hardcoded 0.
+        assert data["analysis_count_24h"] == 15
+        # REAL most-recent timestamp, not None.
+        assert data["last_analysis"] is not None
+        assert "2026-06-13T11:35:11" in data["last_analysis"]
+        # The 24h count must be scoped to a 1-day window over the completed
+        # causal-analysis event type.
+        assert recorded["count_kwargs"].get("days_back") == 1
+        assert recorded["count_kwargs"].get("event_type") == "causal_analysis_completed"
+
+    def test_health_shows_honest_zero_when_no_recent_analyses(self, client, monkeypatch):
+        """When there are genuinely no analyses in the window the handler shows a
+        REAL 0 / None (honest empty), never a fabricated number — and must not
+        500 on the empty episodic read.
+        """
+        import src.api.routes.causal as causal_route
+
+        async def fake_count(**kwargs):
+            return 0
+
+        async def fake_recent(**kwargs):
+            return []
+
+        monkeypatch.setattr(causal_route, "count_memories_by_type", fake_count)
+        monkeypatch.setattr(causal_route, "get_recent_memories", fake_recent)
+
+        response = client.get("/causal/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["analysis_count_24h"] == 0
+        assert data["last_analysis"] is None
+
+    def test_health_degrades_gracefully_when_episodic_read_fails(self, client, monkeypatch):
+        """A failure reading episodic_memories must not crash the health check —
+        the activity fields fall back to 0/None (honest unknown), not a fabricated
+        value, and the rest of the health payload is still served.
+        """
+        import src.api.routes.causal as causal_route
+
+        async def boom(**kwargs):
+            raise RuntimeError("episodic store unreachable")
+
+        monkeypatch.setattr(causal_route, "count_memories_by_type", boom)
+        monkeypatch.setattr(causal_route, "get_recent_memories", boom)
+
+        response = client.get("/causal/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["analysis_count_24h"] == 0
+        assert data["last_analysis"] is None
+        # Core health payload still present.
+        assert "libraries_available" in data
+
+
+# =============================================================================
+# CAUSAL ANALYSIS-HISTORY ENDPOINT TESTS (#931 History tab wire-up)
+# =============================================================================
+
+
+class TestCausalHistory:
+    """The Analysis History tab is fed by ``GET /causal/history`` returning REAL
+    recent completed causal-analysis episodic rows (not an unwired empty state).
+    """
+
+    @pytest.fixture
+    def viewer_app(self):
+        """App with the causal router and a viewer auth override."""
+        from src.api.dependencies.auth import require_viewer
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[require_viewer] = lambda: {
+            "sub": "test-user",
+            "roles": ["viewer"],
+        }
+        return app
+
+    @pytest.fixture
+    def viewer_client(self, viewer_app):
+        return TestClient(viewer_app)
+
+    def test_history_returns_real_recent_causal_analyses(self, viewer_client, monkeypatch):
+        """The endpoint must return the REAL recent causal-analysis rows from
+        episodic_memories, mapped to history items — not an empty stub.
+        """
+        import src.api.routes.causal as causal_route
+
+        recorded: dict = {}
+
+        async def fake_recent(**kwargs):
+            recorded["kwargs"] = kwargs
+            return [
+                {
+                    "memory_id": "92c7da7b-7fa8-4b94-a161-30033bc8780f",
+                    "event_type": "causal_analysis_completed",
+                    "description": "Causal analysis: treatment -> outcome, ATE=0.185",
+                    "occurred_at": "2026-06-13T11:35:11.002171+00:00",
+                    "agent_name": "causal_impact",
+                    "raw_content": {
+                        "ate_estimate": 0.18485779575711986,
+                        "confidence": 0.78,
+                        "model_used": "linear_regression",
+                    },
+                },
+                {
+                    "memory_id": "def93ce4-9e10-4d4f-9dcd-a4b88f98827e",
+                    "event_type": "causal_analysis_completed",
+                    "description": "Causal analysis: treatment -> outcome, ATE=0.178",
+                    "occurred_at": "2026-06-13T11:33:58.654853+00:00",
+                    "agent_name": "causal_impact",
+                    "raw_content": {"ate_estimate": 0.178, "confidence": 0.65},
+                },
+            ]
+
+        monkeypatch.setattr(causal_route, "get_recent_memories", fake_recent)
+
+        response = viewer_client.get("/causal/history")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 2
+        assert len(data["items"]) == 2
+        first = data["items"][0]
+        assert first["memory_id"] == "92c7da7b-7fa8-4b94-a161-30033bc8780f"
+        assert first["event_type"] == "causal_analysis_completed"
+        assert "2026-06-13T11:35:11" in first["occurred_at"]
+        # ATE pulled from real raw_content, not fabricated.
+        assert abs(first["ate_estimate"] - 0.18485779575711986) < 1e-9
+        # The read must filter to completed causal-analysis events.
+        assert recorded["kwargs"].get("event_types") == ["causal_analysis_completed"]
+
+    def test_history_empty_is_honest_empty(self, viewer_client, monkeypatch):
+        """No rows -> a real empty history (total 0), not a fabricated series."""
+        import src.api.routes.causal as causal_route
+
+        async def fake_recent(**kwargs):
+            return []
+
+        monkeypatch.setattr(causal_route, "get_recent_memories", fake_recent)
+
+        response = viewer_client.get("/causal/history")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 0
+        assert data["items"] == []
+
+    def test_history_500_on_episodic_read_failure(self, viewer_client, monkeypatch):
+        """A failure reading the episodic store surfaces as a 500 (generic detail)
+        rather than an empty list that the UI would mistake for 'no analyses'."""
+        import src.api.routes.causal as causal_route
+
+        async def boom(**kwargs):
+            raise RuntimeError("episodic store unreachable")
+
+        monkeypatch.setattr(causal_route, "get_recent_memories", boom)
+
+        response = viewer_client.get("/causal/history")
+
+        assert response.status_code == 500
+        # Generic detail; no raw exception text leaked.
+        assert "unreachable" not in response.text
+
+    def test_history_skips_rows_missing_memory_id_or_timestamp(self, viewer_client, monkeypatch):
+        """Rows without a memory_id (PK) or a parseable timestamp are dropped — not
+        emitted with a blank key or a fabricated time."""
+        import src.api.routes.causal as causal_route
+
+        async def fake_recent(**kwargs):
+            return [
+                {
+                    "memory_id": "good-1",
+                    "event_type": "causal_analysis_completed",
+                    "occurred_at": "2026-06-13T11:35:11+00:00",
+                    "raw_content": {"ate_estimate": "0.185"},  # string float -> coerced
+                },
+                {
+                    # missing memory_id -> skipped
+                    "event_type": "causal_analysis_completed",
+                    "occurred_at": "2026-06-13T10:00:00+00:00",
+                },
+                {
+                    "memory_id": "bad-ts",
+                    "event_type": "causal_analysis_completed",
+                    "occurred_at": "not-a-timestamp",  # unparseable -> skipped
+                },
+            ]
+
+        monkeypatch.setattr(causal_route, "get_recent_memories", fake_recent)
+
+        response = viewer_client.get("/causal/history")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["items"][0]["memory_id"] == "good-1"
+        # string-encoded float in raw_content is coerced, not dropped.
+        assert abs(data["items"][0]["ate_estimate"] - 0.185) < 1e-9
