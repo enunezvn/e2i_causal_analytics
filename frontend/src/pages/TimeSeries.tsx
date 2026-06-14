@@ -155,7 +155,7 @@ function TimeSeries() {
   // Performance mode state
   const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
   const [metricName, setMetricName] = useState<string>(DEFAULT_METRIC);
-  const [timeRange, setTimeRange] = useState<string>('90d');
+  const [timeRange, setTimeRange] = useState<string>('1825d');
 
   // KPI mode state
   const [kpiId, setKpiId] = useState<string>(DEFAULT_KPI_ID);

@@ -211,4 +211,9 @@ async def _resolve_goldstd_experiment(client: Any, spec: Any, experiment_name: s
             "_get_or_create_experiment resolves that target. Extend the helper "
             "before deploying another cohort."
         )
-    return await _get_or_create_experiment(client, experiment_name)
+    return await _get_or_create_experiment(
+        client,
+        experiment_name,
+        created_by="gold_standard_eval",
+        description="Gold-standard eval pipeline for the initiation cohort.",
+    )

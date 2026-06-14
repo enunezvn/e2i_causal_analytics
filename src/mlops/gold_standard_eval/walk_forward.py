@@ -167,7 +167,7 @@ class WalkForwardRunner:
             # Only one class was present at fit; predict_proba has a single col.
             only_class = int(model.classes_[0])
             return np.full(len(eval_df), float(only_class))
-        pos_idx = list(model.classes_).index(1) if 1 in model.classes_ else 1
+        pos_idx = list(model.classes_).index(1) if 1 in model.classes_ else 0
         return proba[:, pos_idx]
 
     # ------------------------------------------------------------------ #

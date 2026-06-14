@@ -171,13 +171,23 @@ def serialize_and_write_manifest(
 
 
 async def _get_or_create_experiment(
-    client: Any, experiment_name: str = DEPLOY_EXPERIMENT_NAME
+    client: Any,
+    experiment_name: str = DEPLOY_EXPERIMENT_NAME,
+    *,
+    created_by: str = "prediction_synthesizer_deploy",
+    description: str = "Real deployable models backing live chat predictions (#840).",
 ) -> str:
     """Resolve (or create) the dedicated real deploy experiment id.
 
     Matches on ``(experiment_name, prediction_target)`` — ``experiment_name``
     alone is not unique in the schema, and resolving the wrong target's row
     would register models that ``get_models_for_target`` could never surface.
+
+    ``created_by`` and ``description`` are only written at INSERT time (the row
+    is looked up by ``(experiment_name, prediction_target)``); callers that
+    reuse this helper for a different experiment (e.g. the gold-standard eval
+    deployer) should pass their own values so the DB row carries the correct
+    provenance on first creation.
     """
     existing = await (
         client.table("ml_experiments")
@@ -199,8 +209,8 @@ async def _get_or_create_experiment(
         "prediction_target": PREDICTION_TARGET,
         "brand": BRAND,
         "is_synthetic": False,
-        "created_by": "prediction_synthesizer_deploy",
-        "description": "Real deployable models backing live chat predictions (#840).",
+        "created_by": created_by,
+        "description": description,
     }
     created = await client.table("ml_experiments").insert(row).execute()
     if not created.data:

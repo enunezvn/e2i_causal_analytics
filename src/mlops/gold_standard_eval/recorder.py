@@ -71,7 +71,16 @@ class MetricRecorder:
             split_version: Optional cohort/split label.  Used to scope the
                 delete filter so only rows from this split are cleared.  NOT
                 embedded in individual metric rows in P1 (see module docstring).
+                Must be ``None`` until row-level metadata storage is implemented
+                (P2); passing a non-None value would cause the delete filter to
+                match no rows while the insert still fires, breaking idempotency.
         """
+        if split_version is not None:
+            raise NotImplementedError(
+                "split_version isolation requires writing it to row metadata (P2); "
+                "pass None"
+            )
+
         # Step 1 — resolve model handle → uuid ONCE
         model_id = await _resolve_model_id(self.repo.client, model_version)
 

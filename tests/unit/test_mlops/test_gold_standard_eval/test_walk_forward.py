@@ -212,7 +212,7 @@ def test_walk_forward_default_window_mode_is_expanding():
     flip the production window mode; the experiment log records WHY.
     """
     runner = WalkForwardRunner(INITIATION, fit_fn=_CapturingFit(), predict_fn=_predict)
-    assert runner.window_mode in ("expanding", "rolling")
-    # rolling mode must carry a positive window length.
-    if runner.window_mode == "rolling":
-        assert runner.rolling_months and runner.rolling_months > 0
+    assert runner.window_mode == "expanding", (
+        "The experiment selected 'expanding' as the default window mode; "
+        "a different default would change production behaviour without a new experiment."
+    )

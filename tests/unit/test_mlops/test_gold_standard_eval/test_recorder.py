@@ -75,7 +75,7 @@ async def test_record_run_deletes_once_before_inserts(monkeypatch):
         "mv",
         [(m1, {"auc_roc": 0.8}, 100), (m2, {"auc_roc": 0.81}, 90)],
         source="backtest_wf",
-        split_version="e2i_pilot_v3",
+        split_version=None,
     )
 
     kinds = [c[0] for c in repo.calls]
@@ -83,8 +83,8 @@ async def test_record_run_deletes_once_before_inserts(monkeypatch):
         f"Expected [delete, record, record], got {kinds}"
     )
 
-    # delete called with resolved model_id, correct source, correct split_version
-    assert repo.calls[0] == ("delete", "mid", "backtest_wf", "e2i_pilot_v3")
+    # delete called with resolved model_id, correct source, split_version=None
+    assert repo.calls[0] == ("delete", "mid", "backtest_wf", None)
 
     # first insert: measured_at = m1, source correct
     assert repo.calls[1][1] == m1
@@ -132,3 +132,30 @@ async def test_record_run_passes_metrics_through(monkeypatch):
     assert measured_at == m1
     assert dict(items_tuple) == metrics
     assert src == "backtest_wf"
+
+
+@pytest.mark.asyncio
+async def test_record_run_split_version_not_none_raises(monkeypatch):
+    """Passing a non-None split_version must raise NotImplementedError (P2 guard).
+
+    split_version is filtered in delete_metrics but never written to row
+    metadata, so a non-None value breaks idempotency (delete matches nothing
+    while insert still fires). The fail-closed guard prevents accidental misuse
+    until the P2 row-metadata extension lands.
+    """
+    import src.mlops.gold_standard_eval.recorder as R
+
+    monkeypatch.setattr(R, "_resolve_model_id", _async_mid)
+
+    repo = FakeRepo()
+    rec = MetricRecorder(repo)
+
+    m1 = dt.datetime(2026, 5, 1, tzinfo=dt.timezone.utc)
+
+    with pytest.raises(NotImplementedError, match="split_version isolation"):
+        await rec.record_run(
+            "mv",
+            [(m1, {"auc_roc": 0.8}, 100)],
+            source="backtest_wf",
+            split_version="x",
+        )

@@ -184,7 +184,7 @@ async def run(db: Any = None) -> dict[str, Any]:
         only_class = int(champion.classes_[0])
         y_score = np.full(n_holdout, float(only_class))
     else:
-        pos_idx = list(champion.classes_).index(1) if 1 in champion.classes_ else 1
+        pos_idx = list(champion.classes_).index(1) if 1 in champion.classes_ else 0
         y_score = proba[:, pos_idx]
     holdout_metrics = score(y_holdout, y_score)
     holdout_auc = float(holdout_metrics["auc_roc"])
@@ -250,10 +250,16 @@ async def run(db: Any = None) -> dict[str, Any]:
     )
 
     # --- 6 (record). Holdout headline as ONE point (source='holdout'). ------- #
-    now_month = datetime.now(timezone.utc)
+    # The measured_at is the DATA BOUNDARY (latest holdout journey_start_date),
+    # not now() — so the point plots at the end of the real cohort timeline rather
+    # than at the current wall-clock date, which may be months/years later.
+    import pandas as _pd
+
+    latest = _pd.to_datetime(holdout_frame["journey_start_date"]).max()
+    holdout_ts = latest.to_pydatetime().replace(tzinfo=timezone.utc)
     await recorder.record_run(
         model_handle,
-        [(now_month, holdout_metrics, n_holdout)],
+        [(holdout_ts, holdout_metrics, n_holdout)],
         source=_HOLDOUT_SOURCE,
         split_version=None,
     )
