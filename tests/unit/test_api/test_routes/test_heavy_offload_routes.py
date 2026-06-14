@@ -449,6 +449,13 @@ def _explain_service_for_route():
             "model_version_id": "v1",
             "prediction_class": "adopter",
             "prediction_probability": 0.9,
+            # The route now feeds compute_shap/audit the canonical, strictly-
+            # validated numeric feature dict that get_prediction resolves from
+            # /model_info (not the raw request) and fail-closes (500) if it is
+            # absent. Provide it so these tests still exercise the compute_shap /
+            # slot behavior they actually guard, rather than tripping the
+            # internal-contract guard before reaching the heavy body.
+            "model_features": {"f1": 1.0},
         }
     )
     return svc
