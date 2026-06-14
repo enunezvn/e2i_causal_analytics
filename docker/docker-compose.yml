@@ -44,6 +44,13 @@ x-common-env: &common-env
   BENTOML_SERVICE_URL: http://bentoml:3000
   FEAST_URL: http://feast:6566
   OPIK_URL: http://opik-backend:8080
+  # Forward the canonical OPIK_ENABLED opt-out switch (default "true") from the
+  # host .env into api + workers. Opik is intentionally STOPPED on this droplet,
+  # so OPIK_ENABLED=false lets the health_score tracer + opik_connector skip
+  # client construction — no forever-retrying uploader threads against the dead
+  # opik-backend on every health check (#952 follow-up). Was previously unset on
+  # the containers (the .env value never reached them), so it defaulted to on.
+  OPIK_ENABLED: ${OPIK_ENABLED:-true}
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set}@redis:6379/2
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
