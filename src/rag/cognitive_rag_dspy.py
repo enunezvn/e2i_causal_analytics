@@ -331,8 +331,13 @@ class InvestigatorModule(dspy.Module):
         self.max_hops = 4
 
     async def forward(self, rewritten_query: str, intent: str, entities: str) -> Dict:
-        # Step 1: Plan investigation
-        plan = self.plan(query=rewritten_query, intent=intent, entities=entities)
+        # Step 1: Plan investigation. self.plan is a SYNC DSPy ChainOfThought
+        # (blocking LLM call); run it off the event loop so the gunicorn worker
+        # keeps sending heartbeats during the call (#953 RC2). Output is
+        # assigned exactly as before -- only WHERE the work runs changes.
+        plan = await asyncio.to_thread(
+            self.plan, query=rewritten_query, intent=intent, entities=entities
+        )
 
         evidence_board: List[Evidence] = []
         queried_memories = set()
@@ -346,8 +351,9 @@ class InvestigatorModule(dspy.Module):
             if not available:
                 break
 
-            # Decide next hop
-            decision = self.decide_hop(
+            # Decide next hop. self.decide_hop is a SYNC DSPy call -> offload.
+            decision = await asyncio.to_thread(
+                self.decide_hop,
                 investigation_goal=plan.investigation_goal,
                 current_evidence=str([e.__dict__ for e in evidence_board]),
                 hop_number=hop_num,
@@ -375,7 +381,9 @@ class InvestigatorModule(dspy.Module):
                 )
             else:
                 for item in raw_evidence:
-                    scored = self.score_evidence(
+                    # self.score_evidence is a SYNC DSPy Predict -> offload.
+                    scored = await asyncio.to_thread(
+                        self.score_evidence,
                         investigation_goal=plan.investigation_goal,
                         evidence_item=item["content"],
                         source_memory=hop_memory.value,
@@ -515,16 +523,20 @@ class AgentModule(dspy.Module):
         self.agent_registry = agent_registry
 
     async def forward(self, state: CognitiveState) -> CognitiveState:
-        # Step 1: Synthesize evidence
-        synthesis = self.synthesize(
+        # Step 1: Synthesize evidence. self.synthesize is a SYNC DSPy
+        # ChainOfThought (blocking LLM call); offload so the worker heartbeat
+        # keeps firing (#953 RC2). Output assigned exactly as before.
+        synthesis = await asyncio.to_thread(
+            self.synthesize,
             user_query=state.user_query,
             investigation_goal=state.investigation_goal,
             evidence_board=str([e.__dict__ for e in state.evidence_board]),
             intent=state.detected_intent,
         )
 
-        # Step 2: Determine agent routing
-        routing = self.route(
+        # Step 2: Determine agent routing. self.route is a SYNC DSPy Predict.
+        routing = await asyncio.to_thread(
+            self.route,
             intent=state.detected_intent,
             complexity="COMPLEX" if state.hop_count > 2 else "MODERATE",
             evidence_summary=synthesis.synthesis[:500],
@@ -542,7 +554,9 @@ class AgentModule(dspy.Module):
 
         # Step 4: Generate visualization if needed
         if state.detected_intent in ["CAUSAL_ANALYSIS", "GAP_ANALYSIS", "PREDICTION"]:
-            viz = self.visualize(
+            # self.visualize is a SYNC DSPy Predict -> offload.
+            viz = await asyncio.to_thread(
+                self.visualize,
                 synthesis=synthesis.synthesis,
                 data_types=["temporal", "categorical", "causal"],
                 user_preference="",
@@ -614,8 +628,11 @@ class ReflectorModule(dspy.Module):
     async def forward(
         self, state: CognitiveState, user_feedback: Optional[str] = None
     ) -> CognitiveState:
-        # Step 1: Evaluate memory worthiness
-        evaluation = self.evaluate(
+        # Step 1: Evaluate memory worthiness. The DSPy evaluator is a SYNC
+        # predictor (dspy.Predict); run it off the event loop so the gunicorn
+        # heartbeat keeps firing during the ~LLM-latency call (#953 RC2).
+        evaluation = await asyncio.to_thread(
+            self.evaluate,
             user_query=state.user_query,
             response=state.response,
             evidence_count=len(state.evidence_board),
@@ -624,25 +641,61 @@ class ReflectorModule(dspy.Module):
 
         state.worth_remembering = evaluation.worth_remembering
 
-        # Step 2: Store in appropriate memory
+        # Step 2: Store in appropriate memory.
+        #
+        # These long-term-memory writes are BEST-EFFORT: a write failure must
+        # never abort the request or surface in-band as the HTTP-200 ``error``
+        # field (which is exactly what happened pre-#953 when the call hit the
+        # nonexistent ``.store`` method on EpisodicMemoryBackend -> the
+        # AttributeError unwound into CausalRAG.cognitive_search's except
+        # clause). We call the REAL backend signatures and guard each write so
+        # it logs-and-continues instead of raising.
         if evaluation.worth_remembering:
             if evaluation.memory_type == "episodic":
-                await self.memory_writers["episodic"].store(
-                    {
-                        "query": state.user_query,
-                        "response": state.response,
-                        "importance": evaluation.importance_score,
-                    }
+                # EpisodicMemoryBackend.store_episode(content, episode_type,
+                # metadata). The synthesized response is what is worth
+                # remembering; the original query + importance live in metadata.
+                await self._best_effort(
+                    "episodic.store_episode",
+                    self.memory_writers["episodic"].store_episode(
+                        content=state.response,
+                        episode_type="conversation",
+                        metadata={
+                            "query": state.user_query,
+                            "importance_score": evaluation.importance_score,
+                            "agent_name": "cognitive_rag",
+                            "session_id": state.conversation_id,
+                        },
+                    ),
                 )
 
             if evaluation.key_facts:
                 state.extracted_facts = evaluation.key_facts
+                # SemanticMemoryBackend exposes store_relationship(source,
+                # target, rel_type, properties) -- there is no ``add_fact``. A
+                # "fact" only maps cleanly onto a graph edge when it carries a
+                # source AND target; ill-formed facts are skipped (best-effort)
+                # rather than crashing the write-back.
                 for fact in evaluation.key_facts:
-                    await self.memory_writers["semantic"].add_fact(fact)
+                    edge = self._fact_to_relationship(fact)
+                    if edge is None:
+                        continue
+                    source, target, rel_type, properties = edge
+                    await self._best_effort(
+                        "semantic.store_relationship",
+                        self.memory_writers["semantic"].store_relationship(
+                            source_entity=source,
+                            target_entity=target,
+                            relationship_type=rel_type,
+                            properties=properties,
+                        ),
+                    )
 
-        # Step 3: Learn procedures from successful interactions
+        # Step 3: Learn procedures from successful interactions. learn_procedure
+        # is a SYNC DSPy predictor -> offload (#953 RC2).
         if user_feedback and "positive" in user_feedback.lower():
-            procedure = self.learn_procedure(
+            procedure = await asyncio.to_thread(
+                self.learn_procedure,
                 query_type=state.detected_intent,
                 agents_used=state.routed_agents,
                 hop_sequence=[e.source.value for e in state.evidence_board],
@@ -657,13 +710,78 @@ class ReflectorModule(dspy.Module):
                 }
             )
 
-            await self.memory_writers["procedural"].store_procedure(state.learned_procedures[-1])
+            # ProceduralMemoryBackend.store_procedure(procedure_name,
+            # tool_sequence, trigger_pattern, intent, ...) -- positional fields,
+            # not a single dict. Map the learned pattern onto that contract.
+            learned = state.learned_procedures[-1]
+            triggers = learned.get("triggers")
+            if isinstance(triggers, list) and triggers:
+                trigger_pattern: Optional[str] = str(triggers[0])
+            elif isinstance(triggers, str):
+                trigger_pattern = triggers
+            else:
+                trigger_pattern = None
+            await self._best_effort(
+                "procedural.store_procedure",
+                self.memory_writers["procedural"].store_procedure(
+                    procedure_name=str(
+                        learned.get("pattern") or state.detected_intent or "procedure"
+                    ),
+                    tool_sequence=[{"agent": agent} for agent in state.routed_agents],
+                    trigger_pattern=trigger_pattern,
+                    intent=state.detected_intent or None,
+                ),
+            )
 
         # Step 4: Collect DSPy training signals for Feedback Learner
         state.dspy_signals = self._collect_training_signals(state, user_feedback)
         await self.signal_collector.collect(state.dspy_signals)
 
         return state
+
+    @staticmethod
+    async def _best_effort(label: str, awaitable: Any) -> None:
+        """Await a best-effort memory write, logging-and-swallowing any error.
+
+        Long-term-memory consolidation is non-critical to producing the user's
+        response. A failure here (a backend signature drift, a transient
+        Supabase/FalkorDB outage) must NEVER unwind into the response path and
+        be surfaced as error-as-data (#953). The underlying backend methods
+        already swallow their own exceptions and return None/False, but this
+        guard is the contract enforcement point for any future writer.
+        """
+        try:
+            await awaitable
+        except Exception as exc:  # noqa: BLE001 -- best-effort by design
+            logger.warning("Best-effort memory write %s failed: %s", label, exc)
+
+    @staticmethod
+    def _fact_to_relationship(
+        fact: Any,
+    ) -> Optional[tuple[str, str, str, Dict[str, Any]]]:
+        """Map a Reflector ``key_facts`` entry onto a semantic-graph edge.
+
+        ``MemoryWorthinessSignature.key_facts`` is a free-text list, so an entry
+        may be a dict (preferred) or a bare string. We can only persist a fact
+        as a relationship when it carries BOTH a source and a target; anything
+        else is skipped (returns None) rather than guessed-at, so we never
+        fabricate edges. ``store_relationship`` is the only write method the
+        semantic backend exposes.
+        """
+        if not isinstance(fact, dict):
+            return None
+        source = fact.get("source") or fact.get("source_entity")
+        target = fact.get("target") or fact.get("target_entity")
+        if not source or not target:
+            return None
+        rel_type = str(
+            fact.get("relationship")
+            or fact.get("relationship_type")
+            or fact.get("rel_type")
+            or "RELATED_TO"
+        )
+        properties = fact.get("properties") if isinstance(fact.get("properties"), dict) else {}
+        return str(source), str(target), rel_type, properties
 
     def _collect_training_signals(
         self, state: CognitiveState, user_feedback: Optional[str]
@@ -789,7 +907,14 @@ def create_dspy_cognitive_workflow(
 
     # Phase 1: Summarizer Node
     async def summarizer_node(state: CognitiveState) -> CognitiveState:
-        result = summarizer.forward(
+        # summarizer.forward is SYNC and fires three blocking DSPy predictors
+        # (extract / rewrite / classify). Run the whole call off the event loop
+        # so the gunicorn worker keeps sending heartbeats during the ~LLM
+        # latency -- otherwise the loop blocks, the worker misses its
+        # heartbeat, gunicorn kills it (WORKER TIMEOUT) and nginx returns 502
+        # (#953 RC2). The returned dict is consumed exactly as before.
+        result = await asyncio.to_thread(
+            summarizer.forward,
             original_query=state.user_query,
             conversation_context=state.compressed_history,
             domain_vocabulary=domain_vocabulary,
