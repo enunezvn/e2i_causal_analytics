@@ -17,10 +17,8 @@ columns unseen at fit → dropped).  Without this, ``build_from_frame`` recomput
 making any cross-split metric meaningless.  Tasks 4/8 (live loader, walk-forward)
 depend on this consistency.
 
-build_for_split() is an INTENTIONAL STUB — Task 4 implements the live
-patient_journeys DB loader (brand+split filtering, include_synthetic=True,
-optional journey_start_date < before_month cutoff, → build_from_frame /
-transform).  Do NOT add DB access here; the contract boundary is deliberate.
+load_frame() loads patient_journeys rows from the live DB (Task 4).
+build_for_split() is the convenience wrapper that loads + fits in one call.
 
 KEEP_COLUMNS rationale (Task 3 EXPERIMENT lock, 2026-06-14):
   Locked by MEASURED holdout AUC on real synthetic Remibrutinib initiation rows
@@ -45,7 +43,24 @@ LEAKAGE_DENYLIST rationale:
 
 from __future__ import annotations
 
+import logging
+from typing import Any, Sequence
+
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# Columns we always SELECT from patient_journeys — label + id/split (for
+# filtering / downstream use) + KEEP_COLUMNS raw inputs.
+_ALWAYS_SELECT = (
+    "patient_id",
+    "journey_start_date",
+    "data_split",
+)
+# PostgREST cap-agnostic page size (mirrors the blessed idiom in
+# src/repositories/business_metric.py get_by_region_paged).
+_PAGE_SIZE = 1000
+_MAX_PAGES = 10_000  # runaway guard (~10M rows before emitting a warning)
 
 # Columns knowable only AFTER the initiation decision → never features (anti-leakage).
 LEAKAGE_DENYLIST = (
@@ -209,28 +224,135 @@ class FeatureBuilder:
                 out[col] = s.fillna(median).astype(float)
         return pd.DataFrame(out, index=df.index)
 
+    async def load_frame(
+        self,
+        db: Any,
+        *,
+        splits: Sequence[str] | None = None,
+        before_month: str | None = None,
+    ) -> pd.DataFrame:
+        """Load patient_journeys rows for ``self.spec.brand`` with ``is_synthetic=True``.
+
+        Mirrors the cap-agnostic PK-ordered ``.range()`` pagination idiom from
+        ``src/repositories/business_metric.py`` (``get_by_region_paged``,
+        ``get_distinct_values``): advances by the rows ACTUALLY returned and stops
+        on an EMPTY page — correct under any PostgREST ``db-max-rows`` cap.
+
+        Parameters
+        ----------
+        db:
+            An async supabase-py client (``AsyncClient`` from
+            ``src.memory.services.factories.get_async_supabase_client``).
+        splits:
+            Optional list of ``data_split`` values to include (e.g. ``["train"]``
+            or ``["holdout"]``).  ``None`` → no split filter (all rows for the
+            brand).
+        before_month:
+            Optional ISO-8601 date string (e.g. ``"2026-05-01"``).  When set,
+            adds a ``journey_start_date < before_month`` predicate so walk-forward
+            windows can load the training prefix.
+
+        Returns
+        -------
+        pandas.DataFrame:
+            Concatenated rows with at least:
+            ``patient_id``, ``journey_start_date``, ``data_split``,
+            ``self.spec.label_column``, and the columns in ``KEEP_COLUMNS``.
+        """
+        # Build the SELECT column list: always-select + label + raw feature cols.
+        select_cols = set(_ALWAYS_SELECT)
+        select_cols.add(self.spec.label_column)
+        select_cols.update(self.keep_columns)
+        select_expr = ",".join(sorted(select_cols))
+
+        all_rows: list[dict[str, Any]] = []
+        exhausted = False
+        offset = 0
+
+        for _page in range(_MAX_PAGES):
+            query = (
+                db.table("patient_journeys")
+                .select(select_expr)
+                .eq("brand", self.spec.brand)
+                # Gold-standard eval REQUIRES synthetic rows (opt-in explicit):
+                # patient_journeys.is_synthetic=True is the provenance flag for
+                # the synthetic cohort used in gold-standard evaluation.
+                .eq("is_synthetic", True)
+            )
+
+            if splits is not None:
+                # PostgREST .in_() for list membership.
+                query = query.in_("data_split", list(splits))
+
+            if before_month is not None:
+                query = query.lt("journey_start_date", before_month)
+
+            # PK-ordered range window — cap-agnostic, deterministic under concurrency.
+            query = query.order("patient_id").range(offset, offset + _PAGE_SIZE - 1)
+
+            result = await query.execute()
+            page_rows: list[dict[str, Any]] = result.data or []
+
+            if not page_rows:
+                exhausted = True
+                break
+
+            all_rows.extend(page_rows)
+            offset += len(page_rows)
+
+        if not exhausted:
+            logger.warning(
+                "FeatureBuilder.load_frame hit the max_pages=%d runaway guard for "
+                "brand=%s splits=%s before_month=%s; rows beyond page %d are omitted.",
+                _MAX_PAGES,
+                self.spec.brand,
+                splits,
+                before_month,
+                _MAX_PAGES,
+            )
+
+        if not all_rows:
+            return pd.DataFrame()
+
+        return pd.DataFrame(all_rows)
+
     async def build_for_split(
         self,
-        db: object,
+        db: Any,
         split: str,
-        *,
-        before_month: str | None = None,
     ) -> tuple[pd.DataFrame, pd.Series]:
-        """Load patient_journeys rows for *split* and encode via build_from_frame.
+        """Load patient_journeys rows for *split* and FIT-encode via build_from_frame.
 
-        STUB — implemented in Task 4.
+        Convenience wrapper: calls :meth:`load_frame` with ``splits=[split]`` then
+        passes the result to :meth:`build_from_frame` (FIT path — learns medians
+        and ``feature_columns`` from this frame).
 
-        Task 4 will:
-          - Query patient_journeys filtered by self.spec.brand, data_split=split,
-            include_synthetic=True (gold-standard uses synthetic cohort).
-          - Apply optional journey_start_date < before_month cutoff (walk-forward
-            window experiment).
-          - Call self.build_from_frame(raw) and return the result.
+        Walk-forward callers (Task 8) should call :meth:`load_frame` directly once
+        and alternate :meth:`build_from_frame` / :meth:`transform` per month window
+        themselves — this method is the simple single-split entry point.
 
-        Do NOT implement DB access in this task.
+        Parameters
+        ----------
+        db:
+            Async Supabase client (see :meth:`load_frame`).
+        split:
+            ``data_split`` value, e.g. ``"train"`` or ``"holdout"``.
+
+        Returns
+        -------
+        (X, y):
+            Encoded feature matrix and label series (same contract as
+            :meth:`build_from_frame`).
+
+        Raises
+        ------
+        ValueError:
+            If no rows are found for the given split.
         """
-        raise NotImplementedError(
-            "build_for_split is implemented in Task 4 (live patient_journeys loader). "
-            "See Task 4 for: brand+split filtering, include_synthetic=True, "
-            "optional journey_start_date < before_month cutoff."
-        )
+        frame = await self.load_frame(db, splits=[split])
+        if frame.empty:
+            raise ValueError(
+                f"FeatureBuilder.build_for_split: no rows found for "
+                f"brand={self.spec.brand!r} split={split!r} is_synthetic=True"
+            )
+        return self.build_from_frame(frame)
