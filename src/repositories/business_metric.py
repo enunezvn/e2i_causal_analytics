@@ -186,6 +186,96 @@ class BusinessMetricRepository(BaseRepository):
             filters=filters, limit=limit, include_synthetic=include_synthetic
         )
 
+    async def get_by_region_paged(
+        self,
+        region: str,
+        brand: Optional[str] = None,
+        include_synthetic: bool = False,
+        columns: str = "*",
+        page_size: int = 5000,
+        max_pages: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        """Fetch EVERY row for ``(region[, brand])`` by paging to exhaustion.
+
+        ``get_by_region`` (via ``get_many``) reads a SINGLE ``.limit()`` window with no
+        ``ORDER BY``. A caller that AGGREGATES those rows — ``BenchmarkStore``'s per-
+        segment means — therefore computes the mean over a truncated, arbitrarily-ordered
+        sample once a ``(brand, region)`` slice exceeds the window, biasing the P75/P90
+        benchmark (#931, the per-VALUE sibling of the #929 segment-NAME drop). This pages
+        PK-ordered ``.range()`` windows until a short page proves the slice exhausted — the
+        same blessed idiom as the #929 ``get_distinct_values`` fix and
+        ``dispatcher._resolve_gap_inputs`` (#874 R2). PK (``id_column``) ordering makes
+        OFFSET paging deterministic (no skip/duplicate across pages, even under concurrent
+        writes). Paging is **cap-agnostic**: each iteration advances by the rows actually
+        returned and stops only on an EMPTY page, so it stays correct even if PostgREST
+        caps a response below ``page_size`` (``db-max-rows`` differs per environment — a
+        ``page_size``-stride + short-page terminator would silently drop the capped tail).
+        ``max_pages`` is a runaway guard that WARNs — a bounded result is never silently
+        truncated.
+
+        Operational errors PROPAGATE (no broad swallow): ``region``/``brand`` are real
+        columns, so there is no 42703-unsupported-column case here (unlike
+        ``get_distinct_values``); any failure surfaces rather than fabricating "no rows".
+
+        Args:
+            region: Segment value to filter on (``region`` enum).
+            brand: Optional brand filter.
+            include_synthetic: When True, do not exclude synthetic rows (opt-in).
+            columns: PostgREST select list (default ``"*"``); callers may narrow it to
+                the columns they aggregate to cut transfer (e.g. ``"metric_name,value"``).
+            page_size: Rows per ``.range()`` window (cap-agnostic; need not match
+                PostgREST ``db-max-rows``).
+            max_pages: Runaway guard on the number of windows paged; warns if hit.
+
+        Returns:
+            Raw row dicts for the whole slice (the caller reads them dict-style, mirroring
+            ``get_by_region`` whose ``model_class`` is None).
+        """
+        if page_size < 1:
+            raise ValueError(f"page_size must be >= 1, got {page_size}")
+
+        if not self.client:
+            return []
+
+        from src.repositories.provenance import apply_provenance_filter
+
+        rows: List[Dict[str, Any]] = []
+        exhausted = False
+        offset = 0
+        for _page in range(max_pages):
+            query = self.client.table(self.table_name).select(columns).eq("region", region)
+            if brand:
+                query = query.eq("brand", brand)
+            query = apply_provenance_filter(query, include_synthetic)
+            # PK-ordered .range() window — see the completeness note above.
+            query = query.order(self.id_column).range(offset, offset + page_size - 1)
+            result = await query.execute()
+
+            page_rows = result.data or []
+            # Cap-agnostic termination: advance by the rows ACTUALLY returned and stop
+            # only on an EMPTY page. PostgREST may cap a response below page_size
+            # (db-max-rows differs per environment — CI's fresh DB, a future prod config);
+            # advancing by page_size and stopping on a short page would then SKIP the
+            # capped tail and silently truncate. Advancing by len(page_rows) tiles the
+            # slice for ANY cap, and an empty page is the only proof of exhaustion.
+            if not page_rows:
+                exhausted = True
+                break
+            rows.extend(page_rows)
+            offset += len(page_rows)
+
+        if not exhausted:
+            logger.warning(
+                "business_metrics get_by_region_paged for region=%s brand=%s hit the "
+                "max_pages=%d page bound (page_size=%d) before exhausting the slice; rows "
+                "beyond it are omitted from the aggregate.",
+                region,
+                brand,
+                max_pages,
+                page_size,
+            )
+        return rows
+
     async def get_distinct_values(
         self,
         column: str,
