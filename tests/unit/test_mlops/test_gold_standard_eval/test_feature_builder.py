@@ -139,3 +139,47 @@ def test_empty_keep_columns_disables_allowlist():
     X, _ = fb.build_from_frame(raw)
     assert any(c.startswith("age_group") for c in X.columns)
     assert "outcome_probability" not in X.columns
+
+
+def test_load_frame_omits_brand_filter_when_brand_none():
+    import asyncio
+
+    from src.mlops.gold_standard_eval.cohort_spec import PERSISTENCE
+    from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
+
+    calls = {"eq": []}
+
+    class _Q:
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, col, val):
+            calls["eq"].append(col)
+            return self
+
+        def in_(self, *a, **k):
+            return self
+
+        def lt(self, *a, **k):
+            return self
+
+        def order(self, *a, **k):
+            return self
+
+        def range(self, *a, **k):
+            return self
+
+        async def execute(self):
+            class R:
+                data = []
+
+            return R()
+
+    class _DB:
+        def table(self, *a, **k):
+            return _Q()
+
+    fb = FeatureBuilder(PERSISTENCE)
+    asyncio.run(fb.load_frame(_DB()))
+    assert "brand" not in calls["eq"]  # all-brands: no brand filter
+    assert "is_synthetic" in calls["eq"]  # synthetic provenance still enforced
