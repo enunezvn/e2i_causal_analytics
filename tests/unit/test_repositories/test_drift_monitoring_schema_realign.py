@@ -18,11 +18,16 @@ the realigned mapping so inserts/selects address only real columns.
 """
 
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Tuple
+
+import pytest
 
 from src.repositories.drift_monitoring import (
+    _MV_KEY,
     DriftHistoryRecord,
     MonitoringAlertRecord,
     MonitoringRunRecord,
+    MonitoringRunRepository,
     PerformanceMetricRecord,
     RetrainingHistoryRecord,
     _derive_trigger_type,
@@ -486,3 +491,220 @@ def test_retrain_compat_properties_read_from_real_columns():
     assert rec.performance_after == 0.90
     assert rec.drift_score_before == 0.42
     assert rec.training_config["data_source"] == "optum"
+
+
+# ---------------------------------------------------------------------------
+# MonitoringRunRepository.get_recent_runs model filter
+# ---------------------------------------------------------------------------
+# RED-first regression for the live 500 on
+#   GET /monitoring/runs?model_id=<name>&days=30   and
+#   GET /monitoring/health/<name>
+# (error 42703: ``column ml_monitoring_runs.model_id does not exist``).
+#
+# Root cause: ``ml_monitoring_runs`` links models via the ``model_ids UUID[]``
+# array column (database/ml/017_model_monitoring_tables.sql line 291) — it has
+# NO scalar ``model_id`` column (unlike ml_drift_history / ml_performance_metrics
+# / ml_monitoring_alerts, which do). ``get_recent_runs`` reused the scalar
+# ``_apply_model_filter`` helper, which on a resolved-uuid handle emits
+# ``.eq("model_id", uuid)`` → PostgREST 42703 → the repo raises → the route's
+# ``_log_and_500`` returns HTTP 500. The unfiltered path never filters, so it
+# worked. The 2 live seed rows store the model both in ``model_ids`` (e.g.
+# ``{5fd7826b-...}``) and in ``config->>_model_version``.
+
+
+class _FakeQuery:
+    """Minimal async PostgREST query-builder double.
+
+    Records every filter operation issued so the test can assert WHICH column +
+    operator the repository targets (the bug is a phantom ``model_id`` column).
+    Chainable + awaitable-execute, mirroring the real client's surface used by
+    ``get_recent_runs`` (select/order/limit/eq/contains/gte/execute).
+    """
+
+    def __init__(self, rows: List[Dict[str, Any]]):
+        self._rows = rows
+        # list of (op, column, value)
+        self.ops: List[Tuple[str, str, Any]] = []
+
+    def select(self, *_a, **_k) -> "_FakeQuery":
+        return self
+
+    def order(self, *_a, **_k) -> "_FakeQuery":
+        return self
+
+    def limit(self, *_a, **_k) -> "_FakeQuery":
+        return self
+
+    def eq(self, column: str, value: Any) -> "_FakeQuery":
+        self.ops.append(("eq", column, value))
+        return self
+
+    def contains(self, column: str, value: Any) -> "_FakeQuery":
+        self.ops.append(("contains", column, value))
+        return self
+
+    def gte(self, column: str, value: Any) -> "_FakeQuery":
+        self.ops.append(("gte", column, value))
+        return self
+
+    async def execute(self) -> Any:
+        # Honor the recorded filters faithfully so the returned rows reflect what
+        # the column/operator combination would actually match.
+        result = list(self._rows)
+        for op, column, value in self.ops:
+            if column == "model_id":
+                # The phantom column: in the real DB this is the 42703. Modelling
+                # it as "matches nothing" still makes the assertions below catch
+                # the bug (no real row is ever returned via this filter).
+                result = []
+            elif op == "contains" and column == "model_ids":
+                result = [r for r in result if value[0] in (r.get("model_ids") or [])]
+            elif op == "eq" and _MV_KEY in column:
+                # jsonb handle fallback, e.g. "config->>_model_version"
+                result = [r for r in result if (r.get("config") or {}).get(_MV_KEY) == value]
+        return type("Res", (), {"data": result})()
+
+
+class _FakeTable:
+    def __init__(self, q: _FakeQuery):
+        self._q = q
+
+    def select(self, *a, **k) -> _FakeQuery:
+        return self._q.select(*a, **k)
+
+
+class _FakeClient:
+    """Resolves the model name -> uuid (registry) and serves the runs table."""
+
+    def __init__(self, q: _FakeQuery, *, registry: Dict[str, str]):
+        self._q = q
+        self._registry = registry  # model_name -> id
+
+    def table(self, name: str) -> Any:
+        if name == "ml_model_registry":
+            return _FakeRegistry(self._registry)
+        return _FakeTable(self._q)
+
+
+class _FakeRegistry:
+    """Mimics the ml_model_registry select(.eq(col, val)).limit(1).execute()
+    used by ``_resolve_model_id`` (tries model_version then model_name)."""
+
+    def __init__(self, registry: Dict[str, str]):
+        self._registry = registry
+        self._pending: Tuple[str, str] | None = None
+
+    def select(self, *_a, **_k) -> "_FakeRegistry":
+        return self
+
+    def eq(self, column: str, value: str) -> "_FakeRegistry":
+        self._pending = (column, value)
+        return self
+
+    def limit(self, *_a, **_k) -> "_FakeRegistry":
+        return self
+
+    async def execute(self) -> Any:
+        data: List[Dict[str, Any]] = []
+        if self._pending is not None:
+            column, value = self._pending
+            if column == "model_name" and value in self._registry:
+                data = [{"id": self._registry[value]}]
+        return type("Res", (), {"data": data})()
+
+
+# The live fixtures (verified against the prod DB on 2026-06-14):
+_FULL_NAME = "csu_treatment_initiation_lr_full_v1"
+_FULL_ID = "5fd7826b-28d7-491b-b9b1-8b5494dbe1ff"
+_BAL_NAME = "csu_treatment_initiation_lr_balanced_v1"
+_BAL_ID = "d765b451-12df-46df-955f-63359b506b52"
+
+_LIVE_RUNS = [
+    {
+        "id": "09ba6fc6-5170-439f-85a2-c3da8ff61db9",
+        "model_ids": [_FULL_ID],
+        "config": {"_model_version": _FULL_ID},
+        "run_type": "full",
+        "trigger_type": "scheduled",
+        "status": "completed",
+        "started_at": "2026-06-14T00:23:58.583875+00:00",
+        "completed_at": "2026-06-14T00:23:59.278485+00:00",
+        "total_checks": 0,
+        "drift_detected_count": 0,
+        "alerts_generated": 0,
+        "duration_seconds": 0.81,
+        "error_message": None,
+    },
+    {
+        "id": "1bf0b9b1-a9cc-4cd7-a950-3e61d321b15b",
+        "model_ids": [_BAL_ID],
+        "config": {"_model_version": _BAL_ID},
+        "run_type": "full",
+        "trigger_type": "scheduled",
+        "status": "completed",
+        "started_at": "2026-06-14T00:23:58.540911+00:00",
+        "completed_at": "2026-06-14T00:23:59.285629+00:00",
+        "total_checks": 0,
+        "drift_detected_count": 0,
+        "alerts_generated": 0,
+        "duration_seconds": 0.85,
+        "error_message": None,
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_recent_runs_filter_never_targets_phantom_model_id_column():
+    """RED-first: ``get_recent_runs(model_version=<name>)`` must NOT emit a filter
+    against ``ml_monitoring_runs.model_id`` (no such column → 42703 → HTTP 500).
+
+    The handle resolves to a uuid via the registry; the run table links via the
+    ``model_ids`` array, so the resolved uuid must be filtered with an
+    array-contains on ``model_ids`` — never ``.eq("model_id", uuid)``.
+    """
+    q = _FakeQuery([dict(r) for r in _LIVE_RUNS])
+    client = _FakeClient(q, registry={_FULL_NAME: _FULL_ID, _BAL_NAME: _BAL_ID})
+    repo = MonitoringRunRepository(client)
+
+    await repo.get_recent_runs(model_version=_FULL_NAME, limit=50)
+
+    phantom = [op for op in q.ops if op[1] == "model_id"]
+    assert not phantom, (
+        "get_recent_runs filtered ml_monitoring_runs on the phantom scalar "
+        f"'model_id' column (42703 in prod): {phantom!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_recent_runs_returns_real_row_for_resolved_uuid():
+    """The model-name-filtered query returns the REAL run row whose ``model_ids``
+    array contains the resolved uuid — the same row the unfiltered endpoint shows.
+    """
+    q = _FakeQuery([dict(r) for r in _LIVE_RUNS])
+    client = _FakeClient(q, registry={_FULL_NAME: _FULL_ID, _BAL_NAME: _BAL_ID})
+    repo = MonitoringRunRepository(client)
+
+    runs = await repo.get_recent_runs(model_version=_FULL_NAME, limit=50)
+
+    assert len(runs) == 1, f"expected exactly the full_v1 run, got {len(runs)}"
+    assert str(runs[0].id) == "09ba6fc6-5170-439f-85a2-c3da8ff61db9"
+    # array-contains is the operator that addresses the model_ids[] column
+    assert ("contains", "model_ids", [_FULL_ID]) in q.ops
+
+
+@pytest.mark.asyncio
+async def test_recent_runs_falls_back_to_jsonb_handle_when_unresolved():
+    """When the handle does NOT resolve to a registry uuid (unregistered model),
+    filter by the preserved ``config->>_model_version`` handle — never by a
+    phantom scalar column, and never silently returning everything."""
+    q = _FakeQuery([dict(r) for r in _LIVE_RUNS])
+    # Empty registry → no resolution; the run rows preserve a uuid handle, but an
+    # unresolved *name* handle is filtered by the jsonb fallback.
+    client = _FakeClient(q, registry={})
+    repo = MonitoringRunRepository(client)
+
+    await repo.get_recent_runs(model_version="totally_unregistered_model", limit=50)
+
+    assert not [op for op in q.ops if op[1] == "model_id"]
+    jsonb_ops = [op for op in q.ops if op[0] == "eq" and _MV_KEY in op[1]]
+    assert jsonb_ops, f"expected a config->>{_MV_KEY} fallback filter, got {q.ops!r}"
