@@ -62,11 +62,21 @@ def mock_shap_result():
 
 @pytest.fixture
 def mock_prediction():
-    """Mock prediction result."""
+    """Mock prediction result.
+
+    Includes the canonical ``model_features`` dict the endpoint requires —
+    get_prediction is contracted to return the strictly-validated, model-ordered
+    {name: float} features that feed SHAP + the audit record.
+    """
     return {
         "prediction_class": "high_propensity",
         "prediction_probability": 0.78,
         "model_version_id": "v2.3.1-prod",
+        "model_features": {
+            "days_since_last_hcp_visit": 45.0,
+            "total_hcp_interactions_90d": 12.0,
+            "therapy_adherence_score": 0.72,
+        },
     }
 
 
@@ -167,6 +177,64 @@ class TestExplainPrediction:
         assert response.status_code == 200
         # Should not call get_features when features are provided
         mock_shap_service.get_features.assert_not_called()
+
+    def test_endpoint_feeds_canonical_features_to_shap_and_audit(self, mock_shap_service):
+        """compute_shap + store_audit_record must receive the canonical
+        ``model_features`` from get_prediction (validated, model-ordered), NOT
+        the raw request features (which may carry extra/non-numeric fields)."""
+        with patch(
+            "src.api.routes.explain.get_shap_service",
+            new=AsyncMock(return_value=mock_shap_service),
+        ):
+            response = client.post(
+                "/api/explain/predict",
+                json={
+                    "patient_id": "PAT-2024-001234",
+                    "model_type": "propensity",
+                    "features": {
+                        "days_since_last_hcp_visit": 30,
+                        "therapy_adherence_score": 0.85,
+                        "extra_string_field": "north",  # must NOT reach SHAP/audit
+                    },
+                    "store_for_audit": True,
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        # compute_shap got the canonical dict from get_prediction, not the raw
+        # request features (no extra_string_field).
+        shap_kwargs = mock_shap_service.compute_shap.call_args.kwargs
+        assert "extra_string_field" not in shap_kwargs["features"]
+        assert shap_kwargs["features"] == {
+            "days_since_last_hcp_visit": 45.0,
+            "total_hcp_interactions_90d": 12.0,
+            "therapy_adherence_score": 0.72,
+        }
+        audit_kwargs = mock_shap_service.store_audit_record.call_args.kwargs
+        assert "extra_string_field" not in audit_kwargs["features"]
+
+    def test_endpoint_fails_closed_when_prediction_lacks_model_features(
+        self, mock_shap_service, mock_prediction
+    ):
+        """If get_prediction returns no validated model_features, the endpoint
+        must FAIL CLOSED (500) rather than run SHAP/audit over raw features."""
+        broken = dict(mock_prediction)
+        broken.pop("model_features")
+        mock_shap_service.get_prediction = AsyncMock(return_value=broken)
+        with patch(
+            "src.api.routes.explain.get_shap_service",
+            new=AsyncMock(return_value=mock_shap_service),
+        ):
+            response = client.post(
+                "/api/explain/predict",
+                json={
+                    "patient_id": "PAT-2024-001234",
+                    "model_type": "propensity",
+                    "features": {"days_since_last_hcp_visit": 30},
+                },
+            )
+        assert response.status_code == 500, response.text
+        mock_shap_service.compute_shap.assert_not_called()
 
     def test_explain_prediction_with_narrative(self, mock_shap_service):
         """Should generate narrative when format=narrative."""

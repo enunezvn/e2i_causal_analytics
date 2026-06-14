@@ -1014,8 +1014,21 @@ async def explain_prediction(
             # Use the canonical, strictly-validated model feature dict for SHAP
             # and audit — NOT the raw request dict, which may carry extra or
             # non-numeric fields that _prepare_numeric_features would fabricate
-            # (hash/zero-fill) into audit-grade output.
-            model_features = prediction.get("model_features", features)
+            # (hash/zero-fill) into audit-grade output. FAIL CLOSED on a broken
+            # internal contract rather than silently falling back to raw inputs.
+            model_features = prediction.get("model_features")
+            if not isinstance(model_features, dict) or not all(
+                isinstance(v, (int, float)) and not isinstance(v, bool)
+                for v in model_features.values()
+            ):
+                logger.error(
+                    "get_prediction did not return a validated numeric "
+                    "model_features dict; refusing SHAP/audit over raw features."
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal error: model features were not validated for SHAP",
+                )
 
             # 3. Compute SHAP values
             shap_result = await service.compute_shap(
