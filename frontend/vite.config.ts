@@ -45,74 +45,18 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), dropMswWorkerInProd()],
-    build: {
-      rollupOptions: {
-        output: {
-          /**
-           * Split the heavy shared vendors out of the single ~3MB `index`
-           * chunk. Routes are already React.lazy()-loaded (src/router/routes.tsx),
-           * but vendors imported by 2+ lazy routes (recharts in 17 pages,
-           * @copilotkit in the chat shell, etc.) get hoisted into one common
-           * `index` chunk. manualChunks forces each vendor family into its own
-           * cacheable chunk regardless of the route graph.
-           *
-           * recharts + d3 MUST stay in the SAME chunk: recharts re-exports
-           * cartesian components (Bar, etc.) through its barrel while those
-           * modules also depend back on it. Splitting them across chunks
-           * produces the circular-dependency-between-chunks warning Rollup
-           * emits and risks broken execution order, so they share `vendor-charts`.
-           */
-          manualChunks(id) {
-            if (!id.includes('node_modules')) return undefined
-
-            // React core: shared by every route, keep it isolated + tiny.
-            if (
-              /[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(
-                id,
-              )
-            ) {
-              return 'vendor-react'
-            }
-            // Charts: recharts + d3 + victory-vendor (recharts' d3 shim) together
-            // to avoid the cross-chunk circular dependency warned about above.
-            if (
-              /[\\/]node_modules[\\/](recharts|d3-[^\\/]+|d3|victory-vendor|internmap|delaunator|robust-predicates)[\\/]/.test(
-                id,
-              )
-            ) {
-              return 'vendor-charts'
-            }
-            // CopilotKit chat SDK (largest single dependency family on disk).
-            if (/[\\/]node_modules[\\/]@copilotkit[\\/]/.test(id)) {
-              return 'vendor-copilotkit'
-            }
-            // Supabase client + its gotrue/realtime/postgrest sub-packages.
-            if (/[\\/]node_modules[\\/]@supabase[\\/]/.test(id)) {
-              return 'vendor-supabase'
-            }
-            // TanStack Query.
-            if (/[\\/]node_modules[\\/]@tanstack[\\/]/.test(id)) {
-              return 'vendor-query'
-            }
-            // Animation library.
-            if (/[\\/]node_modules[\\/]framer-motion[\\/]/.test(id)) {
-              return 'vendor-motion'
-            }
-            // Radix UI primitives (many small packages -> one shared chunk).
-            if (/[\\/]node_modules[\\/]@radix-ui[\\/]/.test(id)) {
-              return 'vendor-radix'
-            }
-            // Form stack.
-            if (
-              /[\\/]node_modules[\\/](react-hook-form|@hookform|zod)[\\/]/.test(id)
-            ) {
-              return 'vendor-forms'
-            }
-            return undefined
-          },
-        },
-      },
-    },
+    // NOTE: a `build.rollupOptions.output.manualChunks` vendor split was added in
+    // #919 (97c96b27, 2026-06-13) to break up the ~3MB `index` chunk. Forcing
+    // React (`react`/`react-dom`/`react-router`/`scheduler`, all CJS) into a
+    // dedicated `vendor-react` chunk broke React's CJS->ESM interop in the
+    // PRODUCTION rollup output only: React's own export object was `undefined`
+    // when it assigned `React.Children`, so React core never initialized and the
+    // SPA rendered a blank page (dev server + vitest don't use manualChunks, so
+    // it was invisible there; it also caused the Playwright e2e wall-clock
+    // timeouts, #941). Reverted to the pre-#919 known-good build (Vite defaults +
+    // the existing React.lazy route chunks) which renders correctly. Re-introducing
+    // a safe vendor split that does NOT force React into its own chunk is tracked
+    // as a follow-up.
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),
