@@ -58,12 +58,24 @@ import { useKPIValue, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
 // CONSTANTS
 // =============================================================================
 
-// Model ID is a free-text field on this page (forecasting/performance for an
-// operator-supplied model). Start empty rather than pre-filling a fictional
-// handle; the example placeholder uses a real registered production model
-// (`ml_model_registry`) so users know the expected format.
-const DEFAULT_MODEL_ID = 'csu_initiation_goldstd_lr_v1';
+// Per-brand model default: cohort=persistence, brand=Remibrutinib.
+// Handle convention: `{cohort}_{brand_lower}_goldstd_lr_v1`
+const DEFAULT_COHORT = 'persistence';
+const DEFAULT_BRAND = 'Remibrutinib';
+const DEFAULT_MODEL_ID = `${DEFAULT_COHORT}_${DEFAULT_BRAND.toLowerCase()}_goldstd_lr_v1`;
 const EXAMPLE_MODEL_ID = 'csu_treatment_initiation_lr_balanced_v1';
+
+const COHORT_OPTIONS: { value: string; label: string }[] = [
+  { value: 'initiation', label: 'Initiation' },
+  { value: 'persistence', label: 'Persistence' },
+  { value: 'discontinuation', label: 'Discontinuation' },
+];
+
+const BRAND_OPTIONS: { value: string; label: string }[] = [
+  { value: 'Remibrutinib', label: 'Remibrutinib' },
+  { value: 'Fabhalta', label: 'Fabhalta' },
+  { value: 'Kisqali', label: 'Kisqali' },
+];
 const DEFAULT_METRIC = 'accuracy';
 const DEFAULT_KPI_ID = 'WS1-DQ-001';
 
@@ -152,10 +164,23 @@ function kpiHistoryToSeries(metadata: Record<string, unknown> | undefined): Char
 function TimeSeries() {
   const [mode, setMode] = useState<'performance' | 'kpi'>('performance');
 
-  // Performance mode state
+  // Performance mode state — cohort/brand dropdowns drive modelId; free-text overrides
+  const [cohort, setCohort] = useState<string>(DEFAULT_COHORT);
+  const [brand, setBrand] = useState<string>(DEFAULT_BRAND);
   const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
   const [metricName, setMetricName] = useState<string>(DEFAULT_METRIC);
   const [timeRange, setTimeRange] = useState<string>('1825d');
+
+  // Derive model handle from cohort/brand and sync into modelId whenever they change.
+  const handleCohortChange = (newCohort: string) => {
+    setCohort(newCohort);
+    setModelId(`${newCohort}_${brand.toLowerCase()}_goldstd_lr_v1`);
+  };
+
+  const handleBrandChange = (newBrand: string) => {
+    setBrand(newBrand);
+    setModelId(`${cohort}_${newBrand.toLowerCase()}_goldstd_lr_v1`);
+  };
 
   // KPI mode state
   const [kpiId, setKpiId] = useState<string>(DEFAULT_KPI_ID);
@@ -575,18 +600,58 @@ function TimeSeries() {
               Model Selection
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <label htmlFor="ts-model-id" className="text-sm font-medium mb-2 block">
-              Model ID
-            </label>
-            <input
-              id="ts-model-id"
-              type="text"
-              value={modelId}
-              onChange={(e) => setModelId(e.target.value)}
-              className="w-full p-2 border rounded-md text-sm"
-              placeholder={EXAMPLE_MODEL_ID}
-            />
+          <CardContent className="space-y-4">
+            {/* Cohort + Brand dropdowns — resolve to the per-brand model handle */}
+            <div className="flex flex-wrap gap-4">
+              <div className="flex flex-col gap-1">
+                <label htmlFor="ts-cohort" className="text-sm font-medium">
+                  Cohort
+                </label>
+                <select
+                  id="ts-cohort"
+                  value={cohort}
+                  onChange={(e) => handleCohortChange(e.target.value)}
+                  className="p-2 border rounded-md text-sm bg-background"
+                >
+                  {COHORT_OPTIONS.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="ts-brand" className="text-sm font-medium">
+                  Brand
+                </label>
+                <select
+                  id="ts-brand"
+                  value={brand}
+                  onChange={(e) => handleBrandChange(e.target.value)}
+                  className="p-2 border rounded-md text-sm bg-background"
+                >
+                  {BRAND_OPTIONS.map((b) => (
+                    <option key={b.value} value={b.value}>
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {/* Free-text model ID — advanced override; typing here wins directly */}
+            <div>
+              <label htmlFor="ts-model-id" className="text-sm font-medium mb-2 block">
+                Model ID (advanced override)
+              </label>
+              <input
+                id="ts-model-id"
+                type="text"
+                value={modelId}
+                onChange={(e) => setModelId(e.target.value)}
+                className="w-full p-2 border rounded-md text-sm"
+                placeholder={EXAMPLE_MODEL_ID}
+              />
+            </div>
           </CardContent>
         </Card>
       )}
