@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 _TABLE = "gap_analyses"
 
 
+def _escape_like(value: str) -> str:
+    """Escape PostgREST/SQL ``LIKE``/``ILIKE`` metacharacters in ``value``.
+
+    The brand filter uses a case-insensitive ``.ilike`` match (see
+    ``list_completed``). ``.ilike`` interprets its argument as a *pattern*, so a
+    caller-supplied brand containing ``%`` or ``_`` (or a literal backslash)
+    would otherwise broaden the match — e.g. ``brand="%"`` matches every brand.
+    Escaping these metacharacters with the default ``\\`` escape character makes
+    the pattern a literal, whole-string, case-insensitive match. Backslash is
+    escaped first so the subsequent ``%``/``_`` escapes are not double-escaped.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class GapsRepository:
     """Thin async repository over the ``gap_analyses`` table."""
 
@@ -60,7 +74,19 @@ class GapsRepository:
             .eq("status", AnalysisStatus.COMPLETED.value)
         )
         if brand:
-            query = query.eq("brand", brand)
+            # Case-insensitive brand match. The canonical brand casing across the
+            # system is CAPITALIZED ("Kisqali", "Fabhalta", "Remibrutinib") — it
+            # matches the Supabase ``brand_type`` ENUM and the synthetic ``Brand``
+            # enum. ``gap_analyses.brand`` is a plain TEXT column (no ENUM
+            # constraint), so historical rows were written with whatever casing
+            # the caller sent (the frontend previously sent lowercase). ``.ilike``
+            # keeps the grounded, capitalized analyses reachable regardless of the
+            # request's casing so the GapAnalysis page never silently empties on a
+            # casing mismatch again. The brand value is escaped first so its
+            # ``LIKE`` metacharacters (``%``/``_``) are treated literally and the
+            # filter is an exact, whole-string, case-insensitive match (a bare
+            # ``.ilike`` would let ``brand="%"`` match every brand).
+            query = query.ilike("brand", _escape_like(brand))
         result = await asyncio.to_thread(query.execute)
         rows = (result.data) or []
         return [GapAnalysisResponse.model_validate(r["payload"]) for r in rows]
