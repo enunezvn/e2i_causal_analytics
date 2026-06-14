@@ -107,13 +107,22 @@ class TestModelInferenceTool:
 
     @pytest.fixture
     def mock_bentoml_client(self):
-        """Create a mock BentoML client."""
+        """Create a mock BentoML client.
+
+        Exposes ``get_model_info`` with ``feature_columns`` so the tool can
+        vectorize the feature dict into the model's positional order (the live
+        flat contract). ``feature_columns`` echoes the keys requested by these
+        tests so the ordered vector is well-defined.
+        """
         client = AsyncMock()
+        client.get_model_info = AsyncMock(
+            return_value={"feature_columns": ["recency", "frequency", "engagement_score"]}
+        )
         client.predict = AsyncMock(
             return_value={
-                "prediction": 0.85,
-                "confidence": 0.92,
-                "model_version": "1.0.0",
+                "predictions": [0.85],
+                "probabilities": [0.92],
+                "model_id": "tier0_df99c7ba:abc",
                 "_metadata": {
                     "latency_ms": 45.0,
                     "timestamp": "2024-01-01T00:00:00Z",
@@ -124,24 +133,25 @@ class TestModelInferenceTool:
 
     @pytest.mark.asyncio
     async def test_invoke_with_features(self, tool, mock_bentoml_client):
-        """Test prediction with direct features."""
+        """Test prediction with direct features (vectorized to ordered row)."""
         tool._client = mock_bentoml_client
 
         result = await tool.invoke(
             {
                 "model_name": "churn_model",
-                "features": {"recency": 10, "frequency": 5},
+                "features": {"recency": 10, "frequency": 5, "engagement_score": 0.8},
             }
         )
 
         assert result.model_name == "churn_model"
         assert result.prediction == 0.85
-        assert result.confidence == 0.92
         assert result.latency_ms == 45.0
 
         mock_bentoml_client.predict.assert_called_once()
         call_args = mock_bentoml_client.predict.call_args
         assert call_args.kwargs["model_name"] == "churn_model"
+        # Feature dict vectorized into the model's positional order.
+        assert call_args.kwargs["input_data"]["features"] == [[10.0, 5.0, 0.8]]
 
     @pytest.mark.asyncio
     async def test_invoke_with_pydantic_input(self, tool, mock_bentoml_client):
@@ -150,7 +160,7 @@ class TestModelInferenceTool:
 
         input_model = ModelInferenceInput(
             model_name="conversion_model",
-            features={"engagement_score": 0.8},
+            features={"recency": 1.0, "frequency": 2.0, "engagement_score": 0.8},
             return_probabilities=True,
         )
 
@@ -176,12 +186,13 @@ class TestModelInferenceTool:
 
     @pytest.mark.asyncio
     async def test_invoke_handles_general_error(self, tool):
-        """Test handling of general errors."""
+        """Test handling of general errors (predict raises -> None + warning)."""
         mock_client = AsyncMock()
+        mock_client.get_model_info = AsyncMock(return_value={"feature_columns": ["recency"]})
         mock_client.predict = AsyncMock(side_effect=Exception("Connection refused"))
         tool._client = mock_client
 
-        result = await tool.invoke({"model_name": "test_model", "features": {}})
+        result = await tool.invoke({"model_name": "test_model", "features": {"recency": 1.0}})
 
         assert result.prediction is None
         assert len(result.warnings) > 0
@@ -189,7 +200,11 @@ class TestModelInferenceTool:
 
     @pytest.mark.asyncio
     async def test_invoke_with_feast_features(self, tool, mock_bentoml_client):
-        """Test prediction with Feast feature retrieval."""
+        """Test prediction with Feast feature retrieval (merged + vectorized)."""
+        # Order the merged features deterministically for this test.
+        mock_bentoml_client.get_model_info = AsyncMock(
+            return_value={"feature_columns": ["manual_feature", "feast_feature"]}
+        )
         tool._client = mock_bentoml_client
         tool.feast_enabled = True
 
@@ -209,15 +224,17 @@ class TestModelInferenceTool:
         )
 
         assert result.prediction == 0.85
-        # Features should be merged
+        # Merged features (manual + feast) vectorized into the model's order.
         call_args = mock_bentoml_client.predict.call_args
         features = call_args.kwargs["input_data"]["features"]
-        assert features["feast_feature"] == 100
-        assert features["manual_feature"] == 50
+        assert features == [[50.0, 100.0]]
 
     @pytest.mark.asyncio
     async def test_feast_error_graceful_fallback(self, tool, mock_bentoml_client):
         """Test graceful fallback when Feast fails."""
+        mock_bentoml_client.get_model_info = AsyncMock(
+            return_value={"feature_columns": ["manual_feature"]}
+        )
         tool._client = mock_bentoml_client
         tool.feast_enabled = True
 
@@ -259,10 +276,11 @@ class TestModelInferenceFunction:
     async def test_function_interface(self):
         """Test the function interface returns correct structure."""
         mock_client = AsyncMock()
+        mock_client.get_model_info = AsyncMock(return_value={"feature_columns": ["x", "y"]})
         mock_client.predict = AsyncMock(
             return_value={
-                "prediction": 0.75,
-                "confidence": 0.88,
+                "predictions": [0.75],
+                "probabilities": [0.88],
                 "_metadata": {
                     "latency_ms": 30.0,
                     "timestamp": "2024-01-01T00:00:00Z",
@@ -288,7 +306,6 @@ class TestModelInferenceFunction:
 
             assert isinstance(result, dict)
             assert result["prediction"] == 0.75
-            assert result["confidence"] == 0.88
 
         # Cleanup
         module._tool_instance = None

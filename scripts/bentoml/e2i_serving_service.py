@@ -346,6 +346,29 @@ class E2IModelService:
                 return None
         return None
 
+    def _apply_preprocessor(self, arr: Any) -> Any:
+        """Apply the bundled preprocessor to a feature matrix, if present.
+
+        Builds a named DataFrame (using ``feature_columns``) when the column
+        count matches so a ColumnTransformer/preprocessor receives the named
+        features it was fit on; otherwise transforms the raw array. Used by BOTH
+        single and batch prediction so batch inference is not run on raw,
+        un-preprocessed rows (which would error or silently mis-predict for
+        bundled models with a preprocessor).
+        """
+        if self._preprocessor is None:
+            return arr
+        try:
+            import pandas as pd
+
+            if self._feature_columns and len(self._feature_columns) == arr.shape[1]:
+                df = pd.DataFrame(arr, columns=self._feature_columns)
+                return self._preprocessor.transform(df)
+            return self._preprocessor.transform(arr)
+        except Exception as e:
+            logger.warning("Preprocessor transform failed, using raw input: %s", e)
+            return arr
+
     def _run_prediction(
         self,
         features: List[List[float]],
@@ -374,20 +397,7 @@ class E2IModelService:
             )
 
         start = time.time()
-        arr = np.array(features)
-
-        # Apply preprocessor if bundled with model
-        if self._preprocessor is not None:
-            try:
-                import pandas as pd
-
-                if self._feature_columns and len(self._feature_columns) == arr.shape[1]:
-                    df = pd.DataFrame(arr, columns=self._feature_columns)
-                    arr = self._preprocessor.transform(df)
-                else:
-                    arr = self._preprocessor.transform(arr)
-            except Exception as e:
-                logger.warning("Preprocessor transform failed, using raw input: %s", e)
+        arr = self._apply_preprocessor(np.array(features))
 
         predictions = self._model.predict(arr).tolist()
 
@@ -576,7 +586,9 @@ class E2IModelService:
 
         import numpy as np
 
-        arr = np.array(input_data.features)
+        # Apply the bundled preprocessor (same path as single predict) so batch
+        # inference is not run on raw, un-preprocessed rows.
+        arr = self._apply_preprocessor(np.array(input_data.features))
         predictions = self._model.predict(arr).tolist()
         elapsed_ms = (time.time() - start) * 1000
         self._prediction_count += len(input_data.features)

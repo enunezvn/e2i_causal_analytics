@@ -598,6 +598,11 @@ async def predict_batch(
             )
             success_count += 1
 
+    except HTTPException:
+        # Preserve the fail-closed contract: _resolve_feature_order raises 503
+        # (no feature order) and _vectorize_feature_dict raises 422 (missing /
+        # non-numeric required feature). These must NOT be rewritten to 500.
+        raise
     except Exception as e:
         logger.error(f"Batch prediction failed for model {model_name}: {e}")
         raise HTTPException(

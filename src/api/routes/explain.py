@@ -561,44 +561,87 @@ class RealTimeSHAPService:
         model_type: ModelType,
         model_version_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Get prediction from BentoML endpoint."""
+        """Get a REAL prediction from the BentoML endpoint.
+
+        The feature dict is vectorized into the served model's authoritative
+        POSITIONAL order (resolved from /model_info ``feature_columns``) and sent
+        in the flat contract ``{"input_data": {"features": [[...]],
+        "model_type": ...}}``. This prediction feeds the SHAP explanation AND the
+        audit record, so it FAILS CLOSED (503) when the model service is
+        unavailable, exposes no feature order, or a required feature is missing —
+        it does NOT fabricate a plausible prediction (which would silently
+        corrupt audit-grade SHAP output). The previous hardcoded ``0.78``
+        demonstration fallback is removed for this reason.
+        """
         await self._ensure_initialized()
 
-        if self.bentoml_client:
-            try:
-                # Prepare numeric features for model
-                numeric_features = self._prepare_numeric_features(features)
+        if not self.bentoml_client:
+            raise HTTPException(
+                status_code=503,
+                detail="Model serving unavailable: BentoML client not configured",
+            )
 
-                result = await self.bentoml_client.predict(
-                    model_name=model_type.value,
-                    input_data={"features": [list(numeric_features.values())]},
-                )
+        # Coerce values to numeric (string categoricals -> stable encoding) so a
+        # mixed feature dict can be ordered into a numeric row.
+        numeric_features = self._prepare_numeric_features(features)
 
-                # Extract prediction from BentoML response
-                prediction_proba = result.get("predictions", [[0.5]])[0]
-                if isinstance(prediction_proba, list):
-                    prediction_proba = (
-                        prediction_proba[1] if len(prediction_proba) > 1 else prediction_proba[0]
-                    )
+        # Resolve the model's authoritative feature order from /model_info.
+        try:
+            info = await self.bentoml_client.get_model_info(model_type.value)
+        except Exception as e:
+            logger.error("Could not fetch model_info for SHAP prediction: %s", e)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Model metadata unavailable for '{model_type.value}'",
+            )
+        feature_order = info.get("feature_columns")
+        if not feature_order or not isinstance(feature_order, list):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Model '{model_type.value}' exposes no feature order; cannot "
+                    "produce an audit-grade prediction for SHAP"
+                ),
+            )
 
-                return {
-                    "prediction_class": "high_propensity"
-                    if prediction_proba > 0.5
-                    else "low_propensity",
-                    "prediction_probability": float(prediction_proba),
-                    "model_version_id": result.get("_metadata", {}).get(
-                        "model_name", model_version_id or "v2.3.1-prod"
-                    ),
-                }
+        missing = [name for name in feature_order if name not in numeric_features]
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Missing required feature(s) for SHAP prediction: {missing}",
+            )
+        ordered_row = [float(numeric_features[name]) for name in feature_order]
 
-            except Exception as e:
-                logger.warning(f"BentoML prediction failed, using fallback: {e}")
+        try:
+            result = await self.bentoml_client.predict(
+                model_name=model_type.value,
+                input_data={"features": [ordered_row], "model_type": "classification"},
+            )
+        except Exception as e:
+            logger.error("BentoML prediction failed for SHAP (%s): %s", model_type.value, e)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Model prediction failed for '{model_type.value}'",
+            )
 
-        # Fallback: mock prediction
+        # Flat contract: predictions/probabilities are flat lists.
+        probs = result.get("probabilities")
+        if isinstance(probs, list) and probs:
+            prediction_proba = float(probs[0])
+        else:
+            preds = result.get("predictions") or [0.0]
+            first = preds[0]
+            prediction_proba = float(first[0] if isinstance(first, list) else first)
+
         return {
-            "prediction_class": "high_propensity",
-            "prediction_probability": 0.78,
-            "model_version_id": model_version_id or "v2.3.1-prod",
+            "prediction_class": "high_propensity" if prediction_proba > 0.5 else "low_propensity",
+            "prediction_probability": prediction_proba,
+            "model_version_id": (
+                result.get("model_id")
+                or result.get("_metadata", {}).get("model_name")
+                or model_version_id
+                or "unknown"
+            ),
         }
 
     def _prepare_numeric_features(self, features: Dict[str, Any]) -> Dict[str, float]:

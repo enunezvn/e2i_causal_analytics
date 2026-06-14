@@ -144,8 +144,8 @@ class TestPredictVectorization:
             app.dependency_overrides.clear()
 
     def test_no_feature_order_available_fails_closed(self, vectorizing_client):
-        """If the service exposes no feature order, the route fails closed
-        rather than guessing a positional order."""
+        """If the service exposes no feature order, the route fails closed with
+        a 503 (model metadata unavailable) rather than guessing an order."""
         vectorizing_client.get_model_info = AsyncMock(
             return_value={"model_id": "x", "model_loaded": True}  # no feature_columns
         )
@@ -155,7 +155,7 @@ class TestPredictVectorization:
                 "/api/models/predict/tier0_df99c7ba",
                 json={"features": {"brand": 1.0}},
             )
-            assert resp.status_code in (422, 503), resp.text
+            assert resp.status_code == 503, resp.text
             vectorizing_client.predict.assert_not_called()
         finally:
             app.dependency_overrides.clear()
@@ -195,5 +195,54 @@ class TestBatchVectorization:
                 [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
                 [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             ]
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_batch_missing_feature_fails_closed_422(self, vectorizing_client):
+        """A batch instance missing a required feature must 422 (fail closed),
+        NOT be rewritten to 500 by the route's broad exception handler."""
+        full = {
+            "brand": 1.0,
+            "geographic_region": 2.0,
+            "prior_treatments": 3.0,
+            "age_group": 4.0,
+            "hcp_visits": 5.0,
+            "data_quality_score": 6.0,
+        }
+        incomplete = {k: v for k, v in full.items() if k != "hcp_visits"}
+        app.dependency_overrides[get_bentoml_client] = lambda: vectorizing_client
+        try:
+            resp = client.post(
+                "/api/models/predict/tier0_df99c7ba/batch",
+                json={"instances": [{"features": full}, {"features": incomplete}]},
+            )
+            assert resp.status_code == 422, resp.text
+            assert "hcp_visits" in resp.text
+            vectorizing_client.predict_batch.assert_not_called()
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_batch_no_feature_order_fails_closed_503(self, vectorizing_client):
+        """No feature order from /model_info -> batch fails closed with 503,
+        not 500."""
+        vectorizing_client.get_model_info = AsyncMock(
+            return_value={"model_id": "x", "model_loaded": True}  # no feature_columns
+        )
+        full = {
+            "brand": 1.0,
+            "geographic_region": 2.0,
+            "prior_treatments": 3.0,
+            "age_group": 4.0,
+            "hcp_visits": 5.0,
+            "data_quality_score": 6.0,
+        }
+        app.dependency_overrides[get_bentoml_client] = lambda: vectorizing_client
+        try:
+            resp = client.post(
+                "/api/models/predict/tier0_df99c7ba/batch",
+                json={"instances": [{"features": full}]},
+            )
+            assert resp.status_code == 503, resp.text
+            vectorizing_client.predict_batch.assert_not_called()
         finally:
             app.dependency_overrides.clear()

@@ -665,3 +665,86 @@ class TestExplainFailLoud:
         assert body["prediction_probability"] == mock_prediction["prediction_probability"]
         # The audit record was scheduled and executed (TestClient runs bg tasks).
         service.store_audit_record.assert_awaited_once()
+
+
+# =============================================================================
+# get_prediction: real vectorization + fail-closed (no fabricated 0.78)
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestSHAPGetPredictionFailClosed:
+    """The SHAP prediction feeds audit-grade output, so it must vectorize via
+    the model's real feature order and FAIL CLOSED — never fabricate 0.78."""
+
+    def _service(self, bentoml_client):
+        from src.api.routes.explain import RealTimeSHAPService
+
+        svc = RealTimeSHAPService(bentoml_client=bentoml_client)
+        svc._ensure_initialized = AsyncMock()
+        return svc
+
+    @pytest.mark.asyncio
+    async def test_vectorizes_in_model_feature_order(self):
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(
+            return_value={"feature_columns": ["a", "b", "c"], "model_id": "m1"}
+        )
+        bento.predict = AsyncMock(
+            return_value={"predictions": [1.0], "probabilities": [0.9], "model_id": "m1"}
+        )
+        svc = self._service(bento)
+
+        out = await svc.get_prediction(
+            features={"c": 3.0, "a": 1.0, "b": 2.0},  # deliberately unordered
+            model_type=ModelType.PROPENSITY,
+        )
+        sent = bento.predict.call_args.kwargs["input_data"]
+        assert sent["features"] == [[1.0, 2.0, 3.0]]  # reordered to a,b,c
+        assert out["prediction_probability"] == 0.9
+        assert out["model_version_id"] == "m1"
+
+    @pytest.mark.asyncio
+    async def test_no_client_fails_closed(self):
+        from src.api.routes.explain import ModelType
+
+        svc = self._service(None)
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_no_feature_order_fails_closed(self):
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"model_id": "m1"})  # no columns
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 503
+        bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_feature_fails_closed(self):
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 422
+        bento.predict.assert_not_called()
