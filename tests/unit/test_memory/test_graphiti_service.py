@@ -852,23 +852,35 @@ class TestPathToChain:
     """Tests for _path_to_chain method."""
 
     def test_convert_path_with_nodes_and_edges(self, graphiti_service):
-        """Test converting a graph path to chain dictionary."""
+        """Test converting a graph path to chain dictionary.
+
+        Models the real FalkorDB ``Path`` contract: nodes carry an integer
+        ``id`` and an external ``id`` PROPERTY, edges are read via ``.edges()``
+        (not ``.relationships()``) and reference their endpoints by the internal
+        integer node id (``src_node``/``dest_node``).
+        """
         # Create mock path
         mock_node1 = MagicMock()
+        mock_node1.id = 1
         mock_node1.properties = {"id": "n1", "name": "Cause"}
         mock_node1.labels = ["Trigger"]
 
         mock_node2 = MagicMock()
+        mock_node2.id = 2
         mock_node2.properties = {"id": "n2", "name": "Effect"}
         mock_node2.labels = ["KPI"]
 
         mock_rel = MagicMock()
         mock_rel.relation = "CAUSES"
+        mock_rel.src_node = 1
+        mock_rel.dest_node = 2
         mock_rel.properties = {"confidence": 0.9, "effect_size": 0.3}
 
         mock_path = MagicMock()
         mock_path.nodes.return_value = [mock_node1, mock_node2]
-        mock_path.relationships.return_value = [mock_rel]
+        # FalkorDB's Path has no ``relationships`` attribute -- only ``edges()``.
+        del mock_path.relationships
+        mock_path.edges.return_value = [mock_rel]
 
         chain = graphiti_service._path_to_chain(mock_path)
 
@@ -877,19 +889,171 @@ class TestPathToChain:
         assert chain["length"] == 1
         assert chain["edges"][0]["type"] == "CAUSES"
         assert chain["edges"][0]["confidence"] == 0.9
+        assert chain["edges"][0]["source_id"] == "n1"
+        assert chain["edges"][0]["target_id"] == "n2"
+        assert chain["confidence"] == 0.9
 
     def test_convert_path_empty(self, graphiti_service):
         """Test converting empty path."""
         mock_path = MagicMock()
-        # Path without nodes/relationships methods
+        # Path without nodes/edges/relationships methods
         del mock_path.nodes
+        del mock_path.edges
         del mock_path.relationships
 
         chain = graphiti_service._path_to_chain(mock_path)
 
         assert chain["nodes"] == []
         assert chain["edges"] == []
+        assert chain["confidence"] is None
         assert chain["length"] == -1  # len([]) - 1
+
+
+class TestPathToChainRealFalkorPath:
+    """_path_to_chain must preserve edges from a REAL FalkorDB ``Path`` (#causal-chains-edgeless).
+
+    The live defect: ``/api/graph/causal-chains`` returned chains with nodes but
+    ``relationships=[]`` and ``total_confidence=null`` for every chain, so the
+    AIAgentInsights "Active Causal Chains" DAG and the CausalDiscovery graph
+    rendered disconnected nodes with no edges/weights.
+
+    Root cause (verified live against FalkorDB ``e2i_causal``): the FalkorDB
+    Python client's ``Path`` object exposes its edges via ``path.edges()`` and
+    has NO ``relationships`` attribute. ``_path_to_chain`` guarded on
+    ``hasattr(path, "relationships")`` (always False for a real Path), so the
+    edge-building block was skipped and ``edges`` stayed ``[]`` even though the
+    graph holds the CAUSES edges with confidence/effect_size on them.
+
+    These tests use REAL ``falkordb.Node/Edge/Path`` objects (NOT MagicMock,
+    which would answer ``.relationships()`` and hide the bug) so they fail
+    against the buggy code and pass only against the fix.
+    """
+
+    def _build_real_path(self):
+        """Build a faithful FalkorDB Path: two CAUSES hops with edge properties.
+
+        Mirrors what the live ``e2i_causal`` graph returns: edge ``src_node``/
+        ``dest_node`` are the INTERNAL integer node ids (not the ``id``
+        property), and confidence/effect_size live in edge ``properties``.
+        """
+        from falkordb.edge import Edge
+        from falkordb.node import Node
+        from falkordb.path import Path
+
+        n1 = Node(
+            node_id=61, labels=["Variable"], properties={"id": "var:treatment", "name": "treatment"}
+        )
+        n2 = Node(
+            node_id=62, labels=["Variable"], properties={"id": "var:mediator", "name": "mediator"}
+        )
+        n3 = Node(node_id=63, labels=["KPI"], properties={"id": "var:outcome", "name": "outcome"})
+
+        e1 = Edge(
+            61,
+            "CAUSES",
+            62,
+            edge_id=1,
+            properties={"confidence": 0.9, "effect_size": 0.41, "ate_estimate": 0.413},
+        )
+        e2 = Edge(
+            62,
+            "CAUSES",
+            63,
+            edge_id=2,
+            properties={"confidence": 0.78, "effect_size": 0.18},
+        )
+        return Path([n1, n2, n3], [e1, e2])
+
+    def test_real_path_preserves_edges_with_endpoints(self, graphiti_service):
+        """Edges from a real Path must be carried into the chain with endpoints.
+
+        Asserts the failure mode seen live: edges present in the graph must NOT
+        be dropped, and each edge must carry source_id/target_id (the Cytoscape
+        DAG keys edges on these) plus its confidence.
+        """
+        path = self._build_real_path()
+
+        chain = graphiti_service._path_to_chain(path)
+
+        assert len(chain["nodes"]) == 3
+        # The core regression: edges must be preserved, not [].
+        assert len(chain["edges"]) == 2, (
+            "FalkorDB Path edges were dropped -- _path_to_chain must read "
+            "path.edges() (a real Path has no .relationships attribute)"
+        )
+
+        first = chain["edges"][0]
+        assert first["type"] == "CAUSES"
+        assert first["confidence"] == 0.9
+        # Endpoints must resolve to the node `id` PROPERTY (not the internal
+        # integer node id) so the DAG can draw the line and the route can build
+        # GraphRelationship.source_id/target_id.
+        assert first["source_id"] == "var:treatment"
+        assert first["target_id"] == "var:mediator"
+
+        second = chain["edges"][1]
+        assert second["source_id"] == "var:mediator"
+        assert second["target_id"] == "var:outcome"
+        assert second["confidence"] == 0.78
+
+    def test_real_path_emits_total_confidence(self, graphiti_service):
+        """Chain must expose a combined confidence so total_confidence != null.
+
+        The route maps ``chain.get("confidence")`` -> ``GraphPath.total_confidence``;
+        without it the UI badge shows 'confidence unavailable' for every chain.
+        Conservative combined confidence == min of edge confidences (0.78).
+        """
+        path = self._build_real_path()
+
+        chain = graphiti_service._path_to_chain(path)
+
+        assert chain.get("confidence") is not None, (
+            "chain must expose a combined path confidence -- the route maps it "
+            "to total_confidence, which was null for every chain"
+        )
+        assert chain["confidence"] == pytest.approx(0.78)
+
+    def test_real_path_confidence_falls_back_to_weight(self, graphiti_service):
+        """Standalone CAUSES edges store ``weight`` (not ``confidence``).
+
+        The live graph has CAUSES edges whose only score field is ``weight``
+        (e.g. 0.8). Those must surface as the edge confidence rather than being
+        treated as unknown.
+        """
+        from falkordb.edge import Edge
+        from falkordb.node import Node
+        from falkordb.path import Path
+
+        a = Node(node_id=10, labels=["Variable"], properties={"id": "a", "name": "a"})
+        b = Node(node_id=11, labels=["Variable"], properties={"id": "b", "name": "b"})
+        e = Edge(10, "CAUSES", 11, edge_id=5, properties={"weight": 0.8})
+
+        chain = graphiti_service._path_to_chain(Path([a, b], [e]))
+
+        assert len(chain["edges"]) == 1
+        assert chain["edges"][0]["confidence"] == pytest.approx(0.8)
+        assert chain["confidence"] == pytest.approx(0.8)
+
+    def test_real_path_no_fabricated_confidence(self, graphiti_service):
+        """An edge with no score must not get a fabricated confidence default.
+
+        The frontend honestly renders 'confidence unavailable' when the API
+        reports none; _path_to_chain must report None, not a fake 1.0.
+        """
+        from falkordb.edge import Edge
+        from falkordb.node import Node
+        from falkordb.path import Path
+
+        a = Node(node_id=20, labels=["Variable"], properties={"id": "a", "name": "a"})
+        b = Node(node_id=21, labels=["Variable"], properties={"id": "b", "name": "b"})
+        e = Edge(20, "CAUSES", 21, edge_id=7, properties={})
+
+        chain = graphiti_service._path_to_chain(Path([a, b], [e]))
+
+        assert len(chain["edges"]) == 1
+        assert chain["edges"][0]["confidence"] is None
+        # No known edge confidence -> no combined confidence (honest null).
+        assert chain.get("confidence") is None
 
 
 # ============================================================================
