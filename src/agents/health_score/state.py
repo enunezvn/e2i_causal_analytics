@@ -22,7 +22,13 @@ class ComponentStatus(TypedDict):
 
 
 class ModelMetrics(TypedDict):
-    """Model performance metrics"""
+    """Model performance metrics.
+
+    ``predictions_last_24h``/``error_rate`` are Optional: ``None`` means the metric
+    is UNMEASURED (the ml_model_health_dashboard view sources status but not these
+    sub-fields), NOT a fabricated 0. Consumers must guard None before comparing or
+    formatting (the score composer does).
+    """
 
     model_id: str
     accuracy: Optional[float]
@@ -32,8 +38,8 @@ class ModelMetrics(TypedDict):
     auc_roc: Optional[float]
     prediction_latency_p50_ms: Optional[int]
     prediction_latency_p99_ms: Optional[int]
-    predictions_last_24h: int
-    error_rate: float
+    predictions_last_24h: Optional[int]
+    error_rate: Optional[float]
     status: Literal["healthy", "degraded", "unhealthy"]
 
 
@@ -49,13 +55,20 @@ class PipelineStatus(TypedDict):
 
 
 class AgentStatus(TypedDict):
-    """Agent availability status"""
+    """Agent availability status.
+
+    ``avg_latency_ms``/``success_rate`` are Optional: ``None`` means the agent is
+    registered (availability measured) but has NO recent runtime telemetry, so the
+    rate/latency are UNMEASURED — never fabricated to 1.0/0. The agent node treats
+    a None success_rate as "available => not penalized" (matching the /agents
+    endpoint which scores purely on availability), without inventing a measurement.
+    """
 
     agent_name: str
     tier: int
     available: bool
-    avg_latency_ms: int
-    success_rate: float
+    avg_latency_ms: Optional[int]
+    success_rate: Optional[float]
     last_invocation: str
 
 

@@ -295,6 +295,379 @@ async def test_execute_health_check_wires_real_health_client():
     assert isinstance(captured["kwargs"]["health_client"], SupabaseHealthClient)
 
 
+# -----------------------------------------------------------------------------
+# UNWIRED-BACKEND FIX: /health-score/full must compute model/pipeline/agent
+# health from the REAL tables (ml_model_health_dashboard / etl_pipeline_metrics /
+# agent_registry+audit_chain_entries) — not fail-closed to null. The route must
+# construct the agent with the three real store adapters (DRY-reusing _fetch_*),
+# so the full graph's model/pipeline/agent nodes actually run.
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_health_check_wires_real_stores_for_full_scope():
+    """REGRESSION: full scope must thread metrics_store/pipeline_store/
+    agent_registry into the agent so the model/pipeline/agent dimensions are
+    computed from the real tables — before this fix only health_client was wired,
+    leaving the three dimensions null."""
+    from src.api.routes.health_score import (
+        _AgentRegistryAdapter,
+        _ModelMetricsStoreAdapter,
+        _PipelineStoreAdapter,
+    )
+
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        agent = MagicMock()
+        agent.check_health = AsyncMock(
+            return_value=MagicMock(
+                overall_health_score=95.0,
+                health_grade="A",
+                component_health_score=1.0,
+                model_health_score=1.0,
+                pipeline_health_score=1.0,
+                agent_health_score=1.0,
+                critical_issues=[],
+                warnings=[],
+                health_summary="measured",
+                total_latency_ms=10,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                data_provenance="measured",
+            )
+        )
+        return agent
+
+    with patch("src.agents.health_score.HealthScoreAgent", side_effect=_capture):
+        await _execute_health_check(CheckScope.FULL)
+
+    kw = captured["kwargs"]
+    assert isinstance(kw.get("metrics_store"), _ModelMetricsStoreAdapter)
+    assert isinstance(kw.get("pipeline_store"), _PipelineStoreAdapter)
+    assert isinstance(kw.get("agent_registry"), _AgentRegistryAdapter)
+
+
+@pytest.mark.asyncio
+async def test_model_store_adapter_reuses_fetch_and_carries_status():
+    """The model store adapter must REUSE _fetch_model_health (single source of
+    truth) and carry its authoritative status — the agent's model node then
+    scores identically to the /models endpoint, never re-deriving a divergent
+    status."""
+    from src.api.routes.health_score import _ModelMetricsStoreAdapter
+
+    real_models = [
+        ModelHealth(model_id="m1", model_name="alpha", status=ModelStatus.HEALTHY, auc_roc=0.83),
+        ModelHealth(model_id="m2", model_name="beta", status=ModelStatus.DEGRADED),
+    ]
+    with patch(
+        "src.api.routes.health_score._fetch_model_health",
+        return_value=(real_models, DataProvenance.PARTIAL),
+    ):
+        adapter = _ModelMetricsStoreAdapter()
+        ids = await adapter.get_active_models()
+        assert ids == ["m1", "m2"]
+        m1 = await adapter.get_model_metrics("m1", "24h")
+        m2 = await adapter.get_model_metrics("m2", "24h")
+    # Status is the reader's authoritative value, NOT re-derived.
+    assert m1["status"] == "healthy"
+    assert m2["status"] == "degraded"
+    assert m1["auc_roc"] == 0.83
+
+
+@pytest.mark.asyncio
+async def test_model_store_adapter_fails_closed_when_backend_down():
+    """When _fetch_model_health signals the backend is unreachable (provenance
+    None), the adapter must raise HealthSourceUnavailable so the node fails closed
+    to an honest null — never a fabricated healthy score."""
+    from src.api.routes.health_score import HealthSourceUnavailable, _ModelMetricsStoreAdapter
+
+    with patch(
+        "src.api.routes.health_score._fetch_model_health",
+        return_value=([], None),
+    ):
+        adapter = _ModelMetricsStoreAdapter()
+        with pytest.raises(HealthSourceUnavailable):
+            await adapter.get_active_models()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_store_adapter_carries_status_and_fails_closed():
+    """Pipeline adapter reuses _fetch_pipeline_health, carries its status, and
+    fails closed when the backend is down."""
+    from src.api.routes.health_score import HealthSourceUnavailable, _PipelineStoreAdapter
+
+    real = [
+        PipelineHealth(
+            pipeline_name="rwd_ingest",
+            last_run="2026-06-12T00:00:00+00:00",
+            last_success="2026-06-12T00:00:00+00:00",
+            rows_processed=10000,
+            freshness_hours=12.0,
+            status=PipelineStatus.HEALTHY,
+        )
+    ]
+    with patch(
+        "src.api.routes.health_score._fetch_pipeline_health",
+        return_value=(real, DataProvenance.MEASURED),
+    ):
+        adapter = _PipelineStoreAdapter()
+        names = await adapter.get_all_pipelines()
+        st = await adapter.get_pipeline_status("rwd_ingest")
+    assert names == ["rwd_ingest"]
+    assert st["status"] == "healthy"
+    assert st["failed"] is False
+
+    with patch(
+        "src.api.routes.health_score._fetch_pipeline_health",
+        return_value=([], None),
+    ):
+        adapter = _PipelineStoreAdapter()
+        with pytest.raises(HealthSourceUnavailable):
+            await adapter.get_all_pipelines()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_store_adapter_carries_freshness_hours():
+    """codex r3 MEDIUM: the adapter must pass _fetch_pipeline_health's already-
+    computed freshness_hours through so the node does NOT recompute it and emit a
+    -1 sentinel (formatted as '(-1.0 hours)') when a row lacks a usable run_end."""
+    from src.api.routes.health_score import _PipelineStoreAdapter
+
+    real = [
+        PipelineHealth(
+            pipeline_name="rwd_ingest",
+            last_run="2026-06-12T00:00:00+00:00",
+            last_success="2026-06-12T00:00:00+00:00",
+            rows_processed=10000,
+            freshness_hours=43.99,
+            status=PipelineStatus.HEALTHY,
+        )
+    ]
+    with patch(
+        "src.api.routes.health_score._fetch_pipeline_health",
+        return_value=(real, DataProvenance.MEASURED),
+    ):
+        adapter = _PipelineStoreAdapter()
+        st = await adapter.get_pipeline_status("rwd_ingest")
+    assert st["freshness_hours"] == 43.99
+
+
+@pytest.mark.asyncio
+async def test_agent_registry_adapter_passes_null_telemetry_honestly():
+    """Agent registry adapter reuses _fetch_agent_health. A registered, available
+    agent with no recent telemetry must keep success_rate/avg_latency_ms NULL
+    (unmeasured) — never fabricated to 1.0/0. The agent NODE separately treats a
+    None success_rate as 'available => not penalized' so the score still matches
+    the /agents endpoint without inventing a measurement."""
+    from src.api.routes.health_score import HealthSourceUnavailable, _AgentRegistryAdapter
+
+    roster = [
+        AgentHealth(
+            agent_name="gap_analyzer",
+            tier=2,
+            available=True,
+            avg_latency_ms=None,
+            success_rate=None,
+            last_invocation=None,
+            invocations_24h=0,
+        )
+    ]
+    with patch(
+        "src.api.routes.health_score._fetch_agent_health",
+        return_value=(roster, DataProvenance.PARTIAL),
+    ):
+        adapter = _AgentRegistryAdapter()
+        agents = await adapter.get_all_agents()
+        metrics = await adapter.get_agent_metrics("gap_analyzer")
+    assert agents == [{"name": "gap_analyzer", "tier": 2}]
+    assert metrics["available"] is True
+    # null telemetry stays NULL — honest, not fabricated.
+    assert metrics["success_rate"] is None
+    assert metrics["avg_latency_ms"] is None
+
+    with patch(
+        "src.api.routes.health_score._fetch_agent_health",
+        return_value=([], None),
+    ):
+        adapter = _AgentRegistryAdapter()
+        with pytest.raises(HealthSourceUnavailable):
+            await adapter.get_all_agents()
+
+
+@pytest.mark.asyncio
+async def test_full_health_score_degraded_model_with_null_error_rate_no_crash():
+    """REGRESSION (codex r2 HIGH): a degraded/unhealthy model whose error_rate is
+    UNMEASURED (None, as the real ml_model_health_dashboard adapter passes through)
+    must NOT crash the score composer's diagnosis (None > 0.1 TypeError). The
+    composite must still complete with a real, non-null model score (NOT collapse
+    to a failed/unknown composite)."""
+    real_models = [
+        ModelHealth(model_id="m1", model_name="alpha", status=ModelStatus.DEGRADED),
+        ModelHealth(model_id="m2", model_name="beta", status=ModelStatus.UNHEALTHY),
+    ]
+    real_pipelines = [
+        PipelineHealth(
+            pipeline_name="rwd_ingest",
+            last_run="2026-06-12T00:00:00+00:00",
+            last_success="2026-06-12T00:00:00+00:00",
+            rows_processed=10000,
+            freshness_hours=12.0,
+            status=PipelineStatus.HEALTHY,
+        )
+    ]
+    real_agents = [
+        AgentHealth(
+            agent_name="orchestrator",
+            tier=1,
+            available=True,
+            avg_latency_ms=None,
+            success_rate=None,
+            last_invocation=None,
+            invocations_24h=0,
+        )
+    ]
+
+    class _StubHealthClient:
+        async def check(self, endpoint: str):
+            return {"ok": True}
+
+    with (
+        patch(
+            "src.api.routes.health_score._fetch_model_health",
+            return_value=(real_models, DataProvenance.PARTIAL),
+        ),
+        patch(
+            "src.api.routes.health_score._fetch_pipeline_health",
+            return_value=(real_pipelines, DataProvenance.MEASURED),
+        ),
+        patch(
+            "src.api.routes.health_score._fetch_agent_health",
+            return_value=(real_agents, DataProvenance.PARTIAL),
+        ),
+        patch("src.agents.health_score.SupabaseHealthClient", _StubHealthClient),
+    ):
+        result = await _execute_health_check(CheckScope.FULL)
+
+    # Diagnosis did not crash: model dimension is a REAL measurement (not None),
+    # and the composite did not collapse to a failed/unknown 'F'.
+    assert result.model_health_score is not None
+    # 1 degraded (0.5) + 1 unhealthy (0.0) over 2 -> 0.25
+    assert result.model_health_score == 0.25
+    assert result.data_provenance == "partial"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_full_provenance_downgrades_on_partial_source():
+    """_reconcile_full_provenance must downgrade a 'measured' composite to
+    'partial' when ANY wired adapter saw a PARTIAL source, and leave it 'measured'
+    only when every adapter source was MEASURED. Non-'measured' composites pass
+    through untouched."""
+    from src.api.routes.health_score import _reconcile_full_provenance
+
+    partial_adapter = MagicMock(provenance=DataProvenance.PARTIAL)
+    measured_adapter = MagicMock(provenance=DataProvenance.MEASURED)
+    unloaded_adapter = MagicMock(provenance=None)
+
+    # measured composite + a partial source -> partial
+    assert (
+        _reconcile_full_provenance("measured", measured_adapter, partial_adapter, measured_adapter)
+        == "partial"
+    )
+    # measured composite + all measured sources -> stays measured
+    assert (
+        _reconcile_full_provenance("measured", measured_adapter, measured_adapter, measured_adapter)
+        == "measured"
+    )
+    # unloaded adapters (QUICK scope never touched them) don't force a downgrade
+    assert _reconcile_full_provenance("measured", unloaded_adapter, unloaded_adapter) == "measured"
+    # non-measured composites pass through unchanged
+    assert _reconcile_full_provenance("partial", measured_adapter) == "partial"
+    assert _reconcile_full_provenance("unknown", partial_adapter) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_full_health_score_computes_real_dimensions_end_to_end():
+    """END-TO-END (faithful, no agent mock): with the real store adapters wired
+    over patched _fetch_* readers returning real-shaped rows, the full health
+    SCORE must compute non-null model/pipeline/agent dimensions — proving the
+    defect (three nulls) is fixed through the real agent graph, not a stubbed
+    agent. Provenance is reconciled to 'partial' (not 'measured') because the
+    model + agent readers are PARTIAL: the dimension SCORES are real, but some
+    sub-fields (model accuracy/latency, agent runtime telemetry) are unsourced —
+    so /full must not overclaim relative to /models and /agents."""
+    real_models = [
+        ModelHealth(model_id="m1", model_name="alpha", status=ModelStatus.HEALTHY),
+        ModelHealth(model_id="m2", model_name="beta", status=ModelStatus.HEALTHY),
+    ]
+    real_pipelines = [
+        PipelineHealth(
+            pipeline_name="rwd_ingest",
+            last_run="2026-06-12T00:00:00+00:00",
+            last_success="2026-06-12T00:00:00+00:00",
+            rows_processed=10000,
+            freshness_hours=12.0,
+            status=PipelineStatus.HEALTHY,
+        )
+    ]
+    real_agents = [
+        AgentHealth(
+            agent_name="orchestrator",
+            tier=1,
+            available=True,
+            avg_latency_ms=None,
+            success_rate=None,
+            last_invocation=None,
+            invocations_24h=0,
+        ),
+        AgentHealth(
+            agent_name="causal_impact",
+            tier=2,
+            available=True,
+            avg_latency_ms=None,
+            success_rate=None,
+            last_invocation=None,
+            invocations_24h=0,
+        ),
+    ]
+
+    # A component health_client implementing the node's HealthClient Protocol
+    # (check(endpoint) -> {"ok": ...}) so every component reports healthy and the
+    # component dimension is measured (so provenance can reach 'measured').
+    class _StubHealthClient:
+        async def check(self, endpoint: str):
+            return {"ok": True}
+
+    with (
+        patch(
+            "src.api.routes.health_score._fetch_model_health",
+            return_value=(real_models, DataProvenance.PARTIAL),
+        ),
+        patch(
+            "src.api.routes.health_score._fetch_pipeline_health",
+            return_value=(real_pipelines, DataProvenance.MEASURED),
+        ),
+        patch(
+            "src.api.routes.health_score._fetch_agent_health",
+            return_value=(real_agents, DataProvenance.PARTIAL),
+        ),
+        patch("src.agents.health_score.SupabaseHealthClient", _StubHealthClient),
+    ):
+        result = await _execute_health_check(CheckScope.FULL)
+
+    # The three previously-null dimensions are now REAL, computed from the tables.
+    assert result.model_health_score is not None
+    assert result.pipeline_health_score is not None
+    assert result.agent_health_score is not None
+    # All measured-and-healthy -> scores 1.0 (matches the per-dimension endpoints).
+    assert result.model_health_score == 1.0
+    assert result.pipeline_health_score == 1.0
+    assert result.agent_health_score == 1.0
+    # Honest provenance: scores are real, but model/agent sub-fields are unsourced
+    # (readers PARTIAL) -> reconciled to 'partial', never overclaiming 'measured'.
+    assert result.data_provenance == "partial"
+
+
 # =============================================================================
 # ENDPOINT TESTS - get_component_health
 # =============================================================================

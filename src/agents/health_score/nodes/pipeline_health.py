@@ -137,24 +137,40 @@ class PipelineHealthNode:
             assert self.pipeline_store is not None
             status = await self.pipeline_store.get_pipeline_status(pipeline_name)
 
-            # Calculate freshness
-            last_success = status.get("last_success")
-            if last_success:
-                try:
-                    last_success_dt = datetime.fromisoformat(last_success.replace("Z", "+00:00"))
-                    # Ensure timezone-aware comparison
-                    if last_success_dt.tzinfo is None:
-                        last_success_dt = last_success_dt.replace(tzinfo=timezone.utc)
-                    freshness_hours = (
-                        datetime.now(timezone.utc) - last_success_dt
-                    ).total_seconds() / 3600
-                except (ValueError, AttributeError):
-                    freshness_hours = float("inf")
+            # Honor a freshness the store already computed (e.g. the route adapter
+            # carrying _fetch_pipeline_health's authoritative freshness_hours) so
+            # the node does NOT recompute it from timestamps and emit a -1 sentinel
+            # when a row lacks a usable run_end. Recompute only when absent.
+            provided_freshness = status.get("freshness_hours")
+            if provided_freshness is not None:
+                freshness_hours = float(provided_freshness)
             else:
-                freshness_hours = float("inf")
+                last_success = status.get("last_success")
+                if last_success:
+                    try:
+                        last_success_dt = datetime.fromisoformat(
+                            last_success.replace("Z", "+00:00")
+                        )
+                        # Ensure timezone-aware comparison
+                        if last_success_dt.tzinfo is None:
+                            last_success_dt = last_success_dt.replace(tzinfo=timezone.utc)
+                        freshness_hours = (
+                            datetime.now(timezone.utc) - last_success_dt
+                        ).total_seconds() / 3600
+                    except (ValueError, AttributeError):
+                        freshness_hours = float("inf")
+                else:
+                    freshness_hours = float("inf")
 
-            # Determine status
-            if status.get("failed", False) or freshness_hours > self.max_freshness_hours:
+            # Honor an authoritative status the store already computed (e.g. the
+            # route adapter mapping etl_pipeline_metrics + freshness) so the node
+            # does NOT re-derive a divergent one from its own thresholds. Fall
+            # back to threshold inference only when the store provides no status.
+            precomputed = status.get("status")
+            valid = {"healthy", "stale", "failed"}
+            if precomputed in valid:
+                pipeline_status = precomputed
+            elif status.get("failed", False) or freshness_hours > self.max_freshness_hours:
                 pipeline_status = "failed"
             elif freshness_hours > self.stale_threshold_hours:
                 pipeline_status = "stale"
