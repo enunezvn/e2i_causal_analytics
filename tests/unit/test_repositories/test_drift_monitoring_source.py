@@ -7,17 +7,14 @@ to_db_row() and that record_metrics() accepts them without breaking callers
 that omit them.
 """
 
-import datetime as dt
 import asyncio
+import datetime as dt
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from src.repositories.drift_monitoring import (
     PerformanceMetricRecord,
     PerformanceMetricRepository,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pure to_db_row tests (no DB)

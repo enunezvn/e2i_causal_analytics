@@ -1,5 +1,6 @@
 import numpy as np
-from src.mlops.gold_standard_eval.scorer import score, METRIC_NAMES
+
+from src.mlops.gold_standard_eval.scorer import METRIC_NAMES, score
 
 
 def test_score_emits_page_aligned_names_and_real_values():

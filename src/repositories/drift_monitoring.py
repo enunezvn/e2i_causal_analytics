@@ -983,16 +983,16 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
 
         records: List[PerformanceMetricRecord] = []
         for metric_name, metric_value in metrics.items():
-            kwargs: Dict[str, Any] = dict(
-                model_id=model_id,
-                model_version=model_version,
-                metric_name=metric_name,
-                metric_value=metric_value,
-                sample_size=sample_size,
-                measurement_window_start=window_start,
-                measurement_window_end=window_end,
-                source=source,
-            )
+            kwargs: Dict[str, Any] = {
+                "model_id": model_id,
+                "model_version": model_version,
+                "metric_name": metric_name,
+                "metric_value": metric_value,
+                "sample_size": sample_size,
+                "measurement_window_start": window_start,
+                "measurement_window_end": window_end,
+                "source": source,
+            }
             if measured_at is not None:
                 kwargs["measured_at"] = measured_at
             records.append(PerformanceMetricRecord(**kwargs))

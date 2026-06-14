@@ -77,8 +77,7 @@ class MetricRecorder:
         """
         if split_version is not None:
             raise NotImplementedError(
-                "split_version isolation requires writing it to row metadata (P2); "
-                "pass None"
+                "split_version isolation requires writing it to row metadata (P2); pass None"
             )
 
         # Step 1 — resolve model handle → uuid ONCE

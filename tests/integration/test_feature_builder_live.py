@@ -76,9 +76,7 @@ async def test_load_frame_holdout_returns_expected_shape_and_columns() -> None:
     )
 
     # Label must be non-null.
-    assert df[INITIATION.label_column].isnull().sum() == 0, (
-        "label_column has null values"
-    )
+    assert df[INITIATION.label_column].isnull().sum() == 0, "label_column has null values"
 
 
 @pytest.mark.asyncio
@@ -95,9 +93,7 @@ async def test_load_frame_holdout_label_mean_in_range() -> None:
     mean = df[INITIATION.label_column].mean()
 
     # Generous tolerance: expect 0.25–0.50 given the synthetic DGP.
-    assert 0.25 <= mean <= 0.50, (
-        f"label mean {mean:.4f} outside expected range [0.25, 0.50]"
-    )
+    assert 0.25 <= mean <= 0.50, f"label mean {mean:.4f} outside expected range [0.25, 0.50]"
 
 
 @pytest.mark.asyncio
@@ -153,9 +149,7 @@ async def test_build_for_split_produces_no_nan_feature_matrix() -> None:
 
     # feature_columns must be populated and match X.
     assert fb.feature_columns, "feature_columns is empty after build_for_split"
-    assert list(X.columns) == fb.feature_columns, (
-        "X.columns does not match feature_columns"
-    )
+    assert list(X.columns) == fb.feature_columns, "X.columns does not match feature_columns"
 
     # Row counts must agree.
     assert len(X) == len(y), "X and y have different row counts"

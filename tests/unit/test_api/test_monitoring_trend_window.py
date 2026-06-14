@@ -7,9 +7,6 @@ with le=90) and PASSES after widening to le=1825.
 
 import inspect
 
-import pytest
-from fastapi import Query
-
 
 def _get_trend_route_days_param():
     """
@@ -69,6 +66,4 @@ class TestMonitoringTrendWindowRoute:
                 if hasattr(meta, "ge"):
                     ge_value = meta.ge
                     break
-        assert ge_value == 1, (
-            f"Expected days ge=1 but got ge={ge_value}."
-        )
+        assert ge_value == 1, f"Expected days ge=1 but got ge={ge_value}."

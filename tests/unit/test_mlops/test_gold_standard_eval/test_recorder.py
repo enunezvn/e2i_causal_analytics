@@ -48,6 +48,7 @@ class FakeRepo:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _async_mid(client, model_version):  # noqa: D401
     """Stand-in for _resolve_model_id that immediately returns a fixed uuid."""
     return "mid"

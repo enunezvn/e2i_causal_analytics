@@ -6,6 +6,7 @@ strings the frontend Time-Series page queries:
 
 Pure function: no I/O, no mocking, no side effects.
 """
+
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
