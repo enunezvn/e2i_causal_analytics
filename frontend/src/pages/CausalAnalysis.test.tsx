@@ -24,11 +24,16 @@ vi.mock('recharts', async () => {
 vi.mock('@/hooks/api', () => ({
   useCausalHealth: vi.fn(),
   useRunHierarchicalAnalysis: vi.fn(),
+  // Added in PR #947 (51ab0de6) to wire the History tab to real episodic
+  // data; the component calls this at render time, so the mock must export it
+  // or every render throws "No useCausalAnalysisHistory export … on the mock".
+  useCausalAnalysisHistory: vi.fn(),
 }));
 
 import {
   useCausalHealth,
   useRunHierarchicalAnalysis,
+  useCausalAnalysisHistory,
 } from '@/hooks/api';
 
 function createWrapper() {
@@ -48,6 +53,14 @@ describe('CausalAnalysis — F-002 empty state', () => {
       data: undefined,
       mutateAsync: vi.fn(),
       isPending: false,
+    });
+    // No history loaded — matches the F-002 empty-state theme. The component
+    // reads historyData?.total / historyData.items behind a truthiness guard,
+    // so `data: undefined` renders the History tab's empty branch (no crash).
+    (useCausalAnalysisHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
     });
   });
 
