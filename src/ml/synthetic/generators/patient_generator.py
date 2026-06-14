@@ -121,6 +121,11 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
         cate_map = rd_map_from_tau(segment, tau_i)
 
+        # Hoist region generation here so it can be passed into the DGP (region now
+        # carries real leakage-safe signal via _DISC_REGION_LOGIT) and reused in the
+        # record dict below — single SSOT, no second random draw.
+        geographic_region = self._random_choice([r.value for r in RegionEnum], n)
+
         # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
         # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses
         # Shard 03's _BRAND_CATE_SCALE so a Kisqali probe differs from a Remibrutinib one.
@@ -129,6 +134,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             treatment_arm=np.asarray(treatment_arm, dtype=int),
             disease_severity=confounders["disease_severity"],
             academic_hcp=confounders["academic_hcp"],
+            geographic_region=np.asarray(geographic_region),
             segment=np.asarray(segment),
             brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
         )
@@ -210,10 +216,7 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "engagement_score": engagement_scores,
                 "treatment_initiated": treatment_initiated,
                 "days_to_treatment": days_to_treatment,
-                "geographic_region": self._random_choice(
-                    [r.value for r in RegionEnum],
-                    n,
-                ),
+                "geographic_region": geographic_region,
                 "insurance_type": self._random_choice(
                     [i.value for i in InsuranceTypeEnum],
                     n,
