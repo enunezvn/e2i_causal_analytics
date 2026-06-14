@@ -964,6 +964,10 @@ export const ResourceHealthResponseWireSchema = z.object({
   scipy_available: z.boolean(),
   last_optimization: z.string().nullable().optional(),
   optimizations_24h: z.number().int().nonnegative(),
+  // 'durable' (Redis, shared across workers) or 'degraded' (process-local
+  // in-memory fallback — cross-worker reads can 404). Optional for backward
+  // compatibility with older backends that predate the field.
+  storage_mode: z.string().optional(),
 });
 
 // ----- MEMORY -----
