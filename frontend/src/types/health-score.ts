@@ -236,6 +236,8 @@ export interface ComponentHealthResponse {
   components: ComponentHealth[];
   /** Check duration */
   check_latency_ms: number;
+  /** Provenance: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**
@@ -256,6 +258,8 @@ export interface ModelHealthResponse {
   models: ModelHealth[];
   /** Check duration */
   check_latency_ms: number;
+  /** Provenance: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**
