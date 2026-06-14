@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.utils.audit_chain import AgentTier
 
 from .nodes.context_enricher import ContextEnricherNode
@@ -69,11 +73,15 @@ def build_prediction_synthesizer_graph(
     # Build graph
     workflow = StateGraph(PredictionSynthesizerState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("orchestrate", orchestrator.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("combine", combiner.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("enrich", enricher.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node, agent_name="prediction_synthesizer", agent_tier=AgentTier.ML_PREDICTIONS
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "orchestrate", orchestrator.execute)
+    timed(workflow, "combine", combiner.execute)
+    timed(workflow, "enrich", enricher.execute)
     workflow.add_node("error_handler", _error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Entry point - start with audit initialization
@@ -156,9 +164,16 @@ def build_simple_prediction_graph(
 
     workflow = StateGraph(PredictionSynthesizerState)
 
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("orchestrate", orchestrator.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("combine", combiner.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node,
+        agent_name="prediction_synthesizer_simple",
+        agent_tier=AgentTier.ML_PREDICTIONS,
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "orchestrate", orchestrator.execute)
+    timed(workflow, "combine", combiner.execute)
     workflow.add_node("error_handler", _error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Entry point - start with audit initialization

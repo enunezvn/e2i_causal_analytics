@@ -17,7 +17,7 @@ from enum import Enum
 from typing import List, Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
@@ -80,10 +80,27 @@ class AgentStatusResponse(BaseModel):
 
     agents: List[AgentInfo] = Field(..., description="List of all agents with their status")
     total_agents: int = Field(..., description="Total number of agents")
+    # ``total`` is an alias for ``total_agents`` so the frontend contract
+    # (api-schemas.ts AgentStatusResponseSchema declares ``total``) resolves to a
+    # real value instead of falling through to undefined. Kept alongside
+    # ``total_agents`` (existing consumers) rather than renamed, since both name
+    # the same count. Optional on input + auto-derived from ``total_agents`` so
+    # existing construction sites need not pass it; the wire always carries it.
+    total: Optional[int] = Field(
+        default=None, description="Total number of agents (alias of total_agents)"
+    )
     active_count: int = Field(..., description="Number of active agents")
     processing_count: int = Field(..., description="Number of processing agents")
     error_count: int = Field(..., description="Number of agents in error state")
     timestamp: datetime = Field(..., description="Response timestamp")
+
+    @model_validator(mode="after")
+    def _mirror_total(self) -> "AgentStatusResponse":
+        """``total`` is a pure alias of ``total_agents`` — mirror it
+        unconditionally so an inconsistent explicit ``total`` can never be
+        serialized (the two must always agree)."""
+        self.total = self.total_agents
+        return self
 
 
 # =============================================================================
@@ -297,6 +314,7 @@ async def get_agent_status() -> AgentStatusResponse:
     return AgentStatusResponse(
         agents=agents,
         total_agents=len(agents),
+        total=len(agents),
         active_count=active_count,
         processing_count=processing_count,
         error_count=error_count,

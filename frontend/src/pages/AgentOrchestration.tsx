@@ -305,8 +305,15 @@ export default function AgentOrchestration() {
       processingAgents: processing,
       errorAgents: error,
       queries24h: summary?.total_queries ?? null,
+      // avg_latency_ms is null == UNMEASURED (no audit entry carried a real
+      // duration_ms in the window). A value of exactly 0 is the same artifact:
+      // before the agent graphs were instrumented, a genesis-only window left
+      // the latency list empty and the backend reported 0.0, which rendered a
+      // misleading "0ms / instant". Treat both null AND 0-with-no-real-latency
+      // as unmeasured -> the card shows "—". A real per-node duration is always
+      // >= ~1ms, so a measured 0 is not a plausible real average.
       avgResponseTime:
-        typeof summary?.avg_latency_ms === 'number'
+        typeof summary?.avg_latency_ms === 'number' && summary.avg_latency_ms > 0
           ? Math.round(summary.avg_latency_ms)
           : null,
       successRate: typeof summary?.success_rate === 'number' ? summary.success_rate : null,

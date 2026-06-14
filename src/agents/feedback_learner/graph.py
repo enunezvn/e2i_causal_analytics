@@ -12,11 +12,15 @@ DSPy Integration:
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Any, Dict, Optional
 
 from langgraph.graph import END, StateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.utils.audit_chain import AgentTier
 
 from .dspy_integration import (
@@ -116,16 +120,20 @@ def build_feedback_learner_graph(
                     )
         return result
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("enrich", enrich_node)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("collect", collector.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("analyze", analyzer.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node, agent_name="feedback_learner", agent_tier=AgentTier.SELF_IMPROVEMENT
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "enrich", enrich_node)
+    timed(workflow, "collect", collector.execute)
+    timed(workflow, "analyze", analyzer.execute)
     if rubric_node:
-        workflow.add_node("rubric", rubric_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("extract", extractor.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("update", updater.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("finalize", finalize_node)  # type: ignore[type-var,arg-type,call-overload]
+        timed(workflow, "rubric", rubric_node.execute)
+    timed(workflow, "extract", extractor.execute)
+    timed(workflow, "update", updater.execute)
+    timed(workflow, "finalize", finalize_node)
     workflow.add_node("error_handler", _error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Flow - start with audit initialization

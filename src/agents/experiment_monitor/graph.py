@@ -8,10 +8,15 @@ Workflow: Sequential execution through all monitoring nodes
 Tier: 3 (Monitoring)
 """
 
+from functools import partial
+
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.agents.experiment_monitor.nodes import (
     AlertGeneratorNode,
     FidelityCheckerNode,
@@ -50,13 +55,17 @@ def create_experiment_monitor_graph() -> CompiledStateGraph:
     fidelity_checker_node = FidelityCheckerNode()
     alert_generator_node = AlertGeneratorNode()
 
-    # Add nodes to graph
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("health_checker", health_checker_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("srm_detector", srm_detector_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("interim_analyzer", interim_analyzer_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("fidelity_checker", fidelity_checker_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("alert_generator", alert_generator_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node, agent_name="experiment_monitor", agent_tier=AgentTier.MONITORING
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "health_checker", health_checker_node.execute)
+    timed(workflow, "srm_detector", srm_detector_node.execute)
+    timed(workflow, "interim_analyzer", interim_analyzer_node.execute)
+    timed(workflow, "fidelity_checker", fidelity_checker_node.execute)
+    timed(workflow, "alert_generator", alert_generator_node.execute)
 
     # Define sequential workflow starting with audit initialization
     workflow.set_entry_point("audit_init")
