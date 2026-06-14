@@ -79,7 +79,10 @@ _HOLDOUT_SPLIT = "holdout"
 # /app/data itself is read-only — see #857). Resolved relative to the repo root so
 # it is stable regardless of the process CWD.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_ARTIFACT_DIR = _REPO_ROOT / "data" / "ml_artifacts" / "csu_treatment_initiation"
+# Artifacts live under a per-target subdir (data/ml_artifacts/<spec.target>/) so the
+# persistence + discontinuation pickles are organised by cohort, not dumped into the
+# initiation dir. serialize_model mkdirs the subdir on the writable volume.
+_ARTIFACT_BASE = _REPO_ROOT / "data" / "ml_artifacts"
 
 _BACKTEST_SOURCE = "backtest_wf"
 _HOLDOUT_SOURCE = "holdout"
@@ -243,7 +246,7 @@ async def _run_one_cohort(
         )
 
     # Serialize a real artifact (loadability/honesty) and register at staging.
-    artifact_path = serialize_model(champion, _ARTIFACT_DIR, model_name)
+    artifact_path = serialize_model(champion, _ARTIFACT_BASE / spec.target, model_name)
     model_handle = await register_cohort_model(
         client,
         spec,
