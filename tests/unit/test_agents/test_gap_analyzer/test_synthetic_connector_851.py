@@ -277,7 +277,9 @@ async def test_get_distinct_values_returns_data_values():
     chain = MagicMock()
     chain.select.return_value = chain
     chain.eq.return_value = chain
-    chain.limit.return_value = chain
+    # #929: distinct extraction now pages via PK-ordered .range() windows.
+    chain.order.return_value = chain
+    chain.range.return_value = chain
     chain.execute = AsyncMock(return_value=result)
     client.table.return_value = chain
 
@@ -299,7 +301,9 @@ async def test_get_distinct_values_swallows_only_undefined_column():
     chain = MagicMock()
     chain.select.return_value = chain
     chain.eq.return_value = chain
-    chain.limit.return_value = chain
+    # #929: distinct extraction now pages via PK-ordered .range() windows.
+    chain.order.return_value = chain
+    chain.range.return_value = chain
     chain.execute = AsyncMock(side_effect=APIError({"code": "42703", "message": "no column"}))
     client.table.return_value = chain
     repo = BusinessMetricRepository(client)
