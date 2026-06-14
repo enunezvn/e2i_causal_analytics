@@ -16,6 +16,36 @@ from src.rag.models.retrieval_models import RetrievalContext, RetrievalResult
 logger = logging.getLogger(__name__)
 
 
+def _coerce_cognitive_state(raw: Any) -> Any:
+    """Coerce a compiled-LangGraph ainvoke result into a CognitiveState.
+
+    ``StateGraph(CognitiveState).compile().ainvoke(...)`` returns a **dict** of
+    channel values keyed by the CognitiveState field names, not the dataclass
+    instance. ``cognitive_search`` consumes the result via attribute access, so
+    a bare dict raised ``'dict' object has no attribute 'evidence_board'``
+    (#953). This rebuilds the dataclass from the dict (keys == field names),
+    ignoring any unknown channel keys so construction can never raise.
+
+    The ONLY problematic shape is a plain ``dict``. Anything else (a real
+    CognitiveState, or a test double that already supports attribute access) is
+    returned untouched -- we duck-type rather than ``isinstance`` against
+    CognitiveState because that symbol may be patched in tests, and the
+    consumer only needs attribute access to succeed.
+    """
+    if isinstance(raw, dict):
+        # Lazy import mirrors cognitive_search's own lazy import (circular-dep
+        # safe) and picks up a patched CognitiveState in tests.
+        from dataclasses import fields
+
+        from src.rag.cognitive_rag_dspy import CognitiveState
+
+        valid = {f.name for f in fields(CognitiveState)}
+        return CognitiveState(**{k: v for k, v in raw.items() if k in valid})
+    # Already attribute-accessible (real CognitiveState / test double / future
+    # LangGraph object): leave as-is. We do not fabricate a state.
+    return raw
+
+
 class CausalRAG:
     """
     Graph-enhanced retrieval for causal insights.
@@ -230,7 +260,21 @@ class CausalRAG:
             # because the workflow is compiled with a checkpointer (see
             # create_dspy_cognitive_workflow); omitting it raises a ValueError.
             run_config = {"configurable": {"thread_id": resolved_conversation_id}}
-            result_state = await workflow.ainvoke(initial_state, config=run_config)  # type: ignore[attr-defined]
+            raw_result = await workflow.ainvoke(initial_state, config=run_config)  # type: ignore[attr-defined]
+
+            # A compiled LangGraph returns a *dict* of channel values, not the
+            # CognitiveState dataclass it was seeded with. The consumer below
+            # uses attribute access (result_state.evidence_board, .response,
+            # ... 10 fields), so a raw dict raised
+            # "'dict' object has no attribute 'evidence_board'", which the
+            # except clause then surfaced in-band as error-as-data. Coerce the
+            # channel-value dict back into a CognitiveState (its keys are
+            # exactly the CognitiveState field names) so every downstream
+            # attribute access is valid and correctly typed. Tolerate an
+            # already-CognitiveState return (future LangGraph behavior) and
+            # filter to known fields so an extra channel key can never break
+            # construction.
+            result_state = _coerce_cognitive_state(raw_result)
 
             elapsed_ms = (time.time() - start_time) * 1000
 

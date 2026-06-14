@@ -193,11 +193,16 @@ class TestReflectorStoreEpisode:
         call = episodic.calls[0]
         # content is the synthesized response (what we want to remember)
         assert call["content"] == state.response
-        assert call["episode_type"] == "conversation"
+        # event_type maps to the memory_event_type enum; "agent_action" is the
+        # faithful, valid value ("conversation" is NOT in the enum -> #953b).
+        assert call["episode_type"] == "agent_action"
         meta = call["metadata"]
         assert meta["query"] == state.user_query
         assert meta["importance_score"] == pytest.approx(0.91)
-        assert meta.get("agent_name") == "cognitive_rag"
+        # agent_name is deliberately omitted: cognitive_rag is not a valid
+        # e2i_agent_name enum value (#953b). Must be absent, never the invalid
+        # literal.
+        assert meta.get("agent_name") is None
         # No in-band error / AttributeError leaked through
         assert result.worth_remembering is True
 

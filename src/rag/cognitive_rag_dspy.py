@@ -653,17 +653,31 @@ class ReflectorModule(dspy.Module):
         if evaluation.worth_remembering:
             if evaluation.memory_type == "episodic":
                 # EpisodicMemoryBackend.store_episode(content, episode_type,
-                # metadata). The synthesized response is what is worth
-                # remembering; the original query + importance live in metadata.
+                # metadata) -> episodic_memories(event_type, agent_name, ...).
+                # The synthesized response is what is worth remembering; the
+                # original query + importance live in metadata.
+                #
+                # BOTH the event_type and agent_name we write must be valid
+                # against constrained DB enums or the insert dies with postgrest
+                # 22P02 and the episode is lost:
+                #   - event_type maps to ``memory_event_type`` (NOT NULL). Its
+                #     vocabulary does NOT include "conversation"; "agent_action"
+                #     is the faithful label for the cognitive-RAG cycle (an agent
+                #     produced this synthesized response). Verified against the
+                #     live DB enum.
+                #   - agent_name maps to ``e2i_agent_name`` (nullable), whose
+                #     vocabulary is the 23 registered E2I agents. The cognitive
+                #     RAG cycle is NOT one of them, so we OMIT agent_name (the
+                #     writer drops None keys -> column left NULL) rather than
+                #     invent a fake-but-valid agent.
                 await self._best_effort(
                     "episodic.store_episode",
                     self.memory_writers["episodic"].store_episode(
                         content=state.response,
-                        episode_type="conversation",
+                        episode_type="agent_action",
                         metadata={
                             "query": state.user_query,
                             "importance_score": evaluation.importance_score,
-                            "agent_name": "cognitive_rag",
                             "session_id": state.conversation_id,
                         },
                     ),
