@@ -1116,8 +1116,9 @@ export const HealthScoreModelHealthWireSchema = z.object({
   auc_roc: z.number().nullable().optional(),
   prediction_latency_p50_ms: z.number().int().nullable().optional(),
   prediction_latency_p99_ms: z.number().int().nullable().optional(),
-  predictions_last_24h: z.number().int().nonnegative(),
-  error_rate: z.number(),
+  // null = UNMEASURED (no ml_performance_metrics source), not a real zero.
+  predictions_last_24h: z.number().int().nonnegative().nullable(),
+  error_rate: z.number().nullable(),
   status: z.string(),
 });
 
@@ -1136,8 +1137,9 @@ export const AgentHealthWireSchema = z.object({
   agent_name: z.string(),
   tier: z.number().int(),
   available: z.boolean(),
-  avg_latency_ms: z.number().int(),
-  success_rate: z.number(),
+  // null = UNMEASURED (no recent telemetry; provenance "partial"), not a zero.
+  avg_latency_ms: z.number().int().nullable(),
+  success_rate: z.number().nullable(),
   last_invocation: z.string().nullable().optional(),
   invocations_24h: z.number().int().nonnegative(),
 });
@@ -1228,7 +1230,8 @@ export const HealthHistoryItemWireSchema = z.object({
 export const HealthHistoryResponseWireSchema = z.object({
   total_checks: z.number().int().nonnegative(),
   checks: z.array(HealthHistoryItemWireSchema),
-  avg_health_score: z.number(),
+  // null when there is no history (not a fabricated 0.0).
+  avg_health_score: z.number().nullable(),
   trend: z.string(),
 });
 

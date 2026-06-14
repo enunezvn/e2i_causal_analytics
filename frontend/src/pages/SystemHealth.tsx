@@ -199,13 +199,19 @@ function SystemHealth() {
   const services: ServiceStatus[] = [];
   const models: ModelHealth[] = [];
 
-  // Use API data when present; otherwise render empty/neutral values.
-  const healthScore = quickHealthData?.overall_health_score ?? null;
-  const healthGrade = quickHealthData?.health_grade ?? null;
+  // Use API data when present; otherwise render empty/neutral values. Dev-offline
+  // placeholder data (data_provenance="placeholder") is treated as no score, so
+  // the headline shows "Awaiting health check…" rather than a fabricated number.
+  const isQuickPlaceholder = quickHealthData?.data_provenance === 'placeholder';
+  const healthScore =
+    quickHealthData && !isQuickPlaceholder ? (quickHealthData.overall_health_score ?? null) : null;
+  const healthGrade =
+    quickHealthData && !isQuickPlaceholder ? (quickHealthData.health_grade ?? null) : null;
   const agents = agentHealthData?.agents ?? [];
   const pipelines = pipelineHealthData?.pipelines ?? [];
   const healthHistory = healthHistoryData?.checks ?? [];
-  const healthTrend = healthHistoryData?.trend ?? 'stable';
+  // null = no history -> rendered as "Unknown", not a fabricated "stable".
+  const healthTrend = healthHistoryData?.trend ?? null;
 
   // Group agents by tier
   const agentsByTier = useMemo(() => {
@@ -227,20 +233,23 @@ function SystemHealth() {
   }, [healthHistory]);
 
   const componentScoreData = useMemo(() => {
-    if (!quickHealthData) {
-      return [
-        { name: 'Components', score: 95, fill: '#10b981' },
-        { name: 'Models', score: 88, fill: '#3b82f6' },
-        { name: 'Pipelines', score: 82, fill: '#8b5cf6' },
-        { name: 'Agents', score: 92, fill: '#f59e0b' },
-      ];
+    // No fabricated scores: show no bars until a real health check loads, and
+    // never chart dev-offline placeholder data (data_provenance="placeholder")
+    // as if it were measured.
+    if (!quickHealthData || quickHealthData.data_provenance === 'placeholder') {
+      return [];
     }
-    return [
-      { name: 'Components', score: Math.round(quickHealthData.component_health_score * 100), fill: '#10b981' },
-      { name: 'Models', score: Math.round(quickHealthData.model_health_score * 100), fill: '#3b82f6' },
-      { name: 'Pipelines', score: Math.round(quickHealthData.pipeline_health_score * 100), fill: '#8b5cf6' },
-      { name: 'Agents', score: Math.round(quickHealthData.agent_health_score * 100), fill: '#f59e0b' },
+    // Only chart dimensions a real backend MEASURED. A null dimension score is
+    // unmeasured and is omitted (not rendered as a fabricated 0% bar).
+    const dims: Array<{ name: string; score: number | null | undefined; fill: string }> = [
+      { name: 'Components', score: quickHealthData.component_health_score, fill: '#10b981' },
+      { name: 'Models', score: quickHealthData.model_health_score, fill: '#3b82f6' },
+      { name: 'Pipelines', score: quickHealthData.pipeline_health_score, fill: '#8b5cf6' },
+      { name: 'Agents', score: quickHealthData.agent_health_score, fill: '#f59e0b' },
     ];
+    return dims
+      .filter((d) => d.score != null)
+      .map((d) => ({ name: d.name, score: Math.round((d.score as number) * 100), fill: d.fill }));
   }, [quickHealthData]);
 
   // Convert API alerts to AlertCard format
@@ -349,7 +358,7 @@ function SystemHealth() {
                   {healthTrend === 'improving' && <TrendingUp className="h-4 w-4 text-emerald-500" />}
                   {healthTrend === 'declining' && <TrendingDown className="h-4 w-4 text-rose-500" />}
                   {healthTrend === 'stable' && <Minus className="h-4 w-4 text-slate-500" />}
-                  {healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1)}
+                  {healthTrend ? healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1) : 'Unknown'}
                 </div>
               </>
             )}
@@ -642,11 +651,11 @@ function SystemHealth() {
                         <div className="grid grid-cols-2 gap-2 text-xs text-[var(--color-muted-foreground)]">
                           <div>
                             <p>Latency</p>
-                            <p className="font-medium text-[var(--color-foreground)]">{agent.avg_latency_ms}ms</p>
+                            <p className="font-medium text-[var(--color-foreground)]">{agent.avg_latency_ms != null ? `${agent.avg_latency_ms}ms` : '—'}</p>
                           </div>
                           <div>
                             <p>Success</p>
-                            <p className="font-medium text-[var(--color-foreground)]">{(agent.success_rate * 100).toFixed(0)}%</p>
+                            <p className="font-medium text-[var(--color-foreground)]">{agent.success_rate != null ? `${(agent.success_rate * 100).toFixed(0)}%` : '—'}</p>
                           </div>
                           <div className="col-span-2">
                             <p>24h Invocations: <span className="font-medium text-[var(--color-foreground)]">{agent.invocations_24h}</span></p>
@@ -741,7 +750,7 @@ function SystemHealth() {
               <div className="mt-4 grid grid-cols-3 gap-4 text-center">
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Average</p>
-                  <p className="text-2xl font-bold">{healthHistoryData?.avg_health_score?.toFixed(1) ?? '89.5'}</p>
+                  <p className="text-2xl font-bold">{healthHistoryData?.avg_health_score?.toFixed(1) ?? '—'}</p>
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Trend</p>
@@ -749,7 +758,7 @@ function SystemHealth() {
                     {healthTrend === 'improving' && <TrendingUp className="h-5 w-5 text-emerald-500" />}
                     {healthTrend === 'declining' && <TrendingDown className="h-5 w-5 text-rose-500" />}
                     {healthTrend === 'stable' && <Minus className="h-5 w-5 text-slate-500" />}
-                    {healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1)}
+                    {healthTrend ? healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1) : 'Unknown'}
                   </p>
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">

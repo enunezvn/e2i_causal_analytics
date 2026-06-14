@@ -112,10 +112,10 @@ export interface ModelHealth {
   prediction_latency_p50_ms?: number;
   /** 99th percentile prediction latency */
   prediction_latency_p99_ms?: number;
-  /** Predictions in last 24 hours */
-  predictions_last_24h: number;
-  /** Error rate (0-1) */
-  error_rate: number;
+  /** Predictions in last 24 hours; null when unmeasured */
+  predictions_last_24h: number | null;
+  /** Error rate (0-1); null when unmeasured */
+  error_rate: number | null;
   /** Model health status */
   status: ModelStatus;
 }
@@ -148,10 +148,10 @@ export interface AgentHealth {
   tier: number;
   /** Whether agent is available */
   available: boolean;
-  /** Average response latency */
-  avg_latency_ms: number;
-  /** Success rate (0-1) */
-  success_rate: number;
+  /** Average response latency; null when unmeasured (provenance "partial") */
+  avg_latency_ms: number | null;
+  /** Success rate (0-1); null when unmeasured (provenance "partial") */
+  success_rate: number | null;
   /** Last invocation timestamp */
   last_invocation?: string;
   /** Invocations in last 24 hours */
@@ -214,6 +214,8 @@ export interface HealthScoreResponse {
   check_latency_ms: number;
   /** Check timestamp */
   timestamp: string;
+  /** Provenance: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**
@@ -321,9 +323,9 @@ export interface HealthHistoryResponse {
   /** Historical records */
   checks: HealthHistoryItem[];
   /** Average health score */
-  avg_health_score: number;
-  /** Trend direction */
-  trend: 'improving' | 'stable' | 'declining';
+  avg_health_score: number | null;
+  /** Trend direction; 'unknown' when there are too few checks to compute one */
+  trend: 'improving' | 'stable' | 'declining' | 'unknown';
 }
 
 /**

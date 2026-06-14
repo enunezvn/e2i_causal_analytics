@@ -168,7 +168,9 @@ class ScoreComposerNode:
                 summary=summary,
             )
 
-            check_time = state.get("total_latency_ms", 0) + int((time.time() - start_time) * 1000)
+            check_time = (state.get("total_latency_ms") or 0) + int(
+                (time.time() - start_time) * 1000
+            )
 
             logger.info(
                 f"Score composition complete: score={overall_score_100:.1f}, "
@@ -204,7 +206,7 @@ class ScoreComposerNode:
                 "critical_issues": [f"Score composition failed: {e}"],
                 "warnings": [],
                 "health_summary": "Unable to compute health score due to an error.",
-                "total_latency_ms": state.get("total_latency_ms", 0),
+                "total_latency_ms": state.get("total_latency_ms") or 0,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",
             }

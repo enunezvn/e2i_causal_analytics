@@ -27,7 +27,8 @@ Version: 4.2.0
 """
 
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -132,8 +133,14 @@ class ModelHealth(BaseModel):
     prediction_latency_p99_ms: Optional[int] = Field(
         default=None, description="99th percentile prediction latency"
     )
-    predictions_last_24h: int = Field(default=0, description="Predictions in last 24 hours")
-    error_rate: float = Field(default=0.0, description="Error rate (0-1)")
+    # Optional: None = UNMEASURED (no ml_performance_metrics source), not a real
+    # zero. A 0/0.0 default here would fabricate a count/rate never observed.
+    predictions_last_24h: Optional[int] = Field(
+        default=None, description="Predictions in last 24 hours, null if unmeasured"
+    )
+    error_rate: Optional[float] = Field(
+        default=None, description="Error rate (0-1), null if unmeasured"
+    )
     status: ModelStatus = Field(..., description="Model health status")
 
 
@@ -154,8 +161,15 @@ class AgentHealth(BaseModel):
     agent_name: str = Field(..., description="Agent identifier")
     tier: int = Field(..., description="Agent tier (0-5)")
     available: bool = Field(..., description="Whether agent is available")
-    avg_latency_ms: int = Field(default=0, description="Average response latency")
-    success_rate: float = Field(default=1.0, description="Success rate (0-1)")
+    # Optional: None means UNMEASURED (no recent runtime telemetry), NOT a
+    # measured zero. A 1.0/0.0 default here would fabricate a success rate the
+    # system never observed; null is the honest value when provenance=partial.
+    avg_latency_ms: Optional[int] = Field(
+        default=None, description="Average response latency, null if unmeasured"
+    )
+    success_rate: Optional[float] = Field(
+        default=None, description="Success rate (0-1), null if unmeasured"
+    )
     last_invocation: Optional[str] = Field(default=None, description="Last invocation timestamp")
     invocations_24h: int = Field(default=0, description="Invocations in last 24 hours")
 
@@ -246,13 +260,20 @@ class HealthScoreResponse(BaseModel):
 class DataProvenance(str, Enum):
     """Where the health data in a response came from.
 
-    ``measured`` — produced by the real Health Score agent.
-    ``placeholder`` — fabricated sample data served only because the agent is
-    unavailable AND mock-fallback is explicitly permitted (dev/test). Surfaced
-    so consumers never mistake placeholder values for real measurements.
+    ``measured`` — every field came from a real backend query.
+    ``partial`` — the dimension is real-backed (rows came from a live table) but
+    some sub-fields have no source yet and are left null/empty (e.g. model
+    accuracy when ``ml_performance_metrics`` is empty, or agent runtime metrics
+    when no recent telemetry exists). Honest middle ground — never fabricated.
+    ``unknown`` — no real source returned rows; an empty, non-fabricated result.
+    ``placeholder`` — hardcoded sample data served only because the real backend
+    is unavailable AND mock-fallback is explicitly permitted (dev/test).
+    Surfaced so consumers never mistake placeholder values for real measurements.
     """
 
     MEASURED = "measured"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
     PLACEHOLDER = "placeholder"
 
 
@@ -335,8 +356,13 @@ class HealthHistoryResponse(BaseModel):
 
     total_checks: int = Field(..., description="Total checks in history")
     checks: List[HealthHistoryItem] = Field(..., description="Historical records")
-    avg_health_score: float = Field(..., description="Average health score")
-    trend: str = Field(..., description="Trend direction (improving, stable, declining)")
+    avg_health_score: Optional[float] = Field(
+        default=None, description="Average health score, null when there is no history"
+    )
+    trend: str = Field(
+        default="unknown",
+        description="Trend direction (improving, stable, declining, unknown)",
+    )
 
 
 class HealthServiceStatus(BaseModel):
@@ -462,27 +488,32 @@ async def get_component_health() -> ComponentHealthResponse:
 
     Checks: Database, Cache (Redis), Vector Store, API, Message Queue
 
-    Behavior (F1, Codex #3): this endpoint serves HARDCODED placeholder sample
-    data — it does NOT invoke the agent or query a real backend. The response is
-    therefore ALWAYS tagged ``data_provenance="placeholder"`` so callers never
-    mistake the sample values for real measurements. Mere importability of the
-    agent class is not a measurement. The #429 import guard still fails-closed
-    (503) in production if the agent cannot be imported at all; otherwise the
-    placeholder data is returned and clearly tagged as such.
-
-    For genuinely measured component health, use ``GET /health-score/check`` (or
-    ``/quick``), which runs the real Health Score agent + SupabaseHealthClient.
+    Behavior: runs the REAL component check (Health Score agent +
+    SupabaseHealthClient live probes of db/cache/vector/api/queue) and tags the
+    response ``data_provenance="measured"``. Only when the real backend is
+    unavailable does it fall back to the #429 guard: a 503 in production, or
+    clearly-tagged ``placeholder`` sample data in dev/test.
 
     Returns:
-        Component health details (placeholder sample data)
+        Component health details (measured live, or honest placeholder in dev)
     """
     import time
 
     start_time = time.time()
 
-    provenance = _resolve_health_provenance(agent_name="Health Score")
+    try:
+        result = await _execute_health_check(CheckScope.QUICK)
+    except HTTPException:
+        raise  # #429 fail-closed 503 in production
 
-    components = _get_mock_component_health()
+    if result.data_provenance in ("measured", "partial") and result.component_statuses:
+        components = result.component_statuses
+        provenance = DataProvenance.MEASURED
+    else:
+        # Real check did not run (dev ImportError fallback): serve clearly-tagged
+        # placeholder rather than presenting unmeasured data as real.
+        provenance = _resolve_health_provenance(agent_name="Health Score")
+        components = _get_mock_component_health()
     check_latency = int((time.time() - start_time) * 1000)
 
     healthy = sum(1 for c in components if c.status == ComponentStatus.HEALTHY)
@@ -516,24 +547,27 @@ async def get_model_health() -> ModelHealthResponse:
 
     Checks model accuracy, latency, error rates, and prediction volume.
 
-    Behavior (F1, Codex #3): mirrors ``/components`` — this endpoint serves
-    HARDCODED placeholder sample data (e.g. accuracy=0.89, auc=0.92), NOT real
-    measurements. The response is ALWAYS tagged ``data_provenance="placeholder"``
-    so fabricated model accuracy is never presented as real in the dashboard.
-    The #429 import guard still fails-closed (503) in production if the agent
-    cannot be imported at all; otherwise placeholder data is returned and clearly
-    tagged. For measured health, use ``GET /health-score/check``.
+    Behavior: reads REAL model health from ml_model_health_dashboard (production
+    stage). Status/drift/alert signals are measured; performance sub-fields
+    (accuracy/latency) are left null while ml_performance_metrics is empty, so
+    the response is tagged ``data_provenance="partial"`` (never a fabricated
+    accuracy). Only when the backend is unreachable does it fall back to the #429
+    guard: 503 in production, clearly-tagged placeholder in dev/test.
 
     Returns:
-        Model health details (placeholder sample data)
+        Model health details (measured/partial from the live registry)
     """
     import time
 
     start_time = time.time()
 
-    provenance = _resolve_health_provenance(agent_name="Health Score")
-
-    models = _get_mock_model_health()
+    models, provenance = _fetch_model_health()
+    if provenance is None:
+        # Backend unreachable: fail closed in prod (503), clearly-tagged
+        # placeholder only in an explicit dev/test environment.
+        _fail_closed_if_no_backend()
+        provenance = DataProvenance.PLACEHOLDER
+        models = _get_mock_model_health()
     check_latency = int((time.time() - start_time) * 1000)
 
     healthy = sum(1 for m in models if m.status == ModelStatus.HEALTHY)
@@ -567,24 +601,24 @@ async def get_pipeline_health() -> PipelineHealthResponse:
 
     Checks data freshness, processing success, and row counts.
 
-    Behavior (F1, Codex #3): mirrors ``/components`` and ``/models`` — this
-    endpoint serves HARDCODED placeholder sample data, NOT real measurements.
-    The response is ALWAYS tagged ``data_provenance="placeholder"`` so fabricated
-    pipeline freshness/row counts are never presented as real in the dashboard.
-    The #429 import guard still fails-closed (503) in production if the agent
-    cannot be imported at all; otherwise placeholder data is returned and clearly
-    tagged. For measured health, use ``GET /health-score/check``.
+    Behavior: reads REAL pipeline health from etl_pipeline_metrics (latest run
+    per pipeline; freshness computed from run_end), tagged
+    ``data_provenance="measured"``. Only when the backend is unreachable does it
+    fall back to the #429 guard: 503 in production, clearly-tagged placeholder in
+    dev/test.
 
     Returns:
-        Pipeline health details (placeholder sample data)
+        Pipeline health details (measured from etl_pipeline_metrics)
     """
     import time
 
     start_time = time.time()
 
-    provenance = _resolve_health_provenance(agent_name="Health Score")
-
-    pipelines = _get_mock_pipeline_health()
+    pipelines, provenance = _fetch_pipeline_health()
+    if provenance is None:
+        _fail_closed_if_no_backend()
+        provenance = DataProvenance.PLACEHOLDER
+        pipelines = _get_mock_pipeline_health()
     check_latency = int((time.time() - start_time) * 1000)
 
     healthy = sum(1 for p in pipelines if p.status == PipelineStatus.HEALTHY)
@@ -618,24 +652,26 @@ async def get_agent_health() -> AgentHealthResponse:
 
     Checks agent availability, success rates, and latency.
 
-    Behavior (F1, Codex #3): mirrors ``/components`` and ``/models`` — this
-    endpoint serves HARDCODED placeholder sample data, NOT real measurements.
-    The response is ALWAYS tagged ``data_provenance="placeholder"`` so fabricated
-    agent success-rates/latency are never presented as real in the dashboard.
-    The #429 import guard still fails-closed (503) in production if the agent
-    cannot be imported at all; otherwise placeholder data is returned and clearly
-    tagged. For measured health, use ``GET /health-score/check``.
+    Behavior: reads the REAL agent roster from agent_registry (availability/tier
+    measured) and runtime metrics from audit_chain_entries within the last
+    30 days (the configured look-back window). Where an agent has no recent telemetry, its success_rate and
+    latency are left null (NOT a fabricated 1.0/0.0) and the response is tagged
+    ``data_provenance="partial"``. Only when the backend is unreachable does it
+    fall back to the #429 guard: 503 in production, clearly-tagged placeholder in
+    dev/test.
 
     Returns:
-        Agent health details (placeholder sample data)
+        Agent health details (measured roster + measured/null runtime metrics)
     """
     import time
 
     start_time = time.time()
 
-    provenance = _resolve_health_provenance(agent_name="Health Score")
-
-    agents = _get_mock_agent_health()
+    agents, provenance = _fetch_agent_health()
+    if provenance is None:
+        _fail_closed_if_no_backend()
+        provenance = DataProvenance.PLACEHOLDER
+        agents = _get_mock_agent_health()
     check_latency = int((time.time() - start_time) * 1000)
 
     available = sum(1 for a in agents if a.available)
@@ -694,10 +730,13 @@ async def get_health_history(
         for h in history
     ]
 
-    avg_score = sum(h.overall_health_score for h in history) / len(history) if history else 0.0
+    # No history -> no average (None), NOT a fabricated 0.0 the dashboard would
+    # render as a real metric.
+    avg_score = sum(h.overall_health_score for h in history) / len(history) if history else None
 
-    # Calculate trend
-    trend = "stable"
+    # Trend is "unknown" until there are enough checks (>=3) to compute one — a
+    # default "stable" would fabricate a trend from zero/one/two data points.
+    trend = "unknown"
     if len(history) >= 3:
         recent_avg = sum(h.overall_health_score for h in history[-3:]) / 3
         earlier_avg = sum(h.overall_health_score for h in history[:3]) / 3
@@ -705,6 +744,8 @@ async def get_health_history(
             trend = "improving"
         elif recent_avg < earlier_avg - 5:
             trend = "declining"
+        else:
+            trend = "stable"
 
     return HealthHistoryResponse(
         total_checks=len(history),
@@ -800,6 +841,344 @@ def _resolve_health_provenance(*, agent_name: str) -> DataProvenance:
         # Raises 503 in fail-closed environments; returns placeholder otherwise.
         guard_or_raise(e, agent_name=agent_name)
         return DataProvenance.PLACEHOLDER
+
+
+# =============================================================================
+# REAL-DATA SOURCES for the per-dimension endpoints
+#
+# These replace the hardcoded `_get_mock_*_health()` placeholders for the
+# user-facing /models, /pipelines, /agents endpoints. They read live tables via
+# the service-role Supabase client (the ml_* tables are GRANTed to service_role
+# only; `get_supabase()` resolves SUPABASE_SERVICE_ROLE_KEY/SUPABASE_SERVICE_KEY
+# per #926, so these reads are not denied 42501). Each returns
+# ``(items, provenance)``: MEASURED when every field is sourced, PARTIAL when the
+# dimension is real-backed but some sub-fields have no source yet (left
+# null/empty — never fabricated), UNKNOWN when no rows exist, and ``None``
+# provenance to signal the backend was unreachable (caller fails closed).
+# =============================================================================
+
+# Look-back window for agent runtime telemetry (audit_chain_entries).
+_AGENT_TELEMETRY_WINDOW_DAYS = 30
+# A pipeline is stale if its last successful run is older than this.
+_PIPELINE_STALE_HOURS = 48.0
+
+
+def _health_source_client() -> Any:
+    """Service-role Supabase client for health-source reads (or None)."""
+    try:
+        from src.api.dependencies.supabase_client import get_supabase
+
+        return get_supabase()
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"health sources: could not get Supabase client: {e}")
+        return None
+
+
+def _hours_since(ts: Any, now: datetime) -> float:
+    """Hours between an ISO timestamp and ``now`` (large sentinel if unparseable)."""
+    if not ts:
+        return 1e9
+    try:
+        parsed = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (now - parsed).total_seconds() / 3600.0)
+    except (ValueError, TypeError):
+        return 1e9
+
+
+def _map_model_status(health_status: Any) -> ModelStatus:
+    s = (health_status or "").strip().lower()
+    if s in ("healthy", "ok", "good", "nominal"):
+        return ModelStatus.HEALTHY
+    if s in ("unhealthy", "critical", "failed", "error", "down"):
+        return ModelStatus.UNHEALTHY
+    # attention / warning / degraded / unknown / anything else -> degraded
+    return ModelStatus.DEGRADED
+
+
+# agent_registry.agent_tier is a TEXT category enum; this is its numeric tier
+# (the same number tier_v2 embeds: 'tier_2_causal' -> 2). Used as the fallback
+# when tier_v2 is null (it is nullable in the schema).
+_AGENT_TIER_BY_CATEGORY = {
+    "coordination": 1,
+    "causal_analytics": 2,
+    "monitoring": 3,
+    "ml_predictions": 4,
+    "self_improvement": 5,
+}
+
+
+def _agent_tier_int(row: Dict[str, Any]) -> int:
+    """Numeric tier (0-5) from agent_registry. ``tier_v2`` ('tier_2_causal')
+    embeds the number; when it is null, map the ``agent_tier`` TEXT category
+    ('coordination', 'causal_analytics', ...). Returns 0 only when neither
+    resolves (genuinely unknown tier)."""
+    tier_v2 = row.get("tier_v2")
+    if tier_v2 is not None:
+        m = re.search(r"(\d+)", str(tier_v2))
+        if m:
+            return int(m.group(1))
+    category = row.get("agent_tier")
+    if category is not None:
+        return _AGENT_TIER_BY_CATEGORY.get(str(category).strip().lower(), 0)
+    return 0
+
+
+def _map_pipeline_status(status: Any, freshness_hours: float) -> PipelineStatus:
+    s = (status or "").strip().lower()
+    if s in ("failed", "error", "failure"):
+        return PipelineStatus.FAILED
+    if freshness_hours > _PIPELINE_STALE_HOURS:
+        return PipelineStatus.STALE
+    return PipelineStatus.HEALTHY
+
+
+def _fail_closed_if_no_backend() -> None:
+    """A dimension's real backend is unreachable (fetcher returned None).
+
+    Fail closed in production (503) so fabricated placeholder data is NEVER served
+    as real when the source is down. In an explicit dev/test environment, return
+    so the caller serves clearly-tagged placeholder (mirrors the #429 import-guard
+    policy, extended from 'agent import failed' to 'data source unavailable')."""
+    from src.api.utils.agent_import_guard import should_fail_closed_on_import_error
+
+    if should_fail_closed_on_import_error():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "health_source_unavailable",
+                "message": (
+                    "Health data source is unavailable; refusing to serve "
+                    "placeholder data as real in production."
+                ),
+            },
+        )
+
+
+def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
+    """Real model health from ml_model_health_dashboard (production stage).
+
+    Performance sub-fields (accuracy/precision/latency/...) have no source while
+    ml_performance_metrics is empty, so they are left null and the provenance is
+    PARTIAL. The status/drift/alert signals are genuinely measured.
+    """
+    db = _health_source_client()
+    if db is None:
+        return [], None
+    # The query AND the row->model construction are both inside the try: a bad
+    # row (e.g. non-numeric metric) must fail closed (None -> 503/placeholder),
+    # never 500 the endpoint.
+    try:
+        rows = (
+            db.table("ml_model_health_dashboard")
+            .select(
+                "model_id, model_name, model_stage, health_status, latest_metric_value, "
+                "primary_metric, has_active_drift, max_drift_severity, performance_degraded, "
+                "active_alerts, critical_alerts"
+            )
+            .eq("model_stage", "production")
+            .execute()
+            .data
+            or []
+        )
+        models: List[ModelHealth] = []
+        for r in rows:
+            metric_val = r.get("latest_metric_value")
+            primary = (r.get("primary_metric") or "").strip().lower()
+            auc = None
+            acc = None
+            if metric_val is not None:
+                try:
+                    v = float(metric_val)
+                    if "auc" in primary:
+                        auc = v
+                    elif primary in ("accuracy", "acc"):
+                        acc = v
+                except (ValueError, TypeError):
+                    pass
+            models.append(
+                ModelHealth(
+                    model_id=str(r.get("model_id") or r.get("model_name") or "unknown"),
+                    model_name=str(r.get("model_name") or "unknown"),
+                    accuracy=acc,
+                    auc_roc=auc,
+                    # precision/recall/f1/latencies/predictions/error_rate have
+                    # NO source (ml_performance_metrics empty) -> left null.
+                    status=_map_model_status(r.get("health_status")),
+                )
+            )
+    except Exception as e:
+        logger.warning(f"model health: live query/build failed ({e})")
+        return [], None
+    if not models:
+        return [], DataProvenance.UNKNOWN
+    # ALWAYS PARTIAL: the dashboard view sources status/drift and at most one
+    # metric (auc/accuracy), but precision/recall/f1/latency/predictions/
+    # error_rate have no source, so the dimension is never fully measured. Never
+    # MEASURED here -> we never present those null/structural fields as real.
+    return models, DataProvenance.PARTIAL
+
+
+def _fetch_pipeline_health() -> tuple[List[PipelineHealth], Optional[DataProvenance]]:
+    """Real pipeline health: latest run per pipeline from etl_pipeline_metrics."""
+    db = _health_source_client()
+    if db is None:
+        return [], None
+    # Query + build both inside the try so a malformed row fails closed, not 500.
+    try:
+        rows = (
+            db.table("etl_pipeline_metrics")
+            .select("pipeline_name, run_start, run_end, records_processed, status, created_at")
+            .order("run_end", desc=True)
+            .limit(2000)
+            .execute()
+            .data
+            or []
+        )
+        now = datetime.now(timezone.utc)
+        latest: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            name = r.get("pipeline_name") or "unknown"
+            if name not in latest:
+                latest[name] = r
+        pipelines: List[PipelineHealth] = []
+        for name, r in latest.items():
+            run_end = r.get("run_end") or r.get("created_at")
+            freshness = _hours_since(run_end, now)
+            try:
+                rows_processed = int(r.get("records_processed") or 0)
+            except (ValueError, TypeError):
+                rows_processed = 0
+            pipelines.append(
+                PipelineHealth(
+                    pipeline_name=str(name),
+                    last_run=str(r.get("run_start") or run_end or ""),
+                    last_success=str(run_end or ""),
+                    rows_processed=rows_processed,
+                    freshness_hours=round(freshness, 2),
+                    status=_map_pipeline_status(r.get("status"), freshness),
+                )
+            )
+    except Exception as e:
+        logger.warning(f"pipeline health: live query/build failed ({e})")
+        return [], None
+    if not pipelines:
+        return [], DataProvenance.UNKNOWN
+    return pipelines, DataProvenance.MEASURED
+
+
+def _fetch_agent_health() -> tuple[List[AgentHealth], Optional[DataProvenance]]:
+    """Real agent roster from agent_registry + runtime metrics from
+    audit_chain_entries (last ``_AGENT_TELEMETRY_WINDOW_DAYS`` days).
+
+    Availability/tier are measured from the registry. Runtime metrics
+    (success_rate/latency/invocations) are measured only where recent telemetry
+    exists; otherwise they are left null (NOT a fabricated 1.0/0.0) and the
+    provenance is PARTIAL.
+    """
+    db = _health_source_client()
+    if db is None:
+        return [], None
+    try:
+        roster = (
+            db.table("agent_registry")
+            .select("agent_name, agent_tier, tier_v2, is_active")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        logger.warning(f"agent health: roster query failed ({e})")
+        return [], None
+    if not roster:
+        return [], DataProvenance.UNKNOWN
+
+    start = (datetime.now(timezone.utc) - timedelta(days=_AGENT_TELEMETRY_WINDOW_DAYS)).isoformat()
+    try:
+        telemetry = (
+            db.table("audit_chain_entries")
+            .select("agent_name, duration_ms, validation_passed, created_at")
+            .gte("created_at", start)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        # Roster is real; telemetry is just unavailable -> partial with null metrics.
+        logger.warning(f"agent health: telemetry query failed ({e})")
+        telemetry = []
+    # invocations_24h must mean the last 24h (its name), distinct from the wider
+    # window used to aggregate success_rate/latency over more samples.
+    cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    try:
+        agg: Dict[str, Dict[str, Any]] = {}
+        for entry in telemetry:
+            name = entry.get("agent_name")
+            if not name:
+                continue
+            d = agg.setdefault(
+                name, {"latencies": [], "ok": 0, "total": 0, "last": None, "count_24h": 0}
+            )
+            d["total"] += 1
+            dur = entry.get("duration_ms")
+            if isinstance(dur, (int, float)) and dur > 0:
+                d["latencies"].append(dur)
+            if entry.get("validation_passed") is not False:  # True or None -> counted ok
+                d["ok"] += 1
+            ts = entry.get("created_at")
+            if ts:
+                if d["last"] is None or str(ts) > str(d["last"]):
+                    d["last"] = ts
+                if str(ts) >= cutoff_24h:
+                    d["count_24h"] += 1
+
+        agents: List[AgentHealth] = []
+        missing_telemetry = False
+        for r in roster:
+            name = str(r.get("agent_name") or "unknown")
+            a = agg.get(name)
+            lat = a["latencies"] if a else []
+            if a and a["total"] > 0:
+                avg_latency = int(sum(lat) / len(lat)) if lat else None
+                # Fully sourced only if BOTH the rate and a latency are measured;
+                # telemetry rows without any valid duration leave latency null ->
+                # the agent is not fully sourced -> dimension is PARTIAL.
+                if avg_latency is None:
+                    missing_telemetry = True
+                agents.append(
+                    AgentHealth(
+                        agent_name=name,
+                        tier=_agent_tier_int(r),
+                        available=bool(r.get("is_active")),
+                        avg_latency_ms=avg_latency,
+                        success_rate=round(a["ok"] / a["total"], 4),
+                        last_invocation=str(a["last"]) if a["last"] else None,
+                        invocations_24h=a["count_24h"],
+                    )
+                )
+            else:
+                # Registered, but no recent telemetry: availability is real, runtime
+                # metrics are UNMEASURED (null), not a fabricated success rate.
+                missing_telemetry = True
+                agents.append(
+                    AgentHealth(
+                        agent_name=name,
+                        tier=_agent_tier_int(r),
+                        available=bool(r.get("is_active")),
+                        avg_latency_ms=None,
+                        success_rate=None,
+                        last_invocation=None,
+                        invocations_24h=0,
+                    )
+                )
+    except Exception as e:
+        logger.warning(f"agent health: build failed ({e})")
+        return [], None
+    # MEASURED only if EVERY roster agent had recent telemetry AND a measured
+    # latency; any null runtime field -> PARTIAL (honest, not fabricated).
+    prov = DataProvenance.PARTIAL if missing_telemetry else DataProvenance.MEASURED
+    return agents, prov
 
 
 async def _execute_health_check(scope: CheckScope) -> HealthScoreResponse:
@@ -923,6 +1302,12 @@ def _generate_mock_health_response(
         "All core systems operational.",
         check_latency_ms=check_latency,
         timestamp=datetime.now(timezone.utc).isoformat(),
+        # This is the dev-offline ImportError fallback (#429): the scores above
+        # are hardcoded sample data, NOT measured. Tag PLACEHOLDER explicitly so
+        # it is never mislabeled "unknown" and consumers (the dashboard chart)
+        # can refuse to render it as real. Production fails closed (503) before
+        # reaching here.
+        data_provenance=DataProvenance.PLACEHOLDER.value,
     )
 
 

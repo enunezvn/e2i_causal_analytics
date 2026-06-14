@@ -68,24 +68,24 @@ class HealthScoreState(TypedDict):
 
     # === COMPONENT HEALTH ===
     component_statuses: NotRequired[List[ComponentStatus]]
-    component_health_score: NotRequired[float]
+    component_health_score: NotRequired[Optional[float]]
     # True only when a real health backend produced the score (F1 fail-closed).
     # Absent/False => the dimension is UNKNOWN, never fail-open "healthy".
     component_health_measured: NotRequired[bool]
 
     # === MODEL HEALTH ===
     model_metrics: NotRequired[List[ModelMetrics]]
-    model_health_score: NotRequired[float]
+    model_health_score: NotRequired[Optional[float]]
     model_health_measured: NotRequired[bool]
 
     # === PIPELINE HEALTH ===
     pipeline_statuses: NotRequired[List[PipelineStatus]]
-    pipeline_health_score: NotRequired[float]
+    pipeline_health_score: NotRequired[Optional[float]]
     pipeline_health_measured: NotRequired[bool]
 
     # === AGENT HEALTH ===
     agent_statuses: NotRequired[List[AgentStatus]]
-    agent_health_score: NotRequired[float]
+    agent_health_score: NotRequired[Optional[float]]
     agent_health_measured: NotRequired[bool]
 
     # === COMPOSITE SCORE (Required outputs) ===

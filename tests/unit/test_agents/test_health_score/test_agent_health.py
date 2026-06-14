@@ -115,3 +115,19 @@ class TestAgentHealthThresholds:
 
         # With default metrics at 0.95, should be degraded
         assert result["agent_health_score"] < 1.0
+
+
+@pytest.mark.asyncio
+async def test_agent_health_exception_fails_closed_to_unmeasured(initial_state):
+    """codex R3: a FAILED agent check measured nothing. The node must mark the
+    dimension UNMEASURED (so the composer excludes it), NOT emit a fabricated
+    0.5 score with measured=True presented to the dashboard as real."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    store = MagicMock()
+    store.get_all_agents = AsyncMock(side_effect=RuntimeError("boom"))
+    node = AgentHealthNode(agent_registry=store)
+    result = await node.execute(initial_state)
+
+    assert result["agent_health_measured"] is False
+    assert result.get("agent_health_score") is None

@@ -146,8 +146,11 @@ class ComponentHealthNode:
             return {
                 **state,
                 "errors": [{"node": "component_health", "error": str(e)}],
-                "component_health_score": 0.0,
-                "component_health_measured": True,
+                # A failed check measured nothing -> unmeasured, so the composer
+                # excludes it rather than counting a fabricated 0.0 as a real
+                # measurement (which would drag the composite to a false 'F').
+                "component_health_score": None,
+                "component_health_measured": False,
                 "component_statuses": [],
                 "status": "checking",
             }
