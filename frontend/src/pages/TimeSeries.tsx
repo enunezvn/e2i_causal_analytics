@@ -62,7 +62,7 @@ import { useKPIValue, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
 // operator-supplied model). Start empty rather than pre-filling a fictional
 // handle; the example placeholder uses a real registered production model
 // (`ml_model_registry`) so users know the expected format.
-const DEFAULT_MODEL_ID = '';
+const DEFAULT_MODEL_ID = 'csu_initiation_goldstd_lr_v1';
 const EXAMPLE_MODEL_ID = 'csu_treatment_initiation_lr_balanced_v1';
 const DEFAULT_METRIC = 'accuracy';
 const DEFAULT_KPI_ID = 'WS1-DQ-001';
@@ -73,6 +73,7 @@ const TIME_RANGES: { value: string; label: string; days: number }[] = [
   { value: '90d', label: '90 Days', days: 90 },
   { value: '180d', label: '6 Months', days: 180 },
   { value: '365d', label: '1 Year', days: 365 },
+  { value: '1825d', label: '5 Years', days: 1825 },
 ];
 
 const METRIC_OPTIONS: { value: string; label: string }[] = [
@@ -154,7 +155,7 @@ function TimeSeries() {
   // Performance mode state
   const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
   const [metricName, setMetricName] = useState<string>(DEFAULT_METRIC);
-  const [timeRange, setTimeRange] = useState<string>('90d');
+  const [timeRange, setTimeRange] = useState<string>('1825d');
 
   // KPI mode state
   const [kpiId, setKpiId] = useState<string>(DEFAULT_KPI_ID);

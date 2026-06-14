@@ -130,6 +130,22 @@ def train_target_models(
     return models
 
 
+def serialize_model(model: Any, artifact_dir: Path, model_name: str) -> str:
+    """Pickle one fitted model under *artifact_dir* and return its ABSOLUTE path.
+
+    The single-model serialization primitive shared by this module's
+    manifest-writing path and the gold-standard eval deployer (which serializes
+    for loadability/honesty but does NOT write a serving manifest). The path is
+    resolved to absolute so it loads regardless of the app's CWD.
+    """
+    artifact_dir = Path(artifact_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    pkl_path = (artifact_dir / f"{model_name}.pkl").resolve()
+    with open(pkl_path, "wb") as fh:
+        pickle.dump(model, fh)
+    return str(pkl_path)
+
+
 def serialize_and_write_manifest(
     models: List[TrainedModel],
     artifact_dir: Path,
@@ -142,15 +158,9 @@ def serialize_and_write_manifest(
     ``load_clients_from_deployment_manifest_file``; URIs are absolute so they
     resolve regardless of the app's CWD.
     """
-    artifact_dir = Path(artifact_dir)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-
     uri_map: Dict[str, str] = {}
     for m in models:
-        pkl_path = (artifact_dir / f"{m.model_name}.pkl").resolve()
-        with open(pkl_path, "wb") as fh:
-            pickle.dump(m.model, fh)
-        uri_map[m.model_name] = str(pkl_path)
+        uri_map[m.model_name] = serialize_model(m.model, artifact_dir, m.model_name)
 
     manifest = {"spec": {"models": {name: {"model_uri": uri} for name, uri in uri_map.items()}}}
     manifest_path = Path(manifest_path)
@@ -161,13 +171,23 @@ def serialize_and_write_manifest(
 
 
 async def _get_or_create_experiment(
-    client: Any, experiment_name: str = DEPLOY_EXPERIMENT_NAME
+    client: Any,
+    experiment_name: str = DEPLOY_EXPERIMENT_NAME,
+    *,
+    created_by: str = "prediction_synthesizer_deploy",
+    description: str = "Real deployable models backing live chat predictions (#840).",
 ) -> str:
     """Resolve (or create) the dedicated real deploy experiment id.
 
     Matches on ``(experiment_name, prediction_target)`` — ``experiment_name``
     alone is not unique in the schema, and resolving the wrong target's row
     would register models that ``get_models_for_target`` could never surface.
+
+    ``created_by`` and ``description`` are only written at INSERT time (the row
+    is looked up by ``(experiment_name, prediction_target)``); callers that
+    reuse this helper for a different experiment (e.g. the gold-standard eval
+    deployer) should pass their own values so the DB row carries the correct
+    provenance on first creation.
     """
     existing = await (
         client.table("ml_experiments")
@@ -189,13 +209,107 @@ async def _get_or_create_experiment(
         "prediction_target": PREDICTION_TARGET,
         "brand": BRAND,
         "is_synthetic": False,
-        "created_by": "prediction_synthesizer_deploy",
-        "description": "Real deployable models backing live chat predictions (#840).",
+        "created_by": created_by,
+        "description": description,
     }
     created = await client.table("ml_experiments").insert(row).execute()
     if not created.data:
         raise RuntimeError(f"failed to create experiment '{experiment_name}' (no row returned)")
     return str(created.data[0]["id"])
+
+
+async def register_model_row(
+    client: Any,
+    *,
+    experiment_id: str,
+    model_name: str,
+    model_version: str,
+    algorithm: str,
+    artifact_path: str,
+    auc: float,
+    feature_count: int,
+    training_samples: int | None = None,
+    stage: str = "production",
+    is_champion: bool = True,
+    is_synthetic: bool = False,
+    promoted: bool | None = None,
+) -> str:
+    """Write ONE ``ml_model_registry`` row idempotently, then verify it landed.
+
+    The shared registration primitive. Idempotent at the
+    ``(model_name, model_version)`` grain (the schema unique key) — replaces only
+    the matching version, preserving other versions and avoiding FK fallout from
+    a name-wide delete. Verifies the artifact exists on disk before writing, and
+    reads the row back to confirm it actually landed AT THE INTENDED ``stage``
+    (a trigger/RLS no-op, or a trigger that demotes the stage, must not be
+    reported as success). Returns the registered ``model_name``.
+
+    ``promoted`` defaults to "is this a production row" — production rows record
+    a ``promoted_at`` timestamp, staging/shadow rows do not (they are not
+    promoted). ``stage`` must be a valid ``model_stage_enum`` value; the caller
+    is responsible for choosing a non-colliding stage (e.g. the gold-standard
+    eval deployer uses ``stage='staging'`` so it is not surfaced by
+    ``get_models_for_target``'s production-only serving filter).
+    """
+    if not Path(artifact_path).is_file():
+        raise RuntimeError(
+            f"artifact for {model_name} missing at {artifact_path} — refusing to "
+            "register an unloadable model"
+        )
+    if promoted is None:
+        promoted = stage == "production"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Replace only this exact (model_name, model_version) — not all versions.
+    await (
+        client.table("ml_model_registry")
+        .delete()
+        .eq("model_name", model_name)
+        .eq("model_version", model_version)
+        .execute()
+    )
+    row = {
+        "experiment_id": experiment_id,
+        "model_name": model_name,
+        "model_version": model_version,
+        "algorithm": algorithm,
+        "stage": stage,
+        "is_champion": is_champion,
+        "is_synthetic": is_synthetic,
+        "artifact_path": artifact_path,
+        "auc": auc,
+        "feature_count": feature_count,
+        "trained_at": now,
+        "registered_at": now,
+    }
+    if training_samples is not None:
+        row["training_samples"] = training_samples
+    if promoted:
+        row["promoted_at"] = now
+    await client.table("ml_model_registry").insert(row).execute()
+
+    # Confirm the row actually landed at the INTENDED stage with the artifact
+    # (no silent no-op, and not demoted to another stage by a trigger).
+    check = await (
+        client.table("ml_model_registry")
+        .select("model_name, stage, artifact_path")
+        .eq("model_name", model_name)
+        .eq("model_version", model_version)
+        .execute()
+    )
+    landed = [
+        r
+        for r in (check.data or [])
+        if r.get("artifact_path") == artifact_path and r.get("stage") == stage
+    ]
+    if not landed:
+        raise RuntimeError(
+            f"registration of {model_name} did not persist as a {stage} row "
+            f"(read-back found no matching {stage} row) — refusing to report it "
+            "as deployed"
+        )
+    logger.info("Registered %s model %s (auc=%.4f)", stage, model_name, auc)
+    return model_name
 
 
 async def register_deployed_models(
@@ -213,65 +327,24 @@ async def register_deployed_models(
     (a trigger/RLS no-op must not be reported as success).
     """
     experiment_id = await _get_or_create_experiment(client, experiment_name)
-    now = datetime.now(timezone.utc).isoformat()
 
     registered: List[str] = []
     for m in models:
-        artifact_path = uri_map[m.model_name]
-        if not Path(artifact_path).is_file():
-            raise RuntimeError(
-                f"artifact for {m.model_name} missing at {artifact_path} — refusing to "
-                "register an unloadable model"
-            )
-
-        # Replace only this exact (model_name, model_version) — not all versions.
-        await (
-            client.table("ml_model_registry")
-            .delete()
-            .eq("model_name", m.model_name)
-            .eq("model_version", MODEL_VERSION)
-            .execute()
+        await register_model_row(
+            client,
+            experiment_id=experiment_id,
+            model_name=m.model_name,
+            model_version=MODEL_VERSION,
+            algorithm=m.algorithm,
+            artifact_path=uri_map[m.model_name],
+            auc=m.auc,
+            feature_count=m.n_features,
+            training_samples=m.training_samples,
+            stage="production",
+            is_champion=True,
+            is_synthetic=False,
         )
-        row = {
-            "experiment_id": experiment_id,
-            "model_name": m.model_name,
-            "model_version": MODEL_VERSION,
-            "algorithm": m.algorithm,
-            "stage": "production",
-            "is_champion": True,
-            "is_synthetic": False,
-            "artifact_path": artifact_path,
-            "auc": m.auc,
-            "feature_count": m.n_features,
-            "training_samples": m.training_samples,
-            "trained_at": now,
-            "registered_at": now,
-            "promoted_at": now,
-        }
-        await client.table("ml_model_registry").insert(row).execute()
-
-        # Confirm the row actually landed as a PRODUCTION row with the artifact
-        # (no silent no-op, and not demoted to a non-serving stage by a trigger).
-        check = await (
-            client.table("ml_model_registry")
-            .select("model_name, stage, artifact_path")
-            .eq("model_name", m.model_name)
-            .eq("model_version", MODEL_VERSION)
-            .execute()
-        )
-        landed = [
-            r
-            for r in (check.data or [])
-            if r.get("artifact_path") == artifact_path and r.get("stage") == "production"
-        ]
-        if not landed:
-            raise RuntimeError(
-                f"registration of {m.model_name} did not persist as a production row "
-                "(read-back found no matching production row) — refusing to report it "
-                "as deployed"
-            )
         registered.append(m.model_name)
-        logger.info("Registered production model %s (auc=%.4f)", m.model_name, m.auc)
     return registered
 
 

@@ -172,7 +172,7 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
 
     const defaultCalls = mockUsePerformanceTrend.mock.calls;
     const defaultDaysParam = defaultCalls[defaultCalls.length - 1]?.[0]?.days;
-    expect(defaultDaysParam).toBe(90);
+    expect(defaultDaysParam).toBe(1825);
 
     const timeRangeTrigger = screen.getByRole('combobox', { name: /time range/i });
     await user.click(timeRangeTrigger);
@@ -214,10 +214,11 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
 
   it('time-range filter applies in KPI history mode too (filters embedded history)', async () => {
     const user = userEvent.setup();
-    // Build history that spans 200+ days so a 30d window strictly shrinks the series.
+    // Build history that spans 2000 days so the 1825d default window (5 Years)
+    // still trims the earliest ~175 points, proving the filter is applied.
     const today = new Date();
-    const longHistory = Array.from({ length: 200 }, (_, i) => {
-      const d = new Date(today.getTime() - (200 - i) * 24 * 60 * 60 * 1000);
+    const longHistory = Array.from({ length: 2000 }, (_, i) => {
+      const d = new Date(today.getTime() - (2000 - i) * 24 * 60 * 60 * 1000);
       return { recorded_at: d.toISOString(), value: 0.5 + i * 0.001 };
     });
     mockUseKPIValue.mockReturnValue({
@@ -238,8 +239,8 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     });
 
     // The recharts container is present. The "Data Points" KPI card reflects
-    // the filtered series length; default range is 90d so we expect a count
-    // strictly less than the full 200-point history.
+    // the filtered series length; default range is 1825d (5 Years) so we expect a
+    // count strictly less than the full 2000-point history.
     const recharts = container.querySelector('.recharts-responsive-container');
     expect(recharts).toBeInTheDocument();
 
@@ -248,12 +249,12 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     const card = dataPointsLabel.closest('[class*="rounded"]');
     expect(card).not.toBeNull();
     const txt = card!.textContent ?? '';
-    // Extract digits; must be a positive integer less than 200.
+    // Extract digits; must be a positive integer less than 2000.
     const m = txt.match(/(\d{1,4})/);
     expect(m).not.toBeNull();
     const count = Number(m![1]);
     expect(count).toBeGreaterThan(0);
-    expect(count).toBeLessThan(200);
+    expect(count).toBeLessThan(2000);
   });
 
   it('renders a recharts container fed by live hook history data', () => {
