@@ -46,3 +46,28 @@ complement_inhibitor_status.
 - Per the user's standing rule ("only generate new data if the models fail
   performance"), this measured ~0.59 is the trigger for a proceed-vs-regenerate
   decision. Discontinuation is the exact complement → same ~0.59.
+
+## Update (2026-06-14): user chose REGENERATE (moderate boost) — DONE, re-measured 0.77
+
+Root cause of the weak 0.59: in `cohort_outcomes.generate_discontinuation_outcomes`
+the dominant outcome driver was `treatment_arm` (±1.2 logit, leakage-denylisted →
+invisible to a leakage-safe model), while the observable confounders were tiny
+(`severity` 0.18, `academic` −0.40) and `geographic_region` had **zero** effect
+(pure noise), plus heavy `Normal(0, 0.5)` noise.
+
+**DGP change (commit `e66d38e3`), causal treatment effect UNCHANGED:**
+`_DISC_SEVERITY_COEF` 0.18→0.55, `_DISC_ACADEMIC_COEF` −0.40→−0.80, new
+`_DISC_REGION_LOGIT` (midwest −0.9 / northeast −0.3 / south +0.3 / west +0.9),
+noise 0.5→0.35, `_DISC_INTERCEPT` −0.85→−2.4 (re-tuned for the band). Locked by a
+measured sim on the real covariates (conf/noise sweep → moderate target ~0.78).
+
+**Targeted regeneration (NOT full re-gen — initiation/TRUE_ATE untouched):** applied
+the new DGP to the existing 25k synthetic patients' covariates and UPDATEd only
+`persistent_180d`/`discontinued_180d` (backup `~/db_backups/persist_backup_*.tsv`).
+Verified on the live DB: disc 0.497 / persistent 0.503 (in-band), 0 complement
+violations, region monotonic (midwest 0.320 → northeast 0.442 → south 0.568 →
+west 0.663), `treatment_initiated` sum unchanged (8750).
+
+**Re-measured holdout AUC on regenerated data:** base-3 **0.7747** (was 0.5936),
++brand 0.7748, +extras 0.7733 → base-3 still wins. `keep_columns` = base-3 stands.
+Discontinuation is the exact complement → same ~0.77.
