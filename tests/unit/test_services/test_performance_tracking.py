@@ -33,10 +33,10 @@ from src.services.performance_tracking import (
 def default_config() -> PerformanceTrackingConfig:
     """Create default performance tracking configuration."""
     return PerformanceTrackingConfig(
-        tracked_metrics=["accuracy", "precision", "recall", "f1_score", "auc_roc"],
+        tracked_metrics=["accuracy", "precision", "recall", "f1", "auc_roc"],
         degradation_threshold=0.1,
         absolute_min_accuracy=0.5,
-        trend_window_days=30,
+        trend_window_days=365,
         min_samples=100,
         baseline_window_days=7,
         current_window_days=1,
@@ -74,10 +74,10 @@ class TestPerformanceTrackingConfig:
         assert "accuracy" in config.tracked_metrics
         assert "precision" in config.tracked_metrics
         assert "recall" in config.tracked_metrics
-        assert "f1_score" in config.tracked_metrics
+        assert "f1" in config.tracked_metrics
         assert config.degradation_threshold == 0.1
         assert config.absolute_min_accuracy == 0.5
-        assert config.trend_window_days == 30
+        assert config.trend_window_days == 365
         assert config.min_samples == 100
 
     def test_custom_config_values(self, default_config: PerformanceTrackingConfig):
@@ -231,7 +231,7 @@ class TestPerformanceTracker:
         assert "accuracy" in metrics
         assert "precision" in metrics
         assert "recall" in metrics
-        assert "f1_score" in metrics
+        assert "f1" in metrics
         assert 0 <= metrics["accuracy"] <= 1
         assert 0 <= metrics["precision"] <= 1
 

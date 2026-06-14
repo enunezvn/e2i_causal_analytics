@@ -1115,7 +1115,7 @@ async def record_performance(
 async def get_performance_trend(
     model_id: str,
     metric_name: str = Query(default="accuracy", description="Metric to analyze"),
-    days: int = Query(default=30, ge=1, le=90, description="Days of history"),
+    days: int = Query(default=365, ge=1, le=1825, description="Days of history"),
 ) -> PerformanceTrendResponse:
     """
     Get performance trend for a model.
@@ -1124,7 +1124,7 @@ async def get_performance_trend(
 
     Args:
         model_id: Model version/ID
-        metric_name: Metric to analyze (accuracy, precision, recall, f1_score, auc_roc)
+        metric_name: Metric to analyze (accuracy, precision, recall, f1, auc_roc)
         days: Number of days to look back
 
     Returns:
