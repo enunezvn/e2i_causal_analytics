@@ -56,7 +56,7 @@ class PerformanceTrackingConfig:
             "accuracy",
             "precision",
             "recall",
-            "f1_score",
+            "f1",
             "auc_roc",
         ]
     )
@@ -64,7 +64,7 @@ class PerformanceTrackingConfig:
     # Thresholds
     degradation_threshold: float = 0.1  # 10% relative drop
     absolute_min_accuracy: float = 0.5  # Minimum acceptable accuracy
-    trend_window_days: int = 30
+    trend_window_days: int = 365
     min_samples: int = 100
 
     # Comparison settings
@@ -188,11 +188,11 @@ class PerformanceTracker:
             metrics["recall"] = 0.0
 
         try:
-            metrics["f1_score"] = float(
+            metrics["f1"] = float(
                 f1_score(actuals, predictions, average="weighted", zero_division=0)
             )
         except Exception:
-            metrics["f1_score"] = 0.0
+            metrics["f1"] = 0.0
 
         # AUC-ROC (requires probability scores)
         if scores is not None:
