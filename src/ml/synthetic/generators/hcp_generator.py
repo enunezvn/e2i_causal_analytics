@@ -64,6 +64,12 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
         RegionEnum.WEST: 0.19,
     }
 
+    # Sales territories nested within each geographic_region. Each region is
+    # split into this many territories; territory_id = "<region>-T<NN>". This
+    # populates hcp_profiles.territory_id (the single key the territory_metrics
+    # ETL groups on; previously NULL -> the panel was always empty).
+    TERRITORIES_PER_REGION = 10
+
     @property
     def entity_type(self) -> str:
         """Return entity type."""
@@ -132,6 +138,21 @@ class HCPGenerator(BaseGenerator[pd.DataFrame]):
                 "adoption_category": adoption_category,
             }
         )
+
+        # Territory / sales-rep assignment. geographic_region is the only
+        # populated geo field, so nest TERRITORIES_PER_REGION deterministic
+        # territories within each region: territory_id = "<region>-T<NN>",
+        # sales_rep_id = "REP-<territory_id>" (one rep per territory). Drawn from
+        # the seeded RNG AFTER all other columns, so existing draws are unchanged.
+        region_arr = df["geographic_region"].to_numpy()
+        terr_idx = self._rng.integers(0, self.TERRITORIES_PER_REGION, size=n)
+        territory_ids = [
+            f"{region}-T{idx:02d}" for region, idx in zip(region_arr, terr_idx, strict=True)
+        ]
+        # Build both as plain lists (not "REP-" + Series) so n_records=0 yields
+        # empty columns instead of an empty-Series string-concat type error.
+        df["territory_id"] = territory_ids
+        df["sales_rep_id"] = [f"REP-{tid}" for tid in territory_ids]
 
         self._log(f"Generated {len(df)} HCP profiles")
         return df
