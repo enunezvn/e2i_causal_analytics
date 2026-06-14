@@ -325,6 +325,36 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     }
   });
 
+  it('default selection yields persistence_remibrutinib_goldstd_lr_v1', () => {
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    // After initial render the hook should have been called with the default per-brand model id.
+    expect(mockUsePerformanceTrend).toHaveBeenCalled();
+    const lastCall = mockUsePerformanceTrend.mock.calls[
+      mockUsePerformanceTrend.mock.calls.length - 1
+    ];
+    expect(lastCall[0].model_id).toBe('persistence_remibrutinib_goldstd_lr_v1');
+  });
+
+  it('cohort+brand dropdowns update the queried model id (initiation + Kisqali)', async () => {
+    const user = userEvent.setup();
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    // Change cohort to initiation
+    const cohortSelect = screen.getByRole('combobox', { name: /cohort/i });
+    await user.selectOptions(cohortSelect, 'initiation');
+
+    // Change brand to Kisqali
+    const brandSelect = screen.getByRole('combobox', { name: /brand/i });
+    await user.selectOptions(brandSelect, 'Kisqali');
+
+    await waitFor(() => {
+      const allCalls = mockUsePerformanceTrend.mock.calls;
+      const lastModelId = allCalls[allCalls.length - 1]?.[0]?.model_id;
+      expect(lastModelId).toBe('initiation_kisqali_goldstd_lr_v1');
+    });
+  });
+
   it('source file contains NO sample/mock data — by identifier AND by behavior', () => {
     const sourcePath = path.resolve(__dirname, 'TimeSeries.tsx');
     const source = fs.readFileSync(sourcePath, 'utf-8');
