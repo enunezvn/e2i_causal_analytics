@@ -48,6 +48,8 @@ from typing import Any, Sequence
 
 import pandas as pd
 
+from src.mlops.gold_standard_eval.cohort_spec import CohortSpec
+
 logger = logging.getLogger(__name__)
 
 # Columns we always SELECT from patient_journeys — label + id/split (for
@@ -113,7 +115,7 @@ class FeatureBuilder:
         # fb.feature_columns now holds the ordered list of encoded column names.
     """
 
-    def __init__(self, spec: object, keep_columns: tuple[str, ...] | None = None) -> None:
+    def __init__(self, spec: CohortSpec, keep_columns: tuple[str, ...] | None = None) -> None:
         self.spec = spec
         # ``None`` → use the module-level locked allowlist; pass () to disable
         # the allowlist (keep all non-denylisted columns), e.g. for ad-hoc probes.

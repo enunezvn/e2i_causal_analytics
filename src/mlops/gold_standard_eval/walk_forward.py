@@ -59,6 +59,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from src.mlops.gold_standard_eval.cohort_spec import CohortSpec
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
 from src.mlops.gold_standard_eval.scorer import score
 
@@ -112,7 +113,7 @@ class WalkForwardRunner:
 
     def __init__(
         self,
-        spec: object,
+        spec: CohortSpec,
         *,
         fit_fn: FitFn | None = None,
         predict_fn: PredictFn | None = None,
@@ -168,7 +169,7 @@ class WalkForwardRunner:
             only_class = int(model.classes_[0])
             return np.full(len(eval_df), float(only_class))
         pos_idx = list(model.classes_).index(1) if 1 in model.classes_ else 0
-        return proba[:, pos_idx]
+        return np.asarray(proba[:, pos_idx])
 
     # ------------------------------------------------------------------ #
     # The walk-forward loop.                                              #
@@ -311,7 +312,7 @@ class WalkForwardRunner:
 
 
 def run_walk_forward(
-    spec: object,
+    spec: CohortSpec,
     frame: pd.DataFrame,
     *,
     min_train_n: int = 50,

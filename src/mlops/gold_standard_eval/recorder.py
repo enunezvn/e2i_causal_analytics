@@ -82,6 +82,16 @@ class MetricRecorder:
 
         # Step 1 — resolve model handle → uuid ONCE
         model_id = await _resolve_model_id(self.repo.client, model_version)
+        if model_id is None:
+            # Fail-closed: an unresolved handle means the cohort model is not
+            # registered. Writing metrics against a NULL model_id would create
+            # rows the time-series read path (which resolves by model_id) cannot
+            # find, AND break idempotency (the delete scope below is keyed by
+            # model_id). Surface the misconfiguration instead.
+            raise ValueError(
+                f"Cannot record metrics: model handle {model_version!r} did not "
+                "resolve to a registered model_id (register the cohort model first)."
+            )
 
         # Step 2 — delete prior rows (idempotency); fires BEFORE any insert
         deleted = await self.repo.delete_metrics(model_id, source, split_version)
