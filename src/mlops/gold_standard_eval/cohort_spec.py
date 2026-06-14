@@ -18,7 +18,9 @@ from dataclasses import dataclass
 class CohortSpec:
     name: str
     target: str  # ml_experiments.prediction_target
-    brand: str  # patient_journeys.brand partition
+    brand: (
+        str | None
+    )  # patient_journeys.brand partition; None = all brands (no brand partition filter)
     label_column: str  # ground-truth column in patient_journeys
     grain: str  # "patient" | "hcp"
     base_covariates: tuple[str, ...]  # leakage-safe seed features (from _PJ_COHORTS)
@@ -39,4 +41,28 @@ INITIATION = CohortSpec(
         "academic_hcp",
         "geographic_region",
     ),
+)
+
+# Grounded in _PJ_COHORTS["persistence"]/["discontinuation"] in
+# src/services/cohort_resolution.py. Both labels are 180-day post-index outcomes
+# (each is the OTHER cohort's leakage column; both already in
+# feature_builder.LEAKAGE_DENYLIST). brand=None: persistence is brand-agnostic in
+# the synthetic DGP (pos rate ~0.55 across all 3 brands) so we train ALL brands;
+# discontinued_180d == 1 - persistent_180d exactly in-data.
+PERSISTENCE = CohortSpec(
+    name="persistence",
+    target="pnh_persistence",
+    brand=None,
+    label_column="persistent_180d",
+    grain="patient",
+    base_covariates=("disease_severity", "academic_hcp", "geographic_region"),
+)
+
+DISCONTINUATION = CohortSpec(
+    name="discontinuation",
+    target="pnh_discontinuation",
+    brand=None,
+    label_column="discontinued_180d",
+    grain="patient",
+    base_covariates=("disease_severity", "academic_hcp", "geographic_region"),
 )

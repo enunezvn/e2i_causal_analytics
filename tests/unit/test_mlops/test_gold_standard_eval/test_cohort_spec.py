@@ -12,3 +12,21 @@ def test_initiation_spec_matches_codebase_intent():
     assert INITIATION.label_column not in INITIATION.base_covariates
     for leak in ("days_to_treatment", "discontinued_180d", "persistent_180d", "adherence_rate"):
         assert leak not in INITIATION.base_covariates
+
+
+def test_persistence_and_discontinuation_specs():
+    from src.mlops.gold_standard_eval.cohort_spec import DISCONTINUATION, PERSISTENCE
+
+    assert PERSISTENCE.target == "pnh_persistence"
+    assert PERSISTENCE.label_column == "persistent_180d"
+    assert PERSISTENCE.brand is None
+    assert PERSISTENCE.grain == "patient"
+    assert PERSISTENCE.base_covariates == ("disease_severity", "academic_hcp", "geographic_region")
+    assert DISCONTINUATION.target == "pnh_discontinuation"
+    assert DISCONTINUATION.label_column == "discontinued_180d"
+    assert DISCONTINUATION.brand is None
+    assert DISCONTINUATION.base_covariates == (
+        "disease_severity",
+        "academic_hcp",
+        "geographic_region",
+    )

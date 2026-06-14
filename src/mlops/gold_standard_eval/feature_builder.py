@@ -275,12 +275,14 @@ class FeatureBuilder:
             query = (
                 db.table("patient_journeys")
                 .select(select_expr)
-                .eq("brand", self.spec.brand)
                 # Gold-standard eval REQUIRES synthetic rows (opt-in explicit):
                 # patient_journeys.is_synthetic=True is the provenance flag for
                 # the synthetic cohort used in gold-standard evaluation.
                 .eq("is_synthetic", True)
             )
+            if self.spec.brand is not None:
+                # None brand = all-brands cohort (e.g. persistence): no partition filter.
+                query = query.eq("brand", self.spec.brand)
 
             if splits is not None:
                 # PostgREST .in_() for list membership.

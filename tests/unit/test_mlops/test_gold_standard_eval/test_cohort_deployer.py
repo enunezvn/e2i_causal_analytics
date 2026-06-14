@@ -308,3 +308,53 @@ async def test_register_cohort_model_refuses_missing_artifact():
             auc=0.671,
             feature_count=4,
         )
+
+
+@pytest.mark.asyncio
+async def test_register_cohort_model_uses_spec_target_for_experiment(tmp_path):
+    """A non-initiation spec must resolve/create its experiment under its own target.
+
+    PERSISTENCE has target='pnh_persistence' — the experiment row inserted must
+    carry that target, NOT the initiation target ('csu_treatment_initiation').
+    The registry row must still land at stage='staging' and is_synthetic=False.
+    """
+    from src.mlops.gold_standard_eval.cohort_spec import PERSISTENCE
+
+    X, y, feature_columns = _tiny_gold_standard_xy()
+    model = train_cohort_model(INITIATION, X, y)  # estimator shape doesn't matter here
+    artifact_path = serialize_model(model, tmp_path / "artifacts", "pnh_persistence_goldstd_lr_v1")
+
+    client = FakeClient()
+    returned = await register_cohort_model(
+        client,
+        PERSISTENCE,
+        model_name="pnh_persistence_goldstd_lr_v1",
+        experiment_name="persistence_goldstd_eval_v1",
+        artifact_path=artifact_path,
+        auc=0.77,
+        feature_count=9,
+        training_samples=8336,
+    )
+
+    assert returned == "pnh_persistence_goldstd_lr_v1"
+
+    # The experiment row must be created under the PERSISTENCE target.
+    experiment_inserts = [r for (t, r) in client.inserts if t == "ml_experiments"]
+    assert len(experiment_inserts) == 1, f"expected 1 experiment insert, got {experiment_inserts}"
+    exp_row = experiment_inserts[0]
+    assert exp_row["prediction_target"] == "pnh_persistence", (
+        f"experiment must be created under 'pnh_persistence', got {exp_row['prediction_target']!r}"
+    )
+    assert exp_row["experiment_name"] == "persistence_goldstd_eval_v1"
+
+    # Registry row must still be at staging, is_synthetic=False.
+    registry_inserts = [r for (t, r) in client.inserts if t == "ml_model_registry"]
+    assert len(registry_inserts) == 1
+    row = registry_inserts[0]
+    assert row["stage"] == "staging"
+    assert row["is_synthetic"] is False
+    assert row["model_name"] == "pnh_persistence_goldstd_lr_v1"
+    assert row["auc"] == 0.77
+    assert row["feature_count"] == 9
+    assert row["training_samples"] == 8336
+    assert row["experiment_id"] == FakeClient.EXPERIMENT_ID

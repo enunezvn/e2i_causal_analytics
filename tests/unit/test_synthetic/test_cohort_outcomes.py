@@ -25,17 +25,19 @@ def _inputs(n=4000, seed=7):
         "high_severity",
         np.where(disease_severity > 4, "medium_severity", "low_severity"),
     )
-    return rng, treatment_arm, disease_severity, academic_hcp, segment
+    geographic_region = rng.choice(["midwest", "northeast", "south", "west"], n)
+    return rng, treatment_arm, disease_severity, academic_hcp, segment, geographic_region
 
 
 def test_discontinuation_prevalence_in_band():
-    rng, t, sev, acad, seg = _inputs()
+    rng, t, sev, acad, seg, geo = _inputs()
     out = generate_discontinuation_outcomes(
         rng=rng,
         treatment_arm=t,
         disease_severity=sev,
         academic_hcp=acad,
         segment=seg,
+        geographic_region=geo,
         brand_cate_scale=1.0,
     )
     prev = out["discontinued_180d"].mean()
@@ -45,13 +47,14 @@ def test_discontinuation_prevalence_in_band():
 
 
 def test_treatment_reduces_discontinuation_recoverable():
-    rng, t, sev, acad, seg = _inputs()
+    rng, t, sev, acad, seg, geo = _inputs()
     out = generate_discontinuation_outcomes(
         rng=rng,
         treatment_arm=t,
         disease_severity=sev,
         academic_hcp=acad,
         segment=seg,
+        geographic_region=geo,
         brand_cate_scale=1.0,
     )
     disc = out["discontinued_180d"]
@@ -60,13 +63,14 @@ def test_treatment_reduces_discontinuation_recoverable():
 
 
 def test_retention_benefit_is_non_negative():
-    rng, t, sev, acad, seg = _inputs()
+    rng, t, sev, acad, seg, geo = _inputs()
     out = generate_discontinuation_outcomes(
         rng=rng,
         treatment_arm=t,
         disease_severity=sev,
         academic_hcp=acad,
         segment=seg,
+        geographic_region=geo,
         brand_cate_scale=1.0,
     )
     assert (out["retention_benefit"] >= 0).all()
@@ -74,7 +78,7 @@ def test_retention_benefit_is_non_negative():
 
 
 def test_brand_scale_changes_structure():
-    rng1, t, sev, acad, seg = _inputs(seed=11)
+    rng1, t, sev, acad, seg, geo = _inputs(seed=11)
     rng2, *_ = _inputs(seed=11)
     a = generate_discontinuation_outcomes(
         rng=rng1,
@@ -82,6 +86,7 @@ def test_brand_scale_changes_structure():
         disease_severity=sev,
         academic_hcp=acad,
         segment=seg,
+        geographic_region=geo,
         brand_cate_scale=0.6,
     )
     b = generate_discontinuation_outcomes(
@@ -90,6 +95,23 @@ def test_brand_scale_changes_structure():
         disease_severity=sev,
         academic_hcp=acad,
         segment=seg,
+        geographic_region=geo,
         brand_cate_scale=1.4,
     )
     assert a["discontinued_180d"].mean() != b["discontinued_180d"].mean()
+
+
+def test_region_drives_discontinuation():
+    rng, t, sev, acad, seg, geo = _inputs(n=8000)
+    out = generate_discontinuation_outcomes(
+        rng=rng,
+        treatment_arm=t,
+        disease_severity=sev,
+        academic_hcp=acad,
+        segment=seg,
+        geographic_region=geo,
+        brand_cate_scale=1.0,
+    )
+    disc = out["discontinued_180d"]
+    # west has the highest positive region pull (+0.9), midwest the most negative (-0.9)
+    assert disc[geo == "west"].mean() > disc[geo == "midwest"].mean()
