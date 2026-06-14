@@ -110,7 +110,12 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     # Execute the actual node function
                     result = await func(state)
 
-                    duration_ms = int((time.time() - start_time) * 1000)
+                    # Floor a real positive elapsed time to >=1ms: recording 0 is
+                    # indistinguishable downstream from "unmeasured" (analytics
+                    # drops falsy duration_ms), so a fast node would vanish from
+                    # the latency panel. Honest ms-resolution quantization.
+                    elapsed = time.time() - start_time
+                    duration_ms = max(1, int(elapsed * 1000)) if elapsed > 0 else 0
 
                     # Set output data (sanitized)
                     output_summary = {
@@ -282,7 +287,10 @@ async def traced_apply_adjustment_policy(state: CausalImpactState) -> Dict[str, 
         try:
             result = await apply_adjustment_set_policy(state)
 
-            duration_ms = int((time.time() - start_time) * 1000)
+            # Floor positive elapsed time to >=1ms (see traced_node) so a real
+            # sub-ms node is not dropped by analytics as "unmeasured".
+            elapsed = time.time() - start_time
+            duration_ms = max(1, int(elapsed * 1000)) if elapsed > 0 else 0
 
             policy_log = result.get("policy_log") or []
             cg = result.get("causal_graph") or {}

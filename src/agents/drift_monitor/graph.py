@@ -14,10 +14,15 @@ Graph Architecture: .claude/specialists/Agent_Specialists_Tiers 1-5/drift-monito
 Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
+from functools import partial
+
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.agents.drift_monitor.nodes import (
     AlertAggregatorNode,
     ConceptDriftNode,
@@ -56,13 +61,15 @@ def create_drift_monitor_graph() -> CompiledStateGraph:
     structural_drift_node = StructuralDriftNode()  # V4.4
     alert_aggregator_node = AlertAggregatorNode()
 
-    # Add nodes to graph
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("data_drift", data_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("model_drift", model_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("concept_drift", concept_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("structural_drift", structural_drift_node.execute)  # type: ignore[type-var,arg-type,call-overload]  # V4.4
-    workflow.add_node("alert_aggregator", alert_aggregator_node.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(add_audited_node, agent_name="drift_monitor", agent_tier=AgentTier.MONITORING)
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "data_drift", data_drift_node.execute)
+    timed(workflow, "model_drift", model_drift_node.execute)
+    timed(workflow, "concept_drift", concept_drift_node.execute)
+    timed(workflow, "structural_drift", structural_drift_node.execute)  # V4.4
+    timed(workflow, "alert_aggregator", alert_aggregator_node.execute)
 
     # Define sequential workflow starting with audit initialization
     # V4.4: Added structural_drift between concept_drift and alert_aggregator

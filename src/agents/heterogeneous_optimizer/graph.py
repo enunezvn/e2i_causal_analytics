@@ -10,10 +10,15 @@ Observability:
 - Audit chain recording for tamper-evident logging
 """
 
+from functools import partial
+
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.utils.audit_chain import AgentTier
 
 from .nodes.cate_estimator import CATEEstimatorNode
@@ -82,14 +87,20 @@ def create_heterogeneous_optimizer_graph(
     # Build graph
     workflow = StateGraph(HeterogeneousOptimizerState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("estimate_cate", cate_estimator.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("analyze_segments", segment_analyzer.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node,
+        agent_name="heterogeneous_optimizer",
+        agent_tier=AgentTier.CAUSAL_ANALYTICS,
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "estimate_cate", cate_estimator.execute)
+    timed(workflow, "analyze_segments", segment_analyzer.execute)
     if enable_hierarchical:
-        workflow.add_node("hierarchical_analysis", hierarchical_analyzer.execute)  # type: ignore[type-var,arg-type,call-overload,union-attr]
-    workflow.add_node("learn_policy", policy_learner.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("generate_profiles", profile_generator.execute)  # type: ignore[type-var,arg-type,call-overload]
+        timed(workflow, "hierarchical_analysis", hierarchical_analyzer.execute)  # type: ignore[union-attr]
+    timed(workflow, "learn_policy", policy_learner.execute)
+    timed(workflow, "generate_profiles", profile_generator.execute)
     workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
 
     # Entry point - start with audit initialization

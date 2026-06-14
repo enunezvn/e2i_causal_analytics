@@ -18,12 +18,16 @@ Observability:
 Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 """
 
+from functools import partial
 from typing import Optional
 
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.agents.base.audit_chain_mixin import create_workflow_initializer
+from src.agents.base.audit_chain_mixin import (
+    add_audited_node,
+    create_workflow_initializer,
+)
 from src.services.roi_calculation import ROICalculationService
 from src.utils.audit_chain import AgentTier
 
@@ -83,13 +87,17 @@ def create_gap_analyzer_graph(
     # Create graph
     workflow = StateGraph(GapAnalyzerState)
 
-    # Add nodes
-    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain
-    workflow.add_node("gap_detector", gap_detector.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("roi_calculator", roi_calculator.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("instrument_analyzer", instrument_analyzer.execute)  # type: ignore[type-var,arg-type,call-overload]  # #357
-    workflow.add_node("prioritizer", prioritizer.execute)  # type: ignore[type-var,arg-type,call-overload]
-    workflow.add_node("formatter", formatter.execute)  # type: ignore[type-var,arg-type,call-overload]
+    # Add nodes. Business nodes are wrapped via add_audited_node so each emits a
+    # real timed audit entry (duration_ms) -> populates the analytics latency panel.
+    timed = partial(
+        add_audited_node, agent_name="gap_analyzer", agent_tier=AgentTier.CAUSAL_ANALYTICS
+    )
+    workflow.add_node("audit_init", audit_initializer)  # type: ignore[type-var,arg-type,call-overload]  # Initialize audit chain (genesis)
+    timed(workflow, "gap_detector", gap_detector.execute)
+    timed(workflow, "roi_calculator", roi_calculator.execute)
+    timed(workflow, "instrument_analyzer", instrument_analyzer.execute)  # #357
+    timed(workflow, "prioritizer", prioritizer.execute)
+    timed(workflow, "formatter", formatter.execute)
 
     # Define linear flow starting with audit initialization.
     # #357: instrument_analyzer runs between roi_calculator and prioritizer so that

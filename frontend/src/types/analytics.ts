@@ -29,13 +29,15 @@ export interface AgentMetrics {
   failed_invocations: number;
   success_rate: number;
 
-  // Latency metrics (milliseconds)
-  avg_latency_ms: number;
-  p50_latency_ms: number;
-  p95_latency_ms: number;
-  p99_latency_ms: number;
-  min_latency_ms: number;
-  max_latency_ms: number;
+  // Latency metrics (milliseconds). null == UNMEASURED (agent has entries in the
+  // window but none carried a real duration_ms), DISTINCT from a measured 0ms.
+  // The per-agent table renders "—" for null, never a fabricated "0ms".
+  avg_latency_ms: number | null;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  p99_latency_ms: number | null;
+  min_latency_ms: number | null;
+  max_latency_ms: number | null;
 
   // Confidence
   avg_confidence: number | null;
@@ -51,7 +53,8 @@ export interface LatencyBreakdown {
   routing_ms: number;
   agent_dispatch_ms: number;
   synthesis_ms: number;
-  total_ms: number;
+  // null == UNMEASURED (no timed entries in window), distinct from a real 0ms.
+  total_ms: number | null;
 }
 
 // =============================================================================
@@ -66,11 +69,14 @@ export interface QueryMetricsSummary {
   failed_queries: number;
   success_rate: number;
 
-  // Latency summary
-  avg_latency_ms: number;
-  p50_latency_ms: number;
-  p95_latency_ms: number;
-  p99_latency_ms: number;
+  // Latency summary. null == UNMEASURED (no audit entry in the window carried a
+  // duration_ms) — DISTINCT from a real measured 0ms. The UI renders "—" for
+  // null rather than a misleading "0ms / instant". Mirrors the backend
+  // QueryMetricsSummary, whose latency fields are now Optional[float] = None.
+  avg_latency_ms: number | null;
+  p50_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  p99_latency_ms: number | null;
 
   // Distribution
   intent_distribution: Record<string, number>;
@@ -142,7 +148,12 @@ export function getTierLabel(tier: number): string {
 // FORMATTING HELPERS
 // =============================================================================
 
-export function formatLatency(ms: number): string {
+export function formatLatency(ms: number | null | undefined): string {
+  // null/undefined == UNMEASURED (no timed entries in window). Render an em
+  // dash rather than a fabricated "0ms" that reads like "instant".
+  if (ms == null) {
+    return '—';
+  }
   if (ms < 1000) {
     return `${Math.round(ms)}ms`;
   }

@@ -320,8 +320,8 @@ export default function Analytics() {
         />
         <StatCard
           title="Avg Latency"
-          value={formatLatency(summary?.avg_latency_ms ?? 0)}
-          subtext={`p95: ${formatLatency(summary?.p95_latency_ms ?? 0)}`}
+          value={formatLatency(summary?.avg_latency_ms)}
+          subtext={`p95: ${formatLatency(summary?.p95_latency_ms)}`}
           icon={<Clock className="h-5 w-5" />}
         />
         <StatCard
@@ -378,7 +378,7 @@ export default function Analytics() {
               <div className="flex items-center justify-between text-sm">
                 <span className="font-medium">Total Average</span>
                 <span className="font-bold text-lg">
-                  {formatLatency(breakdown?.total_ms ?? 0)}
+                  {formatLatency(breakdown?.total_ms)}
                 </span>
               </div>
             </div>
@@ -397,19 +397,19 @@ export default function Analytics() {
           <CardContent>
             <div className="space-y-6">
               <div className="text-center">
-                <p className="text-4xl font-bold">{formatLatency(summary?.p50_latency_ms ?? 0)}</p>
+                <p className="text-4xl font-bold">{formatLatency(summary?.p50_latency_ms)}</p>
                 <p className="text-sm text-muted-foreground">p50 (Median)</p>
               </div>
               <div className="grid grid-cols-2 gap-4 pt-4 border-t">
                 <div className="text-center">
                   <p className="text-2xl font-semibold text-amber-600">
-                    {formatLatency(summary?.p95_latency_ms ?? 0)}
+                    {formatLatency(summary?.p95_latency_ms)}
                   </p>
                   <p className="text-xs text-muted-foreground">p95</p>
                 </div>
                 <div className="text-center">
                   <p className="text-2xl font-semibold text-rose-600">
-                    {formatLatency(summary?.p99_latency_ms ?? 0)}
+                    {formatLatency(summary?.p99_latency_ms)}
                   </p>
                   <p className="text-xs text-muted-foreground">p99</p>
                 </div>

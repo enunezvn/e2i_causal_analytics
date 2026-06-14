@@ -240,6 +240,7 @@ jobs:
             tests/unit/test_testing/ \
             tests/unit/test_tests_meta/ \
             tests/unit/test_tool_registry/ \
+            tests/unit/test_audited_node_timing.py \
             tests/unit/test_converter_schema.py \
             tests/unit/test_cost_matrix_injection.py \
             tests/unit/test_csu_converter_masking.py \
