@@ -47,22 +47,20 @@ def mock_prediction_result():
 
 @pytest.fixture
 def mock_batch_result():
-    """Mock batch prediction result from BentoML."""
+    """Mock batch prediction result matching the live flat contract.
+
+    Verified live (e2i_bentoml_dev, 2026-06-14): ``POST /predict_batch`` returns
+    ``{"batch_id", "total_samples", "predictions": [number, ...],
+    "processing_time_ms", "is_mock"}`` — ``predictions`` is a FLAT list of
+    scalar predictions (one per instance), NOT a list of per-instance dicts.
+    """
     return {
-        "predictions": [
-            {
-                "prediction": 0.85,
-                "confidence": 0.92,
-                "model_version": "v2.1.0",
-                "latency_ms": 10.0,
-            },
-            {
-                "prediction": 0.42,
-                "confidence": 0.88,
-                "model_version": "v2.1.0",
-                "latency_ms": 12.0,
-            },
-        ]
+        "batch_id": "batch-test-1",
+        "total_samples": 2,
+        "predictions": [0.85, 0.42],
+        "processing_time_ms": 22.0,
+        "is_mock": False,
+        "model_id": "tier0_df99c7ba:abc",
     }
 
 
@@ -576,14 +574,22 @@ class TestBatchPrediction:
         assert "failed_count" in data
         assert "total_latency_ms" in data
 
-    def test_batch_predict_partial_failure(self, mock_bentoml_client):
-        """Should handle partial failures gracefully."""
+    def test_batch_predict_maps_flat_scalar_predictions(self, mock_bentoml_client):
+        """Each flat scalar prediction maps to one per-instance response.
+
+        The live ``/predict_batch`` contract returns a flat list of scalar
+        predictions (no per-item error objects), so every returned scalar is a
+        successful per-instance prediction. This pins the route's mapping of
+        ``predictions: [number, ...]`` -> ``BatchPredictionResponse.predictions``.
+        """
         mock_bentoml_client.predict_batch = AsyncMock(
             return_value={
-                "predictions": [
-                    {"prediction": 0.8, "confidence": 0.9},
-                    {"error": "Invalid features"},
-                ]
+                "batch_id": "b-2",
+                "total_samples": 2,
+                "predictions": [0.8, 0.1],
+                "processing_time_ms": 15.0,
+                "is_mock": False,
+                "model_id": "tier0_df99c7ba:abc",
             }
         )
 
@@ -593,14 +599,16 @@ class TestBatchPrediction:
             json={
                 "instances": [
                     {"features": {"x": 1}},
-                    {"features": {"invalid": "data"}},
+                    {"features": {"y": 2}},
                 ]
             },
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["failed_count"] >= 1
+        assert data["success_count"] == 2
+        assert data["failed_count"] == 0
+        assert [p["prediction"] for p in data["predictions"]] == [0.8, 0.1]
 
     def test_batch_predict_empty_request(self):
         """Should reject empty batch request."""
@@ -697,18 +705,58 @@ class TestModelHealth:
 class TestModelsStatus:
     """Tests for GET /api/models/status."""
 
-    def test_models_status_success(self, mock_bentoml_client):
-        """Should return status of all models."""
+    def test_models_status_success(self, mock_bentoml_client, monkeypatch):
+        """Default model list is resolved from ml_model_registry, not hardcoded.
+
+        Patches the registry resolver to return real production model names and
+        asserts the status response is built over exactly those models.
+        """
+        from src.api.routes import predictions as predictions_module
+
+        monkeypatch.setattr(
+            predictions_module,
+            "_resolve_production_model_names",
+            AsyncMock(
+                return_value=[
+                    "csu_treatment_initiation_lr_balanced_v1",
+                    "csu_treatment_initiation_lr_full_v1",
+                ]
+            ),
+        )
+
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.get("/api/models/status")
 
         assert response.status_code == 200
         data = response.json()
-        assert "total_models" in data
+        assert data["total_models"] == 2
+        returned = {m["model_name"] for m in data["models"]}
+        assert returned == {
+            "csu_treatment_initiation_lr_balanced_v1",
+            "csu_treatment_initiation_lr_full_v1",
+        }
         assert "healthy_count" in data
         assert "unhealthy_count" in data
-        assert "models" in data
         assert "timestamp" in data
+
+    def test_models_status_empty_registry_is_honest(self, mock_bentoml_client, monkeypatch):
+        """When no production models are registered, return an honest empty
+        status rather than fabricating fictional handles."""
+        from src.api.routes import predictions as predictions_module
+
+        monkeypatch.setattr(
+            predictions_module,
+            "_resolve_production_model_names",
+            AsyncMock(return_value=[]),
+        )
+
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.get("/api/models/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_models"] == 0
+        assert data["models"] == []
 
     def test_models_status_with_filter(self, mock_bentoml_client):
         """Should filter to specific models when provided."""
@@ -722,8 +770,16 @@ class TestModelsStatus:
         data = response.json()
         assert data["total_models"] == 2
 
-    def test_models_status_mixed_health(self, mock_bentoml_client):
+    def test_models_status_mixed_health(self, mock_bentoml_client, monkeypatch):
         """Should report mixed health status correctly."""
+        from src.api.routes import predictions as predictions_module
+
+        monkeypatch.setattr(
+            predictions_module,
+            "_resolve_production_model_names",
+            AsyncMock(return_value=["model_a", "model_b", "model_c"]),
+        )
+
         call_count = [0]
 
         async def alternating_health(*args, **kwargs):
@@ -731,13 +787,13 @@ class TestModelsStatus:
             if call_count[0] % 2 == 0:
                 return {
                     "status": "unhealthy",
-                    "endpoint": "http://localhost:3000/model",
+                    "endpoint": "http://localhost:3000",
                     "error": "Down",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
             return {
                 "status": "healthy",
-                "endpoint": "http://localhost:3000/model",
+                "endpoint": "http://localhost:3000",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -748,8 +804,9 @@ class TestModelsStatus:
 
         assert response.status_code == 200
         data = response.json()
-        # With 3 default models: healthy_count + unhealthy_count = total_models
+        # 3 resolved models: healthy_count + unhealthy_count = total_models
         assert data["healthy_count"] + data["unhealthy_count"] == data["total_models"]
+        assert data["total_models"] == 3
 
 
 # =============================================================================

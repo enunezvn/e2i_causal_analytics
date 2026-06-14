@@ -31,6 +31,51 @@ from src.feature_store.online_feature_presence import missing_or_null_feature_fi
 
 logger = logging.getLogger(__name__)
 
+
+async def _resolve_production_model_names(limit: int = 50) -> List[str]:
+    """Resolve REAL production model names from ``ml_model_registry``.
+
+    Drives the model-status selector from the registry instead of fictional
+    hardcoded handles (``churn_model``/``conversion_model``/``causal_model``,
+    which are not registered and never resolve). Returns the names of models at
+    ``stage='production'`` and ``is_synthetic=false`` — the genuine,
+    user-facing production models (e.g. ``csu_treatment_initiation_lr_*_v1``).
+
+    Best-effort: returns ``[]`` if the registry is unreachable so the caller can
+    surface an honest "no models" state rather than fabricating handles. Tests
+    monkey-patch this function directly.
+    """
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+
+        client = await get_async_supabase_client()
+        if client is None:
+            return []
+
+        result = await (
+            client.table("ml_model_registry")
+            .select("model_name")
+            .eq("stage", "production")
+            .eq("is_synthetic", False)
+            .order("registered_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows: List[Dict[str, Any]] = result.data or []
+        # De-dup while preserving order (a model may have multiple versions).
+        seen: set[str] = set()
+        names: List[str] = []
+        for r in rows:
+            name = r.get("model_name")
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        return names
+    except Exception as e:
+        logger.warning("Could not resolve production models from registry: %s", e)
+        return []
+
+
 router = APIRouter(
     prefix="/api/models",
     tags=["Model Predictions"],
@@ -403,36 +448,40 @@ async def predict_batch(
     failed_count = 0
 
     try:
-        # Build batch input
-        batch_data = [
-            {
-                "features": inst.features,
-                "return_proba": inst.return_probabilities,
-                "return_intervals": inst.return_intervals,
-            }
-            for inst in request.instances
-        ]
+        # Build batch input matching the BentoML ``BatchPredictionInput`` schema
+        # (verified live 2026-06-14): {"batch_id": str, "features": [[...], ...]}.
+        # NOTE (per-panel follow-up): ``inst.features`` is a feature *dict*; the
+        # service expects an ordered numeric row. Per-instance feature
+        # vectorization (dict -> ordered 2D array, e.g. via Feast feature refs)
+        # is tracked as a follow-up; here we forward the feature payloads as
+        # provided so the transport contract (path + wrapper) is correct.
+        import uuid
+
+        batch_data = {
+            "batch_id": str(uuid.uuid4()),
+            "features": [inst.features for inst in request.instances],
+        }
 
         # Call batch endpoint
         result = await client.predict_batch(model_name, batch_data)
 
-        # Process results
+        # Flat-contract response: {"batch_id", "total_samples", "predictions":
+        # [number, ...], "processing_time_ms", "is_mock"}. ``predictions`` is a
+        # flat list of scalar predictions (one per instance), NOT a list of
+        # per-instance result dicts.
         raw_predictions = result.get("predictions", [])
-        for _i, pred in enumerate(raw_predictions):
-            if pred.get("error"):
-                failed_count += 1
-                continue
-
+        model_version = result.get("model_id")
+        for pred in raw_predictions:
             predictions.append(
                 PredictionResponse(
                     model_name=model_name,
-                    prediction=pred.get("prediction"),
-                    confidence=pred.get("confidence"),
-                    probabilities=pred.get("probabilities"),
-                    prediction_interval=pred.get("prediction_interval"),
-                    feature_importance=pred.get("feature_importance"),
-                    latency_ms=pred.get("latency_ms", 0),
-                    model_version=pred.get("model_version"),
+                    prediction=pred,
+                    confidence=None,
+                    probabilities=None,
+                    prediction_interval=None,
+                    feature_importance=None,
+                    latency_ms=result.get("processing_time_ms", 0),
+                    model_version=model_version,
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 )
             )
@@ -546,8 +595,12 @@ async def models_status(
     Returns:
         Status of all models
     """
-    # Default models if not specified
-    model_list = models or ["churn_model", "conversion_model", "causal_model"]
+    # Drive the model list from the registry, NOT fictional hardcoded handles.
+    # When the caller does not name specific models, resolve the real
+    # production models from ``ml_model_registry`` (stage='production',
+    # is_synthetic=false). An empty result yields an honest empty status rather
+    # than fabricated handles that never resolve.
+    model_list = models or await _resolve_production_model_names()
 
     model_statuses = []
     healthy_count = 0
