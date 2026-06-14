@@ -179,8 +179,14 @@ test.describe('Time Series Page', () => {
     })
 
     test('should show Trend stat', async () => {
-      // The trend summary card surfaces a "Trend" label once the
-      // performance-trend hook has data — which our inline mock guarantees.
+      // The "Trend Summary" card renders only once `performanceTrend.data`
+      // resolves, and that query is disabled until a model ID is entered
+      // (usePerformanceTrend → `enabled: !!model_id`; DEFAULT_MODEL_ID is '').
+      // So drive the page like a user: entering a model ID enables the fetch —
+      // fulfilled here by the inline `/trend` mock — which surfaces the card.
+      // Without this, the mock never receives a request and the card (and the
+      // KPI summary stats) stay empty: the failure seen in CI shard 4 (#941).
+      await timeSeriesPage.enterModelId('csu_treatment_initiation_lr_balanced_v1')
       await expect(timeSeriesPage.trendCard).toBeVisible()
     })
   })
