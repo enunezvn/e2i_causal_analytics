@@ -373,15 +373,19 @@ class HTTPModelClient:
                     if isinstance(predictions, list) and predictions
                     else result.get("prediction")  # legacy/mock single-value shape
                 )
-                positive_proba = (
-                    probabilities[0]
-                    if isinstance(probabilities, list) and probabilities
-                    else result.get("confidence", 0.5)
-                )
+                # Confidence is the real positive-class probability if present,
+                # else an explicit ``confidence`` from the response. We do NOT
+                # manufacture a neutral 0.5 — a fabricated confidence could flow
+                # into ensemble decisions looking like a real one. Absent both,
+                # propagate None and let downstream treat it as unknown.
+                if isinstance(probabilities, list) and probabilities:
+                    confidence = float(probabilities[0])
+                else:
+                    confidence = result.get("confidence")
                 prediction_result = {
                     "prediction": prediction,
                     "proba": probabilities,
-                    "confidence": result.get("confidence", positive_proba),
+                    "confidence": confidence,
                     "model_type": result.get("model_type", "unknown"),
                     "model_version": result.get("model_version") or result.get("model_id"),
                     "features_used": result.get("features_used", list(features.keys())),

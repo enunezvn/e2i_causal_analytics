@@ -748,3 +748,58 @@ class TestSHAPGetPredictionFailClosed:
             await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
         assert ei.value.status_code == 422
         bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_null_feature_fails_closed_not_zero_filled(self):
+        """A required feature present as null must 422, NOT be fabricated as 0.0."""
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(
+                features={"a": 1.0, "b": None}, model_type=ModelType.PROPENSITY
+            )
+        assert ei.value.status_code == 422
+        bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_feature_fails_closed_not_hash_encoded(self):
+        """A required string feature must 422, NOT be silently hash-encoded."""
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a", "b"]})
+        bento.predict = AsyncMock()
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(
+                features={"a": 1.0, "b": "Northeast"}, model_type=ModelType.PROPENSITY
+            )
+        assert ei.value.status_code == 422
+        bento.predict.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_probabilities_fails_closed_not_fabricated(self):
+        """A response with no probabilities must 502, NOT fabricate a 0.0
+        audit-grade probability from class predictions."""
+        from fastapi import HTTPException
+
+        from src.api.routes.explain import ModelType
+
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"feature_columns": ["a"]})
+        bento.predict = AsyncMock(return_value={"predictions": [0.0]})  # no probabilities
+        svc = self._service(bento)
+
+        with pytest.raises(HTTPException) as ei:
+            await svc.get_prediction(features={"a": 1.0}, model_type=ModelType.PROPENSITY)
+        assert ei.value.status_code == 502

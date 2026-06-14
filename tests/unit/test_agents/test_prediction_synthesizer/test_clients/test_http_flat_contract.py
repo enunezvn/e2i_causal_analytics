@@ -152,3 +152,34 @@ class TestMockFallbackPreserved:
         factory = ModelClientFactory(cfg)
         client = await factory.get_client("mock_model")
         assert type(client).__name__ == "MockModelClient"
+
+
+@pytest.mark.unit
+class TestNoFabricatedConfidence:
+    @pytest.mark.asyncio
+    async def test_missing_probabilities_yields_none_confidence_not_half(self):
+        """When the response carries no probabilities and no confidence, the
+        client propagates confidence=None — it does NOT manufacture a neutral
+        0.5 that could flow into ensemble decisions as a real value."""
+        client = HTTPModelClient(
+            model_id="m",
+            endpoint_url="http://bento:3000",
+            config=HTTPModelClientConfig(model_id="m", endpoint_url="http://bento:3000"),
+        )
+
+        model_info_resp = MagicMock()
+        model_info_resp.status_code = 200
+        model_info_resp.json.return_value = {"feature_columns": ["a"]}
+        model_info_resp.raise_for_status = MagicMock()
+
+        predict_resp = MagicMock()
+        predict_resp.status_code = 200
+        predict_resp.json.return_value = {"predictions": [1.0]}  # no probabilities/confidence
+        predict_resp.raise_for_status = MagicMock()
+
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = [model_info_resp, predict_resp]
+            result = await client.predict(entity_id="E1", features={"a": 1.0}, time_horizon="30d")
+            assert result["confidence"] is None
+
+        await client.close()

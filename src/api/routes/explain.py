@@ -604,13 +604,33 @@ class RealTimeSHAPService:
                 ),
             )
 
-        missing = [name for name in feature_order if name not in numeric_features]
+        # STRICT validation against the RAW features (not the lossy numeric
+        # coercion): a required feature that is missing, null, or non-numeric
+        # FAILS CLOSED (422). We do NOT fall back to a fabricated 0.0 / hash
+        # encoding for a required model feature, because this vector feeds
+        # audit-grade SHAP and the stored audit record.
+        missing = [name for name in feature_order if name not in features or features[name] is None]
         if missing:
             raise HTTPException(
                 status_code=422,
-                detail=f"Missing required feature(s) for SHAP prediction: {missing}",
+                detail=f"Missing/null required feature(s) for SHAP prediction: {missing}",
             )
-        ordered_row = [float(numeric_features[name]) for name in feature_order]
+        ordered_row: List[float] = []
+        for name in feature_order:
+            raw = features[name]
+            coerced = numeric_features.get(name)
+            # Reject string/object required features: _prepare_numeric_features
+            # hash-encodes strings and zero-fills objects, which would fabricate
+            # an audit-grade feature value. Only genuine numerics/bools pass.
+            if not isinstance(raw, (int, float, bool)) or coerced is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Required feature '{name}' must be numeric for an "
+                        f"audit-grade SHAP prediction (got {type(raw).__name__})"
+                    ),
+                )
+            ordered_row.append(float(coerced))
 
         try:
             result = await self.bentoml_client.predict(
@@ -624,14 +644,24 @@ class RealTimeSHAPService:
                 detail=f"Model prediction failed for '{model_type.value}'",
             )
 
-        # Flat contract: predictions/probabilities are flat lists.
+        # Flat contract: ``probabilities`` is a flat positive-class list. A real
+        # probability is REQUIRED for the audit-grade SHAP record — we do NOT
+        # fabricate a 0.0 from class predictions on a malformed/empty response.
         probs = result.get("probabilities")
-        if isinstance(probs, list) and probs:
-            prediction_proba = float(probs[0])
-        else:
-            preds = result.get("predictions") or [0.0]
-            first = preds[0]
-            prediction_proba = float(first[0] if isinstance(first, list) else first)
+        if not isinstance(probs, list) or not probs:
+            logger.error(
+                "Model '%s' returned no probabilities; refusing to fabricate an "
+                "audit-grade SHAP probability.",
+                model_type.value,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Model '{model_type.value}' returned no probabilities; cannot "
+                    "produce an audit-grade SHAP prediction"
+                ),
+            )
+        prediction_proba = float(probs[0])
 
         return {
             "prediction_class": "high_propensity" if prediction_proba > 0.5 else "low_propensity",
