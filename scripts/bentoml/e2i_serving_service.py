@@ -366,8 +366,12 @@ class E2IModelService:
                 return self._preprocessor.transform(df)
             return self._preprocessor.transform(arr)
         except Exception as e:
-            logger.warning("Preprocessor transform failed, using raw input: %s", e)
-            return arr
+            # FAIL CLOSED: a bundled preprocessor exists but its transform
+            # failed. Running model.predict on the RAW (un-preprocessed) matrix
+            # would emit a plausible-but-wrong prediction the explain path then
+            # treats as audit-grade truth. Raise instead of returning raw input.
+            logger.error("Preprocessor transform failed: %s", e)
+            raise RuntimeError(f"Preprocessor transform failed: {e}") from e
 
     def _run_prediction(
         self,
@@ -504,35 +508,35 @@ class E2IModelService:
 
         n_rows = len(entity_ids)
         matrix: List[List[float]] = []
-        # Track which features had any null/non-numeric values coerced to 0.0
-        # so we can emit ONE aggregate WARNING per request rather than spamming
-        # one log line per coerced value (3A-I-1).
-        coerced_features: Dict[str, int] = {}
+        # FAIL CLOSED on null/missing/non-numeric Feast values. A Feast 200 can
+        # carry PRESENT-but-null values; zero-filling them and then labeling the
+        # response feature_source='feast_online' feeds the model a fabricated
+        # vector presented as real, audit-grade Feast data (the #576/#532 harm —
+        # mirrors the FastAPI route's anti-null-trap guard). A real 0.0 from
+        # Feast is a legitimate value and passes; only null/non-numeric raises.
+        invalid: Dict[str, int] = {}
         for row_idx in range(n_rows):
             row: List[float] = []
             for col_name, col_values in feature_columns.items():
                 raw = col_values[row_idx] if row_idx < len(col_values) else None
                 if raw is None:
-                    row.append(0.0)
-                    coerced_features[col_name] = coerced_features.get(col_name, 0) + 1
+                    invalid[col_name] = invalid.get(col_name, 0) + 1
+                    row.append(0.0)  # placeholder; request fails below
                     continue
                 try:
                     row.append(float(raw))
                 except (TypeError, ValueError):
-                    row.append(0.0)
-                    coerced_features[col_name] = coerced_features.get(col_name, 0) + 1
+                    invalid[col_name] = invalid.get(col_name, 0) + 1
+                    row.append(0.0)  # placeholder; request fails below
             matrix.append(row)
 
-        if coerced_features:
-            total_coerced = sum(coerced_features.values())
-            logger.warning(
-                "Feast online-features call returned %d null/non-numeric "
-                "values across %d feature(s); coerced to 0.0. Feature names: "
-                "%s. Investigate Feast feature view configuration if this "
-                "persists across requests.",
-                total_coerced,
-                len(coerced_features),
-                sorted(coerced_features.keys()),
+        if invalid:
+            # Do NOT run inference over a fabricated vector mislabeled
+            # feast_online. Fail loud so the caller sees an honest error.
+            raise RuntimeError(
+                "Feast returned null/non-numeric values for "
+                f"{sorted(invalid)}; refusing to fabricate a 'feast_online' "
+                "prediction over zero-filled features"
             )
 
         return matrix

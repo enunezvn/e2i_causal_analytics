@@ -249,16 +249,55 @@ async def test_feast_path_propagates_http_failure(
 
 
 @pytest.mark.asyncio
-async def test_feast_path_falls_back_to_zero_for_non_numeric_values(
+async def test_feast_path_fails_closed_on_null_or_non_numeric_values(
     serving_module: Any,
 ) -> None:
-    """Non-numeric / null values become 0.0 (don't crash model.predict)."""
+    """Null / non-numeric Feast values FAIL CLOSED (RuntimeError) — they are NOT
+    zero-filled and labeled feast_online (the #576/#532 audit-grade harm). A
+    fabricated 'feast_online' vector must never reach the model."""
     feast_body = {
         "metadata": {"feature_names": ["patient_id", "score", "label"]},
         "results": [
             {"values": ["P001"], "statuses": ["PRESENT"]},
             {"values": [None], "statuses": ["NOT_FOUND"]},
             {"values": ["not-a-number"], "statuses": ["PRESENT"]},
+        ],
+    }
+    response_mock = MagicMock()
+    response_mock.raise_for_status = MagicMock(return_value=None)
+    response_mock.json = MagicMock(return_value=feast_body)
+
+    http_client_mock = MagicMock()
+    http_client_mock.post = AsyncMock(return_value=response_mock)
+
+    with patch(
+        "httpx.AsyncClient",
+        return_value=_FakeAsyncContext(http_client_mock),
+    ):
+        service = serving_module.E2IModelService()
+        with pytest.raises(RuntimeError) as ei:
+            await service._fetch_features_from_feast(
+                entity_ids=["P001"],
+                feature_view="patient_engagement_features",
+                entity_key="patient_id",
+            )
+    # The error names the offending feature(s) and refuses the fabrication.
+    assert "null/non-numeric" in str(ei.value)
+    assert "score" in str(ei.value) and "label" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_feast_path_real_zero_is_not_treated_as_null(
+    serving_module: Any,
+) -> None:
+    """A genuine 0.0 from Feast is a legitimate value — it must NOT trip the
+    fail-closed guard (only null/non-numeric do)."""
+    feast_body = {
+        "metadata": {"feature_names": ["patient_id", "score", "rate"]},
+        "results": [
+            {"values": ["P001"], "statuses": ["PRESENT"]},
+            {"values": [0.0], "statuses": ["PRESENT"]},
+            {"values": [0.0], "statuses": ["PRESENT"]},
         ],
     }
     response_mock = MagicMock()
@@ -283,68 +322,28 @@ async def test_feast_path_falls_back_to_zero_for_non_numeric_values(
 
 
 @pytest.mark.asyncio
-async def test_feast_path_emits_aggregate_warning_on_coercion(
+async def test_preprocessor_failure_fails_closed_no_raw_predict(
     serving_module: Any,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """3A-I-1: silent zero-fill masks Feast misconfiguration. The
-    serving service must emit a SINGLE aggregate WARNING per request
-    (not one per coerced value) listing how many values were coerced
-    and which feature names were affected."""
-    feast_body = {
-        "metadata": {
-            "feature_names": ["patient_id", "score", "label", "rate"],
-        },
-        "results": [
-            {"values": ["P001", "P002"], "statuses": ["PRESENT", "PRESENT"]},
-            # score: one valid, one None (coerced)
-            {"values": [1.5, None], "statuses": ["PRESENT", "NOT_FOUND"]},
-            # label: both non-numeric strings (both coerced)
-            {"values": ["bad-1", "bad-2"], "statuses": ["PRESENT", "PRESENT"]},
-            # rate: both clean
-            {"values": [0.5, 0.7], "statuses": ["PRESENT", "PRESENT"]},
-        ],
-    }
-    response_mock = MagicMock()
-    response_mock.raise_for_status = MagicMock(return_value=None)
-    response_mock.json = MagicMock(return_value=feast_body)
+    """When a bundled preprocessor exists but its transform raises, the service
+    FAILS CLOSED — it does NOT silently predict on the raw (un-preprocessed)
+    matrix, which would emit a plausible-but-wrong audit-grade prediction."""
+    service = serving_module.E2IModelService()
 
-    http_client_mock = MagicMock()
-    http_client_mock.post = AsyncMock(return_value=response_mock)
+    class _Model:
+        def predict(self, arr):
+            raise AssertionError("model.predict must not run on raw input")
 
-    import logging
+    class _BadPreprocessor:
+        def transform(self, x):
+            raise ValueError("transform boom")
 
-    caplog.set_level(logging.WARNING, logger="e2i_serving_service")
+    service._model = _Model()
+    service._preprocessor = _BadPreprocessor()
+    service._feature_columns = None
 
-    with patch(
-        "httpx.AsyncClient",
-        return_value=_FakeAsyncContext(http_client_mock),
-    ):
-        service = serving_module.E2IModelService()
-        matrix = await service._fetch_features_from_feast(
-            entity_ids=["P001", "P002"],
-            feature_view="patient_engagement_features",
-            entity_key="patient_id",
-        )
+    import numpy as np
 
-    # The matrix is still produced (zero-fill keeps model.predict happy).
-    assert len(matrix) == 2
-    assert len(matrix[0]) == 3  # score, label, rate (patient_id stripped)
-
-    # Exactly ONE aggregate WARNING was emitted (not 3 — one per coerced
-    # value would be noisy).
-    coercion_warnings = [
-        rec
-        for rec in caplog.records
-        if rec.levelno == logging.WARNING and "coerced" in rec.getMessage()
-    ]
-    assert len(coercion_warnings) == 1, (
-        f"Expected exactly 1 aggregate coercion WARNING; got "
-        f"{len(coercion_warnings)}: {[r.getMessage() for r in coercion_warnings]}"
-    )
-    msg = coercion_warnings[0].getMessage()
-    # Total: 1 (score None) + 2 (label bad-1, bad-2) = 3
-    assert "3 null/non-numeric" in msg, msg
-    # Both affected feature names appear; rate (clean) does NOT.
-    assert "score" in msg and "label" in msg, msg
-    assert "rate" not in msg, msg
+    with pytest.raises(RuntimeError) as ei:
+        service._apply_preprocessor(np.array([[1.0, 2.0]]))
+    assert "Preprocessor transform failed" in str(ei.value)
