@@ -443,6 +443,25 @@ async def _persist_update(update: KnowledgeUpdate) -> None:
     await repo.upsert_update(update)
 
 
+async def _persist_cycle_artifacts(result: LearningResponse) -> None:
+    """Persist the patterns and updates a completed learning cycle produced.
+
+    Both the SYNC (``async_mode=False``) and ASYNC (``_run_learning_task``)
+    paths run the SAME ``_execute_learning_cycle`` and must persist its
+    artifacts identically — otherwise the GET /feedback/{patterns,updates}
+    endpoints (and the FeedbackLearning page's Patterns/Updates tabs) see the
+    detected patterns / proposed updates only for whichever path happened to
+    persist them. Historically only the async task did, so the sync path the
+    UI drives (``useQuickLearningCycle`` -> ``async_mode=false``) computed and
+    threw the artifacts away. Centralizing the two loops here keeps the paths
+    from drifting apart again.
+    """
+    for pattern in result.detected_patterns:
+        await _persist_pattern(pattern)
+    for update in result.proposed_updates:
+        await _persist_update(update)
+
+
 async def _persist_item(item: FeedbackItem) -> None:
     if _use_inmemory_fallback():
         _feedback_store.append(item)
@@ -563,6 +582,10 @@ async def run_learning_cycle(
     try:
         result = await _execute_learning_cycle(request)
         result.batch_id = batch_id
+        # Persist the detected patterns / proposed updates too — not just the
+        # batch — so the Patterns/Updates tabs reflect this cycle. The UI drives
+        # this sync path; without this the artifacts were silently discarded.
+        await _persist_cycle_artifacts(result)
         await _persist_batch(result)
         return result
     except HTTPException:
@@ -1279,11 +1302,8 @@ async def _run_learning_task(
         result = await _execute_learning_cycle(request)
         result.batch_id = batch_id
 
-        # Store patterns and updates
-        for pattern in result.detected_patterns:
-            await _persist_pattern(pattern)
-        for update in result.proposed_updates:
-            await _persist_update(update)
+        # Store patterns and updates (shared with the sync path).
+        await _persist_cycle_artifacts(result)
 
         # Store result
         await _persist_batch(result)
