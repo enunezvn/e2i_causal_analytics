@@ -540,7 +540,7 @@ def _elapsed_ms(start: float) -> int:
 
 
 def audited_node(
-    func: Callable[[Dict[str, Any]], Any],
+    func: Callable[..., Any],
     *,
     agent_name: str,
     agent_tier: AgentTier,
@@ -657,7 +657,7 @@ def audited_node(
 def add_audited_node(
     workflow: Any,
     name: str,
-    func: Callable[[Dict[str, Any]], Any],
+    func: Callable[..., Any],
     *,
     agent_name: str,
     agent_tier: AgentTier,

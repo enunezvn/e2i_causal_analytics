@@ -17,6 +17,7 @@ import asyncio
 from typing import Any, Dict, List, TypedDict
 from uuid import uuid4
 
+import pytest
 from langgraph.graph import END, StateGraph
 
 from src.agents.base.audit_chain_mixin import (
@@ -49,8 +50,13 @@ class _State(TypedDict, total=False):
     status: str
 
 
-def test_compiled_graph_records_real_node_duration() -> None:
-    """A compiled graph with an add_audited_node business node records duration_ms."""
+@pytest.mark.asyncio
+async def test_compiled_graph_records_real_node_duration() -> None:
+    """A compiled graph with an add_audited_node business node records duration_ms.
+
+    Async test (not ``asyncio.run``) per the #220/#218/#215 RAGAS event-loop-
+    pollution lint: pytest-asyncio drives the loop and we ``await`` directly.
+    """
     rec = _RecordingService()
     set_audit_chain_service(rec)  # type: ignore[arg-type]
     try:
@@ -74,7 +80,7 @@ def test_compiled_graph_records_real_node_duration() -> None:
         workflow.add_edge("gap_detector", END)
         graph = workflow.compile()
 
-        final = asyncio.run(graph.ainvoke({}))
+        final = await graph.ainvoke({})
         assert final.get("status") == "ok"
 
         # Genesis entry has no duration; the gap_detector node entry must.
