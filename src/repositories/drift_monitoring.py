@@ -470,13 +470,17 @@ class PerformanceMetricRecord(BaseModel):
     measurement_window_start: Optional[datetime] = None
     measurement_window_end: Optional[datetime] = None
     measured_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # ``source`` maps to the ml_performance_metrics.source column (default 'mlflow' in DB).
+    # When None the key is omitted from to_db_row() so the DB default applies; when set
+    # (e.g. 'backtest_wf' / 'holdout') the value is written explicitly.
+    source: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     def to_db_row(self) -> Dict[str, Any]:
         meta = dict(self.metadata or {})
         if self.model_version:
             meta[_MV_KEY] = self.model_version
-        return {
+        row: Dict[str, Any] = {
             "id": self.id,
             "model_id": self.model_id,
             "metric_name": self.metric_name,
@@ -487,6 +491,10 @@ class PerformanceMetricRecord(BaseModel):
             "measured_at": _iso(self.measured_at),
             "metadata": meta,
         }
+        # Emit source only when explicitly set; absence lets the DB default ('mlflow') apply.
+        if self.source is not None:
+            row["source"] = self.source
+        return row
 
     @classmethod
     def from_db_row(cls, row: Dict[str, Any]) -> "PerformanceMetricRecord":
@@ -948,8 +956,26 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
         sample_size: int,
         window_start: datetime,
         window_end: datetime,
+        *,
+        measured_at: Optional[datetime] = None,
+        source: Optional[str] = None,
     ) -> List[PerformanceMetricRecord]:
-        """Record performance metrics for a model."""
+        """Record performance metrics for a model.
+
+        Args:
+            model_version: Model version/handle being tracked.
+            metrics: Mapping of metric_name → metric_value.
+            sample_size: Number of samples in the evaluation window.
+            window_start: Start of the measurement window.
+            window_end: End of the measurement window.
+            measured_at: Explicit timestamp for the measurement point (e.g. the
+                eval month for a backtest sweep).  When None the record's
+                ``default_factory`` (``now()``) applies — preserving the
+                existing behaviour for all callers that omit this argument.
+            source: Tag for the metric origin (e.g. ``'backtest_wf'`` /
+                ``'holdout'``).  When None the DB column default (``'mlflow'``)
+                is preserved via the ``to_db_row()`` omission rule.
+        """
         if not self.client or not metrics:
             return []
 
@@ -957,21 +983,58 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
 
         records: List[PerformanceMetricRecord] = []
         for metric_name, metric_value in metrics.items():
-            records.append(
-                PerformanceMetricRecord(
-                    model_id=model_id,
-                    model_version=model_version,
-                    metric_name=metric_name,
-                    metric_value=metric_value,
-                    sample_size=sample_size,
-                    measurement_window_start=window_start,
-                    measurement_window_end=window_end,
-                )
+            kwargs: Dict[str, Any] = dict(
+                model_id=model_id,
+                model_version=model_version,
+                metric_name=metric_name,
+                metric_value=metric_value,
+                sample_size=sample_size,
+                measurement_window_start=window_start,
+                measurement_window_end=window_end,
+                source=source,
             )
+            if measured_at is not None:
+                kwargs["measured_at"] = measured_at
+            records.append(PerformanceMetricRecord(**kwargs))
 
         data = [r.to_db_row() for r in records]
         await self.client.table(self.table_name).insert(data).execute()
         return records
+
+    async def delete_metrics(
+        self,
+        model_id: str,
+        source: str,
+        split_version: Optional[str] = None,
+    ) -> int:
+        """Delete performance metric rows by model_id and source tag.
+
+        Used by the MetricRecorder (T7) for idempotent re-runs: delete stale
+        rows for a given (model_id, source, split_version) before re-inserting.
+
+        Args:
+            model_id: The UUID of the model in ``ml_model_registry``.
+            source: The source tag to filter on (e.g. ``'backtest_wf'``).
+            split_version: When supplied, further restricts to rows where
+                ``metadata->>split_version`` equals this value.  The JSONB
+                ``->>`` form mirrors ``_apply_model_filter`` (line 238 and 255
+                of this file) which is the form the repo already uses.
+
+        Returns:
+            Number of rows deleted (0 when client is absent — safe no-op).
+        """
+        if not self.client:
+            return 0
+        q = (
+            self.client.table(self.table_name)
+            .delete()
+            .eq("model_id", model_id)
+            .eq("source", source)
+        )
+        if split_version is not None:
+            q = q.eq("metadata->>split_version", split_version)
+        res = await q.execute()
+        return len(res.data or [])
 
     async def get_metric_trend(
         self,
