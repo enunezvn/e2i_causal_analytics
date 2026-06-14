@@ -468,3 +468,84 @@ class TestCustomWeightsAndGrades:
         # Should be 100% since only component matters
         assert result["overall_health_score"] == 100.0
         assert result["health_grade"] == "A"
+
+
+class TestDegradedModelNullErrorRate:
+    """Regression (#952): a degraded/unhealthy model whose ``error_rate`` is
+    UNMEASURED (``None``, as the real ml_model_health_dashboard adapter passes
+    through) must NOT crash the composer's diagnosis (the ``None > 0.1``
+    TypeError in ``_analyze_model_health``). The composite must still COMPLETE
+    with a real, non-null model score — never collapse to a failed/unknown
+    composite.
+
+    This is the pure-logic half of PR #948's
+    ``test_full_health_score_degraded_model_with_null_error_rate_no_crash``: it
+    is kept in the unit lane (direct ``ScoreComposerNode``, no full graph) while
+    the real-graph version moves to ``tests/integration/`` (issue #952), so the
+    serviceless unit shard never instantiates the real agent's hanging
+    observability/memory clients.
+    """
+
+    @staticmethod
+    def _unmeasured_model(model_id: str, status: str) -> dict:
+        """A model row matching the real adapter: ``status`` is sourced; every
+        numeric sub-field (accuracy/error_rate/...) is UNMEASURED (``None``),
+        never a fabricated 0."""
+        return {
+            "model_id": model_id,
+            "accuracy": None,
+            "precision": None,
+            "recall": None,
+            "f1_score": None,
+            "auc_roc": None,
+            "prediction_latency_p50_ms": None,
+            "prediction_latency_p99_ms": None,
+            "predictions_last_24h": None,
+            "error_rate": None,
+            "status": status,
+        }
+
+    @pytest.mark.asyncio
+    async def test_degraded_model_null_error_rate_does_not_crash(self):
+        state = {
+            "query": "",
+            "check_scope": "full",
+            "component_statuses": [],
+            "component_health_score": 1.0,
+            "component_health_measured": True,
+            # model dimension measured with a LOW score (< 0.8) so
+            # _analyze_model_health iterates the models and reaches the
+            # error_rate comparison that historically crashed on None.
+            "model_metrics": [
+                self._unmeasured_model("m1", "degraded"),
+                self._unmeasured_model("m2", "unhealthy"),
+            ],
+            "model_health_score": 0.25,  # 1 degraded (0.5) + 1 unhealthy (0.0) / 2
+            "model_health_measured": True,
+            "pipeline_statuses": [],
+            "agent_statuses": [],
+            "overall_health_score": None,
+            "health_grade": None,
+            "critical_issues": None,
+            "warnings": None,
+            "health_summary": None,
+            "total_latency_ms": 0,
+            "timestamp": "",
+            "errors": [],
+            "status": "checking",
+        }
+
+        node = ScoreComposerNode()
+        result = await node.execute(state)
+
+        # Diagnosis did NOT crash on the None error_rate: the run COMPLETED,
+        # not the execute() except-branch (which would set status="failed").
+        assert result["status"] == "completed"
+        assert not any(
+            (e or {}).get("node") == "score_composer" for e in (result.get("errors") or [])
+        ), f"score_composer raised on a null error_rate: {result.get('errors')}"
+        # The model dimension stays a REAL, non-null measurement.
+        assert result["model_health_score"] == 0.25
+        # Two measured dims (component + model) -> honest partial provenance.
+        assert result["data_provenance"] == "partial"
+        assert result["health_grade"] in {"A", "B", "C", "D", "F"}
