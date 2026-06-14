@@ -114,6 +114,62 @@ describe('Experiments — interim analyses (H2)', () => {
   });
 });
 
+describe('Experiments — enrollment honesty + synthetic opt-in', () => {
+  it('does NOT render the fabricated hardcoded enrollment series', async () => {
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getByRole('tab', { name: 'Analytics' }));
+    });
+    // The demo weekly enrollment values (450/920/1380/...) and the chart title
+    // were hardcoded scaffolding — they must be gone.
+    expect(screen.queryByText('Enrollment Progress')).not.toBeInTheDocument();
+    expect(screen.queryByText('450')).not.toBeInTheDocument();
+    expect(screen.queryByText('1380')).not.toBeInTheDocument();
+    expect(screen.queryByText('2520')).not.toBeInTheDocument();
+  });
+
+  it('passes include_synthetic=true when the synthetic opt-in is enabled', async () => {
+    const mutate = vi.fn();
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      mutate,
+    });
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+
+    // Toggle the synthetic opt-in, then run monitoring.
+    await act(async () => {
+      await user.click(screen.getByLabelText(/include synthetic/i));
+    });
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /run monitoring/i }));
+    });
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ include_synthetic: true }),
+    );
+  });
+
+  it('defaults to real-mode (include_synthetic=false) when the opt-in is off', async () => {
+    const mutate = vi.fn();
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      mutate,
+    });
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /run monitoring/i }));
+    });
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ include_synthetic: false }),
+    );
+  });
+});
+
 describe('Experiments — fidelity (H2)', () => {
   it('renders an empty state on the fidelity tab when no experiment is selected', async () => {
     const user = userEvent.setup();

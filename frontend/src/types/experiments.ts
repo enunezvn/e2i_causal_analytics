@@ -160,6 +160,13 @@ export interface TriggerMonitorRequest {
   check_fidelity?: boolean;
   /** SRM p-value threshold */
   srm_threshold?: number;
+  /**
+   * Provenance opt-in (#894). When true the monitor includes synthetic-tagged
+   * experiments/assignments; default (false/omitted) is real-mode
+   * default-exclude. All A/B substrate in this deployment is synthetic-gold,
+   * so the page must opt in to surface it.
+   */
+  include_synthetic?: boolean;
 }
 
 /**

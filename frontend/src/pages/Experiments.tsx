@@ -29,6 +29,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -152,6 +154,10 @@ function formatTimeAgo(timestamp: string): string {
 export default function Experiments() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);
+  // Provenance opt-in (#894). Defaults OFF (real-mode default-exclude, matching
+  // the gap_analyzer/het resolver convention); the reviewer explicitly opts in
+  // to surface the synthetic-gold A/B substrate this deployment runs on.
+  const [includeSynthetic, setIncludeSynthetic] = useState(false);
 
   // API hooks. No sample-data fallback — honest empty states only.
   const { data: monitorData, isPending: isLoadingMonitor, mutate: triggerMonitor } = useTriggerMonitoring();
@@ -225,17 +231,13 @@ export default function Experiments() {
     };
   }, [experiments, alerts]);
 
-  // Enrollment trend data
-  const enrollmentTrendData = useMemo(() => {
-    return [
-      { week: 'W1', enrolled: 450, target: 500 },
-      { week: 'W2', enrolled: 920, target: 1000 },
-      { week: 'W3', enrolled: 1380, target: 1500 },
-      { week: 'W4', enrolled: 1820, target: 2000 },
-      { week: 'W5', enrolled: 2180, target: 2500 },
-      { week: 'W6', enrolled: 2520, target: 3000 },
-    ];
-  }, []);
+  // Enrollment trend chart REMOVED (honesty fix): the prior weekly series was
+  // hardcoded scaffolding (W1..W6 demo values), never wired to a real source.
+  // No per-week enrollment time-series exists in the API — the monitor returns
+  // only per-experiment totals (total_enrolled / enrollment_rate_per_day), and
+  // the /enrollments EnrollmentStats dataclass carries no enrollment_trend.
+  // Rather than fabricate chrome on a page that otherwise shows honest empty
+  // states, the chart is replaced by an honest empty state below.
 
   // Health distribution data
   const healthDistributionData = useMemo(() => {
@@ -247,7 +249,7 @@ export default function Experiments() {
   }, [overviewMetrics]);
 
   const handleRunMonitoring = () => {
-    triggerMonitor({});
+    triggerMonitor({ include_synthetic: includeSynthetic });
   };
 
   return (
@@ -263,12 +265,28 @@ export default function Experiments() {
             Monitor experiment health, enrollment, and statistical analysis
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Provenance opt-in (#894): all A/B substrate in this deployment is
+              synthetic-gold, so a reviewer must opt in to see it. Default OFF
+              matches the backend real-mode default-exclude. */}
+          <div className="flex items-center gap-2 mr-2">
+            <Checkbox
+              id="include-synthetic"
+              checked={includeSynthetic}
+              onCheckedChange={(checked) => setIncludeSynthetic(checked === true)}
+            />
+            <Label htmlFor="include-synthetic" className="text-sm cursor-pointer">
+              Include synthetic data
+            </Label>
+          </div>
           <Button onClick={handleRunMonitoring} disabled={isLoadingMonitor}>
             <Play className="mr-2 h-4 w-4" />
             Run Monitoring
           </Button>
-          <Button variant="outline" onClick={() => triggerMonitor({})}>
+          <Button
+            variant="outline"
+            onClick={() => triggerMonitor({ include_synthetic: includeSynthetic })}
+          >
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoadingMonitor ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -547,24 +565,38 @@ export default function Experiments() {
               </CardContent>
             </Card>
 
-            {/* Enrollment Trend */}
+            {/* Total Enrolled by experiment (real monitor data; honest empty
+                state when no live roster is loaded). Replaces the prior
+                hardcoded weekly demo series — no per-week enrollment time-series
+                source exists. */}
             <Card>
               <CardHeader>
-                <CardTitle>Enrollment Progress</CardTitle>
-                <CardDescription>Weekly enrollment vs. target</CardDescription>
+                <CardTitle>Enrollment by Experiment</CardTitle>
+                <CardDescription>Total enrolled per active experiment (live)</CardDescription>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={enrollmentTrendData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="week" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="enrolled" fill={COLORS.primary} name="Enrolled" />
-                    <Bar dataKey="target" fill={COLORS.secondary} name="Target" opacity={0.5} />
-                  </BarChart>
-                </ResponsiveContainer>
+                {experiments.length === 0 ? (
+                  <EmptyState
+                    title="No enrollment data"
+                    description='Run "Run Monitoring" to load total enrollment per experiment from the monitoring service.'
+                  />
+                ) : (
+                  <ResponsiveContainer width="100%" height={250}>
+                    <BarChart
+                      data={experiments.map((e) => ({
+                        name: e.experiment_name,
+                        enrolled: e.total_enrolled,
+                      }))}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" />
+                      <YAxis />
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="enrolled" fill={COLORS.primary} name="Enrolled" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
           </div>

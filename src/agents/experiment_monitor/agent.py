@@ -42,6 +42,12 @@ class ExperimentMonitorInput:
         check_srm: Whether to run Sample Ratio Mismatch detection
         check_enrollment: Whether to run the enrollment-rate health check
         check_fidelity: Whether to run the Digital Twin fidelity check
+        include_synthetic: Provenance opt-in (#894 plumb). When truthy the
+            monitor's ml_experiments / ab_experiment_assignments reads include
+            synthetic-tagged rows; default False keeps the real-mode
+            default-exclude shared with the gap_analyzer (#877) and
+            heterogeneous_optimizer (#880) resolvers. All A/B substrate in this
+            deployment is synthetic-gold, so a reviewer must opt in to see it.
     """
 
     query: str = ""
@@ -55,6 +61,7 @@ class ExperimentMonitorInput:
     check_srm: bool = True
     check_enrollment: bool = True
     check_fidelity: bool = True
+    include_synthetic: bool = False
 
 
 @dataclass
@@ -159,6 +166,11 @@ class ExperimentMonitorAgent:
             "check_srm": input_data.check_srm,
             "check_enrollment": input_data.check_enrollment,
             "check_fidelity": input_data.check_fidelity,
+            # Provenance opt-in (#894): the nodes read state["include_synthetic"]
+            # via coerce_provenance_flag; without this handoff the flag was always
+            # absent (real-mode default-exclude), hiding the synthetic A/B
+            # substrate the live deployment runs on.
+            "include_synthetic": input_data.include_synthetic,
             "experiments": [],
             "srm_issues": [],
             "enrollment_issues": [],
