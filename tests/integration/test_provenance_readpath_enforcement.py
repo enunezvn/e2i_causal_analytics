@@ -169,6 +169,11 @@ def _enforced_readers():
         ),
         ("BusinessMetricRepository.get_by_kpi", BusinessMetricRepository.get_by_kpi),
         ("BusinessMetricRepository.get_by_region", BusinessMetricRepository.get_by_region),
+        # #931: paged per-region reader for benchmark means — provenance-enforced.
+        (
+            "BusinessMetricRepository.get_by_region_paged",
+            BusinessMetricRepository.get_by_region_paged,
+        ),
         ("TriggerRepository.get_recent_triggers", TriggerRepository.get_recent_triggers),
         ("TriggerRepository.get_by_patient", TriggerRepository.get_by_patient),
         # PatientJourneyRepository's explicit-query readers carry the kwarg

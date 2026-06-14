@@ -8,7 +8,7 @@ and top decile performance from the business_metrics table.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 import pandas as pd
 
@@ -111,7 +111,7 @@ class BenchmarkStore:
         brand: str,
         metrics: List[str],
         segments: List[str],
-        value_field: str = "value",
+        value_field: Literal["value", "target"] = "value",
     ) -> pd.DataFrame:
         """Fetch a per-segment wide frame of mean metric values from business_metrics.
 
@@ -127,6 +127,13 @@ class BenchmarkStore:
         Args:
             value_field: "value" for performance/peer frames, "target" for target frames.
         """
+        # value_field is interpolated into the PostgREST select list below, so confine it
+        # to the two real numeric columns (defense-in-depth against a future caller
+        # injecting an arbitrary column; #931 codex review). Literal pins it statically;
+        # this guards it at runtime too.
+        if value_field not in ("value", "target"):
+            raise ValueError(f"value_field must be 'value' or 'target', got {value_field!r}")
+
         repository = await self._ensure_repository()
 
         segment, seg_values = await self._resolve_segment(brand, segments)
@@ -139,11 +146,15 @@ class BenchmarkStore:
 
         rows: List[Dict[str, Any]] = []
         for seg_value in seg_values:
-            records = await repository.get_by_region(
+            # #931: read the COMPLETE (brand, region) slice (paged to exhaustion), not a
+            # single .limit(5000) window — otherwise a slice larger than the window biases
+            # the per-segment mean over a truncated, arbitrarily-ordered sample. Narrow the
+            # select to just the columns we aggregate (metric_name + the value field).
+            records = await repository.get_by_region_paged(
                 region=seg_value,
                 brand=brand,
-                limit=5000,
                 include_synthetic=self.include_synthetic,
+                columns=f"metric_name,{value_field}",
             )
             # Collect per-metric values for this segment value, then average.
             metric_values: Dict[str, List[float]] = {m: [] for m in metrics}

@@ -217,11 +217,12 @@ async def test_benchmark_peer_returns_per_segment_wide_frame():
     fake_repo = MagicMock()
     fake_repo.get_distinct_values = AsyncMock(return_value=["northeast", "south", "west"])
 
-    def _records(region, brand, limit, include_synthetic):
+    # #931: benchmark means now read the COMPLETE slice via the paged fetch.
+    def _records(region, brand, include_synthetic, columns="*"):
         base = {"northeast": 100.0, "south": 200.0, "west": 300.0}[region]
         return [{"metric_name": "trx", "value": base}]
 
-    fake_repo.get_by_region = AsyncMock(side_effect=_records)
+    fake_repo.get_by_region_paged = AsyncMock(side_effect=_records)
     store._repository = fake_repo
 
     peers = await store.get_peer_benchmarks(brand="Kisqali", metrics=["trx"], segments=["region"])
