@@ -19,3 +19,35 @@ test.describe('Smoke — routes serve HTML', () => {
     })
   }
 })
+
+// The HTML-only smoke above is NOT sufficient: the <title> "E2I Causal
+// Analytics" lives statically in index.html, so it stays green even when the
+// React app fails to MOUNT (blank white page). That exact gap let a prod-only
+// blank page ship (a manualChunks vendor-react split broke React's CJS init in
+// the production rollup bundle — invisible to dev/vitest, and the title check
+// passed anyway). This block closes the gap: it asserts React actually mounts
+// (#root gets children) and that React's init does not throw. It MUST run
+// against the PRODUCTION bundle (`npx serve -s dist`, i.e. CI), where the bug
+// manifested — the dev server does not use manualChunks.
+test.describe('Smoke — React app actually mounts (prod bundle)', () => {
+  for (const path of ['/', '/login']) {
+    test(`GET ${path} mounts React (#root populated, no init error)`, async ({ page }) => {
+      const fatalErrors: string[] = []
+      page.on('pageerror', (e) => fatalErrors.push(String(e?.message ?? e)))
+      page.on('console', (m) => {
+        if (m.type() === 'error') fatalErrors.push(m.text())
+      })
+
+      await page.goto(path, { waitUntil: 'load' })
+
+      // React mounts into <div id="root">. A blank page leaves it empty.
+      await expect(page.locator('#root')).not.toBeEmpty({ timeout: 15000 })
+
+      // The blank-page signature: React core failing to initialize.
+      const blankSig = fatalErrors.filter((e) =>
+        /Cannot set properties of undefined|setting 'Children'/.test(e),
+      )
+      expect(blankSig, `React init error(s): ${blankSig.join(' | ')}`).toHaveLength(0)
+    })
+  }
+})
