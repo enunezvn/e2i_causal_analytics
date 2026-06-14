@@ -742,69 +742,168 @@ async def get_recent_signals(
 
 async def _increment_memory_stats(memory_type: str, subtype: Optional[str] = None) -> None:
     """
-    Track memory usage statistics for monitoring.
+    Observability hook for a memory write (log-only, no DB persistence).
+
+    The live ``memory_statistics`` table (database/memory/001_agentic_memory_schema_v1.3.sql,
+    "Aggregated memory system metrics") is an *hourly aggregated rollup* keyed by
+    ``UNIQUE(stat_date, stat_hour)`` with denormalized columns
+    (``episodic_count`` / ``procedural_count`` / ``semantic_cache_count`` + cycle,
+    performance, quality and distribution metrics). It is populated by a separate
+    aggregation job, NOT by per-write increments.
+
+    The previous implementation upserted a normalized ``(memory_type, subtype, count)``
+    row with ``on_conflict="stat_date,memory_type,subtype"`` — none of those columns or
+    constraints exist on the real table, so every call raised Postgres 42703
+    (undefined_column) and the error was swallowed. The procedural card therefore read 0
+    even though ``procedural_memories`` holds the real rows.
+
+    Live memory counts are sourced directly from their source tables instead
+    (:func:`count_procedures` here, mirroring ``count_memories_by_type`` for episodic),
+    so this hook is now a no-op log line — matching the sibling episodic hook
+    (``src/memory/episodic_memory.py``) and avoiding a silently-failing write.
 
     Args:
         memory_type: episodic, procedural, semantic
         subtype: Event type or procedure type
     """
+    logger.debug(f"Memory stat: {memory_type}/{subtype or 'general'} +1")
+
+
+async def count_procedures(
+    procedure_type: Optional[str] = None,
+    active_only: bool = True,
+) -> int:
+    """
+    Count procedural memories directly from the ``procedural_memories`` table.
+
+    This mirrors the episodic ``count_memories_by_type`` pattern: live memory counts
+    are read from the source table, not from the (separate, aggregation-job-populated)
+    ``memory_statistics`` rollup. ``procedural_memories`` has no ``is_synthetic``
+    provenance column, so no provenance filter applies.
+
+    Args:
+        procedure_type: Optional filter by ``procedure_type``.
+        active_only: When True (default) count only ``is_active = true`` procedures.
+
+    Returns:
+        Count of matching procedural memories.
+    """
     client = get_supabase_client()
 
-    today = datetime.now(timezone.utc).date().isoformat()
+    query = client.table("procedural_memories").select("procedure_id", count="exact")
 
-    try:
-        # Upsert stats record
-        client.table("memory_statistics").upsert(
-            {
-                "stat_date": today,
-                "memory_type": memory_type,
-                "subtype": subtype or "general",
-                "count": 1,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            },
-            on_conflict="stat_date,memory_type,subtype",
-        ).execute()
-    except Exception as e:
-        # Stats are non-critical, just log
-        logger.debug(f"Failed to update memory stats: {e}")
+    if procedure_type:
+        query = query.eq("procedure_type", procedure_type)
+    if active_only:
+        query = query.eq("is_active", True)
+
+    result = query.execute()
+    return cast(int, result.count or 0)
+
+
+async def get_procedural_stats(active_only: bool = True) -> Dict[str, Any]:
+    """
+    Live procedural-memory statistics sourced directly from ``procedural_memories``.
+
+    Returns the total procedure count and the average per-procedure ``success_rate``
+    (the column maintained on each row by ``update_procedure_outcome``). This replaces
+    the broken ``memory_statistics`` lookup that always returned 0 (see
+    :func:`_increment_memory_stats` for the schema-drift root cause).
+
+    Args:
+        active_only: When True (default) consider only ``is_active = true`` procedures.
+
+    Returns:
+        Dict with ``total_procedures`` (int) and ``average_success_rate`` (float).
+    """
+    client = get_supabase_client()
+
+    total = await count_procedures(active_only=active_only)
+
+    # Average the per-row ``success_rate`` across ALL procedures. Without
+    # ``.range()`` PostgREST silently caps the response at ~1000 rows, so at the
+    # live volume (1,566 rows) a single SELECT would average only the first page
+    # and return a plausible-but-wrong rate. Page through ``.range()`` windows,
+    # ordered by the unique PK (``procedure_id``) for a stable offset, and
+    # accumulate a running (sum, count) so we never hold the full set in memory.
+    # Mirrors the L7/#694 pagination pattern in crystallizer/consolidator.
+    page_size = 1000
+    offset = 0
+    rate_sum = 0.0
+    rate_count = 0
+    while True:
+        page_query = client.table("procedural_memories").select("success_rate")
+        if active_only:
+            page_query = page_query.eq("is_active", True)
+        page_query = page_query.order("procedure_id").range(offset, offset + page_size - 1)
+        page = page_query.execute().data or []
+        for row in page:
+            value = row.get("success_rate")
+            if value is not None:
+                rate_sum += value
+                rate_count += 1
+        if len(page) < page_size:
+            break
+        offset += page_size
+
+    average_success_rate = rate_sum / rate_count if rate_count else 0.0
+
+    return {
+        "total_procedures": total,
+        "average_success_rate": average_success_rate,
+    }
 
 
 async def get_memory_statistics(
     days_back: int = 30, memory_type: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Get memory usage statistics for monitoring.
+    Read the aggregated ``memory_statistics`` rollup (hourly snapshots).
+
+    Reads the real, live columns of the rollup table
+    (``episodic_count`` / ``procedural_count`` / ``semantic_cache_count`` keyed by
+    ``stat_date`` / ``stat_hour``). The previous implementation selected a
+    nonexistent ``memory_type`` / ``count`` long-format shape, which would have
+    raised 42703 against the live schema.
+
+    NOTE: This rollup is populated by a separate aggregation job and may be empty.
+    For the live "total procedures" / "success rate" surface, use
+    :func:`get_procedural_stats`, which reads ``procedural_memories`` directly.
 
     Args:
-        days_back: Number of days to look back
-        memory_type: Optional filter by memory type
+        days_back: Number of days to look back.
+        memory_type: Optional logical type ("episodic" | "procedural" |
+            "semantic_cache") — selects which rollup count column to aggregate.
 
     Returns:
-        Dict with counts by type and trends
+        Dict with ``period_days``, ``totals_by_type`` (per-type rollup sums), and
+        ``daily_breakdown`` (raw rollup rows).
     """
     client = get_supabase_client()
 
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
 
-    query = (
+    result = (
         client.table("memory_statistics")
         .select("*")
         .gte("stat_date", cutoff)
         .order("stat_date", desc=True)
+        .execute()
     )
-
-    if memory_type:
-        query = query.eq("memory_type", memory_type)
-
-    result = query.execute()
     stats = result.data or []
 
-    # Aggregate by type
-    totals = {}
+    count_columns = {
+        "episodic": "episodic_count",
+        "procedural": "procedural_count",
+        "semantic_cache": "semantic_cache_count",
+    }
+    selected = (
+        {memory_type: count_columns[memory_type]} if memory_type in count_columns else count_columns
+    )
+
+    totals: Dict[str, int] = {}
     for stat in stats:
-        mt = stat["memory_type"]
-        if mt not in totals:
-            totals[mt] = 0
-        totals[mt] += stat.get("count", 0)
+        for logical_type, column in selected.items():
+            totals[logical_type] = totals.get(logical_type, 0) + (stat.get(column) or 0)
 
     return {"period_days": days_back, "totals_by_type": totals, "daily_breakdown": stats}

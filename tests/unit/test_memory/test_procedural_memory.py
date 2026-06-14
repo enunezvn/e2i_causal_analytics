@@ -5,7 +5,7 @@ Tests pattern learning, few-shot example retrieval, and DSPy learning signals.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -15,6 +15,7 @@ from src.memory.procedural_memory import (
     ProceduralMemoryInput,
     # Statistics functions
     _increment_memory_stats,
+    count_procedures,
     deactivate_procedure,
     # Procedural memory functions
     find_relevant_procedures,
@@ -23,6 +24,7 @@ from src.memory.procedural_memory import (
     get_feedback_summary_for_trigger,
     get_few_shot_examples,
     get_memory_statistics,
+    get_procedural_stats,
     get_procedure_by_id,
     get_recent_signals,
     get_top_procedures,
@@ -55,6 +57,7 @@ def mock_supabase():
     table_mock.gte.return_value = table_mock
     table_mock.lte.return_value = table_mock
     table_mock.order.return_value = table_mock
+    table_mock.range.return_value = table_mock
     table_mock.limit.return_value = table_mock
     table_mock.single.return_value = table_mock
     table_mock.execute.return_value.data = []
@@ -866,53 +869,177 @@ class TestGetRecentSignals:
 
 
 class TestIncrementMemoryStats:
-    """Tests for _increment_memory_stats function."""
+    """Tests for _increment_memory_stats function.
+
+    The per-write hook is a log-only no-op: the live ``memory_statistics`` table is
+    an hourly rollup keyed by UNIQUE(stat_date, stat_hour), NOT a per-write
+    (memory_type, subtype, count) long-format table. The old upsert wrote nonexistent
+    columns and raised a swallowed 42703 on every call. Live counts come from the
+    source tables directly (count_procedures), so this hook must NOT touch the DB.
+    """
 
     @pytest.mark.asyncio
-    async def test_increment_stats(self, mock_supabase):
-        """_increment_memory_stats should upsert stats record."""
+    async def test_increment_stats_does_not_write_to_db(self, mock_supabase):
+        """_increment_memory_stats must not attempt any DB write (no silent 42703)."""
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
             await _increment_memory_stats("procedural", "investigation")
 
-        mock_supabase.table.assert_called_with("memory_statistics")
-        upsert_call = mock_supabase.table.return_value.upsert
-        assert upsert_call.called
-
-        upsert_data = upsert_call.call_args[0][0]
-        assert upsert_data["memory_type"] == "procedural"
-        assert upsert_data["subtype"] == "investigation"
-        assert upsert_data["count"] == 1
+        # No table access at all — log-only hook (mirrors episodic_memory).
+        mock_supabase.table.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_increment_stats_default_subtype(self, mock_supabase):
-        """_increment_memory_stats should use 'general' as default subtype."""
+    async def test_increment_stats_default_subtype_no_raise(self, mock_supabase):
+        """_increment_memory_stats should accept a default subtype without raising."""
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
             await _increment_memory_stats("procedural")
 
-        upsert_call = mock_supabase.table.return_value.upsert
-        upsert_data = upsert_call.call_args[0][0]
-        assert upsert_data["subtype"] == "general"
+        mock_supabase.table.assert_not_called()
+
+
+class TestCountProcedures:
+    """Tests for count_procedures (direct count from procedural_memories)."""
 
     @pytest.mark.asyncio
-    async def test_increment_stats_handles_error(self, mock_supabase):
-        """_increment_memory_stats should not raise on error."""
-        mock_supabase.table.return_value.upsert.side_effect = Exception("DB error")
+    async def test_count_procedures_reads_source_table(self, mock_supabase):
+        """count_procedures must count procedural_memories directly via count=exact."""
+        mock_supabase.table.return_value.execute.return_value.count = 1566
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            # Should not raise
-            await _increment_memory_stats("procedural", "investigation")
+            result = await count_procedures()
+
+        mock_supabase.table.assert_called_with("procedural_memories")
+        # Reads the real source table, NOT the memory_statistics rollup.
+        assert result == 1566
+
+    @pytest.mark.asyncio
+    async def test_count_procedures_active_only_filter(self, mock_supabase):
+        """count_procedures(active_only=True) should filter is_active = True."""
+        mock_supabase.table.return_value.execute.return_value.count = 10
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            await count_procedures(active_only=True)
+
+        eq_calls = mock_supabase.table.return_value.eq.call_args_list
+        assert any(call[0] == ("is_active", True) for call in eq_calls)
+
+    @pytest.mark.asyncio
+    async def test_count_procedures_none_count_is_zero(self, mock_supabase):
+        """count_procedures returns 0 (not None) when the client reports no count."""
+        mock_supabase.table.return_value.execute.return_value.count = None
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            result = await count_procedures()
+
+        assert result == 0
+
+
+class TestGetProceduralStats:
+    """Tests for get_procedural_stats — the live procedural surface.
+
+    RED-FIRST: this is the exact bug the MemoryArchitecture 'Procedural' card hit.
+    The old code routed the count through the (empty) memory_statistics rollup and
+    returned 0 even though procedural_memories holds 1,566 real rows. These tests
+    prove the count reflects the real source-table rows instead.
+    """
+
+    @pytest.mark.asyncio
+    async def test_total_reflects_real_procedural_rows(self, mock_supabase):
+        """total_procedures must reflect the real procedural_memories row count."""
+        mock_supabase.table.return_value.execute.return_value.count = 1566
+        mock_supabase.table.return_value.execute.return_value.data = [
+            {"success_rate": 0.8},
+            {"success_rate": 0.6},
+        ]
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            result = await get_procedural_stats()
+
+        mock_supabase.table.assert_called_with("procedural_memories")
+        assert result["total_procedures"] == 1566
+        assert result["average_success_rate"] == pytest.approx(0.7)
+
+    @pytest.mark.asyncio
+    async def test_average_success_rate_ignores_nulls(self, mock_supabase):
+        """average_success_rate should ignore rows with a NULL success_rate."""
+        mock_supabase.table.return_value.execute.return_value.count = 3
+        mock_supabase.table.return_value.execute.return_value.data = [
+            {"success_rate": 1.0},
+            {"success_rate": None},
+            {"success_rate": 0.0},
+        ]
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            result = await get_procedural_stats()
+
+        assert result["total_procedures"] == 3
+        assert result["average_success_rate"] == pytest.approx(0.5)
+
+    @pytest.mark.asyncio
+    async def test_empty_table_is_zero_not_error(self, mock_supabase):
+        """No procedures → 0 / 0.0, no division-by-zero, no exception."""
+        mock_supabase.table.return_value.execute.return_value.count = 0
+        mock_supabase.table.return_value.execute.return_value.data = []
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            result = await get_procedural_stats()
+
+        assert result["total_procedures"] == 0
+        assert result["average_success_rate"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_average_paginates_past_postgrest_row_cap(self, mock_supabase):
+        """average_success_rate must page past the ~1000-row PostgREST cap.
+
+        At the live volume (1,566 rows) a single SELECT averages only the first
+        page. The reader must walk .range() windows until a short page, summing
+        across ALL pages — otherwise the rate is plausible-but-wrong.
+        """
+        full_page = [{"success_rate": 1.0} for _ in range(1000)]
+        short_page = [{"success_rate": 0.0} for _ in range(566)]
+        # First .execute() serves count_procedures (reads .count); the next two
+        # serve the two pagination windows (read .data).
+        count_result = MagicMock()
+        count_result.count = 1566
+        count_result.data = []
+        page1, page2 = MagicMock(), MagicMock()
+        page1.data, page2.data = full_page, short_page
+        mock_supabase.table.return_value.execute.side_effect = [count_result, page1, page2]
+
+        with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
+            result = await get_procedural_stats()
+
+        assert result["total_procedures"] == 1566
+        # 1000 rows at 1.0 + 566 rows at 0.0 over 1566 rows.
+        assert result["average_success_rate"] == pytest.approx(1000 / 1566)
+        # Two .range() windows were requested (page 1 full, page 2 short → stop).
+        range_calls = mock_supabase.table.return_value.range.call_args_list
+        assert range_calls == [call(0, 999), call(1000, 1999)]
 
 
 class TestGetMemoryStatistics:
-    """Tests for get_memory_statistics function."""
+    """Tests for get_memory_statistics — reader of the aggregated rollup.
+
+    Reads the REAL live columns (episodic_count / procedural_count /
+    semantic_cache_count keyed by stat_date / stat_hour). The old reader selected a
+    nonexistent memory_type / count shape that would 42703 against the live schema.
+    """
 
     @pytest.mark.asyncio
-    async def test_get_memory_statistics(self, mock_supabase):
-        """get_memory_statistics should aggregate stats by type."""
+    async def test_get_memory_statistics_aggregates_real_columns(self, mock_supabase):
+        """get_memory_statistics should sum the real rollup count columns by type."""
         mock_supabase.table.return_value.execute.return_value.data = [
-            {"memory_type": "procedural", "count": 100, "stat_date": "2025-01-01"},
-            {"memory_type": "procedural", "count": 50, "stat_date": "2025-01-02"},
-            {"memory_type": "episodic", "count": 200, "stat_date": "2025-01-01"},
+            {
+                "stat_date": "2025-01-02",
+                "episodic_count": 120,
+                "procedural_count": 50,
+                "semantic_cache_count": 5,
+            },
+            {
+                "stat_date": "2025-01-01",
+                "episodic_count": 80,
+                "procedural_count": 100,
+                "semantic_cache_count": 3,
+            },
         ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
@@ -921,18 +1048,20 @@ class TestGetMemoryStatistics:
         assert result["period_days"] == 30
         assert result["totals_by_type"]["procedural"] == 150
         assert result["totals_by_type"]["episodic"] == 200
-        assert len(result["daily_breakdown"]) == 3
+        assert result["totals_by_type"]["semantic_cache"] == 8
+        assert len(result["daily_breakdown"]) == 2
 
     @pytest.mark.asyncio
     async def test_get_memory_statistics_with_type_filter(self, mock_supabase):
-        """get_memory_statistics should filter by memory type."""
-        mock_supabase.table.return_value.execute.return_value.data = []
+        """get_memory_statistics(memory_type=...) should aggregate only that column."""
+        mock_supabase.table.return_value.execute.return_value.data = [
+            {"stat_date": "2025-01-01", "episodic_count": 9, "procedural_count": 7},
+        ]
 
         with patch("src.memory.procedural_memory.get_supabase_client", return_value=mock_supabase):
-            await get_memory_statistics(days_back=7, memory_type="procedural")
+            result = await get_memory_statistics(days_back=7, memory_type="procedural")
 
-        eq_calls = mock_supabase.table.return_value.eq.call_args_list
-        assert any(call[0] == ("memory_type", "procedural") for call in eq_calls)
+        assert result["totals_by_type"] == {"procedural": 7}
 
     @pytest.mark.asyncio
     async def test_get_memory_statistics_empty(self, mock_supabase):

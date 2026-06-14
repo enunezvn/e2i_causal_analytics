@@ -39,7 +39,7 @@ from src.memory.episodic_memory import (
 )
 from src.memory.procedural_memory import (
     LearningSignalInput,
-    get_memory_statistics,
+    get_procedural_stats,
     get_procedure_by_id,
     record_learning_signal,
     update_procedure_outcome,
@@ -789,15 +789,14 @@ async def get_memory_stats(
         total_episodic = await count_memories_by_type(days_back=365 * 10)  # All time
         recent_episodic = await count_memories_by_type(days_back=1)  # Last 24h
 
-        # Get procedural memory stats
-        proc_stats = await get_memory_statistics(days_back=30)
-        proc_totals = proc_stats.get("totals_by_type", {})
-        total_procedures = sum(proc_totals.values()) if proc_totals else 0
-
-        # Calculate average success rate from daily breakdown
-        daily_stats = proc_stats.get("daily_breakdown", [])
-        success_rates = [s.get("success_rate", 0.0) for s in daily_stats if s.get("success_rate")]
-        avg_success_rate = sum(success_rates) / len(success_rates) if success_rates else 0.0
+        # Get procedural memory stats directly from procedural_memories (the
+        # source table), mirroring how episodic counts come from count_memories_by_type.
+        # The memory_statistics rollup is populated by a separate aggregation job and
+        # is not the live count source (its per-write writer was schema-drifted and
+        # silently failing — see procedural_memory.get_procedural_stats).
+        proc_stats = await get_procedural_stats()
+        total_procedures = proc_stats.get("total_procedures", 0)
+        avg_success_rate = proc_stats.get("average_success_rate", 0.0)
 
         # Get semantic memory stats from FalkorDB
         semantic = get_semantic_memory()
