@@ -48,9 +48,13 @@ class TestBentoMLClientConfig:
         assert config.circuit_failure_threshold == 5
 
     def test_get_endpoint_url_default(self):
-        """Test endpoint URL generation with default pattern."""
+        """get_endpoint_url returns the FLAT base, never base/{model_name}.
+
+        The deployed service is single-model and flat (verified live): the model
+        name must NOT be appended as a path segment or every call 404s.
+        """
         config = BentoMLClientConfig(base_url="http://localhost:3000")
-        assert config.get_endpoint_url("churn_model") == "http://localhost:3000/churn_model"
+        assert config.get_endpoint_url("churn_model") == "http://localhost:3000"
 
     def test_get_endpoint_url_custom(self):
         """Test endpoint URL with custom mapping."""
@@ -310,15 +314,19 @@ class TestBentoMLClient:
 
     @pytest.mark.asyncio
     async def test_predict_batch_success(self, client):
-        """Test batch prediction request."""
+        """Test batch prediction request against the live flat contract.
+
+        The live /predict_batch returns a FLAT scalar predictions list and the
+        client wraps the request as {"input_data": {batch_id, features}}.
+        """
         mock_response = make_response(
             200,
             {
-                "predictions": [
-                    {"prediction": 0.8},
-                    {"prediction": 0.6},
-                    {"prediction": 0.9},
-                ]
+                "batch_id": "b1",
+                "total_samples": 3,
+                "predictions": [0.8, 0.6, 0.9],
+                "processing_time_ms": 12.0,
+                "is_mock": False,
             },
         )
 
@@ -326,13 +334,12 @@ class TestBentoMLClient:
             mock_post.return_value = mock_response
 
             await client.initialize()
-            result = await client.predict_batch(
-                "test_model",
-                [{"features": [0.1]}, {"features": [0.2]}, {"features": [0.3]}],
-            )
+            batch_data = {"batch_id": "b1", "features": [[0.1], [0.2], [0.3]]}
+            result = await client.predict_batch("test_model", batch_data)
 
-            assert len(result["predictions"]) == 3
-            assert result["predictions"][0]["prediction"] == 0.8
+            # Request wrapped in the flat input_data envelope.
+            assert mock_post.call_args.kwargs["json"] == {"input_data": batch_data}
+            assert result["predictions"] == [0.8, 0.6, 0.9]
 
         await client.close()
 

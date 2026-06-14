@@ -46,10 +46,9 @@ logger = logging.getLogger(__name__)
 def _resolve_feast_endpoint() -> str:
     """Return the Feast online-features HTTP base URL, with fallbacks."""
     return (
-        os.environ.get("FEAST_HTTP_ENDPOINT")
-        or os.environ.get("FEAST_URL")
-        or "http://feast:6566"
+        os.environ.get("FEAST_HTTP_ENDPOINT") or os.environ.get("FEAST_URL") or "http://feast:6566"
     )
+
 
 # =============================================================================
 # Request/Response Models (matching mock_service.py contract)
@@ -324,6 +323,29 @@ class E2IModelService:
         else:
             logger.warning("E2I Model Service initialized in degraded mode (no model)")
 
+    def _resolve_feature_columns(self) -> Optional[List[str]]:
+        """Resolve the model's authoritative ordered feature names.
+
+        Order of preference:
+          1. The bundled ``feature_columns`` (the preprocessor input order) —
+             this is what ``_run_prediction`` uses to build the DataFrame fed
+             to the ColumnTransformer.
+          2. The estimator's ``feature_names_in_`` (set by scikit-learn when
+             the model was fit on a named DataFrame).
+
+        Returns ``None`` when neither is available so callers fail closed
+        instead of guessing a positional order.
+        """
+        if self._feature_columns:
+            return list(self._feature_columns)
+        names = getattr(self._model, "feature_names_in_", None)
+        if names is not None:
+            try:
+                return [str(n) for n in names]
+            except TypeError:
+                return None
+        return None
+
     def _run_prediction(
         self,
         features: List[List[float]],
@@ -449,9 +471,7 @@ class E2IModelService:
                 response.raise_for_status()
                 body = response.json()
         except Exception as e:
-            raise RuntimeError(
-                f"Feast online-features call failed ({url}): {e}"
-            ) from e
+            raise RuntimeError(f"Feast online-features call failed ({url}): {e}") from e
 
         # Feast 0.43 response shape (column-oriented):
         #   {"metadata": {"feature_names": [...]},
@@ -484,17 +504,13 @@ class E2IModelService:
                 raw = col_values[row_idx] if row_idx < len(col_values) else None
                 if raw is None:
                     row.append(0.0)
-                    coerced_features[col_name] = (
-                        coerced_features.get(col_name, 0) + 1
-                    )
+                    coerced_features[col_name] = coerced_features.get(col_name, 0) + 1
                     continue
                 try:
                     row.append(float(raw))
                 except (TypeError, ValueError):
                     row.append(0.0)
-                    coerced_features[col_name] = (
-                        coerced_features.get(col_name, 0) + 1
-                    )
+                    coerced_features[col_name] = coerced_features.get(col_name, 0) + 1
             matrix.append(row)
 
         if coerced_features:
@@ -539,9 +555,7 @@ class E2IModelService:
         return self._run_prediction(input_data.features, feature_source=feature_source)
 
     @bentoml.api
-    async def predict_batch(
-        self, input_data: BatchPredictionInput
-    ) -> BatchPredictionOutput:
+    async def predict_batch(self, input_data: BatchPredictionInput) -> BatchPredictionOutput:
         """Run batch predictions.
 
         Args:
@@ -634,6 +648,15 @@ class E2IModelService:
                 "/metrics",
                 "/model_info",
             ],
+            # Expose the model's authoritative feature ORDER so callers can
+            # vectorize a feature dict into the positional ``features`` matrix
+            # the model expects. Prefer the bundled ``feature_columns`` (the
+            # ColumnTransformer/preprocessor input order); fall back to the
+            # estimator's own ``feature_names_in_`` (set when fit on a
+            # DataFrame). Omitted (None) when the model carries no named
+            # feature contract — callers MUST then fail closed rather than
+            # guess an order.
+            "feature_columns": self._resolve_feature_columns(),
         }
 
         # Add model metadata if available

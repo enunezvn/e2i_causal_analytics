@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -205,6 +205,9 @@ class HTTPModelClient:
             reset_timeout=self.config.circuit_reset_timeout,
         )
         self._initialized = False
+        # Cached authoritative feature order (from /model_info). Resolved lazily
+        # on first predict() and reused across calls for the same model.
+        self._feature_order: Optional[List[str]] = None
 
     async def initialize(self) -> None:
         """Initialize the HTTP client with connection pool."""
@@ -232,6 +235,65 @@ class HTTPModelClient:
             self._client = None
             self._initialized = False
             logger.debug(f"HTTPModelClient closed for model={self.model_id}")
+
+    async def _resolve_feature_order(self) -> List[str]:
+        """Resolve the served model's authoritative ordered feature names.
+
+        Fetched from the flat service's ``POST /model_info`` -> ``feature_columns``
+        and cached. Fails closed (ValueError) when the model exposes no feature
+        order — never guesses a positional order (which would silently feed the
+        model a mis-ordered vector presented as a real prediction).
+        """
+        if self._feature_order is not None:
+            return self._feature_order
+
+        assert self._client is not None
+        try:
+            response = await self._client.post(
+                f"{self.endpoint_url}/model_info",
+                json={},
+                timeout=5.0,
+            )
+            response.raise_for_status()
+            info = response.json()
+        except (httpx.HTTPError, ValueError) as e:
+            raise ValueError(
+                f"Could not fetch model_info to resolve feature order for "
+                f"model '{self.model_id}': {e}"
+            )
+
+        columns = info.get("feature_columns")
+        if not columns or not isinstance(columns, list):
+            raise ValueError(
+                f"Model '{self.model_id}' exposes no feature_columns order via "
+                "/model_info; refusing to vectorize a feature dict against an "
+                "unknown positional order."
+            )
+        self._feature_order = [str(c) for c in columns]
+        return self._feature_order
+
+    def _vectorize(self, features: Dict[str, Any], feature_order: List[str]) -> List[float]:
+        """Build one ordered numeric row from a feature dict + canonical order.
+
+        A missing/null required feature FAILS CLOSED (ValueError) — no silent
+        zero-fill. Extra keys are ignored. Non-numeric values raise ValueError.
+        """
+        missing = [n for n in feature_order if n not in features or features[n] is None]
+        if missing:
+            raise ValueError(
+                f"Missing required feature(s) for model '{self.model_id}': {missing}. "
+                f"Expected (in order): {feature_order}"
+            )
+        row: List[float] = []
+        for name in feature_order:
+            try:
+                row.append(float(features[name]))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"Feature '{name}' is not numeric (got {features[name]!r}) for "
+                    f"model '{self.model_id}'"
+                )
+        return row
 
     async def predict(
         self,
@@ -269,12 +331,22 @@ class HTTPModelClient:
         start_time = time.time()
         last_exception: Optional[Exception] = None
 
-        # Build request payload
-        request_payload = {
+        # Vectorize the feature dict into the model's authoritative POSITIONAL
+        # order and wrap it in the FLAT BentoML contract the deployed service
+        # expects: {"input_data": {"features": [[...]], "model_type": ...}}.
+        # The order is resolved from the service's /model_info feature_columns —
+        # never guessed. Fails closed (ValueError) when the order is unavailable
+        # or a required feature is missing (no silent zero-fill / fabrication).
+        feature_order = await self._resolve_feature_order()
+        ordered_row = self._vectorize(features, feature_order)
+        request_payload: Dict[str, Any] = {
+            "input_data": {
+                "features": [ordered_row],
+                "model_type": "classification",
+            },
+            # Telemetry passthrough (ignored by the model IO descriptor).
             "entity_id": entity_id,
-            "features": features,
             "time_horizon": time_horizon,
-            "return_proba": True,
         }
 
         for attempt in range(self.config.max_retries):
@@ -291,13 +363,27 @@ class HTTPModelClient:
 
                 self._circuit_breaker.record_success()
 
-                # Transform BentoML response to ModelClient format
+                # Transform the FLAT contract response to ModelClient format.
+                # The service returns ``predictions``/``probabilities`` as flat
+                # lists (one per sample); we sent a single row, so take [0].
+                predictions = result.get("predictions")
+                probabilities = result.get("probabilities")
+                prediction = (
+                    predictions[0]
+                    if isinstance(predictions, list) and predictions
+                    else result.get("prediction")  # legacy/mock single-value shape
+                )
+                positive_proba = (
+                    probabilities[0]
+                    if isinstance(probabilities, list) and probabilities
+                    else result.get("confidence", 0.5)
+                )
                 prediction_result = {
-                    "prediction": result.get("prediction"),
-                    "proba": result.get("probabilities"),
-                    "confidence": result.get("confidence", 0.5),
+                    "prediction": prediction,
+                    "proba": probabilities,
+                    "confidence": result.get("confidence", positive_proba),
                     "model_type": result.get("model_type", "unknown"),
-                    "model_version": result.get("model_version"),
+                    "model_version": result.get("model_version") or result.get("model_id"),
                     "features_used": result.get("features_used", list(features.keys())),
                     "latency_ms": latency_ms,
                     "timestamp": datetime.now(timezone.utc).isoformat(),

@@ -76,6 +76,78 @@ async def _resolve_production_model_names(limit: int = 50) -> List[str]:
         return []
 
 
+async def _resolve_feature_order(client: "BentoMLClient", model_name: str) -> List[str]:
+    """Resolve the served model's authoritative ordered feature names.
+
+    The live BentoML service expects ``features`` as a POSITIONAL numeric matrix
+    ordered by the model's own ``feature_columns`` (the preprocessor input
+    order, or the estimator's ``feature_names_in_``). The service exposes this
+    via ``POST /model_info`` -> ``feature_columns``. We fetch it from the model
+    itself rather than guessing/hardcoding an order (the repo has several
+    divergent feature lists; only the bundled model knows its real order).
+
+    Fails CLOSED (503) when the model exposes no feature order — never invents a
+    positional order, which would silently feed the model a mis-ordered vector
+    presented as a real prediction.
+    """
+    try:
+        info = await client.get_model_info(model_name)
+    except Exception as e:
+        logger.error("Could not fetch model_info for feature order (model=%s): %s", model_name, e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Model metadata unavailable for '{model_name}'",
+        )
+
+    columns = info.get("feature_columns")
+    if not columns or not isinstance(columns, list):
+        logger.error(
+            "Model '%s' exposes no feature_columns order via /model_info; refusing to "
+            "vectorize a feature dict against an unknown positional order.",
+            model_name,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Model '{model_name}' does not expose a feature order; cannot vectorize "
+                "feature dictionary"
+            ),
+        )
+    return [str(c) for c in columns]
+
+
+def _vectorize_feature_dict(
+    features: Dict[str, Any], feature_order: List[str], *, context: str
+) -> List[float]:
+    """Build a single ordered numeric row from a feature dict + canonical order.
+
+    Each value is read by name in ``feature_order``. A missing or null required
+    feature FAILS CLOSED with a 422 — no silent zero-fill (which would fabricate
+    a plausible-but-wrong prediction). Extra keys not in the order are ignored.
+    Non-numeric values raise a 422 with the offending field named.
+    """
+    missing = [name for name in feature_order if name not in features or features[name] is None]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Missing required feature(s) for {context}: {missing}. "
+                f"Expected features (in order): {feature_order}"
+            ),
+        )
+    row: List[float] = []
+    for name in feature_order:
+        value = features[name]
+        try:
+            row.append(float(value))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Feature '{name}' is not numeric (got {value!r}) for {context}",
+            )
+    return row
+
+
 router = APIRouter(
     prefix="/api/models",
     tags=["Model Predictions"],
@@ -353,9 +425,21 @@ async def predict(
                 model_name,
             )
 
-        # Build input data for BentoML
+        # Vectorize the feature dict into the model's authoritative POSITIONAL
+        # order. The live service expects ``features`` as a 2D numeric matrix
+        # (samples x features) ordered by the model's own feature_columns —
+        # resolved from /model_info, never guessed. Fails closed on a missing
+        # required feature (no silent zero-fill).
+        feature_order = await _resolve_feature_order(client, model_name)
+        ordered_row = _vectorize_feature_dict(
+            features_payload, feature_order, context=f"predict(model={model_name})"
+        )
+
+        # Build input data for BentoML (flat single-model contract, verified
+        # live): {"input_data": {"features": [[...]], "model_type": ...}}.
         input_data: Dict[str, Any] = {
-            "features": features_payload,
+            "features": [ordered_row],
+            "model_type": "classification",
             "return_proba": request.return_probabilities,
             "return_intervals": request.return_intervals,
             "feature_source": feature_source,
@@ -369,6 +453,24 @@ async def predict(
 
         # Extract metadata
         metadata = result.get("_metadata", {})
+
+        # The live flat contract returns ``probabilities`` as a flat list
+        # (positive-class probability per sample). PredictionResponse expects a
+        # labeled dict, so map the single-sample positive-class probability to
+        # {"positive_class": p} and surface it as ``confidence`` too. A legacy
+        # dict response (older/mock servers) passes through unchanged.
+        raw_probs = result.get("probabilities")
+        probabilities: Optional[Dict[str, float]]
+        confidence = result.get("confidence")
+        if isinstance(raw_probs, dict):
+            probabilities = raw_probs
+        elif isinstance(raw_probs, list) and raw_probs:
+            positive = float(raw_probs[0])
+            probabilities = {"positive_class": positive}
+            if confidence is None:
+                confidence = positive
+        else:
+            probabilities = None
 
         # 3A-I-3: route is the source of truth for feature_source.
         # If we invoked Feast (entity_id was set + lookup succeeded), the
@@ -389,12 +491,13 @@ async def predict(
                 if result.get("prediction") is not None
                 else result.get("predictions", [None])[0]
             ),
-            confidence=result.get("confidence"),
-            probabilities=result.get("probabilities"),
+            confidence=confidence,
+            probabilities=probabilities,
             prediction_interval=result.get("prediction_interval"),
             feature_importance=result.get("feature_importance"),
             latency_ms=metadata.get("latency_ms", 0),
-            model_version=result.get("model_version"),
+            # Live contract carries ``model_id``; legacy mocks carry ``model_version``.
+            model_version=result.get("model_version") or result.get("model_id"),
             timestamp=metadata.get("timestamp", datetime.now(timezone.utc).isoformat()),
             feature_source=feature_source,
         )
@@ -450,16 +553,24 @@ async def predict_batch(
     try:
         # Build batch input matching the BentoML ``BatchPredictionInput`` schema
         # (verified live 2026-06-14): {"batch_id": str, "features": [[...], ...]}.
-        # NOTE (per-panel follow-up): ``inst.features`` is a feature *dict*; the
-        # service expects an ordered numeric row. Per-instance feature
-        # vectorization (dict -> ordered 2D array, e.g. via Feast feature refs)
-        # is tracked as a follow-up; here we forward the feature payloads as
-        # provided so the transport contract (path + wrapper) is correct.
+        # Each instance's feature DICT is vectorized into the model's authoritative
+        # POSITIONAL order (resolved from /model_info, never guessed). A missing
+        # required feature on any instance fails closed (422) — no zero-fill.
         import uuid
+
+        feature_order = await _resolve_feature_order(client, model_name)
+        ordered_rows = [
+            _vectorize_feature_dict(
+                inst.features,
+                feature_order,
+                context=f"predict_batch(model={model_name}, instance={i})",
+            )
+            for i, inst in enumerate(request.instances)
+        ]
 
         batch_data = {
             "batch_id": str(uuid.uuid4()),
-            "features": [inst.features for inst in request.instances],
+            "features": ordered_rows,
         }
 
         # Call batch endpoint
