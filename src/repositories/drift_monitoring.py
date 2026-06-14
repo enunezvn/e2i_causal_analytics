@@ -221,11 +221,38 @@ async def _resolve_model_id(client: Any, model_version: Optional[str]) -> Option
 
 
 def _apply_model_filter(query: Any, model_id: Optional[str], model_version: str, jsonb_col: str):
-    """Filter a query by model: by ``model_id`` when the handle resolved to a
-    uuid, else by the preserved handle in the table's jsonb column."""
+    """Filter a query by model on tables with a **scalar** ``model_id`` uuid FK
+    (ml_drift_history / ml_performance_metrics / ml_monitoring_alerts): by
+    ``model_id`` when the handle resolved to a uuid, else by the preserved handle
+    in the table's jsonb column.
+
+    NOTE: ``ml_monitoring_runs`` does NOT have a scalar ``model_id`` column — it
+    links via the ``model_ids UUID[]`` array (a run can cover several models), so
+    it uses ``_apply_run_model_filter`` instead. Calling this helper on the runs
+    table emits ``.eq("model_id", uuid)`` against a non-existent column and
+    PostgREST 42703s (the live monitoring-runs/health 500). See migration
+    database/ml/017_model_monitoring_tables.sql line 291.
+    """
     if model_id is not None:
         return query.eq("model_id", model_id)
     return query.eq(f"{jsonb_col}->>{_MV_KEY}", model_version)
+
+
+def _apply_run_model_filter(query: Any, model_id: Optional[str], model_version: str):
+    """Filter a ``ml_monitoring_runs`` query by model.
+
+    The runs table records the models a run covered in the ``model_ids UUID[]``
+    array column (NOT a scalar ``model_id`` FK). When the app handle resolves to
+    a registry uuid we filter with an array-contains (``model_ids @> {uuid}``,
+    PostgREST ``cs`` via ``.contains``); otherwise we fall back to the preserved
+    handle in ``config->>_model_version`` — mirroring how the row was written
+    (start_run stores both). Never targets the phantom scalar ``model_id``
+    column, so the filtered ``/monitoring/runs`` + ``/monitoring/health`` paths
+    return the real rows instead of 42703-ing into an HTTP 500.
+    """
+    if model_id is not None:
+        return query.contains("model_ids", [model_id])
+    return query.eq(f"config->>{_MV_KEY}", model_version)
 
 
 # ===========================================================================
@@ -894,7 +921,9 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
 
         if model_version:
             model_id = await _resolve_model_id(self.client, model_version)
-            query = _apply_model_filter(query, model_id, model_version, "config")
+            # ml_monitoring_runs links models via the model_ids UUID[] array, not
+            # a scalar model_id column — use the array-aware run filter.
+            query = _apply_run_model_filter(query, model_id, model_version)
 
         if since is not None:
             query = query.gte("started_at", since.isoformat())
