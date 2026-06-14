@@ -17,7 +17,30 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
   useMonitoringRuns: vi.fn(),
 }));
 
+// Mock the health-score hooks (imported from the @/hooks/api barrel by the page).
+// Each hook gets a default no-data implementation in beforeEach so existing
+// empty-state tests keep their (undefined data) behaviour, and the new wiring
+// tests override the two we care about.
+vi.mock('@/hooks/api', () => ({
+  useQuickHealthCheck: vi.fn(),
+  usePipelineHealth: vi.fn(),
+  useAgentHealth: vi.fn(),
+  useHealthHistory: vi.fn(),
+  useComponentHealth: vi.fn(),
+  useModelHealth: vi.fn(),
+}));
+
 import { useAlerts, useMonitoringRuns } from '@/hooks/api/use-monitoring';
+import {
+  useQuickHealthCheck,
+  usePipelineHealth,
+  useAgentHealth,
+  useHealthHistory,
+  useComponentHealth,
+  useModelHealth,
+} from '@/hooks/api';
+
+type MockFn = ReturnType<typeof vi.fn>;
 
 // Create wrapper with QueryClientProvider
 function createWrapper() {
@@ -69,22 +92,93 @@ const mockRunsData = {
   total_runs: 15,
 };
 
+// Real-shaped /components payload (mirrors ComponentHealthResponse from the
+// backend health_score.py route, data_provenance="measured"). Counts are kept
+// internally consistent with the components list (1 healthy + 1 degraded), as
+// the real backend computes them from the same list.
+const measuredComponentHealth = {
+  component_health_score: 0.75,
+  total_components: 2,
+  healthy_count: 1,
+  degraded_count: 1,
+  unhealthy_count: 0,
+  components: [
+    {
+      component_name: 'Database',
+      status: 'healthy',
+      latency_ms: 12,
+      last_check: new Date().toISOString(),
+    },
+    {
+      component_name: 'Cache (Redis)',
+      status: 'degraded',
+      latency_ms: 240,
+      last_check: new Date().toISOString(),
+    },
+  ],
+  check_latency_ms: 30,
+  data_provenance: 'measured',
+};
+
+// Real-shaped /models payload (mirrors ModelHealthResponse). The backend
+// model_health domain reports status (measured) plus accuracy / error_rate /
+// predictions_last_24h, each of which is left null when ml_performance_metrics
+// has no source row. It does NOT return drift scores or a performance trend.
+// First model = performance sub-fields populated; second = partial (sub-fields
+// null) — exactly the two states the live endpoint emits.
+const measuredModelHealth = {
+  model_health_score: 0.75,
+  total_models: 2,
+  healthy_count: 1,
+  degraded_count: 1,
+  unhealthy_count: 0,
+  models: [
+    {
+      model_id: 'mdl-001',
+      model_name: 'CSU Initiation Model',
+      accuracy: 0.83,
+      error_rate: 0.04,
+      predictions_last_24h: 1500,
+      status: 'healthy',
+    },
+    {
+      model_id: 'mdl-002',
+      model_name: 'Remission Propensity Model',
+      // unmeasured performance sub-fields stay null (partial provenance)
+      accuracy: null,
+      error_rate: null,
+      predictions_last_24h: null,
+      status: 'degraded',
+    },
+  ],
+  check_latency_ms: 45,
+  data_provenance: 'partial',
+};
+
 describe('SystemHealth', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
     // Default mock implementations
-    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useAlerts as MockFn).mockReturnValue({
       data: mockAlertsData,
       isLoading: false,
       refetch: vi.fn().mockResolvedValue({}),
     });
 
-    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useMonitoringRuns as MockFn).mockReturnValue({
       data: mockRunsData,
       isLoading: false,
       refetch: vi.fn().mockResolvedValue({}),
     });
+
+    // Default: health hooks return no data (undefined) so empty states render.
+    (useQuickHealthCheck as MockFn).mockReturnValue({ data: undefined, refetch: vi.fn().mockResolvedValue({}) });
+    (usePipelineHealth as MockFn).mockReturnValue({ data: undefined });
+    (useAgentHealth as MockFn).mockReturnValue({ data: undefined });
+    (useHealthHistory as MockFn).mockReturnValue({ data: undefined });
+    (useComponentHealth as MockFn).mockReturnValue({ data: undefined, refetch: vi.fn().mockResolvedValue({}) });
+    (useModelHealth as MockFn).mockReturnValue({ data: undefined, refetch: vi.fn().mockResolvedValue({}) });
   });
 
   it('renders page header with title', () => {
@@ -119,6 +213,156 @@ describe('SystemHealth', () => {
     expect(screen.queryByText('Propensity Model')).not.toBeInTheDocument();
     expect(screen.queryByText('Churn Prediction')).not.toBeInTheDocument();
     expect(screen.queryByText('Conversion Model')).not.toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // WIRING TESTS (this PR): the Service Status / Model Health cards must render
+  // REAL data from useComponentHealth / useModelHealth, and degrade to honest
+  // empty states (never fabricated values) when data is absent or placeholder.
+  // ===========================================================================
+
+  it('renders REAL service status from useComponentHealth when measured', () => {
+    (useComponentHealth as MockFn).mockReturnValue({
+      data: measuredComponentHealth,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    // Real component names from the /components endpoint.
+    expect(screen.getByText('Database')).toBeInTheDocument();
+    expect(screen.getByText('Cache (Redis)')).toBeInTheDocument();
+    // Real latency surfaced.
+    expect(screen.getByText('12ms')).toBeInTheDocument();
+    expect(screen.getByText('240ms')).toBeInTheDocument();
+    // Empty-state copy must be gone.
+    expect(screen.queryByText(/No service status available/)).not.toBeInTheDocument();
+  });
+
+  it('renders REAL model health from useModelHealth when measured', () => {
+    (useModelHealth as MockFn).mockReturnValue({
+      data: measuredModelHealth,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    // Real model names from the /models endpoint.
+    expect(screen.getByText('CSU Initiation Model')).toBeInTheDocument();
+    expect(screen.getByText('Remission Propensity Model')).toBeInTheDocument();
+    // Empty-state copy must be gone.
+    expect(screen.queryByText(/No model health data/)).not.toBeInTheDocument();
+    // Anti-fabrication: the page must NOT invent a "drift" metric (the real
+    // /models endpoint returns no drift score).
+    expect(screen.queryByText(/Drift/i)).not.toBeInTheDocument();
+  });
+
+  it('shows honest "—" for unmeasured model performance sub-fields (no fabricated zeros)', () => {
+    (useModelHealth as MockFn).mockReturnValue({
+      data: measuredModelHealth,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    // The 2nd model has null accuracy/error_rate/predictions: those must render
+    // as "—", never as a fabricated 0 / 0% / 0.00.
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('does not fabricate a zero avg latency when no service latency is measured', () => {
+    (useComponentHealth as MockFn).mockReturnValue({
+      data: {
+        ...measuredComponentHealth,
+        component_health_score: 1.0,
+        healthy_count: 1,
+        degraded_count: 0,
+        total_components: 1,
+        // Single component with NO latency reported (latency_ms omitted).
+        components: [
+          {
+            component_name: 'Message Queue',
+            status: 'healthy',
+            last_check: new Date().toISOString(),
+          },
+        ],
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    // Overview avg latency must render "—", never "0ms".
+    expect(screen.getByText(/Avg latency: —/)).toBeInTheDocument();
+    expect(screen.queryByText(/Avg latency: 0ms/)).not.toBeInTheDocument();
+  });
+
+  it('treats placeholder-provenance component data as honest empty (no fake services)', () => {
+    (useComponentHealth as MockFn).mockReturnValue({
+      data: {
+        ...measuredComponentHealth,
+        data_provenance: 'placeholder',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    // Placeholder dev data must NOT be presented as real measured services.
+    expect(screen.queryByText('Database')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cache (Redis)')).not.toBeInTheDocument();
+    expect(screen.getByText(/No service status available/)).toBeInTheDocument();
+  });
+
+  it('treats untrusted/absent provenance as honest empty (only measured|partial render)', () => {
+    // 'unknown' provenance and a response with NO provenance field must both be
+    // treated as no-data — only 'measured'/'partial' are surfaced as real.
+    (useComponentHealth as MockFn).mockReturnValue({
+      data: { ...measuredComponentHealth, data_provenance: 'unknown' },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    // Model response with the data_provenance field omitted entirely.
+    const { data_provenance: _omitted, ...modelNoProv } = measuredModelHealth;
+    void _omitted;
+    (useModelHealth as MockFn).mockReturnValue({
+      data: modelNoProv,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText('Database')).not.toBeInTheDocument();
+    expect(screen.queryByText('CSU Initiation Model')).not.toBeInTheDocument();
+    expect(screen.getByText(/No service status available/)).toBeInTheDocument();
+    expect(screen.getByText(/No model health data/)).toBeInTheDocument();
+  });
+
+  it('treats placeholder-provenance model data as honest empty (no fake models)', () => {
+    (useModelHealth as MockFn).mockReturnValue({
+      data: {
+        ...measuredModelHealth,
+        data_provenance: 'placeholder',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText('CSU Initiation Model')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remission Propensity Model')).not.toBeInTheDocument();
+    expect(screen.getByText(/No model health data/)).toBeInTheDocument();
+  });
+
+  it('degrades to honest empty when a hook crashes / returns null data', () => {
+    // Simulate a hook whose query errored: data is undefined. The page must
+    // render the empty state, never a fabricated default service/model.
+    (useComponentHealth as MockFn).mockReturnValue({ data: null, refetch: vi.fn() });
+    (useModelHealth as MockFn).mockReturnValue({ data: null, refetch: vi.fn() });
+
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/No service status available/)).toBeInTheDocument();
+    expect(screen.getByText(/No model health data/)).toBeInTheDocument();
   });
 
   it('displays overview stat cards with neutral defaults (F-002)', () => {
@@ -165,13 +409,13 @@ describe('SystemHealth', () => {
     const mockRefetchAlerts = vi.fn().mockResolvedValue({});
     const mockRefetchRuns = vi.fn().mockResolvedValue({});
 
-    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useAlerts as MockFn).mockReturnValue({
       data: mockAlertsData,
       isLoading: false,
       refetch: mockRefetchAlerts,
     });
 
-    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useMonitoringRuns as MockFn).mockReturnValue({
       data: mockRunsData,
       isLoading: false,
       refetch: mockRefetchRuns,
@@ -189,13 +433,13 @@ describe('SystemHealth', () => {
   });
 
   it('shows loading state while fetching data', () => {
-    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useAlerts as MockFn).mockReturnValue({
       data: undefined,
       isLoading: true,
       refetch: vi.fn(),
     });
 
-    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useMonitoringRuns as MockFn).mockReturnValue({
       data: undefined,
       isLoading: true,
       refetch: vi.fn(),
@@ -214,7 +458,7 @@ describe('SystemHealth', () => {
   // available, so these tests no longer have a meaningful target.
 
   it('displays empty alerts message when no active alerts', () => {
-    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useAlerts as MockFn).mockReturnValue({
       data: { alerts: [], active_count: 0, total_count: 0 },
       isLoading: false,
       refetch: vi.fn(),
@@ -231,12 +475,12 @@ describe('SystemHealth', () => {
 
   it('does not fabricate alerts when the API returns zero active alerts (M3)', async () => {
     const user = (await import('@testing-library/user-event')).default.setup();
-    (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useAlerts as MockFn).mockReturnValue({
       data: { alerts: [], active_count: 0, total_count: 0 },
       isLoading: false,
       refetch: vi.fn(),
     });
-    (useMonitoringRuns as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useMonitoringRuns as MockFn).mockReturnValue({
       data: mockRunsData,
       isLoading: false,
       refetch: vi.fn(),

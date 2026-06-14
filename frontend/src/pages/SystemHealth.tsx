@@ -48,11 +48,17 @@ import {
   usePipelineHealth,
   useAgentHealth,
   useHealthHistory,
+  useComponentHealth,
+  useModelHealth,
 } from '@/hooks/api';
 import { AlertStatus } from '@/types/monitoring';
 import type { AlertItem } from '@/types/monitoring';
 import { HealthGrade } from '@/types/health-score';
-import type { AgentHealth } from '@/types/health-score';
+import type {
+  AgentHealth,
+  ComponentHealth as ApiComponentHealth,
+  ModelHealth as ApiModelHealth,
+} from '@/types/health-score';
 import { AlertList } from '@/components/visualizations/dashboard/AlertCard';
 import { StatusBadge, StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 import { ProgressRing } from '@/components/visualizations/dashboard/ProgressRing';
@@ -64,23 +70,27 @@ import type { StatusType } from '@/components/visualizations/dashboard/StatusBad
 // TYPES
 // =============================================================================
 
+// View-model for the Service Status card. Derived 1:1 from the backend
+// /health-score/components ComponentHealth shape — no fabricated fields.
 interface ServiceStatus {
   name: string;
   status: 'healthy' | 'warning' | 'error' | 'unknown';
   latencyMs?: number;
-  lastCheck?: Date;
   icon: React.ElementType;
 }
 
-interface ModelHealth {
+// View-model for the Model Health card. Mirrors the backend
+// /health-score/models ModelHealth shape EXACTLY. The real endpoint reports
+// status + (optionally) accuracy / error_rate / predictions_last_24h; it does
+// NOT report a drift score or a performance trend, so those are intentionally
+// absent here rather than fabricated. null = unmeasured -> rendered as "—".
+interface ModelHealthView {
   modelId: string;
   name: string;
-  healthScore: number;
   status: 'healthy' | 'warning' | 'critical';
-  driftScore: number;
-  activeAlerts: number;
-  lastRetrained?: Date;
-  performanceTrend: 'improving' | 'stable' | 'degrading';
+  accuracy: number | null;
+  errorRate: number | null;
+  predictions24h: number | null;
 }
 
 // =============================================================================
@@ -124,6 +134,44 @@ function mapHealthToStatus(health: string): StatusType {
       return 'error';
     default:
       return 'unknown';
+  }
+}
+
+// A response's items are surfaced as real data only when the backend tagged the
+// wrapper with a trusted provenance. "measured" = live probe; "partial" = some
+// sub-fields unmeasured but the measured signals are real. "placeholder" /
+// "unknown" / absent are NOT trustworthy and degrade to the honest empty state.
+function isTrustedProvenance(provenance: string | undefined): boolean {
+  return provenance === 'measured' || provenance === 'partial';
+}
+
+// Map the backend ComponentStatus enum (healthy | degraded | unhealthy |
+// unknown) to the Service Status card's status vocabulary.
+function mapComponentStatus(status: string): ServiceStatus['status'] {
+  switch (status) {
+    case 'healthy':
+      return 'healthy';
+    case 'degraded':
+      return 'warning';
+    case 'unhealthy':
+      return 'error';
+    default:
+      return 'unknown';
+  }
+}
+
+// Map the backend ModelStatus enum (healthy | degraded | unhealthy) to the
+// ProgressRing/badge status vocabulary used by the Model Health card.
+function mapModelStatus(status: string): ModelHealthView['status'] {
+  switch (status) {
+    case 'healthy':
+      return 'healthy';
+    case 'degraded':
+      return 'warning';
+    case 'unhealthy':
+      return 'critical';
+    default:
+      return 'warning';
   }
 }
 
@@ -193,11 +241,52 @@ function SystemHealth() {
   const { data: pipelineHealthData } = usePipelineHealth({ refetchInterval: 60000 });
   const { data: healthHistoryData } = useHealthHistory(20, { refetchInterval: 120000 });
 
-  // F-002 fix: services + models surfaces have no API hook yet, so the page
-  // renders explicit empty states (NOT fabricated SAMPLE_ data). Once the
-  // service-status / model-health endpoints exist, wire them here.
-  const services: ServiceStatus[] = [];
-  const models: ModelHealth[] = [];
+  // Service Status + Model Health are now wired to the real backend endpoints
+  // (GET /health-score/components, GET /health-score/models). #927 built these
+  // endpoints + hooks + Zod wire-schemas; this surfaces them in the two cards.
+  const {
+    data: componentHealthData,
+    refetch: refetchComponents,
+  } = useComponentHealth({ refetchInterval: 30000 });
+  const {
+    data: modelHealthData,
+    refetch: refetchModels,
+  } = useModelHealth({ refetchInterval: 60000 });
+
+  // Honesty model (mirrors #927): only data the backend explicitly tagged as
+  // trustworthy (data_provenance "measured" or "partial") is surfaced as real.
+  // Dev-offline "placeholder", "unknown", or an absent provenance are all
+  // treated as NO data, so the cards render their honest empty states rather
+  // than presenting unmeasured/untrusted values as real. A null/undefined
+  // payload (e.g. a crashed/errored query) likewise degrades to empty — never
+  // to a fabricated default.
+  const services = useMemo<ServiceStatus[]>(() => {
+    if (!componentHealthData || !isTrustedProvenance(componentHealthData.data_provenance)) {
+      return [];
+    }
+    return componentHealthData.components.map((c: ApiComponentHealth) => ({
+      name: c.component_name,
+      status: mapComponentStatus(c.status),
+      latencyMs: c.latency_ms ?? undefined,
+      icon: Server,
+    }));
+  }, [componentHealthData]);
+
+  const models = useMemo<ModelHealthView[]>(() => {
+    if (!modelHealthData || !isTrustedProvenance(modelHealthData.data_provenance)) {
+      return [];
+    }
+    return modelHealthData.models.map((m: ApiModelHealth) => ({
+      modelId: m.model_id,
+      name: m.model_name,
+      status: mapModelStatus(m.status),
+      // null = unmeasured (no ml_performance_metrics source). Preserve null so
+      // the card renders "—" instead of a fabricated 0 / 0% / 0.00.
+      accuracy: m.accuracy ?? null,
+      errorRate: m.error_rate ?? null,
+      predictions24h: m.predictions_last_24h ?? null,
+    }));
+  }, [modelHealthData]);
 
   // Use API data when present; otherwise render empty/neutral values. Dev-offline
   // placeholder data (data_provenance="placeholder") is treated as no score, so
@@ -269,9 +358,15 @@ function SystemHealth() {
   const healthStats = useMemo(() => {
     const healthyServices = services.filter(s => s.status === 'healthy').length;
     const totalServices = services.length;
-    const avgLatency = totalServices > 0
-      ? services.reduce((sum, s) => sum + (s.latencyMs || 0), 0) / totalServices
-      : 0;
+    // Average only over services that actually report a latency. A missing/null
+    // latency is unmeasured, NOT zero — counting it as 0 would fabricate a
+    // misleadingly-low average. null when nothing measured -> rendered as "—".
+    const measuredLatencies = services
+      .map(s => s.latencyMs)
+      .filter((ms): ms is number => ms != null);
+    const avgLatency = measuredLatencies.length > 0
+      ? Math.round(measuredLatencies.reduce((sum, ms) => sum + ms, 0) / measuredLatencies.length)
+      : null;
 
     const healthyModels = models.filter(m => m.status === 'healthy').length;
     const warningModels = models.filter(m => m.status === 'warning').length;
@@ -280,8 +375,7 @@ function SystemHealth() {
     return {
       healthyServices,
       totalServices,
-      serviceHealth: totalServices > 0 ? (healthyServices / totalServices) * 100 : 0,
-      avgLatency: Math.round(avgLatency),
+      avgLatency,
       healthyModels,
       warningModels,
       criticalModels,
@@ -292,10 +386,16 @@ function SystemHealth() {
   // Refresh handler
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    await Promise.all([refetchAlerts(), refetchRuns(), refetchHealth()]);
+    await Promise.all([
+      refetchAlerts(),
+      refetchRuns(),
+      refetchHealth(),
+      refetchComponents(),
+      refetchModels(),
+    ]);
     setLastRefresh(new Date());
     setIsRefreshing(false);
-  }, [refetchAlerts, refetchRuns, refetchHealth]);
+  }, [refetchAlerts, refetchRuns, refetchHealth, refetchComponents, refetchModels]);
 
   // Auto-refresh timestamp update
   useEffect(() => {
@@ -375,7 +475,7 @@ function SystemHealth() {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-[var(--color-muted-foreground)]">
-              Avg latency: {healthStats.avgLatency}ms
+              Avg latency: {healthStats.avgLatency != null ? `${healthStats.avgLatency}ms` : '—'}
             </p>
           </CardContent>
         </Card>
@@ -516,7 +616,7 @@ function SystemHealth() {
                 {services.length === 0 ? (
                   <EmptyState
                     title="No service status available"
-                    description="Service status endpoint is not yet wired. Status will appear here once available."
+                    description="No component health was reported. Service status appears here once measured."
                   />
                 ) : (
                 services.map((service) => {
@@ -553,13 +653,13 @@ function SystemHealth() {
                   <Brain className="h-5 w-5" />
                   Model Health
                 </CardTitle>
-                <CardDescription>ML model performance and drift status</CardDescription>
+                <CardDescription>ML model status and live performance</CardDescription>
               </CardHeader>
               <CardContent>
                 {models.length === 0 ? (
                   <EmptyState
                     title="No model health data"
-                    description="Model health endpoint is not yet wired. Drift and trend will appear here once available."
+                    description="No production model health was reported by the registry. Status and performance appear here once measured."
                   />
                 ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -568,40 +668,44 @@ function SystemHealth() {
                       key={model.modelId}
                       className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]"
                     >
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <h4 className="font-semibold text-sm">{model.name}</h4>
-                          <p className="text-xs text-[var(--color-muted-foreground)]">
+                      <div className="flex items-start justify-between mb-3 gap-2">
+                        <div className="min-w-0">
+                          <h4 className="font-semibold text-sm truncate">{model.name}</h4>
+                          <p className="text-xs text-[var(--color-muted-foreground)] truncate">
                             {model.modelId}
                           </p>
                         </div>
-                        <ProgressRing
-                          value={model.healthScore}
-                          size={48}
-                          strokeWidth={4}
-                          status={model.status}
-                        />
+                        {/* Accuracy is the only measured 0-1 metric the /models
+                            endpoint exposes; drive the ring off it when present,
+                            otherwise show a status badge (no fabricated ring). */}
+                        {model.accuracy !== null ? (
+                          <ProgressRing
+                            value={Math.round(model.accuracy * 100)}
+                            size={48}
+                            strokeWidth={4}
+                            status={model.status}
+                          />
+                        ) : (
+                          <StatusBadge status={mapHealthToStatus(model.status)} size="sm" />
+                        )}
                       </div>
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-[var(--color-muted-foreground)]">Drift</span>
-                          <span className={model.driftScore > 0.3 ? 'text-amber-600' : ''}>
-                            {(model.driftScore * 100).toFixed(0)}%
+                          <span className="text-[var(--color-muted-foreground)]">Accuracy</span>
+                          <span>
+                            {model.accuracy !== null ? `${(model.accuracy * 100).toFixed(0)}%` : '—'}
                           </span>
                         </div>
                         <div className="flex items-center justify-between text-sm">
-                          <span className="text-[var(--color-muted-foreground)]">Trend</span>
-                          <span className="flex items-center gap-1">
-                            {model.performanceTrend === 'improving' && (
-                              <TrendingUp className="h-3 w-3 text-emerald-500" />
-                            )}
-                            {model.performanceTrend === 'degrading' && (
-                              <TrendingDown className="h-3 w-3 text-rose-500" />
-                            )}
-                            {model.performanceTrend === 'stable' && (
-                              <Minus className="h-3 w-3 text-slate-500" />
-                            )}
-                            {model.performanceTrend}
+                          <span className="text-[var(--color-muted-foreground)]">Error rate</span>
+                          <span className={model.errorRate !== null && model.errorRate > 0.1 ? 'text-amber-600' : ''}>
+                            {model.errorRate !== null ? `${(model.errorRate * 100).toFixed(1)}%` : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-[var(--color-muted-foreground)]">Predictions (24h)</span>
+                          <span>
+                            {model.predictions24h !== null ? model.predictions24h.toLocaleString() : '—'}
                           </span>
                         </div>
                       </div>
