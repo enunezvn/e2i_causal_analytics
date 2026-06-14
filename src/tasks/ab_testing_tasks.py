@@ -914,11 +914,31 @@ def fidelity_tracking_update(
 @celery_app.task(bind=True, name="src.tasks.check_all_active_experiments")
 def check_all_active_experiments(
     self,
+    include_synthetic: bool = False,
 ) -> Dict[str, Any]:
     """Check all active experiments for interim analysis triggers.
 
     Scans all running experiments and queues interim analysis
     tasks for those that have reached analysis milestones.
+
+    Args:
+        include_synthetic: Provenance opt-in (#894). Default False keeps the
+            scheduled/periodic sweep real-mode (default-exclude synthetic rows).
+            The async ``/monitor?async_mode=true`` path forwards the request's
+            opt-in so a reviewer's ``include_synthetic`` choice is not silently
+            dropped on the async branch: it scopes which running experiments the
+            sweep DISCOVERS. Strictly parsed via coerce_provenance_flag — an
+            ambiguous value fails closed to real mode.
+
+            BOUNDARY (codex R2): ``scheduled_interim_analysis`` is deliberately
+            real-mode only (its body skips a synthetic experiment as "experiment
+            not found" — interim statistical stopping decisions must not run on
+            planted data). So under ``include_synthetic=True`` this sweep reports
+            the synthetic experiments it discovered, but does NOT enqueue interim
+            checks for them — that would queue child tasks guaranteed to skip,
+            inflating ``tasks_queued`` with no-op work. Interim analysis on
+            synthetic substrate is out of scope here and intentionally not
+            preserved across this enqueue.
 
     Returns:
         Summary of experiments checked and tasks queued
@@ -936,13 +956,22 @@ def check_all_active_experiments(
                     "reason": "No database client available",
                 }
 
-            from src.repositories.provenance import apply_provenance_filter
-
-            # Get all running experiments (#894: real-mode sweep only)
-            query = (
-                client.table("ml_experiments").select("id, experiment_name").eq("status", "running")
+            from src.repositories.provenance import (
+                apply_provenance_filter,
+                coerce_provenance_flag,
             )
-            result = await apply_provenance_filter(query).execute()
+
+            # Get all running experiments. #894: default real-mode sweep;
+            # opt in (strictly parsed) to include the synthetic-gold substrate.
+            # Select is_synthetic so the enqueue step can honour the interim-mode
+            # boundary below without re-querying.
+            opt_in = coerce_provenance_flag(include_synthetic)
+            query = (
+                client.table("ml_experiments")
+                .select("id, experiment_name, is_synthetic")
+                .eq("status", "running")
+            )
+            result = await apply_provenance_filter(query, opt_in).execute()
 
             if not result.data:
                 return {
@@ -952,9 +981,25 @@ def check_all_active_experiments(
                 }
 
             tasks_queued = []
+            synthetic_skipped = []
             errors = []
 
             for exp in result.data:
+                # BOUNDARY (codex R2): scheduled_interim_analysis is real-mode
+                # only (it skips synthetic ids as "experiment not found"). Under
+                # the discovery opt-in, REPORT the synthetic experiment but do NOT
+                # enqueue a child guaranteed to no-op — interim stopping decisions
+                # must not run on planted data, and a wasted enqueue would inflate
+                # tasks_queued.
+                if coerce_provenance_flag(exp.get("is_synthetic")):
+                    synthetic_skipped.append(
+                        {
+                            "experiment_id": exp["id"],
+                            "name": exp.get("experiment_name", "Unknown"),
+                            "reason": "interim analysis is real-mode only (#894)",
+                        }
+                    )
+                    continue
                 try:
                     # Queue interim analysis check for each experiment
                     task = scheduled_interim_analysis.delay(
@@ -981,6 +1026,10 @@ def check_all_active_experiments(
                 "experiments_found": len(result.data),
                 "tasks_queued": len(tasks_queued),
                 "queued_tasks": tasks_queued,
+                # Synthetic experiments surfaced by the discovery opt-in but not
+                # interim-analyzed (real-mode-only boundary, #894). Honestly
+                # reported so the count is not silently dropped.
+                "synthetic_skipped": synthetic_skipped,
                 "errors": errors,
             }
 

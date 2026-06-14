@@ -218,6 +218,16 @@ class TriggerMonitorRequest(BaseModel):
     check_enrollment: bool = Field(default=True, description="Check enrollment rates")
     check_fidelity: bool = Field(default=True, description="Check Digital Twin fidelity")
     srm_threshold: float = Field(default=0.001, description="SRM p-value threshold")
+    include_synthetic: bool = Field(
+        default=False,
+        description=(
+            "Provenance opt-in (#894). When true the monitor includes "
+            "synthetic-tagged ml_experiments / ab_experiment_assignments rows; "
+            "default excludes them (real-mode), matching the gap_analyzer/het "
+            "resolver convention. All A/B substrate in this deployment is "
+            "synthetic-gold, so callers must opt in to see it."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -227,6 +237,7 @@ class TriggerMonitorRequest(BaseModel):
                 "check_enrollment": True,
                 "check_fidelity": True,
                 "srm_threshold": 0.001,
+                "include_synthetic": False,
             }
         }
     )
@@ -1249,11 +1260,18 @@ async def trigger_experiment_monitoring(
     if async_mode:
         from src.tasks.ab_testing_tasks import check_all_active_experiments
 
-        # check_all_active_experiments takes no arguments — it scans all running
-        # experiments and enqueues an interim-analysis check per experiment. The
-        # prior srm_threshold kwarg was a copy-paste error that raised a TypeError
-        # in the worker (#825).
-        task = check_all_active_experiments.delay()
+        # check_all_active_experiments scans all running experiments and enqueues
+        # an interim-analysis check per experiment. The prior srm_threshold kwarg
+        # was a copy-paste error that raised a TypeError in the worker (#825).
+        # Forward the request's provenance opt-in so async_mode does not silently
+        # drop the synthetic-gold substrate the sync path can now surface (#894).
+        # NOTE (codex R2): the opt-in scopes which experiments the sweep
+        # DISCOVERS; interim analysis itself stays real-mode (scheduled_interim_
+        # analysis skips synthetic ids by design), so synthetic experiments are
+        # reported under synthetic_skipped rather than interim-analyzed. The
+        # interactive Experiments page uses the SYNC path (async_mode=false),
+        # which is fully opted-in end-to-end.
+        task = check_all_active_experiments.delay(include_synthetic=request.include_synthetic)
         return MonitorResponse(
             experiments_checked=0,
             healthy_count=0,
@@ -1278,6 +1296,7 @@ async def trigger_experiment_monitoring(
                 check_srm=request.check_srm,
                 check_enrollment=request.check_enrollment,
                 check_fidelity=request.check_fidelity,
+                include_synthetic=request.include_synthetic,
             )
         )
 
@@ -1352,12 +1371,21 @@ async def trigger_experiment_monitoring(
 )
 async def get_experiment_health(
     experiment_id: str,
+    include_synthetic: bool = Query(
+        default=False,
+        description=(
+            "Provenance opt-in (#894). When true a synthetic-gold experiment id "
+            "resolves; default real-mode excludes synthetic rows, so a synthetic "
+            "id 404s unless opted in. Matches the /monitor sweep convention."
+        ),
+    ),
 ) -> ExperimentHealthSummary:
     """
     Get health status for a single experiment.
 
     Args:
         experiment_id: Experiment ID
+        include_synthetic: Provenance opt-in (default False, real-mode)
 
     Returns:
         Experiment health summary
@@ -1370,6 +1398,7 @@ async def get_experiment_health(
             ExperimentMonitorInput(
                 experiment_ids=[experiment_id],
                 check_all_active=False,
+                include_synthetic=include_synthetic,
             )
         )
 
