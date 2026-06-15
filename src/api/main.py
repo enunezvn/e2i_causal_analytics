@@ -878,12 +878,17 @@ async def health_check() -> Dict[str, Any]:
     }
 
     # Build response
+    from src.repositories.provenance import deployment_includes_synthetic
+
     response = {
         "status": "healthy",
         "service": "e2i-causal-analytics-api",
         "version": API_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "components": components,
+        # WS-SYNTH: lets the FE render a non-blocking "synthetic showcase data"
+        # badge/banner when this instance runs on synthetic-gold data.
+        "synthetic_showcase_mode": deployment_includes_synthetic(),
     }
 
     # Add notes for non-critical unhealthy components

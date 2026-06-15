@@ -150,18 +150,20 @@ def _fetch_brand_rows(
     # secondary key so offset pagination over same-date rows can neither skip nor
     # duplicate a row across page boundaries (codex MED) -> _latest_per_combo sees
     # a stable total order and cannot miss a combo.
+    from src.repositories.provenance import apply_provenance_filter
+
     base = (
         sb.table("business_metrics")
         .select(_METRIC_COLUMNS)
         .eq("brand", brand)
-        # Provenance (Shard 07 R12): never embed synthetic KPI prose into the prod
-        # corpus. business_metrics carries is_synthetic (default false); synthetic
-        # rows (Shard 02) are excluded so the chatbot only surfaces real metrics.
-        .eq("is_synthetic", False)
         .not_.is_("metric_name", "null")
         .order("metric_date", desc=True)
         .order("metric_id")
     )
+    # Provenance (Shard 07 R12): exclude synthetic KPI prose from the prod corpus in
+    # real mode; a synthetic-gold showcase instance (E2I_INCLUDE_SYNTHETIC) includes
+    # it so the chatbot RAG corpus is populated rather than empty. (WS-SYNTH)
+    base = apply_provenance_filter(base)
     if not latest_per_combo:
         return list(base.limit(limit_per_brand).execute().data or [])
 
@@ -190,18 +192,14 @@ def _existing_corpus_descriptions(sb: Any, agent_name: str) -> set[str]:
     page = 0
     page_size = 1000
     while True:
-        resp = (
-            sb.table("episodic_memories")
-            .select("description")
-            .eq("agent_name", agent_name)
-            # Provenance (Shard 07 R12/R15): the dedup set must contain ONLY real
-            # corpus rows. A synthetic episodic description must never suppress
-            # ingesting a real business_metrics row (which would leave the real
-            # KPI unsearchable while the synthetic prose silently stands in).
-            .eq("is_synthetic", False)
-            .range(page * page_size, page * page_size + page_size - 1)
-            .execute()
-        )
+        from src.repositories.provenance import apply_provenance_filter
+
+        dedup_q = sb.table("episodic_memories").select("description").eq("agent_name", agent_name)
+        # Provenance (Shard 07 R12/R15): dedup against REAL corpus rows in real mode;
+        # the showcase instance (E2I_INCLUDE_SYNTHETIC) dedups against the synthetic
+        # corpus too so re-ingest stays idempotent on synthetic-gold data. (WS-SYNTH)
+        dedup_q = apply_provenance_filter(dedup_q)
+        resp = dedup_q.range(page * page_size, page * page_size + page_size - 1).execute()
         batch = resp.data or []
         for row in batch:
             if row.get("description"):
@@ -250,15 +248,14 @@ async def index_business_metrics(
     """
     sb = supabase_client or get_supabase_client()
     if brands is None:
-        r = (
-            sb.table("business_metrics")
-            .select("brand")
-            # Provenance (Shard 07 R12): brand discovery must not surface a brand
-            # that exists only in synthetic rows.
-            .eq("is_synthetic", False)
-            .not_.is_("brand", "null")
-            .execute()
-        )
+        from src.repositories.provenance import apply_provenance_filter
+
+        brand_q = sb.table("business_metrics").select("brand").not_.is_("brand", "null")
+        # Provenance (Shard 07 R12): real-mode brand discovery excludes synthetic-only
+        # brands; the showcase instance (E2I_INCLUDE_SYNTHETIC) includes them so every
+        # synthetic-gold brand is discovered for indexing. (WS-SYNTH)
+        brand_q = apply_provenance_filter(brand_q)
+        r = brand_q.execute()
         brands = sorted({row["brand"] for row in (r.data or []) if row.get("brand")})
 
     already = _existing_corpus_descriptions(sb, agent_name) if dedup else set()

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
-from src.repositories.provenance import coerce_provenance_flag
+from src.repositories.provenance import coerce_provenance_flag, deployment_includes_synthetic
 
 from .._agent_method_map import get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
@@ -526,6 +526,11 @@ def _resolve_include_synthetic_opt_in(agent_input: Dict[str, Any], params: Dict[
     ambiguous value (``"false"``, ``"0"``, non-bool/non-str types) fails CLOSED
     to the real-mode default-exclude predicate.
     """
+    # Showcase / synthetic-gold instance (E2I_INCLUDE_SYNTHETIC): synthetic is a
+    # badge, not a gate — force include so every dispatch runs at full potential,
+    # consistent with apply_provenance_filter. Reversible (unset → strict). WS-SYNTH.
+    if deployment_includes_synthetic():
+        return True
     channel_opt_in = (
         _coerce_provenance_flag((params.get("filters") or {}).get("include_synthetic"))
         or _coerce_provenance_flag((agent_input.get("filters") or {}).get("include_synthetic"))

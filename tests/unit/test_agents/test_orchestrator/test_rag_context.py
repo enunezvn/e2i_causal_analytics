@@ -301,6 +301,22 @@ class TestProvenanceOptIn:
         )
         assert filters["include_synthetic"] is True
 
+    @pytest.mark.asyncio
+    async def test_showcase_deployment_flag_forces_include(self, monkeypatch):
+        """WS-SYNTH: on a synthetic-gold showcase instance (E2I_INCLUDE_SYNTHETIC)
+        synthetic is a badge, not a gate — the resolver includes synthetic even
+        over an explicit real-only opt-out (consistent with apply_provenance_filter;
+        reversible when the env is unset)."""
+        monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+        filters = await self._search_filters(
+            {
+                "query": "overall trends",
+                "entities_extracted": {},
+                "user_context": {"include_synthetic": "false"},
+            }
+        )
+        assert filters["include_synthetic"] is True
+
     def test_build_filters_plural_key_contract(self):
         """Locks the entity-filter contract: plural keys carrying lists.
 

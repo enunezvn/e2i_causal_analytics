@@ -95,10 +95,17 @@ def kpi_include_synthetic() -> bool:
     Reads ``E2I_KPI_INCLUDE_SYNTHETIC`` fresh on every call (truthy:
     ``1`` / ``true`` / ``yes``, case-insensitive), mirroring the other
     ``E2I_*`` runtime flags so it can be toggled per-deployment without a
-    restart-coupled import-time capture. Defaults to ``False`` → production's
-    strict synthetic-exclusion gate (migration 066) is preserved untouched.
+    restart-coupled import-time capture. ALSO honors the deployment-wide
+    ``E2I_INCLUDE_SYNTHETIC`` showcase switch (the generalized flag in
+    :func:`src.repositories.provenance.deployment_includes_synthetic`) so ONE env
+    makes the whole synthetic-gold instance run at full potential. Defaults to
+    ``False`` → production's strict synthetic-exclusion gate (migration 066) is
+    preserved untouched.
     """
-    return os.getenv("E2I_KPI_INCLUDE_SYNTHETIC", "0").strip().lower() in _TRUTHY
+    return (
+        os.getenv("E2I_KPI_INCLUDE_SYNTHETIC", "0").strip().lower() in _TRUTHY
+        or os.getenv("E2I_INCLUDE_SYNTHETIC", "0").strip().lower() in _TRUTHY
+    )
 
 
 def resolve_kpi_query_id(query_id: str) -> str:
