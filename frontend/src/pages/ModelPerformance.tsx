@@ -171,8 +171,13 @@ function ModelPerformance() {
     [models, effectiveModelId]
   );
 
+  // Performance metrics are recorded ~monthly (backtest sweep), so a 30-day
+  // window catches only ~1-2 points and the trend chart renders degenerate /
+  // empty. Use a 1-year window to surface the full accuracy-over-time history
+  // (the backend's own default is also 365). Cards (current/baseline/trend)
+  // come from the tracker independently of this window.
   const trendQuery = usePerformanceTrend(
-    { model_id: effectiveModelId, metric_name: 'accuracy', days: 30 },
+    { model_id: effectiveModelId, metric_name: 'accuracy', days: 365 },
     { enabled: !!effectiveModelId }
   );
 
