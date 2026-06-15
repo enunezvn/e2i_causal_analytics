@@ -2631,6 +2631,8 @@ def _causal_path_to_graphpath(row: Mapping[str, Any]) -> GraphPath:
             type=EntityType.AGENT,
             name=n,
             properties={"original_type": "Variable"},
+            created_at=None,
+            updated_at=None,
         )
         for n in names
     ]
@@ -2666,6 +2668,7 @@ def _causal_path_to_graphpath(row: Mapping[str, Any]) -> GraphPath:
                 target_id=nodes[i + 1].id,
                 properties=props,
                 confidence=conf_f,
+                created_at=None,
             )
         )
 
