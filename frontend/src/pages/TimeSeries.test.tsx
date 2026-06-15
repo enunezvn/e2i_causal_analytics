@@ -381,6 +381,54 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     });
   });
 
+  it('removes the free-text Model ID advanced override', () => {
+    const { container } = render(<TimeSeries />, { wrapper: createWrapper() });
+    // The advanced-override input is gone; cohort+brand selects fully drive the model id.
+    expect(screen.queryByText(/advanced override/i)).not.toBeInTheDocument();
+    expect(container.querySelector('#ts-model-id')).toBeNull();
+    // The selection card is still present at the top with cohort + brand.
+    expect(screen.getByRole('combobox', { name: /cohort/i })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /brand/i })).toBeInTheDocument();
+  });
+
+  it('Model Selection appears above the Performance Trend chart (top placement)', () => {
+    render(<TimeSeries />, { wrapper: createWrapper() });
+    const selection = screen.getByText('Model Selection');
+    const chart = screen.getByText('Performance Trend');
+    // DOCUMENT_POSITION_FOLLOWING (4) => selection comes before chart in DOM order.
+    expect(selection.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('KPI history shows an honest empty-state when the API returns no time series', async () => {
+    const user = userEvent.setup();
+    // Real-world shape today: a current value but NO metadata.history.
+    mockUseKPIValue.mockReturnValue({
+      data: {
+        kpi_id: 'WS1-DQ-001',
+        value: 0.0576,
+        status: 'critical' as const,
+        calculated_at: '2026-06-15T00:00:00Z',
+        cached: false,
+        metadata: { include_synthetic: true },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+      isRefetching: false,
+    });
+
+    render(<TimeSeries />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /KPI history/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('kpi-history-empty')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/No historical data available for this KPI/i)).toBeInTheDocument();
+    // The current KPI value is still shown.
+    expect(screen.getByText('Current KPI Status')).toBeInTheDocument();
+  });
+
   it('source file contains NO sample/mock data — by identifier AND by behavior', () => {
     const sourcePath = path.resolve(__dirname, 'TimeSeries.tsx');
     const source = fs.readFileSync(sourcePath, 'utf-8');

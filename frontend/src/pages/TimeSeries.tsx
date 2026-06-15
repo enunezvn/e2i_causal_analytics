@@ -63,7 +63,6 @@ import { useKPIValue, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
 const DEFAULT_COHORT = 'persistence';
 const DEFAULT_BRAND = 'Remibrutinib';
 const DEFAULT_MODEL_ID = `${DEFAULT_COHORT}_${DEFAULT_BRAND.toLowerCase()}_goldstd_lr_v1`;
-const EXAMPLE_MODEL_ID = 'csu_treatment_initiation_lr_balanced_v1';
 
 const COHORT_OPTIONS: { value: string; label: string }[] = [
   { value: 'initiation', label: 'Initiation' },
@@ -386,6 +385,61 @@ function TimeSeries() {
           </TabsTrigger>
         </TabsList>
 
+        {/* Model selection (performance mode) — at the TOP so it's the first thing
+            you set. Cohort × Brand spans all 12 per-brand gold-standard models and
+            resolves the serving handle `{cohort}_{brand}_goldstd_lr_v1`. */}
+        {mode === 'performance' && (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Model Selection</CardTitle>
+              <CardDescription>
+                Resolves to{' '}
+                <Badge variant="outline" className="font-mono">
+                  {modelId}
+                </Badge>
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-4">
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="ts-cohort" className="text-sm font-medium">
+                    Cohort
+                  </label>
+                  <select
+                    id="ts-cohort"
+                    value={cohort}
+                    onChange={(e) => handleCohortChange(e.target.value)}
+                    className="p-2 border rounded-md text-sm bg-background"
+                  >
+                    {COHORT_OPTIONS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="ts-brand" className="text-sm font-medium">
+                    Brand
+                  </label>
+                  <select
+                    id="ts-brand"
+                    value={brand}
+                    onChange={(e) => handleBrandChange(e.target.value)}
+                    className="p-2 border rounded-md text-sm bg-background"
+                  >
+                    {BRAND_OPTIONS.map((b) => (
+                      <option key={b.value} value={b.value}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Error state — both modes */}
         {error && (
           <QueryErrorState
@@ -466,26 +520,37 @@ function TimeSeries() {
               </div>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={performanceSeries} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                  <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
-                  <YAxis fontSize={12} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    formatter={formatTooltipValue}
-                    labelFormatter={formatDate}
-                  />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="value"
-                    stroke="hsl(var(--chart-1))"
-                    strokeWidth={2}
-                    dot={false}
-                    name={currentSeriesLabel}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              {!isLoading && performanceSeries.length === 0 ? (
+                <div
+                  data-testid="performance-trend-empty"
+                  className="flex h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground"
+                >
+                  <Activity className="h-8 w-8 opacity-40" />
+                  <p className="font-medium">No performance history for this model / metric</p>
+                  <p className="max-w-md text-xs">
+                    Try a different cohort, brand, or metric — this combination has no
+                    recorded trend points.
+                  </p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={400}>
+                  <LineChart data={performanceSeries} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                    <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
+                    <YAxis fontSize={12} tickLine={false} axisLine={false} />
+                    <Tooltip formatter={formatTooltipValue} labelFormatter={formatDate} />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="value"
+                      stroke="var(--color-chart-1)"
+                      strokeWidth={2}
+                      dot={false}
+                      name={currentSeriesLabel}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 
@@ -536,26 +601,40 @@ function TimeSeries() {
               </div>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={kpiSeries} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                  <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
-                  <YAxis fontSize={12} tickLine={false} axisLine={false} />
-                  <Tooltip
-                    formatter={formatTooltipValue}
-                    labelFormatter={formatDate}
-                  />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="value"
-                    stroke="hsl(var(--chart-2))"
-                    strokeWidth={2}
-                    dot={false}
-                    name={currentSeriesLabel}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              {/* Honest empty-state: the KPI API returns a current value but no
+                  time series today, so when there's no history DON'T render a
+                  blank chart that reads as real flat data — say so plainly. */}
+              {!isLoading && kpiSeries.length === 0 ? (
+                <div
+                  data-testid="kpi-history-empty"
+                  className="flex h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground"
+                >
+                  <Activity className="h-8 w-8 opacity-40" />
+                  <p className="font-medium">No historical data available for this KPI</p>
+                  <p className="max-w-md text-xs">
+                    The KPI API currently returns only a point-in-time value. A KPI
+                    time series isn&apos;t being captured yet — see the current value below.
+                  </p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={400}>
+                  <LineChart data={kpiSeries} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                    <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
+                    <YAxis fontSize={12} tickLine={false} axisLine={false} />
+                    <Tooltip formatter={formatTooltipValue} labelFormatter={formatDate} />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="value"
+                      stroke="var(--color-chart-2)"
+                      strokeWidth={2}
+                      dot={false}
+                      name={currentSeriesLabel}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
 
@@ -592,70 +671,6 @@ function TimeSeries() {
           )}
         </TabsContent>
       </Tabs>
-
-      {/* Model selector (performance mode only) — placed below for visibility */}
-      {mode === 'performance' && (
-        <Card className="mt-6">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Model Selection
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Cohort + Brand dropdowns — resolve to the per-brand model handle */}
-            <div className="flex flex-wrap gap-4">
-              <div className="flex flex-col gap-1">
-                <label htmlFor="ts-cohort" className="text-sm font-medium">
-                  Cohort
-                </label>
-                <select
-                  id="ts-cohort"
-                  value={cohort}
-                  onChange={(e) => handleCohortChange(e.target.value)}
-                  className="p-2 border rounded-md text-sm bg-background"
-                >
-                  {COHORT_OPTIONS.map((c) => (
-                    <option key={c.value} value={c.value}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-col gap-1">
-                <label htmlFor="ts-brand" className="text-sm font-medium">
-                  Brand
-                </label>
-                <select
-                  id="ts-brand"
-                  value={brand}
-                  onChange={(e) => handleBrandChange(e.target.value)}
-                  className="p-2 border rounded-md text-sm bg-background"
-                >
-                  {BRAND_OPTIONS.map((b) => (
-                    <option key={b.value} value={b.value}>
-                      {b.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            {/* Free-text model ID — advanced override; typing here wins directly */}
-            <div>
-              <label htmlFor="ts-model-id" className="text-sm font-medium mb-2 block">
-                Model ID (advanced override)
-              </label>
-              <input
-                id="ts-model-id"
-                type="text"
-                value={modelId}
-                onChange={(e) => setModelId(e.target.value)}
-                className="w-full p-2 border rounded-md text-sm"
-                placeholder={EXAMPLE_MODEL_ID}
-              />
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
