@@ -97,12 +97,12 @@ def _synthetic_rows(n: int = 400) -> list[dict]:
 
 
 class TestSpecRegistry:
-    def test_registry_covers_all_twelve_live_models(self) -> None:
-        """Every live ``*_goldstd_lr_v1`` registry model_name is resolvable."""
+    def test_registry_covers_all_twelve_servable_models(self) -> None:
+        """Every SERVABLE (staging) ``*_goldstd_lr_v1`` model is resolvable:
+        the 9 patient cohorts + the 3 HCP-adoption cohorts. The 3 base
+        aggregates are ARCHIVED and intentionally excluded."""
         expected = {
-            "csu_initiation_goldstd_lr_v1",
-            "pnh_persistence_goldstd_lr_v1",
-            "pnh_discontinuation_goldstd_lr_v1",
+            # 9 patient cohorts × brands
             "initiation_remibrutinib_goldstd_lr_v1",
             "initiation_fabhalta_goldstd_lr_v1",
             "initiation_kisqali_goldstd_lr_v1",
@@ -112,8 +112,21 @@ class TestSpecRegistry:
             "discontinuation_remibrutinib_goldstd_lr_v1",
             "discontinuation_fabhalta_goldstd_lr_v1",
             "discontinuation_kisqali_goldstd_lr_v1",
+            # 3 HCP-adoption cohorts × brands
+            "hcp_adoption_remibrutinib_goldstd_lr_v1",
+            "hcp_adoption_fabhalta_goldstd_lr_v1",
+            "hcp_adoption_kisqali_goldstd_lr_v1",
         }
         assert set(SPEC_REGISTRY.keys()) == expected
+
+    def test_archived_aggregates_excluded(self) -> None:
+        """The archived base aggregate rows are NOT in the servable registry."""
+        for archived in (
+            "csu_initiation_goldstd_lr_v1",
+            "pnh_persistence_goldstd_lr_v1",
+            "pnh_discontinuation_goldstd_lr_v1",
+        ):
+            assert archived not in SPEC_REGISTRY
 
     def test_serving_root_is_under_data_ml_artifacts(self) -> None:
         assert SHAP_SERVING_ROOT.parts[-2:] == ("ml_artifacts", "shap_serving")

@@ -42,12 +42,11 @@ from sklearn.metrics import roc_auc_score
 from src.mlops.gold_standard_eval.cohort_deployer import train_cohort_model
 from src.mlops.gold_standard_eval.cohort_spec import (
     BRANDS,
-    DISCONTINUATION,
-    INITIATION,
+    HCP_ADOPTION_COHORT,
     PATIENT_COHORTS,
-    PERSISTENCE,
     CohortSpec,
     goldstd_model_name,
+    make_hcp_spec,
     make_patient_spec,
 )
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
@@ -63,25 +62,33 @@ SHAP_SERVING_ROOT = _REPO_ROOT / "data" / "ml_artifacts" / "shap_serving"
 
 
 def _build_spec_registry() -> dict[str, tuple[CohortSpec, str]]:
-    """Map every live ``*_goldstd_lr_v1`` model_name → (CohortSpec, cohort_dir).
+    """Map every SERVABLE ``*_goldstd_lr_v1`` model_name → (CohortSpec, cohort_dir).
 
-    The cohort_dir is the sub-directory under ``shap_serving/`` (matches the
-    cohort family so the 9 per-brand bundles and the base aggregates group
-    sensibly on disk).
+    The cohort_dir is the sub-directory under ``shap_serving/``. Covers the 12
+    staging models that are actually served:
+      * 9 patient cohorts (initiation/persistence/discontinuation × 3 brands)
+      * 3 HCP-adoption cohorts (hcp_adoption × 3 brands)
+
+    The 3 base aggregate rows (csu_initiation / pnh_persistence /
+    pnh_discontinuation) are ARCHIVED in ml_model_registry (superseded by the
+    per-brand models) and are intentionally NOT re-materialized.
     """
     registry: dict[str, tuple[CohortSpec, str]] = {}
 
-    # Base aggregate specs (the original 3 cohorts).
-    registry["csu_initiation_goldstd_lr_v1"] = (INITIATION, "initiation")
-    registry["pnh_persistence_goldstd_lr_v1"] = (PERSISTENCE, "persistence")
-    registry["pnh_discontinuation_goldstd_lr_v1"] = (DISCONTINUATION, "discontinuation")
-
-    # 9 per-brand cohort specs.
+    # 9 per-brand patient cohort specs.
     for cohort in PATIENT_COHORTS:
         for brand in BRANDS:
             name = goldstd_model_name(cohort, brand)
             spec = make_patient_spec(cohort, brand)
             registry[name] = (spec, cohort)
+
+    # 3 per-brand HCP-adoption cohort specs (HCP grain: 5 covariates →
+    # 19 encoded features, JOIN-embedded from hcp_profiles). Same bundle shape /
+    # raw-covariate serving contract; the FeatureBuilder dispatches on grain.
+    for brand in BRANDS:
+        name = goldstd_model_name(HCP_ADOPTION_COHORT, brand)
+        spec = make_hcp_spec(brand)
+        registry[name] = (spec, HCP_ADOPTION_COHORT)
 
     return registry
 

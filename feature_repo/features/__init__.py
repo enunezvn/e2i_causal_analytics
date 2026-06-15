@@ -10,6 +10,9 @@ This module exports all feature views organized by use case:
 from .goldstd_cohort_features import (
     goldstd_cohort_features_fv,
 )
+from .goldstd_hcp_features import (
+    goldstd_hcp_features_fv,
+)
 from .hcp_features import (
     hcp_conversion_fv,
     hcp_engagement_fv,
@@ -44,6 +47,7 @@ __all__ = [
     "territory_performance_fv",
     # Gold-standard cohort SHAP serving (#39)
     "goldstd_cohort_features_fv",
+    "goldstd_hcp_features_fv",
 ]
 
 # Feature view registry for programmatic access
@@ -58,6 +62,7 @@ FEATURE_VIEW_MAP = {
     "market_dynamics": market_dynamics_fv,
     "territory_performance": territory_performance_fv,
     "goldstd_cohort_features": goldstd_cohort_features_fv,
+    "goldstd_hcp_features": goldstd_hcp_features_fv,
 }
 
 

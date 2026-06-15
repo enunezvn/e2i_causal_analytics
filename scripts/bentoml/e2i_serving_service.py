@@ -116,6 +116,19 @@ class PredictionInput(BaseModel):
             "Defaults to 'patient_id' to match the project's primary entity."
         ),
     )
+    model_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional serving model name to ROUTE this request to (#39 "
+            "multi-model serving). When set and known, the service uses the "
+            "bundle registered under this name (e.g. "
+            "'initiation_remibrutinib_goldstd_lr_v1', "
+            "'hcp_adoption_kisqali_goldstd_lr_v1'). When None, the legacy "
+            "single default model is used (tier0 / numeric / Feast contracts — "
+            "backward compatible). An unknown name FAILS CLOSED (error in the "
+            "response) rather than silently scoring the wrong/default model."
+        ),
+    )
 
 
 class PredictionOutput(BaseModel):
@@ -167,6 +180,14 @@ class PredictionOutput(BaseModel):
             "feature_columns order). Empty when ``encoded_features`` is empty."
         ),
     )
+    error: Optional[str] = Field(
+        default=None,
+        description=(
+            "Fail-closed error message (#39 multi-model): set when a routed "
+            "``model_name`` is unknown so the caller sees an honest failure "
+            "instead of a fabricated/wrong-model prediction. None on success."
+        ),
+    )
 
 
 class BatchPredictionInput(BaseModel):
@@ -184,6 +205,21 @@ class BatchPredictionOutput(BaseModel):
     predictions: List[float]
     processing_time_ms: float
     is_mock: bool = False
+
+
+class ModelInfoInput(BaseModel):
+    """Input for ``/model_info`` — optionally routed by serving model name (#39).
+
+    When ``model_name`` is set and known, ``/model_info`` returns that bundle's
+    contract (its ``keep_columns`` + encoded ``feature_columns``). When None, the
+    legacy default model's info is returned (backward compatible — the legacy
+    caller posts ``{}``).
+    """
+
+    model_name: Optional[str] = Field(
+        default=None,
+        description="Optional serving model name to describe (multi-model #39).",
+    )
 
 
 class HealthResponse(BaseModel):
@@ -308,6 +344,140 @@ def _load_model_by_tag(tag: str) -> tuple[Optional[Any], Optional[str], Optional
 
 
 # =============================================================================
+# Multi-model discovery (#39) — gold-standard cohort bundles
+# =============================================================================
+#
+# The service serves MANY gold-standard cohort models from ONE process (12+
+# separate containers is infeasible on a memory-constrained box). Each bundle is
+# a small dict {"model", "preprocessor": FeatureBuilder, "feature_columns"}.
+# Discovery order per model:
+#   1. BentoML store — any model whose tag name matches *_goldstd_lr_v1
+#      (the LIVE ACTIVATION step imports each bundle as a picklable model with
+#      metadata.bundled=True). Preferred: same store as the legacy path.
+#   2. Filesystem fallback — data/ml_artifacts/shap_serving/<cohort>/<name>.bundle.pkl
+#      (what scripts/rematerialize_goldstd_bundles.py writes).
+# Eager-loading ~12 calibrated-LR bundles is trivially cheap; we still guard with
+# a cap + a warning if the discovered set is unexpectedly large.
+
+# Sentinel so resolver helpers can distinguish "use the legacy default" (arg
+# omitted) from an explicitly-passed None (a routed model with no preprocessor).
+_UNSET: Any = object()
+
+_GOLDSTD_NAME_SUFFIX = "_goldstd_lr_v1"
+_SHAP_SERVING_DIRNAME = os.path.join("data", "ml_artifacts", "shap_serving")
+_MAX_EAGER_MODELS = 64  # sanity cap; warn (don't crash) if exceeded
+
+
+def _is_goldstd_bundle_dict(obj: Any) -> bool:
+    """True for the {"model","preprocessor","feature_columns"} bundle shape."""
+    return (
+        isinstance(obj, dict)
+        and "model" in obj
+        and "preprocessor" in obj
+        and "feature_columns" in obj
+    )
+
+
+def _unwrap_bundle(obj: Any) -> Optional[Dict[str, Any]]:
+    """Return a normalized {model, preprocessor, feature_columns} entry or None."""
+    if not _is_goldstd_bundle_dict(obj):
+        return None
+    return {
+        "model": obj.get("model"),
+        "preprocessor": obj.get("preprocessor"),
+        "feature_columns": obj.get("feature_columns"),
+    }
+
+
+def _discover_goldstd_bundles_from_store() -> Dict[str, Dict[str, Any]]:
+    """Load every *_goldstd_lr_v1 bundle from the BentoML store, keyed by name.
+
+    The serving name is the registry model_name (the tag's name component, e.g.
+    ``initiation_remibrutinib_goldstd_lr_v1``). Best-effort: store/loader errors
+    for one model are logged and skipped (one bad bundle must not sink the
+    others). Only dict-shaped bundles are accepted.
+    """
+    found: Dict[str, Dict[str, Any]] = {}
+    try:
+        models = bentoml.models.list()
+    except Exception as e:  # pragma: no cover - store unavailable in unit env
+        logger.warning("Multi-model discovery: bentoml.models.list() failed: %s", e)
+        return found
+
+    for m in models:
+        try:
+            tag_str = str(m.tag)
+            name = tag_str.split(":", 1)[0]
+            if not name.endswith(_GOLDSTD_NAME_SUFFIX):
+                continue
+            loaded, _tag, _fw = _load_model_by_tag(tag_str)
+            entry = _unwrap_bundle(loaded)
+            if entry is None:
+                logger.warning(
+                    "Multi-model discovery: %s is not a bundle dict; skipping.", tag_str
+                )
+                continue
+            # Newest tag wins (models.list() order is not guaranteed); keep first
+            # seen per name after sorting by creation_time desc.
+            found.setdefault(name, entry)
+        except Exception as e:  # pragma: no cover
+            logger.warning("Multi-model discovery: failed to load %s: %s", m, e)
+    return found
+
+
+def _discover_goldstd_bundles_from_fs(root: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Load *_goldstd_lr_v1 bundles from the shap_serving artifact dir.
+
+    Fallback for when the bundles are on disk but not (yet) imported to the
+    BentoML store. Walks ``data/ml_artifacts/shap_serving/<cohort>/<name>.bundle.pkl``.
+    """
+    found: Dict[str, Dict[str, Any]] = {}
+    base = root or _SHAP_SERVING_DIRNAME
+    if not os.path.isdir(base):
+        return found
+    import pickle as _pickle
+
+    for dirpath, _dirnames, filenames in os.walk(base):
+        for fn in filenames:
+            if not fn.endswith(".bundle.pkl"):
+                continue
+            name = fn[: -len(".bundle.pkl")]
+            if not name.endswith(_GOLDSTD_NAME_SUFFIX):
+                continue
+            path = os.path.join(dirpath, fn)
+            try:
+                with open(path, "rb") as fh:
+                    obj = _pickle.load(fh)  # noqa: S301 - trusted local artifact
+                entry = _unwrap_bundle(obj)
+                if entry is None:
+                    logger.warning("FS discovery: %s is not a bundle dict; skipping.", path)
+                    continue
+                found.setdefault(name, entry)
+            except Exception as e:
+                logger.warning("FS discovery: failed to load %s: %s", path, e)
+    return found
+
+
+def _discover_goldstd_bundles() -> Dict[str, Dict[str, Any]]:
+    """Discover all gold-standard serving bundles (store first, FS fallback)."""
+    models = _discover_goldstd_bundles_from_store()
+    # FS fallback fills in any names the store does not have (does not override
+    # a store-loaded entry).
+    for name, entry in _discover_goldstd_bundles_from_fs().items():
+        models.setdefault(name, entry)
+    if len(models) > _MAX_EAGER_MODELS:
+        logger.warning(
+            "Multi-model discovery loaded %d models (> cap %d); memory pressure "
+            "possible — consider sharding the serving set.",
+            len(models),
+            _MAX_EAGER_MODELS,
+        )
+    if models:
+        logger.info("Multi-model serving: loaded %d gold-standard bundles", len(models))
+    return models
+
+
+# =============================================================================
 # BentoML Service
 # =============================================================================
 
@@ -335,6 +505,10 @@ class E2IModelService:
         self._framework: Optional[str] = None
         self._preprocessor = None
         self._feature_columns: Optional[List[str]] = None
+        # Multi-model registry (#39): {serving_name: {model, preprocessor,
+        # feature_columns}}. Empty when no gold-standard bundles are present —
+        # the legacy single default model below is then the only servable model.
+        self._models: Dict[str, Dict[str, Any]] = _discover_goldstd_bundles()
 
         self._model, self._model_tag, self._framework = _discover_model()
 
@@ -355,22 +529,50 @@ class E2IModelService:
         else:
             logger.warning("E2I Model Service initialized in degraded mode (no model)")
 
-    def _resolve_feature_columns(self) -> Optional[List[str]]:
-        """Resolve the model's authoritative ordered feature names.
+    def _resolve_active(
+        self, model_name: Optional[str]
+    ) -> tuple[Any, Any, Optional[List[str]], str, Optional[str]]:
+        """Resolve the (model, preprocessor, feature_columns, tag, error) to use.
+
+        Routing (#39 multi-model):
+          * ``model_name`` set AND in the registry → that bundle's components.
+          * ``model_name`` None/empty → the LEGACY single default (self._model*),
+            tag self._model_tag (backward compatible).
+          * ``model_name`` set but UNKNOWN → ``error`` is non-None so callers FAIL
+            CLOSED instead of silently scoring the default/wrong model.
+        """
+        if model_name:
+            entry = self._models.get(model_name)
+            if entry is None:
+                return (None, None, None, model_name, f"Unknown model_name: {model_name}")
+            return (
+                entry.get("model"),
+                entry.get("preprocessor"),
+                entry.get("feature_columns"),
+                model_name,
+                None,
+            )
+        return (self._model, self._preprocessor, self._feature_columns, self._model_tag, None)
+
+    def _resolve_feature_columns(
+        self, model: Any = _UNSET, feature_columns: Any = _UNSET
+    ) -> Optional[List[str]]:
+        """Resolve the active model's authoritative ordered feature names.
 
         Order of preference:
-          1. The bundled ``feature_columns`` (the preprocessor input order) —
-             this is what ``_run_prediction`` uses to build the DataFrame fed
-             to the ColumnTransformer.
-          2. The estimator's ``feature_names_in_`` (set by scikit-learn when
-             the model was fit on a named DataFrame).
+          1. The bundled ``feature_columns`` (the preprocessor input order).
+          2. The estimator's ``feature_names_in_`` (set when fit on a DataFrame).
 
-        Returns ``None`` when neither is available so callers fail closed
-        instead of guessing a positional order.
+        Defaults to the legacy default model when no explicit model/feature
+        columns are passed (backward compatible). Returns ``None`` when neither
+        is available so callers fail closed instead of guessing a positional
+        order.
         """
-        if self._feature_columns:
-            return list(self._feature_columns)
-        names = getattr(self._model, "feature_names_in_", None)
+        model = self._model if model is _UNSET else model
+        feature_columns = self._feature_columns if feature_columns is _UNSET else feature_columns
+        if feature_columns:
+            return list(feature_columns)
+        names = getattr(model, "feature_names_in_", None)
         if names is not None:
             try:
                 return [str(n) for n in names]
@@ -378,7 +580,7 @@ class E2IModelService:
                 return None
         return None
 
-    def _resolve_keep_columns(self) -> Optional[List[str]]:
+    def _resolve_keep_columns(self, preprocessor: Any = _UNSET) -> Optional[List[str]]:
         """Resolve the RAW covariate names a caller must supply, if any.
 
         Returns the bundled preprocessor's ``keep_columns`` when the preprocessor
@@ -392,7 +594,7 @@ class E2IModelService:
         Best-effort: any unexpected shape yields ``None`` so model_info never
         raises.
         """
-        pre = self._preprocessor
+        pre = self._preprocessor if preprocessor is _UNSET else preprocessor
         if pre is None:
             return None
         keep = getattr(pre, "keep_columns", None)
@@ -403,21 +605,34 @@ class E2IModelService:
         except TypeError:
             return None
 
-    def _preprocessor_is_feature_builder(self) -> bool:
-        """True when the bundled preprocessor is a FeatureBuilder (raw-covariate
-        contract): it exposes both ``keep_columns`` and a ``transform`` method.
+    @staticmethod
+    def _is_feature_builder(preprocessor: Any) -> bool:
+        """True when ``preprocessor`` is a FeatureBuilder (raw-covariate contract):
+        it exposes both ``keep_columns`` and a ``transform`` method.
 
         Detected structurally (duck-typed) rather than by import — the BentoML
         container deliberately cannot import ``src.*``.
         """
-        pre = self._preprocessor
         return (
-            pre is not None
-            and getattr(pre, "keep_columns", None) is not None
-            and callable(getattr(pre, "transform", None))
+            preprocessor is not None
+            and getattr(preprocessor, "keep_columns", None) is not None
+            and callable(getattr(preprocessor, "transform", None))
         )
 
-    def _run_raw_prediction(self, raw_rows: List[Dict[str, Any]]) -> PredictionOutput:
+    def _preprocessor_is_feature_builder(self) -> bool:
+        """Legacy-default convenience: is the default model's preprocessor a
+        FeatureBuilder? (Preserved for any existing caller / test.)"""
+        return self._is_feature_builder(self._preprocessor)
+
+    def _run_raw_prediction(
+        self,
+        raw_rows: List[Dict[str, Any]],
+        *,
+        model: Any = _UNSET,
+        preprocessor: Any = _UNSET,
+        feature_columns: Any = _UNSET,
+        model_tag: Any = _UNSET,
+    ) -> PredictionOutput:
         """Encode RAW covariate rows via the FeatureBuilder, then predict.
 
         Builds a raw DataFrame (preserving each covariate's native dtype so a
@@ -426,11 +641,23 @@ class E2IModelService:
         CLOSED if no FeatureBuilder preprocessor is bundled — a raw request has
         no meaning without one, and silently treating dicts as a numeric matrix
         would fabricate a prediction.
+
+        Operates on the ROUTED model components (#39 multi-model) when passed;
+        defaults to the legacy default model. Grain-agnostic: a covariate is a
+        category iff the request value is a string (so the HCP cohort's
+        ``specialty`` + ``geographic_region`` and the patient cohort's
+        ``geographic_region`` all one-hot correctly) — there is NO hardcoded
+        categorical name.
         """
         import numpy as np
         import pandas as pd
 
-        if self._model is None:
+        model = self._model if model is _UNSET else model
+        preprocessor = self._preprocessor if preprocessor is _UNSET else preprocessor
+        feature_columns = self._feature_columns if feature_columns is _UNSET else feature_columns
+        model_tag = self._model_tag if model_tag is _UNSET else model_tag
+
+        if model is None:
             return PredictionOutput(
                 predictions=[],
                 probabilities=[],
@@ -440,16 +667,24 @@ class E2IModelService:
                 feature_source="raw_covariates",
             )
 
-        if not self._preprocessor_is_feature_builder():
+        if not self._is_feature_builder(preprocessor):
             raise RuntimeError(
                 "raw_features supplied but the served model has no FeatureBuilder "
                 "preprocessor; refusing to fabricate a prediction from raw "
                 "covariates without an encoder."
             )
 
-        required_columns = self._resolve_keep_columns() or []
+        required_columns = self._resolve_keep_columns(preprocessor) or []
+        # The fitted FeatureBuilder is the AUTHORITY on which covariates are
+        # numeric vs categorical — it stores a learned median per numeric column
+        # in ``_numeric_medians`` and one-hot-encodes everything else. We use
+        # that to validate per-column type GRAIN-AGNOSTICALLY (patient:
+        # geographic_region categorical; HCP: specialty + geographic_region
+        # categorical) WITHOUT a hardcoded name, while keeping codex's
+        # fail-closed intent: a string in a NUMERIC column is a malformed request
+        # (it would be reindexed to a fabricated 0.0), not a category.
+        numeric_cols = set(getattr(preprocessor, "_numeric_medians", {}) or {})
         start = time.time()
-        categorical_columns = {"geographic_region"}
         normalized_rows: List[Dict[str, Any]] = []
         for row in raw_rows:
             missing = [name for name in required_columns if name not in row or row[name] is None]
@@ -460,25 +695,43 @@ class E2IModelService:
                 )
             normalized_row: Dict[str, Any] = {}
             for key, value in row.items():
-                if key in categorical_columns:
-                    if not isinstance(value, str) or not value.strip():
+                is_numeric_col = key in numeric_cols
+                if isinstance(value, bool):
+                    # bool is a valid 0/1 numeric covariate; never a category.
+                    if not is_numeric_col and numeric_cols:
                         raise RuntimeError(
-                            f"Raw covariate '{key}' must be a non-empty string "
-                            "for the gold-standard FeatureBuilder path"
+                            f"Categorical covariate '{key}' must be a string, not a bool"
                         )
                     normalized_row[key] = value
-                elif isinstance(value, (int, float, bool)):
+                elif isinstance(value, (int, float)):
+                    if not is_numeric_col and numeric_cols:
+                        raise RuntimeError(
+                            f"Categorical covariate '{key}' must be a non-empty string "
+                            f"for the gold-standard FeatureBuilder path (got {type(value).__name__})"
+                        )
+                    normalized_row[key] = value
+                elif isinstance(value, str):
+                    if is_numeric_col:
+                        raise RuntimeError(
+                            f"Numeric covariate '{key}' must be a number, not a string "
+                            "(a string would be reindexed to a fabricated 0.0)"
+                        )
+                    if not value.strip():
+                        raise RuntimeError(
+                            f"Raw covariate '{key}' is an empty string; refusing to "
+                            "fabricate a category for the gold-standard FeatureBuilder path"
+                        )
                     normalized_row[key] = value
                 else:
                     raise RuntimeError(
-                        f"Raw covariate '{key}' must be numeric on the gold-standard "
-                        f"FeatureBuilder path (got {type(value).__name__})"
+                        f"Raw covariate '{key}' must be numeric or a categorical string "
+                        f"on the gold-standard FeatureBuilder path (got {type(value).__name__})"
                     )
             normalized_rows.append(normalized_row)
 
         raw_df = pd.DataFrame(list(normalized_rows))
         try:
-            encoded = self._preprocessor.transform(raw_df)
+            encoded = preprocessor.transform(raw_df)
         except Exception as e:
             # FAIL CLOSED — a raw->encoded transform failure must not fall back
             # to predicting on raw values (plausible-but-wrong audit-grade output).
@@ -486,12 +739,12 @@ class E2IModelService:
             raise RuntimeError(f"Preprocessor transform failed: {e}") from e
 
         arr = np.asarray(encoded)
-        predictions = self._model.predict(arr).tolist()
+        predictions = model.predict(arr).tolist()
 
         probabilities: List[float] = []
-        if hasattr(self._model, "predict_proba"):
+        if hasattr(model, "predict_proba"):
             try:
-                proba = self._model.predict_proba(arr)
+                proba = model.predict_proba(arr)
                 if proba.ndim == 2 and proba.shape[1] == 2:
                     probabilities = proba[:, 1].tolist()
                 else:
@@ -503,14 +756,14 @@ class E2IModelService:
         self._prediction_count += len(raw_rows)
 
         # Surface the ENCODED vector the model scored so the SHAP caller runs
-        # SHAP over the audit-grade encoded features (not the 3 raw covariates).
-        encoded_cols = self._resolve_feature_columns() or []
+        # SHAP over the audit-grade encoded features (not the raw covariates).
+        encoded_cols = self._resolve_feature_columns(model, feature_columns) or []
         encoded_matrix = np.asarray(encoded).tolist()
 
         return PredictionOutput(
             predictions=predictions,
             probabilities=probabilities,
-            model_id=self._model_tag or "unknown",
+            model_id=model_tag or "unknown",
             prediction_time_ms=elapsed_ms,
             is_mock=False,
             feature_source="raw_covariates",
@@ -736,12 +989,31 @@ class E2IModelService:
           - Otherwise → use the supplied ``features`` matrix directly,
             tag ``feature_source='user_provided'`` (None when matrix is empty).
 
+        Multi-model routing (#39): when ``model_name`` is set it selects which
+        loaded gold-standard bundle to use; unknown names FAIL CLOSED. When None,
+        the legacy single default model is used (Feast / numeric / tier0).
+
         Args:
             input_data: Features and configuration
 
         Returns:
             Model predictions with a ``feature_source`` telemetry tag.
         """
+        # Resolve the routed model first so an unknown model_name fails closed
+        # BEFORE any Feast/feature work (no fabricated/wrong-model prediction).
+        model, preprocessor, feature_columns, model_tag, err = self._resolve_active(
+            input_data.model_name
+        )
+        if err is not None:
+            return PredictionOutput(
+                predictions=[],
+                probabilities=[],
+                model_id="unknown_model",
+                prediction_time_ms=0.0,
+                is_mock=False,
+                error=err,
+            )
+
         if input_data.entity_ids and input_data.feature_view:
             features = await self._fetch_features_from_feast(
                 entity_ids=input_data.entity_ids,
@@ -751,10 +1023,17 @@ class E2IModelService:
             return self._run_prediction(features, feature_source="feast_online")
 
         # RAW covariate path (#39): gold-standard cohort models bundle a
-        # FeatureBuilder preprocessor and expect the 3 RAW covariates. Takes
+        # FeatureBuilder preprocessor and expect the RAW covariates. Takes
         # precedence over the legacy numeric ``features`` matrix when present.
+        # Routes to the resolved (possibly multi-model) components.
         if input_data.raw_features:
-            return self._run_raw_prediction(input_data.raw_features)
+            return self._run_raw_prediction(
+                input_data.raw_features,
+                model=model,
+                preprocessor=preprocessor,
+                feature_columns=feature_columns,
+                model_tag=model_tag,
+            )
 
         feature_source = "user_provided" if input_data.features else None
         return self._run_prediction(input_data.features, feature_source=feature_source)
@@ -835,19 +1114,40 @@ class E2IModelService:
         }
 
     @bentoml.api
-    async def model_info(self) -> Dict[str, Any]:
-        """Return model information.
+    async def model_info(self, input_data: Optional[ModelInfoInput] = None) -> Dict[str, Any]:
+        """Return model information, optionally for a routed model (#39).
+
+        With ``input_data.model_name`` set + known → that bundle's contract
+        (its ``keep_columns`` + encoded ``feature_columns``). With None / legacy
+        empty body → the default model's info. An unknown name returns an
+        ``error`` field (fail-closed, not the default model's contract).
+
+        ``available_models`` enumerates every loaded gold-standard serving name
+        so the route/selector can list cohort×brand options.
 
         Returns:
             Model metadata
         """
+        requested = input_data.model_name if input_data is not None else None
+        model, preprocessor, feature_columns, model_tag, err = self._resolve_active(requested)
+
+        available_models = sorted(self._models.keys())
+
+        if err is not None:
+            return {
+                "model_id": requested or "no_model",
+                "model_loaded": False,
+                "available_models": available_models,
+                "error": err,
+            }
+
         info: Dict[str, Any] = {
-            "model_id": self._model_tag or "no_model",
+            "model_id": model_tag or "no_model",
             "model_type": self._framework or "none",
             "framework": self._framework or "none",
             "version": "1.0.0",
             "is_mock": False,
-            "model_loaded": self._model is not None,
+            "model_loaded": model is not None,
             "supported_endpoints": [
                 "/predict",
                 "/predict_batch",
@@ -863,21 +1163,24 @@ class E2IModelService:
             # DataFrame). Omitted (None) when the model carries no named
             # feature contract — callers MUST then fail closed rather than
             # guess an order.
-            "feature_columns": self._resolve_feature_columns(),
+            "feature_columns": self._resolve_feature_columns(model, feature_columns),
             # The RAW covariate names a caller must supply for a gold-standard
             # cohort model (#39): the bundled FeatureBuilder's ``keep_columns``
-            # (e.g. ['disease_severity', 'academic_hcp', 'geographic_region']).
-            # The service encodes these into the numeric ``feature_columns``
-            # (the SHAP vector) at serve time. None for a bare estimator /
-            # ColumnTransformer (no raw-covariate contract — supply the encoded
-            # matrix directly).
-            "keep_columns": self._resolve_keep_columns(),
+            # (patient: ['disease_severity','academic_hcp','geographic_region'];
+            # HCP: the 5 hcp covariates). The service encodes these into the
+            # numeric ``feature_columns`` (the SHAP vector) at serve time. None
+            # for a bare estimator / ColumnTransformer (no raw-covariate
+            # contract — supply the encoded matrix directly).
+            "keep_columns": self._resolve_keep_columns(preprocessor),
+            # Loaded gold-standard serving names (multi-model #39).
+            "available_models": available_models,
         }
 
-        # Add model metadata if available
-        if self._model_tag:
+        # Add model metadata if available (legacy default path only — routed
+        # bundles are loaded into memory, not necessarily named in the store).
+        if model_tag and requested is None:
             try:
-                bento_model = bentoml.models.get(self._model_tag)
+                bento_model = bentoml.models.get(model_tag)
                 meta = bento_model.info.metadata or {}
                 info["metadata"] = meta
             except Exception:

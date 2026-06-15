@@ -75,18 +75,56 @@ class ModelType(str, Enum):
     RISK_STRATIFICATION = "risk_stratification"
     NEXT_BEST_ACTION = "next_best_action"
     CHURN_PREDICTION = "churn_prediction"
-    # Gold-standard cohort families (#39) — real deployed models.
+    # Gold-standard cohort families (#39) — real deployed per-brand models.
+    # Patient-grain (3 raw covariates → 9 encoded):
     INITIATION = "initiation"
     PERSISTENCE = "persistence"
     DISCONTINUATION = "discontinuation"
+    # HCP-grain (5 raw covariates → 19 encoded; JOIN-embedded from hcp_profiles):
+    HCP_ADOPTION = "hcp_adoption"
 
 
-# Gold-standard cohort families: served by the real ``*_goldstd_lr_v1`` models,
-# whose serving contract is RAW covariates + a bundled FeatureBuilder (SHAP over
-# the encoded vector). Used to branch the feature-resolution / numeric guard.
+# Gold-standard cohort families: served by the real per-brand ``*_goldstd_lr_v1``
+# models, whose serving contract is RAW covariates + a bundled FeatureBuilder
+# (SHAP over the ENCODED vector). Used to branch the feature-resolution / numeric
+# guard and to resolve the per-brand serving model_name.
 GOLDSTD_COHORT_MODEL_TYPES: frozenset[ModelType] = frozenset(
-    {ModelType.INITIATION, ModelType.PERSISTENCE, ModelType.DISCONTINUATION}
+    {
+        ModelType.INITIATION,
+        ModelType.PERSISTENCE,
+        ModelType.DISCONTINUATION,
+        ModelType.HCP_ADOPTION,
+    }
 )
+
+# The brands the gold-standard models are registered for (mirrors
+# src/mlops/gold_standard_eval/cohort_spec.BRANDS). Lower-cased into the serving
+# name. Kept local so this route module does not import the heavy mlops package.
+GOLDSTD_BRANDS: tuple[str, ...] = ("Remibrutinib", "Fabhalta", "Kisqali")
+_DEFAULT_GOLDSTD_BRAND = "Remibrutinib"
+
+
+def goldstd_serving_name(model_type: ModelType, brand: Optional[str]) -> str:
+    """Resolve the per-brand serving ``model_name`` for a gold-standard cohort.
+
+    Returns ``f"{cohort}_{brand}_goldstd_lr_v1"`` (e.g.
+    ``initiation_remibrutinib_goldstd_lr_v1``,
+    ``hcp_adoption_kisqali_goldstd_lr_v1``) — the registry model_name the
+    multi-model BentoML service routes on. ``brand`` is case-insensitive; when
+    None it defaults to the explicit default brand (NOT a silent skip). An
+    unknown brand FAILS CLOSED (422) so no wrong-model prediction is produced.
+    """
+    chosen = brand or _DEFAULT_GOLDSTD_BRAND
+    match = next((b for b in GOLDSTD_BRANDS if b.lower() == chosen.lower()), None)
+    if match is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown brand '{brand}' for gold-standard cohort "
+                f"'{model_type.value}'; valid brands: {list(GOLDSTD_BRANDS)}"
+            ),
+        )
+    return f"{model_type.value}_{match.lower()}_goldstd_lr_v1"
 
 
 class ExplanationFormat(str, Enum):
@@ -126,6 +164,16 @@ class ExplainRequest(BaseModel):
     patient_id: str = Field(..., description="Patient identifier")
     hcp_id: Optional[str] = Field(None, description="HCP context for the prediction")
     model_type: ModelType = Field(..., description="Type of model to explain")
+    brand: Optional[str] = Field(
+        None,
+        description=(
+            "Brand for the gold-standard per-brand cohort models (#39): "
+            "Remibrutinib | Fabhalta | Kisqali. Selects which per-brand "
+            "model to explain (serving name f'{cohort}_{brand}_goldstd_lr_v1'). "
+            "Defaults to Remibrutinib when omitted for a gold-standard cohort; "
+            "ignored for the legacy model types."
+        ),
+    )
     model_version_id: Optional[str] = Field(
         None, description="Specific model version (latest if not specified)"
     )
@@ -505,7 +553,12 @@ class RealTimeSHAPService:
 
         self._initialized = True
 
-    async def get_features(self, patient_id: str, model_type: ModelType) -> Dict[str, Any]:
+    async def get_features(
+        self,
+        patient_id: str,
+        model_type: ModelType,
+        entity_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Retrieve features from the Feast feature store.
 
         Fails LOUD when Feast is unavailable. This route feeds a regulatory-audit
@@ -513,6 +566,11 @@ class RealTimeSHAPService:
         features (the #532 silent-degradation contract) — that would present
         invented patient data as a real, audit-grade explanation. Mirrors the
         predictions route, which returns 503 on a Feast lookup failure.
+
+        Grain-aware entity (#39 multi-model): patient-grain cohorts key on
+        ``patient_id``; the HCP-grain ``hcp_adoption`` cohort keys on ``hcp_id``
+        (``entity_id`` carries the hcp_id, falling back to ``patient_id`` only
+        when no explicit hcp entity is supplied).
 
         Raises:
             HTTPException: 503 when the Feast client is unavailable or the
@@ -530,8 +588,15 @@ class RealTimeSHAPService:
             # Map model type to feature refs
             feature_refs = self._get_feature_refs_for_model(model_type)
 
+            # HCP-grain cohort → key on hcp_id; patient cohorts → patient_id.
+            if model_type == ModelType.HCP_ADOPTION:
+                hcp_entity = entity_id or patient_id
+                entity_row: Dict[str, Any] = {"hcp_id": hcp_entity}
+            else:
+                entity_row = {"patient_id": patient_id}
+
             features_dict = await self.feast_client.get_online_features(
-                entity_rows=[{"patient_id": patient_id}],
+                entity_rows=[entity_row],
                 feature_refs=feature_refs,
                 full_feature_names=False,
             )
@@ -618,6 +683,7 @@ class RealTimeSHAPService:
         self,
         features: Dict[str, Any],
         model_type: ModelType,
+        serving_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Resolve the strictly-validated, model-ordered feature dict.
 
@@ -648,13 +714,16 @@ class RealTimeSHAPService:
                 status_code=503,
                 detail="Model serving unavailable: BentoML client not configured",
             )
+        # The serving name selects WHICH model the multi-model BentoML service
+        # describes (#39). Defaults to model_type.value (legacy single-model).
+        info_name = serving_name or model_type.value
         try:
-            info = await self.bentoml_client.get_model_info(model_type.value)
+            info = await self.bentoml_client.get_model_info(info_name)
         except Exception as e:
             logger.error("Could not fetch model_info for SHAP prediction: %s", e)
             raise HTTPException(
                 status_code=503,
-                detail=f"Model metadata unavailable for '{model_type.value}'",
+                detail=f"Model metadata unavailable for '{info_name}'",
             )
 
         # FeatureBuilder gold-standard branch (#39): validate against the RAW
@@ -664,7 +733,9 @@ class RealTimeSHAPService:
         # raw covariates (so SHAP runs over the encoded numeric vector).
         keep_columns = info.get("keep_columns")
         if isinstance(keep_columns, list) and keep_columns:
-            return self._resolve_raw_covariates(features, keep_columns, model_type)
+            encoded_cols = info.get("feature_columns")
+            encoded_list = encoded_cols if isinstance(encoded_cols, list) else []
+            return self._resolve_raw_covariates(features, keep_columns, encoded_list, model_type)
 
         feature_order = info.get("feature_columns")
         if not feature_order or not isinstance(feature_order, list):
@@ -699,25 +770,56 @@ class RealTimeSHAPService:
             canonical[name] = float(raw)
         return canonical
 
+    @staticmethod
+    def _infer_categorical_covariates(
+        keep_columns: List[str], encoded_feature_columns: List[str]
+    ) -> set[str]:
+        """Infer which RAW covariates are categorical from the encoded columns.
+
+        GRAIN-AGNOSTIC (no hardcoded name): the FeatureBuilder encodes a numeric
+        covariate ``X`` as a bare ``X`` column; a categorical ``X`` becomes only
+        one-hot ``X_<value>`` columns. So ``X`` is categorical iff the encoded
+        set has NO bare ``X`` but DOES have an ``X_``-prefixed column. When the
+        encoded columns are unavailable (legacy/empty), fall back to the
+        historical patient categorical (``geographic_region``) so the patient
+        path is unchanged.
+        """
+        encoded = set(encoded_feature_columns)
+        if not encoded:
+            return {"geographic_region"} & set(keep_columns)
+        categorical: set[str] = set()
+        for name in keep_columns:
+            if name in encoded:
+                continue  # bare encoded column → numeric covariate
+            if any(c.startswith(f"{name}_") for c in encoded):
+                categorical.add(name)
+        return categorical
+
     def _resolve_raw_covariates(
         self,
         features: Dict[str, Any],
         keep_columns: List[str],
+        encoded_feature_columns: List[str],
         model_type: ModelType,
     ) -> Dict[str, Any]:
         """Validate RAW covariates for a FeatureBuilder gold-standard model (#39).
 
         The served FeatureBuilder encodes these RAW covariates into the numeric
         vector SHAP runs over, so a categorical RAW covariate (e.g.
-        ``geographic_region``) is ALLOWED as a string here — the strict
+        ``geographic_region`` for patient cohorts, ``specialty`` +
+        ``geographic_region`` for HCP) is ALLOWED as a string here — the strict
         all-numeric guard is for the legacy pre-encoded contract only.
 
-        Still FAILS CLOSED (422) on a missing/null RAW covariate — that would
-        leave the encoder to impute/zero a fabricated value into an audit-grade
-        SHAP record (#532/#576). Numeric covariates must be genuine
-        numerics/bools (a string where a number is expected is a malformed
-        request, not a category); the lone categorical is identified by being
-        non-numeric in the request AND named in the model's keep_columns.
+        Which covariates are categorical is INFERRED from the model's own encoded
+        ``feature_columns`` (GRAIN-AGNOSTIC — no hardcoded name): a numeric
+        covariate ``X`` appears as bare ``X`` (+ ``X__isna``) in the encoded set;
+        a categorical ``X`` appears only as one-hot ``X_<value>`` columns. So
+        ``X`` is categorical iff there is NO bare ``X`` encoded column but there
+        ARE ``X_``-prefixed one-hot columns.
+
+        Still FAILS CLOSED (422) on a missing/null RAW covariate, and on a type
+        mismatch (a string in a numeric covariate, a non-string in a categorical)
+        — no fabricated value reaches an audit-grade SHAP record (#532/#576).
 
         Returns ``{raw_covariate: value}`` for exactly ``keep_columns``, values
         keeping their native type (so the categorical string survives to the
@@ -733,7 +835,9 @@ class RealTimeSHAPService:
                 ),
             )
 
-        categorical_columns = {"geographic_region"}
+        categorical_columns = self._infer_categorical_covariates(
+            keep_columns, encoded_feature_columns
+        )
         resolved: Dict[str, Any] = {}
         for name in keep_columns:
             raw = features[name]
@@ -779,6 +883,7 @@ class RealTimeSHAPService:
         features: Dict[str, Any],
         model_type: ModelType,
         model_version_id: Optional[str] = None,
+        brand: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get a REAL prediction from the BentoML endpoint.
 
@@ -791,6 +896,11 @@ class RealTimeSHAPService:
         it does NOT fabricate a plausible prediction (which would silently
         corrupt audit-grade SHAP output). The previous hardcoded ``0.78``
         demonstration fallback is removed for this reason.
+
+        Multi-model routing (#39): for a gold-standard cohort the per-brand
+        serving ``model_name`` (``f"{cohort}_{brand}_goldstd_lr_v1"``) is resolved
+        from ``brand`` and sent to BentoML so the shared multi-model service
+        routes to the correct per-brand bundle.
         """
         await self._ensure_initialized()
 
@@ -800,24 +910,28 @@ class RealTimeSHAPService:
                 detail="Model serving unavailable: BentoML client not configured",
             )
 
-        # Resolve the canonical, strictly-validated model feature dict. This is
-        # the SINGLE source of truth for the prediction, the SHAP inputs, and the
-        # audit record — so no fabricated (hash/zero-filled) value or extra
-        # non-model field can leak into audit-grade output.
-        #
-        # For the legacy contract this is {name: float} in /model_info order; for
-        # the FeatureBuilder gold-standard contract (#39) this is the RAW
-        # covariate dict (the categorical string is kept for the encoder).
-        canonical_features = await self.resolve_canonical_model_features(features, model_type)
         is_goldstd = model_type in GOLDSTD_COHORT_MODEL_TYPES
+        # The serving name routes the shared multi-model service. Gold-standard
+        # → per-brand name; legacy → the bare model_type value (single-model).
+        serving_name = goldstd_serving_name(model_type, brand) if is_goldstd else model_type.value
+
+        # Resolve the canonical, strictly-validated model feature dict against the
+        # ROUTED model's /model_info. SINGLE source of truth for the prediction,
+        # SHAP inputs, and audit record — no fabricated value or extra field leaks
+        # into audit-grade output. Legacy: {name: float} in /model_info order.
+        # Gold-standard (#39): the RAW covariate dict (categorical string kept).
+        canonical_features = await self.resolve_canonical_model_features(
+            features, model_type, serving_name=serving_name
+        )
 
         try:
             if is_goldstd:
                 # Send RAW covariates; the served FeatureBuilder encodes them and
                 # the response carries the ENCODED vector SHAP must run over.
                 result = await self.bentoml_client.predict(
-                    model_name=model_type.value,
+                    model_name=serving_name,
                     input_data={
+                        "model_name": serving_name,
                         "raw_features": [dict(canonical_features)],
                         "model_type": "classification",
                     },
@@ -828,14 +942,28 @@ class RealTimeSHAPService:
                     for name in canonical_features  # already in model order
                 ]
                 result = await self.bentoml_client.predict(
-                    model_name=model_type.value,
+                    model_name=serving_name,
                     input_data={"features": [ordered_row], "model_type": "classification"},
                 )
         except Exception as e:
-            logger.error("BentoML prediction failed for SHAP (%s): %s", model_type.value, e)
+            logger.error("BentoML prediction failed for SHAP (%s): %s", serving_name, e)
             raise HTTPException(
                 status_code=503,
                 detail=f"Model prediction failed for '{model_type.value}'",
+            )
+
+        # Multi-model fail-closed (#39): the shared service returns an ``error``
+        # field for an unknown/unrouted model_name. Surface it as a clear 502
+        # rather than letting it fall through to the generic "no probabilities".
+        if result.get("error"):
+            logger.error(
+                "BentoML returned an error for serving model '%s': %s",
+                serving_name,
+                result["error"],
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Model '{serving_name}' is not served: {result['error']}",
             )
 
         # Flat contract: ``probabilities`` is a flat positive-class list. A real
@@ -1220,16 +1348,22 @@ async def explain_prediction(
     _slot = nullcontext() if heavy_offload_enabled() else heavy_compute_slot(reuse_if_held=True)
     async with _slot:
         try:
-            # 1. Get features (from request or Feast)
+            # 1. Get features (from request or Feast). HCP-grain cohorts key on
+            # hcp_id (passed as entity_id); patient cohorts on patient_id.
             features = request.features
             if features is None:
-                features = await service.get_features(request.patient_id, request.model_type)
+                features = await service.get_features(
+                    request.patient_id,
+                    request.model_type,
+                    entity_id=request.hcp_id,
+                )
 
             # 2. Get prediction from BentoML
             prediction = await service.get_prediction(
                 features=features,
                 model_type=request.model_type,
                 model_version_id=request.model_version_id,
+                brand=request.brand,
             )
 
             # Use the canonical, strictly-validated model feature dict for SHAP
