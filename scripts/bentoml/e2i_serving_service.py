@@ -222,6 +222,90 @@ class ModelInfoInput(BaseModel):
     )
 
 
+class ShapInput(BaseModel):
+    """Input for ``/shap`` — gold-standard SHAP over the ENCODED vector (#39).
+
+    Mirrors the ``/predict`` raw-covariate path: a routed ``model_name`` plus
+    ``raw_features`` (RAW covariate rows). The service encodes the raw row via the
+    bundled FeatureBuilder and runs the SHAP explainer over the ENCODED numeric
+    vector the model actually scored — the API process cannot do this itself
+    because the bundle lives only in this container's mount.
+    """
+
+    model_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Serving model name to ROUTE this SHAP request to (#39 multi-model). "
+            "When set and known, the matching gold-standard bundle (model + "
+            "FeatureBuilder) is used. When None, the legacy default model is used. "
+            "An unknown name FAILS CLOSED (error in the response)."
+        ),
+    )
+    raw_features: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "RAW covariate rows (samples) as {name: value} dicts (e.g. "
+            "{'disease_severity': 5.61, 'academic_hcp': 0, "
+            "'geographic_region': 'northeast'}). The bundled FeatureBuilder "
+            "encodes them before SHAP. SHAP runs on the first row."
+        ),
+    )
+    top_k: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional cap on the number of returned per-feature SHAP values "
+            "(by descending |shap|). None returns all encoded features."
+        ),
+    )
+
+
+class ShapOutput(BaseModel):
+    """Output for ``/shap`` — real per-encoded-feature SHAP values (#39).
+
+    Fail-closed: ``error`` is set (and the value maps are empty) when the
+    ``model_name`` is unknown, no FeatureBuilder is bundled, or SHAP cannot be
+    computed — NEVER fabricated SHAP values for an audit-grade explanation.
+    """
+
+    shap_values: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Signed per-ENCODED-feature SHAP contributions {encoded_name: value}.",
+    )
+    base_value: float = Field(
+        default=0.0,
+        description="The explainer's expected value (base margin) for the encoded model.",
+    )
+    encoded_feature_columns: List[str] = Field(
+        default_factory=list,
+        description="The encoded feature order SHAP ran over (the bundle's feature_columns).",
+    )
+    encoded_features: List[float] = Field(
+        default_factory=list,
+        description="The single ENCODED row SHAP was computed for (audit trail).",
+    )
+    explainer_type: str = Field(
+        default="LinearExplainer",
+        description="The SHAP explainer used (LinearExplainer over the inner linear estimator).",
+    )
+    model_id: str = Field(
+        default="unknown",
+        description="The routed model tag/name the SHAP was computed for.",
+    )
+    computation_time_ms: float = Field(
+        default=0.0,
+        description="SHAP computation time in milliseconds.",
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description=(
+            "Fail-closed error message: set when SHAP could not be computed "
+            "(unknown model_name, no FeatureBuilder, explainer failure). None on "
+            "success. The caller MUST treat a non-None error as a hard failure "
+            "and NOT present fabricated SHAP."
+        ),
+    )
+
+
 class HealthResponse(BaseModel):
     """Health check response."""
 
@@ -413,9 +497,7 @@ def _discover_goldstd_bundles_from_store() -> Dict[str, Dict[str, Any]]:
             loaded, _tag, _fw = _load_model_by_tag(tag_str)
             entry = _unwrap_bundle(loaded)
             if entry is None:
-                logger.warning(
-                    "Multi-model discovery: %s is not a bundle dict; skipping.", tag_str
-                )
+                logger.warning("Multi-model discovery: %s is not a bundle dict; skipping.", tag_str)
                 continue
             # Newest tag wins (models.list() order is not guaranteed); keep first
             # seen per name after sorting by creation_time desc.
@@ -690,8 +772,7 @@ class E2IModelService:
             missing = [name for name in required_columns if name not in row or row[name] is None]
             if missing:
                 raise RuntimeError(
-                    "raw_features omitted required gold-standard covariate(s): "
-                    f"{missing}"
+                    f"raw_features omitted required gold-standard covariate(s): {missing}"
                 )
             normalized_row: Dict[str, Any] = {}
             for key, value in row.items():
@@ -769,6 +850,165 @@ class E2IModelService:
             feature_source="raw_covariates",
             encoded_features=encoded_matrix,
             encoded_feature_columns=list(encoded_cols),
+        )
+
+    @staticmethod
+    def _resolve_linear_estimator(model: Any) -> Any:
+        """Return the underlying LINEAR estimator SHAP's LinearExplainer needs.
+
+        Gold-standard cohort models are a ``CalibratedClassifierCV`` wrapping a
+        ``LogisticRegression``. ``shap.LinearExplainer`` needs a bare linear
+        estimator exposing ``coef_`` — the calibration wrapper does not. So we
+        unwrap to ``model.calibrated_classifiers_[0].estimator`` (sklearn >=1.4)
+        / ``.base_estimator`` (older). This matches the verified in-container
+        disproof: ``LinearExplainer`` over the inner LR gives per-encoded-feature
+        SHAP that satisfy additivity exactly (base + sum(shap) == inner-LR
+        margin). Returns the model itself when it already exposes ``coef_`` (a
+        bare LR bundle), or ``None`` when no linear estimator can be found
+        (caller FAILS CLOSED — no fabricated SHAP).
+        """
+        if hasattr(model, "coef_"):
+            return model
+        calibrated = getattr(model, "calibrated_classifiers_", None)
+        if calibrated:
+            inner = calibrated[0]
+            est = getattr(inner, "estimator", None)
+            if est is None:
+                est = getattr(inner, "base_estimator", None)
+            if est is not None and hasattr(est, "coef_"):
+                return est
+        return None
+
+    def _run_shap_explanation(
+        self,
+        raw_rows: List[Dict[str, Any]],
+        *,
+        top_k: Optional[int] = None,
+        model: Any = _UNSET,
+        preprocessor: Any = _UNSET,
+        feature_columns: Any = _UNSET,
+        model_tag: Any = _UNSET,
+    ) -> ShapOutput:
+        """Compute real per-ENCODED-feature SHAP for a gold-standard cohort (#39).
+
+        Encodes the FIRST raw covariate row via the bundled FeatureBuilder (the
+        SAME raw->encoded path ``_run_raw_prediction`` uses), then runs
+        ``shap.LinearExplainer`` over the inner linear estimator of the calibrated
+        model. SHAP runs over the ENCODED numeric vector the model actually scored
+        (NOT the raw covariates), so the explanation is audit-grade.
+
+        Background data: a 2-row encoded background (a zeros row + the encoded
+        instance itself) — sufficient for the linear masker and keeps the
+        base_value the explainer's expected value over that background, with
+        exact additivity preserved (verified live).
+
+        FAILS CLOSED (returns ``ShapOutput`` with a non-None ``error`` and empty
+        value maps) on: no model, no FeatureBuilder, no linear estimator, missing
+        covariates, or any explainer/transform failure. It NEVER fabricates SHAP
+        values for an audit-grade explanation.
+        """
+        import numpy as np
+        import pandas as pd
+
+        model = self._model if model is _UNSET else model
+        preprocessor = self._preprocessor if preprocessor is _UNSET else preprocessor
+        feature_columns = self._feature_columns if feature_columns is _UNSET else feature_columns
+        model_tag = self._model_tag if model_tag is _UNSET else model_tag
+
+        def _fail(msg: str) -> ShapOutput:
+            logger.error("SHAP fail-closed: %s", msg)
+            return ShapOutput(model_id=str(model_tag or "unknown"), error=msg)
+
+        if model is None:
+            return _fail("no model loaded")
+        if not self._is_feature_builder(preprocessor):
+            return _fail(
+                "served model has no FeatureBuilder preprocessor; cannot encode "
+                "raw covariates for a gold-standard SHAP explanation"
+            )
+        if not raw_rows:
+            return _fail("no raw_features supplied for SHAP")
+
+        estimator = self._resolve_linear_estimator(model)
+        if estimator is None:
+            return _fail(
+                "served model exposes no linear estimator (no coef_); refusing to "
+                "fabricate SHAP for a non-linear model on this endpoint"
+            )
+
+        # Validate + dtype-preserve the raw row exactly like the predict path so a
+        # categorical string is one-hot-encoded (not float-coerced) and a
+        # malformed request fails closed rather than fabricating an encoded vector.
+        required_columns = self._resolve_keep_columns(preprocessor) or []
+        numeric_cols = set(getattr(preprocessor, "_numeric_medians", {}) or {})
+        row = raw_rows[0]
+        missing = [name for name in required_columns if name not in row or row[name] is None]
+        if missing:
+            return _fail(f"raw_features omitted required gold-standard covariate(s): {missing}")
+        normalized_row: Dict[str, Any] = {}
+        for key, value in row.items():
+            is_numeric_col = key in numeric_cols
+            if isinstance(value, bool):
+                if not is_numeric_col and numeric_cols:
+                    return _fail(f"Categorical covariate '{key}' must be a string, not a bool")
+                normalized_row[key] = value
+            elif isinstance(value, (int, float)):
+                if not is_numeric_col and numeric_cols:
+                    return _fail(
+                        f"Categorical covariate '{key}' must be a non-empty string "
+                        f"(got {type(value).__name__})"
+                    )
+                normalized_row[key] = value
+            elif isinstance(value, str):
+                if is_numeric_col:
+                    return _fail(f"Numeric covariate '{key}' must be a number, not a string")
+                if not value.strip():
+                    return _fail(f"Raw covariate '{key}' is an empty string; refusing to fabricate")
+                normalized_row[key] = value
+            else:
+                return _fail(
+                    f"Raw covariate '{key}' must be numeric or a categorical string "
+                    f"(got {type(value).__name__})"
+                )
+
+        start = time.time()
+        try:
+            import shap
+
+            raw_df = pd.DataFrame([normalized_row])
+            encoded = np.asarray(preprocessor.transform(raw_df), dtype=float)
+            encoded_cols = self._resolve_feature_columns(model, feature_columns) or [
+                f"f{i}" for i in range(encoded.shape[1])
+            ]
+            # 2-row encoded background (zeros + the instance) for the linear masker.
+            background = np.vstack([np.zeros((1, encoded.shape[1])), encoded])
+            explainer = shap.LinearExplainer(estimator, background)
+            sv = np.asarray(explainer.shap_values(encoded))
+            row_sv = np.ravel(sv[0]) if sv.ndim > 1 else np.ravel(sv)
+            base = float(np.ravel(np.asarray(explainer.expected_value))[0])
+        except Exception as e:  # FAIL CLOSED — no fabricated SHAP on any failure.
+            return _fail(f"SHAP computation failed: {e}")
+
+        if len(row_sv) != len(encoded_cols):
+            return _fail(
+                f"SHAP/feature length mismatch (shap={len(row_sv)}, cols={len(encoded_cols)})"
+            )
+
+        shap_map = {str(name): float(val) for name, val in zip(encoded_cols, row_sv, strict=True)}
+        if top_k is not None and top_k > 0:
+            shap_map = dict(
+                sorted(shap_map.items(), key=lambda kv: abs(kv[1]), reverse=True)[:top_k]
+            )
+
+        elapsed_ms = (time.time() - start) * 1000
+        return ShapOutput(
+            shap_values=shap_map,
+            base_value=base,
+            encoded_feature_columns=list(encoded_cols),
+            encoded_features=[float(v) for v in np.ravel(encoded[0]).tolist()],
+            explainer_type="LinearExplainer",
+            model_id=str(model_tag or "unknown"),
+            computation_time_ms=elapsed_ms,
         )
 
     def _apply_preprocessor(self, arr: Any) -> Any:
@@ -1223,3 +1463,44 @@ class E2IModelService:
                 pass
 
         return info
+
+    @bentoml.api
+    async def shap(self, input_data: ShapInput) -> ShapOutput:
+        """Compute real per-ENCODED-feature SHAP for a gold-standard cohort (#39).
+
+        NOTE: BentoML routes each ``@bentoml.api`` method at ``/<method_name>``
+        (verified live: ``predict`` -> ``/predict``, ``model_info`` ->
+        ``/model_info``). This method is named ``shap`` so the live path is
+        ``/shap`` — the path the API client's ``get_shap`` posts to.
+
+        Option-B placement: the gold-standard bundles (model + FeatureBuilder +
+        encoded ``feature_columns``) live ONLY in this container's mount, so the
+        SHAP explanation is computed HERE, where the bundle is loaded — the API
+        process cannot read the bundle files. Input mirrors ``/predict``'s
+        raw-covariate path (routed ``model_name`` + ``raw_features``); the service
+        encodes the raw row via the bundled FeatureBuilder and runs
+        ``shap.LinearExplainer`` over the ENCODED vector the model actually scored.
+
+        Routing (#39): an unknown ``model_name`` FAILS CLOSED (``error`` set) — it
+        does NOT silently SHAP the default/wrong model. ``/predict``,
+        ``/predict_batch``, ``/model_info`` are unchanged.
+
+        Returns:
+            ``ShapOutput`` with signed per-encoded-feature ``shap_values``,
+            ``base_value``, ``encoded_feature_columns``, and ``explainer_type``.
+            A non-None ``error`` means SHAP could not be computed (fail-closed).
+        """
+        model, preprocessor, feature_columns, model_tag, err = self._resolve_active(
+            input_data.model_name
+        )
+        if err is not None:
+            return ShapOutput(model_id=input_data.model_name or "unknown_model", error=err)
+
+        return self._run_shap_explanation(
+            input_data.raw_features,
+            top_k=input_data.top_k,
+            model=model,
+            preprocessor=preprocessor,
+            feature_columns=feature_columns,
+            model_tag=model_tag,
+        )

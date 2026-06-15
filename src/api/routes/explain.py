@@ -1009,6 +1009,14 @@ class RealTimeSHAPService:
             # numeric request features. Gold-standard: the ENCODED vector the
             # model scored (the audit-grade SHAP inputs).
             "model_features": shap_features,
+            # Gold-standard SHAP (Option B, #39) runs on the BentoML side, which
+            # re-encodes the RAW covariates — so it needs the per-brand serving
+            # name and the SAME validated RAW covariates this prediction used.
+            # Surfaced here (single source of truth) so the endpoint can thread
+            # them into compute_shap without re-deriving them. None on the legacy
+            # path (SHAP there runs in-process over the encoded model_features).
+            "serving_name": serving_name if is_goldstd else None,
+            "raw_features": dict(canonical_features) if is_goldstd else None,
         }
 
     def _encoded_features_from_result(
@@ -1064,14 +1072,146 @@ class RealTimeSHAPService:
                 numeric_features[key] = 0.0
         return numeric_features
 
+    async def _compute_shap_goldstd(
+        self,
+        features: Dict[str, Any],
+        model_type: ModelType,
+        model_version_id: str,
+        top_k: int,
+        serving_name: Optional[str],
+        raw_features: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Compute gold-standard cohort SHAP on the BentoML side (#39, Option B).
+
+        Calls the service ``/shap`` endpoint with the per-brand serving name and
+        the RAW covariates (the service re-encodes them via the bundled
+        FeatureBuilder and runs SHAP over the ENCODED vector). Maps the response
+        into the SAME shape the legacy path returns (a ``contributions`` list of
+        :class:`FeatureContribution`, ``base_value``, ``shap_sum``,
+        ``explainer_type``, ``computation_time_ms``) so the FE renders identically.
+
+        FAILS CLOSED (no fabricated SHAP for an audit-grade explanation):
+
+        * 500 if the internal contract is broken (no serving name, no raw
+          covariates threaded through — a programming error, not a user error).
+        * 503 if the BentoML client is unavailable or the call fails.
+        * 502 if the service returns a fail-closed ``error`` or an empty/malformed
+          SHAP map.
+
+        ``features`` here is the ENCODED vector ``get_prediction`` produced — used
+        only to surface the encoded ``feature_value`` for each contribution; the
+        SHAP math runs service-side over the bundle's own re-encoding.
+        """
+        # The serving name + RAW covariates are the SINGLE source of truth from
+        # get_prediction. Missing them is an internal wiring error, not a bad
+        # request — fail closed loudly rather than guessing.
+        if not serving_name or not isinstance(raw_features, dict) or not raw_features:
+            logger.error(
+                "Gold-standard SHAP missing serving_name/raw_features for model "
+                "%s; refusing to compute SHAP over an unknown vector.",
+                model_type.value,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Internal error: gold-standard SHAP context was not provided",
+            )
+
+        if not self.bentoml_client:
+            raise HTTPException(
+                status_code=503,
+                detail="Model serving unavailable: BentoML client not configured",
+            )
+
+        try:
+            result = await self.bentoml_client.get_shap(
+                model_name=serving_name,
+                raw_features=[dict(raw_features)],
+            )
+        except Exception as e:
+            logger.error("BentoML /shap call failed for '%s': %s", serving_name, e)
+            raise HTTPException(
+                status_code=503,
+                detail=f"SHAP computation failed for '{model_type.value}'",
+            )
+
+        # Multi-model fail-closed: the service sets ``error`` for an unknown
+        # model_name / missing FeatureBuilder / explainer failure.
+        if result.get("error"):
+            logger.error(
+                "BentoML /shap returned an error for '%s': %s", serving_name, result["error"]
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"SHAP unavailable for '{serving_name}': {result['error']}",
+            )
+
+        shap_values_map = result.get("shap_values")
+        if not isinstance(shap_values_map, dict) or not shap_values_map:
+            logger.error(
+                "BentoML /shap returned no shap_values for '%s'; refusing to "
+                "fabricate an audit-grade SHAP explanation.",
+                serving_name,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Model '{model_type.value}' returned no SHAP values for an "
+                    "audit-grade explanation"
+                ),
+            )
+
+        shap_values_map = {str(k): float(v) for k, v in shap_values_map.items()}
+        base_value = float(result.get("base_value", 0.0))
+        explainer_type_str = str(result.get("explainer_type") or "LinearExplainer")
+        computation_time_ms = float(result.get("computation_time_ms", 0.0))
+
+        # ``features`` is the ENCODED vector from get_prediction — surface its
+        # value per contribution so the FE shows the encoded feature value.
+        contributions: List[FeatureContribution] = []
+        sorted_shap = sorted(shap_values_map.items(), key=lambda x: abs(x[1]), reverse=True)[:top_k]
+        for rank, (feature_name, shap_value) in enumerate(sorted_shap, 1):
+            contributions.append(
+                FeatureContribution(
+                    feature_name=feature_name,
+                    feature_value=features.get(feature_name),
+                    shap_value=shap_value,
+                    contribution_direction="positive" if shap_value > 0 else "negative",
+                    contribution_rank=rank,
+                )
+            )
+
+        return {
+            "base_value": base_value,
+            "contributions": contributions,
+            "shap_sum": sum(shap_values_map.values()),
+            "explainer_type": explainer_type_str,
+            "computation_time_ms": computation_time_ms,
+        }
+
     async def compute_shap(
-        self, features: Dict[str, Any], model_type: ModelType, model_version_id: str, top_k: int = 5
+        self,
+        features: Dict[str, Any],
+        model_type: ModelType,
+        model_version_id: str,
+        top_k: int = 5,
+        *,
+        serving_name: Optional[str] = None,
+        raw_features: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Compute SHAP values for a single instance using real SHAP explainer.
 
         Uses TreeExplainer for tree-based models (fast),
         KernelExplainer for others (slower).
+
+        Gold-standard cohorts (#39, Option B): SHAP is computed on the BentoML
+        side via ``/shap`` because the cohort bundle (model + FeatureBuilder)
+        lives only in the BentoML container's mount — the API process cannot read
+        it. ``serving_name`` (the per-brand registry name) and ``raw_features``
+        (the RAW covariates the prediction used) are threaded from the endpoint /
+        ``get_prediction`` so the service can re-encode and explain the SAME
+        instance. The legacy (MLflow / in-process explainer) path is unchanged for
+        the non-gold-standard model types.
         """
         from src.api.dependencies.compute import (
             await_celery_result,
@@ -1079,6 +1219,18 @@ class RealTimeSHAPService:
         )
 
         await self._ensure_initialized()
+
+        # Gold-standard branch (#39, Option B): delegate to the BentoML /shap
+        # endpoint. The legacy path below is untouched for non-goldstd models.
+        if model_type in GOLDSTD_COHORT_MODEL_TYPES:
+            return await self._compute_shap_goldstd(
+                features=features,
+                model_type=model_type,
+                model_version_id=model_version_id,
+                top_k=top_k,
+                serving_name=serving_name,
+                raw_features=raw_features,
+            )
 
         # Prepare numeric features
         numeric_features = self._prepare_numeric_features(features)
@@ -1391,6 +1543,12 @@ async def explain_prediction(
                 model_type=request.model_type,
                 model_version_id=prediction["model_version_id"],
                 top_k=request.top_k,
+                # Gold-standard SHAP (#39, Option B) runs on the BentoML side and
+                # needs the per-brand serving name + the RAW covariates this
+                # prediction used. get_prediction surfaces both (None on the
+                # legacy path, where these are ignored).
+                serving_name=prediction.get("serving_name"),
+                raw_features=prediction.get("raw_features"),
             )
 
             # 4. Generate narrative (if requested)
