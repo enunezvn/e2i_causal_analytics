@@ -45,7 +45,6 @@ import {
   ArrowRight,
   Pill,
   MapPin,
-  CalendarDays,
   Sparkles,
   RefreshCw,
   ExternalLink,
@@ -79,7 +78,6 @@ type Brand = 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
 // .geographic_region, causal_paths.region, business_metrics.region all share this
 // vocabulary). Southeast/Southwest were never in the data and always returned 0.
 type Region = 'All US' | 'Northeast' | 'South' | 'Midwest' | 'West';
-type DateRange = 'Q4 2025' | 'Q3 2025' | 'Q2 2025' | 'Q1 2025' | 'YTD 2025' | 'Last 12 Months';
 
 interface KPIMetric {
   id: string;
@@ -134,15 +132,6 @@ const REGIONS: { value: Region; label: string }[] = [
 function regionToParam(region: Region): string | undefined {
   return region === 'All US' ? undefined : region.toLowerCase();
 }
-
-const DATE_RANGES: { value: DateRange; label: string; description: string }[] = [
-  { value: 'Q4 2025', label: 'Q4 2025', description: 'Oct - Dec 2025' },
-  { value: 'Q3 2025', label: 'Q3 2025', description: 'Jul - Sep 2025' },
-  { value: 'Q2 2025', label: 'Q2 2025', description: 'Apr - Jun 2025' },
-  { value: 'Q1 2025', label: 'Q1 2025', description: 'Jan - Mar 2025' },
-  { value: 'YTD 2025', label: 'Year to Date', description: 'Jan - Dec 2025' },
-  { value: 'Last 12 Months', label: 'Last 12 Months', description: 'Rolling 12 months' },
-];
 
 // Demo-mode (SAMPLE_KPIS) categories — only used when the API is offline.
 const KPI_CATEGORIES = [
@@ -392,9 +381,6 @@ function Home() {
   // lowercase census region. Drives the KPI summary, Model Accuracy, and the
   // batch-calculate context so the KPIs re-scope when Region changes.
   const regionParam = regionToParam(selectedRegion);
-  // Period is no longer user-selectable (it filtered nothing); kept as a fixed
-  // label for the synthetic demo dataset's reporting period (shown in the footer).
-  const selectedDateRange: DateRange = 'Q4 2025';
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
@@ -1354,19 +1340,12 @@ function Home() {
             </CardContent>
           </Card>
 
-          {/* Filter Summary */}
+          {/* Filter Summary — active region scope. The Reporting Period card was
+              removed with the Period selector (it recapped a non-functional,
+              fixed value); region is a real, active filter so it stays. */}
           <Card>
             <CardContent className="py-4">
               <div className="flex items-center gap-3">
-                <CalendarDays className="h-5 w-5 text-muted-foreground" />
-                <div>
-                  <div className="text-sm font-medium">Reporting Period</div>
-                  <div className="text-xs text-muted-foreground">
-                    {DATE_RANGES.find((r) => r.value === selectedDateRange)?.description || selectedDateRange}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 mt-3 pt-3 border-t">
                 <MapPin className="h-5 w-5 text-muted-foreground" />
                 <div>
                   <div className="text-sm font-medium">Territory</div>

@@ -332,24 +332,15 @@ describe('Home', () => {
   // =========================================================================
 
   // The Period (date-range) selector was removed — it filtered nothing (the KPI
-  // stack is brand/region-scoped, date-range was never threaded into a query).
-  // The dataset's reporting period now shows as STATIC context in the footer
-  // Filter Summary card, so only the static display is asserted here.
-  describe('Reporting Period (static footer context)', () => {
-    it('shows the reporting-period description statically in the filter summary', () => {
+  // stack is brand/region-scoped, date-range was never threaded into a query) —
+  // and the vestigial "Reporting Period" recap card was removed with it. Only the
+  // Brand + Region selectors and the region (Territory) recap remain.
+  describe('Period removal', () => {
+    it('no longer renders the Reporting Period recap card', () => {
       renderWithAllProviders(<Home />);
 
-      // The filter summary card shows the Q4 2025 description (no selector).
-      const descriptions = screen.getAllByText('Oct - Dec 2025');
-      expect(descriptions.length).toBeGreaterThan(0);
-    });
-
-    it('labels the static reporting period in the filter summary', () => {
-      renderWithAllProviders(<Home />);
-
-      const reportingLabel = screen.getByText('Reporting Period');
-      const card = reportingLabel.closest('div');
-      expect(within(card!.parentElement!).getByText('Oct - Dec 2025')).toBeInTheDocument();
+      expect(screen.queryByText('Reporting Period')).not.toBeInTheDocument();
+      expect(screen.queryByText('Oct - Dec 2025')).not.toBeInTheDocument();
     });
 
     it('no longer renders a Period/date-range selector combobox', () => {
@@ -696,25 +687,17 @@ describe('Home', () => {
   // =========================================================================
 
   describe('Filter Summary Card', () => {
-    it('displays reporting period summary', () => {
-      renderWithAllProviders(<Home />);
-
-      expect(screen.getByText('Reporting Period')).toBeInTheDocument();
-    });
-
-    it('displays territory summary', () => {
+    it('displays territory summary (region recap)', () => {
       renderWithAllProviders(<Home />);
 
       expect(screen.getByText('Territory')).toBeInTheDocument();
     });
 
-    it('shows current filter values', () => {
+    it('shows the current region filter value', () => {
       renderWithAllProviders(<Home />);
 
-      // Default values - use getAllByText since there might be duplicates
-      const octDecText = screen.getAllByText('Oct - Dec 2025');
+      // Default region; use getAllByText since the dropdown + recap both show it.
       const allUSText = screen.getAllByText('All US Regions');
-      expect(octDecText.length).toBeGreaterThan(0);
       expect(allUSText.length).toBeGreaterThan(0);
     });
   });
