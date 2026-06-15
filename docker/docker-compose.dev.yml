@@ -293,6 +293,12 @@ services:
       - ../scripts/bentoml/e2i_serving_service.py:/home/bentoml/e2i_serving_service.py
       - ../src/mlops/bentoml_service.py:/home/bentoml/src/mlops/bentoml_service.py
       - ../src/mlops/bentoml_templates:/home/bentoml/src/mlops/bentoml_templates
+      # #39: the gold-standard serving bundles pickle a FeatureBuilder instance
+      # (src.mlops.gold_standard_eval.feature_builder). The multi-model service
+      # (_discover_goldstd_bundles_from_store) must import that class to
+      # deserialize + apply preprocessor.transform; mount it read-only so the
+      # bentoml container can resolve it (empty __init__; only dep is cohort_spec).
+      - ../src/mlops/gold_standard_eval:/home/bentoml/src/mlops/gold_standard_eval:ro
     environment:
       - LOG_LEVEL=DEBUG
     deploy:
