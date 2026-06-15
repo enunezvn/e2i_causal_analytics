@@ -13,6 +13,7 @@ Fits REAL FeatureBuilders + calibrated LRs (no mocks of business logic).
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock
 
 import numpy as np
 import pandas as pd
@@ -108,6 +109,67 @@ class TestRoutingByModelName:
         assert out_init.probabilities[0] != out_pers.probabilities[0]
         assert out_init.model_id == "initiation_remibrutinib_goldstd_lr_v1"
         assert out_pers.model_id == "persistence_fabhalta_goldstd_lr_v1"
+
+    async def test_model_name_routes_feature_view_and_numeric_paths(
+        self, serving_module: Any
+    ) -> None:
+        class _ModelA:
+            feature_names_in_ = np.array(["a", "b"])
+
+            def predict(self, arr):
+                return (np.asarray(arr).sum(axis=1) > 0).astype(int)
+
+            def predict_proba(self, arr):
+                s = np.asarray(arr).sum(axis=1)
+                p = 1 / (1 + np.exp(-s))
+                return np.column_stack([1 - p, p])
+
+        class _ModelB:
+            feature_names_in_ = np.array(["a", "b"])
+
+            def predict(self, arr):
+                return (np.asarray(arr).sum(axis=1) > 0).astype(int)
+
+            def predict_proba(self, arr):
+                s = 2.0 * np.asarray(arr).sum(axis=1)
+                p = 1 / (1 + np.exp(-s))
+                return np.column_stack([1 - p, p])
+
+        service = _service_with_models(
+            serving_module,
+            {
+                "initiation_remibrutinib_goldstd_lr_v1": {
+                    "model": _ModelA(),
+                    "preprocessor": None,
+                    "feature_columns": ["a", "b"],
+                },
+                "persistence_fabhalta_goldstd_lr_v1": {
+                    "model": _ModelB(),
+                    "preprocessor": None,
+                    "feature_columns": ["a", "b"],
+                },
+            },
+        )
+        service._fetch_features_from_feast = AsyncMock(return_value=[[1.0, 2.0]])
+
+        feast_out = await service.predict(
+            serving_module.PredictionInput(
+                model_name="persistence_fabhalta_goldstd_lr_v1",
+                entity_ids=["E1"],
+                feature_view="fv",
+            )
+        )
+        numeric_out = await service.predict(
+            serving_module.PredictionInput(
+                model_name="initiation_remibrutinib_goldstd_lr_v1",
+                features=[[1.0, 2.0]],
+            )
+        )
+
+        assert feast_out.model_id == "persistence_fabhalta_goldstd_lr_v1"
+        assert numeric_out.model_id == "initiation_remibrutinib_goldstd_lr_v1"
+        assert feast_out.probabilities[0] == pytest.approx(1 / (1 + np.exp(-6.0)))
+        assert numeric_out.probabilities[0] == pytest.approx(1 / (1 + np.exp(-3.0)))
 
     async def test_model_info_by_model_name_returns_that_models_contract(
         self, serving_module: Any

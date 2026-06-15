@@ -802,6 +802,11 @@ class E2IModelService:
         self,
         features: List[List[float]],
         feature_source: Optional[str] = None,
+        *,
+        model: Any = _UNSET,
+        preprocessor: Any = _UNSET,
+        feature_columns: Any = _UNSET,
+        model_tag: Any = _UNSET,
     ) -> PredictionOutput:
         """Run prediction using the loaded model.
 
@@ -815,7 +820,12 @@ class E2IModelService:
         """
         import numpy as np
 
-        if self._model is None:
+        model = self._model if model is _UNSET else model
+        preprocessor = self._preprocessor if preprocessor is _UNSET else preprocessor
+        feature_columns = self._feature_columns if feature_columns is _UNSET else feature_columns
+        model_tag = self._model_tag if model_tag is _UNSET else model_tag
+
+        if model is None:
             return PredictionOutput(
                 predictions=[],
                 probabilities=[],
@@ -826,14 +836,26 @@ class E2IModelService:
             )
 
         start = time.time()
-        arr = self._apply_preprocessor(np.array(features))
+        if preprocessor is None:
+            arr = np.array(features)
+        else:
+            try:
+                if features and feature_columns and len(feature_columns) == len(features[0]):
+                    import pandas as pd
 
-        predictions = self._model.predict(arr).tolist()
+                    arr = preprocessor.transform(pd.DataFrame(features, columns=feature_columns))
+                else:
+                    arr = preprocessor.transform(np.array(features))
+            except Exception as e:
+                logger.error("Preprocessor transform failed: %s", e)
+                raise RuntimeError(f"Preprocessor transform failed: {e}") from e
+
+        predictions = model.predict(arr).tolist()
 
         probabilities = []
-        if hasattr(self._model, "predict_proba"):
+        if hasattr(model, "predict_proba"):
             try:
-                proba = self._model.predict_proba(arr)
+                proba = model.predict_proba(arr)
                 # Return probability of positive class for binary classification
                 if proba.ndim == 2 and proba.shape[1] == 2:
                     probabilities = proba[:, 1].tolist()
@@ -848,7 +870,7 @@ class E2IModelService:
         return PredictionOutput(
             predictions=predictions,
             probabilities=probabilities,
-            model_id=self._model_tag or "unknown",
+            model_id=model_tag or "unknown",
             prediction_time_ms=elapsed_ms,
             is_mock=False,
             feature_source=feature_source,
@@ -1020,7 +1042,14 @@ class E2IModelService:
                 feature_view=input_data.feature_view,
                 entity_key=input_data.entity_key,
             )
-            return self._run_prediction(features, feature_source="feast_online")
+            return self._run_prediction(
+                features,
+                feature_source="feast_online",
+                model=model,
+                preprocessor=preprocessor,
+                feature_columns=feature_columns,
+                model_tag=model_tag,
+            )
 
         # RAW covariate path (#39): gold-standard cohort models bundle a
         # FeatureBuilder preprocessor and expect the RAW covariates. Takes
@@ -1036,7 +1065,14 @@ class E2IModelService:
             )
 
         feature_source = "user_provided" if input_data.features else None
-        return self._run_prediction(input_data.features, feature_source=feature_source)
+        return self._run_prediction(
+            input_data.features,
+            feature_source=feature_source,
+            model=model,
+            preprocessor=preprocessor,
+            feature_columns=feature_columns,
+            model_tag=model_tag,
+        )
 
     @bentoml.api
     async def predict_batch(self, input_data: BatchPredictionInput) -> BatchPredictionOutput:
