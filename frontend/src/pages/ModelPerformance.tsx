@@ -434,9 +434,23 @@ function ModelPerformance() {
                           {
                             value: trendQuery.data.baseline_value,
                             label: 'Baseline',
-                            type: 'target',
+                            type: 'target' as const,
                             color: '#22c55e',
                           },
+                          // Alert-threshold line: the level below which a
+                          // performance alert fires. Only plotted when the API
+                          // reports a real (>0) threshold (it is 0 when there
+                          // is no baseline history to derive it from).
+                          ...(trendQuery.data.alert_threshold > 0
+                            ? [
+                                {
+                                  value: trendQuery.data.alert_threshold,
+                                  label: 'Alert threshold',
+                                  type: 'lower' as const,
+                                  color: '#ef4444',
+                                },
+                              ]
+                            : []),
                         ]
                       : []
                   }

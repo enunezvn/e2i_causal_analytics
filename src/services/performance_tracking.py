@@ -44,6 +44,11 @@ class PerformanceTrend:
     trend: str  # improving, stable, degrading
     is_significant: bool
     alert_threshold_breached: bool
+    # The metric level below which an alert fires — the higher of the relative
+    # floor (baseline * (1 - degradation_threshold)) and the absolute floor
+    # (absolute_min_accuracy). 0.0 when there is no data. Surfaced so the UI can
+    # plot it as the trend chart's alert-threshold line.
+    alert_threshold: float = 0.0
 
 
 @dataclass
@@ -249,6 +254,7 @@ class PerformanceTracker:
                 trend="unknown",
                 is_significant=False,
                 alert_threshold_breached=False,
+                alert_threshold=0.0,
             )
 
         # Get current and baseline values
@@ -279,6 +285,13 @@ class PerformanceTracker:
         alert_threshold_breached = change_percent < -threshold or float(current_value) < float(
             self.config.absolute_min_accuracy
         )
+        # The accuracy level below which the breach above triggers: the stricter
+        # (higher) of the relative floor and the absolute floor. Mirrors the two
+        # OR'd conditions so a value at/below this line == breached.
+        alert_threshold = max(
+            float(baseline_value) * (1.0 - float(self.config.degradation_threshold)),
+            float(self.config.absolute_min_accuracy),
+        )
 
         return PerformanceTrend(
             model_version=model_version,
@@ -289,6 +302,7 @@ class PerformanceTracker:
             trend=trend,
             is_significant=is_significant,
             alert_threshold_breached=bool(alert_threshold_breached),
+            alert_threshold=float(alert_threshold),
         )
 
     async def check_performance_alerts(
