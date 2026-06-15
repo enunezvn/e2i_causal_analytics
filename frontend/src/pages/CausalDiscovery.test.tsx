@@ -279,7 +279,10 @@ vi.mock('@/hooks/api/use-causal', () => ({
 
 // The page fetches real estimation rows BEFORE running the pipeline. Mock it so
 // the pipeline test can assert the rows are threaded into the request filters.
-const mockGetCausalEstimationData = vi.fn(async () => ({
+// NB: the impl takes an explicit arg so the mock's call signature carries it —
+// `tsc -b` (the production build) otherwise infers a zero-arg tuple and rejects
+// `mock.calls[0][0]` with TS2493.
+const mockGetCausalEstimationData = vi.fn(async (_args?: unknown) => ({
   dataset: 'patient_journeys',
   columns: ['treatment_arm', 'persistent_180d'],
   n_rows: 2,
@@ -290,8 +293,7 @@ const mockGetCausalEstimationData = vi.fn(async () => ({
 }));
 
 vi.mock('@/api/causal', () => ({
-  getCausalEstimationData: (...args: unknown[]) =>
-    mockGetCausalEstimationData(...(args as [])),
+  getCausalEstimationData: (args: unknown) => mockGetCausalEstimationData(args),
 }));
 
 vi.mock('@/hooks/api/use-graph', () => ({
