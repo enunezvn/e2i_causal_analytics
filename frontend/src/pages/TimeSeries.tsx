@@ -69,6 +69,7 @@ const COHORT_OPTIONS: { value: string; label: string }[] = [
   { value: 'initiation', label: 'Initiation' },
   { value: 'persistence', label: 'Persistence' },
   { value: 'discontinuation', label: 'Discontinuation' },
+  { value: 'hcp_adoption', label: 'HCP Adoption' },
 ];
 
 const BRAND_OPTIONS: { value: string; label: string }[] = [

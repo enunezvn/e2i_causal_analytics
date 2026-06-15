@@ -102,6 +102,46 @@ def make_patient_spec(cohort: str, brand: str) -> CohortSpec:
     )
 
 
+# ---------------------------------------------------------------------------
+# Per-brand HCP-grain adoption cohort factory (HCP-T3 — the 4th cohort × 3 brands)
+# ---------------------------------------------------------------------------
+# Grain = (hcp_id, brand) on hcp_brand_adoption (migration 076). The label is
+# ``adopted`` (0/1, from the shared leakage-safe _compute_adoption DGP); the
+# predictive covariates live on hcp_profiles and are JOIN-embedded at load time
+# (FeatureBuilder HCP path). consideration_date is the walk-forward temporal axis
+# (aliased to journey_start_date at load) — a row attribute, never a feature.
+HCP_ADOPTION_COHORT = "hcp_adoption"
+_HCP_COVARIATES = (
+    "peer_influence_score",
+    "influence_network_size",
+    "years_experience",
+    "specialty",
+    "geographic_region",
+)
+
+
+def make_hcp_spec(brand: str) -> CohortSpec:
+    """Build a per-brand CohortSpec for the HCP-grain adoption cohort.
+
+    brand in BRANDS.  target/name are uniform f"hcp_adoption_{brand.lower()}" so
+    the 3 per-brand HCP models register cleanly alongside the 9 patient models.
+    grain="hcp" routes FeatureBuilder to the hcp_brand_adoption + hcp_profiles
+    load path (see FeatureBuilder.load_frame); base_covariates are the 5
+    leakage-safe HCP attributes JOINed from hcp_profiles.
+    """
+    if brand not in BRANDS:
+        raise ValueError(f"unknown brand {brand!r}")
+    key = f"hcp_adoption_{brand.lower()}"
+    return CohortSpec(
+        name=key,
+        target=key,
+        brand=brand,
+        label_column="adopted",
+        grain="hcp",
+        base_covariates=_HCP_COVARIATES,
+    )
+
+
 def goldstd_model_name(cohort: str, brand: str) -> str:
     """Return the canonical ml_model_registry model_name for a per-brand slot."""
     return f"{cohort}_{brand.lower()}_goldstd_lr_v1"

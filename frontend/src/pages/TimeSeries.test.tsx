@@ -355,6 +355,32 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     });
   });
 
+  it('HCP Adoption cohort option resolves to hcp_adoption_{brand}_goldstd_lr_v1', async () => {
+    const user = userEvent.setup();
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    // Select the HCP Adoption cohort
+    const cohortSelect = screen.getByRole('combobox', { name: /cohort/i });
+    await user.selectOptions(cohortSelect, 'hcp_adoption');
+
+    // Default brand is Remibrutinib; the model handle should reflect the template
+    await waitFor(() => {
+      const allCalls = mockUsePerformanceTrend.mock.calls;
+      const lastModelId = allCalls[allCalls.length - 1]?.[0]?.model_id;
+      expect(lastModelId).toBe('hcp_adoption_remibrutinib_goldstd_lr_v1');
+    });
+
+    // Also verify with a different brand (Fabhalta) to prove the template wiring
+    const brandSelect = screen.getByRole('combobox', { name: /brand/i });
+    await user.selectOptions(brandSelect, 'Fabhalta');
+
+    await waitFor(() => {
+      const allCalls = mockUsePerformanceTrend.mock.calls;
+      const lastModelId = allCalls[allCalls.length - 1]?.[0]?.model_id;
+      expect(lastModelId).toBe('hcp_adoption_fabhalta_goldstd_lr_v1');
+    });
+  });
+
   it('source file contains NO sample/mock data — by identifier AND by behavior', () => {
     const sourcePath = path.resolve(__dirname, 'TimeSeries.tsx');
     const source = fs.readFileSync(sourcePath, 'utf-8');
