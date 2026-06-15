@@ -26,6 +26,7 @@ Env (read from the process; use ``set -a; source .env``): SUPABASE_URL,
 SUPABASE_SERVICE_KEY, FALKORDB_HOST, FALKORDB_PORT, FALKORDB_PASSWORD,
 FALKORDB_GRAPH_NAME (default ``e2i_causal``).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -69,8 +70,16 @@ def fetch_validated_paths() -> List[Dict[str, Any]]:
         while True:
             resp = client.get(
                 url,
-                headers={**headers, "Range-Unit": "items", "Range": f"{offset}-{offset + page - 1}"},
-                params={"select": select, "validation_status": "eq.validated", "order": "causal_effect_size.desc"},
+                headers={
+                    **headers,
+                    "Range-Unit": "items",
+                    "Range": f"{offset}-{offset + page - 1}",
+                },
+                params={
+                    "select": select,
+                    "validation_status": "eq.validated",
+                    "order": "causal_effect_size.desc",
+                },
             )
             resp.raise_for_status()
             batch = resp.json()

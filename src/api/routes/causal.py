@@ -2740,9 +2740,7 @@ async def get_causal_value_chains(
         # Pull a generous, effect-ordered slice; dedupe by pathway; rank by
         # |effect| x confidence so the top-N are DISTINCT, strongly-supported chains.
         result = await (
-            query.order("causal_effect_size", desc=True)
-            .limit(max(limit * 12, 60))
-            .execute()
+            query.order("causal_effect_size", desc=True).limit(max(limit * 12, 60)).execute()
         )
         rows: List[Dict[str, Any]] = result.data or []
 

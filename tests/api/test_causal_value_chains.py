@@ -22,8 +22,16 @@ from src.api.routes.causal import (
 client = TestClient(app)
 
 
-def _row(start, mids, end, eff, conf, brand="Kisqali", region="south",
-         method="backdoor.linear_regression"):
+def _row(
+    start,
+    mids,
+    end,
+    eff,
+    conf,
+    brand="Kisqali",
+    region="south",
+    method="backdoor.linear_regression",
+):
     return {
         "path_id": f"scp_{start}_{end}_{'_'.join(mids)}",
         "start_node": start,
@@ -85,11 +93,10 @@ def _patch_client(rows):
 # Pure mappers
 # ---------------------------------------------------------------------------
 
+
 def test_chain_node_sequence_prefers_causal_chain():
     row = _row("treatment_arm", ["engagement_score"], "treatment_initiated", 0.55, 0.86)
-    assert _chain_node_sequence(row) == [
-        "treatment_arm", "engagement_score", "treatment_initiated"
-    ]
+    assert _chain_node_sequence(row) == ["treatment_arm", "engagement_score", "treatment_initiated"]
 
 
 def test_chain_node_sequence_fallback_without_causal_chain():
@@ -102,7 +109,9 @@ def test_path_to_graphpath_puts_ate_on_terminal_edge():
     row = _row("treatment_arm", ["engagement_score"], "treatment_initiated", 0.549, 0.86)
     gp = _causal_path_to_graphpath(row)
     assert [n.name for n in gp.nodes] == [
-        "treatment_arm", "engagement_score", "treatment_initiated"
+        "treatment_arm",
+        "engagement_score",
+        "treatment_initiated",
     ]
     assert gp.total_confidence == pytest.approx(0.86)
     # The chain-level ATE rides the TERMINAL edge (what the dashboard reads).
@@ -121,12 +130,15 @@ def test_chain_score_is_abs_effect_times_confidence():
 # Endpoint
 # ---------------------------------------------------------------------------
 
+
 def test_value_chains_ranks_and_dedupes_and_scopes():
     rows = [
         _row("treatment_arm", ["engagement_score"], "treatment_initiated", 0.55, 0.86),  # .473
-        _row("treatment_arm", ["prior_therapy"], "treatment_initiated", 0.54, 0.94),     # .508 top
-        _row("treatment_arm", ["engagement_score"], "treatment_initiated", 0.40, 0.50),  # dup -> drop
-        _row("hcp_reach", [], "nrx", 0.20, 0.60),                                         # .12
+        _row("treatment_arm", ["prior_therapy"], "treatment_initiated", 0.54, 0.94),  # .508 top
+        _row(
+            "treatment_arm", ["engagement_score"], "treatment_initiated", 0.40, 0.50
+        ),  # dup -> drop
+        _row("hcp_reach", [], "nrx", 0.20, 0.60),  # .12
     ]
     cm, q = _patch_client(rows)
     with cm:
