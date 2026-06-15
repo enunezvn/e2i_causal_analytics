@@ -107,6 +107,49 @@ export enum CausalAnalysisStatus {
 }
 
 // =============================================================================
+// DATASET / VARIABLE DISCOVERY TYPES
+// =============================================================================
+
+/**
+ * Candidate treatment / outcome / covariate variables for a dataset.
+ *
+ * Returned by `GET /causal/variables?dataset=...`. Drives the page's
+ * treatment / outcome / covariate selectors so they only offer columns that
+ * actually exist in the estimation frame (no fictional defaults).
+ */
+export interface CausalVariablesResponse {
+  /** Dataset the candidates were derived from (e.g. 'patient_journeys') */
+  dataset: string;
+  /** Columns suitable as the treatment variable */
+  treatment_candidates: string[];
+  /** Columns suitable as the outcome variable */
+  outcome_candidates: string[];
+  /** Columns suitable as covariates / controls */
+  covariate_candidates: string[];
+  /** All columns available in the dataset */
+  columns: string[];
+}
+
+/**
+ * Real estimation-ready records for a chosen treatment / outcome / covariates.
+ *
+ * Returned by `GET /causal/estimation-data?dataset=...&treatment_var=...`. The
+ * `estimation_data_records` are fed verbatim to the parallel pipeline (via the
+ * request `filters`) so the libraries estimate effects on real rows rather than
+ * 503-ing on an empty payload.
+ */
+export interface EstimationDataResponse {
+  /** Dataset the records were drawn from */
+  dataset: string;
+  /** Columns present in each record */
+  columns: string[];
+  /** Number of rows returned */
+  n_rows: number;
+  /** Estimation-ready rows (one record per row) */
+  estimation_data_records: Array<Record<string, unknown>>;
+}
+
+// =============================================================================
 // HIERARCHICAL ANALYSIS TYPES
 // =============================================================================
 

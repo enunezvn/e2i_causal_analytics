@@ -365,6 +365,47 @@ class RouteQueryResponse(BaseModel):
     )
 
 
+class CausalVariablesResponse(BaseModel):
+    """Available causal variables for a gold-standard dataset.
+
+    Drives the causal-discovery page's treatment / outcome / covariate
+    dropdowns. The candidate lists are the curated, causally-meaningful columns
+    for the dataset intersected with its LIVE schema, so a dropdown never offers
+    a column that is not actually present in the data.
+    """
+
+    dataset: str = Field(..., description="Gold-standard dataset the variables come from")
+    treatment_candidates: List[str] = Field(
+        default_factory=list, description="Columns valid as a treatment variable"
+    )
+    outcome_candidates: List[str] = Field(
+        default_factory=list, description="Columns valid as an outcome variable"
+    )
+    covariate_candidates: List[str] = Field(
+        default_factory=list, description="Columns valid as covariates/confounders"
+    )
+    columns: List[str] = Field(
+        default_factory=list, description="All columns present in the dataset sample"
+    )
+
+
+class EstimationDataResponse(BaseModel):
+    """Real estimation records loaded server-side from a gold-standard dataset.
+
+    The frontend posts ``estimation_data_records`` into a pipeline request's
+    ``filters.estimation_data_records`` so the parallel/sequential pipeline can
+    estimate a real effect. Records are loaded from the live table (never
+    fabricated); rows missing a treatment/outcome value are dropped.
+    """
+
+    dataset: str = Field(..., description="Dataset the records were loaded from")
+    columns: List[str] = Field(..., description="Columns included in each record")
+    n_rows: int = Field(..., description="Number of usable estimation rows returned")
+    estimation_data_records: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Row records for the pipeline DataFrame"
+    )
+
+
 # =============================================================================
 # PIPELINE SCHEMAS
 # =============================================================================

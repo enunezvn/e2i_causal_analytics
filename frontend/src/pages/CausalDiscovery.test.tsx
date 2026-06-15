@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as React from 'react';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithAllProviders } from '@/test/utils';
 import CausalDiscovery from './CausalDiscovery';
@@ -18,6 +19,124 @@ import CausalDiscovery from './CausalDiscovery';
 // =============================================================================
 // MOCK SETUP
 // =============================================================================
+
+// Radix <Select> relies on pointer-capture / portal behaviour that jsdom does
+// not implement, so we replace the UI primitive with a native <select> that
+// preserves the same value / onValueChange contract AND the trigger's id +
+// aria-label (so getByLabelText(/treatment variable/i) keeps working). The
+// <Select> mock walks its own children to collect the <SelectItem> values and
+// the trigger id/aria-label, then renders ONE native <select>. Tests drive it
+// with fireEvent.change like a normal control.
+vi.mock('@/components/ui/select', () => {
+  type ItemProps = { value: string; children?: React.ReactNode };
+  type TriggerProps = {
+    id?: string;
+    'aria-label'?: string;
+    children?: React.ReactNode;
+  };
+
+  const Select = ({
+    value,
+    onValueChange,
+    disabled,
+    children,
+  }: {
+    value?: string;
+    onValueChange?: (v: string) => void;
+    disabled?: boolean;
+    children?: React.ReactNode;
+  }) => {
+    const options: Array<{ value: string; label: React.ReactNode }> = [];
+    let triggerId: string | undefined;
+    let triggerAriaLabel: string | undefined;
+
+    const walk = (nodes: React.ReactNode) => {
+      React.Children.forEach(nodes, (child: unknown) => {
+        if (!React.isValidElement(child)) return;
+        const el = child as React.ReactElement<
+          Partial<ItemProps & TriggerProps> & { children?: React.ReactNode }
+        >;
+        const name = (el.type as { __mockName?: string })?.__mockName;
+        if (name === 'SelectItem' && typeof el.props.value === 'string') {
+          options.push({ value: el.props.value, label: el.props.children });
+        }
+        if (name === 'SelectTrigger') {
+          triggerId = el.props.id;
+          triggerAriaLabel = el.props['aria-label'];
+        }
+        if (el.props.children) walk(el.props.children);
+      });
+    };
+    walk(children);
+
+    return (
+      <select
+        id={triggerId}
+        aria-label={triggerAriaLabel}
+        value={value ?? ''}
+        disabled={disabled}
+        onChange={(e) => onValueChange?.(e.target.value)}
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
+  // Tagged passthroughs so the walker can identify them by name.
+  const SelectTrigger = (_props: TriggerProps) => null;
+  (SelectTrigger as { __mockName?: string }).__mockName = 'SelectTrigger';
+  const SelectItem = (_props: ItemProps) => null;
+  (SelectItem as { __mockName?: string }).__mockName = 'SelectItem';
+  const SelectValue = () => null;
+  const SelectContent = ({ children }: { children?: React.ReactNode }) => (
+    <>{children}</>
+  );
+
+  return { Select, SelectTrigger, SelectContent, SelectItem, SelectValue };
+});
+
+// Simplify the covariate multi-select to native checkboxes for deterministic
+// jsdom interaction (the real one uses a Radix popover + portal).
+vi.mock('@/components/causal/CovariateMultiSelect', () => {
+  return {
+    CovariateMultiSelect: ({
+      options,
+      selected,
+      onChange,
+      disabled,
+    }: {
+      options: string[];
+      selected: string[];
+      onChange: (next: string[]) => void;
+      disabled?: boolean;
+    }) => (
+      <div aria-label="Covariates" data-testid="covariate-multiselect">
+        {options.map((opt) => (
+          <label key={opt}>
+            <input
+              type="checkbox"
+              value={opt}
+              checked={selected.includes(opt)}
+              disabled={disabled}
+              onChange={(e) =>
+                onChange(
+                  e.target.checked
+                    ? [...selected, opt]
+                    : selected.filter((v) => v !== opt)
+                )
+              }
+            />
+            {opt}
+          </label>
+        ))}
+      </div>
+    ),
+  };
+});
 
 // Mock the CausalDiscovery visualization component to avoid D3 complexities in tests
 vi.mock('@/components/visualizations/CausalDiscovery', () => ({
@@ -105,7 +224,43 @@ const pipelineState: FakeMutationState = {
   isSuccess: false,
 };
 
+// Candidate variables returned by useCausalVariables. The page's selectors and
+// the covariate multi-select render from these.
+const variablesState: {
+  data:
+    | {
+        dataset: string;
+        treatment_candidates: string[];
+        outcome_candidates: string[];
+        covariate_candidates: string[];
+        columns: string[];
+      }
+    | undefined;
+  isLoading: boolean;
+} = {
+  data: {
+    dataset: 'patient_journeys',
+    treatment_candidates: ['treatment_arm', 'treatment_initiated'],
+    outcome_candidates: [
+      'persistent_180d',
+      'discontinued_180d',
+      'treatment_initiated',
+    ],
+    covariate_candidates: [
+      'disease_severity',
+      'engagement_score',
+      'age_at_diagnosis',
+    ],
+    columns: [],
+  },
+  isLoading: false,
+};
+
 vi.mock('@/hooks/api/use-causal', () => ({
+  useCausalVariables: () => ({
+    data: variablesState.data,
+    isLoading: variablesState.isLoading,
+  }),
   useRouteQuery: () => ({
     mutate: mockRouteMutate,
     data: routeState.data,
@@ -120,6 +275,23 @@ vi.mock('@/hooks/api/use-causal', () => ({
     error: pipelineState.error,
     isSuccess: pipelineState.isSuccess,
   }),
+}));
+
+// The page fetches real estimation rows BEFORE running the pipeline. Mock it so
+// the pipeline test can assert the rows are threaded into the request filters.
+const mockGetCausalEstimationData = vi.fn(async () => ({
+  dataset: 'patient_journeys',
+  columns: ['treatment_arm', 'persistent_180d'],
+  n_rows: 2,
+  estimation_data_records: [
+    { treatment_arm: 1, persistent_180d: 1 },
+    { treatment_arm: 0, persistent_180d: 0 },
+  ],
+}));
+
+vi.mock('@/api/causal', () => ({
+  getCausalEstimationData: (...args: unknown[]) =>
+    mockGetCausalEstimationData(...(args as [])),
 }));
 
 vi.mock('@/hooks/api/use-graph', () => ({
@@ -151,6 +323,22 @@ describe('CausalDiscovery Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetMutationStates();
+    variablesState.isLoading = false;
+    variablesState.data = {
+      dataset: 'patient_journeys',
+      treatment_candidates: ['treatment_arm', 'treatment_initiated'],
+      outcome_candidates: [
+        'persistent_180d',
+        'discontinued_180d',
+        'treatment_initiated',
+      ],
+      covariate_candidates: [
+        'disease_severity',
+        'engagement_score',
+        'age_at_diagnosis',
+      ],
+      columns: [],
+    };
   });
 
   // =========================================================================
@@ -338,16 +526,19 @@ describe('CausalDiscovery Page', () => {
     it('submits the form and calls useRouteQuery with treatment, outcome, and covariates', async () => {
       renderWithAllProviders(<CausalDiscovery />);
 
-      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLInputElement;
-      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLInputElement;
-      const covariates = screen.getByLabelText(/covariates/i) as HTMLInputElement;
+      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLSelectElement;
+      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLSelectElement;
 
-      // Use fireEvent.change to set controlled-input values atomically, avoiding
-      // the per-keystroke concatenation issues of `userEvent.type` on prefilled
-      // controlled inputs.
-      fireEvent.change(treatment, { target: { value: 'rep_visits' } });
-      fireEvent.change(outcome, { target: { value: 'trx_count' } });
-      fireEvent.change(covariates, { target: { value: 'age, region' } });
+      // Treatment / outcome are now Selects bound to the live candidate lists;
+      // pick real columns from the patient_journeys gold-standard frame.
+      fireEvent.change(treatment, { target: { value: 'treatment_arm' } });
+      fireEvent.change(outcome, { target: { value: 'persistent_180d' } });
+      // Covariates default to the three gold-standard controls; deselect
+      // engagement_score so we exercise the multi-select wiring too.
+      const engagementBox = screen.getByLabelText(
+        'engagement_score',
+      ) as HTMLInputElement;
+      fireEvent.click(engagementBox);
 
       const submit = screen.getByRole('button', { name: /run routing/i });
       fireEvent.click(submit);
@@ -361,9 +552,9 @@ describe('CausalDiscovery Page', () => {
       // field, so a top-level placement would be silently ignored by the
       // backend. Assert the canonical `context.covariates` shape exactly.
       expect(calledWith).toMatchObject({
-        treatment_var: 'rep_visits',
-        outcome_var: 'trx_count',
-        context: { covariates: ['age', 'region'] },
+        treatment_var: 'treatment_arm',
+        outcome_var: 'persistent_180d',
+        context: { covariates: ['disease_severity', 'age_at_diagnosis'] },
       });
       expect(
         (calledWith as Record<string, unknown>).covariates,
@@ -539,7 +730,7 @@ describe('CausalDiscovery Page', () => {
       ).toBeInTheDocument();
     });
 
-    it('invokes useRunParallelPipeline with treatment, outcome, and covariates', async () => {
+    it('fetches real estimation data and threads it + treatment/outcome/covariates into the pipeline request', async () => {
       routeState.data = {
         query: '',
         question_type: 'causal_effect',
@@ -554,18 +745,27 @@ describe('CausalDiscovery Page', () => {
 
       renderWithAllProviders(<CausalDiscovery />);
 
-      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLInputElement;
-      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLInputElement;
-      const covariates = screen.getByLabelText(/covariates/i) as HTMLInputElement;
+      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLSelectElement;
+      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLSelectElement;
 
-      fireEvent.change(treatment, { target: { value: 'rep_visits' } });
-      fireEvent.change(outcome, { target: { value: 'trx_count' } });
-      fireEvent.change(covariates, { target: { value: 'age, region' } });
+      // Real columns from the gold-standard frame.
+      fireEvent.change(treatment, { target: { value: 'treatment_arm' } });
+      fireEvent.change(outcome, { target: { value: 'persistent_180d' } });
 
       const button = screen.getByRole('button', {
         name: /run parallel pipeline|run pipeline/i,
       });
       fireEvent.click(button);
+
+      // The page must fetch the real estimation rows BEFORE running.
+      await waitFor(() => {
+        expect(mockGetCausalEstimationData).toHaveBeenCalledTimes(1);
+      });
+      expect(mockGetCausalEstimationData.mock.calls[0][0]).toMatchObject({
+        treatment_var: 'treatment_arm',
+        outcome_var: 'persistent_180d',
+        covariates: ['disease_severity', 'engagement_score', 'age_at_diagnosis'],
+      });
 
       await waitFor(() => {
         expect(mockPipelineMutate).toHaveBeenCalledTimes(1);
@@ -574,10 +774,19 @@ describe('CausalDiscovery Page', () => {
       // Hook expects an object: { request, asyncMode }
       const request = (arg && (arg.request ?? arg)) as Record<string, unknown>;
       expect(request).toMatchObject({
-        treatment_var: 'rep_visits',
-        outcome_var: 'trx_count',
+        treatment_var: 'treatment_arm',
+        outcome_var: 'persistent_180d',
       });
-      expect(request.covariates).toEqual(['age', 'region']);
+      expect(request.covariates).toEqual([
+        'disease_severity',
+        'engagement_score',
+        'age_at_diagnosis',
+      ]);
+      // Real estimation rows are attached via filters so the libraries can fit.
+      expect(
+        (request.filters as { estimation_data_records?: unknown[] })
+          .estimation_data_records,
+      ).toHaveLength(2);
       // Libraries should pull from routing (dowhy, econml) when present.
       expect(request.libraries).toEqual(
         expect.arrayContaining(['dowhy', 'econml']),
@@ -598,8 +807,9 @@ describe('CausalDiscovery Page', () => {
     it('invokes useCausalChains when the KG-chains action is triggered', async () => {
       renderWithAllProviders(<CausalDiscovery />);
 
-      const outcomeInput = screen.getByLabelText(/outcome variable/i) as HTMLInputElement;
-      fireEvent.change(outcomeInput, { target: { value: 'trx_count' } });
+      const outcomeInput = screen.getByLabelText(/outcome variable/i) as HTMLSelectElement;
+      // Pick a real outcome candidate from the gold-standard frame.
+      fireEvent.change(outcomeInput, { target: { value: 'discontinued_180d' } });
 
       const kgButton = screen.getByRole('button', { name: /discover chains|kg chains/i });
       fireEvent.click(kgButton);
@@ -609,7 +819,7 @@ describe('CausalDiscovery Page', () => {
       });
       const calledWith = mockChainsMutate.mock.calls[0][0];
       // Should pass the outcome as kpi_name (or include it some structured way)
-      expect(calledWith.kpi_name).toBe('trx_count');
+      expect(calledWith.kpi_name).toBe('discontinued_180d');
     });
 
     it('renders discovered chains when useCausalChains returns data', () => {
