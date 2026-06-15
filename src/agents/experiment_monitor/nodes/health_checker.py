@@ -148,6 +148,12 @@ class HealthCheckerNode:
                     client.table("ml_experiments")
                     .select("id, experiment_name, status, prediction_target, created_at")
                     .eq("status", "running")
+                    # Bound the interactive sweep: there are 700+ running experiments
+                    # (the synthetic generator leaves many perpetually-"running"), so
+                    # an unbounded scan + per-experiment checks blew past the 30s
+                    # client timeout and surfaced "no recommendations". Most-recent 25.
+                    .order("created_at", desc=True)
+                    .limit(25)
                 )
                 result = await apply_provenance_filter(query, include_synthetic).execute()
             elif state.get("experiment_ids"):

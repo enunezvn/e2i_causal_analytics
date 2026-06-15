@@ -1448,7 +1448,12 @@ class _FakeQuery:
     def select(self, *a, **k):
         return self
 
-    def eq(self, *a, **k):
+    def eq(self, col, val):
+        # Honor ``.eq(col, val)`` so the is_synthetic=False structural guard is
+        # actually exercised. Default-to-val on a missing key keeps rows that
+        # omit the column (backward compatible with fixtures predating it).
+        self._eq_filters = getattr(self, "_eq_filters", [])
+        self._eq_filters.append((col, val))
         return self
 
     def gte(self, *a, **k):
@@ -1460,8 +1465,27 @@ class _FakeQuery:
     def limit(self, *a, **k):
         return self
 
+    @property
+    def not_(self):
+        self._negate = True
+        return self
+
+    def is_(self, col, val):
+        # Honor ``query.not_.is_(col, "null")`` so the model-health metric-presence
+        # filter is actually exercised by the fake (excludes rows where col IS NULL).
+        if getattr(self, "_negate", False) and str(val).lower() == "null":
+            self._exclude_null_cols = getattr(self, "_exclude_null_cols", [])
+            self._exclude_null_cols.append(col)
+        self._negate = False
+        return self
+
     def execute(self):
-        return MagicMock(data=list(self._rows))
+        rows = list(self._rows)
+        for col, val in getattr(self, "_eq_filters", []):
+            rows = [r for r in rows if r.get(col, val) == val]
+        for col in getattr(self, "_exclude_null_cols", []):
+            rows = [r for r in rows if r.get(col) is not None]
+        return MagicMock(data=rows)
 
 
 class _FakeDB:
@@ -1484,10 +1508,13 @@ def test_fetch_model_health_none_when_no_client():
     assert prov is None
 
 
-def test_fetch_model_health_partial_when_no_metric_values():
-    """Real rows but empty ml_performance_metrics (latest_metric_value NULL):
-    perf fields stay null, provenance is PARTIAL, status is mapped — NEVER the
-    hardcoded accuracy=0.89."""
+def test_fetch_model_health_excludes_metricless_rows():
+    """WS-BACKEND: rows with NO performance metric (latest_metric_value NULL) — the
+    362 synthetic experiment artifacts that polluted the card as "362/362" blank —
+    are EXCLUDED. The Model-Health card surfaces only models carrying a real metric,
+    so an all-metric-less dashboard reads UNKNOWN (honest empty), never a wall of
+    blank rows. (A model WITH a metric still shows its real value, never a hardcoded
+    0.89 — see test_fetch_model_health_partial_even_with_auc_metric.)"""
     db = _FakeDB(
         {
             "ml_model_health_dashboard": [
@@ -1512,12 +1539,48 @@ def test_fetch_model_health_partial_when_no_metric_values():
     )
     with _patch_health_client(db):
         models, prov = _fetch_model_health()
+    assert models == []
+    assert prov == DataProvenance.UNKNOWN
+
+
+def test_fetch_model_health_excludes_synthetic_even_with_metric():
+    """WS-BACKEND (codex r2 RESOLUTION-4): a synthetic experiment artifact that DOES
+    carry a performance metric must STILL be excluded — structurally, via the
+    is_synthetic=False guard (migration 031 exposes is_synthetic on the view) — not
+    merely because synthetic rows happen to be metric-less today. The live registry
+    holds 720 is_synthetic=true rows under stage IN (production, staging); only the
+    14 real models (all is_synthetic=false) may reach the card. Here the synthetic
+    row has a real-looking 0.91 auc and must NOT survive; only the gold-standard
+    model does."""
+    db = _FakeDB(
+        {
+            "ml_model_health_dashboard": [
+                {
+                    "model_id": "synth1",
+                    "model_name": "scenario_synth_v1",
+                    "model_stage": "staging",
+                    "health_status": "healthy",
+                    "latest_metric_value": 0.91,
+                    "primary_metric": "auc",
+                    "is_synthetic": True,
+                },
+                {
+                    "model_id": "real1",
+                    "model_name": "initiation_kisqali_goldstd_lr_v1",
+                    "model_stage": "staging",
+                    "health_status": "healthy",
+                    "latest_metric_value": 0.68,
+                    "primary_metric": "auc",
+                    "is_synthetic": False,
+                },
+            ]
+        }
+    )
+    with _patch_health_client(db):
+        models, prov = _fetch_model_health()
+    assert [m.model_name for m in models] == ["initiation_kisqali_goldstd_lr_v1"]
+    assert models[0].auc_roc == 0.68
     assert prov == DataProvenance.PARTIAL
-    assert len(models) == 2
-    assert models[0].status == ModelStatus.HEALTHY
-    assert models[1].status == ModelStatus.UNHEALTHY
-    assert all(m.accuracy is None and m.auc_roc is None for m in models)
-    assert all(m.accuracy != 0.89 for m in models)
 
 
 def test_fetch_model_health_partial_even_with_auc_metric():

@@ -975,9 +975,21 @@ def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:
             .select(
                 "model_id, model_name, model_stage, health_status, latest_metric_value, "
                 "primary_metric, has_active_drift, max_drift_severity, performance_degraded, "
-                "active_alerts, critical_alerts"
+                "active_alerts, critical_alerts, is_synthetic"
             )
-            .eq("model_stage", "production")
+            # Exclude synthetic experiment artifacts STRUCTURALLY (migration 031
+            # exposes is_synthetic on the view). The registry holds 720
+            # is_synthetic=true rows under stage IN (production, staging) — the
+            # noise that rendered "362/362" with blank accuracy — versus 14 real
+            # models (2 production + 12 staging), ALL is_synthetic=false. This is
+            # NOT gating a desired capability: the 12 gold-standard models the
+            # platform surfaces are is_synthetic=false; we are removing planted
+            # artifacts, not real model health.
+            .eq("is_synthetic", False)
+            # Of the 14 real models, surface the 12 that actually carry a
+            # performance metric; the 2 legacy production rows without a metric
+            # have nothing to show on a health dashboard.
+            .not_.is_("latest_metric_value", "null")
             .execute()
             .data
             or []

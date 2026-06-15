@@ -37,9 +37,11 @@ async def _resolve_production_model_names(limit: int = 50) -> List[str]:
 
     Drives the model-status selector from the registry instead of fictional
     hardcoded handles (``churn_model``/``conversion_model``/``causal_model``,
-    which are not registered and never resolve). Returns the names of models at
-    ``stage='production'`` and ``is_synthetic=false`` — the genuine,
-    user-facing production models (e.g. ``csu_treatment_initiation_lr_*_v1``).
+    which are not registered and never resolve). Returns the names of REAL models
+    (``is_synthetic=false``) at ``stage IN ('production','staging')`` — the 2 legacy
+    ``csu_treatment_initiation_lr_*_v1`` production models PLUS the 12 gold-standard
+    ``*_goldstd_lr_v1`` staging models (which were previously invisible). The 360
+    synthetic experiment artifacts stay excluded via ``is_synthetic=false``.
 
     Best-effort: returns ``[]`` if the registry is unreachable so the caller can
     surface an honest "no models" state rather than fabricating handles. Tests
@@ -55,7 +57,11 @@ async def _resolve_production_model_names(limit: int = 50) -> List[str]:
         result = await (
             client.table("ml_model_registry")
             .select("model_name")
-            .eq("stage", "production")
+            # Surface BOTH production and staging real models: the 12 gold-standard
+            # models are registered at stage='staging' and were invisible (only the
+            # 2 legacy csu_* production models showed). is_synthetic=False still
+            # excludes the 360 synthetic experiment artifacts (verified: 14 models).
+            .in_("stage", ["production", "staging"])
             .eq("is_synthetic", False)
             .order("registered_at", desc=True)
             .limit(limit)
