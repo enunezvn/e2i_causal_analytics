@@ -7,22 +7,28 @@ This module exports all feature views organized by use case:
 - Market Dynamics: Features for ROI prediction and resource allocation
 """
 
+from .goldstd_cohort_features import (
+    goldstd_cohort_features_fv,
+)
+from .goldstd_hcp_features import (
+    goldstd_hcp_features_fv,
+)
 from .hcp_features import (
     hcp_conversion_fv,
-    hcp_profile_fv,
     hcp_engagement_fv,
-)
-from .patient_features import (
-    patient_journey_fv,
-    patient_adherence_fv,
-)
-from .trigger_features import (
-    trigger_effectiveness_fv,
-    trigger_response_fv,
+    hcp_profile_fv,
 )
 from .market_features import (
     market_dynamics_fv,
     territory_performance_fv,
+)
+from .patient_features import (
+    patient_adherence_fv,
+    patient_journey_fv,
+)
+from .trigger_features import (
+    trigger_effectiveness_fv,
+    trigger_response_fv,
 )
 
 __all__ = [
@@ -39,6 +45,9 @@ __all__ = [
     # Market features
     "market_dynamics_fv",
     "territory_performance_fv",
+    # Gold-standard cohort SHAP serving (#39)
+    "goldstd_cohort_features_fv",
+    "goldstd_hcp_features_fv",
 ]
 
 # Feature view registry for programmatic access
@@ -52,6 +61,8 @@ FEATURE_VIEW_MAP = {
     "trigger_response": trigger_response_fv,
     "market_dynamics": market_dynamics_fv,
     "territory_performance": territory_performance_fv,
+    "goldstd_cohort_features": goldstd_cohort_features_fv,
+    "goldstd_hcp_cohort_features": goldstd_hcp_features_fv,
 }
 
 

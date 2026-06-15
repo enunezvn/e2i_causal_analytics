@@ -52,6 +52,39 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
         "patient_nba_features:response_history",
         "patient_nba_features:timing_preference",
     ],
+    # Gold-standard cohort families (#39): the real ``*_goldstd_lr_v1`` models
+    # consume the 3 RAW leakage-safe KEEP_COLUMNS covariates served by the
+    # ``goldstd_cohort_features`` Feast view (feature_repo/features/
+    # goldstd_cohort_features.py). The served model's bundled FeatureBuilder
+    # one-hot/median-encodes these into the 9 numeric features SHAP runs over.
+    "initiation": [
+        "goldstd_cohort_features:disease_severity",
+        "goldstd_cohort_features:academic_hcp",
+        "goldstd_cohort_features:geographic_region",
+    ],
+    "persistence": [
+        "goldstd_cohort_features:disease_severity",
+        "goldstd_cohort_features:academic_hcp",
+        "goldstd_cohort_features:geographic_region",
+    ],
+    "discontinuation": [
+        "goldstd_cohort_features:disease_severity",
+        "goldstd_cohort_features:academic_hcp",
+        "goldstd_cohort_features:geographic_region",
+    ],
+    # HCP-grain gold-standard adoption cohort (#39 multi-model): the per-brand
+    # ``hcp_adoption_{brand}_goldstd_lr_v1`` models consume the 5 RAW leakage-safe
+    # HCP covariates served by the ``goldstd_hcp_cohort_features`` view
+    # (entity: hcp / hcp_id). The served model's FeatureBuilder one-hot/median-
+    # encodes them into the 19 numeric features SHAP runs over. ``specialty`` +
+    # ``geographic_region`` are categorical (one-hot); the other 3 are numeric.
+    "hcp_adoption": [
+        "goldstd_hcp_cohort_features:peer_influence_score",
+        "goldstd_hcp_cohort_features:influence_network_size",
+        "goldstd_hcp_cohort_features:years_experience",
+        "goldstd_hcp_cohort_features:specialty",
+        "goldstd_hcp_cohort_features:geographic_region",
+    ],
 }
 
 

@@ -96,7 +96,10 @@ class TestDirectFeaturesPath:
         # Stub the prediction kernel so we don't need a real model.
         captured: dict[str, Any] = {}
 
-        def _fake_run(features: Any, feature_source: Any = None) -> Any:
+        def _fake_run(features: Any, feature_source: Any = None, **_kwargs: Any) -> Any:
+            # **_kwargs absorbs the routed-bundle keywords (#39 multi-model:
+            # model=/preprocessor=/feature_columns=/model_tag=) the predict
+            # method now threads through; this stub only asserts the tag/features.
             captured["features"] = features
             captured["feature_source"] = feature_source
             return serving_module.PredictionOutput(
@@ -178,7 +181,8 @@ async def test_predict_with_entity_ids_uses_feast(
 
     captured: dict[str, Any] = {}
 
-    def _fake_run(features: Any, feature_source: Any = None) -> Any:
+    def _fake_run(features: Any, feature_source: Any = None, **_kwargs: Any) -> Any:
+        # **_kwargs absorbs the routed-bundle keywords (#39 multi-model).
         captured["features"] = features
         captured["feature_source"] = feature_source
         return serving_module.PredictionOutput(
