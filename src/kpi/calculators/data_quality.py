@@ -23,7 +23,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import resolve_kpi_query_id
+from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id
 
 
 class DataQualityCalculator(KPICalculatorBase):
@@ -132,13 +132,36 @@ class DataQualityCalculator(KPICalculatorBase):
         lower_is_better = kpi.id in self._LOWER_IS_BETTER_IDS
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
+    @staticmethod
+    def _region_scoped(
+        base_query_id: str, context: dict[str, Any], base_params: list[Any]
+    ) -> tuple[str, list[Any]]:
+        """Route to the region-scoped query variant (migration 078) when a region
+        is selected, else the base query with its own params.
+
+        The region variants take region as ``$1`` (max_params 1). For coverage,
+        the region cut is region-only (region takes precedence over brand);
+        ``base_params`` is used verbatim only in the non-region case, so
+        region=None stays byte-identical to today (certified gates unaffected).
+        Only the three region-decomposable data-quality KPIs have a variant;
+        geographic_consistency (cross-region by nature) and the view-backed KPIs
+        do not, and keep their portfolio value when a region is selected.
+        """
+        region = context.get("region")
+        if region:
+            return region_query_id(base_query_id), [region]
+        return base_query_id, base_params
+
     def _calc_source_coverage_patients(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-001: Source Coverage - Patients.
 
         Formula: covered_patients / reference_patients
         """
         brand = context.get("brand")
-        result = self._execute_query("data_quality_source_coverage_patients", [brand])
+        query_id, params = self._region_scoped(
+            "data_quality_source_coverage_patients", context, [brand]
+        )
+        result = self._execute_query(query_id, params)
         if not result or result[0].get("total") is None or result[0]["total"] <= 0:
             raise RuntimeError(
                 "KPI WS1-DQ-001 unavailable: no reference patients to compute "
@@ -160,7 +183,8 @@ class DataQualityCalculator(KPICalculatorBase):
         incoherent ratio (global covered HCPs over one brand's universe). Per-brand
         HCP coverage needs a brand-attributable coverage source (future).
         """
-        result = self._execute_query("data_quality_source_coverage_hcps", [])
+        query_id, params = self._region_scoped("data_quality_source_coverage_hcps", context, [])
+        result = self._execute_query(query_id, params)
         if not result or result[0].get("total") is None or result[0]["total"] <= 0:
             raise RuntimeError(
                 "KPI WS1-DQ-002 unavailable: no reference HCP universe to compute "
@@ -196,7 +220,8 @@ class DataQualityCalculator(KPICalculatorBase):
 
         Formula: records_passing_completeness / total_records
         """
-        result = self._execute_query("data_quality_completeness_pass_rate", [])
+        query_id, params = self._region_scoped("data_quality_completeness_pass_rate", context, [])
+        result = self._execute_query(query_id, params)
         if not result or result[0].get("pass_rate") is None:
             raise RuntimeError("KPI WS1-DQ-005 unavailable: no data for completeness pass rate")
         # A genuine 0.0 pass_rate (records exist but none passed) is a legitimate value.

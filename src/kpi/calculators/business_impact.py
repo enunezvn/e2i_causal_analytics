@@ -21,7 +21,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
+from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id
 
 
 class BusinessImpactCalculator(KPICalculatorBase):
@@ -115,22 +115,9 @@ class BusinessImpactCalculator(KPICalculatorBase):
             return KPIStatus.UNKNOWN
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
-    @staticmethod
-    def _region_variant(base_query_id: str) -> str:
-        """Region-scoped query id for a base business_impact query (migration 077).
-
-        The ``*_region`` queries are ADDITIVE — deliberately absent from
-        ``SYNTHETIC_TWINNED_QUERY_IDS`` (which mirrors migration 066 and is
-        drift-checked in CI), so :func:`resolve_kpi_query_id` will NOT auto-swap
-        them to the synthetic-inclusive twin. We therefore append the
-        ``_include_synthetic`` suffix HERE under the showcase flag, so a
-        region-scoped read honors the same synthetic-visibility gate as the base
-        query it parallels. ``_execute_query`` still calls
-        :func:`resolve_kpi_query_id`, which is a safe no-op on an
-        already-``_include_synthetic`` id.
-        """
-        qid = f"{base_query_id}_region"
-        return f"{qid}_include_synthetic" if kpi_include_synthetic() else qid
+    # Region-scoped query id helper shared across calculators (migrations
+    # 077/078). Kept as a thin alias so the call sites below stay readable.
+    _region_variant = staticmethod(region_query_id)
 
     def _calc_mau(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-001: Monthly Active Users.
