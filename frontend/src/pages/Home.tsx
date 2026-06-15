@@ -379,7 +379,9 @@ function Home() {
   const queryClient = useQueryClient();
   const [selectedBrand, setSelectedBrand] = useState<Brand>('All');
   const [selectedRegion, setSelectedRegion] = useState<Region>('All US');
-  const [selectedDateRange, setSelectedDateRange] = useState<DateRange>('Q4 2025');
+  // Period is no longer user-selectable (it filtered nothing); kept as a fixed
+  // label for the synthetic demo dataset's reporting period (shown in the footer).
+  const selectedDateRange: DateRange = 'Q4 2025';
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
@@ -852,25 +854,10 @@ function Home() {
             </SelectContent>
           </Select>
 
-          {/* Date Range Selector */}
-          <Select value={selectedDateRange} onValueChange={(v) => setSelectedDateRange(v as DateRange)}>
-            <SelectTrigger className="w-[160px]">
-              <div className="flex items-center gap-2">
-                <CalendarDays className="h-4 w-4" />
-                <SelectValue placeholder="Select Period" />
-              </div>
-            </SelectTrigger>
-            <SelectContent>
-              {DATE_RANGES.map((range) => (
-                <SelectItem key={range.value} value={range.value}>
-                  <div className="flex flex-col">
-                    <span>{range.label}</span>
-                    <span className="text-xs text-muted-foreground">{range.description}</span>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {/* Period selector removed: it did not filter any data (the KPI stack
+              is brand-scoped; date-range was never threaded into a query), so a
+              functional-looking control would mislead. The data's reporting
+              period is still shown as static context in the footer. */}
 
           {/* Refresh Button */}
           <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isRefreshing}>
