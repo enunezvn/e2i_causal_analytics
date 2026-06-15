@@ -43,6 +43,8 @@ interface ChainCardData {
   status: 'active' | 'in-progress' | 'monitored';
   nodes: string[];
   result: string;
+  /** True when `result` is a real quantified effect (drives pill styling). */
+  quantified: boolean;
   /** Combined path confidence from the API; null when not reported. */
   confidence: number | null;
   /** Causal method recorded on the relationship; null when not reported. */
@@ -112,25 +114,56 @@ function transformGraphPathToCard(
       ? ((path.relationships[0].properties?.method as string | undefined) ?? null)
       : null;
 
-  // Create title from first and last node
+  // Full chain label (source → … → terminal). Shown in full and allowed to
+  // wrap — never silently truncated to an ambiguous 'pati…'.
   const title =
     nodeNames.length >= 2
       ? `${nodeNames[0]} → ${nodeNames[nodeNames.length - 1]}`
       : 'Causal Chain';
 
-  // Result text from the real terminal-node value; honest when absent.
-  // `!= null` (not truthiness): a quantified ZERO effect is real data.
-  const resultValue = lastNode?.properties?.value as number | undefined;
-  const result = resultValue != null
-    ? `${resultValue > 0 ? '+' : ''}${resultValue.toFixed(1)}% Impact`
-    : 'Impact not quantified';
+  // Quantified causal effect. The magnitude lives on the terminal RELATIONSHIP
+  // as `ate_estimate` (the numeric Average Treatment Effect the causal-impact
+  // pipeline writes — interpretation.py), NOT on the node. `effect_size` is a
+  // CATEGORICAL label ("small"/"medium"/"large"/"unknown"), never the
+  // magnitude, so it is deliberately not read as a number. We fall back to a
+  // terminal-node `value` (a quantified KPI endpoint) only when no ATE is
+  // reported. `Number.isFinite` (not truthiness): a real ZERO effect is data.
+  const lastRel =
+    path.relationships.length > 0
+      ? path.relationships[path.relationships.length - 1]
+      : undefined;
+  const ateRaw = lastRel?.properties?.ate_estimate;
+  const ate =
+    typeof ateRaw === 'number' && Number.isFinite(ateRaw) ? ateRaw : null;
+
+  const nodeValRaw = lastNode?.properties?.value;
+  const nodeVal =
+    typeof nodeValRaw === 'number' && Number.isFinite(nodeValRaw)
+      ? nodeValRaw
+      : null;
+
+  let result: string;
+  let quantified: boolean;
+  if (ate != null) {
+    // Raw ATE, matching the platform convention (`ATE: {ate:.2f}`). NOT a
+    // fabricated percentage — the outcome scale is not asserted here.
+    result = `ATE ${ate >= 0 ? '+' : ''}${ate.toFixed(2)}`;
+    quantified = true;
+  } else if (nodeVal != null) {
+    result = `${nodeVal > 0 ? '+' : ''}${nodeVal.toFixed(1)}% Impact`;
+    quantified = true;
+  } else {
+    result = 'Impact not quantified';
+    quantified = false;
+  }
 
   return {
     id: `chain-${index}`,
-    title: title.length > 30 ? title.substring(0, 27) + '...' : title,
+    title,
     status,
     nodes: nodeNames.slice(0, -1), // All but last (result)
     result,
+    quantified,
     confidence,
     method,
     // NOTE: no timestamp — GraphPath carries none, and inventing a recency
@@ -157,11 +190,16 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
     <Card className="bg-[var(--color-card)] border-[var(--color-border)] hover:border-[var(--color-primary)]/30 transition-colors">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-[var(--color-muted)]">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="p-2 rounded-lg bg-[var(--color-muted)] flex-shrink-0">
               {chain.icon}
             </div>
-            <CardTitle className="text-sm font-medium">{chain.title}</CardTitle>
+            <CardTitle
+              className="text-sm font-medium break-words"
+              title={chain.title}
+            >
+              {chain.title}
+            </CardTitle>
           </div>
           <Badge variant="outline" className={cn('text-xs', statusConfig.className)}>
             {statusConfig.label}
@@ -182,7 +220,7 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
           <div
             className={cn(
               'px-2 py-1 rounded text-xs font-semibold whitespace-nowrap',
-              chain.result === 'Impact not quantified'
+              !chain.quantified
                 ? 'bg-[var(--color-muted)] text-[var(--color-muted-foreground)]'
                 : 'bg-emerald-500/10 text-emerald-600'
             )}
@@ -289,11 +327,14 @@ export function CausalValueChains({ className }: CausalValueChainsProps) {
               {chainsResponse.total_chains} chains discovered
             </Badge>
           )}
-          {chainsResponse?.aggregate_effect !== undefined && (
-            <Badge variant="outline" className="text-xs">
-              {(chainsResponse.aggregate_effect * 100).toFixed(1)}% aggregate effect
-            </Badge>
-          )}
+          {/* Only when the API reports a real aggregate. `null` (the current
+              graphiti default) must NOT render as a fabricated "0.0%". */}
+          {typeof chainsResponse?.aggregate_effect === 'number' &&
+            Number.isFinite(chainsResponse.aggregate_effect) && (
+              <Badge variant="outline" className="text-xs">
+                {`ATE ${chainsResponse.aggregate_effect >= 0 ? '+' : ''}${chainsResponse.aggregate_effect.toFixed(2)} aggregate`}
+              </Badge>
+            )}
         </div>
       </div>
 

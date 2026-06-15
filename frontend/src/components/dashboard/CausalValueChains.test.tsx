@@ -66,6 +66,36 @@ function realPath(): GraphPath {
   };
 }
 
+/** A real single-edge chain that carries the causal effect on the
+ *  RELATIONSHIP as `ate_estimate` — the shape POST /graph/causal-chains
+ *  actually returns for discovered chains (verified against the live API). */
+function atePath(
+  ate: number | null,
+  opts: { effectSize?: unknown } = {}
+): GraphPath {
+  return {
+    nodes: [
+      { id: 'v1', type: 'Agent' as never, name: 'hcp_engagement_level', properties: {} },
+      { id: 'v2', type: 'Agent' as never, name: 'patient_conversion_rate', properties: {} },
+    ],
+    relationships: [
+      {
+        id: 'r1',
+        type: 'CAUSES' as never,
+        source_id: 'v1',
+        target_id: 'v2',
+        properties: {
+          ate_estimate: ate,
+          ...(opts.effectSize !== undefined ? { effect_size: opts.effectSize } : {}),
+        },
+        confidence: 0.9,
+      },
+    ],
+    total_confidence: 0.9,
+    path_length: 1,
+  };
+}
+
 const FABRICATED_MARKERS = [
   '+12% TRx Accuracy',
   '+8.5% Conversion',
@@ -175,6 +205,94 @@ describe('CausalValueChains', () => {
     // The old code rendered a literal "+X% Impact" placeholder.
     expect(screen.queryByText('+X% Impact')).not.toBeInTheDocument();
     expect(screen.getByText(/impact not quantified/i)).toBeInTheDocument();
+  });
+
+  it('derives the chain effect from the relationship ate_estimate (real API shape), as a raw ATE not a fabricated %', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.413004, { effectSize: 'unknown' })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    render(<CausalValueChains />);
+
+    // The pipeline's real ATE is on the edge — surfaced, not dropped.
+    expect(screen.getByText('ATE +0.41')).toBeInTheDocument();
+    // The old bug read lastNode.properties.value (never populated) → always
+    // "Impact not quantified". That must no longer happen for a real ATE.
+    expect(screen.queryByText(/impact not quantified/i)).not.toBeInTheDocument();
+    // ate_estimate=0.413 is NOT asserted to be 41.3% — the outcome scale is
+    // not claimed, so no fabricated percentage is rendered.
+    expect(screen.queryByText(/41\.3?\s*%/)).not.toBeInTheDocument();
+    // Full chain title — never silently truncated to 'pati…'.
+    expect(
+      screen.getByText('hcp_engagement_level → patient_conversion_rate')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/…|\.\.\./)).not.toBeInTheDocument();
+  });
+
+  it('shows a negative ATE honestly', () => {
+    mockChainsState({
+      data: { chains: [atePath(-0.2)], total_chains: 1, timestamp: new Date().toISOString() },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ATE -0.20')).toBeInTheDocument();
+  });
+
+  it('prefers the relationship ATE over a legacy terminal-node value', () => {
+    const p = atePath(0.413);
+    p.nodes[1].properties = { value: 6.4 }; // both present
+    mockChainsState({
+      data: { chains: [p], total_chains: 1, timestamp: new Date().toISOString() },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ATE +0.41')).toBeInTheDocument();
+    expect(screen.queryByText('+6.4% Impact')).not.toBeInTheDocument();
+  });
+
+  it('does NOT treat effect_size as the magnitude — no ATE means "Impact not quantified"', () => {
+    // Seed-style edge: effect_size is a bare number, ate_estimate is null.
+    // effect_size is a category label in real data, never the magnitude.
+    mockChainsState({
+      data: {
+        chains: [atePath(null, { effectSize: 0.2 })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText(/impact not quantified/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ATE/)).not.toBeInTheDocument();
+    expect(screen.queryByText('0.2')).not.toBeInTheDocument();
+  });
+
+  it('hides the aggregate-effect badge when the API reports null (never a fabricated 0.0%)', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.18)],
+        total_chains: 1,
+        aggregate_effect: null,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.queryByText(/aggregate/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0\.0\s*%/)).not.toBeInTheDocument();
+  });
+
+  it('renders the aggregate-effect badge as a raw ATE when the API provides a number', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.18)],
+        total_chains: 1,
+        aggregate_effect: 0.3,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ATE +0.30 aggregate')).toBeInTheDocument();
   });
 
   it('shows the loading skeleton while the mutation is pending', () => {
