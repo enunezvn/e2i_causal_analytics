@@ -109,46 +109,17 @@ class SupabaseHealthClient:
             }
 
     async def _check_database(self) -> dict[str, Any]:
-        """Check Supabase database health."""
-        start_time = time.time()
+        """Check Supabase database health.
 
-        try:
-            # Try to import and use Supabase client
-            from src.api.dependencies.supabase_client import get_supabase
-
-            client_result = get_supabase()
-            assert client_result is not None, "Failed to get Supabase client"
-            client = await client_result
-
-            # Execute a simple health check query
-            # Using a lightweight query that doesn't require specific tables
-            result = await client.rpc("version").execute()
-
-            latency_ms = int((time.time() - start_time) * 1000)
-
-            if result.data is not None:
-                return {
-                    "ok": True,
-                    "latency_ms": latency_ms,
-                    "version": result.data,
-                }
-            else:
-                return {
-                    "ok": False,
-                    "latency_ms": latency_ms,
-                    "error": "No response from database",
-                }
-
-        except ImportError:
-            # Fall back to direct HTTP check if Supabase client not available
-            return await self._check_supabase_rest_health()
-        except Exception as e:
-            latency_ms = int((time.time() - start_time) * 1000)
-            return {
-                "ok": False,
-                "latency_ms": latency_ms,
-                "error": str(e),
-            }
+        The previous probe called ``rpc("version")`` — which resolves to a
+        non-existent ``public.version()`` (PGRST202 404) — AND ``await``-ed the
+        Supabase client (the sync ``Client`` is not awaitable). Both falsely
+        reported the DB unhealthy though Postgres is fully up. Reuse the robust
+        httpx REST probe instead: a 200/401 from ``/rest/v1/`` means the service
+        (and the Postgres behind it) is reachable, independent of the sync/async
+        client surface.
+        """
+        return await self._check_supabase_rest_health()
 
     async def _check_supabase_rest_health(self) -> dict[str, Any]:
         """Check Supabase REST API health directly."""
@@ -227,33 +198,80 @@ class SupabaseHealthClient:
             }
 
     async def _check_vector_store(self) -> dict[str, Any]:
-        """Check vector store health."""
+        """Check vector store health (pgvector in Postgres).
+
+        The vector store is pgvector INSIDE Postgres (extension ``vector`` backing
+        ``rag_document_chunks``) — there is NO separate vector service, so the old
+        ``VECTOR_STORE_URL`` probe was structurally unset and degraded unconditionally
+        (the false alarm). Probe the pgvector-backed table over PostgREST with httpx
+        (robust to the sync/async Supabase client). ``200/206`` = the route resolves
+        (healthy); ``404`` = the table is absent (real failure). A ``401/403`` is
+        ambiguous — it is returned for a restricted-but-present table AND for an
+        invalid/missing JWT that rejects everything — so it is disambiguated with a
+        second probe of a guaranteed-nonexistent table: if THAT returns ``404`` the
+        token is valid and the real table exists (healthy); if it ALSO ``401/403``s
+        the auth is broken and the table is unverifiable (degraded, not masked).
+        """
         start_time = time.time()
 
-        # Vector store check depends on configuration
-        # For now, return degraded if not configured
-        latency_ms = int((time.time() - start_time) * 1000)
-
-        # Check if we have vector store configuration
-        vector_store_url = os.getenv("VECTOR_STORE_URL")
-
-        if not vector_store_url:
+        if not self.supabase_url:
             return {
                 "ok": False,
                 "degraded": True,
-                "latency_ms": latency_ms,
-                "error": "VECTOR_STORE_URL not configured",
+                "latency_ms": 0,
+                "error": "SUPABASE_URL not configured",
             }
 
         try:
             client = await self._get_http_client()
-            response = await client.get(f"{vector_store_url}/health")
+            apikey = os.getenv("SUPABASE_ANON_KEY", "") or os.getenv("SUPABASE_KEY", "")
+            headers = {"apikey": apikey} if apikey else None
+            url = f"{self.supabase_url}/rest/v1/rag_document_chunks?limit=1"
+            response = await client.get(url, headers=headers)
+            code = response.status_code
+
+            # Definitive signals (measured against the live PostgREST, 2026-06-15):
+            #   200/206 -> the route resolves and is readable -> healthy.
+            #   404     -> PGRST205, the table is absent -> real failure.
+            if code in (200, 206):
+                latency_ms = int((time.time() - start_time) * 1000)
+                return {"ok": True, "latency_ms": latency_ms}
+
+            # 401/403 is AMBIGUOUS: it is returned both for a restricted-but-present
+            # table (RLS/grant denies the probe role) AND for an invalid/missing JWT
+            # that rejects every request before table resolution. Naively treating
+            # 401 as healthy would mask an absent/inaccessible table. Disambiguate
+            # with a guaranteed-nonexistent table: PostgREST resolves the table name
+            # AFTER JWT validation, so with a VALID token an absent table returns 404
+            # while a present-but-restricted table returns 401/403.
+            if code in (401, 403):
+                bogus_url = f"{self.supabase_url}/rest/v1/__vector_health_probe_absent__?limit=1"
+                bogus = await client.get(bogus_url, headers=headers)
+                latency_ms = int((time.time() - start_time) * 1000)
+                if bogus.status_code == 404:
+                    # JWT is valid (the bogus name resolved to 404), so the original
+                    # 401/403 proves rag_document_chunks EXISTS and is merely
+                    # restricted to the probe role -> healthy.
+                    return {"ok": True, "latency_ms": latency_ms}
+                # The bogus probe also 401/403'd: the token itself is invalid or
+                # missing, so the table's status is unverifiable. Surface it as
+                # degraded rather than masking a possibly-absent table.
+                return {
+                    "ok": False,
+                    "degraded": True,
+                    "latency_ms": latency_ms,
+                    "error": (
+                        f"vector store unverifiable (table HTTP {code}, "
+                        f"auth probe HTTP {bogus.status_code})"
+                    ),
+                }
 
             latency_ms = int((time.time() - start_time) * 1000)
-
             return {
-                "ok": response.status_code == 200,
+                "ok": False,
+                "degraded": True,
                 "latency_ms": latency_ms,
+                "error": f"HTTP {code}",
             }
 
         except Exception as e:

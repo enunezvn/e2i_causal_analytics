@@ -52,6 +52,8 @@ class MockSupabaseQuery:
         self._filters: List[Dict] = []
         self._select_cols: str = "*"
         self._count_type: Optional[str] = None
+        self._order: Optional[tuple] = None
+        self._limit: Optional[int] = None
 
     def select(self, cols: str = "*", count: Optional[str] = None) -> "MockSupabaseQuery":
         """Mock select method."""
@@ -69,6 +71,22 @@ class MockSupabaseQuery:
         self._filters.append({"type": "in", "column": column, "values": values})
         return self
 
+    def order(self, column: str, desc: bool = False, **kwargs: Any) -> "MockSupabaseQuery":
+        """Mock order: record the sort key so execute() returns deterministic rows.
+
+        HealthCheckerNode._get_experiments bounds the active sweep with
+        ``.order('created_at', desc=True).limit(25)``; without these chainable
+        methods the real query chain raised AttributeError, which the node's
+        ``except`` swallowed into an empty roster (the synthetic-plumb tests then
+        saw set())."""
+        self._order = (column, desc)
+        return self
+
+    def limit(self, count: int) -> "MockSupabaseQuery":
+        """Mock limit: cap the returned rows (applied after order in execute)."""
+        self._limit = count
+        return self
+
     async def execute(self) -> MockSupabaseResult:
         """Execute the mock query."""
         self.client.call_count += 1
@@ -78,11 +96,20 @@ class MockSupabaseQuery:
                 "select": self._select_cols,
                 "filters": self._filters,
                 "count": self._count_type,
+                "order": self._order,
+                "limit": self._limit,
             }
         )
 
         # Return mock data based on table and filters
         data = self.client.get_mock_data(self.table_name, self._filters)
+        # Apply order then limit to mirror the real PostgREST chain (ISO-8601
+        # timestamps sort lexicographically == chronologically).
+        if self._order is not None:
+            col, desc = self._order
+            data = sorted(data, key=lambda d: (d.get(col) is None, d.get(col)), reverse=desc)
+        if self._limit is not None:
+            data = data[: self._limit]
         count = len(data) if self._count_type == "exact" else None
 
         return MockSupabaseResult(data=data, count=count)

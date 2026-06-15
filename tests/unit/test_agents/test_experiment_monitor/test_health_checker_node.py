@@ -104,6 +104,8 @@ class TestHealthCheckerExecute:
         exp_query.select = MagicMock(return_value=exp_query)
         exp_query.eq = MagicMock(return_value=exp_query)
         exp_query.in_ = MagicMock(return_value=exp_query)
+        exp_query.order = MagicMock(return_value=exp_query)
+        exp_query.limit = MagicMock(return_value=exp_query)
         exp_query.execute = AsyncMock(return_value=exp_result)
 
         # Setup assignments table mock
@@ -244,6 +246,10 @@ class TestGetExperiments:
         mock_query = MagicMock()
         mock_query.select = MagicMock(return_value=mock_query)
         mock_query.eq = MagicMock(return_value=mock_query)
+        # Bounded interactive sweep (700+ running experiments would blow the 30s
+        # client timeout): most-recent N via order+limit.
+        mock_query.order = MagicMock(return_value=mock_query)
+        mock_query.limit = MagicMock(return_value=mock_query)
         mock_query.execute = AsyncMock(return_value=mock_result)
         mock_client.table = MagicMock(return_value=mock_query)
 
@@ -266,6 +272,9 @@ class TestGetExperiments:
         mock_query.eq.assert_any_call("status", "running")
         # #894: the enumeration default-excludes synthetic experiments
         mock_query.eq.assert_any_call("is_synthetic", False)
+        # WS-BACKEND: the sweep is bounded (most-recent 25), not an unbounded scan.
+        mock_query.order.assert_called_once_with("created_at", desc=True)
+        mock_query.limit.assert_called_once_with(25)
 
     @pytest.mark.asyncio
     async def test_get_experiments_specific_ids(self, node):
