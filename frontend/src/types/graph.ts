@@ -38,6 +38,8 @@ export enum EntityType {
   PREDICTION = 'Prediction',
   EXPERIMENT = 'Experiment',
   AGENT_ACTIVITY = 'AgentActivity',
+  // Causal variables — nodes of discovered causal chains (causal_paths SSOT).
+  VARIABLE = 'Variable',
   HCP_SPECIALTY = 'HCPSpecialty',
   JOURNEY_STAGE = 'JourneyStage',
 }

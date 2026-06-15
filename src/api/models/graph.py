@@ -45,6 +45,10 @@ class EntityType(str, Enum):
     PREDICTION = "Prediction"
     EXPERIMENT = "Experiment"
     AGENT_ACTIVITY = "AgentActivity"
+    # Causal variables: the nodes of discovered causal chains (causal_paths SSOT,
+    # synced into FalkorDB as (:Variable)-[:CAUSES]->(:Variable)). First-class so
+    # they type as "Variable" instead of falling back to the Agent default.
+    VARIABLE = "Variable"
     # Domain-specific types from seed data
     HCP_SPECIALTY = "HCPSpecialty"
     JOURNEY_STAGE = "JourneyStage"

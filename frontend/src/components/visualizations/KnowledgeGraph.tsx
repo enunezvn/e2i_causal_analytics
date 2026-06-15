@@ -86,6 +86,7 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   Prediction: '#a855f7', // purple-500
   Experiment: '#22c55e', // green-500
   AgentActivity: '#64748b', // slate-500
+  Variable: '#0d9488', // teal-600 (causal variables)
   HCPSpecialty: '#0ea5e9', // sky-500
   JourneyStage: '#d946ef', // fuchsia-500
 };

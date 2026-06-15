@@ -7,21 +7,24 @@
  * - Page header
  * - Search functionality
  * - Node type legend
- * - Stats cards
+ * - Stats cards (computed from the RENDERED graph, not the global stats endpoint)
+ * - Connectivity filter (singletons + duets are hidden)
+ * - Gold-standard / show-all scope toggle
  * - Graph visualization
  * - Node/Edge details panel
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import KnowledgeGraphPage from './KnowledgeGraph';
 
-// Mock the graph hooks
+// Mock the graph hooks. NOTE: the page intentionally does NOT call useGraphStats
+// — stats are computed from the rendered (scoped + connected) graph so the cards
+// match the canvas. Only useNodes/useRelationships are consumed.
 vi.mock('@/hooks/api/use-graph', () => ({
   useNodes: vi.fn(),
   useRelationships: vi.fn(),
-  useGraphStats: vi.fn(),
 }));
 
 // Mock the KnowledgeGraph visualization component
@@ -49,7 +52,7 @@ vi.mock('@/components/visualizations/KnowledgeGraph', () => ({
   ),
 }));
 
-import { useNodes, useRelationships, useGraphStats } from '@/hooks/api/use-graph';
+import { useNodes, useRelationships } from '@/hooks/api/use-graph';
 
 // Create wrapper with QueryClientProvider
 function createWrapper() {
@@ -66,7 +69,9 @@ function createWrapper() {
   );
 }
 
-// Sample data
+// Sample data: three nodes forming ONE connected component of size 3 (node-3 is
+// linked to both node-1 and node-2), so the K=3 connectivity filter keeps all of
+// them. Rendered totals are therefore 3 nodes / 2 relationships.
 const mockNodes = [
   { id: 'node-1', name: 'Patient A', type: 'Patient', properties: {}, created_at: '2026-01-04' },
   { id: 'node-2', name: 'HCP Smith', type: 'HCP', properties: {}, created_at: '2026-01-04' },
@@ -78,11 +83,12 @@ const mockRelationships = [
   { id: 'rel-2', type: 'RECEIVES', source_id: 'node-1', target_id: 'node-3', confidence: 0.85, created_at: '2026-01-04' },
 ];
 
-const mockGraphStats = {
-  total_nodes: 150,
-  total_relationships: 420,
-  nodes_by_type: { Patient: 50, HCP: 40, Brand: 10, Agent: 20, KPI: 30 },
-};
+/** Assert a number is shown inside the stats card identified by its description. */
+function expectStatValue(description: string, value: string) {
+  // CardDescription and the CardTitle holding the value share the CardHeader parent.
+  const header = screen.getByText(description).parentElement as HTMLElement;
+  expect(within(header).getByText(value)).toBeInTheDocument();
+}
 
 describe('KnowledgeGraphPage', () => {
   beforeEach(() => {
@@ -100,10 +106,6 @@ describe('KnowledgeGraphPage', () => {
       isLoading: false,
       error: null,
       refetch: vi.fn(),
-    });
-    (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: mockGraphStats,
-      isLoading: false,
     });
   });
 
@@ -153,8 +155,9 @@ describe('KnowledgeGraphPage', () => {
       fireEvent.change(searchInput, { target: { value: 'test' } });
 
       // Clear button should appear
-      const clearButton = screen.getByRole('button', { name: '' }); // X button
-      expect(clearButton).toBeInTheDocument();
+      const buttons = screen.getAllByRole('button');
+      const clearButton = buttons.find((btn) => btn.querySelector('.lucide-x'));
+      expect(clearButton).toBeTruthy();
     });
 
     it('clears search when clear button clicked', () => {
@@ -195,6 +198,12 @@ describe('KnowledgeGraphPage', () => {
       expect(screen.getByText('KPI')).toBeInTheDocument();
     });
 
+    it('includes the Variable causal-entity type in the legend', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      expect(screen.getByText('Variable')).toBeInTheDocument();
+    });
+
     it('clicking legend item filters by type', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
@@ -208,22 +217,22 @@ describe('KnowledgeGraphPage', () => {
   });
 
   // =========================================================================
-  // STATS CARDS TESTS
+  // STATS CARDS TESTS (reflect the rendered graph)
   // =========================================================================
 
   describe('Stats Cards', () => {
-    it('displays total nodes count', () => {
+    it('displays total nodes count from the rendered graph', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       expect(screen.getByText('Total Nodes')).toBeInTheDocument();
-      expect(screen.getByText('150')).toBeInTheDocument();
+      expectStatValue('Total Nodes', '3');
     });
 
-    it('displays total relationships count', () => {
+    it('displays total relationships count from the rendered graph', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       expect(screen.getByText('Total Relationships')).toBeInTheDocument();
-      expect(screen.getByText('420')).toBeInTheDocument();
+      expectStatValue('Total Relationships', '2');
     });
 
     it('displays selected info card', () => {
@@ -233,12 +242,82 @@ describe('KnowledgeGraphPage', () => {
       expect(screen.getByText('None')).toBeInTheDocument();
     });
 
-    it('shows node type badges in total nodes card', () => {
+    it('shows node type badges computed from the rendered nodes', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      expect(screen.getByText('Patient: 50')).toBeInTheDocument();
-      expect(screen.getByText('HCP: 40')).toBeInTheDocument();
-      expect(screen.getByText('Brand: 10')).toBeInTheDocument();
+      expect(screen.getByText('Patient: 1')).toBeInTheDocument();
+      expect(screen.getByText('HCP: 1')).toBeInTheDocument();
+      expect(screen.getByText('Brand: 1')).toBeInTheDocument();
+    });
+  });
+
+  // =========================================================================
+  // CONNECTIVITY FILTER TESTS
+  // =========================================================================
+
+  describe('Connectivity Filter', () => {
+    it('drops singletons and duets, keeping only chains of >=3 nodes', () => {
+      // A 3-node connected component (a-b-c) + an isolated singleton (d) +
+      // a 2-node duet (e-f). Only the 3-node component should render.
+      (useNodes as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          nodes: [
+            { id: 'a', name: 'A', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+            { id: 'b', name: 'B', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+            { id: 'c', name: 'C', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+            { id: 'd', name: 'D', type: 'KPI', properties: {}, created_at: '2026-01-04' },
+            { id: 'e', name: 'E', type: 'HCP', properties: {}, created_at: '2026-01-04' },
+            { id: 'f', name: 'F', type: 'Patient', properties: {}, created_at: '2026-01-04' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+      (useRelationships as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          relationships: [
+            { id: 'r1', type: 'CAUSES', source_id: 'a', target_id: 'b', confidence: 0.9, created_at: '2026-01-04' },
+            { id: 'r2', type: 'CAUSES', source_id: 'b', target_id: 'c', confidence: 0.9, created_at: '2026-01-04' },
+            { id: 'r3', type: 'PRESCRIBES', source_id: 'e', target_id: 'f', confidence: 0.8, created_at: '2026-01-04' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      // singleton d + duet (e,f) dropped -> 3 nodes, 2 edges remain
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
+    });
+  });
+
+  // =========================================================================
+  // SCOPE TOGGLE TESTS
+  // =========================================================================
+
+  describe('Scope Toggle', () => {
+    it('defaults to gold-standard only and toggles to show all types', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const toggle = screen.getByRole('button', { name: /Gold-standard only/i });
+      expect(toggle).toBeInTheDocument();
+
+      fireEvent.click(toggle);
+
+      expect(screen.getByRole('button', { name: /Showing all types/i })).toBeInTheDocument();
+    });
+
+    it('requests gold-standard entity types by default', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      // useNodes is called with a comma-joined gold-standard scope (incl. Variable)
+      const call = (useNodes as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(call.entity_types).toContain('Variable');
+      expect(call.entity_types).toContain('CausalPath');
     });
   });
 
@@ -279,10 +358,6 @@ describe('KnowledgeGraphPage', () => {
         isLoading: true,
         error: null,
         refetch: vi.fn(),
-      });
-      (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: undefined,
-        isLoading: true,
       });
 
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
@@ -395,7 +470,7 @@ describe('KnowledgeGraphPage', () => {
       expect(screen.getByTestId('knowledge-graph-viz')).toBeInTheDocument();
     });
 
-    it('passes nodes to visualization', () => {
+    it('passes the connected nodes to visualization', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
@@ -427,10 +502,6 @@ describe('KnowledgeGraphPage', () => {
         error: null,
         refetch: vi.fn(),
       });
-      (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: undefined,
-        isLoading: false,
-      });
 
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
@@ -447,7 +518,9 @@ describe('KnowledgeGraphPage', () => {
 
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
+      // With no edges, every node is a singleton -> all dropped by the filter.
       expect(screen.getByTestId('relationships-count')).toHaveTextContent('0');
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('0');
     });
   });
 });
