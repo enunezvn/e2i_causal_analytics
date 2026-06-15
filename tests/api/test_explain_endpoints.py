@@ -501,7 +501,15 @@ class TestListExplainableModels:
         for model in data["supported_models"]:
             assert "model_type" in model
             assert "explainer_type" in model
-            assert model["explainer_type"] in ["TreeExplainer", "KernelExplainer"]
+            # LinearExplainer added for the gold-standard calibrated-LR cohort
+            # models (initiation/persistence/discontinuation/hcp_adoption) now
+            # enumerated by /api/explain/models — SHAP uses LinearExplainer for
+            # linear/logistic estimators (see explain.py _explainer_label).
+            assert model["explainer_type"] in [
+                "TreeExplainer",
+                "KernelExplainer",
+                "LinearExplainer",
+            ]
 
     def test_list_models_includes_cache_stats(self, mock_shap_service):
         """Should include cache statistics."""
