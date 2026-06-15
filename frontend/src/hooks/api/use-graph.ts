@@ -25,6 +25,7 @@ import {
   listRelationships,
   traverseGraph,
   queryCausalChains,
+  getCausalValueChains,
   executeCypherQuery,
   addEpisode,
   searchGraph,
@@ -326,6 +327,35 @@ export function useCausalChains(
 ) {
   return useMutation<CausalChainResponse, ApiError, CausalChainRequest>({
     mutationFn: queryCausalChains,
+    ...options,
+  });
+}
+
+/**
+ * Hook for the dashboard "Primary Causal Value Chains" section: the top REAL
+ * discovered chains from `causal_paths`, scoped by the selected brand/region.
+ *
+ * A query (not a mutation) so it auto-fetches and **re-fetches when the brand
+ * or region changes** — the section is live and dropdown-driven. 'All' / 'All
+ * US' selections are passed through (the backend treats them as portfolio).
+ *
+ * @example
+ * ```tsx
+ * const { data, isLoading, isError } = useCausalValueChains(selectedBrand, selectedRegion);
+ * ```
+ */
+export function useCausalValueChains(
+  brand?: string,
+  region?: string,
+  limit = 3,
+  options?: Omit<
+    UseQueryOptions<CausalChainResponse, ApiError>,
+    'queryKey' | 'queryFn'
+  >
+) {
+  return useQuery<CausalChainResponse, ApiError>({
+    queryKey: queryKeys.causal.valueChains(brand, region, limit),
+    queryFn: () => getCausalValueChains({ brand, region, limit }),
     ...options,
   });
 }

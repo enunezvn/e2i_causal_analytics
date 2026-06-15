@@ -210,6 +210,24 @@ export async function queryCausalChains(
   );
 }
 
+/**
+ * Fetch the top REAL discovered causal value chains from the `causal_paths`
+ * store (GET /causal/value-chains), scoped by the dashboard's brand/region
+ * selectors. Ranked by |effect| x confidence and de-duplicated by pathway.
+ *
+ * Brand/region 'All' (and 'All US') are passed through; the backend treats them
+ * as "no scope filter" (portfolio view).
+ */
+export async function getCausalValueChains(
+  params: { brand?: string; region?: string; limit?: number } = {}
+): Promise<CausalChainResponse> {
+  const q = new URLSearchParams();
+  if (params.brand) q.set('brand', params.brand);
+  if (params.region) q.set('region', params.region);
+  q.set('limit', String(params.limit ?? 3));
+  return get<CausalChainResponse>(`/causal/value-chains?${q.toString()}`);
+}
+
 // =============================================================================
 // CYPHER QUERY ENDPOINT
 // =============================================================================

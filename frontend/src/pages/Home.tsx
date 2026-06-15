@@ -878,8 +878,8 @@ function Home() {
       {/* Executive Intelligence Summary */}
       <ExecutiveSummary />
 
-      {/* Primary Causal Value Chains */}
-      <CausalValueChains />
+      {/* Primary Causal Value Chains — live, scoped by the brand/region dropdowns */}
+      <CausalValueChains brand={selectedBrand} region={selectedRegion} />
 
       {/* Quick Stats Bar — REAL data: Total TRx (MTD) + HCPs Reached from the
           business_metrics rollup; Active Campaigns = running experiments; Model

@@ -16,7 +16,7 @@
  * @module components/dashboard/CausalValueChains
  */
 
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -30,8 +30,8 @@ import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useCausalChains } from '@/hooks/api/use-graph';
-import type { GraphPath, GraphNode, CausalChainRequest } from '@/types/graph';
+import { useCausalValueChains } from '@/hooks/api/use-graph';
+import type { GraphPath, GraphNode } from '@/types/graph';
 
 // =============================================================================
 // TYPES
@@ -59,6 +59,11 @@ interface ChainCardData {
 
 interface CausalValueChainsProps {
   className?: string;
+  /** Selected brand from the dashboard dropdown ('All' = portfolio). Drives a
+   *  live re-fetch of the brand's top causal value chains. */
+  brand?: string;
+  /** Selected region from the dashboard dropdown ('All US' = all regions). */
+  region?: string;
 }
 
 // NOTE: the former SAMPLE_CHAINS fabricated fallback ("+12% TRx Accuracy",
@@ -70,6 +75,38 @@ interface CausalValueChainsProps {
 // =============================================================================
 // HELPERS
 // =============================================================================
+
+/**
+ * Color-coded TEMPORAL tag from REAL signals on the discovered chain —
+ * `confirmation_count` (how many times the causal engine re-confirmed it) and
+ * `discovery_date` (recency). This replaces the old confidence-bucket relabel:
+ *
+ * - ACTIVE      — strongly re-confirmed (>=3) OR freshly discovered (<=14d):
+ *                 actively tracked.
+ * - IN PROGRESS — building confirmation (>=2) OR discovered within ~30d.
+ * - MONITORED   — established but quiet (few confirmations, older).
+ *
+ * Recency is computed against the current date (the section is "live tracking").
+ * Unknown signals fall back to MONITORED — never an invented status.
+ */
+function deriveTemporalStatus(
+  confirmationCount: number | null,
+  discoveryDate: string | null
+): ChainCardData['status'] {
+  let daysSince: number | null = null;
+  if (discoveryDate) {
+    const t = Date.parse(discoveryDate);
+    if (!Number.isNaN(t)) {
+      daysSince = Math.floor((Date.now() - t) / 86_400_000);
+    }
+  }
+  const recent = daysSince != null && daysSince <= 14;
+  const recentish = daysSince != null && daysSince <= 30;
+  const cc = confirmationCount ?? 0;
+  if (cc >= 3 || recent) return 'active';
+  if (cc >= 2 || recentish) return 'in-progress';
+  return 'monitored';
+}
 
 function getStatusConfig(status: ChainCardData['status']) {
   const config = {
@@ -101,13 +138,6 @@ function transformGraphPathToCard(
   // Honest confidence: only what the API reports — never fabricate a default.
   const confidence = path.total_confidence ?? null;
 
-  // Determine status from REPORTED confidence only; unknown stays 'monitored'.
-  let status: ChainCardData['status'] = 'monitored';
-  if (confidence != null) {
-    if (confidence >= 0.9) status = 'active';
-    else if (confidence >= 0.7) status = 'in-progress';
-  }
-
   // Method only when recorded on the relationship — never default to 'DoWhy'.
   const method =
     path.relationships.length > 0
@@ -132,6 +162,18 @@ function transformGraphPathToCard(
     path.relationships.length > 0
       ? path.relationships[path.relationships.length - 1]
       : undefined;
+
+  // Temporal status tag from REAL chain signals (see deriveTemporalStatus).
+  const confirmationCount =
+    typeof lastRel?.properties?.confirmation_count === 'number'
+      ? (lastRel.properties.confirmation_count as number)
+      : null;
+  const discoveryDate =
+    typeof lastRel?.properties?.discovery_date === 'string'
+      ? (lastRel.properties.discovery_date as string)
+      : null;
+  const status = deriveTemporalStatus(confirmationCount, discoveryDate);
+
   const ateRaw = lastRel?.properties?.ate_estimate;
   const ate =
     typeof ateRaw === 'number' && Number.isFinite(ateRaw) ? ateRaw : null;
@@ -257,23 +299,19 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
 // MAIN COMPONENT
 // =============================================================================
 
-export function CausalValueChains({ className }: CausalValueChainsProps) {
-  // Use mutation hook to fetch causal chains
+export function CausalValueChains({
+  className,
+  brand,
+  region,
+}: CausalValueChainsProps) {
+  // Live, dropdown-driven: the top REAL discovered causal value chains from the
+  // `causal_paths` store for the selected brand/region. A query (not a mutation)
+  // so it auto-fetches and RE-FETCHES whenever brand/region change.
   const {
-    mutate: fetchChains,
     data: chainsResponse,
-    isPending,
+    isLoading,
     isError,
-  } = useCausalChains();
-
-  // Fetch chains on mount
-  useEffect(() => {
-    const request: CausalChainRequest = {
-      min_confidence: 0.5,
-      max_chain_length: 5,
-    };
-    fetchChains(request);
-  }, [fetchChains]);
+  } = useCausalValueChains(brand, region, 3);
 
   // Real API data ONLY — no sample fallback on empty or error.
   const chains = useMemo((): ChainCardData[] => {
@@ -282,10 +320,6 @@ export function CausalValueChains({ className }: CausalValueChainsProps) {
       .slice(0, 3)
       .map((path, idx) => transformGraphPathToCard(path, idx));
   }, [chainsResponse]);
-
-  // Pending covers both the in-flight mutation and the first-mount frame
-  // before the useEffect-triggered mutate() settles (no fabricated flash).
-  const isLoading = isPending || (!chainsResponse && !isError);
 
   // Loading state
   if (isLoading) {

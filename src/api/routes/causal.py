@@ -35,6 +35,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_analyst, require_viewer
 from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
+from src.api.models.graph import (
+    CausalChainResponse,
+    EntityType,
+    GraphNode,
+    GraphPath,
+    GraphRelationship,
+    RelationshipType,
+)
 from src.api.schemas.causal import (
     AggregationMethod,
     AnalysisStatus,
@@ -84,6 +92,7 @@ from src.causal_engine.pipeline.state import (
 # read functions are patchable in tests as ``causal.count_memories_by_type`` /
 # ``causal.get_recent_memories``.
 from src.memory.episodic_memory import count_memories_by_type, get_recent_memories
+from src.repositories.provenance import apply_provenance_filter
 
 logger = logging.getLogger(__name__)
 
@@ -2556,3 +2565,217 @@ async def get_causal_analysis_history(
         )
 
     return CausalAnalysisHistoryResponse(items=items, total=len(items))
+
+
+# =============================================================================
+# CAUSAL VALUE CHAINS (dashboard "Primary Causal Value Chains" — REAL, dynamic)
+# =============================================================================
+
+# 'All'/'portfolio' selections from the Home dropdowns mean "no scope filter".
+_ALL_BRAND_SENTINELS = {"all", "all brands", "portfolio", "all (combined portfolio)"}
+_ALL_REGION_SENTINELS = {"all", "all us", "all regions", "all us regions"}
+
+
+def _chain_node_sequence(row: Mapping[str, Any]) -> List[str]:
+    """Ordered node names for a ``causal_paths`` row.
+
+    Prefer the stored ``causal_chain.nodes`` ordering; fall back to
+    ``start_node`` + ``intermediate_nodes`` + ``end_node``.
+    """
+    chain = row.get("causal_chain")
+    if isinstance(chain, dict):
+        nodes = chain.get("nodes")
+        if isinstance(nodes, list) and len(nodes) >= 2 and all(isinstance(n, str) for n in nodes):
+            return list(nodes)
+    seq: List[str] = []
+    start = row.get("start_node")
+    if isinstance(start, str) and start:
+        seq.append(start)
+    inter = row.get("intermediate_nodes")
+    if isinstance(inter, list):
+        seq.extend(n for n in inter if isinstance(n, str) and n)
+    end = row.get("end_node")
+    if isinstance(end, str) and end:
+        seq.append(end)
+    return seq
+
+
+def _as_optional_float(value: Any) -> Optional[float]:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _chain_score(row: Mapping[str, Any]) -> float:
+    """Rank key: |effect| x confidence (None-safe). Surfaces the strongest,
+    best-supported chains first — never a fabricated magnitude."""
+    eff = _as_optional_float(row.get("causal_effect_size"))
+    conf = _as_optional_float(row.get("confidence_level"))
+    return abs(eff or 0.0) * (conf or 0.0)
+
+
+def _causal_path_to_graphpath(row: Mapping[str, Any]) -> GraphPath:
+    """Map a ``causal_paths`` row to the ``GraphPath`` shape the dashboard renders.
+
+    The chain-level effect (``causal_effect_size``) is placed on the TERMINAL
+    edge as ``ate_estimate`` and the method on every edge — the dashboard reads
+    the ate from the terminal edge and the method from the first, so the card
+    surfaces the REAL effect/method. ``effect_size`` is intentionally NOT set as
+    a number (it is a categorical label in this platform).
+    """
+    names = _chain_node_sequence(row)
+    nodes = [
+        GraphNode(
+            id=f"var:{n}",
+            type=EntityType.AGENT,
+            name=n,
+            properties={"original_type": "Variable"},
+        )
+        for n in names
+    ]
+    conf_f = _as_optional_float(row.get("confidence_level"))
+    eff_f = _as_optional_float(row.get("causal_effect_size"))
+    method = row.get("method_used")
+
+    rels: List[GraphRelationship] = []
+    n_edges = len(nodes) - 1
+    for i in range(n_edges):
+        props: Dict[str, Any] = {}
+        if method:
+            props["method"] = method
+        if i == n_edges - 1:  # terminal edge: chain-level effect + lifecycle/temporal
+            if eff_f is not None:
+                props["ate_estimate"] = eff_f
+            # Real lifecycle/temporal signals for the dashboard's status badge —
+            # NOT a confidence bucket. The frontend derives the tag from these.
+            vstatus = row.get("validation_status")
+            if vstatus:
+                props["validation_status"] = vstatus
+            cc = row.get("confirmation_count")
+            if cc is not None:
+                props["confirmation_count"] = cc
+            ddate = row.get("discovery_date")
+            if ddate:
+                props["discovery_date"] = ddate
+        rels.append(
+            GraphRelationship(
+                id="",
+                type=RelationshipType.CAUSES,
+                source_id=nodes[i].id,
+                target_id=nodes[i + 1].id,
+                properties=props,
+                confidence=conf_f,
+            )
+        )
+
+    plen = row.get("path_length")
+    try:
+        plen_i = int(plen) if plen is not None else n_edges
+    except (TypeError, ValueError):
+        plen_i = n_edges
+
+    return GraphPath(
+        nodes=nodes,
+        relationships=rels,
+        total_confidence=conf_f,
+        path_length=plen_i,
+    )
+
+
+@router.get(
+    "/value-chains",
+    response_model=CausalChainResponse,
+    summary="Top discovered causal value chains (brand/region scoped)",
+    operation_id="get_causal_value_chains",
+)
+async def get_causal_value_chains(
+    brand: Optional[str] = Query(
+        None, description="Scope to a brand; omit or 'All' for the portfolio view"
+    ),
+    region: Optional[str] = Query(
+        None, description="Scope to a region; omit or 'All US' for all regions"
+    ),
+    limit: int = Query(
+        3, ge=1, le=20, description="Max distinct chains (top by |effect| x confidence)"
+    ),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> CausalChainResponse:
+    """Return the strongest REAL discovered causal value chains from ``causal_paths``.
+
+    These are the live, dataset-derived chains the causal engine has *validated*
+    (DoWhy backdoor estimation) — NOT a seeded graph fixture. Scoped by the Home
+    dashboard's brand/region selectors, ranked by ``|effect| x confidence``, and
+    de-duplicated by full pathway so the top-N are distinct value chains. Honors
+    the synthetic-showcase provenance flag (``E2I_INCLUDE_SYNTHETIC``): on a
+    synthetic-gold instance the synthetic chains ARE the substrate; on a strict
+    real-data instance they are excluded verbatim.
+    """
+    start = time.time()
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+
+        client = await get_async_supabase_client()
+        if client is None:
+            raise HTTPException(status_code=503, detail="Causal store unavailable")
+
+        query = (
+            client.table("causal_paths")
+            .select(
+                "path_id,start_node,end_node,intermediate_nodes,causal_chain,"
+                "causal_effect_size,confidence_level,method_used,validation_status,"
+                "confirmation_count,discovery_date,brand,region,path_length"
+            )
+            .eq("validation_status", "validated")
+        )
+        if brand and brand.strip().lower() not in _ALL_BRAND_SENTINELS:
+            query = query.eq("brand", brand)
+        if region and region.strip().lower() not in _ALL_REGION_SENTINELS:
+            query = query.eq("region", region)
+
+        # Synthetic-showcase aware (SSOT). Showcase → include synthetic chains;
+        # strict real-mode → excluded verbatim.
+        query = apply_provenance_filter(query)
+
+        # Pull a generous, effect-ordered slice; dedupe by pathway; rank by
+        # |effect| x confidence so the top-N are DISTINCT, strongly-supported chains.
+        result = await (
+            query.order("causal_effect_size", desc=True)
+            .limit(max(limit * 12, 60))
+            .execute()
+        )
+        rows: List[Dict[str, Any]] = result.data or []
+
+        seen: set = set()
+        distinct: List[Dict[str, Any]] = []
+        for r in rows:
+            seq = _chain_node_sequence(r)
+            if len(seq) < 2:
+                continue
+            key = tuple(seq)
+            if key in seen:
+                continue
+            seen.add(key)
+            distinct.append(r)
+
+        distinct.sort(key=_chain_score, reverse=True)
+        top = distinct[:limit]
+
+        chains = [_causal_path_to_graphpath(r) for r in top]
+        strongest = chains[0] if chains else None
+        latency_ms = (time.time() - start) * 1000.0
+
+        return CausalChainResponse(
+            chains=chains,
+            total_chains=len(chains),
+            strongest_chain=strongest,
+            # Heterogeneous pathways/scales — no honest scalar aggregate; the UI
+            # hides the badge when this is None (never renders a fabricated 0.0%).
+            aggregate_effect=None,
+            query_latency_ms=latency_ms,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Causal value-chains query failed")
+        raise HTTPException(status_code=500, detail="Causal value-chains query failed") from exc
