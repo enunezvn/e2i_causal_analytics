@@ -9,9 +9,11 @@ Endpoints covered:
 - Batch 2C.2: Infrastructure (GET /explain/models, GET /explain/health)
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from src.api.main import app
@@ -19,6 +21,54 @@ from src.api.routes.explain import FeatureContribution
 from src.api.utils.data_masking import mask_identifier
 
 client = TestClient(app)
+
+
+# =============================================================================
+# HELPERS FOR GLOBAL / SAMPLE-ENTITIES TESTS (#39 — option 2)
+# =============================================================================
+
+
+class _FakeSlot:
+    """No-op stand-in for the heavy-compute slot async context manager."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeQuery:
+    """Fluent stand-in for the async Supabase client query builder.
+
+    Every builder method returns ``self``; ``execute()`` pops the next queued
+    result (a ``SimpleNamespace(data=...)``), so a single fake can serve several
+    sequential queries in order.
+    """
+
+    def __init__(self, results):
+        self._results = list(results)
+
+    def table(self, *a, **k):
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def like(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    async def execute(self):
+        return self._results.pop(0)
 
 
 # =============================================================================
@@ -900,3 +950,277 @@ class TestSHAPGetPredictionFailClosed:
         )
         # Only the model's two features, in order, as floats — extras dropped.
         assert out["model_features"] == {"a": 1.0, "b": 2.0}
+
+
+# =============================================================================
+# COHORT-LEVEL (GLOBAL) FEATURE IMPORTANCE + SAMPLE ENTITIES (#39 — option 2)
+# =============================================================================
+
+
+def _ns_resp(base_value, feats):
+    """Minimal ExplainResponse-like object the aggregator reads."""
+    return SimpleNamespace(
+        base_value=base_value,
+        top_features=[
+            FeatureContribution(
+                feature_name=name,
+                feature_value=val,
+                shap_value=shap,
+                contribution_direction="positive" if shap >= 0 else "negative",
+                contribution_rank=i + 1,
+            )
+            for i, (name, val, shap) in enumerate(feats)
+        ],
+    )
+
+
+class TestComputeGlobalImportance:
+    """Pure-logic tests for the cohort aggregation (no HTTP, no DB, no SHAP)."""
+
+    async def test_aggregates_mean_abs_signed_and_value_and_skips_failures(self):
+        from src.api.routes import explain as explain_mod
+
+        # Two good explanations + one that 503s in the middle (must be skipped).
+        resp1 = _ns_resp(-0.7, [("disease_severity", 5.0, 0.6), ("region_ne", 1.0, -0.2)])
+        resp3 = _ns_resp(-0.9, [("disease_severity", 7.0, 0.8), ("region_ne", 3.0, 0.1)])
+
+        with (
+            patch.object(
+                explain_mod,
+                "_sample_entity_ids",
+                new=AsyncMock(return_value=["e1", "e2", "e3"]),
+            ),
+            patch.object(
+                explain_mod,
+                "explain_prediction",
+                new=AsyncMock(side_effect=[resp1, HTTPException(status_code=503), resp3]),
+            ),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=2,
+                background_tasks=None,
+            )
+
+        # The failing entity is skipped — honest n_succeeded over the 2 that worked.
+        assert agg["sample_size"] == 2
+        feats = {f["feature_name"]: f for f in agg["features"]}
+        # disease_severity: mean|shap| = (0.6+0.8)/2 = 0.7 ; mean_shap = 0.7 ; mean_val = 6.0
+        assert feats["disease_severity"]["mean_abs_shap"] == pytest.approx(0.7)
+        assert feats["disease_severity"]["mean_shap"] == pytest.approx(0.7)
+        assert feats["disease_severity"]["mean_feature_value"] == pytest.approx(6.0)
+        # region_ne: mean|shap| = (0.2+0.1)/2 = 0.15 ; mean_shap = (-0.2+0.1)/2 = -0.05
+        assert feats["region_ne"]["mean_abs_shap"] == pytest.approx(0.15)
+        assert feats["region_ne"]["mean_shap"] == pytest.approx(-0.05)
+        # Ranked by mean|shap| desc.
+        assert agg["features"][0]["feature_name"] == "disease_severity"
+        assert agg["features"][0]["contribution_rank"] == 1
+        # Base value averaged across the successful explanations.
+        assert agg["base_value"] == pytest.approx(-0.8)
+        # Real per-entity points retained for the beeswarm distribution.
+        assert len(agg["points"]["disease_severity"]) == 2
+
+    async def test_sparse_features_divide_by_full_sample_not_per_feature_count(self):
+        """A feature present in only some entities must be averaged over the FULL
+        cohort (n_succeeded), treating its absence as ~0 — not inflated by dividing
+        by the count of entities where it surfaced."""
+        from src.api.routes import explain as explain_mod
+
+        # shared_feat in both; only_in_1 / only_in_2 each in exactly one entity.
+        resp1 = _ns_resp(-0.5, [("shared_feat", 5.0, 0.4), ("only_in_1", 1.0, 0.6)])
+        resp2 = _ns_resp(-0.5, [("shared_feat", 5.0, 0.4), ("only_in_2", 1.0, 0.6)])
+
+        with (
+            patch.object(
+                explain_mod, "_sample_entity_ids", new=AsyncMock(return_value=["e1", "e2"])
+            ),
+            patch.object(
+                explain_mod, "explain_prediction", new=AsyncMock(side_effect=[resp1, resp2])
+            ),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            agg = await explain_mod._compute_global_importance(
+                explain_mod.ModelType.INITIATION,
+                "Remibrutinib",
+                sample_size=2,
+                background_tasks=None,
+            )
+
+        feats = {f["feature_name"]: f for f in agg["features"]}
+        # Divided by n_succeeded=2 (NOT by feat_n=1) -> 0.6/2 = 0.3, not 0.6.
+        assert feats["only_in_1"]["mean_abs_shap"] == pytest.approx(0.3)
+        assert feats["only_in_2"]["mean_abs_shap"] == pytest.approx(0.3)
+        # Shared feature surfaced in both -> 0.4 either way.
+        assert feats["shared_feat"]["mean_abs_shap"] == pytest.approx(0.4)
+        # And the shared feature outranks the sparse ones.
+        assert agg["features"][0]["feature_name"] == "shared_feat"
+
+    async def test_raises_503_when_no_entity_explains(self):
+        from src.api.routes import explain as explain_mod
+
+        with (
+            patch.object(
+                explain_mod, "_sample_entity_ids", new=AsyncMock(return_value=["e1", "e2"])
+            ),
+            patch.object(
+                explain_mod,
+                "explain_prediction",
+                new=AsyncMock(side_effect=HTTPException(status_code=503)),
+            ),
+            patch(
+                "src.api.dependencies.compute.heavy_compute_slot",
+                new=lambda *a, **k: _FakeSlot(),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await explain_mod._compute_global_importance(
+                    explain_mod.ModelType.INITIATION,
+                    "Kisqali",
+                    sample_size=2,
+                    background_tasks=None,
+                )
+        assert exc.value.status_code == 503
+
+
+class TestRowToGlobalAgg:
+    """Parsing the stored JSONB global row back into the aggregate shape."""
+
+    def test_parses_rich_jsonb_and_sorts(self):
+        from src.api.routes.explain import _row_to_global_agg
+
+        row = {
+            "global_importance": {
+                "region_ne": {
+                    "mean_abs_shap": 0.15,
+                    "mean_shap": -0.05,
+                    "mean_feature_value": 2.0,
+                    "contribution_rank": 2,
+                    "points": [{"s": -0.2, "v": 1.0}, {"s": 0.1, "v": 3.0}],
+                },
+                "disease_severity": {
+                    "mean_abs_shap": 0.7,
+                    "mean_shap": 0.7,
+                    "mean_feature_value": 6.0,
+                    "contribution_rank": 1,
+                    "points": [{"s": 0.6, "v": 5.0}],
+                },
+            },
+            "base_value": -0.8,
+            "sample_size": 2,
+            "computation_method": "LinearExplainer",
+            "computed_at": "2026-06-15T22:00:00+00:00",
+        }
+        agg = _row_to_global_agg(row)
+        assert [f["feature_name"] for f in agg["features"]] == ["disease_severity", "region_ne"]
+        assert agg["sample_size"] == 2
+        assert agg["base_value"] == pytest.approx(-0.8)
+        assert len(agg["points"]["region_ne"]) == 2
+
+    def test_handles_legacy_bare_number_shape(self):
+        from src.api.routes.explain import _row_to_global_agg
+
+        agg = _row_to_global_agg({"global_importance": {"age": 0.3}, "sample_size": 100})
+        assert agg["features"][0]["feature_name"] == "age"
+        assert agg["features"][0]["mean_abs_shap"] == pytest.approx(0.3)
+        assert agg["points"]["age"] == []
+
+
+class TestGlobalEndpointGuards:
+    """HTTP guards on GET /api/explain/global."""
+
+    def test_400_for_legacy_non_goldstd_model(self):
+        resp = client.get("/api/explain/global", params={"model_type": "propensity"})
+        assert resp.status_code == 400
+
+    def test_422_for_unknown_brand(self):
+        resp = client.get(
+            "/api/explain/global",
+            params={"model_type": "initiation", "brand": "NotARealBrand"},
+        )
+        assert resp.status_code == 422
+
+    def test_cached_read_returns_ranked_features(self):
+        stored_row = {
+            "global_importance": {
+                "disease_severity": {
+                    "mean_abs_shap": 0.81,
+                    "mean_shap": 0.8,
+                    "mean_feature_value": 5.2,
+                    "contribution_rank": 1,
+                    "points": [{"s": 0.7, "v": 5.0}, {"s": 0.9, "v": 6.0}],
+                },
+                "region_ne": {
+                    "mean_abs_shap": 0.14,
+                    "mean_shap": -0.14,
+                    "mean_feature_value": 0.3,
+                    "contribution_rank": 2,
+                    "points": [{"s": -0.1, "v": 0.0}],
+                },
+            },
+            "base_value": -0.72,
+            "sample_size": 30,
+            "computation_method": "LinearExplainer",
+            "computed_at": "2026-06-15T22:00:00+00:00",
+        }
+        # resolve registry id (1 execute) then load global row (2nd execute)
+        fake = _FakeQuery(
+            [SimpleNamespace(data=[{"id": "reg-1"}]), SimpleNamespace(data=[stored_row])]
+        )
+        with patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=fake),
+        ):
+            resp = client.get(
+                "/api/explain/global",
+                params={"model_type": "initiation", "brand": "Remibrutinib", "max_points": 10},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cached"] is True
+        assert body["model_name"] == "initiation_remibrutinib_goldstd_lr_v1"
+        assert body["sample_size"] == 30
+        assert body["features"][0]["feature_name"] == "disease_severity"
+        assert body["features"][0]["mean_abs_shap"] == pytest.approx(0.81)
+        # Real beeswarm points surfaced for the top feature.
+        ds_points = [p for p in body["points"] if p["feature_name"] == "disease_severity"]
+        assert len(ds_points) == 2
+
+
+class TestSampleEntities:
+    """GET /api/explain/sample-entities."""
+
+    def test_patient_grain(self):
+        fake = _FakeQuery(
+            [SimpleNamespace(data=[{"patient_id": "scvpt_000000"}, {"patient_id": "scvpt_000001"}])]
+        )
+        with patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=fake),
+        ):
+            resp = client.get("/api/explain/sample-entities", params={"model_type": "initiation"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["grain"] == "patient"
+        assert body["id_field"] == "patient_id"
+        assert body["entities"] == ["scvpt_000000", "scvpt_000001"]
+
+    def test_hcp_grain(self):
+        fake = _FakeQuery([SimpleNamespace(data=[{"hcp_id": "scvhcp_00000"}])])
+        with patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=fake),
+        ):
+            resp = client.get("/api/explain/sample-entities", params={"model_type": "hcp_adoption"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["grain"] == "hcp"
+        assert body["id_field"] == "hcp_id"
+        assert body["entities"] == ["scvhcp_00000"]

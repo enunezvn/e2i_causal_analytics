@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.dependencies.auth import require_auth
@@ -283,6 +283,71 @@ class BatchExplainResponse(BaseModel):
     explanations: List[ExplainResponse]
     errors: List[Dict[str, str]]
     total_time_ms: float
+
+
+class GlobalImportanceFeature(BaseModel):
+    """One feature's SHAP importance aggregated over a cohort sample (#39 global view).
+
+    ``mean_abs_shap`` is the canonical *global feature importance* (the standard
+    SHAP global ranking statistic — mean |SHAP| over a sample). ``mean_shap`` is
+    the net signed direction across the sample.
+    """
+
+    feature_name: str = Field(..., description="Encoded feature name")
+    mean_abs_shap: float = Field(
+        ..., description="Mean |SHAP| across the sample (global importance ranking)"
+    )
+    mean_shap: float = Field(..., description="Mean signed SHAP across the sample (net direction)")
+    mean_feature_value: Optional[float] = Field(
+        None, description="Mean feature value across the sample (numeric features only)"
+    )
+    contribution_rank: int = Field(..., description="Rank by mean_abs_shap (1 = most important)")
+
+
+class GlobalImportancePoint(BaseModel):
+    """One entity's signed SHAP for one feature — a REAL beeswarm dot.
+
+    The points come from the per-entity SHAP that backed the aggregation, so the
+    beeswarm shows a genuine distribution (not a single fabricated dot per feature).
+    """
+
+    feature_name: str
+    shap_value: float
+    feature_value: Optional[float] = None
+
+
+class GlobalFeatureImportanceResponse(BaseModel):
+    """Cohort-level (global) SHAP feature importance for one per-brand model (#39)."""
+
+    model_type: ModelType
+    brand: str
+    model_name: str = Field(
+        ..., description="Resolved serving name, e.g. initiation_kisqali_goldstd_lr_v1"
+    )
+    base_value: Optional[float] = Field(None, description="Mean model base value across the sample")
+    sample_size: int = Field(
+        ..., description="Entities successfully explained (n_succeeded, honest)"
+    )
+    requested_sample_size: int = Field(..., description="Target sample size requested")
+    computation_method: str = Field(..., description="SHAP explainer used (e.g. LinearExplainer)")
+    computed_at: datetime
+    cached: bool = Field(..., description="True when read from a stored precomputed row")
+    features: List[GlobalImportanceFeature] = Field(
+        ..., description="Features ranked desc by mean_abs_shap"
+    )
+    points: List[GlobalImportancePoint] = Field(
+        default_factory=list,
+        description="Per-entity SHAP points for the top features (real beeswarm distribution)",
+    )
+
+
+class SampleEntitiesResponse(BaseModel):
+    """Real entity IDs for the per-entity SHAP picker (#39)."""
+
+    model_type: ModelType
+    grain: str = Field(..., description="'patient' or 'hcp'")
+    id_field: str = Field(..., description="patient_id | hcp_id")
+    entities: List[str] = Field(..., description="Real entity identifiers from the cohort source")
 
 
 # =============================================================================
@@ -1843,6 +1908,479 @@ async def list_explainable_models() -> Dict[str, Any]:
         "total_models": len(ModelType),
         "cache_stats": cache_stats,
     }
+
+
+# =============================================================================
+# COHORT-LEVEL (GLOBAL) FEATURE IMPORTANCE (#39 — option 2)
+# =============================================================================
+
+
+def _entity_source_for_model(model_type: ModelType) -> tuple[str, str, str]:
+    """Resolve ``(grain, source_table, id_column)`` for sampling real entity IDs.
+
+    Patient-grain cohorts draw IDs from ``patient_journeys.patient_id``; the
+    HCP-grain ``hcp_adoption`` cohort draws from ``hcp_profiles.hcp_id``.
+    """
+    if model_type == ModelType.HCP_ADOPTION:
+        return ("hcp", "hcp_profiles", "hcp_id")
+    return ("patient", "patient_journeys", "patient_id")
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    """Best-effort numeric coercion; None for non-numeric (e.g. string-encoded)."""
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _sample_entity_ids(model_type: ModelType, limit: int) -> List[str]:
+    """Fetch up to ``limit`` distinct real entity IDs from the cohort source.
+
+    Ordered deterministically by the id column (a stable prefix sample, not a
+    random draw — keeps the aggregation reproducible and cacheable). NO provenance
+    (``is_synthetic=False``) filter: the gold-standard cohorts ARE synthetic-gold,
+    so that predicate would exclude every row. Fails LOUD (503) when the source
+    is unreachable — this feeds a real importance artifact, not a fabricated one.
+    """
+    from src.memory.services.factories import get_async_supabase_client
+
+    _, table, id_col = _entity_source_for_model(model_type)
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Entity source unavailable")
+    try:
+        result = await client.table(table).select(id_col).order(id_col).limit(limit).execute()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Entity source lookup failed: {e}") from e
+    seen: set[str] = set()
+    ids: List[str] = []
+    for row in result.data or []:
+        eid = row.get(id_col)
+        if eid and eid not in seen:
+            seen.add(eid)
+            ids.append(eid)
+    return ids
+
+
+async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
+    """Resolve a serving ``model_name`` to its latest ``ml_model_registry.id``."""
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        return None
+    try:
+        result = await (
+            client.table("ml_model_registry")
+            .select("id,registered_at")
+            .eq("model_name", model_name)
+            .order("registered_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"registry id lookup failed for {model_name}: {e}")
+        return None
+    rows = result.data or []
+    return rows[0]["id"] if rows else None
+
+
+async def _load_global_importance_row(model_registry_id: str) -> Optional[Dict[str, Any]]:
+    """Read the latest stored ``analysis_type='global'`` row for a model."""
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        return None
+    try:
+        result = await (
+            client.table("ml_shap_analyses")
+            .select("*")
+            .eq("model_registry_id", model_registry_id)
+            .eq("analysis_type", "global")
+            .order("computed_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"global importance read failed for {model_registry_id}: {e}")
+        return None
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
+async def _store_global_importance_row(
+    model_registry_id: Optional[str],
+    model_type: ModelType,
+    agg: Dict[str, Any],
+    max_stored_points: int = 50,
+) -> None:
+    """Persist a computed global-importance aggregate as an ``analysis_type='global'``
+    row in ``ml_shap_analyses`` (durable cache; no new table — the JSONB
+    ``global_importance`` column carries the rich per-feature payload).
+    """
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None or model_registry_id is None:
+        return
+    points: Dict[str, List[tuple]] = agg["points"]
+    gi: Dict[str, Any] = {}
+    for feat in agg["features"]:
+        name = feat["feature_name"]
+        gi[name] = {
+            "mean_abs_shap": feat["mean_abs_shap"],
+            "mean_shap": feat["mean_shap"],
+            "mean_feature_value": feat["mean_feature_value"],
+            "contribution_rank": feat["contribution_rank"],
+            "points": [{"s": s, "v": v} for (s, v) in points.get(name, [])[:max_stored_points]],
+        }
+    record: Dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "model_registry_id": model_registry_id,
+        "analysis_type": "global",
+        "global_importance": gi,
+        "base_value": agg["base_value"],
+        "sample_size": agg["sample_size"],
+        "computation_method": agg["computation_method"],
+        "key_drivers": [f["feature_name"] for f in agg["features"][:5]],
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "entity_type": "hcp" if model_type == ModelType.HCP_ADOPTION else "patient",
+        "data_split": "synthetic",
+    }
+    record = {k: v for k, v in record.items() if v is not None}
+    try:
+        result_or_coro = client.table("ml_shap_analyses").insert(record).execute()
+        if inspect.isawaitable(result_or_coro):
+            await result_or_coro
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not persist global importance row: {e}")
+
+
+def _row_to_global_agg(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse a stored global row's JSONB back into the in-memory aggregate shape."""
+    gi = row.get("global_importance") or {}
+    features: List[Dict[str, Any]] = []
+    points: Dict[str, List[tuple]] = {}
+    if isinstance(gi, dict):
+        for name, detail in gi.items():
+            if isinstance(detail, dict):
+                features.append(
+                    {
+                        "feature_name": name,
+                        "mean_abs_shap": float(detail.get("mean_abs_shap", 0.0)),
+                        "mean_shap": float(detail.get("mean_shap", 0.0)),
+                        "mean_feature_value": (
+                            float(detail["mean_feature_value"])
+                            if detail.get("mean_feature_value") is not None
+                            else None
+                        ),
+                        "contribution_rank": int(detail.get("contribution_rank", 0)),
+                    }
+                )
+                points[name] = [
+                    (float(p["s"]), (float(p["v"]) if p.get("v") is not None else None))
+                    for p in detail.get("points", [])
+                    if isinstance(p, dict) and p.get("s") is not None
+                ]
+            else:
+                # Legacy bare-number shape (feature -> mean_abs): keep it usable.
+                features.append(
+                    {
+                        "feature_name": name,
+                        "mean_abs_shap": abs(float(detail)) if detail is not None else 0.0,
+                        "mean_shap": float(detail) if detail is not None else 0.0,
+                        "mean_feature_value": None,
+                        "contribution_rank": 0,
+                    }
+                )
+                points[name] = []
+    features.sort(key=lambda f: f["mean_abs_shap"], reverse=True)
+    for idx, feat in enumerate(features):
+        if not feat.get("contribution_rank"):
+            feat["contribution_rank"] = idx + 1
+    return {
+        "features": features,
+        "points": points,
+        "base_value": (float(row["base_value"]) if row.get("base_value") is not None else None),
+        "sample_size": int(row.get("sample_size") or 0),
+        "computation_method": row.get("computation_method") or "LinearExplainer",
+        "computed_at": row.get("computed_at"),
+    }
+
+
+async def _compute_global_importance(
+    model_type: ModelType,
+    brand: str,
+    sample_size: int,
+    background_tasks: BackgroundTasks,
+) -> Dict[str, Any]:
+    """Compute cohort-level mean |SHAP| by explaining a sample of real entities.
+
+    SHAP is the heavy (~1.3 GiB) part of each call, so the sample is processed
+    SEQUENTIALLY under ONE held heavy-compute slot — concurrent fan-out would OOM
+    the box (this mirrors ``/predict/batch``, which is sequential on purpose).
+    Entities that fail their Feast lookup (a real ~1/8 miss rate) are SKIPPED, not
+    fabricated, and ``sample_size`` reports the honest ``n_succeeded``.
+    """
+    from collections import defaultdict
+
+    from src.api.dependencies.compute import heavy_compute_slot
+
+    grain, _, _ = _entity_source_for_model(model_type)
+    # Over-sample to absorb Feast misses so we can still reach the target count.
+    candidates = await _sample_entity_ids(model_type, max(sample_size * 2, sample_size + 8))
+    if not candidates:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No sample entities available for {model_type.value}",
+        )
+
+    abs_sum: Dict[str, float] = defaultdict(float)
+    signed_sum: Dict[str, float] = defaultdict(float)
+    val_sum: Dict[str, float] = defaultdict(float)
+    val_n: Dict[str, int] = defaultdict(int)
+    points: Dict[str, List[tuple]] = defaultdict(list)
+    base_values: List[float] = []
+    n_succeeded = 0
+
+    async with heavy_compute_slot():
+        for entity_id in candidates:
+            if n_succeeded >= sample_size:
+                break
+            req = ExplainRequest(
+                patient_id=entity_id,
+                hcp_id=entity_id if grain == "hcp" else None,
+                model_type=model_type,
+                brand=brand,
+                format=ExplanationFormat.TOP_K,
+                # 20 is the request cap (ExplainRequest.top_k le=20) and >= the
+                # encoded feature counts of every current goldstd model (9 patient
+                # / 19 hcp) -> the FULL vector per entity, no truncation. Were a
+                # future model to exceed this, the n_succeeded denominator above
+                # keeps the cohort mean honest (truncated -> treated as ~0), never
+                # inflated.
+                top_k=20,
+                store_for_audit=False,  # don't flood ml_shap_analyses with sampling rows
+            )
+            try:
+                # Inner call reuses the held slot (reuse_if_held=True) — one SHAP
+                # at a time, single-explanation peak memory.
+                resp = await explain_prediction(req, background_tasks)
+            except HTTPException:
+                continue  # skip Feast misses / per-entity failures (honest n_succeeded)
+            n_succeeded += 1
+            if resp.base_value is not None:
+                base_values.append(resp.base_value)
+            for c in resp.top_features:
+                abs_sum[c.feature_name] += abs(c.shap_value)
+                signed_sum[c.feature_name] += c.shap_value
+                fv = _coerce_float(c.feature_value)
+                if fv is not None:
+                    val_sum[c.feature_name] += fv
+                    val_n[c.feature_name] += 1
+                points[c.feature_name].append((c.shap_value, fv))
+
+    if n_succeeded == 0:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Could not explain any sampled entity for "
+                f"{model_type.value}/{brand} (feature store / serving unavailable)"
+            ),
+        )
+
+    # No silent under-sampling: if Feast misses left us short of the target, the
+    # honest n_succeeded still flows to the response — but surface it in logs so a
+    # degraded run isn't invisible.
+    if n_succeeded < sample_size:
+        logger.warning(
+            "Global importance for %s/%s reached only %d/%d entities "
+            "(remaining candidates exhausted / feature-store misses).",
+            model_type.value,
+            brand,
+            n_succeeded,
+            sample_size,
+        )
+
+    features: List[Dict[str, Any]] = []
+    # Cohort MEAN: divide every feature's SHAP sum by the FULL sample size
+    # (n_succeeded), not by the count of entities where the feature surfaced in
+    # top_k. A feature absent from an entity's top_k contributed ~0 there, so the
+    # cohort mean must treat it as 0 — dividing by a per-feature count would
+    # inflate sparsely-surfaced features. (With top_k >= the encoded feature
+    # count this is moot today, but it's correct-by-construction.)
+    for name, total_abs in abs_sum.items():
+        features.append(
+            {
+                "feature_name": name,
+                "mean_abs_shap": total_abs / n_succeeded,
+                "mean_shap": signed_sum[name] / n_succeeded,
+                # Mean of OBSERVED values only (a truncated feature's value is
+                # unknown, not zero) — divide by the count actually seen.
+                "mean_feature_value": (val_sum[name] / val_n[name]) if val_n[name] else None,
+            }
+        )
+    features.sort(key=lambda f: f["mean_abs_shap"], reverse=True)
+    for idx, feat in enumerate(features):
+        feat["contribution_rank"] = idx + 1
+
+    return {
+        "features": features,
+        "points": dict(points),
+        "base_value": (sum(base_values) / len(base_values)) if base_values else None,
+        "sample_size": n_succeeded,
+        "computation_method": "LinearExplainer",
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get(
+    "/sample-entities",
+    response_model=SampleEntitiesResponse,
+    summary="Real entity IDs for the per-entity SHAP picker",
+    operation_id="sample_explain_entities",
+    description=(
+        "Returns real cohort entity identifiers (patient_id, or hcp_id for the "
+        "hcp_adoption cohort) so the UI can offer a picker instead of free-text entry."
+    ),
+)
+async def sample_explain_entities(
+    model_type: ModelType,
+    limit: int = Query(default=25, ge=1, le=200),
+    user: Dict[str, Any] = Depends(require_auth),
+) -> SampleEntitiesResponse:
+    # NOTE on PII: unlike /predict (which masks patient_id in its response), this
+    # endpoint returns RAW entity IDs on purpose. They are the picker's selection
+    # keys — the UI sends the chosen id straight back to /predict, so a masked id
+    # would be unusable (it would not resolve in Feast) and break the feature.
+    # The cohort data here is synthetic-gold (scvpt_*/scvhcp_* are synthetic
+    # identifiers, not real PII) and the route is auth-gated. Reasoned exception
+    # to the response-masking convention, not an oversight.
+    grain, _, id_col = _entity_source_for_model(model_type)
+    ids = await _sample_entity_ids(model_type, limit)
+    return SampleEntitiesResponse(
+        model_type=model_type,
+        grain=grain,
+        id_field=id_col,
+        entities=ids,
+    )
+
+
+@router.get(
+    "/global",
+    response_model=GlobalFeatureImportanceResponse,
+    summary="Cohort-level (global) SHAP feature importance",
+    operation_id="global_feature_importance",
+    description=(
+        "Mean |SHAP| feature importance aggregated over a sample of real cohort "
+        "entities for one per-brand gold-standard model. Reads a durable "
+        "precomputed row when available (instant); otherwise computes it once "
+        "(sequential under the heavy-compute slot) and stores it. ``refresh=true`` "
+        "forces recompute. Only gold-standard cohorts are supported (the legacy "
+        "demo model types have no deployed model)."
+    ),
+)
+async def global_feature_importance(
+    background_tasks: BackgroundTasks,
+    model_type: ModelType,
+    brand: str = Query(default=_DEFAULT_GOLDSTD_BRAND),
+    sample_size: int = Query(default=25, ge=5, le=60),
+    max_points: int = Query(default=30, ge=1, le=60),
+    refresh: bool = Query(default=False),
+    user: Dict[str, Any] = Depends(require_auth),
+) -> GlobalFeatureImportanceResponse:
+    if model_type not in GOLDSTD_COHORT_MODEL_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Global feature importance is only available for the gold-standard "
+                f"cohorts: {[m.value for m in GOLDSTD_COHORT_MODEL_TYPES]}"
+            ),
+        )
+    # Validates brand (422 on unknown) and resolves the per-brand serving name.
+    model_name = goldstd_serving_name(model_type, brand)
+    registry_id = await _resolve_model_registry_id(model_name)
+
+    cached = False
+    agg: Optional[Dict[str, Any]] = None
+    if not refresh and registry_id:
+        row = await _load_global_importance_row(registry_id)
+        if row is not None:
+            parsed = _row_to_global_agg(row)
+            # A stored row with no features / zero sample is degenerate (broken or
+            # a legacy demo row) — DON'T serve it as a real cohort importance;
+            # fall through and recompute instead of returning an empty/zero result.
+            if parsed["features"] and parsed["sample_size"] > 0:
+                agg = parsed
+                cached = True
+    if agg is None:
+        agg = await _compute_global_importance(model_type, brand, sample_size, background_tasks)
+        # The compute path already 503s when n_succeeded == 0; this guards the
+        # rarer "explained N entities but every top_features list was empty" case
+        # so we never store/serve a featureless aggregate.
+        if not agg["features"]:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Computed no feature contributions for {model_type.value}/{brand} "
+                    "(serving returned empty explanations)"
+                ),
+            )
+        await _store_global_importance_row(registry_id, model_type, agg)
+
+    features = [
+        GlobalImportanceFeature(
+            feature_name=f["feature_name"],
+            mean_abs_shap=f["mean_abs_shap"],
+            mean_shap=f["mean_shap"],
+            mean_feature_value=f["mean_feature_value"],
+            contribution_rank=f["contribution_rank"],
+        )
+        for f in agg["features"]
+    ]
+    # Real beeswarm distribution: per-entity points for the TOP features only.
+    top_names = [f["feature_name"] for f in agg["features"][:8]]
+    out_points: List[GlobalImportancePoint] = []
+    for name in top_names:
+        for shap_value, feature_value in agg["points"].get(name, [])[:max_points]:
+            out_points.append(
+                GlobalImportancePoint(
+                    feature_name=name,
+                    shap_value=shap_value,
+                    feature_value=feature_value,
+                )
+            )
+
+    computed_at = agg.get("computed_at")
+    if isinstance(computed_at, str):
+        try:
+            computed_at_dt = datetime.fromisoformat(computed_at.replace("Z", "+00:00"))
+        except ValueError:
+            computed_at_dt = datetime.now(timezone.utc)
+    elif isinstance(computed_at, datetime):
+        computed_at_dt = computed_at
+    else:
+        computed_at_dt = datetime.now(timezone.utc)
+
+    return GlobalFeatureImportanceResponse(
+        model_type=model_type,
+        brand=brand,
+        model_name=model_name,
+        base_value=agg["base_value"],
+        sample_size=int(agg["sample_size"]),
+        requested_sample_size=sample_size,
+        computation_method=agg["computation_method"],
+        computed_at=computed_at_dt,
+        cached=cached,
+        features=features,
+        points=out_points,
+    )
 
 
 @router.get(
