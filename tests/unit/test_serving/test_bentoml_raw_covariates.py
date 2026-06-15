@@ -111,6 +111,42 @@ class TestRawCovariatePredict:
         assert len(out.probabilities) == 2
         assert all(np.isfinite(p) for p in out.probabilities)
 
+    async def test_raw_covariates_numeric_field_rejects_string(self, serving_module: Any) -> None:
+        """Only geographic_region may be categorical; numeric fields stay numeric."""
+        model, fb = _fit_real_bundle()
+        service = serving_module.E2IModelService()
+        service._model = model
+        service._preprocessor = fb
+        service._feature_columns = fb.feature_columns
+
+        with pytest.raises(RuntimeError):
+            await service.predict(
+                serving_module.PredictionInput(
+                    raw_features=[
+                        {
+                            "disease_severity": "5.61",
+                            "academic_hcp": 0,
+                            "geographic_region": "northeast",
+                        }
+                    ]
+                )
+            )
+
+    async def test_raw_covariates_missing_required_field_rejects(self, serving_module: Any) -> None:
+        """The raw path must fail closed if a required keep_column is absent."""
+        model, fb = _fit_real_bundle()
+        service = serving_module.E2IModelService()
+        service._model = model
+        service._preprocessor = fb
+        service._feature_columns = fb.feature_columns
+
+        with pytest.raises(RuntimeError):
+            await service.predict(
+                serving_module.PredictionInput(
+                    raw_features=[{"disease_severity": 5.61, "geographic_region": "northeast"}]
+                )
+            )
+
 
 class TestModelInfoServingContract:
     def test_model_info_exposes_keep_columns_and_feature_columns(self, serving_module: Any) -> None:

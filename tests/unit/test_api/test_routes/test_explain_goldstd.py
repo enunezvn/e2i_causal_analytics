@@ -128,6 +128,23 @@ class TestResolveCanonicalFeaturesGoldstdBranch:
         assert ei.value.status_code == 422
         assert "academic_hcp" in str(ei.value.detail)
 
+    async def test_goldstd_numeric_covariate_rejects_string(self) -> None:
+        """Only the categorical geographic_region field may be a string."""
+        info = {
+            "feature_columns": ["disease_severity", "geographic_region_northeast"],
+            "keep_columns": ["disease_severity", "academic_hcp", "geographic_region"],
+        }
+        service = _service_with_model_info(info)
+        features = {
+            "disease_severity": "5.61",
+            "academic_hcp": 0,
+            "geographic_region": "northeast",
+        }
+        with pytest.raises(HTTPException) as ei:
+            await service.resolve_canonical_model_features(features, ModelType.INITIATION)
+        assert ei.value.status_code == 422
+        assert "disease_severity" in str(ei.value.detail)
+
     async def test_legacy_numeric_guard_unchanged_without_keep_columns(self) -> None:
         """A non-FeatureBuilder model (no keep_columns) keeps the strict numeric
         guard: a string feature still FAILS CLOSED (the #532/#576 contract)."""

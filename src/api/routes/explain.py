@@ -733,14 +733,19 @@ class RealTimeSHAPService:
                 ),
             )
 
+        categorical_columns = {"geographic_region"}
         resolved: Dict[str, Any] = {}
         for name in keep_columns:
             raw = features[name]
-            if isinstance(raw, (int, float, bool)):
-                # Numeric covariate — keep native type (FeatureBuilder medians /
-                # one-hot handle int vs float; bool is a valid 0/1 covariate).
-                resolved[name] = raw
-            elif isinstance(raw, str):
+            if name in categorical_columns:
+                if not isinstance(raw, str):
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Raw covariate '{name}' must be a categorical string "
+                            f"for an audit-grade SHAP prediction (got {type(raw).__name__})"
+                        ),
+                    )
                 # Categorical RAW covariate — the FeatureBuilder one-hot-encodes
                 # it. A non-empty string is a real category; an empty string is
                 # an absent value and must fail closed (no fabricated category).
@@ -754,12 +759,16 @@ class RealTimeSHAPService:
                         ),
                     )
                 resolved[name] = raw
+            elif isinstance(raw, (int, float, bool)):
+                # Numeric covariate — keep native type (FeatureBuilder medians /
+                # one-hot handle int vs float; bool is a valid 0/1 covariate).
+                resolved[name] = raw
             else:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"Raw covariate '{name}' must be numeric or a categorical "
-                        f"string for an audit-grade SHAP prediction (got "
+                        f"Raw covariate '{name}' must be numeric for an audit-grade "
+                        f"SHAP prediction (got "
                         f"{type(raw).__name__})"
                     ),
                 )

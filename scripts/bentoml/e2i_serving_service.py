@@ -447,8 +447,36 @@ class E2IModelService:
                 "covariates without an encoder."
             )
 
+        required_columns = self._resolve_keep_columns() or []
         start = time.time()
-        raw_df = pd.DataFrame(list(raw_rows))
+        categorical_columns = {"geographic_region"}
+        normalized_rows: List[Dict[str, Any]] = []
+        for row in raw_rows:
+            missing = [name for name in required_columns if name not in row or row[name] is None]
+            if missing:
+                raise RuntimeError(
+                    "raw_features omitted required gold-standard covariate(s): "
+                    f"{missing}"
+                )
+            normalized_row: Dict[str, Any] = {}
+            for key, value in row.items():
+                if key in categorical_columns:
+                    if not isinstance(value, str) or not value.strip():
+                        raise RuntimeError(
+                            f"Raw covariate '{key}' must be a non-empty string "
+                            "for the gold-standard FeatureBuilder path"
+                        )
+                    normalized_row[key] = value
+                elif isinstance(value, (int, float, bool)):
+                    normalized_row[key] = value
+                else:
+                    raise RuntimeError(
+                        f"Raw covariate '{key}' must be numeric on the gold-standard "
+                        f"FeatureBuilder path (got {type(value).__name__})"
+                    )
+            normalized_rows.append(normalized_row)
+
+        raw_df = pd.DataFrame(list(normalized_rows))
         try:
             encoded = self._preprocessor.transform(raw_df)
         except Exception as e:
