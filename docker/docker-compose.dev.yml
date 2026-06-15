@@ -299,6 +299,13 @@ services:
       # deserialize + apply preprocessor.transform; mount it read-only so the
       # bentoml container can resolve it (empty __init__; only dep is cohort_spec).
       - ../src/mlops/gold_standard_eval:/home/bentoml/src/mlops/gold_standard_eval:ro
+      # #39: durable FS-fallback discovery of the gold-standard serving bundles.
+      # _discover_goldstd_bundles_from_fs walks data/ml_artifacts/shap_serving
+      # (relative to the /home/bentoml workdir). The BentoML store at
+      # /home/bentoml/models is NOT a volume (ephemeral across recreate), so the
+      # 12 cohort-brand bundles are served from this read-only bind of the repo's
+      # (gitignored, re-materialized) artifact dir — survives container recreate.
+      - ../data/ml_artifacts/shap_serving:/home/bentoml/data/ml_artifacts/shap_serving:ro
     environment:
       - LOG_LEVEL=DEBUG
     deploy:
