@@ -183,11 +183,13 @@ class Crystallizer:
                 .eq("brand", brand)
                 .gte("occurred_at", cutoff)
                 .in_("event_type", ["agent_action", "causal_discovery", "experiment_completed"])
-                # provenance (Shard 07): crystallization emits user-facing
-                # "findings" (crystals) derived from these rows, so a synthetic
-                # memory must NOT be crystallized into a real crystal.
-                .eq("is_synthetic", False)
             )
+            # provenance (Shard 07): exclude synthetic from real crystals in real mode;
+            # the showcase instance (E2I_INCLUDE_SYNTHETIC) crystallizes the
+            # synthetic-gold corpus so findings populate. (WS-SYNTH)
+            from src.repositories.provenance import apply_provenance_filter
+
+            page_query = apply_provenance_filter(page_query)
             if region:
                 page_query = page_query.eq("region", region)
             # L7 (codex MED): order by the unique PK before paging. Offset

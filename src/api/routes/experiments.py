@@ -443,17 +443,18 @@ async def active_experiment_count() -> Dict[str, Any]:
         client = get_supabase()
         if client is None:
             raise HTTPException(status_code=503, detail="Database unavailable")
-        # Provenance (#894): ml_experiments is is_synthetic-tagged (migration
-        # 069) and the synthetic generator leaves 360 perpetually-"running"
-        # rows — the Home tile is an end-user real-mode surface, so the
-        # exclusion is unconditional (no opt-in exposure).
-        result = (
-            client.table("ml_experiments")
-            .select("id", count="exact")
-            .eq("status", "running")
-            .eq("is_synthetic", False)
-            .execute()
+        # Provenance (#894): ml_experiments is is_synthetic-tagged (migration 069).
+        # Real mode excludes synthetic; the synthetic-gold showcase instance
+        # (E2I_INCLUDE_SYNTHETIC) includes them so the Home tile reflects the
+        # synthetic-gold experiments instead of an empty 0. (WS-SYNTH; the 360
+        # perpetually-"running" rows are a separate data-gen artifact.)
+        from src.repositories.provenance import apply_provenance_filter
+
+        active_q = (
+            client.table("ml_experiments").select("id", count="exact").eq("status", "running")
         )
+        active_q = apply_provenance_filter(active_q)
+        result = active_q.execute()
         return {"active_count": result.count or 0}
     except HTTPException:
         raise
