@@ -13,6 +13,7 @@ Provides LangGraph-compatible tools for the E2I chatbot agent:
 Adapted from Pydantic AI patterns to LangGraph @tool decorators.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -576,7 +577,11 @@ async def e2i_data_query_tool(
     Query E2I analytics data across multiple data types.
 
     This tool provides unified access to ALL E2I analytics data including:
-    - KPIs: TRx, NRx, market share, conversion rates
+    - KPIs: STORED snapshot rows from business_metrics. For a COMPUTED KPI VALUE
+      for a brand (e.g. "what is the NBRx/NRx/TRx/market share for Kisqali?"),
+      prefer ``kpi_calculate_tool`` — it resolves the KPI definition and calculates
+      from the real substrate, whereas this returns the raw stored rows (and 0 for
+      a derived KPI like NBRx that is not materialized here).
     - Causal chains: Discovered cause-effect relationships
     - Agent analyses: Outputs from the 21-agent system
     - Triggers: Alerts and explanations for metric changes
@@ -1320,9 +1325,118 @@ async def tool_composer_tool(
 # =============================================================================
 
 
+# =============================================================================
+# KPI ENGINE TOOL — compute a DEFINED KPI on demand (the 46 calculable KPIs)
+# =============================================================================
+
+
+class KpiCalculateInput(BaseModel):
+    """Input schema for kpi_calculate_tool."""
+
+    kpi_name: str = Field(
+        description=(
+            "The KPI to compute, e.g. 'NBRx' (new-to-brand Rx), 'TRx', 'NRx', "
+            "'market share', 'conversion rate', 'ROI', 'HCP coverage'. Resolved "
+            "against the 46 defined KPIs."
+        )
+    )
+    brand: Optional[str] = Field(
+        default=None,
+        description="Brand filter (e.g. Remibrutinib, Fabhalta, Kisqali), case-insensitive.",
+    )
+    region: Optional[str] = Field(default=None, description="Optional region/territory filter.")
+
+
+def _kpi_result_to_response(kpi: Any, result: Any) -> Dict[str, Any]:
+    """Map a ``KPIResult`` onto the chatbot tool response (pure; unit-tested, no DB).
+
+    Surfaces ``data_source='synthetic'`` when the engine answered from the
+    synthetic-gold substrate so the chatbot/FE badges the figure honestly rather
+    than passing it off as real-world data.
+    """
+    if getattr(result, "error", None):
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "kpi_id": kpi.id,
+            "kpi_name": kpi.name,
+            "error": result.error,
+        }
+    include_synthetic = bool((getattr(result, "metadata", None) or {}).get("include_synthetic"))
+    return {
+        "success": True,
+        "query_type": "kpi_calculate",
+        "kpi_id": kpi.id,
+        "kpi_name": kpi.name,
+        "value": result.value,
+        "status": result.status,
+        "data_source": "synthetic" if include_synthetic else "database",
+    }
+
+
+@tool(args_schema=KpiCalculateInput)
+async def kpi_calculate_tool(
+    kpi_name: str,
+    brand: Optional[str] = None,
+    region: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Compute a DEFINED KPI on demand via the KPI engine (the 46 calculable KPIs).
+
+    Use this for "what is the <KPI> for <brand>?" questions — NBRx (new-to-brand
+    Rx), TRx, NRx, market share, conversion rate, ROI, HCP coverage, etc. Unlike
+    ``e2i_data_query_tool`` (which reads the materialized ``business_metrics``
+    fixture and returns 0 for a KPI that isn't stored there), this RESOLVES the KPI
+    name to its definition and CALCULATES it from the real substrate (e.g. NBRx =
+    count of each patient's first-brand prescription over ``treatment_events``).
+
+    Args:
+        kpi_name: the KPI to compute (resolved against the 46 defined KPIs).
+        brand: optional brand filter (case-insensitive).
+        region: optional region/territory filter.
+
+    Returns:
+        Dict with success, kpi_id, kpi_name, value, status, data_source.
+    """
+    kpi = kpi_resolution.recognize_kpi(kpi_name)
+    if kpi is None:
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "error": f"'{kpi_name}' did not resolve to a defined KPI.",
+            "hint": "Try a defined KPI like NBRx, TRx, NRx, market share, conversion rate, or ROI.",
+        }
+
+    context: Dict[str, Any] = {}
+    if brand:
+        context["brand"] = brand
+    if region:
+        context["territory"] = region
+
+    try:
+        # Local import avoids a chatbot_tools <-> kpi route import cycle at load.
+        from src.api.routes.kpi import get_kpi_calculator
+
+        calculator = get_kpi_calculator()
+        # calculate() is synchronous (a DB RPC) -> off-load to a worker thread so
+        # the chatbot event loop is never blocked (mirrors the cognitive-RAG fix).
+        result = await asyncio.to_thread(calculator.calculate, kpi.id, context=context)
+    except Exception as exc:  # noqa: BLE001 - surface as a tool error, never fabricate
+        logger.error("kpi_calculate_tool: calculation failed for %s: %s", kpi.id, exc)
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "kpi_id": kpi.id,
+            "kpi_name": kpi.name,
+            "error": str(exc),
+        }
+
+    return _kpi_result_to_response(kpi, result)
+
+
 # List of all E2I chatbot tools for use in LangGraph ToolNode
 E2I_CHATBOT_TOOLS = [
     e2i_data_query_tool,
+    kpi_calculate_tool,
     causal_analysis_tool,
     agent_routing_tool,
     conversation_memory_tool,
@@ -1334,6 +1448,7 @@ E2I_CHATBOT_TOOLS = [
 # Tool name to function mapping
 E2I_TOOL_MAP = {
     "e2i_data_query_tool": e2i_data_query_tool,
+    "kpi_calculate_tool": kpi_calculate_tool,
     "causal_analysis_tool": causal_analysis_tool,
     "agent_routing_tool": agent_routing_tool,
     "conversation_memory_tool": conversation_memory_tool,
