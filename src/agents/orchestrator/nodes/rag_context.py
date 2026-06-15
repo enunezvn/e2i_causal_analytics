@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional, cast
 
 from src.rag.types import ExtractedEntities, RetrievalResult
-from src.repositories.provenance import coerce_provenance_flag
+from src.repositories.provenance import coerce_provenance_flag, deployment_includes_synthetic
 
 from ..state import OrchestratorState
 
@@ -221,6 +221,11 @@ class RAGContextNode:
         ambiguous value (``"false"``, ``"0"``, non-bool/non-str types) fails
         CLOSED to the real-mode default-exclude predicate.
         """
+        # Showcase / synthetic-gold instance (E2I_INCLUDE_SYNTHETIC): synthetic is a
+        # badge, not a gate — force include so RAG retrieval runs at full potential,
+        # consistent with apply_provenance_filter. Reversible (unset → strict). WS-SYNTH.
+        if deployment_includes_synthetic():
+            return True
         user_context = state.get("user_context") or {}
         return coerce_provenance_flag(user_context.get("include_synthetic"))
 

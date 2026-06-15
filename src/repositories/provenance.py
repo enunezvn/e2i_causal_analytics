@@ -8,6 +8,7 @@ effect modifier. See plan 07-provenance-readpath-enforcement.md.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Iterable
 
 import pandas as pd
@@ -83,6 +84,29 @@ def coerce_provenance_flag(value: Any) -> bool:
     return False
 
 
+#: Truthy spellings for the ``E2I_*`` runtime flags (mirrors
+#: ``src/kpi/synthetic_mode.py`` and the copilotkit ``E2I_ENABLE_*`` idiom).
+_TRUTHY = ("1", "true", "yes")
+
+
+def deployment_includes_synthetic() -> bool:
+    """Whether THIS deployment treats synthetic-tagged rows as first-class data.
+
+    A showcase / review instance whose only substrate is synthetic-gold (the
+    2026-06-11 cleanup) sets ``E2I_INCLUDE_SYNTHETIC`` so the synthetic flag is a
+    *warning/badge*, never a *gate*: every read-path chokepoint INCLUDES synthetic
+    rows so the platform runs at full potential. Read fresh on every call (truthy:
+    ``1`` / ``true`` / ``yes``, case-insensitive) so it can be toggled per
+    deployment without a restart-coupled import-time capture.
+
+    Defaults to ``False`` → the strict real-mode default-exclude gate is preserved
+    verbatim for a true-production instance carrying real RWD alongside synthetic.
+    Generalizes the KPI-only ``E2I_KPI_INCLUDE_SYNTHETIC`` flag
+    (:mod:`src.kpi.synthetic_mode`) to every provenance-gated reader, reversibly.
+    """
+    return os.getenv("E2I_INCLUDE_SYNTHETIC", "0").strip().lower() in _TRUTHY
+
+
 def apply_provenance_filter(query: Any, include_synthetic: bool = False) -> Any:
     """Append the default-exclude provenance predicate to a supabase-py query.
 
@@ -90,8 +114,13 @@ def apply_provenance_filter(query: Any, include_synthetic: bool = False) -> Any:
     Validation mode (``True``) returns the query unchanged (caller opts in
     explicitly). The predicate is a no-op cost on tables whose every row defaults to
     ``false`` and is index-friendly (Shard 01 adds the partial index).
+
+    On a synthetic-gold showcase instance (``E2I_INCLUDE_SYNTHETIC`` set, see
+    :func:`deployment_includes_synthetic`) the predicate is skipped for EVERY
+    reader so synthetic rows power the platform — reversibly: unset the env and
+    the strict gate returns verbatim.
     """
-    if include_synthetic:
+    if include_synthetic or deployment_includes_synthetic():
         return query
     return query.eq(PROVENANCE_COLUMN, False)
 

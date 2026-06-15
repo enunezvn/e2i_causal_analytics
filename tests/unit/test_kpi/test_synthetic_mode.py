@@ -38,6 +38,7 @@ def _twin_bases_from_migration() -> set[str]:
 
 def test_flag_defaults_off(monkeypatch):
     monkeypatch.delenv(_FLAG, raising=False)
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
     assert kpi_include_synthetic() is False
 
 
@@ -50,7 +51,17 @@ def test_flag_truthy_spellings(monkeypatch, val):
 @pytest.mark.parametrize("val", ["0", "false", "no", "", "off", "2"])
 def test_flag_falsy_spellings(monkeypatch, val):
     monkeypatch.setenv(_FLAG, val)
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
     assert kpi_include_synthetic() is False
+
+
+def test_unified_deployment_flag_flips_kpi_reads(monkeypatch):
+    """WS-SYNTH: the deployment-wide ``E2I_INCLUDE_SYNTHETIC`` showcase switch
+    flips KPI reads too (ONE env for the whole synthetic-gold instance), even
+    with the KPI-specific flag off. Generalizes the demo-mode idiom."""
+    monkeypatch.delenv(_FLAG, raising=False)
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    assert kpi_include_synthetic() is True
 
 
 # --- the resolver --------------------------------------------------------------
