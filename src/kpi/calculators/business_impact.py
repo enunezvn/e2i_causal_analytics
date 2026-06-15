@@ -21,7 +21,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import resolve_kpi_query_id
+from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
 
 
 class BusinessImpactCalculator(KPICalculatorBase):
@@ -115,6 +115,23 @@ class BusinessImpactCalculator(KPICalculatorBase):
             return KPIStatus.UNKNOWN
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
+    @staticmethod
+    def _region_variant(base_query_id: str) -> str:
+        """Region-scoped query id for a base business_impact query (migration 077).
+
+        The ``*_region`` queries are ADDITIVE — deliberately absent from
+        ``SYNTHETIC_TWINNED_QUERY_IDS`` (which mirrors migration 066 and is
+        drift-checked in CI), so :func:`resolve_kpi_query_id` will NOT auto-swap
+        them to the synthetic-inclusive twin. We therefore append the
+        ``_include_synthetic`` suffix HERE under the showcase flag, so a
+        region-scoped read honors the same synthetic-visibility gate as the base
+        query it parallels. ``_execute_query`` still calls
+        :func:`resolve_kpi_query_id`, which is a safe no-op on an
+        already-``_include_synthetic`` id.
+        """
+        qid = f"{base_query_id}_region"
+        return f"{qid}_include_synthetic" if kpi_include_synthetic() else qid
+
     def _calc_mau(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-001: Monthly Active Users.
 
@@ -190,10 +207,18 @@ class BusinessImpactCalculator(KPICalculatorBase):
     def _calc_trx(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-005: Total Prescriptions (TRx).
 
-        Total prescription volume. No threshold (volume metric).
+        Total prescription volume. No threshold (volume metric). When a region
+        is supplied, routes to the region-scoped variant (migration 077); brand
+        stays an optional filter.
         """
         brand = context.get("brand")
-        result = self._execute_query("business_impact_trx", [brand])
+        region = context.get("region")
+        if region:
+            result = self._execute_query(
+                self._region_variant("business_impact_trx"), [brand, region]
+            )
+        else:
+            result = self._execute_query("business_impact_trx", [brand])
         if result and result[0].get("trx") is not None:
             return float(result[0]["trx"])
         raise RuntimeError("KPI WS3-BI-005 unavailable: no data for total prescriptions (TRx)")
@@ -202,9 +227,17 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """Calculate WS3-BI-006: New Prescriptions (NRx).
 
         First-time prescriptions for a patient. No threshold (volume metric).
+        When a region is supplied, routes to the region-scoped variant
+        (migration 077); brand stays an optional filter.
         """
         brand = context.get("brand")
-        result = self._execute_query("business_impact_nrx", [brand])
+        region = context.get("region")
+        if region:
+            result = self._execute_query(
+                self._region_variant("business_impact_nrx"), [brand, region]
+            )
+        else:
+            result = self._execute_query("business_impact_nrx", [brand])
         if result and result[0].get("nrx") is not None:
             return float(result[0]["nrx"])
         raise RuntimeError("KPI WS3-BI-006 unavailable: no data for new prescriptions (NRx)")
@@ -223,7 +256,13 @@ class BusinessImpactCalculator(KPICalculatorBase):
                 "KPI WS3-BI-007 unavailable: no brand specified for new-to-brand prescriptions (NBRx)"
             )
 
-        result = self._execute_query("business_impact_nbrx", [brand])
+        region = context.get("region")
+        if region:
+            result = self._execute_query(
+                self._region_variant("business_impact_nbrx"), [brand, region]
+            )
+        else:
+            result = self._execute_query("business_impact_nbrx", [brand])
         if result and result[0].get("nbrx") is not None:
             return float(result[0]["nbrx"])
         raise RuntimeError(
@@ -241,7 +280,13 @@ class BusinessImpactCalculator(KPICalculatorBase):
             # undefined, not zero. Fail loud rather than fabricate a plausible 0% share.
             raise RuntimeError("KPI WS3-BI-008 unavailable: no brand specified for TRx share")
 
-        result = self._execute_query("business_impact_trx_share", [brand])
+        region = context.get("region")
+        if region:
+            result = self._execute_query(
+                self._region_variant("business_impact_trx_share"), [brand, region]
+            )
+        else:
+            result = self._execute_query("business_impact_trx_share", [brand])
         if result and result[0].get("share") is not None:
             return float(result[0]["share"])
         raise RuntimeError("KPI WS3-BI-008 unavailable: no data for TRx share")
@@ -249,9 +294,17 @@ class BusinessImpactCalculator(KPICalculatorBase):
     def _calc_conversion_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-009: Conversion Rate.
 
-        Percentage of triggers resulting in prescription.
+        Percentage of triggers resulting in prescription. When a region is
+        supplied, routes to the region-scoped variant (migration 077) — no brand
+        filter (this metric is brand-agnostic).
         """
-        result = self._execute_query("business_impact_conversion_rate", [])
+        region = context.get("region")
+        if region:
+            result = self._execute_query(
+                self._region_variant("business_impact_conversion_rate"), [region]
+            )
+        else:
+            result = self._execute_query("business_impact_conversion_rate", [])
         if result and result[0].get("conversion_rate") is not None:
             return float(result[0]["conversion_rate"])
         raise RuntimeError("KPI WS3-BI-009 unavailable: no data for conversion rate")

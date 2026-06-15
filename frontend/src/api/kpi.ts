@@ -124,6 +124,7 @@ export async function getKPIMetadata(kpiId: string): Promise<KPIMetadata> {
  *
  * @param kpiId - KPI identifier
  * @param brand - Optional brand filter
+ * @param region - Optional geographic region filter (routes to region variant)
  * @param useCache - Whether to use cached result (default: true)
  * @returns Calculated KPI result
  *
@@ -136,12 +137,14 @@ export async function getKPIMetadata(kpiId: string): Promise<KPIMetadata> {
 export async function getKPIValue(
   kpiId: string,
   brand?: string,
+  region?: string,
   useCache: boolean = true
 ): Promise<KPIResult> {
   return get<KPIResult>(
     `${KPI_BASE}/${encodeURIComponent(kpiId)}`,
     {
       brand,
+      region,
       use_cache: useCache,
     },
     { schema: KPIResultWireSchema }

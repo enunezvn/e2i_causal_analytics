@@ -455,6 +455,7 @@ async def get_kpi_value(
     use_cache: bool = Query(default=True, description="Use cached value if available"),
     force_refresh: bool = Query(default=False, description="Force recalculation"),
     brand: str | None = Query(default=None, description="Brand filter"),
+    region: str | None = Query(default=None, description="Geographic region filter"),
     calculator: KPICalculator = Depends(get_kpi_calculator),
 ) -> KPIResultResponse:
     """Get the calculated value for a specific KPI.
@@ -464,6 +465,7 @@ async def get_kpi_value(
         use_cache: Whether to use cached results
         force_refresh: Force recalculation
         brand: Optional brand filter
+        region: Optional geographic region filter
         calculator: KPI calculator instance
 
     Returns:
@@ -473,7 +475,11 @@ async def get_kpi_value(
         HTTPException: If KPI not found or calculation fails
     """
     try:
-        context = {"brand": brand} if brand else {}
+        context: dict[str, Any] = {}
+        if brand:
+            context["brand"] = brand
+        if region:
+            context["region"] = region
 
         result = calculator.calculate(
             kpi_id=kpi_id,
@@ -527,6 +533,8 @@ async def calculate_kpi(
         if request.context:
             if request.context.brand:
                 context["brand"] = request.context.brand
+            if request.context.region:
+                context["region"] = request.context.region
             if request.context.start_date:
                 context["start_date"] = request.context.start_date
             if request.context.end_date:
@@ -589,6 +597,8 @@ async def calculate_batch(
         if request.context:
             if request.context.brand:
                 context["brand"] = request.context.brand
+            if request.context.region:
+                context["region"] = request.context.region
             if request.context.start_date:
                 context["start_date"] = request.context.start_date
             if request.context.end_date:

@@ -33,9 +33,14 @@ export interface KpiSummaryResponse {
   data_through?: string | null;
 }
 
-/** Fetch the real KPI rollup for a brand. */
-export async function getKpiSummary(brand: string): Promise<KpiSummaryResponse> {
-  return get<KpiSummaryResponse>('/copilotkit/kpis/summary', { brand });
+/** Fetch the real KPI rollup for a brand, optionally scoped to a region.
+ *  `region` is omitted from the query when undefined (axios drops undefined
+ *  params), so the portfolio-wide rollup is unchanged when no region is set. */
+export async function getKpiSummary(
+  brand: string,
+  region?: string
+): Promise<KpiSummaryResponse> {
+  return get<KpiSummaryResponse>('/copilotkit/kpis/summary', { brand, region });
 }
 
 /** Count of currently-running experiments (Active Campaigns). */

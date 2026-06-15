@@ -75,7 +75,10 @@ import { getNavigationRoutes } from '@/router/routes';
 // =============================================================================
 
 type Brand = 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
-type Region = 'All US' | 'Northeast' | 'Southeast' | 'Midwest' | 'West' | 'Southwest';
+// US-Census regions — the ONLY values present in the data (patient_journeys
+// .geographic_region, causal_paths.region, business_metrics.region all share this
+// vocabulary). Southeast/Southwest were never in the data and always returned 0.
+type Region = 'All US' | 'Northeast' | 'South' | 'Midwest' | 'West';
 type DateRange = 'Q4 2025' | 'Q3 2025' | 'Q2 2025' | 'Q1 2025' | 'YTD 2025' | 'Last 12 Months';
 
 interface KPIMetric {
@@ -120,11 +123,17 @@ const BRANDS: { value: Brand; label: string; indication: string; color: string }
 const REGIONS: { value: Region; label: string }[] = [
   { value: 'All US', label: 'All US Regions' },
   { value: 'Northeast', label: 'Northeast' },
-  { value: 'Southeast', label: 'Southeast' },
+  { value: 'South', label: 'South' },
   { value: 'Midwest', label: 'Midwest' },
   { value: 'West', label: 'West' },
-  { value: 'Southwest', label: 'Southwest' },
 ];
+
+/** Map the dropdown region label to the backend query param: 'All US' → no
+ *  filter (undefined); otherwise the lowercase US-Census region the data uses
+ *  (KPI SQL matches case-insensitively; causal_paths is lowercase). */
+function regionToParam(region: Region): string | undefined {
+  return region === 'All US' ? undefined : region.toLowerCase();
+}
 
 const DATE_RANGES: { value: DateRange; label: string; description: string }[] = [
   { value: 'Q4 2025', label: 'Q4 2025', description: 'Oct - Dec 2025' },
@@ -379,6 +388,10 @@ function Home() {
   const queryClient = useQueryClient();
   const [selectedBrand, setSelectedBrand] = useState<Brand>('All');
   const [selectedRegion, setSelectedRegion] = useState<Region>('All US');
+  // Backend region param: undefined for 'All US' (portfolio view), else the
+  // lowercase census region. Drives the KPI summary, Model Accuracy, and the
+  // batch-calculate context so the KPIs re-scope when Region changes.
+  const regionParam = regionToParam(selectedRegion);
   // Period is no longer user-selectable (it filtered nothing); kept as a fixed
   // label for the synthetic demo dataset's reporting period (shown in the footer).
   const selectedDateRange: DateRange = 'Q4 2025';
@@ -416,7 +429,7 @@ function Home() {
     data: kpiSummary,
     isLoading: summaryLoading,
     error: summaryError,
-  } = useKpiSummary(selectedBrand);
+  } = useKpiSummary(selectedBrand, regionParam);
 
   // Honest tile display: the real value, or "No recent activity — data through
   // <date>" when 0/null (no recent data, not a fabrication).
@@ -439,7 +452,11 @@ function Home() {
   const {
     data: rocAucResult,
     isLoading: rocAucLoading,
-  } = useKPIValue('WS1-MP-001', selectedBrand !== 'All' ? selectedBrand : undefined);
+  } = useKPIValue(
+    'WS1-MP-001',
+    selectedBrand !== 'All' ? selectedBrand : undefined,
+    regionParam
+  );
 
   // System Health card: real agent-computed aggregate scores.
   const {
@@ -531,15 +548,21 @@ function Home() {
   );
   useEffect(() => {
     if (kpiListIds.length > 0) {
+      // Brand and/or region scope. Region routes the business_impact KPIs to
+      // their region-scoped variants; calculators without a region variant
+      // ignore the key and return their portfolio/brand value unchanged.
+      const ctx: { brand?: string; region?: string } = {};
+      if (selectedBrand !== 'All') ctx.brand = selectedBrand;
+      if (regionParam) ctx.region = regionParam;
       batchCalc({
         kpi_ids: kpiListIds,
         use_cache: true,
-        context: selectedBrand !== 'All' ? { brand: selectedBrand } : undefined,
+        context: Object.keys(ctx).length > 0 ? ctx : undefined,
       });
     }
     // batchCalc is a stable mutation fn from react-query.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kpiListIds, selectedBrand]);
+  }, [kpiListIds, selectedBrand, regionParam]);
   // Map kpi_id → { value, status, error, dataSource } from the batch result.
   // dataSource carries provenance ('synthetic' in demo mode) so the grid can
   // badge synthetic-sourced values rather than passing them off as real.

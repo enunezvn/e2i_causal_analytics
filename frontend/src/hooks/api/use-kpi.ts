@@ -213,11 +213,12 @@ export function useKPIMetadata(
 export function useKPIValue(
   kpiId: string,
   brand?: string,
+  region?: string,
   options?: Omit<UseQueryOptions<KPIResult, Error>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery({
-    queryKey: [...queryKeys.kpi.detail(kpiId), 'value', brand] as const,
-    queryFn: () => getKPIValue(kpiId, brand),
+    queryKey: [...queryKeys.kpi.detail(kpiId), 'value', brand, region ?? null] as const,
+    queryFn: () => getKPIValue(kpiId, brand, region),
     staleTime: 2 * 60 * 1000, // 2 minutes
     enabled: !!kpiId,
     ...options,

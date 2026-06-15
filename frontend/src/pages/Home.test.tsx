@@ -162,9 +162,10 @@ describe('Home', () => {
   it('renders all filter selectors', () => {
     renderWithAllProviders(<Home />);
 
-    // All three selectors should be present as comboboxes
+    // Brand + Region comboboxes (the Period/date-range selector was removed —
+    // it filtered nothing).
     const comboboxes = screen.getAllByRole('combobox');
-    expect(comboboxes.length).toBeGreaterThanOrEqual(3);
+    expect(comboboxes.length).toBe(2);
   });
 
   it('renders quick stats from real API rollups (no fabricated 125,430 / 94.2%)', () => {
@@ -206,7 +207,7 @@ describe('Home', () => {
     expect(screen.queryByText('synthetic data')).not.toBeInTheDocument();
   });
 
-  it('labels synthetic-sourced KPIs honestly (banner + "synthetic data" badge)', () => {
+  it('labels synthetic-sourced KPIs honestly (page-level synthetic-demo banner)', () => {
     // E2I_KPI_INCLUDE_SYNTHETIC demo mode: the backend reports data_source
     // 'synthetic' so the figures are populated AND clearly labelled as synthetic
     // (never passed off as real-world data).
@@ -234,9 +235,10 @@ describe('Home', () => {
     // Populated synthetic-gold values render...
     expect(screen.getByText('42,642')).toBeInTheDocument();
     expect(screen.getByText('321')).toBeInTheDocument();
-    // ...and are explicitly labelled synthetic, not real DB or generic "sample".
+    // ...and are explicitly labelled synthetic via the page-level synthetic-demo
+    // banner (the redundant per-tile 'synthetic data' chip was removed). They are
+    // NOT mislabelled as a generic fabricated "sample".
     expect(screen.getByText(/synthetic demo data/i)).toBeInTheDocument();
-    expect(screen.getAllByText('synthetic data').length).toBeGreaterThan(0);
     expect(screen.queryByText('sample data')).not.toBeInTheDocument();
   });
 
@@ -296,12 +298,12 @@ describe('Home', () => {
       const regionSelector = screen.getAllByRole('combobox')[1];
       fireEvent.click(regionSelector);
 
-      // Check for region options
+      // Check for region options — the four US-Census regions present in the
+      // data (Southeast/Southwest were removed: never in the dataset).
       expect(await screen.findByText('Northeast')).toBeInTheDocument();
-      expect(screen.getByText('Southeast')).toBeInTheDocument();
+      expect(screen.getByText('South')).toBeInTheDocument();
       expect(screen.getByText('Midwest')).toBeInTheDocument();
       expect(screen.getByText('West')).toBeInTheDocument();
-      expect(screen.getByText('Southwest')).toBeInTheDocument();
     });
 
     it('updates filter summary when region changes', async () => {
@@ -329,55 +331,32 @@ describe('Home', () => {
   // DATE RANGE FILTER TESTS (Phase 3.1)
   // =========================================================================
 
-  describe('Date Range Filter', () => {
-    it('displays default date range as Q4 2025', () => {
+  // The Period (date-range) selector was removed — it filtered nothing (the KPI
+  // stack is brand/region-scoped, date-range was never threaded into a query).
+  // The dataset's reporting period now shows as STATIC context in the footer
+  // Filter Summary card, so only the static display is asserted here.
+  describe('Reporting Period (static footer context)', () => {
+    it('shows the reporting-period description statically in the filter summary', () => {
       renderWithAllProviders(<Home />);
 
-      // Date range is the third combobox
-      const dateSelector = screen.getAllByRole('combobox')[2];
-      expect(dateSelector).toHaveTextContent('Q4 2025');
-    });
-
-    it('shows all date range options when clicked', async () => {
-      renderWithAllProviders(<Home />);
-
-      const dateSelector = screen.getAllByRole('combobox')[2];
-      fireEvent.click(dateSelector);
-
-      // Check for date range options
-      expect(await screen.findByText('Q3 2025')).toBeInTheDocument();
-      expect(screen.getByText('Q2 2025')).toBeInTheDocument();
-      expect(screen.getByText('Q1 2025')).toBeInTheDocument();
-      expect(screen.getByText('Year to Date')).toBeInTheDocument();
-      expect(screen.getByText('Last 12 Months')).toBeInTheDocument();
-    });
-
-    it('shows date range descriptions in filter summary', () => {
-      renderWithAllProviders(<Home />);
-
-      // The filter summary card shows the description (may appear in multiple places)
+      // The filter summary card shows the Q4 2025 description (no selector).
       const descriptions = screen.getAllByText('Oct - Dec 2025');
       expect(descriptions.length).toBeGreaterThan(0);
     });
 
-    it('updates filter summary when date range changes', () => {
+    it('labels the static reporting period in the filter summary', () => {
       renderWithAllProviders(<Home />);
 
-      // Find the reporting period summary
       const reportingLabel = screen.getByText('Reporting Period');
       const card = reportingLabel.closest('div');
-
-      // Initially shows Q4 2025 description
       expect(within(card!.parentElement!).getByText('Oct - Dec 2025')).toBeInTheDocument();
     });
 
-    it('has CalendarDays icon in date selector', () => {
+    it('no longer renders a Period/date-range selector combobox', () => {
       renderWithAllProviders(<Home />);
 
-      // The date selector contains a CalendarDays icon
-      const dateSelector = screen.getAllByRole('combobox')[2];
-      const calendarIcon = dateSelector.querySelector('svg');
-      expect(calendarIcon).toBeInTheDocument();
+      // Only Brand + Region comboboxes remain (the date-range selector is gone).
+      expect(screen.getAllByRole('combobox')).toHaveLength(2);
     });
   });
 

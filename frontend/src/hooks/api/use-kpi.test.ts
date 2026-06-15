@@ -374,7 +374,7 @@ describe('useKPIValue', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data).toEqual(mockKPIResult);
-    expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', undefined);
+    expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', undefined, undefined);
   });
 
   it('passes brand to API', async () => {
@@ -385,7 +385,7 @@ describe('useKPIValue', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', 'remibrutinib');
+    expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', 'remibrutinib', undefined);
   });
 
   it('is disabled when kpiId is empty', async () => {
@@ -579,7 +579,7 @@ describe('useKPIDetail', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', 'remibrutinib');
+    expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', 'remibrutinib', undefined);
   });
 
   it('reports loading state correctly', async () => {

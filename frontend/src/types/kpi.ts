@@ -57,6 +57,9 @@ export enum KPIStatus {
 export interface KPICalculationContext {
   /** Filter by brand (remibrutinib, fabhalta, kisqali) */
   brand?: string;
+  /** Filter by geographic region (northeast/south/midwest/west; matched
+   *  case-insensitively). Routes KPIs to their region-scoped query variants. */
+  region?: string;
   /** Start date for time-based calculations (ISO 8601) */
   start_date?: string;
   /** End date for time-based calculations (ISO 8601) */

@@ -17,14 +17,17 @@ import {
   type ActiveExperimentCountResponse,
 } from '@/api/home-stats';
 
-/** Hook for the real business_metrics KPI rollup. */
+/** Hook for the real business_metrics KPI rollup.
+ *  `region` is part of the query key so switching region refetches (and does
+ *  not collide with the portfolio-wide cache entry). */
 export function useKpiSummary(
   brand: string,
+  region?: string,
   options?: Omit<UseQueryOptions<KpiSummaryResponse, Error>, 'queryKey' | 'queryFn'>
 ) {
   return useQuery<KpiSummaryResponse, Error>({
-    queryKey: ['home', 'kpi-summary', brand],
-    queryFn: () => getKpiSummary(brand),
+    queryKey: ['home', 'kpi-summary', brand, region ?? null],
+    queryFn: () => getKpiSummary(brand, region),
     staleTime: 60 * 1000,
     retry: false,
     ...options,

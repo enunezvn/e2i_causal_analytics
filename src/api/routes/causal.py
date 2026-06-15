@@ -2734,7 +2734,11 @@ async def get_causal_value_chains(
         if brand and brand.strip().lower() not in _ALL_BRAND_SENTINELS:
             query = query.eq("brand", brand)
         if region and region.strip().lower() not in _ALL_REGION_SENTINELS:
-            query = query.eq("region", region)
+            # causal_paths.region is stored lowercase (US-Census regions:
+            # northeast/south/midwest/west). The dropdown sends title-case labels
+            # ('Northeast'), so normalize to lowercase — an exact .eq against a
+            # title-case value would silently return zero chains.
+            query = query.eq("region", region.strip().lower())
 
         # Synthetic-showcase aware (SSOT). Showcase → include synthetic chains;
         # strict real-mode → excluded verbatim.
