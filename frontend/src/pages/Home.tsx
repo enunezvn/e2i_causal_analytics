@@ -1152,7 +1152,7 @@ function Home() {
                   </CardTitle>
                   <CardDescription>Executive insights &amp; gap opportunities</CardDescription>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => navigate('/monitoring')}>
+                <Button variant="ghost" size="sm" onClick={() => navigate('/ai-insights')}>
                   View All
                   <ArrowRight className="h-4 w-4 ml-1" />
                 </Button>
@@ -1177,11 +1177,17 @@ function Home() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {mergedInsights.slice(0, 4).map((insight) => (
+                  {mergedInsights.slice(0, 4).map((insight) => {
+                    // Route to the page where this insight can be acted on: gap
+                    // opportunities → Gap Analysis; executive (LLM) insights → AI
+                    // Insights. (Was a generic /causal-discovery for all.)
+                    const insightDest =
+                      insight.type === 'opportunity' ? '/gap-analysis' : '/ai-insights';
+                    return (
                     <div
                       key={insight.id}
                       className="flex items-start gap-3 p-3 rounded-lg border bg-[var(--color-card)] hover:bg-muted/50 transition-colors cursor-pointer"
-                      onClick={() => navigate('/causal-discovery')}
+                      onClick={() => navigate(insightDest)}
                     >
                       <div className="mt-0.5">{getInsightIcon(insight.type)}</div>
                       <div className="flex-1 min-w-0">
@@ -1204,12 +1210,20 @@ function Home() {
                         </div>
                       </div>
                       {insight.actionable && (
-                        <Button variant="outline" size="sm">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(insightDest);
+                          }}
+                        >
                           Act
                         </Button>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
