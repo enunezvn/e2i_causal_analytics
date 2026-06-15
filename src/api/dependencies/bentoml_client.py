@@ -450,8 +450,20 @@ class BentoMLClient:
         /metadata`` -> 404). The response includes ``model_id``,
         ``model_loaded``, ``supported_endpoints`` and free-form ``metadata``.
 
+        Multi-model routing (#39): the service ``model_info`` method accepts an
+        optional ``ModelInfoInput.model_name`` to ROUTE the response to a
+        specific loaded bundle (e.g. ``initiation_kisqali_goldstd_lr_v1``). The
+        BentoML IO convention wraps the method argument under ``input_data`` (the
+        same convention ``predict`` uses), so we MUST post
+        ``{"input_data": {"model_name": <name>}}`` — posting a bare ``{}`` leaves
+        ``input_data`` None and the service returns the DEFAULT (degraded
+        "no_model", empty ``feature_columns``), verified live. Sending
+        ``model_name`` is backward-compatible for the legacy single-model service:
+        it ignores the routing key and returns its one model's info.
+
         Args:
-            model_name: Name of the model (for tracing / breaker keying)
+            model_name: Name of the model to describe + route to (also used for
+                tracing / breaker keying).
 
         Returns:
             Model metadata and configuration
@@ -470,11 +482,13 @@ class BentoMLClient:
 
         try:
             assert self._client is not None
-            # The BentoML service-method ``model_info`` takes no arguments; an
-            # empty JSON object satisfies its IO descriptor.
+            # Wrap the routing key under ``input_data`` (mirrors ``predict``'s
+            # ``wrapped_input = {"input_data": input_data}``) so the multi-model
+            # ``/model_info`` (#39) routes to the requested bundle instead of
+            # returning the default degraded model.
             response = await self._client.post(
                 f"{endpoint_url}/model_info",
-                json={},
+                json={"input_data": {"model_name": model_name}},
                 timeout=5.0,
             )
             response.raise_for_status()
@@ -484,6 +498,93 @@ class BentoMLClient:
 
         circuit.record_success()
         return response.json()  # type: ignore[no-any-return]
+
+    async def get_shap(
+        self,
+        model_name: str,
+        raw_features: list[Dict[str, Any]],
+        *,
+        timeout: Optional[float] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compute SHAP for a gold-standard cohort on the BentoML side (#39).
+
+        The gold-standard cohort bundles (model + fitted FeatureBuilder + encoded
+        ``feature_columns``) live ONLY in the BentoML container's mount — the API
+        process cannot read the bundle files. So SHAP for these models is computed
+        WHERE the bundle is loaded, via the service ``/shap`` endpoint, which
+        encodes the RAW covariates through the bundled preprocessor and runs the
+        SHAP explainer over the ENCODED vector the model actually scored.
+
+        Input mirrors ``predict``'s raw-covariate path: the routed ``model_name``
+        plus ``raw_features`` (RAW covariate rows). Wrapped under ``input_data``
+        per the BentoML method-parameter convention.
+
+        Returns:
+            The service ``/shap`` JSON, e.g. ``{"shap_values": {encoded: float},
+            "base_value": float, "encoded_feature_columns": [...],
+            "explainer_type": "LinearExplainer", "model_id": ...}``. A fail-closed
+            service response carries a non-None ``error`` (callers must check it).
+
+        Raises:
+            httpx.HTTPError: If the request fails after retries.
+            RuntimeError: If the circuit breaker is open.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        endpoint_url = self.config.get_endpoint_url(model_name)
+        circuit = self._get_circuit_breaker(model_name)
+
+        if not circuit.can_execute():
+            raise RuntimeError(
+                f"Circuit breaker open for model '{model_name}'. Service may be unavailable."
+            )
+
+        start_time = time.time()
+        last_exception: Optional[Exception] = None
+        input_data = {"model_name": model_name, "raw_features": list(raw_features)}
+
+        for attempt in range(self.config.max_retries):
+            try:
+                headers = {}
+                if trace_id:
+                    headers["X-Trace-ID"] = trace_id
+
+                assert self._client is not None
+                response = await self._client.post(
+                    f"{endpoint_url}/shap",
+                    json={"input_data": input_data},
+                    timeout=timeout or self.config.timeout,
+                    headers=headers,
+                )
+                response.raise_for_status()
+
+                result: Dict[str, Any] = response.json()
+                latency_ms = (time.time() - start_time) * 1000
+                circuit.record_success()
+
+                if self.config.enable_tracing:
+                    self._log_trace(model_name, input_data, result, latency_ms, trace_id)
+
+                return result
+
+            except httpx.HTTPStatusError as e:
+                last_exception = e
+                if e.response.status_code >= 500:
+                    circuit.record_failure()
+                    await self._backoff(attempt)
+                else:
+                    # Client error, don't retry
+                    raise
+
+            except httpx.RequestError as e:
+                last_exception = e
+                circuit.record_failure()
+                await self._backoff(attempt)
+
+        # All retries exhausted
+        raise last_exception or RuntimeError(f"Failed to call /shap for model '{model_name}'")
 
     async def _backoff(self, attempt: int) -> None:
         """Exponential backoff with jitter."""

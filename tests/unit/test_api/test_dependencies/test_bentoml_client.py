@@ -547,6 +547,91 @@ class TestBentoMLClient:
         await client.close()
 
     @pytest.mark.asyncio
+    async def test_get_model_info_routes_model_name_in_wrapped_contract(self):
+        """FIX #1 (#39): get_model_info must POST the routed model_name wrapped
+        under ``input_data`` so the multi-model /model_info routes to the bundle.
+
+        Posting a bare ``{}`` (the old behavior) leaves the service's
+        ``input_data`` None → it returns the DEFAULT degraded "no_model" with
+        empty feature_columns (verified live). The fix sends
+        ``{"input_data": {"model_name": <name>}}``.
+        """
+        config = BentoMLClientConfig(base_url="http://localhost:3000")
+        client = BentoMLClient(config)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "model_id": "initiation_kisqali_goldstd_lr_v1",
+            "model_loaded": True,
+            "keep_columns": ["disease_severity", "academic_hcp", "geographic_region"],
+            "feature_columns": ["disease_severity", "geographic_region_northeast"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+
+            await client.get_model_info("initiation_kisqali_goldstd_lr_v1")
+
+            posted = mock_post.call_args.kwargs["json"]
+            # The routed name must travel under input_data.model_name (NOT a bare {}).
+            assert posted == {"input_data": {"model_name": "initiation_kisqali_goldstd_lr_v1"}}
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_shap_posts_wrapped_raw_features(self):
+        """FIX #2b (#39): get_shap POSTs to {base}/shap with the routed
+        model_name + raw_features wrapped under input_data (mirrors predict)."""
+        config = BentoMLClientConfig(base_url="http://localhost:3000")
+        client = BentoMLClient(config)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "shap_values": {"disease_severity": 0.88, "geographic_region_northeast": -0.18},
+            "base_value": -0.83,
+            "encoded_feature_columns": ["disease_severity", "geographic_region_northeast"],
+            "explainer_type": "LinearExplainer",
+            "model_id": "initiation_kisqali_goldstd_lr_v1",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        raw = [{"disease_severity": 5.26, "academic_hcp": 0, "geographic_region": "northeast"}]
+        with patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+
+            result = await client.get_shap("initiation_kisqali_goldstd_lr_v1", raw)
+
+            # Endpoint + wrapped contract.
+            assert mock_post.call_args.args[0] == "http://localhost:3000/shap"
+            posted = mock_post.call_args.kwargs["json"]
+            assert posted == {
+                "input_data": {
+                    "model_name": "initiation_kisqali_goldstd_lr_v1",
+                    "raw_features": raw,
+                }
+            }
+            assert result["shap_values"]["disease_severity"] == 0.88
+            assert result["base_value"] == -0.83
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_shap_rejects_when_circuit_open(self):
+        """get_shap honors the per-endpoint circuit breaker (fail-closed)."""
+        client = BentoMLClient()
+        cb = client._get_circuit_breaker("initiation_kisqali_goldstd_lr_v1")
+        cb.state = CircuitState.OPEN
+        cb.last_failure_time = time.time()
+
+        with pytest.raises(RuntimeError, match="Circuit breaker open"):
+            await client.get_shap("initiation_kisqali_goldstd_lr_v1", [{"x": 1}])
+
+        await client.close()
+
+    @pytest.mark.asyncio
     async def test_get_circuit_breaker_per_endpoint(self):
         """Test circuit breakers are per-endpoint."""
         client = BentoMLClient()

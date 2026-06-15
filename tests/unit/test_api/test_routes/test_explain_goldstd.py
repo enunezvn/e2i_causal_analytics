@@ -169,6 +169,121 @@ class TestResolveCanonicalFeaturesGoldstdBranch:
         assert resolved == {"f1": 1.0, "f2": 2.0}
 
 
+@pytest.mark.asyncio
+class TestComputeShapGoldstdBranch:
+    """Fix #2c (#39, Option B): compute_shap delegates gold-standard cohorts to
+    the BentoML /shap endpoint (no MLflow load) and maps the response into the
+    legacy compute_shap shape. Legacy non-goldstd path is unchanged."""
+
+    @staticmethod
+    def _service_with_shap(shap_return: dict) -> RealTimeSHAPService:
+        service = RealTimeSHAPService.__new__(RealTimeSHAPService)
+        client = AsyncMock()
+        client.get_shap = AsyncMock(return_value=shap_return)
+        service.bentoml_client = client
+        service._initialized = True
+        return service
+
+    async def test_goldstd_compute_shap_calls_bentoml_shap_not_mlflow(self) -> None:
+        """For a gold-standard cohort, compute_shap calls /shap with the serving
+        name + RAW covariates and returns real per-encoded-feature contributions
+        — and NEVER touches the MLflow explainer."""
+        service = self._service_with_shap(
+            {
+                "shap_values": {
+                    "disease_severity": 0.8799,
+                    "geographic_region_northeast": -0.1817,
+                    "academic_hcp": 0.0,
+                },
+                "base_value": -0.8342,
+                "encoded_feature_columns": [
+                    "disease_severity",
+                    "geographic_region_northeast",
+                    "academic_hcp",
+                ],
+                "explainer_type": "LinearExplainer",
+                "model_id": "initiation_kisqali_goldstd_lr_v1",
+            }
+        )
+        # If the legacy in-process explainer were used it would explode (no real
+        # MLflow); assert it is NOT consulted.
+        service.shap_explainer = AsyncMock()
+        service.shap_explainer.compute_shap_values = AsyncMock(
+            side_effect=AssertionError("legacy MLflow explainer must not be called for goldstd")
+        )
+
+        out = await service.compute_shap(
+            features={
+                "disease_severity": 5.26,
+                "geographic_region_northeast": 1.0,
+                "academic_hcp": 0.0,
+            },
+            model_type=ModelType.INITIATION,
+            model_version_id="initiation_kisqali_goldstd_lr_v1",
+            top_k=5,
+            serving_name="initiation_kisqali_goldstd_lr_v1",
+            raw_features={
+                "disease_severity": 5.26,
+                "academic_hcp": 0,
+                "geographic_region": "northeast",
+            },
+        )
+
+        # /shap called with the routed serving name + RAW covariates.
+        called = service.bentoml_client.get_shap.call_args
+        assert called.kwargs["model_name"] == "initiation_kisqali_goldstd_lr_v1"
+        assert called.kwargs["raw_features"][0]["geographic_region"] == "northeast"
+        # Mapped into the legacy compute_shap shape.
+        assert out["base_value"] == pytest.approx(-0.8342)
+        assert out["explainer_type"] == "LinearExplainer"
+        assert out["shap_sum"] == pytest.approx(0.8799 - 0.1817 + 0.0)
+        names = {c.feature_name for c in out["contributions"]}
+        assert "disease_severity" in names
+        top = out["contributions"][0]
+        assert top.feature_name == "disease_severity"  # largest |shap|
+        assert top.shap_value == pytest.approx(0.8799)
+
+    async def test_goldstd_service_error_fails_closed_502(self) -> None:
+        """A fail-closed /shap response (error set) surfaces as 502 — no
+        fabricated SHAP."""
+        service = self._service_with_shap({"shap_values": {}, "error": "Unknown model_name: bad"})
+        with pytest.raises(HTTPException) as ei:
+            await service.compute_shap(
+                features={"x": 1.0},
+                model_type=ModelType.HCP_ADOPTION,
+                model_version_id="hcp_adoption_kisqali_goldstd_lr_v1",
+                serving_name="hcp_adoption_kisqali_goldstd_lr_v1",
+                raw_features={"a": 1},
+            )
+        assert ei.value.status_code == 502
+
+    async def test_goldstd_missing_context_fails_closed_500(self) -> None:
+        """Missing serving_name/raw_features (internal wiring error) → 500."""
+        service = self._service_with_shap({"shap_values": {"x": 0.1}})
+        with pytest.raises(HTTPException) as ei:
+            await service.compute_shap(
+                features={"x": 1.0},
+                model_type=ModelType.INITIATION,
+                model_version_id="initiation_kisqali_goldstd_lr_v1",
+                serving_name=None,  # not threaded through
+                raw_features=None,
+            )
+        assert ei.value.status_code == 500
+
+    async def test_goldstd_empty_shap_map_fails_closed_502(self) -> None:
+        """An empty shap_values map (no error field) still fails closed (502)."""
+        service = self._service_with_shap({"shap_values": {}, "base_value": 0.0})
+        with pytest.raises(HTTPException) as ei:
+            await service.compute_shap(
+                features={"x": 1.0},
+                model_type=ModelType.PERSISTENCE,
+                model_version_id="persistence_kisqali_goldstd_lr_v1",
+                serving_name="persistence_kisqali_goldstd_lr_v1",
+                raw_features={"a": 1},
+            )
+        assert ei.value.status_code == 502
+
+
 class TestGoldstdCohortFamilyMapping:
     def test_per_brand_and_base_names_map_to_family(self) -> None:
         from src.api.routes.explain import _goldstd_cohort_family
