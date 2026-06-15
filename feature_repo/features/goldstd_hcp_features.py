@@ -61,7 +61,7 @@ goldstd_hcp_source = PostgreSQLSource(
 # =============================================================================
 
 goldstd_hcp_features_fv = FeatureView(
-    name="goldstd_hcp_features",
+    name="goldstd_hcp_cohort_features",
     entities=[hcp],
     ttl=timedelta(days=30),
     schema=[

@@ -74,16 +74,16 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
     ],
     # HCP-grain gold-standard adoption cohort (#39 multi-model): the per-brand
     # ``hcp_adoption_{brand}_goldstd_lr_v1`` models consume the 5 RAW leakage-safe
-    # HCP covariates served by the ``goldstd_hcp_features`` view (entity: hcp).
-    # The served model's FeatureBuilder one-hot/median-encodes them into the 19
-    # numeric features SHAP runs over. ``specialty`` + ``geographic_region`` are
-    # categorical (one-hot); the other 3 are numeric.
+    # HCP covariates served by the ``goldstd_hcp_cohort_features`` view
+    # (entity: hcp / hcp_id). The served model's FeatureBuilder one-hot/median-
+    # encodes them into the 19 numeric features SHAP runs over. ``specialty`` +
+    # ``geographic_region`` are categorical (one-hot); the other 3 are numeric.
     "hcp_adoption": [
-        "goldstd_hcp_features:peer_influence_score",
-        "goldstd_hcp_features:influence_network_size",
-        "goldstd_hcp_features:years_experience",
-        "goldstd_hcp_features:specialty",
-        "goldstd_hcp_features:geographic_region",
+        "goldstd_hcp_cohort_features:peer_influence_score",
+        "goldstd_hcp_cohort_features:influence_network_size",
+        "goldstd_hcp_cohort_features:years_experience",
+        "goldstd_hcp_cohort_features:specialty",
+        "goldstd_hcp_cohort_features:geographic_region",
     ],
 }
 

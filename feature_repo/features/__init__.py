@@ -62,7 +62,7 @@ FEATURE_VIEW_MAP = {
     "market_dynamics": market_dynamics_fv,
     "territory_performance": territory_performance_fv,
     "goldstd_cohort_features": goldstd_cohort_features_fv,
-    "goldstd_hcp_features": goldstd_hcp_features_fv,
+    "goldstd_hcp_cohort_features": goldstd_hcp_features_fv,
 }
 
 

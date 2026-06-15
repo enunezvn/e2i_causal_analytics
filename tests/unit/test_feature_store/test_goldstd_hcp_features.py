@@ -30,7 +30,7 @@ class TestGoldstdHcpFeatureView:
         from features.goldstd_hcp_features import goldstd_hcp_features_fv
 
         assert goldstd_hcp_features_fv is not None
-        assert goldstd_hcp_features_fv.name == "goldstd_hcp_features"
+        assert goldstd_hcp_features_fv.name == "goldstd_hcp_cohort_features"
 
     def test_entity_is_hcp_only(self) -> None:
         from features.goldstd_hcp_features import goldstd_hcp_features_fv
@@ -62,5 +62,5 @@ class TestGoldstdHcpFeatureView:
         from features.goldstd_hcp_features import goldstd_hcp_features_fv
 
         assert goldstd_hcp_features_fv.online is True
-        assert "goldstd_hcp_features" in FEATURE_VIEW_MAP
-        assert get_feature_view("goldstd_hcp_features").name == "goldstd_hcp_features"
+        assert "goldstd_hcp_cohort_features" in FEATURE_VIEW_MAP
+        assert get_feature_view("goldstd_hcp_cohort_features").name == "goldstd_hcp_cohort_features"
