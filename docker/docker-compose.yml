@@ -74,6 +74,13 @@ x-common-env: &common-env
   # KPI reads then swap to the *_include_synthetic twins and the FE badges the
   # figures as synthetic. Forwarded to api + scheduler + workers via *common-env.
   E2I_KPI_INCLUDE_SYNTHETIC: ${E2I_KPI_INCLUDE_SYNTHETIC:-0}
+  # WS-SYNTH: deployment-wide synthetic showcase switch. Default OFF -> the strict
+  # real-mode provenance gate stands at every reader. A synthetic-gold-only instance
+  # sets E2I_INCLUDE_SYNTHETIC=true in its host .env: every read-path chokepoint
+  # (apply_provenance_filter) and orchestrator resolver then INCLUDES synthetic so
+  # the platform runs at full potential — synthetic is a badge, not a gate.
+  # Generalizes the KPI-only flag above; reversible (unset -> strict gate returns).
+  E2I_INCLUDE_SYNTHETIC: ${E2I_INCLUDE_SYNTHETIC:-0}
 
 x-common-worker: &common-worker
   build:
