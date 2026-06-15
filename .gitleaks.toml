@@ -133,3 +133,26 @@ description = "advanced_validation.py: surface-key docstrings, no secrets"
 paths = [
   '''^src/agents/ml_foundation/model_trainer/nodes/advanced_validation\.py$''',
 ]
+
+# ---------------------------------------------------------------------------
+# Path allowlist — gold-standard reproducible loaders + generated reports.
+# Added 2026-06-15 (PRs #975 / #976). Both are verified non-secret false
+# positives of the default generic-api-key rule:
+#   * scripts/regenerate_cohort_outcomes.py — the `KEY = "patient_id"`
+#     constant sits next to long outcome-column names in pandas column lists
+#     (`df[[KEY, "persistent_180d", "discontinued_180d"]]`), which the
+#     generic-api-key heuristic reads as a key/value pair (flagged at
+#     :215 and :275). Pure synthetic-data relabel loader — no API keys,
+#     tokens, or secrets.
+#   * docs/reports/** — generated, code-verified lineage & certification
+#     reports. They embed code snippets, config-key identifiers, path:line
+#     refs, and an inlined mermaid JS bundle that false-positive the
+#     generic/high-entropy rules (e.g. the report HTML at :2742). Read-only
+#     documentation — no real secrets.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Gold-standard loaders + generated lineage/cert reports (verified non-secret)"
+paths = [
+  '''^scripts/regenerate_cohort_outcomes\.py$''',
+  '''^docs/reports/.*''',
+]
