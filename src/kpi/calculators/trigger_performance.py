@@ -21,7 +21,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import resolve_kpi_query_id
+from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id
 
 
 class TriggerPerformanceCalculator(KPICalculatorBase):
@@ -111,12 +111,29 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
             return KPIStatus.UNKNOWN
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
+    @staticmethod
+    def _region_scoped(base_query_id: str, context: dict[str, Any]) -> tuple[str, list[Any]]:
+        """Route to the region-scoped query variant (migration 078) when a region
+        is selected, else the base query.
+
+        Trigger queries take no params today; the region variants take region as
+        ``$1`` (triggers carry no region column — the variant joins
+        triggers.patient_id -> patient_journeys.geographic_region). Returns
+        ``(query_id, params)``; region=None yields the base query + ``[]`` (so the
+        certified gates are byte-identical).
+        """
+        region = context.get("region")
+        if region:
+            return region_query_id(base_query_id), [region]
+        return base_query_id, []
+
     def _calc_trigger_precision(self, context: dict[str, Any]) -> float:
         """Calculate WS2-TR-001: Trigger Precision.
 
         Percentage of fired triggers resulting in positive outcome.
         """
-        result = self._execute_query("trigger_performance_precision", [])
+        query_id, params = self._region_scoped("trigger_performance_precision", context)
+        result = self._execute_query(query_id, params)
         if result and result[0].get("precision") is not None:
             return float(result[0]["precision"])
         raise RuntimeError("KPI WS2-TR-001 unavailable: no data for trigger precision")
@@ -126,7 +143,8 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Percentage of positive outcomes preceded by a trigger.
         """
-        result = self._execute_query("trigger_performance_recall", [])
+        query_id, params = self._region_scoped("trigger_performance_recall", context)
+        result = self._execute_query(query_id, params)
         if result and result[0].get("recall") is not None:
             return float(result[0]["recall"])
         raise RuntimeError("KPI WS2-TR-002 unavailable: no data for trigger recall")
@@ -153,7 +171,8 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         not raised; a negative uplift (treatment worse than control) is likewise
         returned (it reads CRITICAL via the higher-is-better bands).
         """
-        result = self._execute_query("trigger_performance_action_rate_uplift", [])
+        query_id, params = self._region_scoped("trigger_performance_action_rate_uplift", context)
+        result = self._execute_query(query_id, params)
         if not result or result[0].get("action_rate_uplift") is None:
             raise RuntimeError(
                 "KPI WS2-TR-003 action_rate_uplift unavailable: no populated "
@@ -167,7 +186,8 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
 
         Percentage of delivered triggers accepted by reps.
         """
-        result = self._execute_query("trigger_performance_acceptance_rate", [])
+        query_id, params = self._region_scoped("trigger_performance_acceptance_rate", context)
+        result = self._execute_query(query_id, params)
         if result and result[0].get("acceptance_rate") is not None:
             return float(result[0]["acceptance_rate"])
         raise RuntimeError("KPI WS2-TR-004 unavailable: no data for acceptance rate")
@@ -178,7 +198,8 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of triggers marked as false positives.
         Lower is better.
         """
-        result = self._execute_query("trigger_performance_false_alert_rate", [])
+        query_id, params = self._region_scoped("trigger_performance_false_alert_rate", context)
+        result = self._execute_query(query_id, params)
         if result and result[0].get("false_alert_rate") is not None:
             return float(result[0]["false_alert_rate"])
         raise RuntimeError("KPI WS2-TR-005 unavailable: no data for false alert rate")
@@ -189,7 +210,8 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of triggers overridden by users.
         Lower is better.
         """
-        result = self._execute_query("trigger_performance_override_rate", [])
+        query_id, params = self._region_scoped("trigger_performance_override_rate", context)
+        result = self._execute_query(query_id, params)
         if result and result[0].get("override_rate") is not None:
             return float(result[0]["override_rate"])
         raise RuntimeError("KPI WS2-TR-006 unavailable: no data for override rate")
@@ -200,7 +222,8 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Median days between trigger and outcome.
         Lower is better.
         """
-        result = self._execute_query("trigger_performance_lead_time", [])
+        query_id, params = self._region_scoped("trigger_performance_lead_time", context)
+        result = self._execute_query(query_id, params)
         if result and result[0].get("median_lead_time") is not None:
             return float(result[0]["median_lead_time"])
         raise RuntimeError("KPI WS2-TR-007 unavailable: no data for lead time")
@@ -211,7 +234,8 @@ class TriggerPerformanceCalculator(KPICalculatorBase):
         Percentage of trigger changes that resulted in worse outcomes.
         Lower is better.
         """
-        result = self._execute_query("trigger_performance_cfr", [])
+        query_id, params = self._region_scoped("trigger_performance_cfr", context)
+        result = self._execute_query(query_id, params)
         if result and result[0].get("cfr") is not None:
             return float(result[0]["cfr"])
         raise RuntimeError("KPI WS2-TR-008 unavailable: no data for change-fail rate")

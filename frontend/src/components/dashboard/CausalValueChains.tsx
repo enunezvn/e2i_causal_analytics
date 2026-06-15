@@ -16,7 +16,7 @@
  * @module components/dashboard/CausalValueChains
  */
 
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -30,8 +30,8 @@ import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useCausalChains } from '@/hooks/api/use-graph';
-import type { GraphPath, GraphNode, CausalChainRequest } from '@/types/graph';
+import { useCausalValueChains } from '@/hooks/api/use-graph';
+import type { GraphPath, GraphNode } from '@/types/graph';
 
 // =============================================================================
 // TYPES
@@ -43,6 +43,8 @@ interface ChainCardData {
   status: 'active' | 'in-progress' | 'monitored';
   nodes: string[];
   result: string;
+  /** True when `result` is a real quantified effect (drives pill styling). */
+  quantified: boolean;
   /** Combined path confidence from the API; null when not reported. */
   confidence: number | null;
   /** Causal method recorded on the relationship; null when not reported. */
@@ -57,6 +59,11 @@ interface ChainCardData {
 
 interface CausalValueChainsProps {
   className?: string;
+  /** Selected brand from the dashboard dropdown ('All' = portfolio). Drives a
+   *  live re-fetch of the brand's top causal value chains. */
+  brand?: string;
+  /** Selected region from the dashboard dropdown ('All US' = all regions). */
+  region?: string;
 }
 
 // NOTE: the former SAMPLE_CHAINS fabricated fallback ("+12% TRx Accuracy",
@@ -68,6 +75,38 @@ interface CausalValueChainsProps {
 // =============================================================================
 // HELPERS
 // =============================================================================
+
+/**
+ * Color-coded TEMPORAL tag from REAL signals on the discovered chain —
+ * `confirmation_count` (how many times the causal engine re-confirmed it) and
+ * `discovery_date` (recency). This replaces the old confidence-bucket relabel:
+ *
+ * - ACTIVE      — strongly re-confirmed (>=3) OR freshly discovered (<=14d):
+ *                 actively tracked.
+ * - IN PROGRESS — building confirmation (>=2) OR discovered within ~30d.
+ * - MONITORED   — established but quiet (few confirmations, older).
+ *
+ * Recency is computed against the current date (the section is "live tracking").
+ * Unknown signals fall back to MONITORED — never an invented status.
+ */
+function deriveTemporalStatus(
+  confirmationCount: number | null,
+  discoveryDate: string | null
+): ChainCardData['status'] {
+  let daysSince: number | null = null;
+  if (discoveryDate) {
+    const t = Date.parse(discoveryDate);
+    if (!Number.isNaN(t)) {
+      daysSince = Math.floor((Date.now() - t) / 86_400_000);
+    }
+  }
+  const recent = daysSince != null && daysSince <= 14;
+  const recentish = daysSince != null && daysSince <= 30;
+  const cc = confirmationCount ?? 0;
+  if (cc >= 3 || recent) return 'active';
+  if (cc >= 2 || recentish) return 'in-progress';
+  return 'monitored';
+}
 
 function getStatusConfig(status: ChainCardData['status']) {
   const config = {
@@ -99,38 +138,74 @@ function transformGraphPathToCard(
   // Honest confidence: only what the API reports — never fabricate a default.
   const confidence = path.total_confidence ?? null;
 
-  // Determine status from REPORTED confidence only; unknown stays 'monitored'.
-  let status: ChainCardData['status'] = 'monitored';
-  if (confidence != null) {
-    if (confidence >= 0.9) status = 'active';
-    else if (confidence >= 0.7) status = 'in-progress';
-  }
-
   // Method only when recorded on the relationship — never default to 'DoWhy'.
   const method =
     path.relationships.length > 0
       ? ((path.relationships[0].properties?.method as string | undefined) ?? null)
       : null;
 
-  // Create title from first and last node
+  // Full chain label (source → … → terminal). Shown in full and allowed to
+  // wrap — never silently truncated to an ambiguous 'pati…'.
   const title =
     nodeNames.length >= 2
       ? `${nodeNames[0]} → ${nodeNames[nodeNames.length - 1]}`
       : 'Causal Chain';
 
-  // Result text from the real terminal-node value; honest when absent.
-  // `!= null` (not truthiness): a quantified ZERO effect is real data.
-  const resultValue = lastNode?.properties?.value as number | undefined;
-  const result = resultValue != null
-    ? `${resultValue > 0 ? '+' : ''}${resultValue.toFixed(1)}% Impact`
-    : 'Impact not quantified';
+  // Quantified causal effect. The magnitude lives on the terminal RELATIONSHIP
+  // as `ate_estimate` (the numeric Average Treatment Effect the causal-impact
+  // pipeline writes — interpretation.py), NOT on the node. `effect_size` is a
+  // CATEGORICAL label ("small"/"medium"/"large"/"unknown"), never the
+  // magnitude, so it is deliberately not read as a number. We fall back to a
+  // terminal-node `value` (a quantified KPI endpoint) only when no ATE is
+  // reported. `Number.isFinite` (not truthiness): a real ZERO effect is data.
+  const lastRel =
+    path.relationships.length > 0
+      ? path.relationships[path.relationships.length - 1]
+      : undefined;
+
+  // Temporal status tag from REAL chain signals (see deriveTemporalStatus).
+  const confirmationCount =
+    typeof lastRel?.properties?.confirmation_count === 'number'
+      ? (lastRel.properties.confirmation_count as number)
+      : null;
+  const discoveryDate =
+    typeof lastRel?.properties?.discovery_date === 'string'
+      ? (lastRel.properties.discovery_date as string)
+      : null;
+  const status = deriveTemporalStatus(confirmationCount, discoveryDate);
+
+  const ateRaw = lastRel?.properties?.ate_estimate;
+  const ate =
+    typeof ateRaw === 'number' && Number.isFinite(ateRaw) ? ateRaw : null;
+
+  const nodeValRaw = lastNode?.properties?.value;
+  const nodeVal =
+    typeof nodeValRaw === 'number' && Number.isFinite(nodeValRaw)
+      ? nodeValRaw
+      : null;
+
+  let result: string;
+  let quantified: boolean;
+  if (ate != null) {
+    // Raw ATE, matching the platform convention (`ATE: {ate:.2f}`). NOT a
+    // fabricated percentage — the outcome scale is not asserted here.
+    result = `ATE ${ate >= 0 ? '+' : ''}${ate.toFixed(2)}`;
+    quantified = true;
+  } else if (nodeVal != null) {
+    result = `${nodeVal > 0 ? '+' : ''}${nodeVal.toFixed(1)}% Impact`;
+    quantified = true;
+  } else {
+    result = 'Impact not quantified';
+    quantified = false;
+  }
 
   return {
     id: `chain-${index}`,
-    title: title.length > 30 ? title.substring(0, 27) + '...' : title,
+    title,
     status,
     nodes: nodeNames.slice(0, -1), // All but last (result)
     result,
+    quantified,
     confidence,
     method,
     // NOTE: no timestamp — GraphPath carries none, and inventing a recency
@@ -157,11 +232,16 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
     <Card className="bg-[var(--color-card)] border-[var(--color-border)] hover:border-[var(--color-primary)]/30 transition-colors">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-[var(--color-muted)]">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="p-2 rounded-lg bg-[var(--color-muted)] flex-shrink-0">
               {chain.icon}
             </div>
-            <CardTitle className="text-sm font-medium">{chain.title}</CardTitle>
+            <CardTitle
+              className="text-sm font-medium break-words"
+              title={chain.title}
+            >
+              {chain.title}
+            </CardTitle>
           </div>
           <Badge variant="outline" className={cn('text-xs', statusConfig.className)}>
             {statusConfig.label}
@@ -182,7 +262,7 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
           <div
             className={cn(
               'px-2 py-1 rounded text-xs font-semibold whitespace-nowrap',
-              chain.result === 'Impact not quantified'
+              !chain.quantified
                 ? 'bg-[var(--color-muted)] text-[var(--color-muted-foreground)]'
                 : 'bg-emerald-500/10 text-emerald-600'
             )}
@@ -219,23 +299,19 @@ function ChainCard({ chain }: { chain: ChainCardData }) {
 // MAIN COMPONENT
 // =============================================================================
 
-export function CausalValueChains({ className }: CausalValueChainsProps) {
-  // Use mutation hook to fetch causal chains
+export function CausalValueChains({
+  className,
+  brand,
+  region,
+}: CausalValueChainsProps) {
+  // Live, dropdown-driven: the top REAL discovered causal value chains from the
+  // `causal_paths` store for the selected brand/region. A query (not a mutation)
+  // so it auto-fetches and RE-FETCHES whenever brand/region change.
   const {
-    mutate: fetchChains,
     data: chainsResponse,
-    isPending,
+    isLoading,
     isError,
-  } = useCausalChains();
-
-  // Fetch chains on mount
-  useEffect(() => {
-    const request: CausalChainRequest = {
-      min_confidence: 0.5,
-      max_chain_length: 5,
-    };
-    fetchChains(request);
-  }, [fetchChains]);
+  } = useCausalValueChains(brand, region, 3);
 
   // Real API data ONLY — no sample fallback on empty or error.
   const chains = useMemo((): ChainCardData[] => {
@@ -244,10 +320,6 @@ export function CausalValueChains({ className }: CausalValueChainsProps) {
       .slice(0, 3)
       .map((path, idx) => transformGraphPathToCard(path, idx));
   }, [chainsResponse]);
-
-  // Pending covers both the in-flight mutation and the first-mount frame
-  // before the useEffect-triggered mutate() settles (no fabricated flash).
-  const isLoading = isPending || (!chainsResponse && !isError);
 
   // Loading state
   if (isLoading) {
@@ -289,11 +361,14 @@ export function CausalValueChains({ className }: CausalValueChainsProps) {
               {chainsResponse.total_chains} chains discovered
             </Badge>
           )}
-          {chainsResponse?.aggregate_effect !== undefined && (
-            <Badge variant="outline" className="text-xs">
-              {(chainsResponse.aggregate_effect * 100).toFixed(1)}% aggregate effect
-            </Badge>
-          )}
+          {/* Only when the API reports a real aggregate. `null` (the current
+              graphiti default) must NOT render as a fabricated "0.0%". */}
+          {typeof chainsResponse?.aggregate_effect === 'number' &&
+            Number.isFinite(chainsResponse.aggregate_effect) && (
+              <Badge variant="outline" className="text-xs">
+                {`ATE ${chainsResponse.aggregate_effect >= 0 ? '+' : ''}${chainsResponse.aggregate_effect.toFixed(2)} aggregate`}
+              </Badge>
+            )}
         </div>
       </div>
 

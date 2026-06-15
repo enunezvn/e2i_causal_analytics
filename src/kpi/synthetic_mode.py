@@ -124,3 +124,19 @@ def resolve_kpi_query_id(query_id: str) -> str:
     if query_id in SYNTHETIC_TWINNED_QUERY_IDS:
         return query_id + _SYNTHETIC_SUFFIX
     return query_id
+
+
+def region_query_id(base_query_id: str) -> str:
+    """Region-scoped query id for a base KPI query (migrations 077 / 078).
+
+    The ``*_region`` variants are ADDITIVE and deliberately ABSENT from
+    :data:`SYNTHETIC_TWINNED_QUERY_IDS` (which mirrors migration 066 and is
+    drift-checked in CI), so :func:`resolve_kpi_query_id` will NOT auto-swap them
+    to the synthetic-inclusive twin. We therefore append ``_include_synthetic``
+    HERE under the showcase flag, so a region-scoped read honors the same
+    synthetic-visibility gate as the base query it parallels. Passing the result
+    back through :func:`resolve_kpi_query_id` (as every ``_execute_query`` does)
+    is a safe no-op on the already-suffixed id.
+    """
+    qid = f"{base_query_id}_region"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid

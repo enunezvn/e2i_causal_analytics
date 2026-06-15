@@ -17,6 +17,14 @@ class KPICalculationContext(BaseModel):
         default=None,
         description="Filter by brand (remibrutinib, fabhalta, kisqali)",
     )
+    region: str | None = Field(
+        default=None,
+        description=(
+            "Filter by geographic region (e.g. northeast, south, midwest, west); "
+            "matched case-insensitively against patient_journeys.geographic_region. "
+            "When set, region-scoped KPI query variants (migration 077) are used."
+        ),
+    )
     start_date: datetime | None = Field(
         default=None,
         description="Start date for time-based calculations",

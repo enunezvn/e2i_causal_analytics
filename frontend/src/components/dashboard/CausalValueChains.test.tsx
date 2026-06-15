@@ -17,22 +17,21 @@ import { CausalValueChains } from './CausalValueChains';
 import type { GraphPath } from '@/types/graph';
 
 vi.mock('@/hooks/api/use-graph', () => ({
-  useCausalChains: vi.fn(),
+  useCausalValueChains: vi.fn(),
 }));
 
-import { useCausalChains } from '@/hooks/api/use-graph';
+import { useCausalValueChains } from '@/hooks/api/use-graph';
 
-const mockUseCausalChains = useCausalChains as ReturnType<typeof vi.fn>;
+const mockUseCausalValueChains = useCausalValueChains as ReturnType<typeof vi.fn>;
 
 function mockChainsState(state: {
   data?: unknown;
-  isPending?: boolean;
+  isLoading?: boolean;
   isError?: boolean;
 }) {
-  mockUseCausalChains.mockReturnValue({
-    mutate: vi.fn(),
+  mockUseCausalValueChains.mockReturnValue({
     data: state.data,
-    isPending: state.isPending ?? false,
+    isLoading: state.isLoading ?? false,
     isError: state.isError ?? false,
   });
 }
@@ -63,6 +62,46 @@ function realPath(): GraphPath {
     ],
     total_confidence: 0.91,
     path_length: 3,
+  };
+}
+
+/** A real single-edge chain that carries the causal effect on the
+ *  RELATIONSHIP as `ate_estimate` — the shape POST /graph/causal-chains
+ *  actually returns for discovered chains (verified against the live API). */
+function atePath(
+  ate: number | null,
+  opts: {
+    effectSize?: unknown;
+    confirmationCount?: number;
+    discoveryDate?: string;
+  } = {}
+): GraphPath {
+  return {
+    nodes: [
+      { id: 'v1', type: 'Agent' as never, name: 'hcp_engagement_level', properties: {} },
+      { id: 'v2', type: 'Agent' as never, name: 'patient_conversion_rate', properties: {} },
+    ],
+    relationships: [
+      {
+        id: 'r1',
+        type: 'CAUSES' as never,
+        source_id: 'v1',
+        target_id: 'v2',
+        properties: {
+          ate_estimate: ate,
+          ...(opts.effectSize !== undefined ? { effect_size: opts.effectSize } : {}),
+          ...(opts.confirmationCount !== undefined
+            ? { confirmation_count: opts.confirmationCount }
+            : {}),
+          ...(opts.discoveryDate !== undefined
+            ? { discovery_date: opts.discoveryDate }
+            : {}),
+        },
+        confidence: 0.9,
+      },
+    ],
+    total_confidence: 0.9,
+    path_length: 1,
   };
 }
 
@@ -177,8 +216,96 @@ describe('CausalValueChains', () => {
     expect(screen.getByText(/impact not quantified/i)).toBeInTheDocument();
   });
 
-  it('shows the loading skeleton while the mutation is pending', () => {
-    mockChainsState({ isPending: true });
+  it('derives the chain effect from the relationship ate_estimate (real API shape), as a raw ATE not a fabricated %', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.413004, { effectSize: 'unknown' })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    render(<CausalValueChains />);
+
+    // The pipeline's real ATE is on the edge — surfaced, not dropped.
+    expect(screen.getByText('ATE +0.41')).toBeInTheDocument();
+    // The old bug read lastNode.properties.value (never populated) → always
+    // "Impact not quantified". That must no longer happen for a real ATE.
+    expect(screen.queryByText(/impact not quantified/i)).not.toBeInTheDocument();
+    // ate_estimate=0.413 is NOT asserted to be 41.3% — the outcome scale is
+    // not claimed, so no fabricated percentage is rendered.
+    expect(screen.queryByText(/41\.3?\s*%/)).not.toBeInTheDocument();
+    // Full chain title — never silently truncated to 'pati…'.
+    expect(
+      screen.getByText('hcp_engagement_level → patient_conversion_rate')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/…|\.\.\./)).not.toBeInTheDocument();
+  });
+
+  it('shows a negative ATE honestly', () => {
+    mockChainsState({
+      data: { chains: [atePath(-0.2)], total_chains: 1, timestamp: new Date().toISOString() },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ATE -0.20')).toBeInTheDocument();
+  });
+
+  it('prefers the relationship ATE over a legacy terminal-node value', () => {
+    const p = atePath(0.413);
+    p.nodes[1].properties = { value: 6.4 }; // both present
+    mockChainsState({
+      data: { chains: [p], total_chains: 1, timestamp: new Date().toISOString() },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ATE +0.41')).toBeInTheDocument();
+    expect(screen.queryByText('+6.4% Impact')).not.toBeInTheDocument();
+  });
+
+  it('does NOT treat effect_size as the magnitude — no ATE means "Impact not quantified"', () => {
+    // Seed-style edge: effect_size is a bare number, ate_estimate is null.
+    // effect_size is a category label in real data, never the magnitude.
+    mockChainsState({
+      data: {
+        chains: [atePath(null, { effectSize: 0.2 })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText(/impact not quantified/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ATE/)).not.toBeInTheDocument();
+    expect(screen.queryByText('0.2')).not.toBeInTheDocument();
+  });
+
+  it('hides the aggregate-effect badge when the API reports null (never a fabricated 0.0%)', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.18)],
+        total_chains: 1,
+        aggregate_effect: null,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.queryByText(/aggregate/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0\.0\s*%/)).not.toBeInTheDocument();
+  });
+
+  it('renders the aggregate-effect badge as a raw ATE when the API provides a number', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.18)],
+        total_chains: 1,
+        aggregate_effect: 0.3,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ATE +0.30 aggregate')).toBeInTheDocument();
+  });
+
+  it('shows the loading skeleton while the query is loading', () => {
+    mockChainsState({ isLoading: true });
 
     const { container } = render(<CausalValueChains />);
 
@@ -188,15 +315,56 @@ describe('CausalValueChains', () => {
     }
   });
 
-  it('shows the loading skeleton on first mount before the mutation settles (no SAMPLE flash)', () => {
-    // Initial mount: mutate() fired in useEffect but state not yet pending.
-    mockChainsState({ data: undefined, isPending: false, isError: false });
+  // --- Temporal status badge (REAL confirmation_count + discovery_date) -------
+  // Replaces the old confidence-bucket relabel. ACTIVE = strongly re-confirmed
+  // OR freshly discovered; IN PROGRESS = building; MONITORED = old + quiet.
 
-    const { container } = render(<CausalValueChains />);
+  it('badge = ACTIVE when the chain is strongly re-confirmed (confirmation_count >= 3)', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.5, { confirmationCount: 4, discoveryDate: '2020-01-01' })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+  });
 
-    for (const marker of FABRICATED_MARKERS) {
-      expect(screen.queryByText(marker)).not.toBeInTheDocument();
-    }
-    expect(container.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+  it('badge = ACTIVE for a freshly discovered chain even with no confirmations', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    mockChainsState({
+      data: {
+        chains: [atePath(0.5, { confirmationCount: 0, discoveryDate: today })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+  });
+
+  it('badge = IN PROGRESS for a building chain (confirmation_count 2, old date)', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.5, { confirmationCount: 2, discoveryDate: '2020-01-01' })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('IN PROGRESS')).toBeInTheDocument();
+  });
+
+  it('badge = MONITORED for an old, lightly-confirmed chain', () => {
+    mockChainsState({
+      data: {
+        chains: [atePath(0.5, { confirmationCount: 1, discoveryDate: '2020-01-01' })],
+        total_chains: 1,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    render(<CausalValueChains />);
+    expect(screen.getByText('MONITORED')).toBeInTheDocument();
   });
 });

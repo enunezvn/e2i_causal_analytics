@@ -454,6 +454,14 @@ export const queryKeys = {
     health: () => [...queryKeys.causal.all(), 'health'] as const,
     history: (limit?: number) =>
       [...queryKeys.causal.all(), 'history', limit ?? 20] as const,
+    valueChains: (brand?: string, region?: string, limit?: number) =>
+      [
+        ...queryKeys.causal.all(),
+        'value-chains',
+        brand ?? 'All',
+        region ?? 'All',
+        limit ?? 3,
+      ] as const,
   },
 
   /**

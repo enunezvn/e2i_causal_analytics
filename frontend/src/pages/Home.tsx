@@ -45,7 +45,6 @@ import {
   ArrowRight,
   Pill,
   MapPin,
-  CalendarDays,
   Sparkles,
   RefreshCw,
   ExternalLink,
@@ -75,8 +74,10 @@ import { getNavigationRoutes } from '@/router/routes';
 // =============================================================================
 
 type Brand = 'All' | 'Remibrutinib' | 'Fabhalta' | 'Kisqali';
-type Region = 'All US' | 'Northeast' | 'Southeast' | 'Midwest' | 'West' | 'Southwest';
-type DateRange = 'Q4 2025' | 'Q3 2025' | 'Q2 2025' | 'Q1 2025' | 'YTD 2025' | 'Last 12 Months';
+// US-Census regions — the ONLY values present in the data (patient_journeys
+// .geographic_region, causal_paths.region, business_metrics.region all share this
+// vocabulary). Southeast/Southwest were never in the data and always returned 0.
+type Region = 'All US' | 'Northeast' | 'South' | 'Midwest' | 'West';
 
 interface KPIMetric {
   id: string;
@@ -120,20 +121,17 @@ const BRANDS: { value: Brand; label: string; indication: string; color: string }
 const REGIONS: { value: Region; label: string }[] = [
   { value: 'All US', label: 'All US Regions' },
   { value: 'Northeast', label: 'Northeast' },
-  { value: 'Southeast', label: 'Southeast' },
+  { value: 'South', label: 'South' },
   { value: 'Midwest', label: 'Midwest' },
   { value: 'West', label: 'West' },
-  { value: 'Southwest', label: 'Southwest' },
 ];
 
-const DATE_RANGES: { value: DateRange; label: string; description: string }[] = [
-  { value: 'Q4 2025', label: 'Q4 2025', description: 'Oct - Dec 2025' },
-  { value: 'Q3 2025', label: 'Q3 2025', description: 'Jul - Sep 2025' },
-  { value: 'Q2 2025', label: 'Q2 2025', description: 'Apr - Jun 2025' },
-  { value: 'Q1 2025', label: 'Q1 2025', description: 'Jan - Mar 2025' },
-  { value: 'YTD 2025', label: 'Year to Date', description: 'Jan - Dec 2025' },
-  { value: 'Last 12 Months', label: 'Last 12 Months', description: 'Rolling 12 months' },
-];
+/** Map the dropdown region label to the backend query param: 'All US' → no
+ *  filter (undefined); otherwise the lowercase US-Census region the data uses
+ *  (KPI SQL matches case-insensitively; causal_paths is lowercase). */
+function regionToParam(region: Region): string | undefined {
+  return region === 'All US' ? undefined : region.toLowerCase();
+}
 
 // Demo-mode (SAMPLE_KPIS) categories — only used when the API is offline.
 const KPI_CATEGORIES = [
@@ -335,9 +333,13 @@ function QuickStatTile({
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground flex items-center gap-1.5">
               {label}
-              {provenanceBadge && (
+              {/* The 'synthetic data' chip is redundant with the page-level
+                  synthetic-demo banner, so it is suppressed here. The 'sample
+                  data' chip (a non-DB fabricated fallback) is a distinct honesty
+                  signal and is kept. */}
+              {provenanceBadge === 'sample' && (
                 <Badge variant="outline" className="text-[10px] px-1 py-0">
-                  {provenanceBadge === 'synthetic' ? 'synthetic data' : 'sample data'}
+                  sample data
                 </Badge>
               )}
             </div>
@@ -375,7 +377,10 @@ function Home() {
   const queryClient = useQueryClient();
   const [selectedBrand, setSelectedBrand] = useState<Brand>('All');
   const [selectedRegion, setSelectedRegion] = useState<Region>('All US');
-  const [selectedDateRange, setSelectedDateRange] = useState<DateRange>('Q4 2025');
+  // Backend region param: undefined for 'All US' (portfolio view), else the
+  // lowercase census region. Drives the KPI summary, Model Accuracy, and the
+  // batch-calculate context so the KPIs re-scope when Region changes.
+  const regionParam = regionToParam(selectedRegion);
   const [selectedCategory, setSelectedCategory] = useState('commercial');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
@@ -410,7 +415,7 @@ function Home() {
     data: kpiSummary,
     isLoading: summaryLoading,
     error: summaryError,
-  } = useKpiSummary(selectedBrand);
+  } = useKpiSummary(selectedBrand, regionParam);
 
   // Honest tile display: the real value, or "No recent activity — data through
   // <date>" when 0/null (no recent data, not a fabrication).
@@ -433,7 +438,11 @@ function Home() {
   const {
     data: rocAucResult,
     isLoading: rocAucLoading,
-  } = useKPIValue('WS1-MP-001', selectedBrand !== 'All' ? selectedBrand : undefined);
+  } = useKPIValue(
+    'WS1-MP-001',
+    selectedBrand !== 'All' ? selectedBrand : undefined,
+    regionParam
+  );
 
   // System Health card: real agent-computed aggregate scores.
   const {
@@ -525,15 +534,21 @@ function Home() {
   );
   useEffect(() => {
     if (kpiListIds.length > 0) {
+      // Brand and/or region scope. Region routes the business_impact KPIs to
+      // their region-scoped variants; calculators without a region variant
+      // ignore the key and return their portfolio/brand value unchanged.
+      const ctx: { brand?: string; region?: string } = {};
+      if (selectedBrand !== 'All') ctx.brand = selectedBrand;
+      if (regionParam) ctx.region = regionParam;
       batchCalc({
         kpi_ids: kpiListIds,
         use_cache: true,
-        context: selectedBrand !== 'All' ? { brand: selectedBrand } : undefined,
+        context: Object.keys(ctx).length > 0 ? ctx : undefined,
       });
     }
     // batchCalc is a stable mutation fn from react-query.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kpiListIds, selectedBrand]);
+  }, [kpiListIds, selectedBrand, regionParam]);
   // Map kpi_id → { value, status, error, dataSource } from the batch result.
   // dataSource carries provenance ('synthetic' in demo mode) so the grid can
   // badge synthetic-sourced values rather than passing them off as real.
@@ -848,25 +863,10 @@ function Home() {
             </SelectContent>
           </Select>
 
-          {/* Date Range Selector */}
-          <Select value={selectedDateRange} onValueChange={(v) => setSelectedDateRange(v as DateRange)}>
-            <SelectTrigger className="w-[160px]">
-              <div className="flex items-center gap-2">
-                <CalendarDays className="h-4 w-4" />
-                <SelectValue placeholder="Select Period" />
-              </div>
-            </SelectTrigger>
-            <SelectContent>
-              {DATE_RANGES.map((range) => (
-                <SelectItem key={range.value} value={range.value}>
-                  <div className="flex flex-col">
-                    <span>{range.label}</span>
-                    <span className="text-xs text-muted-foreground">{range.description}</span>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {/* Period selector removed: it did not filter any data (the KPI stack
+              is brand-scoped; date-range was never threaded into a query), so a
+              functional-looking control would mislead. The data's reporting
+              period is still shown as static context in the footer. */}
 
           {/* Refresh Button */}
           <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isRefreshing}>
@@ -878,8 +878,8 @@ function Home() {
       {/* Executive Intelligence Summary */}
       <ExecutiveSummary />
 
-      {/* Primary Causal Value Chains */}
-      <CausalValueChains />
+      {/* Primary Causal Value Chains — live, scoped by the brand/region dropdowns */}
+      <CausalValueChains brand={selectedBrand} region={selectedRegion} />
 
       {/* Quick Stats Bar — REAL data: Total TRx (MTD) + HCPs Reached from the
           business_metrics rollup; Active Campaigns = running experiments; Model
@@ -1152,7 +1152,7 @@ function Home() {
                   </CardTitle>
                   <CardDescription>Executive insights &amp; gap opportunities</CardDescription>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => navigate('/monitoring')}>
+                <Button variant="ghost" size="sm" onClick={() => navigate('/ai-insights')}>
                   View All
                   <ArrowRight className="h-4 w-4 ml-1" />
                 </Button>
@@ -1177,11 +1177,17 @@ function Home() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {mergedInsights.slice(0, 4).map((insight) => (
+                  {mergedInsights.slice(0, 4).map((insight) => {
+                    // Route to the page where this insight can be acted on: gap
+                    // opportunities → Gap Analysis; executive (LLM) insights → AI
+                    // Insights. (Was a generic /causal-discovery for all.)
+                    const insightDest =
+                      insight.type === 'opportunity' ? '/gap-analysis' : '/ai-insights';
+                    return (
                     <div
                       key={insight.id}
                       className="flex items-start gap-3 p-3 rounded-lg border bg-[var(--color-card)] hover:bg-muted/50 transition-colors cursor-pointer"
-                      onClick={() => navigate('/causal-discovery')}
+                      onClick={() => navigate(insightDest)}
                     >
                       <div className="mt-0.5">{getInsightIcon(insight.type)}</div>
                       <div className="flex-1 min-w-0">
@@ -1204,12 +1210,20 @@ function Home() {
                         </div>
                       </div>
                       {insight.actionable && (
-                        <Button variant="outline" size="sm">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(insightDest);
+                          }}
+                        >
                           Act
                         </Button>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
@@ -1340,19 +1354,12 @@ function Home() {
             </CardContent>
           </Card>
 
-          {/* Filter Summary */}
+          {/* Filter Summary — active region scope. The Reporting Period card was
+              removed with the Period selector (it recapped a non-functional,
+              fixed value); region is a real, active filter so it stays. */}
           <Card>
             <CardContent className="py-4">
               <div className="flex items-center gap-3">
-                <CalendarDays className="h-5 w-5 text-muted-foreground" />
-                <div>
-                  <div className="text-sm font-medium">Reporting Period</div>
-                  <div className="text-xs text-muted-foreground">
-                    {DATE_RANGES.find((r) => r.value === selectedDateRange)?.description || selectedDateRange}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 mt-3 pt-3 border-t">
                 <MapPin className="h-5 w-5 text-muted-foreground" />
                 <div>
                   <div className="text-sm font-medium">Territory</div>

@@ -40,8 +40,11 @@ export class HomePage extends BasePage {
   }
 
   // ========================================================================
-  // Selectors (Brand, Region, Date Range) - using combobox role
+  // Selectors (Brand, Region) - using combobox role
   // ========================================================================
+  // NOTE: the Home header has exactly two comboboxes — Brand and Region. The
+  // non-functional Period/Date-Range selector was removed (it filtered no
+  // data); there is no third combobox.
 
   get brandSelector(): Locator {
     // First combobox is the brand selector
@@ -51,11 +54,6 @@ export class HomePage extends BasePage {
   get regionSelector(): Locator {
     // Second combobox is the region selector
     return this.page.getByRole('combobox').nth(1)
-  }
-
-  get dateRangePicker(): Locator {
-    // Third combobox is the date range selector
-    return this.page.getByRole('combobox').nth(2)
   }
 
   get allSelectors(): Locator {
@@ -199,11 +197,6 @@ export class HomePage extends BasePage {
   async selectRegion(region: string): Promise<void> {
     await this.regionSelector.click()
     await this.page.getByRole('option', { name: new RegExp(region, 'i') }).click()
-  }
-
-  async selectDateRange(range: string): Promise<void> {
-    await this.dateRangePicker.click()
-    await this.page.getByRole('option', { name: new RegExp(range, 'i') }).click()
   }
 
   async clickKpiTab(category: string): Promise<void> {

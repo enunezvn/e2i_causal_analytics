@@ -1200,6 +1200,31 @@ _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
     "patient_starts": ("business_impact_nbrx", "nbrx", True, True),
 }
 
+
+def _kpi_summary_query(
+    base_query_id: str, brand_param: Optional[str], region: Optional[str], brand_scoped: bool
+) -> tuple[str, list]:
+    """Resolve ``(query_id, params)`` for one KPI-summary metric, region-aware.
+
+    When a ``region`` is selected, route to the additive ``*_region`` variant
+    (migration 077). Those variants are deliberately NOT in
+    ``SYNTHETIC_TWINNED_QUERY_IDS`` (which mirrors migration 066 and is
+    drift-checked), so ``resolve_kpi_query_id`` will not auto-swap them — we
+    append ``_include_synthetic`` here under the showcase flag instead, matching
+    the calculator's ``_region_variant`` behavior. The region-variant param order
+    is ``[brand, region]`` for brand-scoped metrics and ``[region]`` otherwise
+    (mirrors the migration's ``$1``/``$2`` positions). With no region selected,
+    falls back to the existing base query + ``resolve_kpi_query_id`` twin path.
+    """
+    if region:
+        qid = f"{base_query_id}_region"
+        if kpi_include_synthetic():
+            qid = f"{qid}_include_synthetic"
+        params = [brand_param, region] if brand_scoped else [region]
+        return qid, params
+    return resolve_kpi_query_id(base_query_id), ([brand_param] if brand_scoped else [])
+
+
 _FALLBACK_AGENTS = [
     {"id": "orchestrator", "name": "Orchestrator", "tier": 1, "status": "active"},
     {"id": "causal-impact", "name": "Causal Impact", "tier": 2, "status": "idle"},
@@ -1242,7 +1267,7 @@ def _fetch_data_through(client: Any) -> Optional[str]:
         return None
 
 
-async def get_kpi_summary(brand: str) -> Dict[str, Any]:
+async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str, Any]:
     """
     Get the REAL KPI summary for a brand for the Home landing tiles.
 
@@ -1262,12 +1287,15 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
 
     Args:
         brand: Brand name (Remibrutinib, Fabhalta, Kisqali, or All)
+        region: Optional geographic region (northeast/south/midwest/west, matched
+            case-insensitively). When set, each metric routes to its region-scoped
+            query variant (migration 077) so the tiles re-scope by region.
 
     Returns:
         ``{brand, period, metrics, data_source}`` -- always this shape, even on
         an unknown brand (honest ``data_source="unavailable"``).
     """
-    logger.info(f"[CopilotKit] Fetching real KPI summary for brand: {brand}")
+    logger.info(f"[CopilotKit] Fetching real KPI summary for brand: {brand}, region: {region}")
 
     metric_fields = list(_KPI_SUMMARY_QUERIES.keys())
     valid_brands = ["Remibrutinib", "Fabhalta", "Kisqali", "All"]
@@ -1301,11 +1329,13 @@ async def get_kpi_summary(brand: str) -> Dict[str, Any]:
                 # view; honest None rather than a misleading 0.
                 metrics[field] = None
                 continue
-            params = [brand_param] if brand_scoped else []
+            resolved_query_id, params = _kpi_summary_query(
+                query_id, brand_param, region, brand_scoped
+            )
             try:
                 response = client.rpc(
                     "kpi_query",
-                    {"query_id": resolve_kpi_query_id(query_id), "params": params},
+                    {"query_id": resolved_query_id, "params": params},
                 ).execute()
                 rows = response.data or []
                 metrics[field] = _coerce_metric(rows[0].get(result_key)) if rows else None
@@ -3140,18 +3170,23 @@ async def get_copilotkit_status() -> Dict[str, Any]:
     summary="Get the real business_metrics KPI rollup for a brand",
     operation_id="get_kpi_summary_rest",
 )
-async def kpi_summary_endpoint(brand: str = Query("All")) -> Dict[str, Any]:
+async def kpi_summary_endpoint(
+    brand: str = Query("All"),
+    region: Optional[str] = Query(None, description="Geographic region filter"),
+) -> Dict[str, Any]:
     """REST exposure of the real business_metrics KPI rollup.
 
     Thin wrapper over the existing :func:`get_kpi_summary` (also registered as a
     CopilotAction) so the Home QUICK_STATS bar can read Total TRx (MTD) and
     HCPs Reached directly. Returns ``{brand, period, metrics, data_source}``;
     ``data_source`` is ``"database"`` for real values, ``"fallback"`` otherwise.
+    When ``region`` is supplied the metrics re-scope to that region (migration
+    077 variants).
 
     Open (no auth) to match the sibling ``GET /copilotkit/status`` so the
     dashboard read works without the auth envelope.
     """
-    return await get_kpi_summary(brand)
+    return await get_kpi_summary(brand, region=region)
 
 
 # =============================================================================

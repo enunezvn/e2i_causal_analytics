@@ -132,7 +132,9 @@ test.describe('Home Page', () => {
       // Wait for selectors to render
       await homePage.brandSelector.waitFor({ state: 'visible', timeout: TIMEOUTS.PAGE_LOAD })
       const count = await homePage.allSelectors.count()
-      expect(count).toBeGreaterThanOrEqual(3)
+      // Exactly two filter comboboxes in the header: Brand + Region. The
+      // non-functional Period/Date-Range selector was removed.
+      expect(count).toBeGreaterThanOrEqual(2)
     })
   })
 
@@ -147,16 +149,9 @@ test.describe('Home Page', () => {
     })
   })
 
-  test.describe('Date Range Picker', () => {
-    test('should display date range picker', async () => {
-      await expect(homePage.dateRangePicker).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
-    })
-
-    test('should allow date range selection', async () => {
-      await homePage.selectDateRange('Q3 2025')
-      await homePage.page.waitForTimeout(500)
-    })
-  })
+  // Date Range Picker tests removed: the non-functional Period/Date-Range
+  // selector was removed from the Home header (it filtered no data). The Home
+  // header now exposes only the Brand and Region filters.
 
   test.describe('System Health', () => {
     test('should show system health indicator', async () => {
