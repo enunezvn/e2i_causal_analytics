@@ -335,9 +335,13 @@ function QuickStatTile({
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground flex items-center gap-1.5">
               {label}
-              {provenanceBadge && (
+              {/* The 'synthetic data' chip is redundant with the page-level
+                  synthetic-demo banner, so it is suppressed here. The 'sample
+                  data' chip (a non-DB fabricated fallback) is a distinct honesty
+                  signal and is kept. */}
+              {provenanceBadge === 'sample' && (
                 <Badge variant="outline" className="text-[10px] px-1 py-0">
-                  {provenanceBadge === 'synthetic' ? 'synthetic data' : 'sample data'}
+                  sample data
                 </Badge>
               )}
             </div>
