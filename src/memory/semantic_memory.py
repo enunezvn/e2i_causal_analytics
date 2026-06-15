@@ -97,6 +97,10 @@ KNOWN_NODE_LABELS: frozenset[str] = frozenset(
         "Community",
         "HCPSpecialty",
         "JourneyStage",
+        # Causal variables (causal_paths -> (:Variable)-[:CAUSES]->(:Variable)).
+        # Needed so the Knowledge-Graph page can scope its node fetch to the
+        # gold-standard causal entities via entity_types=...,Variable.
+        "Variable",
     }
 )
 
@@ -1298,10 +1302,17 @@ class FalkorDBSemanticMemory:
         else:
             rel_match = "-[r]->"
 
+        # Resolve each endpoint id with the SAME precedence list_nodes uses for a
+        # node's id — id, then name, then internal id (see list_nodes:
+        # ``node_dict.get("id") or node_dict.get("name") or str(node.id)``). The
+        # old order (name first) produced endpoint ids that disagreed with the
+        # node ids for any node whose id != name (e.g. a Variable id ``var:treatment``
+        # vs name ``treatment``), so the frontend's orphan-edge filter dropped the
+        # edge and the node rendered as a disconnected singleton.
         query = f"""
         MATCH (s){rel_match}(t)
         {where_clause}
-        RETURN r, coalesce(s.name, s.id, toString(id(s))) as source_name, coalesce(t.name, t.id, toString(id(t))) as target_name, type(r) as rel_type
+        RETURN r, coalesce(s.id, s.name, toString(id(s))) as source_name, coalesce(t.id, t.name, toString(id(t))) as target_name, type(r) as rel_type
         SKIP {offset}
         LIMIT {limit}
         """

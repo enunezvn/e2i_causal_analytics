@@ -19,7 +19,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useNodes, useRelationships, useGraphStats } from '@/hooks/api/use-graph';
+import { useNodes, useRelationships } from '@/hooks/api/use-graph';
 import type { GraphNode, GraphRelationship } from '@/types/graph';
 
 // =============================================================================
@@ -39,6 +39,7 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   CausalPath: '#06b6d4', // cyan-500
   Trigger: '#f97316', // orange-500
   Agent: '#ec4899', // pink-500
+  Variable: '#0d9488', // teal-600 (causal variables)
   Episode: '#6366f1', // indigo-500
   Community: '#14b8a6', // teal-500
   Treatment: '#84cc16', // lime-500
@@ -46,6 +47,102 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   Experiment: '#22c55e', // green-500
   AgentActivity: '#64748b', // slate-500
 };
+
+/**
+ * Gold-standard causal/clinical entity types — the "knowledge" the graph is
+ * meant to convey. This is the DEFAULT render scope. ML-ops artifacts
+ * (Experiment / Model / ScopeSpec / QCReport / Feature / Hyperparameters /
+ * Deployment / …) remain fully present and queryable in FalkorDB; they are only
+ * hidden from this page's default view. Toggle "Show all types" to include them.
+ * This is purely a display filter — it never alters or restricts the graph.
+ */
+const GOLD_STANDARD_LABELS = [
+  'Patient',
+  'HCP',
+  'Brand',
+  'Region',
+  'KPI',
+  'CausalPath',
+  'Trigger',
+  'Treatment',
+  'Agent',
+  'Variable',
+  'Prediction',
+] as const;
+
+/**
+ * Minimum connected-component size to render. Nodes that are not part of a
+ * relationship chain (isolated singletons, and 2-node "duets") carry little
+ * graph signal and only add clutter, so they are dropped from the canvas.
+ * K = 3 keeps every genuine multi-node structure (the data has no 3-node
+ * components — it jumps from duets straight to 4+ node clusters). Tunable.
+ */
+const MIN_COMPONENT_SIZE = 3;
+
+/**
+ * Pull the full (scoped) graph in one window so connected-component detection
+ * and the rendered stats are computed over the complete data, not an arbitrary
+ * page. The backend caps these at 2000; today's graph is ~640 nodes / ~610 edges.
+ */
+const NODE_FETCH_LIMIT = 2000;
+const REL_FETCH_LIMIT = 2000;
+
+/**
+ * Keep only nodes (and the edges among them) that belong to a connected
+ * component of at least `minSize` nodes. Relationships are treated as
+ * undirected; edges whose endpoints are not both present are ignored for
+ * component-building and excluded from the result, so the returned graph is
+ * internally consistent (every edge connects two returned nodes).
+ */
+function filterByComponentSize(
+  nodes: GraphNode[],
+  relationships: GraphRelationship[],
+  minSize: number
+): { nodes: GraphNode[]; relationships: GraphRelationship[] } {
+  if (minSize <= 1 || nodes.length === 0) {
+    return { nodes, relationships };
+  }
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const adjacency = new Map<string, string[]>();
+  for (const id of nodeIds) adjacency.set(id, []);
+  for (const rel of relationships) {
+    if (nodeIds.has(rel.source_id) && nodeIds.has(rel.target_id)) {
+      adjacency.get(rel.source_id)!.push(rel.target_id);
+      adjacency.get(rel.target_id)!.push(rel.source_id);
+    }
+  }
+  // BFS to label components and measure their sizes.
+  const componentOf = new Map<string, number>();
+  const componentSize = new Map<number, number>();
+  let component = 0;
+  for (const start of nodeIds) {
+    if (componentOf.has(start)) continue;
+    component += 1;
+    let size = 0;
+    const queue = [start];
+    componentOf.set(start, component);
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      size += 1;
+      for (const neighbor of adjacency.get(current)!) {
+        if (!componentOf.has(neighbor)) {
+          componentOf.set(neighbor, component);
+          queue.push(neighbor);
+        }
+      }
+    }
+    componentSize.set(component, size);
+  }
+  const keep = new Set(
+    [...nodeIds].filter((id) => (componentSize.get(componentOf.get(id)!) ?? 0) >= minSize)
+  );
+  return {
+    nodes: nodes.filter((n) => keep.has(n.id)),
+    relationships: relationships.filter(
+      (r) => keep.has(r.source_id) && keep.has(r.target_id)
+    ),
+  };
+}
 
 
 // =============================================================================
@@ -60,24 +157,32 @@ function KnowledgeGraphPage() {
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Fetch nodes from API with pagination (get first 100 nodes)
+  // Render scope: gold-standard causal/clinical entities by default; toggle to
+  // also include ML-ops artifacts (Experiment/Model/QCReport/…). Display-only —
+  // the ML-ops data stays in FalkorDB and queryable regardless.
+  const [showAllTypes, setShowAllTypes] = useState(false);
+
+  // Fetch nodes. The default view scopes to the gold-standard entity types;
+  // "Show all types" omits the scope so every label is fetched. The full window
+  // is pulled so connectivity + stats are computed over the complete scoped graph.
   const {
     data: nodesData,
     isLoading: isLoadingNodes,
     error: nodesError,
     refetch: refetchNodes,
-  } = useNodes({ limit: 100 });
+  } = useNodes({
+    entity_types: showAllTypes ? undefined : GOLD_STANDARD_LABELS.join(','),
+    limit: NODE_FETCH_LIMIT,
+  });
 
-  // Fetch relationships from API with pagination (get first 200 relationships)
+  // Fetch relationships (full window). The render derives its edge set from
+  // these, keeping only edges whose endpoints are both present in the node set.
   const {
     data: relationshipsData,
     isLoading: isLoadingRelationships,
     error: relationshipsError,
     refetch: refetchRelationships,
-  } = useRelationships({ limit: 200 });
-
-  // Fetch graph stats for the overview cards
-  const { data: graphStats, isLoading: isLoadingStats } = useGraphStats();
+  } = useRelationships({ limit: REL_FETCH_LIMIT });
 
   // Combined loading state
   const isLoading = isLoadingNodes || isLoadingRelationships;
@@ -102,42 +207,42 @@ function KnowledgeGraphPage() {
     [relationshipsData?.relationships]
   );
 
-  // Filter nodes based on search query
+  // Base rendered graph: drop nodes that are not part of a relationship chain
+  // (singletons + duets) so the canvas shows connected structure, not clutter.
+  // Computed over the full (scoped) graph, independent of the search query.
+  const connectedGraph = useMemo(
+    () => filterByComponentSize(allNodes, allRelationships, MIN_COMPONENT_SIZE),
+    [allNodes, allRelationships]
+  );
+
+  // Filter the connected graph by the search query (matches name or type).
   const filteredNodes = useMemo(() => {
-    if (!searchQuery.trim()) return allNodes;
+    if (!searchQuery.trim()) return connectedGraph.nodes;
     const query = searchQuery.toLowerCase();
-    return allNodes.filter(
+    return connectedGraph.nodes.filter(
       (node) =>
         node.name.toLowerCase().includes(query) ||
         node.type.toLowerCase().includes(query)
     );
-  }, [allNodes, searchQuery]);
+  }, [connectedGraph.nodes, searchQuery]);
 
-  // Filter relationships to only include those connecting filtered nodes
+  // Keep only edges whose endpoints are both in the (possibly searched) node set.
   const filteredRelationships = useMemo(() => {
-    if (!searchQuery.trim()) return allRelationships;
     const nodeIds = new Set(filteredNodes.map((n) => n.id));
-    return allRelationships.filter(
+    return connectedGraph.relationships.filter(
       (rel) => nodeIds.has(rel.source_id) && nodeIds.has(rel.target_id)
     );
-  }, [allRelationships, filteredNodes, searchQuery]);
+  }, [connectedGraph.relationships, filteredNodes]);
 
   // Use filtered data for display
   const nodes = filteredNodes;
   const relationships = filteredRelationships;
 
-  // Calculate stats from API data or use graph stats if available
+  // Stats reflect EXACTLY what is rendered (after scope + connectivity + search),
+  // computed from the loaded data. The global /graph/stats endpoint is NOT used
+  // here: it sums only the legacy enum types (a severe undercount) and would not
+  // match the scoped, connected view shown on the canvas.
   const stats = useMemo(() => {
-    // If we have graph stats from the API, use those
-    if (graphStats) {
-      return {
-        totalNodes: graphStats.total_nodes,
-        totalRelationships: graphStats.total_relationships,
-        nodesByType: graphStats.nodes_by_type,
-      };
-    }
-
-    // Fall back to calculating from the loaded data
     const nodesByType = nodes.reduce(
       (acc, node) => {
         acc[node.type] = (acc[node.type] || 0) + 1;
@@ -151,7 +256,7 @@ function KnowledgeGraphPage() {
       totalRelationships: relationships.length,
       nodesByType,
     };
-  }, [graphStats, nodes, relationships]);
+  }, [nodes, relationships]);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -193,7 +298,26 @@ function KnowledgeGraphPage() {
             Found {filteredNodes.length} nodes, {filteredRelationships.length} relationships
           </div>
         )}
+
+        {/* Scope toggle: gold-standard (default) vs all node types incl. ML-ops */}
+        <div className="flex items-center gap-2 md:ml-auto">
+          <Button
+            variant={showAllTypes ? 'secondary' : 'default'}
+            size="sm"
+            onClick={() => setShowAllTypes((v) => !v)}
+            aria-pressed={showAllTypes}
+            title="Toggle between the gold-standard causal/clinical entities and the full graph (includes ML-ops artifacts)"
+          >
+            {showAllTypes ? 'Showing all types' : 'Gold-standard only'}
+          </Button>
+        </div>
       </div>
+
+      {/* Scope/connectivity hint */}
+      <p className="text-xs text-[var(--color-muted-foreground)] mb-4">
+        Showing {showAllTypes ? 'all node types (incl. ML-ops artifacts)' : 'gold-standard causal & clinical entities'}
+        {' '}that belong to a relationship chain. Isolated singletons and 2-node pairs are hidden.
+      </p>
 
       {/* Legend */}
       <Card className="mb-6">
@@ -225,7 +349,7 @@ function KnowledgeGraphPage() {
           <CardHeader className="pb-2">
             <CardDescription>Total Nodes</CardDescription>
             <CardTitle className="text-2xl">
-              {isLoading || isLoadingStats ? (
+              {isLoading ? (
                 <span className="inline-block h-8 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
               ) : (
                 stats.totalNodes
@@ -233,7 +357,7 @@ function KnowledgeGraphPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {isLoading || isLoadingStats ? (
+            {isLoading ? (
               <div className="flex gap-1">
                 <span className="h-5 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
                 <span className="h-5 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
@@ -254,7 +378,7 @@ function KnowledgeGraphPage() {
           <CardHeader className="pb-2">
             <CardDescription>Total Relationships</CardDescription>
             <CardTitle className="text-2xl">
-              {isLoading || isLoadingStats ? (
+              {isLoading ? (
                 <span className="inline-block h-8 w-16 animate-pulse rounded bg-[var(--color-muted)]" />
               ) : (
                 stats.totalRelationships

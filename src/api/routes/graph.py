@@ -336,7 +336,10 @@ def _convert_to_graph_relationship(data: Dict[str, Any]) -> GraphRelationship:
 async def list_nodes(
     entity_types: Optional[str] = Query(None, description="Comma-separated entity types"),
     search: Optional[str] = Query(None, max_length=500, description="Text search"),
-    limit: int = Query(50, ge=1, le=500, description="Maximum results"),
+    # Cap raised to 2000 so the Knowledge-Graph page can pull the FULL graph in
+    # one window (~640 nodes today) and compute connected components client-side
+    # for the "Show all types" view. The default stays small for ad-hoc callers.
+    limit: int = Query(50, ge=1, le=2000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     sort_by: NodeSortField = Query(NodeSortField.CREATED_AT, description="Sort field"),
     sort_order: SortOrder = Query(SortOrder.DESC, description="Sort order"),
@@ -534,7 +537,10 @@ async def list_relationships(
     source_id: Optional[str] = Query(None, description="Filter by source node"),
     target_id: Optional[str] = Query(None, description="Filter by target node"),
     min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0, description="Minimum confidence"),
-    limit: int = Query(50, ge=1, le=500, description="Maximum results"),
+    # Cap raised to 2000 to match /nodes — the Knowledge-Graph page pulls the
+    # full edge set (~610 today) so it can compute connected components and the
+    # rendered stats client-side. Default stays small for ad-hoc callers.
+    limit: int = Query(50, ge=1, le=2000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
 ) -> ListRelationshipsResponse:
     """
