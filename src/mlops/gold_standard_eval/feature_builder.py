@@ -225,7 +225,16 @@ class FeatureBuilder:
         out: dict[str, pd.Series] = {}
         for col in df.columns:
             s = df[col]
-            if s.dtype == object or str(s.dtype) == "category":
+            # Categorical = "not numeric": covers object, pandas ``category``, AND
+            # the pandas 3.0 ``str`` dtype (future.infer_string=True infers fresh
+            # string columns as ``str``, not ``object``). The old ``== object``
+            # check missed ``str``, so a serving frame built from raw dicts
+            # (the #39 SHAP path) sent ``geographic_region`` down the numeric
+            # branch → ``astype(float)`` on "northeast" → crash. Numerics
+            # (int/float/bool via is_numeric_dtype) keep the impute path; the
+            # DB-loaded ``object`` eval frames are unaffected (object is not
+            # numeric → still one-hot).
+            if not pd.api.types.is_numeric_dtype(s):
                 dummies = pd.get_dummies(s, prefix=col, dummy_na=True)
                 for val, dummy in dummies.items():
                     out[val] = dummy.astype(float)

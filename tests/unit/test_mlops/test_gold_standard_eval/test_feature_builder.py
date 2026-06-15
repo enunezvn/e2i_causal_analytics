@@ -92,6 +92,56 @@ def test_transform_reindexes_eval_to_fitted_columns():
     assert X_eval.shape[1] == X_train.shape[1]
 
 
+def test_transform_one_hots_pandas_string_dtype_categorical():
+    """A categorical column in the pandas ``string`` dtype must one-hot, not crash.
+
+    pandas 3.0 (future.infer_string=True) infers fresh string columns as the
+    ``string`` extension dtype, NOT ``object``. The #39 SHAP serving path builds
+    eval frames from raw {name: value} dicts, so ``geographic_region`` arrives as
+    ``string`` in that runtime. The old ``s.dtype == object`` categorical check
+    missed ``string`` → the column fell through to the numeric branch →
+    ``astype(float)`` on "northeast" raised
+    ``ValueError: could not convert string to float``. We force the ``string``
+    dtype here so the regression reproduces on any pandas version (the droplet's
+    bentoml container runs pandas 3.0; CI/venv may be 2.x).
+    """
+    fb = FeatureBuilder(INITIATION)
+    train = pd.DataFrame(
+        {
+            "treatment_initiated": [1, 0, 1, 0],
+            "disease_severity": [0.9, 0.1, 0.8, 0.2],
+            "academic_hcp": [1, 0, 1, 0],
+            "geographic_region": ["west", "south", "northeast", "midwest"],
+        }
+    )
+    fb.build_from_frame(train)
+    fitted_cols = list(fb.feature_columns)
+
+    eval_df = pd.DataFrame(
+        {
+            "disease_severity": [0.5],
+            "academic_hcp": [0],
+            "geographic_region": pd.array(["northeast"], dtype="string"),
+        }
+    )
+    # Precondition: the categorical column really is the extension string dtype,
+    # not object — otherwise the test would not exercise the regression.
+    assert eval_df["geographic_region"].dtype != object
+    assert pd.api.types.is_string_dtype(eval_df["geographic_region"])
+
+    # Must NOT raise (the old code raised "could not convert string to float").
+    X_eval = fb.transform(eval_df)
+
+    # geographic_region is one-hot-encoded (categorical), not imputed as numeric.
+    assert list(X_eval.columns) == fitted_cols
+    assert X_eval.loc[0, "geographic_region_northeast"] == 1.0
+    region_cols = [c for c in fitted_cols if c.startswith("geographic_region_")]
+    assert X_eval.loc[0, region_cols].sum() == 1.0  # exactly one region hot
+    # numeric covariates still flow through the numeric (impute) path.
+    assert "geographic_region" not in X_eval.columns  # raw cat col not kept as-is
+    assert X_eval.loc[0, "disease_severity"] == 0.5
+
+
 def test_transform_imputes_with_fitted_train_median_not_eval_median():
     fb = FeatureBuilder(INITIATION)
     train = pd.DataFrame(
