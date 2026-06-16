@@ -196,6 +196,17 @@ export function HeterogeneousTreatmentEffects({
   const hasResults = segments.length > 0;
   const significantCount = segments.filter((s) => ciExcludesZero(s) === true).length;
 
+  // The hierarchical CATE endpoint fails closed with a 503 + explanatory message
+  // when no real estimation-data backend is wired (the default in this
+  // deployment). That is an honest "not available yet" condition, not a service
+  // outage, so present it as a calm informational state rather than a red alarm.
+  const noDataBackend =
+    !!error &&
+    (error as { status?: number }).status === 503 &&
+    /no real data backend|no production data source/i.test(
+      (error as { message?: string }).message ?? '',
+    );
+
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
       <CardHeader className="pb-3">
@@ -246,8 +257,16 @@ export function HeterogeneousTreatmentEffects({
           </div>
         )}
 
-        {/* Error State */}
-        {!isPending && (error || failed) && (
+        {/* Honest "data not wired yet" state — an expected condition, not a failure */}
+        {!isPending && noDataBackend && (
+          <EmptyState
+            title="Live CATE data isn’t wired yet"
+            description="Segment-level heterogeneous treatment effects need a real estimation dataset (treatment, outcome and effect-modifier columns). That data source isn’t connected on this surface yet, so no analysis can run — this is an honest empty state, not a service failure."
+          />
+        )}
+
+        {/* Error State (genuine failures only) */}
+        {!isPending && !noDataBackend && (error || failed) && (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/5 border border-rose-500/20">
             <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
             <div className="text-xs text-[var(--color-muted-foreground)]">
