@@ -55,8 +55,11 @@ async def test_default_limit_when_omitted():
 
 @pytest.mark.asyncio
 async def test_no_client_returns_empty_without_query():
-    repo = ABResultsRepository(supabase_client=None)
-    # Force the no-client branch deterministically (avoid env-bound get_supabase).
+    # Construct with a (mock) client so __init__/_ensure_client does NOT lazily
+    # resolve one via get_supabase_client() — that needs a Supabase key, which is
+    # absent in CI and raised ServiceConnectionError at construction. Then null the
+    # client to exercise the method's no-client guard deterministically, env-free.
+    repo = ABResultsRepository(supabase_client=MagicMock())
     repo.client = None
 
     assert await repo.get_fidelity_comparisons(uuid4(), limit=5) == []
