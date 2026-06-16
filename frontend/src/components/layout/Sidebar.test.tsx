@@ -37,4 +37,33 @@ describe('Sidebar navigation (rendered IA)', () => {
     // analytics pages that USED to be mislabeled "System" now lead the list
     expect(links.indexOf('Gap Analysis')).toBeLessThan(links.indexOf('Agent Orchestration'));
   });
+
+  it('renders a real, distinct icon for every nav item (none silently fall back to Home)', () => {
+    renderSidebar();
+    // Build title -> rendered <svg> content signature from the actual DOM.
+    const sigByTitle = new Map<string, string>();
+    for (const a of screen.getAllByRole('link')) {
+      const title = a.textContent?.trim() ?? '';
+      sigByTitle.set(title, a.querySelector('svg')?.innerHTML ?? '');
+    }
+
+    const homeGlyph = sigByTitle.get('Home');
+    expect(homeGlyph).toBeTruthy();
+
+    // The 4 items that used to render the Home glyph (unmapped icon names) must
+    // now render their own icon — this is exactly the content I could not see
+    // below the fold in the screenshot.
+    for (const title of ['Expert Reviews', 'Audit Chain', 'Feedback Learning', 'Analytics']) {
+      expect(sigByTitle.get(title), `${title} should not use the Home fallback icon`).not.toBe(
+        homeGlyph,
+      );
+    }
+
+    // Strongest content check: ONLY Home renders the Home glyph — proves no nav
+    // item anywhere silently falls back.
+    const itemsUsingHomeGlyph = [...sigByTitle.entries()]
+      .filter(([, sig]) => sig === homeGlyph)
+      .map(([title]) => title);
+    expect(itemsUsingHomeGlyph).toEqual(['Home']);
+  });
 });
