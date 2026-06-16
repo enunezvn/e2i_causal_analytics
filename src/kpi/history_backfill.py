@@ -41,7 +41,9 @@ def _status_for(kpi_meta: Any, value: float, lower_is_better: bool = False) -> O
     if threshold is None:
         return None
     try:
-        return threshold.evaluate(value, lower_is_better).value
+        # `.value` on the status enum is typed Any → coerce to str so the
+        # declared Optional[str] return is honoured (mypy no-any-return).
+        return str(threshold.evaluate(value, lower_is_better).value)
     except Exception:  # noqa: BLE001
         return None
 
