@@ -69,11 +69,45 @@ async function stubTimeSeriesEndpoints(page: Page): Promise<void> {
     })
   })
 
-  // Per-KPI value — drives the "KPI history" tab when the user switches modes.
-  // We override the shared `/api/kpis/{id}?use_cache=true` handler so the
-  // payload carries a `metadata.history` series rather than `metadata: {}`.
+  // Per-KPI history — drives the "KPI history" tab's chart (#986). The page
+  // reads the real monthly series from `GET /api/kpis/{id}/history`
+  // (useKPIHistory); when it's empty the page renders an honest empty-state
+  // instead of a chart. Stub a non-empty monthly series so the chart (and the
+  // recharts SVG that `verifyDecompositionDisplayed` asserts) actually renders.
+  // The default time range is 5 years, so ~24 monthly points all survive the
+  // client-side range filter. Register BEFORE the value route below; the value
+  // regex can't match `/history` anyway, but last-registered-wins keeps this
+  // ahead of any shared `/api/kpis/**` catch-all in `mockApiRoutes`.
+  await page.route(/\/api\/kpis\/[^/]+\/history(?:\?|$)/, async (route: Route) => {
+    const url = new URL(route.request().url())
+    const kpiId = decodeURIComponent(url.pathname.split('/').slice(-2)[0] ?? 'WS1-DQ-001')
+    const now = Date.now()
+    const points = []
+    for (let i = 23; i >= 0; i--) {
+      const d = new Date(now - i * 30 * 24 * 60 * 60 * 1000)
+      points.push({
+        metric_date: d.toISOString().slice(0, 10),
+        value: Number((0.85 + 0.05 * Math.sin(i / 3)).toFixed(4)),
+        status: 'warning',
+      })
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        kpi_id: kpiId,
+        brand: '',
+        region: '',
+        count: points.length,
+        points,
+      }),
+    })
+  })
+
+  // Per-KPI value — drives the current-status card. We override the shared
+  // `/api/kpis/{id}?use_cache=true` handler so the payload is well-formed.
   // Use a regex anchored at the path end so we DON'T intercept
-  // `/api/kpis/{id}/metadata` (which the shared mock already serves correctly).
+  // `/api/kpis/{id}/metadata` or `/api/kpis/{id}/history` (handled above).
   await page.route(/\/api\/kpis\/[^/?]+(?:\?|$)/, async (route: Route) => {
     const url = new URL(route.request().url())
     const segments = url.pathname.split('/').filter(Boolean)
@@ -179,14 +213,13 @@ test.describe('Time Series Page', () => {
     })
 
     test('should show Trend stat', async () => {
-      // The "Trend Summary" card renders only once `performanceTrend.data`
-      // resolves, and that query is disabled until a model ID is entered
-      // (usePerformanceTrend → `enabled: !!model_id`; DEFAULT_MODEL_ID is '').
-      // So drive the page like a user: entering a model ID enables the fetch —
-      // fulfilled here by the inline `/trend` mock — which surfaces the card.
-      // Without this, the mock never receives a request and the card (and the
-      // KPI summary stats) stay empty: the failure seen in CI shard 4 (#941).
-      await timeSeriesPage.enterModelId('csu_treatment_initiation_lr_balanced_v1')
+      // #986 retired the free-text "Model ID" override: `modelId` now defaults
+      // to a resolved Cohort × Brand handle (persistence × Remibrutinib), so
+      // `usePerformanceTrend` is enabled on load and the "Trend Summary" card
+      // renders once the inline `/trend` mock resolves — no manual entry needed.
+      // Switching the cohort exercises the new control; the mock fulfils any
+      // resolved handle.
+      await timeSeriesPage.selectCohort('Initiation')
       await expect(timeSeriesPage.trendCard).toBeVisible()
     })
   })

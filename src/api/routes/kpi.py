@@ -33,6 +33,8 @@ from src.api.schemas.kpi import (
     CacheInvalidationResponse,
     KPICalculationRequest,
     KPIHealthResponse,
+    KPIHistoryPoint,
+    KPIHistoryResponse,
     KPIListResponse,
     KPIMetadataResponse,
     KPIResultResponse,
@@ -504,6 +506,50 @@ async def get_kpi_value(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to calculate KPI: {str(e)}",
         )
+
+
+@router.get(
+    "/{kpi_id}/history",
+    response_model=KPIHistoryResponse,
+    summary="Get KPI history (monthly time series)",
+    description=(
+        "Materialized monthly KPI values (from kpi_history) for the Time-Series "
+        "KPI-history view. Returns an EMPTY series for point-in-time KPIs that have "
+        "no real history — the UI shows an honest empty-state rather than a "
+        "fabricated flat line."
+    ),
+    operation_id="get_kpi_history",
+)
+async def get_kpi_history(
+    kpi_id: str,
+    brand: str | None = Query(default=None, description="Brand filter ('' / omitted = global)"),
+    region: str | None = Query(default=None, description="Region filter ('' / omitted = all)"),
+    start_date: str | None = Query(default=None, description="Earliest metric_date (YYYY-MM-DD)"),
+    end_date: str | None = Query(default=None, description="Latest metric_date (YYYY-MM-DD)"),
+) -> KPIHistoryResponse:
+    """Return the date-ordered monthly history for a KPI (empty when none exists)."""
+    from src.repositories.kpi_history import get_kpi_history_repository
+
+    repo = await get_kpi_history_repository()
+    rows = await repo.get_history(
+        kpi_id, brand=brand, region=region, start_date=start_date, end_date=end_date
+    )
+    points = [
+        KPIHistoryPoint(
+            metric_date=str(r.get("metric_date")),
+            value=float(r["value"]),
+            status=r.get("status"),
+        )
+        for r in rows
+        if r.get("value") is not None and r.get("metric_date")
+    ]
+    return KPIHistoryResponse(
+        kpi_id=kpi_id,
+        brand=brand or "",
+        region=region or "",
+        count=len(points),
+        points=points,
+    )
 
 
 @router.post(
