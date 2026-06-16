@@ -115,7 +115,7 @@ export function ScenarioResults({
   // Honest error state — a failed run must NOT look like "never ran".
   // The backend detail is surfaced verbatim; no fabricated numbers.
   if (error) {
-    const detail = error.data?.detail ?? error.message;
+    const detail = error.data?.message ?? error.message;
     let title = 'Simulation failed';
     let hint =
       'The simulation could not be completed. See the details below and try again.';

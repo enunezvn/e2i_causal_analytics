@@ -10,6 +10,7 @@ Observability:
 - Audit chain recording for tamper-evident logging
 """
 
+import logging
 from functools import partial
 
 from langgraph.graph import END, StateGraph
@@ -27,6 +28,8 @@ from .nodes.policy_learner import PolicyLearnerNode
 from .nodes.profile_generator import ProfileGeneratorNode
 from .nodes.segment_analyzer import SegmentAnalyzerNode
 from .state import HeterogeneousOptimizerState
+
+logger = logging.getLogger(__name__)
 
 
 async def error_handler_node(
@@ -71,6 +74,27 @@ def create_heterogeneous_optimizer_graph(
     Returns:
         Compiled LangGraph workflow
     """
+
+    # Resolve ONE shared data connector when the caller did not supply one, so
+    # both data-fetching nodes (cate_estimator + hierarchical_analyzer) read the
+    # SAME live substrate. Done HERE (not in the route) so the route's
+    # import-guard / mock-fallback contract is unaffected and unit tests that
+    # patch this factory never trigger real connector resolution. Falls back to
+    # None — the original lazy / fail-closed node behavior — when a default
+    # connector is unavailable (e.g. no Supabase creds in a unit-test env), so
+    # this resolution can never itself raise out of graph construction.
+    if data_connector is None:
+        try:
+            from .nodes.cate_estimator import _get_default_data_connector
+
+            data_connector = _get_default_data_connector()
+        except Exception as exc:  # pragma: no cover - depends on env/creds
+            logger.warning(
+                "create_heterogeneous_optimizer_graph: default data connector "
+                "unavailable (%s); nodes will resolve lazily / fail-closed.",
+                exc,
+            )
+            data_connector = None
 
     # Initialize nodes. Both data-fetching nodes (cate_estimator and
     # hierarchical_analyzer) receive the SAME connector so they read the same

@@ -1180,23 +1180,15 @@ async def _execute_segment_analysis(
             },
         )
 
-        # Create and run graph.
-        #
-        # Resolve the production data connector ONCE and pass it into the graph
-        # so BOTH data-fetching nodes (cate_estimator and hierarchical_analyzer)
-        # read the same live substrate (#30). Without an explicit connector the
-        # graph factory builds one only for cate_estimator; hierarchical_analyzer
-        # would then have no real source and — because the prod env forbids the
-        # mock fallback — RAISE RuntimeError, failing every analysis AFTER the
-        # (correct) CATE step. Resolving the real connector here keeps the whole
-        # graph on real data while preserving fail-closed behavior (a missing-
-        # credentials env still raises explicitly rather than fabricating).
-        from src.agents.heterogeneous_optimizer.nodes.cate_estimator import (
-            _get_default_data_connector,
-        )
-
-        data_connector = _get_default_data_connector()
-        graph = create_heterogeneous_optimizer_graph(data_connector=data_connector)
+        # Create and run graph. The factory resolves a SINGLE shared data
+        # connector (when none is supplied) and passes it to BOTH data-fetching
+        # nodes (cate_estimator + hierarchical_analyzer) so they read the same
+        # live substrate; hierarchical_analyzer previously had no source and
+        # raised RuntimeError mid-graph in production (#30). The resolution lives
+        # in the factory (not here) so this function's import-guard / mock-
+        # fallback contract — and the unit tests that patch the factory — stay
+        # intact.
+        graph = create_heterogeneous_optimizer_graph()
         result = await graph.ainvoke(initial_state)
 
         # Convert agent output to API response
