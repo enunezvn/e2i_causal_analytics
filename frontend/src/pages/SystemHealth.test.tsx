@@ -22,7 +22,7 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
 // empty-state tests keep their (undefined data) behaviour, and the new wiring
 // tests override the two we care about.
 vi.mock('@/hooks/api', () => ({
-  useQuickHealthCheck: vi.fn(),
+  useFullHealthCheck: vi.fn(),
   usePipelineHealth: vi.fn(),
   useAgentHealth: vi.fn(),
   useHealthHistory: vi.fn(),
@@ -32,7 +32,7 @@ vi.mock('@/hooks/api', () => ({
 
 import { useAlerts, useMonitoringRuns } from '@/hooks/api/use-monitoring';
 import {
-  useQuickHealthCheck,
+  useFullHealthCheck,
   usePipelineHealth,
   useAgentHealth,
   useHealthHistory,
@@ -173,7 +173,7 @@ describe('SystemHealth', () => {
     });
 
     // Default: health hooks return no data (undefined) so empty states render.
-    (useQuickHealthCheck as MockFn).mockReturnValue({ data: undefined, refetch: vi.fn().mockResolvedValue({}) });
+    (useFullHealthCheck as MockFn).mockReturnValue({ data: undefined, refetch: vi.fn().mockResolvedValue({}) });
     (usePipelineHealth as MockFn).mockReturnValue({ data: undefined });
     (useAgentHealth as MockFn).mockReturnValue({ data: undefined });
     (useHealthHistory as MockFn).mockReturnValue({ data: undefined });
