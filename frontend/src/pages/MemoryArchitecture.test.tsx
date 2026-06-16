@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import MemoryArchitecture from './MemoryArchitecture';
 
@@ -35,6 +35,11 @@ function createWrapper() {
 
 // Sample memory stats data
 const mockMemoryStats = {
+  working: {
+    active_sessions: 12,
+    ttl_hours: 24,
+    status: 'healthy',
+  },
   episodic: {
     total_memories: 1250,
     recent_24h: 45,
@@ -332,5 +337,37 @@ describe('MemoryArchitecture', () => {
     render(<MemoryArchitecture />, { wrapper: createWrapper() });
 
     expect(screen.getByText(/Memory systems work together/)).toBeInTheDocument();
+  });
+
+  it('displays the live working-memory active session count', () => {
+    render(<MemoryArchitecture />, { wrapper: createWrapper() });
+
+    // Working Memory card is now wired to real Redis state (no longer a
+    // hardcoded "healthy" facade with no metric).
+    expect(screen.getByText('Active Sessions')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('Live working-memory sessions')).toBeInTheDocument();
+  });
+
+  it('refresh button refetches both queries (no longer a dead control)', () => {
+    const refetchStats = vi.fn();
+    const refetchEpisodic = vi.fn();
+    (useMemoryStats as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockMemoryStats,
+      isLoading: false,
+      error: null,
+      refetch: refetchStats,
+    });
+    (useEpisodicMemories as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockEpisodicMemories,
+      isLoading: false,
+      refetch: refetchEpisodic,
+    });
+
+    render(<MemoryArchitecture />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/i }));
+
+    expect(refetchStats).toHaveBeenCalledTimes(1);
+    expect(refetchEpisodic).toHaveBeenCalledTimes(1);
   });
 });

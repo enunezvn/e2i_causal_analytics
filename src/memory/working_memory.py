@@ -275,6 +275,23 @@ class RedisWorkingMemory:
         sessions.sort(key=lambda s: s.get("last_activity_at", ""), reverse=True)
         return sessions[:limit]
 
+    async def count_active_sessions(self) -> int:
+        """Count active (non-expired) working-memory sessions.
+
+        Counts top-level session keys only (skips nested ``:messages`` /
+        ``:evidence`` keys) without fetching each hash — a cheap, uncapped stat
+        for the Memory Architecture dashboard. "Active" == still present in
+        Redis (expired sessions are evicted by their TTL).
+        """
+        redis = await self.get_client()
+        pattern = f"{self.session_prefix}*"
+        count = 0
+        async for key in redis.scan_iter(match=pattern, count=500):
+            if key.count(":") > self.session_prefix.count(":"):
+                continue
+            count += 1
+        return count
+
     async def delete_session(self, session_id: str) -> bool:
         """
         Delete a session and all associated data.
