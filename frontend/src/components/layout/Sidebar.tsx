@@ -12,7 +12,7 @@
 
 import { NavLink, useLocation } from 'react-router-dom';
 import { useSidebarState } from '@/stores/ui-store';
-import { getNavigationRoutes, type RouteConfig } from '@/router/routes';
+import { getNavigationSections, type RouteConfig } from '@/router/routes';
 
 /**
  * Sidebar props interface
@@ -126,6 +126,30 @@ function NavIcon({ icon, className = 'h-5 w-5' }: { icon?: string; className?: s
         <path strokeLinecap="round" strokeLinejoin="round" d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
     ),
+    'clipboard-check': (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <rect x="8" y="2" width="8" height="4" rx="1" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 14l2 2 4-4" />
+      </svg>
+    ),
+    'shield-check': (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4" />
+      </svg>
+    ),
+    sparkles: (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z" />
+      </svg>
+    ),
+    'bar-chart': (
+      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 20V10M18 20V4M6 20v-4" />
+      </svg>
+    ),
   };
 
   return iconMap[icon ?? 'home'] ?? iconMap.home;
@@ -189,12 +213,10 @@ function CollapseIcon({ isCollapsed, className = 'h-5 w-5' }: { isCollapsed: boo
  */
 export function Sidebar({ className = '' }: SidebarProps) {
   const { isOpen, isCollapsed, setOpen, toggleCollapsed } = useSidebarState();
-  const navigationRoutes = getNavigationRoutes();
-
-  // Group routes by category
-  const mainRoutes = navigationRoutes.slice(0, 1); // Home
-  const analyticsRoutes = navigationRoutes.slice(1, 8); // Analytics sections
-  const systemRoutes = navigationRoutes.slice(8); // System & Monitoring
+  // Sidebar groups come from explicit `route.section` (see getNavigationSections),
+  // not positional slicing — so the ordering/membership in routeConfigs is the
+  // single source of truth and a reorder can't silently mis-file a page.
+  const navSections = getNavigationSections();
 
   return (
     <>
@@ -250,40 +272,20 @@ export function Sidebar({ className = '' }: SidebarProps) {
 
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-4 px-3">
-          {/* Main section */}
-          <div className="space-y-1">
-            {mainRoutes.map((route) => (
-              <NavItem key={route.path} route={route} isCollapsed={isCollapsed} />
-            ))}
-          </div>
-
-          {/* Analytics section */}
-          <div className="mt-6">
-            {!isCollapsed && (
-              <h3 className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-                Analytics
-              </h3>
-            )}
-            <div className="space-y-1">
-              {analyticsRoutes.map((route) => (
-                <NavItem key={route.path} route={route} isCollapsed={isCollapsed} />
-              ))}
+          {navSections.map((section) => (
+            <div key={section.key} className={section.label ? 'mt-6' : ''}>
+              {section.label && !isCollapsed && (
+                <h3 className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                  {section.label}
+                </h3>
+              )}
+              <div className="space-y-1">
+                {section.routes.map((route) => (
+                  <NavItem key={route.path} route={route} isCollapsed={isCollapsed} />
+                ))}
+              </div>
             </div>
-          </div>
-
-          {/* System section */}
-          <div className="mt-6">
-            {!isCollapsed && (
-              <h3 className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-                System
-              </h3>
-            )}
-            <div className="space-y-1">
-              {systemRoutes.map((route) => (
-                <NavItem key={route.path} route={route} isCollapsed={isCollapsed} />
-              ))}
-            </div>
-          </div>
+          ))}
         </nav>
 
         {/* Sidebar footer */}
