@@ -185,10 +185,24 @@ class TestHierarchicalAnalyzerFailClosed:
         }
 
     @pytest.mark.asyncio
-    async def test_raises_when_no_connector_and_mock_forbidden(self):
-        """No connector + no tier0_data + mock forbidden → RuntimeError."""
+    async def test_raises_when_no_connector_and_mock_forbidden(self, monkeypatch):
+        """No connector + no tier0_data + mock forbidden → fail closed.
+
+        The #30 self-heal first tries to resolve a real connector (like the CATE
+        estimator); when none is available it raises rather than fabricating.
+        We force the no-real-connector condition so the test is deterministic
+        regardless of CI Supabase creds.
+        """
+        import src.agents.heterogeneous_optimizer.nodes.cate_estimator as ce
+
+        def _raise():
+            raise RuntimeError(
+                "Failed to initialize Supabase data connector; mock fallback is disabled"
+            )
+
+        monkeypatch.setattr(ce, "_get_default_data_connector", _raise)
         node = HierarchicalAnalyzerNode()
-        # explicitly forbid mock
+        # explicitly forbid mock so the self-heal must resolve a REAL connector
         with patch.dict(
             "os.environ",
             {"E2I_ALLOW_MOCK_CONNECTOR": "0"},
@@ -196,7 +210,7 @@ class TestHierarchicalAnalyzerFailClosed:
         ):
             with pytest.raises(RuntimeError) as exc_info:
                 await node._get_data(self._state())
-            assert "synthetic-data fallback is disabled" in str(exc_info.value)
+            assert "fallback is disabled" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_returns_mock_data_when_explicitly_allowed(self):
@@ -212,8 +226,17 @@ class TestHierarchicalAnalyzerFailClosed:
         assert len(df) > 0
 
     @pytest.mark.asyncio
-    async def test_raises_when_environment_unset(self):
-        """Codex iter-1 H1/H3: unset ENVIRONMENT must fail closed here too."""
+    async def test_raises_when_environment_unset(self, monkeypatch):
+        """Codex iter-1 H1/H3: unset ENVIRONMENT must fail closed here too — the
+        #30 self-heal resolves a real connector or raises; it never fabricates."""
+        import src.agents.heterogeneous_optimizer.nodes.cate_estimator as ce
+
+        def _raise():
+            raise RuntimeError(
+                "Failed to initialize Supabase data connector; mock fallback is disabled"
+            )
+
+        monkeypatch.setattr(ce, "_get_default_data_connector", _raise)
         node = HierarchicalAnalyzerNode()
         with patch.dict("os.environ", {}, clear=False):
             import os as _os
