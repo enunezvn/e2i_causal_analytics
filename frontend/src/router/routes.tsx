@@ -48,6 +48,9 @@ function LazyPage({ children }: { children: React.ReactNode }) {
   return <Suspense fallback={<PageLoadingFallback />}>{children}</Suspense>;
 }
 
+// Navigation section keys — ordered groups rendered in the sidebar.
+export type NavSection = 'main' | 'causal' | 'predictive' | 'decisions' | 'data' | 'system';
+
 // Route configuration with metadata
 export interface RouteConfig {
   path: string;
@@ -55,14 +58,28 @@ export interface RouteConfig {
   description: string;
   icon?: string;
   showInNav?: boolean;
+  /** Sidebar group this route belongs to. Defaults to 'main' (top, no header). */
+  section?: NavSection;
 }
 
 export const routeConfigs: RouteConfig[] = [
+  // ── Main ────────────────────────────────────────────────────────────────
   {
     path: '/',
     title: 'Home',
     description: 'Dashboard overview and key metrics',
     icon: 'home',
+    section: 'main',
+    showInNav: true,
+  },
+
+  // ── Causal Analytics — understand cause → effect ─────────────────────────
+  {
+    path: '/causal-discovery',
+    title: 'Causal Discovery',
+    description: 'Causal analysis and DAG visualization',
+    icon: 'git-branch',
+    section: 'causal',
     showInNav: true,
   },
   {
@@ -70,125 +87,7 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Knowledge Graph',
     description: 'Explore the knowledge graph visualization',
     icon: 'share-2',
-    showInNav: true,
-  },
-  {
-    path: '/causal-discovery',
-    title: 'Causal Discovery',
-    description: 'Causal analysis and DAG visualization',
-    icon: 'git-branch',
-    showInNav: true,
-  },
-  {
-    path: '/model-performance',
-    title: 'Model Performance',
-    description: 'Model metrics and performance analysis',
-    icon: 'bar-chart-2',
-    showInNav: true,
-  },
-  {
-    path: '/feature-importance',
-    title: 'Feature Importance',
-    description: 'SHAP values and feature analysis',
-    icon: 'layers',
-    showInNav: true,
-  },
-  {
-    path: '/time-series',
-    title: 'Time Series',
-    description: 'Time series analysis and forecasting',
-    icon: 'trending-up',
-    showInNav: true,
-  },
-  {
-    path: '/intervention-impact',
-    title: 'Intervention Impact',
-    description: 'Treatment effects and intervention analysis',
-    icon: 'target',
-    showInNav: true,
-  },
-  {
-    path: '/predictive-analytics',
-    title: 'Predictive Analytics',
-    description: 'Risk scores and predictions',
-    icon: 'zap',
-    showInNav: true,
-  },
-  {
-    path: '/data-quality',
-    title: 'Data Quality',
-    description: 'Data profiling and validation',
-    icon: 'check-circle',
-    showInNav: true,
-  },
-  {
-    path: '/system-health',
-    title: 'System Health',
-    description: 'System monitoring and status',
-    icon: 'activity',
-    showInNav: true,
-  },
-  {
-    path: '/monitoring',
-    title: 'Monitoring',
-    description: 'Logs, API usage, and error tracking',
-    icon: 'monitor',
-    showInNav: true,
-  },
-  {
-    path: '/agent-orchestration',
-    title: 'Agent Orchestration',
-    description: '21-agent tiered orchestration system',
-    icon: 'bot',
-    showInNav: true,
-  },
-  {
-    path: '/kpi-dictionary',
-    title: 'KPI Dictionary',
-    description: '46 KPIs across 6 workstreams',
-    icon: 'book-open',
-    showInNav: true,
-  },
-  {
-    path: '/memory-architecture',
-    title: 'Memory Architecture',
-    description: 'Tri-memory cognitive system',
-    icon: 'brain',
-    showInNav: true,
-  },
-  {
-    path: '/digital-twin',
-    title: 'Digital Twin',
-    description: 'Intervention simulation & pre-screening',
-    icon: 'flask-conical',
-    showInNav: true,
-  },
-  {
-    path: '/expert-reviews',
-    title: 'Expert Reviews',
-    description: 'Human-in-the-loop review queue for causal DAGs',
-    icon: 'clipboard-check',
-    showInNav: true,
-  },
-  {
-    path: '/ai-insights',
-    title: 'AI Insights',
-    description: 'GPT-powered briefs, recommendations & alerts',
-    icon: 'brain',
-    showInNav: true,
-  },
-  {
-    path: '/gap-analysis',
-    title: 'Gap Analysis',
-    description: 'ROI opportunity detection and performance gap prioritization',
-    icon: 'target',
-    showInNav: true,
-  },
-  {
-    path: '/experiments',
-    title: 'Experiments',
-    description: 'A/B testing, randomization, and experiment monitoring',
-    icon: 'flask',
+    section: 'causal',
     showInNav: true,
   },
   {
@@ -196,13 +95,15 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Causal Analysis',
     description: 'Multi-library causal inference with hierarchical CATE estimation',
     icon: 'git-branch',
+    section: 'causal',
     showInNav: true,
   },
   {
-    path: '/resource-optimization',
-    title: 'Resource Optimization',
-    description: 'Mathematical optimization for budget and resource allocation',
-    icon: 'calculator',
+    path: '/intervention-impact',
+    title: 'Intervention Impact',
+    description: 'Treatment effects and intervention analysis',
+    icon: 'target',
+    section: 'causal',
     showInNav: true,
   },
   {
@@ -210,20 +111,127 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Segment Analysis',
     description: 'Heterogeneous treatment effects and targeting optimization',
     icon: 'users',
+    section: 'causal',
     showInNav: true,
   },
   {
-    path: '/audit-chain',
-    title: 'Audit Chain',
-    description: 'Workflow audit trails with cryptographic verification',
-    icon: 'shield-check',
+    path: '/expert-reviews',
+    title: 'Expert Reviews',
+    description: 'Human-in-the-loop review queue for causal DAGs',
+    icon: 'clipboard-check',
+    section: 'causal',
+    showInNav: true,
+  },
+
+  // ── Predictive Modeling — predict & explain ──────────────────────────────
+  {
+    path: '/predictive-analytics',
+    title: 'Predictive Analytics',
+    description: 'Risk scores and predictions',
+    icon: 'zap',
+    section: 'predictive',
     showInNav: true,
   },
   {
-    path: '/feedback-learning',
-    title: 'Feedback Learning',
-    description: 'Tier 5 self-improvement with pattern detection and knowledge updates',
-    icon: 'sparkles',
+    path: '/model-performance',
+    title: 'Model Performance',
+    description: 'Model metrics and performance analysis',
+    icon: 'bar-chart-2',
+    section: 'predictive',
+    showInNav: true,
+  },
+  {
+    path: '/feature-importance',
+    title: 'Feature Importance',
+    description: 'SHAP values and feature analysis',
+    icon: 'layers',
+    section: 'predictive',
+    showInNav: true,
+  },
+  {
+    path: '/time-series',
+    title: 'Time Series',
+    description: 'Time series analysis and forecasting',
+    icon: 'trending-up',
+    section: 'predictive',
+    showInNav: true,
+  },
+  {
+    path: '/digital-twin',
+    title: 'Digital Twin',
+    description: 'Intervention simulation & pre-screening',
+    icon: 'flask-conical',
+    section: 'predictive',
+    showInNav: true,
+  },
+
+  // ── Decisions & Optimization — act on the insight ────────────────────────
+  {
+    path: '/gap-analysis',
+    title: 'Gap Analysis',
+    description: 'ROI opportunity detection and performance gap prioritization',
+    icon: 'target',
+    section: 'decisions',
+    showInNav: true,
+  },
+  {
+    path: '/resource-optimization',
+    title: 'Resource Optimization',
+    description: 'Mathematical optimization for budget and resource allocation',
+    icon: 'calculator',
+    section: 'decisions',
+    showInNav: true,
+  },
+  {
+    path: '/experiments',
+    title: 'Experiments',
+    description: 'A/B testing, randomization, and experiment monitoring',
+    icon: 'flask',
+    section: 'decisions',
+    showInNav: true,
+  },
+  {
+    path: '/ai-insights',
+    title: 'AI Insights',
+    description: 'GPT-powered briefs, recommendations & alerts',
+    icon: 'brain',
+    section: 'decisions',
+    showInNav: true,
+  },
+
+  // ── Data & Reference ─────────────────────────────────────────────────────
+  {
+    path: '/kpi-dictionary',
+    title: 'KPI Dictionary',
+    description: '46 KPIs across 6 workstreams',
+    icon: 'book-open',
+    section: 'data',
+    showInNav: true,
+  },
+  {
+    path: '/data-quality',
+    title: 'Data Quality',
+    description: 'Data profiling and validation',
+    icon: 'check-circle',
+    section: 'data',
+    showInNav: true,
+  },
+
+  // ── System & Platform — internals & ops ──────────────────────────────────
+  {
+    path: '/system-health',
+    title: 'System Health',
+    description: 'System monitoring and status',
+    icon: 'activity',
+    section: 'system',
+    showInNav: true,
+  },
+  {
+    path: '/monitoring',
+    title: 'Monitoring',
+    description: 'Logs, API usage, and error tracking',
+    icon: 'monitor',
+    section: 'system',
     showInNav: true,
   },
   {
@@ -231,6 +239,39 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Analytics',
     description: 'Agent performance metrics and query analytics dashboard',
     icon: 'bar-chart',
+    section: 'system',
+    showInNav: true,
+  },
+  {
+    path: '/agent-orchestration',
+    title: 'Agent Orchestration',
+    description: '21-agent tiered orchestration system',
+    icon: 'bot',
+    section: 'system',
+    showInNav: true,
+  },
+  {
+    path: '/memory-architecture',
+    title: 'Memory Architecture',
+    description: 'Tri-memory cognitive system',
+    icon: 'brain',
+    section: 'system',
+    showInNav: true,
+  },
+  {
+    path: '/audit-chain',
+    title: 'Audit Chain',
+    description: 'Workflow audit trails with cryptographic verification',
+    icon: 'shield-check',
+    section: 'system',
+    showInNav: true,
+  },
+  {
+    path: '/feedback-learning',
+    title: 'Feedback Learning',
+    description: 'Tier 5 self-improvement with pattern detection and knowledge updates',
+    icon: 'sparkles',
+    section: 'system',
     showInNav: true,
   },
 ];
@@ -542,4 +583,32 @@ export function getRouteConfig(path: string): RouteConfig | undefined {
 // Helper function to get navigation routes
 export function getNavigationRoutes(): RouteConfig[] {
   return routeConfigs.filter((config) => config.showInNav);
+}
+
+// Ordered sidebar sections. `label: null` renders without a header (e.g. Home).
+const NAV_SECTION_ORDER: { key: NavSection; label: string | null }[] = [
+  { key: 'main', label: null },
+  { key: 'causal', label: 'Causal Analytics' },
+  { key: 'predictive', label: 'Predictive Modeling' },
+  { key: 'decisions', label: 'Decisions & Optimization' },
+  { key: 'data', label: 'Data & Reference' },
+  { key: 'system', label: 'System & Platform' },
+];
+
+export interface NavSectionGroup {
+  key: NavSection;
+  label: string | null;
+  routes: RouteConfig[];
+}
+
+// Group navigation routes into ordered sidebar sections by explicit
+// `route.section` (defaults to 'main'). Membership is semantic, not positional,
+// so reordering a route can never silently move it into the wrong section.
+export function getNavigationSections(): NavSectionGroup[] {
+  const navRoutes = getNavigationRoutes();
+  return NAV_SECTION_ORDER.map(({ key, label }) => ({
+    key,
+    label,
+    routes: navRoutes.filter((route) => (route.section ?? 'main') === key),
+  })).filter((group) => group.routes.length > 0);
 }
