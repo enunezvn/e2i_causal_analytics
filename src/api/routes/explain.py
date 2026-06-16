@@ -2158,6 +2158,10 @@ async def _compute_global_importance(
                 hcp_id=entity_id if grain == "hcp" else None,
                 model_type=model_type,
                 brand=brand,
+                # Explicit None for the optionals — runtime defaults, but named
+                # so mypy (no pydantic plugin) sees every field supplied.
+                model_version_id=None,
+                features=None,
                 format=ExplanationFormat.TOP_K,
                 # 20 is the request cap (ExplainRequest.top_k le=20) and >= the
                 # encoded feature counts of every current goldstd model (9 patient

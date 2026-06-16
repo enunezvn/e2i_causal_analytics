@@ -685,7 +685,7 @@ function FeatureImportance() {
                 <div className="text-center">
                   <div className="text-sm text-muted-foreground">Top Feature</div>
                   <div className="text-lg font-semibold">
-                    {features[0]?.feature_name.replace(/_/g, ' ') ?? '—'}
+                    {features[0]?.feature_name?.replace(/_/g, ' ') ?? '—'}
                   </div>
                 </div>
               </div>
