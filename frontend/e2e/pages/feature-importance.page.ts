@@ -6,13 +6,20 @@ import { ROUTES } from '../fixtures/test-data'
  * Page Object Model for Feature Importance page.
  * Displays SHAP values, feature importance bar charts, beeswarm plots, and waterfall charts.
  *
- * NOTE: After PR #316, this page is wired to the live `/api/explain/*` endpoints
- * (see src/pages/FeatureImportance.tsx). The Model Info, Refresh, and most
- * visualization tabs are gated on a successful POST to /api/explain/predict,
- * which only fires once the user provides a Patient ID and clicks Explain.
- * The spec is responsible for stubbing those endpoints (the shared
- * `**\/api/explain/**` mock returns a legacy shape) and for driving the
- * Patient ID + Explain action when an explanation is required.
+ * NOTE: PR #985 redesigned src/pages/FeatureImportance.tsx into a two-mode view:
+ *
+ *   - **Cohort (global)** — the DEFAULT mode. On arrival it calls
+ *     `GET /api/explain/global` and renders a cohort-level mean-|SHAP| view with
+ *     NO entity selection required. The summary card (Base Value / Top Feature)
+ *     and the Bar/Beeswarm tabs are populated straight away.
+ *   - **Individual** — reached via the "Individual" top-level tab. It exposes an
+ *     entity PICKER (a shadcn Select of real IDs from
+ *     `GET /api/explain/sample-entities`, labelled by `grainLabel` =
+ *     Patient/HCP) and AUTO-RUNS `POST /api/explain/predict` when an entity is
+ *     chosen — there is NO "Explain" button anymore. The Waterfall and History
+ *     viz tabs only exist in this mode.
+ *
+ * The spec stubs `/api/explain/{models,global,sample-entities,predict,history}`.
  */
 export class FeatureImportancePage extends BasePage {
   readonly url = ROUTES.FEATURE_IMPORTANCE
@@ -31,21 +38,41 @@ export class FeatureImportancePage extends BasePage {
     return this.page.getByText(/SHAP|feature importance|beeswarm|force plot/i).first()
   }
 
-  // Model Selector — shadcn SelectTrigger renders as a [role="combobox"] button
-  // with the w-[280px] class set by FeatureImportance.tsx.
+  // Cohort model selector — shadcn SelectTrigger renders as a [role="combobox"]
+  // button. PR #985 changed it to `w-[190px]` with the "Select cohort"
+  // placeholder (was `w-[280px]` / "Select a model").
   get modelSelector(): Locator {
     return this.page
-      .locator('button.w-\\[280px\\], [role="combobox"], button:has-text("Select a model")')
+      .locator('button.w-\\[190px\\], button:has-text("Select cohort")')
       .first()
   }
 
-  // Patient ID + Explain action (post-PR #316)
-  get patientIdInput(): Locator {
-    return this.page.getByLabel(/patient id/i).first()
+  // Brand selector — new in PR #985. `w-[150px]` SelectTrigger, "Select brand"
+  // placeholder. Defaults to the first GOLDSTD_BRANDS entry (Remibrutinib), so
+  // its trigger renders the brand text rather than the placeholder.
+  get brandSelector(): Locator {
+    return this.page
+      .locator('button.w-\\[150px\\], button:has-text("Select brand")')
+      .first()
   }
 
-  get explainButton(): Locator {
-    return this.page.getByRole('button', { name: /^explain$/i }).first()
+  // Top-level mode toggle (Cohort (global) | Individual). Radix Tabs renders
+  // each trigger as a [role="tab"].
+  get cohortModeTab(): Locator {
+    return this.page.getByRole('tab', { name: /cohort \(global\)/i }).first()
+  }
+
+  get individualModeTab(): Locator {
+    return this.page.getByRole('tab', { name: /^individual$/i }).first()
+  }
+
+  // Individual-mode entity picker (a shadcn Select of real IDs, NOT a text
+  // input). It is only mounted once viewMode === 'individual'. The trigger is
+  // labelled by `grainLabel` (Patient/HCP) and shows "Select a patient/hcp".
+  get entityPicker(): Locator {
+    return this.page
+      .locator('button:has-text("Select a patient"), button:has-text("Select a hcp")')
+      .first()
   }
 
   // Action Buttons. The refresh button has no accessible name; it is a
@@ -62,18 +89,12 @@ export class FeatureImportancePage extends BasePage {
     return this.page.getByRole('button', { name: /export/i })
   }
 
-  // Model Info Card — only rendered once `useExplain` has data + a model is
-  // selected. Both the "Base Value" and "Top Feature" labels live inside this
-  // card as `text-sm text-muted-foreground` divs.
+  // Summary card — rendered whenever `hasData` is true. In cohort mode that is
+  // `!!global` (populated on arrival, no Explain needed); in individual mode it
+  // is `!!explanation` (populated after an entity is picked). Both the
+  // "Base Value" and "Top Feature" labels live inside this card.
   //
-  // The shadcn `<Card>` component (src/components/ui/card.tsx) renders as a
-  // div with classes `rounded-xl border …`. The previous locator used
-  // `.rounded-lg.border`, which matches NO element on this page — the only
-  // `rounded-lg`+`border` combo in the codebase is the shadcn `<Alert>`
-  // (src/components/ui/alert.tsx), which is unrelated. That silent miss made
-  // `modelInfoCard.getByText('0.250')` resolve against an empty set, so the
-  // codex-iter-2/3 falsifiability anchors timed out in CI. Scope to the
-  // actual Card class instead.
+  // The shadcn `<Card>` renders as a div with `rounded-xl border …`.
   get modelInfoCard(): Locator {
     return this.page
       .locator('div.rounded-xl.border')
@@ -89,8 +110,7 @@ export class FeatureImportancePage extends BasePage {
     return this.page.getByText('Top Feature').first()
   }
 
-  // Feature Rankings — same `<Card>` (rounded-xl border) issue as
-  // modelInfoCard above; do NOT use `.rounded-lg.border` here.
+  // Feature Rankings — same `<Card>` (rounded-xl border) as modelInfoCard.
   get featureRankingsCard(): Locator {
     return this.page
       .locator('div.rounded-xl.border')
@@ -106,7 +126,8 @@ export class FeatureImportancePage extends BasePage {
     return this.page.locator('.rounded-lg.cursor-pointer')
   }
 
-  // Tabs
+  // Viz Tabs. Bar Chart + Beeswarm exist in BOTH modes; Waterfall + History
+  // only exist in individual mode.
   get tabsList(): Locator {
     return this.page.getByRole('tablist')
   }
@@ -129,11 +150,10 @@ export class FeatureImportancePage extends BasePage {
   }
 
   get featureDistributionCard(): Locator {
-    // Bar Chart's CardDescription wording. The Beeswarm card title was renamed
-    // in PR #316 to "Per-Feature SHAP Contributions"; we keep the broader
-    // matcher so it still resolves either way.
+    // Beeswarm CardTitle: "SHAP Distribution Across the Cohort" (cohort mode)
+    // or "Per-Feature SHAP Contributions" (individual mode).
     return this.page
-      .getByText(/Feature Value Distribution|Per-Feature SHAP Contributions/i)
+      .getByText(/SHAP Distribution Across the Cohort|Per-Feature SHAP Contributions/i)
       .first()
   }
 
@@ -146,24 +166,19 @@ export class FeatureImportancePage extends BasePage {
     return this.page.getByText('Feature Details').first()
   }
 
-  // Actions
-  async selectModel(modelName: string): Promise<void> {
-    // Wait for the models query to settle so the trigger isn't disabled.
-    await this.modelSelector.waitFor({ state: 'visible', timeout: 5000 })
+  // --- Selection helpers ----------------------------------------------------
 
-    // Click the select trigger to open dropdown.
-    await this.modelSelector.click()
-
+  /** Open a Radix Select trigger and click the option matching `optionName`. */
+  private async pickFromSelect(trigger: Locator, optionName: string): Promise<void> {
+    await trigger.waitFor({ state: 'visible', timeout: 5000 })
+    await trigger.click()
     // Wait briefly for Radix to mount the listbox portal.
     await this.page.waitForTimeout(200)
 
-    // Radix Select uses `[role="option"]` for items inside `[role="listbox"]`
-    // (the portal-rendered SelectContent). Match by accessible name first,
-    // then fall back to a text match inside the viewport.
-    const option = this.page.getByRole('option', { name: new RegExp(modelName, 'i') })
+    const option = this.page.getByRole('option', { name: new RegExp(optionName, 'i') })
     const viewportOption = this.page
       .locator('[data-radix-select-viewport] [role="option"], [role="listbox"] [role="option"]')
-      .filter({ hasText: new RegExp(modelName, 'i') })
+      .filter({ hasText: new RegExp(optionName, 'i') })
 
     if (await option.first().isVisible({ timeout: 2000 }).catch(() => false)) {
       await option.first().click()
@@ -174,7 +189,28 @@ export class FeatureImportancePage extends BasePage {
       return
     }
     // Fallback: click by visible text anywhere on the page (last resort).
-    await this.page.getByText(new RegExp(modelName, 'i')).first().click()
+    await this.page.getByText(new RegExp(optionName, 'i')).first().click()
+  }
+
+  async selectModel(modelName: string): Promise<void> {
+    await this.pickFromSelect(this.modelSelector, modelName)
+  }
+
+  async selectBrand(brand: string): Promise<void> {
+    await this.pickFromSelect(this.brandSelector, brand)
+  }
+
+  /** Switch to the Individual (per-entity) mode tab and wait for it to mount. */
+  async switchToIndividualMode(): Promise<void> {
+    await this.individualModeTab.click()
+    // The entity-picker card mounts on the next render; the entity Select is
+    // its first stable element.
+    await this.entityPicker.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
+  }
+
+  /** Switch back to the default Cohort (global) mode tab. */
+  async switchToCohortMode(): Promise<void> {
+    await this.cohortModeTab.click()
   }
 
   async clickTab(tabName: string): Promise<void> {
@@ -185,58 +221,56 @@ export class FeatureImportancePage extends BasePage {
     await this.featureSearchInput.fill(query)
   }
 
-  async fillPatientId(patientId: string): Promise<void> {
-    await this.patientIdInput.fill(patientId)
-  }
-
-  async clickExplain(): Promise<void> {
-    await this.explainButton.click()
+  /**
+   * Pick the first real entity ID from the individual-mode picker. The
+   * explanation auto-runs on selection (no Explain button), so callers don't
+   * trigger a mutation themselves.
+   */
+  async selectFirstEntity(): Promise<void> {
+    await this.entityPicker.waitFor({ state: 'visible', timeout: 5000 })
+    await this.entityPicker.click()
+    await this.page.waitForTimeout(200)
+    await this.page
+      .locator('[data-radix-select-viewport] [role="option"], [role="listbox"] [role="option"]')
+      .first()
+      .click()
   }
 
   /**
-   * Drive the Explain mutation end-to-end and wait for the resulting card to
-   * render. After PR #316, the model-info card and the feature rankings only
-   * appear once `useExplain.data` is populated, so any test that asserts on
-   * downstream UI must call this first.
+   * Drive an INDIVIDUAL-mode explanation end-to-end and wait for the summary
+   * card to render. PR #985 removed the Patient-ID text input + Explain button;
+   * the per-entity explanation is reached by:
+   *   1. switching to the Individual tab,
+   *   2. picking a real entity from the Select picker (defaults to the first ID
+   *      automatically on mount; selecting again is idempotent),
+   *   3. the page AUTO-RUNS `POST /api/explain/predict` and populates the card.
    *
-   * The Explain button is disabled until BOTH the patient-id input is
-   * populated AND the models query has resolved (so `effectiveModelType` is
-   * non-empty). We fill the patient id first, then explicitly wait for the
-   * button to be enabled before clicking — otherwise a slow `/api/explain/
-   * models` response races the click and Playwright times out trying to click
-   * a disabled button (observed locally under contention).
+   * "Base Value" is the first stable label inside the summary card, so it
+   * doubles as the ready-signal for downstream individual-mode assertions.
    */
-  async runExplanation(patientId: string = 'patient_e2e_001'): Promise<void> {
-    await this.fillPatientId(patientId)
-    // Wait for the models query to resolve so `effectiveModelType` is set;
-    // otherwise the Explain button stays disabled.
-    await this.modelSelector.waitFor({ state: 'visible', timeout: 5000 })
-    await this.explainButton.waitFor({ state: 'visible', timeout: 5000 })
-    // Poll until the button is enabled (Playwright's click auto-waits for
-    // enabled, but we surface the readiness explicitly for debuggability).
-    await this.page.waitForFunction(
-      () => {
-        const btn = Array.from(document.querySelectorAll('button')).find(
-          (b) => b.textContent?.trim().toLowerCase() === 'explain',
-        )
-        return !!btn && !(btn as HTMLButtonElement).disabled
-      },
-      undefined,
-      { timeout: 5000 },
-    )
-    await this.clickExplain()
-    // Wait for the live response to flow through the card. "Base Value" is the
-    // first stable label inside the model-info card, so it doubles as the
-    // ready-signal for downstream assertions.
+  async runIndividualExplanation(): Promise<void> {
+    await this.switchToIndividualMode()
+    // The page defaults the picker to the first real ID on mount and auto-runs
+    // the explanation; explicitly selecting is a no-op safety net if the
+    // default-effect hasn't fired yet.
+    if (await this.entityPicker.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await this.selectFirstEntity().catch(() => {})
+    }
     await this.baseValueDisplay.waitFor({ state: 'visible', timeout: 10000 })
   }
 
+  // Back-compat alias: older call-sites used `runExplanation()`. The default
+  // (cohort) view needs no action — the summary card is populated on arrival —
+  // so this routes to the individual-mode driver, which is the only path that
+  // requires interaction to surface an explanation.
+  async runExplanation(): Promise<void> {
+    await this.runIndividualExplanation()
+  }
+
   async clickRefresh(): Promise<void> {
-    // The refresh button is disabled until a patient ID has been entered.
-    // Drive a baseline explanation so the click actually fires the mutation.
-    if (!(await this.refreshButton.isEnabled().catch(() => false))) {
-      await this.runExplanation()
-    }
+    // In the default (cohort) mode the Refresh button is enabled as soon as the
+    // global query settles — no entity needed — so we can click it directly.
+    await this.refreshButton.waitFor({ state: 'visible', timeout: 5000 })
     await this.refreshButton.click()
   }
 
@@ -248,38 +282,22 @@ export class FeatureImportancePage extends BasePage {
     await this.featureRows.nth(index).click()
   }
 
-  // Verification methods
+  // --- Verification methods -------------------------------------------------
+
+  /**
+   * Verify the summary card (Base Value + Top Feature) is populated. In the
+   * default cohort mode this needs NO interaction — `/api/explain/global`
+   * populates it on arrival. We require BOTH labels so a 200 with the wrong
+   * shape (missing `features`/`base_value`) still fails this check rather than
+   * passing on the page header alone.
+   */
   async verifyModelInfoDisplayed(): Promise<boolean> {
     try {
-      // After PR #316 the model-info card only renders once an explanation
-      // has been computed. Drive the Explain action so the live response
-      // populates the card before we look for it.
-      //
-      // We do NOT swallow runExplanation() errors: if the mutation never
-      // completes (e.g. the predict mock broke, the page never reached
-      // `hasExplanation`), this helper MUST return false rather than fall
-      // through to a weaker signal — otherwise a regression in the
-      // /api/explain/predict contract would still pass `should display
-      // model info` (codex iter-0 HIGH).
-      try {
-        await this.runExplanation()
-      } catch {
-        return false
-      }
-
-      // Both the Base Value label AND the Top Feature label only render
-      // inside the model-info card (gated on `hasExplanation &&
-      // selectedModelInfo` in src/pages/FeatureImportance.tsx). Page
-      // header / model selector are present even on the empty-state, so
-      // they cannot be used here. Requiring BOTH labels also catches the
-      // case where a 200 response missing `top_features` would leave the
-      // Top Feature value at the `'—'` fallback (codex iter-2 MED), since
-      // both labels live in the same conditional render.
       const hasBaseValue = await this.baseValueDisplay
-        .isVisible({ timeout: 3000 })
+        .isVisible({ timeout: 5000 })
         .catch(() => false)
       const hasTopFeature = await this.topFeatureDisplay
-        .isVisible({ timeout: 2000 })
+        .isVisible({ timeout: 3000 })
         .catch(() => false)
       return hasBaseValue && hasTopFeature
     } catch {
@@ -298,8 +316,8 @@ export class FeatureImportancePage extends BasePage {
 
   async verifyTabsDisplayed(): Promise<boolean> {
     try {
-      await this.tabsList.waitFor({ state: 'visible', timeout: 5000 })
-      return await this.tabsList.isVisible()
+      await this.tabsList.first().waitFor({ state: 'visible', timeout: 5000 })
+      return await this.tabsList.first().isVisible()
     } catch {
       return false
     }
@@ -309,13 +327,20 @@ export class FeatureImportancePage extends BasePage {
     try {
       // Wait for tab content to render.
       await this.page.waitForTimeout(300)
-      // The Bar Chart tab shows "Global Feature Importance" as the CardTitle.
+      // Cohort-mode Bar Chart CardTitle.
       const hasGlobalImportance = await this.page
         .getByText('Global Feature Importance')
         .first()
         .isVisible()
         .catch(() => false)
       if (hasGlobalImportance) return true
+      // Individual-mode Bar Chart CardTitle.
+      const hasContributions = await this.page
+        .getByText(/Feature Contributions/i)
+        .first()
+        .isVisible()
+        .catch(() => false)
+      if (hasContributions) return true
       // Fallback: empty-state copy emitted by SHAPBarChart when `features=[]`.
       const hasEmptyState = await this.page
         .getByText(/No feature data available/i)
@@ -337,15 +362,15 @@ export class FeatureImportancePage extends BasePage {
   async verifyBeeswarmDisplayed(): Promise<boolean> {
     try {
       await this.page.waitForTimeout(300)
-      // PR #316 renamed the card title; accept either wording.
+      // PR #985 beeswarm CardTitles (cohort | individual).
       const hasContent = await this.page
-        .getByText(/Per-Feature SHAP Contributions|Feature Value Distribution/i)
+        .getByText(/SHAP Distribution Across the Cohort|Per-Feature SHAP Contributions/i)
         .first()
         .isVisible()
         .catch(() => false)
       if (hasContent) return true
       const hasDescription = await this.page
-        .getByText(/dot represents|SHAP impact|One dot per top feature/i)
+        .getByText(/One dot per sampled entity|One dot per top feature/i)
         .first()
         .isVisible()
         .catch(() => false)
@@ -373,7 +398,7 @@ export class FeatureImportancePage extends BasePage {
         .catch(() => false)
       if (hasContent) return true
       const hasDescription = await this.page
-        .getByText(/base value|final prediction/i)
+        .getByText(/base value|final/i)
         .first()
         .isVisible()
         .catch(() => false)

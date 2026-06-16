@@ -2,20 +2,23 @@
  * Feature Importance Page
  * =======================
  *
- * Dashboard for analyzing live feature importance and SHAP explanations
- * by calling the backend `/api/explain/predict` endpoint.
+ * SHAP feature importance for the deployed gold-standard cohort models (#39).
  *
- * Features:
- * - Model selector dropdown populated from `useExplainableModels`
- * - Patient ID input that drives `useExplain` mutation
- * - Real SHAP feature contributions from the response
- * - SHAP Beeswarm + Waterfall + Bar visualizations
- * - Loading / error / empty states
+ * Two modes:
+ * - **Cohort (global)** — mean |SHAP| aggregated over a sample of real cohort
+ *   entities (`/api/explain/global`). Auto-loads on arrival; no entity needed.
+ *   This is the canonical "feature importance" view.
+ * - **Individual** — local SHAP for one selected real entity
+ *   (`/api/explain/predict`), picked from a dropdown of real IDs
+ *   (`/api/explain/sample-entities`) — patients for the patient cohorts, HCPs
+ *   for hcp_adoption.
+ *
+ * Brand selector exposes all 12 per-brand models (4 cohorts × 3 brands).
  *
  * @module pages/FeatureImportance
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Select,
   SelectContent,
@@ -39,6 +42,8 @@ import {
   Minus,
   AlertCircle,
   Loader2,
+  Users,
+  User,
 } from 'lucide-react';
 import {
   SHAPBarChart,
@@ -49,14 +54,20 @@ import {
 import {
   ExplanationFormat,
   ModelType,
-  type ExplainRequest,
+  GOLDSTD_BRANDS,
+  GOLD_STANDARD_COHORTS,
   type ExplainableModelInfo,
   type FeatureContribution,
+  type GlobalImportanceFeature,
+  type GlobalImportancePoint,
+  type GoldStandardBrand,
 } from '@/types/explain';
 import {
   useExplain,
   useExplainableModels,
   useExplanationHistory,
+  useGlobalFeatureImportance,
+  useSampleEntities,
 } from '@/hooks/api/use-explain';
 import { cn } from '@/lib/utils';
 
@@ -65,96 +76,122 @@ import { cn } from '@/lib/utils';
 // =============================================================================
 
 const DEFAULT_TOP_K = 10;
+// Keep the cold-compute (sequential SHAP) comfortably under the 30s client
+// timeout; the result is cached/warmed so repeat loads are instant regardless.
+const COHORT_SAMPLE_SIZE = 25;
 
-/**
- * Gold-standard cohort families (#39) served by the REAL per-brand
- * `*_goldstd_lr_v1` registry models. For these cohorts the page offers a brand
- * selector so all 12 (4 cohorts × 3 brands) serving bundles are reachable
- * (#967). Mirrors `GOLDSTD_COHORT_MODEL_TYPES` in src/api/routes/explain.py.
- * Used only as a fallback when the backend `/explain/models` response omits the
- * authoritative `is_gold_standard` flag.
- */
-const GOLDSTD_COHORTS = new Set<string>([
-  'initiation',
-  'persistence',
-  'discontinuation',
-  'hcp_adoption',
-]);
+/** Friendly cohort labels (no version numbers). */
+const COHORT_LABELS: Record<string, string> = {
+  initiation: 'Initiation',
+  persistence: 'Persistence',
+  discontinuation: 'Discontinuation',
+  hcp_adoption: 'HCP Adoption',
+};
 
-/** The HCP-grain gold-standard cohort — keyed on hcp_id, not patient_id. */
-const HCP_COHORT = 'hcp_adoption';
-
-/**
- * Brands the gold-standard models are registered for. Mirrors `GOLDSTD_BRANDS`
- * in src/api/routes/explain.py; the backend resolves the serving name as
- * `f"{cohort}_{brand.toLowerCase()}_goldstd_lr_v1"` and FAILS CLOSED (422) on
- * an unknown brand.
- */
-const GOLDSTD_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
-const DEFAULT_BRAND: (typeof GOLDSTD_BRANDS)[number] = 'Remibrutinib';
+type ViewMode = 'cohort' | 'individual';
 
 // =============================================================================
 // HELPERS
 // =============================================================================
 
-/** Word fragments that should render as acronyms, not Title-cased. */
-const LABEL_ACRONYMS: Record<string, string> = { hcp: 'HCP' };
-
-/**
- * Human-readable label for a backend model_type enum value.
- * e.g. `hcp_adoption` → "HCP Adoption" (matches the cohort labels in
- * TimeSeries.tsx), `initiation` → "Initiation".
- */
+/** Human-readable label for a model_type value (no version number). */
 function formatModelLabel(model: ExplainableModelInfo): string {
   const raw = String(model.model_type);
-  return raw
-    .split('_')
-    .map((part) => LABEL_ACRONYMS[part] ?? part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
+  return (
+    COHORT_LABELS[raw] ??
+    raw
+      .split('_')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+  );
 }
 
 /**
- * Convert each live feature contribution into a single beeswarm point.
- *
- * The `/api/explain/predict` endpoint returns one explanation per call, so the
- * beeswarm only shows one dot per feature corresponding to *this* patient's
- * SHAP value. A true distribution view would require batch endpoints; until
- * then we honor "real SHAP values + feature names" by NOT fabricating extra
- * points. `instanceId` falls back to `patient_id` so each dot stays uniquely
- * keyed.
- *
- * `featureValue` is the *normalized* coloring axis expected by SHAPBeeswarm
- * (`[0, 1]`), so we derive it from each feature's SHAP magnitude relative to
- * the max so values don't saturate the high-color band. The original domain
- * value is preserved on `originalValue` for tooltips.
+ * Map an aggregated global feature into the `FeatureContribution` shape the
+ * bar chart / ranking list consume. Magnitude is the global importance
+ * (`mean_abs_shap`, always ≥ 0); the SIGN carries the net direction
+ * (`mean_shap`), so the bar is sized by importance and colored by direction.
  */
-function buildBeeswarmData(
+function globalToContribution(f: GlobalImportanceFeature): FeatureContribution {
+  const magnitude = f.mean_abs_shap;
+  const signed = f.mean_shap >= 0 ? magnitude : -magnitude;
+  return {
+    feature_name: f.feature_name,
+    feature_value: f.mean_feature_value,
+    shap_value: signed,
+    contribution_direction: f.mean_shap >= 0 ? 'positive' : 'negative',
+    contribution_rank: f.contribution_rank,
+  };
+}
+
+/**
+ * Build a REAL beeswarm distribution from per-entity global points: one dot per
+ * (top feature, entity). Color axis (`featureValue`, normalized [0,1]) is the
+ * per-feature min-max-normalized feature value — the canonical SHAP beeswarm
+ * coloring (high feature value = red, low = blue).
+ */
+function buildGlobalBeeswarm(
+  points: GlobalImportancePoint[],
+  features: GlobalImportanceFeature[],
+  maxFeatures = 8
+): BeeswarmDataPoint[] {
+  const top = features.slice(0, maxFeatures).map((f) => f.feature_name);
+  const topSet = new Set(top);
+
+  const byFeature = new Map<string, GlobalImportancePoint[]>();
+  for (const p of points) {
+    if (!topSet.has(p.feature_name)) continue;
+    const list = byFeature.get(p.feature_name);
+    if (list) list.push(p);
+    else byFeature.set(p.feature_name, [p]);
+  }
+
+  const out: BeeswarmDataPoint[] = [];
+  for (const fname of top) {
+    const pts = byFeature.get(fname) ?? [];
+    const numeric = pts
+      .map((p) => p.feature_value)
+      .filter((v): v is number => typeof v === 'number');
+    const min = numeric.length ? Math.min(...numeric) : 0;
+    const max = numeric.length ? Math.max(...numeric) : 1;
+    const range = max - min || 1;
+    pts.forEach((p, i) => {
+      const norm =
+        typeof p.feature_value === 'number' ? (p.feature_value - min) / range : 0.5;
+      out.push({
+        feature: fname,
+        shapValue: p.shap_value,
+        featureValue: Math.max(0, Math.min(1, norm)),
+        originalValue: p.feature_value,
+        instanceId: `${fname}-${i}`,
+      });
+    });
+  }
+  return out;
+}
+
+/**
+ * Local beeswarm for a single explanation: one dot per top feature (no
+ * fabricated distribution). Color axis derived from SHAP magnitude.
+ */
+function buildLocalBeeswarm(
   features: FeatureContribution[],
-  patientId: string
+  instanceId: string
 ): BeeswarmDataPoint[] {
   const maxAbsShap =
     features.reduce((acc, f) => Math.max(acc, Math.abs(f.shap_value)), 0) || 1;
-
   return features.slice(0, 8).map((f) => {
-    // Map SHAP value to [0, 1] symmetrically around 0.5 for the coloring axis
     const normalized = 0.5 + (f.shap_value / maxAbsShap) * 0.5;
     return {
       feature: f.feature_name,
       shapValue: f.shap_value,
       featureValue: Math.max(0, Math.min(1, normalized)),
-      // Preserve the real domain value for tooltips
       originalValue: f.feature_value,
-      instanceId: patientId || 'current',
+      instanceId: instanceId || 'current',
     };
   });
 }
 
-/**
- * Defensive accessor: history rows come straight from `ml_shap_analyses`
- * (see `/api/explain/history/{patient_id}` in src/api/routes/explain.py),
- * which is a superset of `ExplainResponse` with optional columns. Treat
- * everything as unknown and coerce.
- */
 type HistoryRowLike = {
   explanation_id?: string | null;
   request_timestamp?: string | null;
@@ -174,6 +211,14 @@ function formatHistoryTimestamp(ts: HistoryRowLike['request_timestamp']): string
   return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
 }
 
+/**
+ * Show a base value, or "—" when it was never computed — never a fabricated 0.0
+ * (anti-fabrication: a synthesized zero baseline would mislead).
+ */
+function formatBaseValue(v: number | null | undefined): string {
+  return v === null || v === undefined ? '—' : v.toFixed(3);
+}
+
 // =============================================================================
 // HELPER COMPONENTS
 // =============================================================================
@@ -188,39 +233,40 @@ function FeatureRow({
   onClick: () => void;
 }) {
   const TrendIcon =
-    feature.shap_value > 0.02 ? TrendingUp :
-    feature.shap_value < -0.02 ? TrendingDown : Minus;
-
+    feature.shap_value > 0.02 ? TrendingUp : feature.shap_value < -0.02 ? TrendingDown : Minus;
   const trendColor =
-    feature.shap_value > 0.02 ? 'text-emerald-600' :
-    feature.shap_value < -0.02 ? 'text-rose-600' : 'text-gray-500';
+    feature.shap_value > 0.02
+      ? 'text-emerald-600'
+      : feature.shap_value < -0.02
+        ? 'text-rose-600'
+        : 'text-gray-500';
 
   return (
     <div
       className={cn(
         'flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors',
-        isSelected
-          ? 'bg-primary/10 border border-primary/20'
-          : 'bg-muted/50 hover:bg-muted'
+        isSelected ? 'bg-primary/10 border border-primary/20' : 'bg-muted/50 hover:bg-muted'
       )}
       onClick={onClick}
     >
       <div className="flex items-center gap-3 flex-1 min-w-0">
-        <Badge variant="outline" className="w-8 h-8 rounded-full flex items-center justify-center text-xs">
+        <Badge
+          variant="outline"
+          className="w-8 h-8 rounded-full flex items-center justify-center text-xs"
+        >
           {feature.contribution_rank}
         </Badge>
         <div className="flex-1 min-w-0">
-          <div className="font-medium truncate">
-            {feature.feature_name.replace(/_/g, ' ')}
-          </div>
+          <div className="font-medium truncate">{feature.feature_name.replace(/_/g, ' ')}</div>
           <div className="text-xs text-muted-foreground">
-            Value: {String(feature.feature_value)}
+            Value: {String(feature.feature_value ?? '—')}
           </div>
         </div>
       </div>
       <div className="flex items-center gap-2">
         <span className={cn('font-mono text-sm', trendColor)}>
-          {feature.shap_value >= 0 ? '+' : ''}{feature.shap_value.toFixed(4)}
+          {feature.shap_value >= 0 ? '+' : ''}
+          {feature.shap_value.toFixed(4)}
         </span>
         <TrendIcon className={cn('h-4 w-4', trendColor)} />
       </div>
@@ -233,12 +279,90 @@ function FeatureRow({
 // =============================================================================
 
 function FeatureImportance() {
-  // -- Live backend state --------------------------------------------------
+  // -- Models --------------------------------------------------------------
   const {
     data: modelsData,
     isLoading: isLoadingModels,
     isError: isModelsError,
   } = useExplainableModels();
+
+  // Only the real deployed gold-standard cohorts are explainable today; the
+  // legacy demo types have no deployed model (and 503 on /predict), so they
+  // would make the page look broken. Filter them out.
+  const cohortModels = useMemo(() => {
+    const all = modelsData?.supported_models ?? [];
+    const gold = all.filter((m) => m.is_gold_standard);
+    return gold.length > 0
+      ? gold
+      : all.filter((m) => GOLD_STANDARD_COHORTS.includes(m.model_type as ModelType));
+  }, [modelsData]);
+
+  // -- Selection state -----------------------------------------------------
+  const [viewMode, setViewMode] = useState<ViewMode>('cohort');
+  const [selectedModelType, setSelectedModelType] = useState<string>('');
+  const [selectedBrand, setSelectedBrand] = useState<GoldStandardBrand>(GOLDSTD_BRANDS[0]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedFeature, setSelectedFeature] = useState<FeatureContribution | null>(null);
+
+  const effectiveModelType =
+    selectedModelType ||
+    (cohortModels[0]?.model_type as string | undefined) ||
+    ModelType.INITIATION;
+  const isHcpCohort = effectiveModelType === ModelType.HCP_ADOPTION;
+
+  const selectedModelInfo = useMemo(
+    () => cohortModels.find((m) => String(m.model_type) === effectiveModelType),
+    [cohortModels, effectiveModelType]
+  );
+
+  // ========================================================================
+  // COHORT (GLOBAL) MODE
+  // ========================================================================
+  const {
+    data: global,
+    isLoading: isLoadingGlobal,
+    isFetching: isFetchingGlobal,
+    isError: isGlobalError,
+    error: globalError,
+    refetch: refetchGlobal,
+  } = useGlobalFeatureImportance(effectiveModelType, selectedBrand, COHORT_SAMPLE_SIZE, {
+    enabled: viewMode === 'cohort' && !!effectiveModelType,
+  });
+
+  const globalFeatures: FeatureContribution[] = useMemo(
+    () => (global?.features ?? []).map(globalToContribution),
+    [global]
+  );
+  const globalBeeswarm = useMemo(
+    () => buildGlobalBeeswarm(global?.points ?? [], global?.features ?? []),
+    [global]
+  );
+
+  // ========================================================================
+  // INDIVIDUAL MODE
+  // ========================================================================
+  const { data: sampleEntities, isLoading: isLoadingEntities } = useSampleEntities(
+    effectiveModelType,
+    25,
+    { enabled: viewMode === 'individual' && !!effectiveModelType }
+  );
+  const entityIds = useMemo(() => sampleEntities?.entities ?? [], [sampleEntities]);
+  // Grain word for prose/placeholders ("hcp"/"patient"); the HCP-grain cohort
+  // keys on hcp_id, every other cohort on patient_id.
+  const grainLabel = isHcpCohort ? 'HCP' : 'Patient';
+  // Field label for the ID picker — the HCP cohort reads "HCP ID" (#967).
+  const entityLabel = isHcpCohort ? 'HCP ID' : 'Patient ID';
+
+  const [selectedEntityId, setSelectedEntityId] = useState<string>('');
+
+  // Default the picker to the first real ID once the list arrives / cohort changes.
+  useEffect(() => {
+    if (viewMode !== 'individual') return;
+    if (entityIds.length === 0) return;
+    if (!selectedEntityId || !entityIds.includes(selectedEntityId)) {
+      setSelectedEntityId(entityIds[0]);
+    }
+  }, [viewMode, entityIds, selectedEntityId]);
 
   const {
     mutate: runExplain,
@@ -249,292 +373,266 @@ function FeatureImportance() {
     reset: resetExplain,
   } = useExplain();
 
-  // -- Form state ----------------------------------------------------------
-  const supportedModels = useMemo(
-    () => modelsData?.supported_models ?? [],
-    [modelsData]
+  const doExplain = useCallback(
+    (entityId: string) => {
+      if (!entityId || !effectiveModelType) return;
+      resetExplain();
+      setSelectedFeature(null);
+      runExplain({
+        patient_id: entityId,
+        hcp_id: isHcpCohort ? entityId : undefined,
+        model_type: effectiveModelType as ModelType,
+        brand: selectedBrand,
+        format: ExplanationFormat.TOP_K,
+        top_k: DEFAULT_TOP_K,
+      });
+    },
+    [effectiveModelType, isHcpCohort, selectedBrand, runExplain, resetExplain]
   );
-  const [selectedModelType, setSelectedModelType] = useState<string>('');
-  const [brand, setBrand] = useState<string>(DEFAULT_BRAND);
-  const [patientId, setPatientId] = useState<string>('');
-  const [submittedPatientId, setSubmittedPatientId] = useState<string>('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedFeature, setSelectedFeature] = useState<FeatureContribution | null>(null);
 
-  // -- Historical explanations for the submitted patient ------------------
+  // Auto-run the individual explanation whenever the entity / model / brand
+  // changes so the page is never blank in individual mode.
+  useEffect(() => {
+    if (viewMode !== 'individual') return;
+    if (!selectedEntityId) return;
+    doExplain(selectedEntityId);
+    // doExplain is stable per (model, brand, hcp) — re-run on those + entity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, selectedEntityId, effectiveModelType, selectedBrand]);
+
+  const localFeatures: FeatureContribution[] = useMemo(
+    () => explanation?.top_features ?? [],
+    [explanation]
+  );
+  const localBaseValue = explanation?.base_value ?? 0;
+  const localBeeswarm = useMemo(
+    () => buildLocalBeeswarm(localFeatures, explanation?.patient_id ?? ''),
+    [localFeatures, explanation?.patient_id]
+  );
+
   const {
     data: historyData,
     isLoading: isLoadingHistory,
     isError: isHistoryError,
-  } = useExplanationHistory(submittedPatientId, undefined, 10, {
-    enabled: !!submittedPatientId,
+  } = useExplanationHistory(selectedEntityId, undefined, 10, {
+    enabled: viewMode === 'individual' && !!selectedEntityId && !isHcpCohort,
   });
   const historyExplanations = historyData?.explanations ?? [];
 
-  // Default to first available model once list arrives
-  const effectiveModelType =
-    selectedModelType || (supportedModels[0]?.model_type as string | undefined) || '';
-
-  const selectedModelInfo = useMemo(
-    () => supportedModels.find((m) => String(m.model_type) === effectiveModelType),
-    [supportedModels, effectiveModelType]
-  );
-
-  // Gold-standard cohorts (#967) get a brand selector so all per-brand serving
-  // bundles are reachable. Trust the backend's authoritative `is_gold_standard`
-  // flag when present; fall back to the known cohort set otherwise.
-  const isGoldStandard = useMemo(() => {
-    if (typeof selectedModelInfo?.is_gold_standard === 'boolean') {
-      return selectedModelInfo.is_gold_standard;
-    }
-    return GOLDSTD_COHORTS.has(effectiveModelType);
-  }, [selectedModelInfo, effectiveModelType]);
-
-  // The HCP-grain cohort keys on hcp_id; every other cohort keys on patient_id.
-  const isHcpCohort = effectiveModelType === HCP_COHORT;
-  const entityLabel = isHcpCohort ? 'HCP ID' : 'Patient ID';
-  const entityPlaceholder = isHcpCohort
-    ? 'Enter HCP ID (e.g. HCP-NE-5678)'
-    : 'Enter patient ID (e.g. patient_123)';
-
-  // -- Derived data from live response -------------------------------------
-  const features: FeatureContribution[] = useMemo(
-    () => explanation?.top_features ?? [],
-    [explanation]
-  );
-  const baseValue: number = explanation?.base_value ?? 0;
-
-  const beeswarmData = useMemo(
-    () => buildBeeswarmData(features, explanation?.patient_id ?? ''),
-    [features, explanation?.patient_id]
-  );
+  // ========================================================================
+  // SHARED DERIVED STATE
+  // ========================================================================
+  const features = viewMode === 'cohort' ? globalFeatures : localFeatures;
+  const beeswarmData = viewMode === 'cohort' ? globalBeeswarm : localBeeswarm;
 
   const filteredFeatures = useMemo(() => {
     if (!searchQuery) return features;
     const query = searchQuery.toLowerCase();
-    return features.filter((f) =>
-      f.feature_name.toLowerCase().includes(query)
-    );
+    return features.filter((f) => f.feature_name.toLowerCase().includes(query));
   }, [features, searchQuery]);
 
+  const hasData = viewMode === 'cohort' ? !!global : !!explanation;
+  const isBusy = viewMode === 'cohort' ? isLoadingGlobal || isFetchingGlobal : isExplaining;
+  const errorMessage =
+    viewMode === 'cohort'
+      ? ((globalError as { message?: string } | null)?.message ??
+        'Failed to load cohort importance')
+      : ((explainError as { message?: string } | null)?.message ??
+        'Failed to compute explanation');
+
   // -- Handlers ------------------------------------------------------------
-  const handleExplain = useCallback(() => {
-    const trimmed = patientId.trim();
-    if (!trimmed || !effectiveModelType) return;
-
-    resetExplain();
-    // Drop any previously selected feature so the details card doesn't show
-    // stale info from a prior patient/model while the new explanation loads.
-    setSelectedFeature(null);
-    setSubmittedPatientId(trimmed);
-    const request: ExplainRequest = {
-      patient_id: trimmed,
-      model_type: effectiveModelType as ModelType,
-      format: ExplanationFormat.TOP_K,
-      top_k: DEFAULT_TOP_K,
-    };
-    // HCP-grain cohort: the entered value IS an hcp_id — send it explicitly so
-    // Feast keys the lookup on hcp_id (backend falls back to patient_id only if
-    // hcp_id is absent). See resolve_features() in src/api/routes/explain.py.
-    if (isHcpCohort) {
-      request.hcp_id = trimmed;
-    }
-    // Gold-standard cohorts select one of 3 per-brand serving bundles; legacy
-    // single-model cohorts ignore brand, so only send it when it matters.
-    if (isGoldStandard) {
-      request.brand = brand;
-    }
-    runExplain(request);
-  }, [patientId, effectiveModelType, isHcpCohort, isGoldStandard, brand, runExplain, resetExplain]);
-
   const handleRefresh = useCallback(() => {
-    if (!patientId.trim()) return;
-    handleExplain();
-  }, [patientId, handleExplain]);
+    setSelectedFeature(null);
+    if (viewMode === 'cohort') refetchGlobal();
+    else if (selectedEntityId) doExplain(selectedEntityId);
+  }, [viewMode, refetchGlobal, selectedEntityId, doExplain]);
 
   const handleExport = useCallback(() => {
-    if (!explanation) return;
-    const exportData = {
-      model_type: effectiveModelType,
-      explanation,
-      exportedAt: new Date().toISOString(),
-    };
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    if ((viewMode === 'cohort' && !global) || (viewMode === 'individual' && !explanation)) return;
+    const payload =
+      viewMode === 'cohort'
+        ? { mode: 'cohort', model_type: effectiveModelType, brand: selectedBrand, global }
+        : { mode: 'individual', model_type: effectiveModelType, brand: selectedBrand, explanation };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.download = `${effectiveModelType || 'shap'}-${explanation.patient_id}-shap.json`;
+    const id = viewMode === 'cohort' ? selectedBrand : explanation?.patient_id;
+    link.download = `${effectiveModelType}-${id}-shap.json`;
     link.href = url;
     link.click();
     URL.revokeObjectURL(url);
-  }, [explanation, effectiveModelType]);
+  }, [viewMode, effectiveModelType, selectedBrand, global, explanation]);
 
   // -- Render --------------------------------------------------------------
-  const hasExplanation = !!explanation;
-  const errorMessage = explainError
-    ? (explainError as { message?: string }).message || 'Failed to compute explanation'
-    : null;
-
   return (
     <div className="container mx-auto px-4 py-8">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-6">
         <div>
           <h1 className="text-3xl font-bold mb-2">Feature Importance</h1>
           <p className="text-muted-foreground">
-            SHAP values, feature importance bar charts, beeswarm plots, and force plots.
+            SHAP feature importance for the gold-standard cohort models — cohort-level
+            (global) importance and per-entity explanations.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Cohort model */}
           <Select
             value={effectiveModelType}
             onValueChange={(v) => {
               setSelectedModelType(v);
               setSelectedFeature(null);
-              resetExplain();
             }}
-            disabled={isLoadingModels || supportedModels.length === 0}
+            disabled={isLoadingModels || cohortModels.length === 0}
           >
-            <SelectTrigger className="w-[280px]">
-              <SelectValue placeholder={isLoadingModels ? 'Loading models...' : 'Select a model'} />
+            <SelectTrigger className="w-[190px]">
+              <SelectValue placeholder={isLoadingModels ? 'Loading models...' : 'Select cohort'} />
             </SelectTrigger>
             <SelectContent>
-              {supportedModels.map((model) => (
+              {cohortModels.map((model) => (
                 <SelectItem key={String(model.model_type)} value={String(model.model_type)}>
-                  <div className="flex items-center gap-2">
-                    <span>{formatModelLabel(model)}</span>
-                    {model.latest_version && (
-                      <span className="text-xs text-muted-foreground">{model.latest_version}</span>
-                    )}
-                  </div>
+                  {formatModelLabel(model)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
 
-          {/* Brand selector — only the gold-standard cohorts have per-brand
-              serving bundles (#967). Native <select> keeps it accessible
-              (aria-label drives the name) and aligned with the model Select.
-              The chosen brand PERSISTS across cohort changes (mirrors
-              TimeSeries.tsx's handleCohortChange) so a user can explore one
-              brand across cohorts; the selector always shows the active brand,
-              so there is no hidden/stale state. */}
-          {isGoldStandard && (
-            <select
-              aria-label="Brand"
-              value={brand}
-              onChange={(e) => {
-                setBrand(e.target.value);
-                setSelectedFeature(null);
-                resetExplain();
-              }}
-              className="h-10 px-3 border rounded-md text-sm bg-background"
-            >
+          {/* Brand */}
+          <Select
+            value={selectedBrand}
+            onValueChange={(v) => {
+              setSelectedBrand(v as GoldStandardBrand);
+              setSelectedFeature(null);
+            }}
+          >
+            <SelectTrigger className="w-[150px]">
+              <SelectValue placeholder="Select brand" />
+            </SelectTrigger>
+            <SelectContent>
               {GOLDSTD_BRANDS.map((b) => (
-                <option key={b} value={b}>
+                <SelectItem key={b} value={b}>
                   {b}
-                </option>
+                </SelectItem>
               ))}
-            </select>
-          )}
+            </SelectContent>
+          </Select>
 
-          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isExplaining || !patientId.trim()}>
-            <RefreshCw className={`h-4 w-4 ${isExplaining ? 'animate-spin' : ''}`} />
+          <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isBusy}>
+            <RefreshCw className={`h-4 w-4 ${isBusy ? 'animate-spin' : ''}`} />
           </Button>
 
-          <Button variant="outline" onClick={handleExport} disabled={!hasExplanation}>
+          <Button variant="outline" onClick={handleExport} disabled={!hasData}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
         </div>
       </div>
 
-      {/* Patient ID + Explain action */}
-      <Card className="mb-6">
-        <CardContent className="pt-6">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex-1 min-w-[240px]">
-              <label
-                htmlFor="patient-id-input"
-                className="block text-sm font-medium mb-1"
-              >
-                {entityLabel}
-              </label>
-              <Input
-                id="patient-id-input"
-                placeholder={entityPlaceholder}
-                value={patientId}
-                onChange={(e) => setPatientId(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleExplain();
-                }}
-              />
-            </div>
-            <Button
-              onClick={handleExplain}
-              disabled={!patientId.trim() || !effectiveModelType || isExplaining}
-            >
-              {isExplaining ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Loading...
-                </>
-              ) : (
-                'Explain'
-              )}
-            </Button>
-          </div>
+      {isModelsError && (
+        <div role="alert" className="mb-4 flex items-center gap-2 text-sm text-rose-600">
+          <AlertCircle className="h-4 w-4" />
+          Failed to load model list
+        </div>
+      )}
 
-          {isModelsError && (
-            <div
-              role="alert"
-              className="mt-3 flex items-center gap-2 text-sm text-rose-600"
-            >
-              <AlertCircle className="h-4 w-4" />
-              Failed to load model list
-            </div>
-          )}
+      {/* Mode toggle */}
+      <Tabs
+        value={viewMode}
+        onValueChange={(v) => {
+          setViewMode(v as ViewMode);
+          setSelectedFeature(null);
+        }}
+        className="mb-6"
+      >
+        <TabsList>
+          <TabsTrigger value="cohort" className="gap-2">
+            <Users className="h-4 w-4" /> Cohort (global)
+          </TabsTrigger>
+          <TabsTrigger value="individual" className="gap-2">
+            <User className="h-4 w-4" /> Individual
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
-          {isExplainError && (
-            <div
-              role="alert"
-              className="mt-3 flex items-center gap-2 text-sm text-rose-600"
-            >
-              <AlertCircle className="h-4 w-4" />
-              Error: {errorMessage}
+      {/* Individual mode: entity picker */}
+      {viewMode === 'individual' && (
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex-1 min-w-[260px]">
+                <label className="block text-sm font-medium mb-1">{entityLabel}</label>
+                <Select
+                  value={selectedEntityId}
+                  onValueChange={(v) => setSelectedEntityId(v)}
+                  disabled={isLoadingEntities || entityIds.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue
+                      placeholder={
+                        isLoadingEntities
+                          ? `Loading ${grainLabel.toLowerCase()}s...`
+                          : `Select a ${grainLabel.toLowerCase()}`
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[320px]">
+                    {entityIds.map((id) => (
+                      <SelectItem key={id} value={id}>
+                        {id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-muted-foreground pb-2 max-w-sm">
+                Pick a real {grainLabel.toLowerCase()} ID — the explanation updates automatically.
+              </p>
             </div>
-          )}
 
-          {isExplaining && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Computing explanation...
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            {isExplainError && (
+              <div role="alert" className="mt-3 flex items-center gap-2 text-sm text-rose-600">
+                <AlertCircle className="h-4 w-4" />
+                Error: {errorMessage}
+              </div>
+            )}
+            {isExplaining && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Computing explanation...
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Empty state when nothing has been explained yet */}
-      {!hasExplanation && !isExplaining && !isExplainError && (
+      {/* Cohort mode loading / error */}
+      {viewMode === 'cohort' && isBusy && !global && (
         <Card className="mb-6">
           <CardContent className="pt-6">
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <BarChart3 className="h-12 w-12 text-muted-foreground mb-3" />
-              <h2 className="text-lg font-semibold mb-1">
-                No explanation yet
-              </h2>
+              <Loader2 className="h-8 w-8 text-muted-foreground mb-3 animate-spin" />
               <p className="text-sm text-muted-foreground max-w-md">
-                Enter {isHcpCohort ? 'an HCP ID' : 'a patient ID'} and click{' '}
-                <strong>Explain</strong> to compute live SHAP feature
-                contributions from the model.
+                Computing cohort feature importance (mean |SHAP| over a sample of real{' '}
+                {isHcpCohort ? 'HCPs' : 'patients'})…
               </p>
             </div>
           </CardContent>
         </Card>
       )}
+      {viewMode === 'cohort' && isGlobalError && (
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <div role="alert" className="flex items-center gap-2 text-sm text-rose-600">
+              <AlertCircle className="h-4 w-4" />
+              {errorMessage}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-      {/* Model Info — only rendered once we have an explanation */}
-      {hasExplanation && selectedModelInfo && (
+      {/* Summary card */}
+      {hasData && (
         <Card className="mb-6">
           <CardContent className="pt-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -543,29 +641,55 @@ function FeatureImportance() {
                   <BarChart3 className="h-6 w-6 text-primary" />
                 </div>
                 <div>
-                  <h2 className="text-xl font-semibold">{formatModelLabel(selectedModelInfo)}</h2>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                    {selectedModelInfo.latest_version && (
+                  <h2 className="text-xl font-semibold">
+                    {selectedModelInfo ? formatModelLabel(selectedModelInfo) : effectiveModelType} ·{' '}
+                    {selectedBrand}
+                  </h2>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground mt-1">
+                    {viewMode === 'cohort' && global ? (
                       <>
-                        <span>{selectedModelInfo.latest_version}</span>
+                        <span className="font-mono text-xs">{global.model_name}</span>
                         <span>•</span>
+                        <span>{global.features.length} features</span>
+                        <span>•</span>
+                        <span>
+                          n = {global.sample_size} {isHcpCohort ? 'HCPs' : 'patients'}
+                        </span>
+                        <span>•</span>
+                        <span>{global.cached ? 'cached' : 'freshly computed'}</span>
                       </>
+                    ) : (
+                      explanation && (
+                        <>
+                          <span>{localFeatures.length} features</span>
+                          <span>•</span>
+                          <span>
+                            {grainLabel} {explanation.patient_id}
+                          </span>
+                          <span>•</span>
+                          <span>
+                            {explanation.prediction_class} (p ={' '}
+                            {explanation.prediction_probability.toFixed(3)})
+                          </span>
+                        </>
+                      )
                     )}
-                    <span>{features.length} features</span>
-                    <span>•</span>
-                    <span>Patient {explanation.patient_id}</span>
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-6">
                 <div className="text-center">
                   <div className="text-sm text-muted-foreground">Base Value</div>
-                  <div className="text-2xl font-bold">{baseValue.toFixed(3)}</div>
+                  <div className="text-2xl font-bold">
+                    {formatBaseValue(
+                      viewMode === 'cohort' ? global?.base_value : explanation?.base_value
+                    )}
+                  </div>
                 </div>
                 <div className="text-center">
                   <div className="text-sm text-muted-foreground">Top Feature</div>
                   <div className="text-lg font-semibold">
-                    {features[0]?.feature_name.replace(/_/g, ' ') ?? '—'}
+                    {features[0]?.feature_name?.replace(/_/g, ' ') ?? '—'}
                   </div>
                 </div>
               </div>
@@ -600,9 +724,11 @@ function FeatureImportance() {
                   key={feature.feature_name}
                   feature={feature}
                   isSelected={selectedFeature?.feature_name === feature.feature_name}
-                  onClick={() => setSelectedFeature(
-                    selectedFeature?.feature_name === feature.feature_name ? null : feature
-                  )}
+                  onClick={() =>
+                    setSelectedFeature(
+                      selectedFeature?.feature_name === feature.feature_name ? null : feature
+                    )
+                  }
                 />
               ))}
               {filteredFeatures.length === 0 && searchQuery && (
@@ -612,7 +738,7 @@ function FeatureImportance() {
               )}
               {filteredFeatures.length === 0 && !searchQuery && (
                 <div className="text-center py-8 text-muted-foreground text-sm">
-                  Run an explanation to see feature contributions.
+                  {isBusy ? 'Loading…' : 'No feature contributions to show.'}
                 </div>
               )}
             </CardContent>
@@ -625,17 +751,24 @@ function FeatureImportance() {
             <TabsList>
               <TabsTrigger value="bar">Bar Chart</TabsTrigger>
               <TabsTrigger value="beeswarm">Beeswarm</TabsTrigger>
-              <TabsTrigger value="waterfall">Waterfall</TabsTrigger>
-              <TabsTrigger value="history">History</TabsTrigger>
+              {viewMode === 'individual' && <TabsTrigger value="waterfall">Waterfall</TabsTrigger>}
+              {viewMode === 'individual' && <TabsTrigger value="history">History</TabsTrigger>}
             </TabsList>
 
             <TabsContent value="bar">
               <Card>
                 <CardHeader>
-                  <CardTitle>Global Feature Importance</CardTitle>
+                  <CardTitle>
+                    {viewMode === 'cohort'
+                      ? 'Global Feature Importance'
+                      : `Feature Contributions (this ${grainLabel.toLowerCase()})`}
+                  </CardTitle>
                   <CardDescription>
-                    Mean absolute SHAP values showing overall feature importance.
-                    Positive values push the prediction higher.
+                    {viewMode === 'cohort'
+                      ? `Mean |SHAP| over ${global?.sample_size ?? COHORT_SAMPLE_SIZE} real ${
+                          isHcpCohort ? 'HCPs' : 'patients'
+                        }. Bar length = importance; color = net direction (green raises, red lowers the prediction).`
+                      : `Signed SHAP contributions for this ${grainLabel.toLowerCase()}. Positive values push the prediction higher.`}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -653,12 +786,15 @@ function FeatureImportance() {
             <TabsContent value="beeswarm">
               <Card>
                 <CardHeader>
-                  <CardTitle>Per-Feature SHAP Contributions</CardTitle>
+                  <CardTitle>
+                    {viewMode === 'cohort'
+                      ? 'SHAP Distribution Across the Cohort'
+                      : 'Per-Feature SHAP Contributions'}
+                  </CardTitle>
                   <CardDescription>
-                    One dot per top feature for this patient. Color reflects the
-                    direction and magnitude of the SHAP contribution
-                    (blue = negative impact, red = positive impact). Position
-                    along the x-axis shows the raw SHAP value.
+                    {viewMode === 'cohort'
+                      ? 'One dot per sampled entity for each top feature. X-axis = SHAP value; color = feature value (red = high, blue = low).'
+                      : 'One dot per top feature for this entity. X-axis = SHAP value; color reflects SHAP direction.'}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -666,10 +802,7 @@ function FeatureImportance() {
                     data={beeswarmData}
                     maxFeatures={8}
                     height={450}
-                    // Built-in legend reads "Feature Value" which doesn't match
-                    // our SHAP-direction coloring. Hide it; the CardDescription
-                    // above documents what the coloring means.
-                    showLegend={false}
+                    showLegend={viewMode === 'cohort'}
                     showReferenceLine
                     onPointClick={(point) => {
                       const feature = features.find((f) => f.feature_name === point.feature);
@@ -680,98 +813,108 @@ function FeatureImportance() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="waterfall">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Individual Prediction Explanation</CardTitle>
-                  <CardDescription>
-                    Waterfall showing how features contribute from base value to final prediction.
-                    {selectedFeature && (
-                      <span className="text-primary ml-2">
-                        Highlighting: {selectedFeature.feature_name.replace(/_/g, ' ')}
-                      </span>
-                    )}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <SHAPWaterfall
-                    baseValue={baseValue}
-                    features={features}
-                    maxFeatures={10}
-                    height={450}
-                    onBarClick={(f) => setSelectedFeature(f)}
-                  />
-                </CardContent>
-              </Card>
-            </TabsContent>
+            {viewMode === 'individual' && (
+              <TabsContent value="waterfall">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Individual Prediction Explanation</CardTitle>
+                    <CardDescription>
+                      Waterfall showing how features move the prediction from base value to final.
+                      {selectedFeature && (
+                        <span className="text-primary ml-2">
+                          Highlighting: {selectedFeature.feature_name.replace(/_/g, ' ')}
+                        </span>
+                      )}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <SHAPWaterfall
+                      baseValue={localBaseValue}
+                      features={localFeatures}
+                      maxFeatures={10}
+                      height={450}
+                      onBarClick={(f) => setSelectedFeature(f)}
+                    />
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
 
-            <TabsContent value="history">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Explanation History</CardTitle>
-                  <CardDescription>
-                    Past SHAP explanations for {submittedPatientId
-                      ? `patient ${submittedPatientId}`
-                      : 'the selected patient'}.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {!submittedPatientId && (
-                    <div className="text-sm text-muted-foreground">
-                      Enter a patient ID and run an explanation to view history.
-                    </div>
-                  )}
-                  {submittedPatientId && isLoadingHistory && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading history...
-                    </div>
-                  )}
-                  {submittedPatientId && isHistoryError && (
-                    <div role="alert" className="flex items-center gap-2 text-sm text-rose-600">
-                      <AlertCircle className="h-4 w-4" />
-                      Failed to load explanation history
-                    </div>
-                  )}
-                  {submittedPatientId &&
-                    !isLoadingHistory &&
-                    !isHistoryError &&
-                    historyExplanations.length === 0 && (
+            {viewMode === 'individual' && (
+              <TabsContent value="history">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Explanation History</CardTitle>
+                    <CardDescription>
+                      Past SHAP explanations for{' '}
+                      {selectedEntityId
+                        ? `${grainLabel.toLowerCase()} ${selectedEntityId}`
+                        : 'the selected entity'}
+                      .
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {!selectedEntityId && (
                       <div className="text-sm text-muted-foreground">
-                        No historical explanations found for this patient.
+                        Select an entity to view history.
                       </div>
                     )}
-                  {submittedPatientId && historyExplanations.length > 0 && (
-                    <ul className="space-y-2">
-                      {(historyExplanations as HistoryRowLike[]).map((h, idx) => (
-                        <li
-                          key={h.explanation_id ?? `history-${idx}`}
-                          className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
-                        >
-                          <div className="flex flex-col">
-                            <span className="text-sm font-medium">
-                              {h.model_type ?? 'unknown model'}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatHistoryTimestamp(h.request_timestamp)}
-                              {h.model_version_id ? ` • ${h.model_version_id}` : ''}
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-sm font-mono">
-                              {h.prediction_class ?? '—'}
+                    {selectedEntityId && isHcpCohort && (
+                      <div className="text-sm text-muted-foreground">
+                        History is recorded per patient; not available for the HCP cohort.
+                      </div>
+                    )}
+                    {selectedEntityId && !isHcpCohort && isLoadingHistory && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading history...
+                      </div>
+                    )}
+                    {selectedEntityId && !isHcpCohort && isHistoryError && (
+                      <div role="alert" className="flex items-center gap-2 text-sm text-rose-600">
+                        <AlertCircle className="h-4 w-4" />
+                        Failed to load explanation history
+                      </div>
+                    )}
+                    {selectedEntityId &&
+                      !isHcpCohort &&
+                      !isLoadingHistory &&
+                      !isHistoryError &&
+                      historyExplanations.length === 0 && (
+                        <div className="text-sm text-muted-foreground">
+                          No historical explanations found for this entity.
+                        </div>
+                      )}
+                    {selectedEntityId && !isHcpCohort && historyExplanations.length > 0 && (
+                      <ul className="space-y-2">
+                        {(historyExplanations as HistoryRowLike[]).map((h, idx) => (
+                          <li
+                            key={h.explanation_id ?? `history-${idx}`}
+                            className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                          >
+                            <div className="flex flex-col">
+                              <span className="text-sm font-medium">
+                                {h.model_type ?? 'unknown model'}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                {formatHistoryTimestamp(h.request_timestamp)}
+                                {h.model_version_id ? ` • ${h.model_version_id}` : ''}
+                              </span>
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              p = {formatHistoryProbability(h.prediction_probability)}
+                            <div className="text-right">
+                              <div className="text-sm font-mono">{h.prediction_class ?? '—'}</div>
+                              <div className="text-xs text-muted-foreground">
+                                p = {formatHistoryProbability(h.prediction_probability)}
+                              </div>
                             </div>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            )}
           </Tabs>
 
           {/* Selected Feature Details */}
@@ -787,34 +930,42 @@ function FeatureImportance() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="bg-muted rounded-lg p-3">
                     <div className="text-xs text-muted-foreground">Rank</div>
+                    <div className="text-lg font-semibold">#{selectedFeature.contribution_rank}</div>
+                  </div>
+                  <div className="bg-muted rounded-lg p-3">
+                    <div className="text-xs text-muted-foreground">
+                      {viewMode === 'cohort' ? 'Mean Value' : 'Current Value'}
+                    </div>
                     <div className="text-lg font-semibold">
-                      #{selectedFeature.contribution_rank}
+                      {typeof selectedFeature.feature_value === 'number'
+                        ? selectedFeature.feature_value.toFixed(3)
+                        : String(selectedFeature.feature_value ?? '—')}
                     </div>
                   </div>
                   <div className="bg-muted rounded-lg p-3">
-                    <div className="text-xs text-muted-foreground">Current Value</div>
-                    <div className="text-lg font-semibold">
-                      {String(selectedFeature.feature_value)}
+                    <div className="text-xs text-muted-foreground">
+                      {viewMode === 'cohort' ? 'Mean |SHAP|' : 'SHAP Value'}
                     </div>
-                  </div>
-                  <div className="bg-muted rounded-lg p-3">
-                    <div className="text-xs text-muted-foreground">SHAP Value</div>
-                    <div className={cn(
-                      'text-lg font-semibold',
-                      selectedFeature.shap_value >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                    )}>
+                    <div
+                      className={cn(
+                        'text-lg font-semibold',
+                        selectedFeature.shap_value >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                      )}
+                    >
                       {selectedFeature.shap_value >= 0 ? '+' : ''}
                       {selectedFeature.shap_value.toFixed(4)}
                     </div>
                   </div>
                   <div className="bg-muted rounded-lg p-3">
                     <div className="text-xs text-muted-foreground">Direction</div>
-                    <div className={cn(
-                      'text-lg font-semibold capitalize',
-                      selectedFeature.contribution_direction === 'positive'
-                        ? 'text-emerald-600'
-                        : 'text-rose-600'
-                    )}>
+                    <div
+                      className={cn(
+                        'text-lg font-semibold capitalize',
+                        selectedFeature.contribution_direction === 'positive'
+                          ? 'text-emerald-600'
+                          : 'text-rose-600'
+                      )}
+                    >
                       {selectedFeature.contribution_direction}
                     </div>
                   </div>
@@ -822,12 +973,13 @@ function FeatureImportance() {
                 <div className="mt-4 p-3 bg-muted/50 rounded-lg">
                   <h4 className="text-sm font-medium mb-2">Interpretation</h4>
                   <p className="text-sm text-muted-foreground">
-                    This feature has a {selectedFeature.contribution_direction} impact on the model's prediction.
-                    {selectedFeature.shap_value > 0
-                      ? ` Higher values of "${selectedFeature.feature_name.replace(/_/g, ' ')}" tend to increase the predicted outcome.`
-                      : ` Higher values of "${selectedFeature.feature_name.replace(/_/g, ' ')}" tend to decrease the predicted outcome.`
-                    }
-                    {' '}It is ranked #{selectedFeature.contribution_rank} in terms of importance for this prediction.
+                    {viewMode === 'cohort'
+                      ? `Across the sampled cohort, "${selectedFeature.feature_name.replace(/_/g, ' ')}" is ranked #${selectedFeature.contribution_rank} by mean |SHAP|, with a net ${selectedFeature.contribution_direction} effect on the prediction.`
+                      : `This feature has a ${selectedFeature.contribution_direction} impact on the prediction.${
+                          selectedFeature.shap_value > 0
+                            ? ` Higher values of "${selectedFeature.feature_name.replace(/_/g, ' ')}" tend to increase the predicted outcome.`
+                            : ` Higher values of "${selectedFeature.feature_name.replace(/_/g, ' ')}" tend to decrease the predicted outcome.`
+                        } It is ranked #${selectedFeature.contribution_rank} in importance for this prediction.`}
                   </p>
                 </div>
               </CardContent>

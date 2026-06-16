@@ -13,14 +13,38 @@
 // =============================================================================
 
 /**
- * Supported model types for SHAP explanation
+ * Supported model types for SHAP explanation.
+ *
+ * The first four are the legacy demonstration taxonomy (no deployed model
+ * today). The four gold-standard cohort families back the REAL deployed
+ * per-brand `*_goldstd_lr_v1` models (#39) and are the ones the page surfaces.
  */
 export enum ModelType {
   PROPENSITY = 'propensity',
   RISK_STRATIFICATION = 'risk_stratification',
   NEXT_BEST_ACTION = 'next_best_action',
   CHURN_PREDICTION = 'churn_prediction',
+  // Gold-standard cohort families (#39) — real deployed per-brand models.
+  INITIATION = 'initiation',
+  PERSISTENCE = 'persistence',
+  DISCONTINUATION = 'discontinuation',
+  HCP_ADOPTION = 'hcp_adoption',
 }
+
+/**
+ * Brands the gold-standard per-brand cohort models are registered for (#39).
+ * Mirrors `GOLDSTD_BRANDS` in src/api/routes/explain.py.
+ */
+export const GOLDSTD_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
+export type GoldStandardBrand = (typeof GOLDSTD_BRANDS)[number];
+
+/** Cohort families served by the real per-brand gold-standard models. */
+export const GOLD_STANDARD_COHORTS: readonly ModelType[] = [
+  ModelType.INITIATION,
+  ModelType.PERSISTENCE,
+  ModelType.DISCONTINUATION,
+  ModelType.HCP_ADOPTION,
+];
 
 /**
  * Output format for SHAP explanations
@@ -73,10 +97,11 @@ export interface ExplainRequest {
   /**
    * Brand for the gold-standard per-brand cohort models (#39/#967):
    * Remibrutinib | Fabhalta | Kisqali. Selects which per-brand model to
-   * explain (serving name `f"{cohort}_{brand}_goldstd_lr_v1"`). Ignored by
-   * the legacy single-model cohorts. See src/api/routes/explain.py.
+   * explain (serving name `f"{cohort}_{brand}_goldstd_lr_v1"`). Defaults to
+   * Remibrutinib server-side when omitted for a gold-standard cohort; ignored
+   * by the legacy single-model cohorts. See src/api/routes/explain.py.
    */
-  brand?: string;
+  brand?: GoldStandardBrand | string;
   /** Specific model version (latest if not specified) */
   model_version_id?: string;
   /** Pre-computed features (fetched from Feast if not provided) */
@@ -200,8 +225,12 @@ export interface ExplanationHistoryResponse {
 export interface ExplainableModelInfo {
   /** Model type */
   model_type: ModelType | string;
-  /** Latest version */
-  latest_version: string;
+  /**
+   * Latest registered version, or null when the registry has no row for this
+   * model type (the backend emits null for the legacy demo types and, today,
+   * for hcp_adoption — see src/api/routes/explain.py).
+   */
+  latest_version: string | null;
   /** Type of SHAP explainer used */
   explainer_type: 'TreeExplainer' | 'KernelExplainer' | 'LinearExplainer';
   /**
@@ -229,6 +258,73 @@ export interface ListExplainableModelsResponse {
   supported_models: ExplainableModelInfo[];
   /** Total number of models */
   total_models: number;
+}
+
+// =============================================================================
+// COHORT-LEVEL (GLOBAL) FEATURE IMPORTANCE (#39 — option 2)
+// =============================================================================
+
+/** One feature's SHAP importance aggregated over a cohort sample. */
+export interface GlobalImportanceFeature {
+  feature_name: string;
+  /** Mean |SHAP| across the sample (global importance ranking). */
+  mean_abs_shap: number;
+  /** Mean signed SHAP across the sample (net direction). */
+  mean_shap: number;
+  /** Mean feature value across the sample (numeric features only). */
+  mean_feature_value: number | null;
+  /** Rank by mean_abs_shap (1 = most important). */
+  contribution_rank: number;
+}
+
+/** One entity's signed SHAP for one feature — a real beeswarm dot. */
+export interface GlobalImportancePoint {
+  feature_name: string;
+  shap_value: number;
+  feature_value: number | null;
+}
+
+/** Cohort-level (global) SHAP feature importance for one per-brand model. */
+export interface GlobalFeatureImportanceResponse {
+  model_type: ModelType | string;
+  brand: string;
+  /** Resolved serving name, e.g. initiation_kisqali_goldstd_lr_v1. */
+  model_name: string;
+  /** Mean model base value across the sample. */
+  base_value: number | null;
+  /** Entities successfully explained (honest n_succeeded). */
+  sample_size: number;
+  /** Target sample size requested. */
+  requested_sample_size: number;
+  /** SHAP explainer used. */
+  computation_method: string;
+  /** When the aggregate was computed (ISO 8601). */
+  computed_at: string;
+  /** True when read from a stored precomputed row. */
+  cached: boolean;
+  /** Features ranked desc by mean_abs_shap. */
+  features: GlobalImportanceFeature[];
+  /** Per-entity SHAP points for the top features (real beeswarm distribution). */
+  points: GlobalImportancePoint[];
+}
+
+/** Query params for the global feature-importance endpoint. */
+export interface GlobalFeatureImportanceParams {
+  model_type: ModelType | string;
+  brand?: GoldStandardBrand | string;
+  sample_size?: number;
+  max_points?: number;
+  refresh?: boolean;
+}
+
+/** Real entity IDs for the per-entity SHAP picker. */
+export interface SampleEntitiesResponse {
+  model_type: ModelType | string;
+  /** 'patient' or 'hcp'. */
+  grain: 'patient' | 'hcp' | string;
+  /** patient_id | hcp_id. */
+  id_field: string;
+  entities: string[];
 }
 
 // =============================================================================
