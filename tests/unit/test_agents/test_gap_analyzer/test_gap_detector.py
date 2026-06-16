@@ -1,5 +1,6 @@
 """Tests for Gap Detector Node."""
 
+import pandas as pd
 import pytest
 
 from src.agents.gap_analyzer.nodes.gap_detector import GapDetectorNode
@@ -397,3 +398,81 @@ class TestMockDataConnectors:
         assert not df.empty
         assert "region" in df.columns
         assert "trx" in df.columns
+
+
+class TestGapDetectorExcludesOverPerformance:
+    """Regression: only a genuine SHORTFALL (current BELOW the reference) is a
+    capturable opportunity.
+
+    Previously the segment-gap filter used ``abs(gap_percentage)``, so a segment
+    that EXCEEDED its target (negative gap = over-performance) leaked through and
+    — because the ROI calculator takes ``abs(gap_size)`` — was ranked as a top
+    "opportunity" with an absurd ROI (live: a region 54% OVER its TRx target
+    surfaced as a $63M / 848x-ROI opportunity, inflating Total Addressable Value
+    to ~$850M). These tests pin the corrected contract: over-performance is
+    excluded, real shortfalls are kept.
+    """
+
+    @pytest.mark.asyncio
+    async def test_over_performance_excluded_under_performance_kept(self):
+        node = GapDetectorNode(use_mock=True)
+        # Region A is 100% OVER target (current 200 vs target 100) -> over-perf.
+        # Region B is a 20% shortfall (current 80 vs target 100) -> opportunity.
+        current = pd.DataFrame({"region": ["A", "B"], "trx": [200.0, 80.0]})
+        targets = pd.DataFrame({"region": ["A", "B"], "trx": [100.0, 100.0]})
+
+        _, gaps = await node._detect_segment_gaps(
+            current_data=current,
+            comparison_data={"vs_target": targets},
+            segment="region",
+            metrics=["trx"],
+            gap_type="vs_target",
+            min_gap_threshold=5.0,
+        )
+
+        seg_vals = {g["segment_value"] for g in gaps}
+        assert "B" in seg_vals, "genuine shortfall must be detected"
+        assert "A" not in seg_vals, "over-performance must NOT be a gap"
+        # Every retained gap is a positive shortfall above threshold.
+        assert gaps and all(g["gap_percentage"] >= 5.0 for g in gaps)
+        assert all(g["gap_percentage"] > 0 for g in gaps)
+
+    @pytest.mark.asyncio
+    async def test_all_over_performance_yields_no_gaps(self):
+        node = GapDetectorNode(use_mock=True)
+        # Both regions exceed target -> nothing to "close".
+        current = pd.DataFrame({"region": ["A", "B"], "trx": [300.0, 250.0]})
+        targets = pd.DataFrame({"region": ["A", "B"], "trx": [100.0, 100.0]})
+
+        _, gaps = await node._detect_segment_gaps(
+            current_data=current,
+            comparison_data={"vs_target": targets},
+            segment="region",
+            metrics=["trx"],
+            gap_type="vs_target",
+            min_gap_threshold=5.0,
+        )
+
+        assert gaps == []
+
+    @pytest.mark.asyncio
+    async def test_temporal_decline_kept_growth_excluded(self):
+        # vs_target semantics generalize: gap_size = reference - current, so a
+        # temporal DECLINE (prior > current) is a positive gap to recover, while
+        # GROWTH (prior < current) is over-performance and is excluded.
+        node = GapDetectorNode(use_mock=True)
+        current = pd.DataFrame({"region": ["Declined", "Grew"], "trx": [70.0, 130.0]})
+        prior = pd.DataFrame({"region": ["Declined", "Grew"], "trx": [100.0, 100.0]})
+
+        _, gaps = await node._detect_segment_gaps(
+            current_data=current,
+            comparison_data={"temporal": prior},
+            segment="region",
+            metrics=["trx"],
+            gap_type="temporal",
+            min_gap_threshold=5.0,
+        )
+
+        seg_vals = {g["segment_value"] for g in gaps}
+        assert "Declined" in seg_vals
+        assert "Grew" not in seg_vals
