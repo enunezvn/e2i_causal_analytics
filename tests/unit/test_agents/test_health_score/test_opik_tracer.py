@@ -257,8 +257,13 @@ class TestHealthCheckTraceContext:
 class TestHealthScoreOpikTracer:
     """Tests for HealthScoreOpikTracer class."""
 
-    def test_init_defaults(self):
+    def test_init_defaults(self, monkeypatch):
         """Test tracer initialization with defaults."""
+        # enabled defaults via _resolve_opik_enabled from OPIK_ENABLED (default
+        # "true" when unset). Pin to the unset state so this asserts the CODE
+        # default, independent of the serviceless CI lane's OPIK_ENABLED=false
+        # opt-out (set to stop the teardown trace-flush hang; backend-tests.yml).
+        monkeypatch.delenv("OPIK_ENABLED", raising=False)
         tracer = HealthScoreOpikTracer()
         assert tracer.project_name == "e2i-health-score"
         assert tracer.enabled is True
