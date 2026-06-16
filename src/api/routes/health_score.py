@@ -1016,6 +1016,11 @@ async def _fetch_component_health() -> tuple[List[ComponentHealth], Optional[Dat
     components: List[ComponentHealth] = []
     measured_any = False
     for (name, _endpoint), res in zip(_HEALTH_COMPONENTS, results, strict=True):
+        # NOTE: the real SupabaseHealthClient.check() catches all exceptions
+        # internally and ALWAYS returns a dict (a down backend -> {"ok": False}
+        # -> UNHEALTHY, measured), so this BaseException branch is DEFENSIVE only
+        # (e.g. a test double that raises, or a future raising client). It is the
+        # sole path to the ([], None) fail-closed return below.
         if isinstance(res, BaseException):
             components.append(
                 ComponentHealth(

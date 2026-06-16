@@ -742,6 +742,37 @@ async def test_fetch_component_health_all_fail_returns_none(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_component_health_mixed_results_are_measured(monkeypatch):
+    """The likely production case: a MIX of healthy / degraded / unhealthy probe
+    dicts is tagged MEASURED with the correct per-component status mapping."""
+    from src.api.routes import health_score as hs
+
+    class _MixedClient:
+        async def check(self, endpoint: str):
+            return {
+                "/health/db": {"ok": True, "latency_ms": 10},  # healthy
+                "/health/cache": {"ok": True, "latency_ms": 2},  # healthy
+                "/health/vectors": {"ok": False, "degraded": True},  # degraded
+                "/health/api": {"ok": True, "latency_ms": 3},  # healthy
+                "/health/queue": {"ok": False, "error": "broker down"},  # unhealthy
+            }[endpoint]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "src.agents.health_score.health_client.SupabaseHealthClient",
+        lambda *a, **k: _MixedClient(),
+    )
+    components, provenance = await hs._fetch_component_health()
+    assert provenance == DataProvenance.MEASURED
+    by_name = {c.component_name: c.status for c in components}
+    assert by_name["database"] == ComponentStatus.HEALTHY
+    assert by_name["vector_store"] == ComponentStatus.DEGRADED
+    assert by_name["message_queue"] == ComponentStatus.UNHEALTHY
+
+
+@pytest.mark.asyncio
 async def test_get_model_health_fails_closed_in_production(monkeypatch):
     """In a fail-closed environment, /models must raise 503 when the real data
     source is unavailable, rather than return fabricated model accuracy/metrics.
