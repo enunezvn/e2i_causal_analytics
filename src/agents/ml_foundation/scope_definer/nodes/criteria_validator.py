@@ -293,8 +293,8 @@ def adaptive_success_criteria(
     # NB > 0 gate (v3): replaces precision per Vickers 2006 derivation
     # NB > 0 ⇔ precision > p_t. The threshold is fixed at 0.0; the
     # intent/regime-keyed cost ratio enters via the audit field ``_adaptive_p_t``
-    # set by the validator (commercial p_t=0.10, clinical regime-keyed). Always
-    # fires — at the low commercial p_t the gate equates to precision > 0.10
+    # set by the validator (commercial p_t=0.05, clinical regime-keyed). Always
+    # fires — at the low commercial p_t the gate equates to precision > 0.05
     # which a useful targeting model clears.
     thresholds["minimum_net_benefit_at_p_t"] = 0.0
 
