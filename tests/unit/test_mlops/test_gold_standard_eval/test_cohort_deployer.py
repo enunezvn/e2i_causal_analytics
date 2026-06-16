@@ -358,3 +358,44 @@ async def test_register_cohort_model_uses_spec_target_for_experiment(tmp_path):
     assert row["feature_count"] == 9
     assert row["training_samples"] == 8336
     assert row["experiment_id"] == FakeClient.EXPERIMENT_ID
+
+
+@pytest.mark.asyncio
+async def test_register_cohort_model_stamps_training_provenance_synthetic_gold(tmp_path):
+    """#968: gold-standard rows must be self-describing as synthetic-trained.
+
+    The models ARE real fitted estimators (``is_synthetic`` stays ``False`` so they
+    remain servable/explainable — serving/explain/predictions/health all filter on
+    ``.eq("is_synthetic", False)``), but they are trained ONLY on the synthetic-gold
+    cohort. ``register_cohort_model`` must therefore stamp
+    ``training_provenance='synthetic_gold'`` on BOTH the registry row and the
+    experiment row, so a real-mode catalog consumer can distinguish them and the
+    promotion gate can refuse a synthetic-gold -> production transition.
+    """
+    X, y, feature_columns = _tiny_gold_standard_xy()
+    model = train_cohort_model(INITIATION, X, y)
+    artifact_path = serialize_model(model, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
+
+    client = FakeClient()
+    await register_cohort_model(
+        client,
+        INITIATION,
+        model_name="csu_initiation_goldstd_lr_v1",
+        model_version="1.0",
+        artifact_path=artifact_path,
+        auc=0.671,
+        feature_count=len(feature_columns),
+    )
+
+    registry_inserts = [r for (t, r) in client.inserts if t == "ml_model_registry"]
+    assert len(registry_inserts) == 1
+    reg_row = registry_inserts[0]
+    # semantics preserved: still a "real fitted model" for the serving/explain filters
+    assert reg_row["is_synthetic"] is False
+    # NEW (#968): self-describing training-data provenance
+    assert reg_row["training_provenance"] == "synthetic_gold"
+
+    # the experiment row is stamped too (issue names BOTH registry + experiment rows)
+    experiment_inserts = [r for (t, r) in client.inserts if t == "ml_experiments"]
+    assert len(experiment_inserts) == 1
+    assert experiment_inserts[0]["training_provenance"] == "synthetic_gold"

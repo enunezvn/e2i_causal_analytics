@@ -624,6 +624,68 @@ class TestMLModelRegistryRepository:
             assert result is True
 
     @pytest.mark.asyncio
+    async def test_transition_stage_blocks_synthetic_gold_promotion(
+        self, repo, mock_client, sample_model_data
+    ):
+        """#968: a synthetic-gold-trained model must NOT be promoted to production.
+
+        ``register_cohort_model`` already refuses ``stage='production'`` at its own
+        seam; this gate closes the GENERIC promotion path (model_deployer ->
+        ``transition_stage``) so a staged gold-standard model cannot be hand-promoted
+        into the serving ensemble without a real-data retrain.
+        """
+        mock_model = MLModelRegistry.from_dict(sample_model_data)
+        mock_model.training_provenance = "synthetic_gold"
+
+        with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
+            # Wire the archive/update chains so that, ABSENT the gate, transition
+            # would COMPLETE and return True — i.e. RED fails cleanly with
+            # "DID NOT RAISE", not a stray mock error.
+            mock_result = MagicMock()
+            mock_result.data = [sample_model_data]
+            mock_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
+                return_value=mock_result
+            )
+            mock_archive_result = MagicMock()
+            mock_archive_result.data = []
+            mock_client.table.return_value.update.return_value.eq.return_value.neq.return_value.execute = AsyncMock(
+                return_value=mock_archive_result
+            )
+
+            model_id = UUID(sample_model_data["id"])
+            with pytest.raises(ValueError, match="synthetic"):
+                await repo.transition_stage(
+                    model_id=model_id, new_stage="production", archive_existing=True
+                )
+
+    @pytest.mark.asyncio
+    async def test_transition_stage_allows_real_provenance_promotion(
+        self, repo, mock_client, sample_model_data
+    ):
+        """The gate must NOT over-block: real / unknown provenance still promotes."""
+        mock_model = MLModelRegistry.from_dict(sample_model_data)
+        mock_model.training_provenance = "real"
+
+        with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
+            mock_result = MagicMock()
+            mock_result.data = [sample_model_data]
+            mock_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
+                return_value=mock_result
+            )
+            mock_archive_result = MagicMock()
+            mock_archive_result.data = []
+            mock_client.table.return_value.update.return_value.eq.return_value.neq.return_value.execute = AsyncMock(
+                return_value=mock_archive_result
+            )
+
+            result = await repo.transition_stage(
+                model_id=UUID(sample_model_data["id"]),
+                new_stage="production",
+                archive_existing=True,
+            )
+            assert result is True
+
+    @pytest.mark.asyncio
     async def test_get_models_by_stage_returns_models(self, repo, mock_client, sample_model_data):
         """Test that get_models_by_stage returns models in stage."""
         mock_result = MagicMock()

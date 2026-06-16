@@ -277,6 +277,11 @@ class MLModelRegistry:
     promoted_at: Optional[datetime] = None
     data_split: str = "train"
 
+    # #968: training-data origin — 'synthetic_gold' | 'real' | 'mixed' | None
+    # (legacy/unknown). Distinct from is_synthetic; backs the staging->production
+    # promotion gate (see MLModelRegistryRepository.transition_stage).
+    training_provenance: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for database storage."""
         return {
@@ -300,6 +305,7 @@ class MLModelRegistry:
             "artifact_path": self.artifact_path,
             "preprocessing_pipeline_path": self.preprocessing_pipeline_path,
             "data_split": self.data_split,
+            "training_provenance": self.training_provenance,
         }
 
     @classmethod
@@ -329,6 +335,7 @@ class MLModelRegistry:
             registered_at=data.get("registered_at"),
             promoted_at=data.get("promoted_at"),
             data_split=data.get("data_split", "train"),
+            training_provenance=data.get("training_provenance"),
         )
 
 
@@ -1066,6 +1073,22 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         current = await self.get_by_id(str(model_id))
         if not current:
             return False
+
+        # #968 promotion gate: a synthetic-gold-trained model must NOT enter
+        # production. register_cohort_model already refuses stage='production' at
+        # its own seam; this closes the GENERIC promotion path (model_deployer ->
+        # transition_stage) so a staged gold-standard model cannot be hand-promoted
+        # into the serving ensemble without a real-data retrain. The single caller
+        # wraps this in try/except and records the failure reason honestly (it does
+        # not crash the deploy agent).
+        if new_stage == "production" and (
+            getattr(current, "training_provenance", None) == "synthetic_gold"
+        ):
+            raise ValueError(
+                f"Refusing to promote model {model_id} to production: "
+                "training_provenance='synthetic_gold' (trained only on the "
+                "synthetic-gold cohort, #968). Retrain on real data before promotion."
+            )
 
         # Archive existing models in production if needed
         if archive_existing and new_stage == "production":

@@ -256,8 +256,14 @@ class FeatureBuilder:
         *,
         splits: Sequence[str] | None = None,
         before_month: str | None = None,
+        include_real: bool = False,
     ) -> pd.DataFrame:
         """Load the raw cohort frame from the live DB, dispatching on grain.
+
+        #968: ``include_real`` (default ``False``) keeps the synthetic-only opt-in
+        (``.eq("is_synthetic", True)``); pass ``True`` to drop that predicate and
+        also read real rows once real ``patient_journeys`` / ``hcp_brand_adoption``
+        data arrives — no code change needed at that point.
 
         Both grains return a frame with the SAME downstream contract — at least
         ``journey_start_date`` (walk_forward._DATE_COL), ``data_split``,
@@ -274,8 +280,12 @@ class FeatureBuilder:
         See the per-grain helpers for the full parameter / pagination semantics.
         """
         if self.spec.grain == "hcp":
-            return await self._load_hcp_frame(db, splits=splits, before_month=before_month)
-        return await self._load_patient_frame(db, splits=splits, before_month=before_month)
+            return await self._load_hcp_frame(
+                db, splits=splits, before_month=before_month, include_real=include_real
+            )
+        return await self._load_patient_frame(
+            db, splits=splits, before_month=before_month, include_real=include_real
+        )
 
     async def _load_patient_frame(
         self,
@@ -283,6 +293,7 @@ class FeatureBuilder:
         *,
         splits: Sequence[str] | None = None,
         before_month: str | None = None,
+        include_real: bool = False,
     ) -> pd.DataFrame:
         """Load patient_journeys rows for ``self.spec.brand`` with ``is_synthetic=True``.
 
@@ -323,14 +334,13 @@ class FeatureBuilder:
         offset = 0
 
         for _page in range(_MAX_PAGES):
-            query = (
-                db.table("patient_journeys")
-                .select(select_expr)
-                # Gold-standard eval REQUIRES synthetic rows (opt-in explicit):
-                # patient_journeys.is_synthetic=True is the provenance flag for
-                # the synthetic cohort used in gold-standard evaluation.
-                .eq("is_synthetic", True)
-            )
+            query = db.table("patient_journeys").select(select_expr)
+            if not include_real:
+                # Gold-standard eval defaults to synthetic rows (opt-in explicit):
+                # patient_journeys.is_synthetic=True is the provenance flag for the
+                # synthetic cohort used in gold-standard evaluation. #968: drop this
+                # predicate (include_real=True) to also read real rows when they arrive.
+                query = query.eq("is_synthetic", True)
             if self.spec.brand is not None:
                 # None brand = all-brands cohort (e.g. persistence): no partition filter.
                 query = query.eq("brand", self.spec.brand)
@@ -377,6 +387,7 @@ class FeatureBuilder:
         *,
         splits: Sequence[str] | None = None,
         before_month: str | None = None,
+        include_real: bool = False,
     ) -> pd.DataFrame:
         """Load hcp_brand_adoption rows for ``self.spec.brand`` (``is_synthetic=True``).
 
@@ -421,14 +432,13 @@ class FeatureBuilder:
         offset = 0
 
         for _page in range(_MAX_PAGES):
-            query = (
-                db.table("hcp_brand_adoption")
-                .select(select_expr)
-                # Gold-standard eval REQUIRES synthetic rows (opt-in explicit):
-                # hcp_brand_adoption.is_synthetic=True marks the gold-standard
-                # cohort (the table default is FALSE = "real").
-                .eq("is_synthetic", True)
-            )
+            query = db.table("hcp_brand_adoption").select(select_expr)
+            if not include_real:
+                # Gold-standard eval defaults to synthetic rows (opt-in explicit):
+                # hcp_brand_adoption.is_synthetic=True marks the gold-standard cohort
+                # (table default FALSE = "real"). #968: drop this predicate
+                # (include_real=True) to also read real rows when they arrive.
+                query = query.eq("is_synthetic", True)
             if self.spec.brand is not None:
                 # HCP cohorts are always per-brand, but keep the None guard so a
                 # hypothetical all-brands HCP spec degrades to no partition filter.

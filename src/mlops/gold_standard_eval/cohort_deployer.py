@@ -187,6 +187,10 @@ async def register_cohort_model(
         stage=stage,
         is_champion=False,
         is_synthetic=False,
+        # #968: real fitted model (is_synthetic=False) but trained only on the
+        # synthetic-gold cohort — label it so the catalog is self-describing and
+        # the promotion gate can refuse synthetic_gold -> production.
+        training_provenance="synthetic_gold",
     )
 
 
@@ -207,4 +211,5 @@ async def _resolve_goldstd_experiment(client: Any, spec: Any, experiment_name: s
         created_by="gold_standard_eval",
         description=f"Gold-standard eval pipeline for the {getattr(spec, 'name', target)} cohort.",
         prediction_target=target,
+        training_provenance="synthetic_gold",  # #968: synthetic-gold-trained
     )

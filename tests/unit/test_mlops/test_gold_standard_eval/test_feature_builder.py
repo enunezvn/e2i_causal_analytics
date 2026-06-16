@@ -233,3 +233,62 @@ def test_load_frame_omits_brand_filter_when_brand_none():
     asyncio.run(fb.load_frame(_DB()))
     assert "brand" not in calls["eq"]  # all-brands: no brand filter
     assert "is_synthetic" in calls["eq"]  # synthetic provenance still enforced
+
+
+def test_load_frame_include_real_toggles_synthetic_filter():
+    """#968: the synthetic-only read must be parameterized, not hardcoded.
+
+    Default (``include_real=False``) keeps the ``.eq("is_synthetic", True)`` opt-in
+    so the gold-standard eval still reads only synthetic-gold rows. ``include_real=
+    True`` drops the predicate so the eval can read real ``patient_journeys`` when
+    they arrive — with NO code change required at that point (issue #968 impact #2).
+    """
+    import asyncio
+
+    from src.mlops.gold_standard_eval.cohort_spec import INITIATION
+    from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
+
+    def _run(include_real):
+        eqs = []
+
+        class _Q:
+            def select(self, *a, **k):
+                return self
+
+            def eq(self, col, val):
+                eqs.append((col, val))
+                return self
+
+            def in_(self, *a, **k):
+                return self
+
+            def lt(self, *a, **k):
+                return self
+
+            def order(self, *a, **k):
+                return self
+
+            def range(self, *a, **k):
+                return self
+
+            async def execute(self):
+                class R:
+                    data = []
+
+                return R()
+
+        class _DB:
+            def table(self, *a, **k):
+                return _Q()
+
+        fb = FeatureBuilder(INITIATION)
+        asyncio.run(fb.load_frame(_DB(), include_real=include_real))
+        return eqs
+
+    default_eqs = _run(include_real=False)
+    assert ("is_synthetic", True) in default_eqs, "default must keep the synthetic opt-in"
+
+    real_eqs = _run(include_real=True)
+    assert not any(col == "is_synthetic" for (col, _val) in real_eqs), (
+        "include_real=True must drop the is_synthetic predicate so real rows are read"
+    )
