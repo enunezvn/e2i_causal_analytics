@@ -313,29 +313,57 @@ function DataQuality() {
     }, 0);
   }, [filteredKpis, ruleStatusFilter, kpiStatuses]);
 
-  // Derive dimension scores from drift signal + KPI count health.
-  // overall_drift_score is in [0, 1] where higher = worse; we invert to a
-  // percentage-style "quality" score.
-  const qualityScores = useMemo(() => {
+  // The drift-derived dimensions (accuracy/consistency/timeliness) are only
+  // meaningful when real drift monitoring has actually run for the DQ pipeline.
+  // When NO drift records exist (features_checked === 0 and no results — the
+  // prod reality for `data_quality_pipeline`, which nothing currently monitors),
+  // the old `1 - (driftScore ?? 0) = 100%` default manufactured a fake-healthy
+  // score that contradicted the failing validation rules below. Treat "no
+  // monitoring" as honestly UNKNOWN (undefined → "No data") instead of green.
+  const hasDriftData =
+    !!latestDrift &&
+    ((latestDrift.features_checked ?? 0) > 0 || (latestDrift.results?.length ?? 0) > 0);
+
+  const qualityScores = useMemo<{
+    completeness: number | undefined;
+    accuracy: number | undefined;
+    consistency: number | undefined;
+    timeliness: number | undefined;
+    overall: number | undefined;
+  }>(() => {
+    const kpiCount = allKpis.length;
+    // Monitoring-coverage proxy (registry size) — independent of drift, so it
+    // stays available even when drift hasn't run.
+    const completeness =
+      kpiCount > 0 ? Math.min(100, 70 + Math.min(30, kpiCount * 2)) : undefined;
+
+    if (!hasDriftData) {
+      return {
+        completeness,
+        accuracy: undefined,
+        consistency: undefined,
+        timeliness: undefined,
+        overall: undefined,
+      };
+    }
+
     const driftScore = latestDrift?.overall_drift_score ?? 0;
     const driftHealth = Math.max(0, Math.min(100, (1 - driftScore) * 100));
     const featuresChecked = latestDrift?.features_checked ?? 0;
     const driftedFeatures = latestDrift?.features_with_drift?.length ?? 0;
-    const accuracy = featuresChecked > 0
-      ? Math.max(0, Math.min(100, ((featuresChecked - driftedFeatures) / featuresChecked) * 100))
-      : driftHealth;
-
-    const kpiCount = allKpis.length;
-    // Use registry size as a proxy for "completeness of monitoring coverage"
-    // (we have N DQ KPIs registered).
-    const completeness = kpiCount > 0 ? Math.min(100, 70 + Math.min(30, kpiCount * 2)) : 0;
-
-    const consistency = driftHealth; // alias until a dedicated signal lands
+    const accuracy =
+      featuresChecked > 0
+        ? Math.max(0, Math.min(100, ((featuresChecked - driftedFeatures) / featuresChecked) * 100))
+        : driftHealth;
+    const consistency = driftHealth;
     const timeliness = driftHealth;
-    const overall = (completeness + accuracy + consistency + timeliness) / 4;
+    const overall =
+      completeness !== undefined
+        ? (completeness + accuracy + consistency + timeliness) / 4
+        : (accuracy + consistency + timeliness) / 3;
 
     return { completeness, accuracy, consistency, timeliness, overall };
-  }, [latestDrift, allKpis.length]);
+  }, [latestDrift, allKpis.length, hasDriftData]);
 
   const dimensionsLoading = kpiLoading || driftLoading;
 
@@ -438,51 +466,48 @@ function DataQuality() {
           </div>
         ) : (
           <>
-            <KPICard
-              title="Overall Quality"
-              value={qualityScores.overall}
-              unit="%"
-              status={getStatusFromScore(qualityScores.overall)}
-              description="Composite score across the four DQ dimensions"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Completeness"
-              value={qualityScores.completeness}
-              unit="%"
-              status={getStatusFromScore(qualityScores.completeness)}
-              description="Monitoring coverage across registered DQ KPIs"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Accuracy"
-              value={qualityScores.accuracy}
-              unit="%"
-              status={getStatusFromScore(qualityScores.accuracy)}
-              description="Drift-free feature share"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Consistency"
-              value={qualityScores.consistency}
-              unit="%"
-              status={getStatusFromScore(qualityScores.consistency)}
-              description="Inverse of overall drift severity"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Timeliness"
-              value={qualityScores.timeliness}
-              unit="%"
-              status={getStatusFromScore(qualityScores.timeliness)}
-              description="Pipeline freshness vs baseline window"
-              sparklineData={[]}
-              higherIsBetter
-            />
+            {(
+              [
+                {
+                  title: 'Overall Quality',
+                  v: qualityScores.overall,
+                  description: 'Composite score across the available DQ dimensions',
+                },
+                {
+                  title: 'Completeness',
+                  v: qualityScores.completeness,
+                  description: 'Monitoring coverage across registered DQ KPIs',
+                },
+                {
+                  title: 'Accuracy',
+                  v: qualityScores.accuracy,
+                  description: 'Drift-free feature share (requires drift monitoring)',
+                },
+                {
+                  title: 'Consistency',
+                  v: qualityScores.consistency,
+                  description: 'Inverse of overall drift severity (requires drift monitoring)',
+                },
+                {
+                  title: 'Timeliness',
+                  v: qualityScores.timeliness,
+                  description: 'Drift-stability of the pipeline vs baseline (requires drift monitoring)',
+                },
+              ] as const
+            ).map((d) => (
+              <KPICard
+                key={d.title}
+                title={d.title}
+                // Honest "No data" when the backing signal is absent — never a
+                // fabricated 100% from a `1 - 0` default (see qualityScores).
+                value={d.v === undefined ? 'No data' : d.v}
+                unit={d.v === undefined ? '' : '%'}
+                status={d.v === undefined ? 'neutral' : getStatusFromScore(d.v)}
+                description={d.description}
+                sparklineData={[]}
+                higherIsBetter
+              />
+            ))}
           </>
         )}
       </div>
@@ -506,10 +531,12 @@ function DataQuality() {
               <Loader2 className="h-4 w-4 animate-spin" />
               <span>Loading drift status...</span>
             </div>
-          ) : !latestDrift ? (
+          ) : !latestDrift || !hasDriftData ? (
             <p className="text-muted-foreground text-sm">
-              No drift detection results yet. Click <strong>Refresh</strong> to trigger
-              detection.
+              No drift monitoring has run for the data quality pipeline yet
+              {latestDrift?.drift_summary ? ` (${latestDrift.drift_summary})` : ''}. The
+              quality dimensions above read <strong>No data</strong> until a run records
+              drift. Click <strong>Refresh</strong> to trigger detection.
             </p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

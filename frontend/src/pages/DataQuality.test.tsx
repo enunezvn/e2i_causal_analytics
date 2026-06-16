@@ -791,3 +791,61 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
     expect(statusTrigger).toBeInTheDocument();
   });
 });
+
+// =============================================================================
+// HONESTY — drift-empty dimension cards + drift card.
+// `data_quality_pipeline` has NO drift monitoring in prod (0 records, confirmed
+// live). The cards must read "No data", NOT a fabricated ~100% from a `1 - 0`
+// default that contradicts the failing validation rules.
+// =============================================================================
+
+describe('DataQuality honesty — empty drift signal', () => {
+  const emptyDrift: DriftDetectionResponse = {
+    task_id: 'history',
+    model_id: 'data_quality_pipeline',
+    status: 'retrieved',
+    overall_drift_score: 0,
+    features_checked: 0,
+    features_with_drift: [],
+    results: [],
+    drift_summary: 'Retrieved 0 drift records',
+    recommended_actions: [],
+    detection_latency_ms: 0,
+    timestamp: '2026-06-16T00:00:00Z',
+  };
+
+  beforeEach(() => {
+    (useLatestDriftStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: emptyDrift,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    (useDriftHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { model_id: 'data_quality_pipeline', total_records: 0, records: [] },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+  });
+
+  it('shows "No data" (not a fabricated 100%) for the drift-derived dimension cards', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    for (const title of ['Accuracy', 'Consistency', 'Timeliness', 'Overall Quality']) {
+      const call = kpiCardCalls.find((c) => c.title === title);
+      expect(call, `${title} card must render`).toBeDefined();
+      expect(call!.value, `${title} must read "No data" when no drift records exist`).toBe(
+        'No data'
+      );
+      // Must NOT be a number masquerading as a healthy score.
+      expect(typeof call!.value).not.toBe('number');
+    }
+  });
+
+  it('drift status card honestly states no monitoring has run (not "0.0% / 0 of 0 features")', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    expect(
+      screen.getByText(/No drift monitoring has run for the data quality pipeline/i)
+    ).toBeInTheDocument();
+  });
+});
