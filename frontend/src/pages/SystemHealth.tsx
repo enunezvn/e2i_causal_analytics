@@ -44,7 +44,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAlerts, useMonitoringRuns } from '@/hooks/api/use-monitoring';
 import {
-  useQuickHealthCheck,
+  useFullHealthCheck,
   usePipelineHealth,
   useAgentHealth,
   useHealthHistory,
@@ -231,11 +231,16 @@ function SystemHealth() {
     refetch: refetchRuns,
   } = useMonitoringRuns({ days: 7, limit: 5 });
 
-  // Health Score API hooks
+  // Health Score API hooks. Use the FULL check (all four dimensions), NOT the
+  // quick (component-only) check: quick leaves model/pipeline/agent UNMEASURED,
+  // which made the composer emit bogus "wire a real X backend" recommendations
+  // and a component-only overall score (a misleading 100/A) even though this page
+  // separately measures those dimensions. Full measures all four (e.g. 87.5/B)
+  // and yields real, actionable recommendations.
   const {
-    data: quickHealthData,
+    data: fullHealthData,
     refetch: refetchHealth,
-  } = useQuickHealthCheck({ refetchInterval: 30000 });
+  } = useFullHealthCheck({ refetchInterval: 60000 });
 
   const { data: agentHealthData } = useAgentHealth({ refetchInterval: 60000 });
   const { data: pipelineHealthData } = usePipelineHealth({ refetchInterval: 60000 });
@@ -291,11 +296,11 @@ function SystemHealth() {
   // Use API data when present; otherwise render empty/neutral values. Dev-offline
   // placeholder data (data_provenance="placeholder") is treated as no score, so
   // the headline shows "Awaiting health check…" rather than a fabricated number.
-  const isQuickPlaceholder = quickHealthData?.data_provenance === 'placeholder';
+  const isHealthPlaceholder = fullHealthData?.data_provenance === 'placeholder';
   const healthScore =
-    quickHealthData && !isQuickPlaceholder ? (quickHealthData.overall_health_score ?? null) : null;
+    fullHealthData && !isHealthPlaceholder ? (fullHealthData.overall_health_score ?? null) : null;
   const healthGrade =
-    quickHealthData && !isQuickPlaceholder ? (quickHealthData.health_grade ?? null) : null;
+    fullHealthData && !isHealthPlaceholder ? (fullHealthData.health_grade ?? null) : null;
   const agents = agentHealthData?.agents ?? [];
   const pipelines = pipelineHealthData?.pipelines ?? [];
   const healthHistory = healthHistoryData?.checks ?? [];
@@ -325,21 +330,21 @@ function SystemHealth() {
     // No fabricated scores: show no bars until a real health check loads, and
     // never chart dev-offline placeholder data (data_provenance="placeholder")
     // as if it were measured.
-    if (!quickHealthData || quickHealthData.data_provenance === 'placeholder') {
+    if (!fullHealthData || fullHealthData.data_provenance === 'placeholder') {
       return [];
     }
     // Only chart dimensions a real backend MEASURED. A null dimension score is
     // unmeasured and is omitted (not rendered as a fabricated 0% bar).
     const dims: Array<{ name: string; score: number | null | undefined; fill: string }> = [
-      { name: 'Components', score: quickHealthData.component_health_score, fill: '#10b981' },
-      { name: 'Models', score: quickHealthData.model_health_score, fill: '#3b82f6' },
-      { name: 'Pipelines', score: quickHealthData.pipeline_health_score, fill: '#8b5cf6' },
-      { name: 'Agents', score: quickHealthData.agent_health_score, fill: '#f59e0b' },
+      { name: 'Components', score: fullHealthData.component_health_score, fill: '#10b981' },
+      { name: 'Models', score: fullHealthData.model_health_score, fill: '#3b82f6' },
+      { name: 'Pipelines', score: fullHealthData.pipeline_health_score, fill: '#8b5cf6' },
+      { name: 'Agents', score: fullHealthData.agent_health_score, fill: '#f59e0b' },
     ];
     return dims
       .filter((d) => d.score != null)
       .map((d) => ({ name: d.name, score: Math.round((d.score as number) * 100), fill: d.fill }));
-  }, [quickHealthData]);
+  }, [fullHealthData]);
 
   // Convert API alerts to AlertCard format
   const alerts = useMemo(() => {
@@ -896,16 +901,16 @@ function SystemHealth() {
           </Card>
 
           {/* Issues and Recommendations from Health Check */}
-          {quickHealthData && (quickHealthData.critical_issues?.length > 0 || quickHealthData.warnings?.length > 0) && (
+          {fullHealthData && (fullHealthData.critical_issues?.length > 0 || fullHealthData.warnings?.length > 0) && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {quickHealthData.critical_issues?.length > 0 && (
+              {fullHealthData.critical_issues?.length > 0 && (
                 <Card className="border-rose-200">
                   <CardHeader>
                     <CardTitle className="text-rose-600">Critical Issues</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <ul className="space-y-2">
-                      {quickHealthData.critical_issues.map((issue, i) => (
+                      {fullHealthData.critical_issues.map((issue, i) => (
                         <li key={i} className="flex items-start gap-2 text-sm">
                           <AlertCircle className="h-4 w-4 text-rose-500 mt-0.5 flex-shrink-0" />
                           {issue}
@@ -915,14 +920,14 @@ function SystemHealth() {
                   </CardContent>
                 </Card>
               )}
-              {quickHealthData.warnings?.length > 0 && (
+              {fullHealthData.warnings?.length > 0 && (
                 <Card className="border-amber-200">
                   <CardHeader>
                     <CardTitle className="text-amber-600">Warnings</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <ul className="space-y-2">
-                      {quickHealthData.warnings.map((warning, i) => (
+                      {fullHealthData.warnings.map((warning, i) => (
                         <li key={i} className="flex items-start gap-2 text-sm">
                           <AlertCircle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
                           {warning}
@@ -935,7 +940,7 @@ function SystemHealth() {
             </div>
           )}
 
-          {(quickHealthData?.recommendations?.length ?? 0) > 0 && (
+          {(fullHealthData?.recommendations?.length ?? 0) > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -945,7 +950,7 @@ function SystemHealth() {
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2">
-                  {quickHealthData?.recommendations?.map((rec, i) => (
+                  {fullHealthData?.recommendations?.map((rec, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm">
                       <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 flex-shrink-0" />
                       {rec}
