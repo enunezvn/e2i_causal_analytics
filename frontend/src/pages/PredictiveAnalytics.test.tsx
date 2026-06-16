@@ -80,18 +80,30 @@ const mockModelsStatus = {
   timestamp: '2026-01-04T10:00:00Z',
 };
 
+// Default model info mirrors the LIVE gold-standard /model_info shape: the
+// schema is exposed via `feature_columns` (ENCODED) + `keep_columns` (the RAW
+// human inputs), NOT `input_schema`. The form is built from keep_columns, and a
+// keep_column is categorical iff `feature_columns` carry its one-hot expansions
+// (`geographic_region_<value>`, single underscore; `__isna` is a missingness
+// flag, not a category).
 const mockModelInfo = {
-  name: 'churn_model',
+  model_id: 'initiation_fabhalta_goldstd_lr_v1:abc',
   version: '1.0.0',
-  type: 'classification',
-  description: 'Churn risk model',
-  input_schema: {
-    hcp_id: 'string',
-    territory: 'string',
-    specialty: 'string',
-    visits_last_quarter: 'number',
-  },
-  metadata: {},
+  model_type: 'none',
+  is_mock: false,
+  model_loaded: true,
+  feature_columns: [
+    'academic_hcp__isna',
+    'academic_hcp',
+    'disease_severity__isna',
+    'disease_severity',
+    'geographic_region_midwest',
+    'geographic_region_northeast',
+    'geographic_region_south',
+    'geographic_region_west',
+    'geographic_region_nan',
+  ],
+  keep_columns: ['disease_severity', 'academic_hcp', 'geographic_region'],
 };
 
 const mockPredictionResponse = {
@@ -176,27 +188,52 @@ describe('PredictiveAnalytics (live API)', () => {
     expect(useModelInfo).toHaveBeenCalledWith('churn_model');
   });
 
-  it('renders an input field per feature in input_schema', () => {
+  it('renders an input per keep_column (raw covariates), with a categorical select', () => {
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
-    // Each feature key should map to a labelled input
-    expect(screen.getByLabelText(/hcp_id/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/territory/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/specialty/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/visits_last_quarter/i)).toBeInTheDocument();
+    // Numeric raw covariates -> labelled inputs.
+    expect(screen.getByLabelText(/disease_severity/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/academic_hcp/i)).toBeInTheDocument();
+    // geographic_region is categorical (one-hot expansions present) -> a select.
+    expect(
+      screen.getByRole('combobox', { name: /geographic_region/i })
+    ).toBeInTheDocument();
+    // The ENGINEERED columns must NOT surface as inputs (a human cannot fill
+    // `geographic_region_south` or the `__isna` missingness flag).
+    expect(screen.queryByLabelText('geographic_region_south')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('academic_hcp__isna')).not.toBeInTheDocument();
   });
 
+  it('lists region categories (excluding the nan placeholder) in the select', async () => {
+    const user = userEvent.setup();
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: /geographic_region/i }));
+    expect(await screen.findByRole('option', { name: /^northeast$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^south$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^midwest$/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^west$/i })).toBeInTheDocument();
+    // The encoder's `nan` placeholder is NOT offered as a real category.
+    expect(screen.queryByRole('option', { name: /^nan$/i })).not.toBeInTheDocument();
+  }, 15000);
+
   // ===========================================================================
-  // AC 3: Run-prediction button invokes usePredict
+  // AC 3: Run-prediction button invokes usePredict with raw covariates
   // ===========================================================================
 
-  it('invokes the usePredict mutation when the Run Prediction button is clicked', async () => {
+  it('invokes usePredict with raw covariates + the feature-importance flag', async () => {
+    const user = userEvent.setup();
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
 
-    // Fill at least one field so the request has feature data. fireEvent is
-    // synchronous and avoids the per-keystroke delay of userEvent.type, which
-    // matters because Radix UI re-renders after each change.
-    const input = screen.getByLabelText(/hcp_id/i);
-    fireEvent.change(input, { target: { value: 'HCP001' } });
+    // Fill the numeric keep_columns (fireEvent is synchronous; userEvent.type
+    // would pay a per-keystroke Radix re-render cost).
+    fireEvent.change(screen.getByLabelText(/disease_severity/i), {
+      target: { value: '5.6' },
+    });
+    fireEvent.change(screen.getByLabelText(/academic_hcp/i), {
+      target: { value: '1' },
+    });
+    // Pick the categorical region via the select.
+    await user.click(screen.getByRole('combobox', { name: /geographic_region/i }));
+    await user.click(await screen.findByRole('option', { name: /^south$/i }));
 
     const runButton = screen.getByRole('button', { name: /run prediction/i });
     fireEvent.click(runButton);
@@ -204,10 +241,42 @@ describe('PredictiveAnalytics (live API)', () => {
     await waitFor(() => {
       expect(mockMutate).toHaveBeenCalledTimes(1);
     });
-    const callArgs = mockMutate.mock.calls[0][0];
-    expect(callArgs.modelName).toBe('churn_model');
-    expect(callArgs.request.features).toMatchObject({ hcp_id: 'HCP001' });
-  });
+    const { modelName, request } = mockMutate.mock.calls[0][0];
+    expect(modelName).toBe('churn_model');
+    // Numeric covariate coerced to a number; categorical sent verbatim (string).
+    expect(request.features).toEqual({
+      disease_severity: 5.6,
+      academic_hcp: 1,
+      geographic_region: 'south',
+    });
+    expect(typeof request.features.disease_severity).toBe('number');
+    expect(typeof request.features.geographic_region).toBe('string');
+    // Real per-prediction SHAP contributions are requested for the result card.
+    expect(request.return_feature_importance).toBe(true);
+    expect(request.return_probabilities).toBe(true);
+  }, 15000);
+
+  it('keeps Run Prediction disabled until every field is filled', async () => {
+    const user = userEvent.setup();
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    const runButton = screen.getByRole('button', { name: /run prediction/i });
+    expect(runButton).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/disease_severity/i), {
+      target: { value: '5.6' },
+    });
+    fireEvent.change(screen.getByLabelText(/academic_hcp/i), {
+      target: { value: '1' },
+    });
+    // Still disabled — the categorical region has not been chosen yet.
+    expect(runButton).toBeDisabled();
+
+    await user.click(screen.getByRole('combobox', { name: /geographic_region/i }));
+    await user.click(await screen.findByRole('option', { name: /^south$/i }));
+
+    await waitFor(() => expect(runButton).toBeEnabled());
+  }, 15000);
 
   // ===========================================================================
   // AC 4: Display prediction + confidence + feature contributions
@@ -254,15 +323,36 @@ describe('PredictiveAnalytics (live API)', () => {
     });
 
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
-    // "Feature Contributions" section title proves the section rendered
+    // "Feature Contributions" section + the honest SHAP unit label.
     expect(screen.getByText('Feature Contributions')).toBeInTheDocument();
-    // Each feature key from feature_importance also appears as a percentage
-    // (the keys themselves also appear as form labels, so we assert the
-    // signed percentage strings rendered next to each contribution)
-    expect(screen.getByText('+40.0%')).toBeInTheDocument(); // visits_last_quarter 0.4
-    expect(screen.getByText('+34.0%')).toBeInTheDocument(); // specialty 0.34
-    expect(screen.getByText('+21.0%')).toBeInTheDocument(); // territory 0.21
-    expect(screen.getByText('+5.0%')).toBeInTheDocument(); // hcp_id 0.05
+    expect(
+      screen.getByText(/Signed SHAP contributions \(log-odds\)/i)
+    ).toBeInTheDocument();
+    // SHAP values are signed log-odds contributions — rendered as RAW signed
+    // decimals, NOT percentages (a SHAP of 0.4 is not "40%").
+    expect(screen.getByText('+0.400')).toBeInTheDocument(); // visits_last_quarter 0.4
+    expect(screen.getByText('+0.340')).toBeInTheDocument(); // specialty 0.34
+    expect(screen.getByText('+0.210')).toBeInTheDocument(); // territory 0.21
+    expect(screen.getByText('+0.050')).toBeInTheDocument(); // hcp_id 0.05
+    // The misleading percentage rendering must be gone.
+    expect(screen.queryByText('+40.0%')).not.toBeInTheDocument();
+  });
+
+  it('renders a SHAP contribution > 1.0 verbatim (no percent, no 100%% cap)', () => {
+    // SHAP log-odds routinely exceed |1.0|; the old "(impact*100)%" + Progress
+    // cap rendered "+158.9%" and truncated the bar. Assert the raw decimal.
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: { ...mockPredictionResponse, feature_importance: { disease_severity: 1.589 } },
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    expect(screen.getByText('+1.589')).toBeInTheDocument();
+    expect(screen.queryByText('+158.9%')).not.toBeInTheDocument();
   });
 
   it('does NOT render synthetic risk score entities (Generate sample data removed)', () => {
@@ -423,13 +513,26 @@ describe('PredictiveAnalytics (live API)', () => {
   // Type-aware coercion (codex iter-1 MED — string-typed id stays a string)
   // ===========================================================================
 
-  it('does NOT coerce string-typed features to numbers when submitting', async () => {
+  it('coerces by declared type on the legacy schema path (string stays string, number -> number)', async () => {
+    // A legacy/non-gold-standard model exposes input_schema (no keep_columns),
+    // so the form falls back to it. Coercion must respect declared types: a
+    // 'string' field stays a string (don't turn an ID into a number), a
+    // 'number' field comes through as a number on the wire.
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        name: 'legacy_model',
+        input_schema: { hcp_id: 'string', visits_last_quarter: 'number' },
+      },
+      isLoading: false,
+      error: null,
+    });
+
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
 
-    // hcp_id is declared as 'string' in mockModelInfo.input_schema; a
-    // numeric-looking input must stay a string in the mutation payload
-    const input = screen.getByLabelText(/hcp_id/i);
-    fireEvent.change(input, { target: { value: '12345' } });
+    fireEvent.change(screen.getByLabelText(/hcp_id/i), { target: { value: '12345' } });
+    fireEvent.change(screen.getByLabelText(/visits_last_quarter/i), {
+      target: { value: '7' },
+    });
 
     const runButton = screen.getByRole('button', { name: /run prediction/i });
     fireEvent.click(runButton);
@@ -440,23 +543,6 @@ describe('PredictiveAnalytics (live API)', () => {
     const features = mockMutate.mock.calls[0][0].request.features;
     expect(features.hcp_id).toBe('12345');
     expect(typeof features.hcp_id).toBe('string');
-  });
-
-  it('coerces number-typed features to numbers when submitting', async () => {
-    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
-
-    // visits_last_quarter is declared as 'number' — input must come
-    // through as a number on the wire
-    const input = screen.getByLabelText(/visits_last_quarter/i);
-    fireEvent.change(input, { target: { value: '7' } });
-
-    const runButton = screen.getByRole('button', { name: /run prediction/i });
-    fireEvent.click(runButton);
-
-    await waitFor(() => {
-      expect(mockMutate).toHaveBeenCalledTimes(1);
-    });
-    const features = mockMutate.mock.calls[0][0].request.features;
     expect(features.visits_last_quarter).toBe(7);
     expect(typeof features.visits_last_quarter).toBe('number');
   });

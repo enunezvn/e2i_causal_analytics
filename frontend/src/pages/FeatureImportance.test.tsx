@@ -451,3 +451,197 @@ describe('FeatureImportance — live data wiring (#299)', () => {
     expect(callsWithPatient42.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+// =============================================================================
+// BRAND SELECTOR + PER-COHORT ID LABEL TESTS (Issue #967)
+// =============================================================================
+//
+// The gold-standard per-brand serving exposes 12 models (4 cohorts × 3 brands),
+// but this page could only ever exercise the default (Remibrutinib) brand
+// because it never offered a brand selector and never threaded `brand` into the
+// explain request. These tests pin the fix: a brand selector appears for
+// gold-standard cohorts, the chosen brand rides the request, and the HCP-grain
+// cohort relabels the ID field (patient_id → hcp_id).
+
+/**
+ * Build a `useExplainableModels` payload whose first (default-selected) model is
+ * a single gold-standard cohort. `is_gold_standard` mirrors the real
+ * `/api/explain/models` response field (src/api/routes/explain.py).
+ */
+function goldstdModels(cohort: string) {
+  return {
+    supported_models: [
+      {
+        model_type: cohort,
+        latest_version: 'v1',
+        explainer_type: 'KernelExplainer' as const,
+        is_gold_standard: true,
+      },
+    ],
+    total_models: 1,
+  };
+}
+
+function mockMutateHook() {
+  const mockMutate = vi.fn();
+  (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+    mutate: mockMutate,
+    data: undefined,
+    isPending: false,
+    isError: false,
+    error: null,
+    reset: vi.fn(),
+  });
+  return mockMutate;
+}
+
+describe('FeatureImportance — brand selector + per-cohort ID label (#967)', () => {
+  it('renders a brand selector offering all three gold-standard brands when a gold-standard cohort is selected', () => {
+    (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: goldstdModels('initiation'),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    const brandSelect = screen.getByRole('combobox', { name: /brand/i });
+    expect(brandSelect).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Remibrutinib' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Fabhalta' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Kisqali' })).toBeInTheDocument();
+  });
+
+  it('does NOT render a brand selector for a legacy (non-gold-standard) model', () => {
+    // beforeEach default mock = propensity + churn (both legacy, no brand)
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    expect(
+      screen.queryByRole('combobox', { name: /brand/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('threads the selected brand into the explain request for a gold-standard cohort', () => {
+    const mockMutate = mockMutateHook();
+    (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: goldstdModels('initiation'),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Pick a non-default brand
+    fireEvent.change(screen.getByRole('combobox', { name: /brand/i }), {
+      target: { value: 'Kisqali' },
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/patient/i), {
+      target: { value: 'patient_42' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^explain$/i }));
+
+    expect(mockMutate).toHaveBeenCalledTimes(1);
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({
+      patient_id: 'patient_42',
+      model_type: 'initiation',
+      brand: 'Kisqali',
+      format: 'top_k',
+      top_k: 10,
+    });
+  });
+
+  it('defaults the brand to Remibrutinib for a gold-standard cohort', () => {
+    const mockMutate = mockMutateHook();
+    (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: goldstdModels('persistence'),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    fireEvent.change(screen.getByPlaceholderText(/patient/i), {
+      target: { value: 'patient_7' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^explain$/i }));
+
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({
+      model_type: 'persistence',
+      brand: 'Remibrutinib',
+    });
+  });
+
+  it('relabels the ID input to HCP and sends hcp_id for the hcp_adoption cohort', () => {
+    const mockMutate = mockMutateHook();
+    (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: goldstdModels('hcp_adoption'),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // The ID field is relabeled to HCP grain — a patient placeholder no longer
+    // applies, an HCP one does.
+    const hcpInput = screen.getByPlaceholderText(/hcp/i);
+    expect(hcpInput).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/patient id/i)).not.toBeInTheDocument();
+
+    fireEvent.change(hcpInput, { target: { value: 'HCP-NE-5678' } });
+    fireEvent.click(screen.getByRole('button', { name: /^explain$/i }));
+
+    expect(mockMutate.mock.calls[0][0]).toMatchObject({
+      patient_id: 'HCP-NE-5678',
+      hcp_id: 'HCP-NE-5678',
+      model_type: 'hcp_adoption',
+      brand: 'Remibrutinib',
+    });
+  });
+
+  it('renders "HCP Adoption" (acronym-cased) for the hcp_adoption cohort', () => {
+    (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: goldstdModels('hcp_adoption'),
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    // An explanation is present so the model-info card (which renders the
+    // formatted cohort label) is visible.
+    (useExplain as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: { ...mockExplainResponse, model_type: 'hcp_adoption' },
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    // Rendered in both the model-Select trigger and the model-info card.
+    expect(screen.getAllByText('HCP Adoption').length).toBeGreaterThanOrEqual(1);
+    // The naive Title-case ("Hcp Adoption") must NOT appear anywhere.
+    expect(screen.queryByText('Hcp Adoption')).not.toBeInTheDocument();
+  });
+
+  it('omits brand and hcp_id from a legacy-model request', () => {
+    const mockMutate = mockMutateHook();
+    // beforeEach default mock = propensity (legacy) is first → default-selected
+
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+
+    fireEvent.change(screen.getByPlaceholderText(/patient/i), {
+      target: { value: 'patient_42' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^explain$/i }));
+
+    const arg = mockMutate.mock.calls[0][0];
+    expect(arg.brand).toBeUndefined();
+    expect(arg.hcp_id).toBeUndefined();
+  });
+});

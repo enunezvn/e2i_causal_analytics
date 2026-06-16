@@ -160,7 +160,10 @@ test.describe('Home Page', () => {
     })
 
     test('renders REAL agent health scores, no fabricated latencies', async ({ page }) => {
-      // Mocked /health-score/quick -> grade A, component 95% etc.
+      // Mocked /health-score/full -> grade A, component 95%, model 88% etc.
+      // (#994 moved the Home System Health card to the FULL, all-dimension check
+      // so Components/Models/Pipelines/Agents rows all render real per-dimension
+      // scores instead of a fabricated component-only "0%".)
       await expect(page.getByText('Components')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
       await expect(page.getByText('Models')).toBeVisible()
       // Fabricated infra latencies must NOT appear.

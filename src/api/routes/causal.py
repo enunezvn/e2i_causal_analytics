@@ -50,8 +50,10 @@ from src.api.schemas.causal import (
     CausalAnalysisHistoryResponse,
     CausalHealthResponse,
     CausalLibrary,
+    CausalVariablesResponse,
     CrossValidationRequest,
     CrossValidationResponse,
+    EstimationDataResponse,
     EstimatorInfo,
     EstimatorListResponse,
     HierarchicalAnalysisRequest,
@@ -59,6 +61,7 @@ from src.api.schemas.causal import (
     NestedCIResult,
     ParallelPipelineRequest,
     ParallelPipelineResponse,
+    PipelineMode,
     PipelineStageResult,
     QuestionType,
     RouteQueryRequest,
@@ -78,6 +81,12 @@ from src.causal.stats import z_score_for_confidence
 # dependencies (dowhy/econml/causalml/networkx availability), so importing
 # the orchestrator classes is cheap.
 from src.causal_engine.pipeline.parallel import ParallelPipeline
+from src.causal_engine.pipeline.router import (
+    LibraryRouter,
+)
+from src.causal_engine.pipeline.router import (
+    QuestionType as RouterQuestionType,
+)
 from src.causal_engine.pipeline.sequential import SequentialPipeline
 from src.causal_engine.pipeline.state import (
     PipelineInput,
@@ -627,54 +636,52 @@ async def route_causal_query(
     Returns:
         RouteQueryResponse with recommended library and estimators
     """
-    logger.info(f"Routing query: {request.query[:50]}...")
+    logger.info(f"Routing query: {(request.query or '')[:50]}...")
 
-    # Simple keyword-based routing (replace with NLP classifier in production)
-    query_lower = request.query.lower()
-
-    # Override if preference specified
+    # Delegate to the production LibraryRouter — the same weighted
+    # regex/keyword classifier the pipeline orchestrator uses — instead of the
+    # former hardcoded keyword stub. The stub fabricated a fixed 0.75/0.9
+    # routing_confidence and ignored this router entirely; the real router
+    # computes a confidence from pattern-match strength (0.0 when it cannot
+    # classify), so the number shown to the user is earned, not invented.
     if request.prefer_library:
-        return _create_routing_response(
-            request.query,
-            _library_to_question_type(request.prefer_library),
-            request.prefer_library,
-            confidence=0.9,
-            rationale=f"User preference: {request.prefer_library.value}",
+        # Explicit override: force the chosen library. question_type is derived
+        # from the library so the UI still shows a precise label, and the
+        # router returns confidence=1.0 with a "Forced libraries" rationale.
+        decision = _library_router.route(
+            request.query or "",
+            force_libraries=[request.prefer_library.value],
         )
-
-    # Classify question type
-    if any(kw in query_lower for kw in ["cause", "causes", "effect of", "impact of", "does"]):
-        question_type = QuestionType.CAUSAL_EFFECT
-        primary_library = CausalLibrary.DOWHY
-        rationale = "Question asks about causal relationship - DoWhy is best for identification"
-    elif any(kw in query_lower for kw in ["vary", "heterogen", "different", "segment", "subgroup"]):
-        question_type = QuestionType.EFFECT_HETEROGENEITY
-        primary_library = CausalLibrary.ECONML
-        rationale = "Question asks about effect heterogeneity - EconML provides CATE estimates"
-    elif any(kw in query_lower for kw in ["target", "who should", "which", "optimize", "best"]):
-        question_type = QuestionType.TARGETING
-        primary_library = CausalLibrary.CAUSALML
-        rationale = "Question about targeting - CausalML provides uplift modeling"
-    elif any(kw in query_lower for kw in ["flow", "propagate", "system", "network", "dependency"]):
-        question_type = QuestionType.SYSTEM_DEPENDENCIES
-        primary_library = CausalLibrary.NETWORKX
-        rationale = "Question about system dependencies - NetworkX for graph analysis"
+        api_question_type = _library_to_question_type(request.prefer_library)
     else:
-        question_type = QuestionType.COMPREHENSIVE
-        primary_library = CausalLibrary.ECONML
-        rationale = "Ambiguous question - defaulting to EconML for comprehensive analysis"
+        decision = _library_router.route(request.query or "")
+        api_question_type = _router_question_type_to_api(decision.question_type)
 
-    return _create_routing_response(
-        request.query,
-        question_type,
-        primary_library,
-        confidence=0.75,
-        rationale=rationale,
+    # router.CausalLibrary and api.CausalLibrary are distinct enum classes with
+    # identical string values — translate by value.
+    primary_library = CausalLibrary(decision.primary_library.value)
+    secondary_libraries = [CausalLibrary(lib.value) for lib in decision.secondary_libraries]
+
+    return RouteQueryResponse(
+        query=request.query,
+        question_type=api_question_type,
+        primary_library=primary_library,
+        secondary_libraries=secondary_libraries,
+        recommended_estimators=_RECOMMENDED_ESTIMATORS.get(primary_library, []),
+        routing_confidence=decision.confidence,
+        routing_rationale=decision.rationale,
+        suggested_pipeline=_recommended_mode_to_pipeline(decision.recommended_mode),
     )
 
 
+# Module-level singleton: the production question-type classifier, shared with
+# the pipeline orchestrator. Stateless after construction (compiles its regex
+# patterns once); safe to reuse across requests.
+_library_router = LibraryRouter()
+
+
 def _library_to_question_type(library: CausalLibrary) -> QuestionType:
-    """Map library to question type."""
+    """Map a forced/preferred library to its natural API question type."""
     mapping = {
         CausalLibrary.DOWHY: QuestionType.CAUSAL_EFFECT,
         CausalLibrary.ECONML: QuestionType.EFFECT_HETEROGENEITY,
@@ -684,39 +691,252 @@ def _library_to_question_type(library: CausalLibrary) -> QuestionType:
     return mapping.get(library, QuestionType.COMPREHENSIVE)
 
 
-def _create_routing_response(
-    query: str,
-    question_type: QuestionType,
-    primary_library: CausalLibrary,
-    confidence: float,
-    rationale: str,
-) -> RouteQueryResponse:
-    """Create routing response with recommendations."""
-    # Recommended estimators by library
-    estimator_recommendations = {
-        CausalLibrary.DOWHY: ["propensity_score_matching", "inverse_propensity_weighting"],
-        CausalLibrary.ECONML: ["causal_forest", "linear_dml", "dr_learner"],
-        CausalLibrary.CAUSALML: ["uplift_random_forest", "uplift_gradient_boosting"],
-        CausalLibrary.NETWORKX: [],
-    }
+# Recommended estimators per library (informational; the router does not pick
+# estimators). NetworkX is a graph/path tool with no point-estimator.
+_RECOMMENDED_ESTIMATORS: Dict[CausalLibrary, List[str]] = {
+    CausalLibrary.DOWHY: ["propensity_score_matching", "inverse_propensity_weighting"],
+    CausalLibrary.ECONML: ["causal_forest", "linear_dml", "dr_learner"],
+    CausalLibrary.CAUSALML: ["uplift_random_forest", "uplift_gradient_boosting"],
+    CausalLibrary.NETWORKX: [],
+}
 
-    # Secondary libraries
-    secondary_map = {
-        CausalLibrary.DOWHY: [CausalLibrary.ECONML],
-        CausalLibrary.ECONML: [CausalLibrary.CAUSALML, CausalLibrary.DOWHY],
-        CausalLibrary.CAUSALML: [CausalLibrary.ECONML],
-        CausalLibrary.NETWORKX: [CausalLibrary.DOWHY],
-    }
+# RouterQuestionType (causal_engine) -> API QuestionType. The two enums were
+# defined independently with different member names; this is the single
+# translation point. router.UNKNOWN has no API peer -> COMPREHENSIVE (the
+# router already reports confidence 0.0 for unclassifiable queries, so the low
+# confidence — not a fabricated label — signals the uncertainty to the UI).
+_ROUTER_QT_TO_API: Dict[RouterQuestionType, QuestionType] = {
+    RouterQuestionType.CAUSAL_RELATIONSHIP: QuestionType.CAUSAL_EFFECT,
+    RouterQuestionType.EFFECT_HETEROGENEITY: QuestionType.EFFECT_HETEROGENEITY,
+    RouterQuestionType.TARGETING_OPTIMIZATION: QuestionType.TARGETING,
+    RouterQuestionType.IMPACT_FLOW: QuestionType.SYSTEM_DEPENDENCIES,
+    RouterQuestionType.COMPREHENSIVE: QuestionType.COMPREHENSIVE,
+    RouterQuestionType.UNKNOWN: QuestionType.COMPREHENSIVE,
+}
 
-    return RouteQueryResponse(
-        query=query,
-        question_type=question_type,
-        primary_library=primary_library,
-        secondary_libraries=secondary_map.get(primary_library, []),
-        recommended_estimators=estimator_recommendations.get(primary_library, []),
-        routing_confidence=confidence,
-        routing_rationale=rationale,
-        suggested_pipeline=None,
+
+def _router_question_type_to_api(router_type: RouterQuestionType) -> QuestionType:
+    """Translate a causal_engine RouterQuestionType to the API QuestionType."""
+    return _ROUTER_QT_TO_API.get(router_type, QuestionType.COMPREHENSIVE)
+
+
+def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
+    """Map RoutingDecision.recommended_mode to the API PipelineMode.
+
+    The router emits 'sequential', 'parallel', or 'validation_loop'. The API
+    PipelineMode exposes only SEQUENTIAL/PARALLEL; a validation_loop (iterative
+    cross-library refutation) is surfaced as PARALLEL since it engages multiple
+    libraries. An unrecognized mode yields None (no suggestion).
+    """
+    if mode in ("parallel", "validation_loop"):
+        return PipelineMode.PARALLEL
+    if mode == "sequential":
+        return PipelineMode.SEQUENTIAL
+    return None
+
+
+# =============================================================================
+# GOLD-STANDARD VARIABLE DISCOVERY + ESTIMATION DATA
+# =============================================================================
+#
+# The causal-discovery page used to free-type treatment/outcome/covariate
+# column names (defaults rep_visits/trx_count were not real columns) and never
+# attached data, so "Run parallel pipeline" fail-closed with 503. These two
+# read-only endpoints fix both: /variables drives data-backed dropdowns, and
+# /estimation-data loads REAL gold-standard rows server-side that the frontend
+# posts into the existing (unchanged) pipeline path.
+#
+# patient_journeys is the gold-standard causal frame: a fully-populated,
+# patient-level cohort (treatment_arm -> persistent_180d, controlling for
+# disease_severity / engagement_score / age_at_diagnosis) — the same cohort the
+# gold-standard models use, with a known TRUE_ATE. (business_metrics is sparse:
+# its causal columns are mostly NULL, so it is not offered here.)
+#
+# Covariate candidates are intentionally restricted to NUMERIC confounders that
+# the executors consume directly. Categorical confounders (geographic_region,
+# brand) are excluded for now — they would need server-side encoding before the
+# DoWhy/EconML executors could use them, which is out of scope for this pass.
+_CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
+    "patient_journeys": {
+        "treatment": ["treatment_arm", "treatment_initiated"],
+        "outcome": ["persistent_180d", "discontinued_180d", "treatment_initiated"],
+        "covariate": ["disease_severity", "engagement_score", "age_at_diagnosis"],
+    },
+}
+_DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+# Columns coerced to float before handing the frame to the executors. Every
+# curated candidate above is numeric, so all are coerced; a value that cannot
+# be coerced becomes None and (for treatment/outcome) drops the row.
+_CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
+    "patient_journeys": {
+        "treatment_arm",
+        "treatment_initiated",
+        "persistent_180d",
+        "discontinued_180d",
+        "disease_severity",
+        "engagement_score",
+        "age_at_diagnosis",
+    },
+}
+
+
+@router.get(
+    "/variables",
+    response_model=CausalVariablesResponse,
+    summary="List causal variables for a gold-standard dataset",
+    operation_id="list_causal_variables",
+)
+async def list_causal_variables(
+    dataset: str = Query(
+        _DEFAULT_CAUSAL_DATASET,
+        description="Gold-standard dataset to enumerate (e.g. patient_journeys)",
+    ),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> CausalVariablesResponse:
+    """Return treatment/outcome/covariate candidates for the causal-discovery
+    dropdowns.
+
+    Candidates are the curated causally-meaningful columns for ``dataset``,
+    intersected with the columns actually present in the live table — so the
+    dropdowns are data-driven and never offer a non-existent column.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Causal data store unavailable")
+
+    # Probe one row to learn the columns actually present in the live schema.
+    probe = await client.table(dataset).select("*").limit(1).execute()
+    rows = probe.data or []
+    present = set(rows[0].keys()) if rows else set()
+
+    def _available(role: str) -> List[str]:
+        # If the probe returned nothing (empty table), fall back to the curated
+        # list so the dropdowns still populate rather than collapsing to empty.
+        if not present:
+            return list(spec[role])
+        return [c for c in spec[role] if c in present]
+
+    return CausalVariablesResponse(
+        dataset=dataset,
+        treatment_candidates=_available("treatment"),
+        outcome_candidates=_available("outcome"),
+        covariate_candidates=_available("covariate"),
+        columns=sorted(present),
+    )
+
+
+@router.get(
+    "/estimation-data",
+    response_model=EstimationDataResponse,
+    summary="Load real estimation records from a gold-standard dataset",
+    operation_id="get_causal_estimation_data",
+)
+async def get_causal_estimation_data(
+    treatment_var: str = Query(..., description="Treatment column to load"),
+    outcome_var: str = Query(..., description="Outcome column to load"),
+    dataset: str = Query(_DEFAULT_CAUSAL_DATASET, description="Gold-standard dataset"),
+    covariates: Optional[str] = Query(
+        None, description="Comma-separated covariate columns (confounders)"
+    ),
+    limit: int = Query(4000, ge=100, le=20000, description="Max rows to load"),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> EstimationDataResponse:
+    """Load REAL estimation rows for the requested variables, server-side.
+
+    The frontend posts the returned ``estimation_data_records`` into a pipeline
+    request's ``filters`` so the (unchanged) parallel/sequential pipeline can
+    estimate a real effect. Requested columns are validated against the
+    dataset's curated allowlist (an arbitrary column/table cannot be read), and
+    rows missing a treatment/outcome value are dropped. Never fabricates data:
+    if no usable rows exist the endpoint fails closed with 503.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
+    covs = [c.strip() for c in (covariates or "").split(",") if c.strip()]
+    requested = [treatment_var, outcome_var, *covs]
+    not_allowed = [c for c in requested if c not in allowed]
+    if not_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {not_allowed} are not permitted for dataset "
+                f"'{dataset}'. Allowed: {sorted(allowed)}"
+            ),
+        )
+
+    # De-duplicate while preserving order (treatment/outcome may also be covariates).
+    select_cols = list(dict.fromkeys(requested))
+
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Causal data store unavailable")
+
+    query = client.table(dataset).select(",".join(select_cols))
+    # Synthetic-showcase aware: on a synthetic-gold instance the synthetic rows
+    # ARE the substrate; on a strict real-data instance they are excluded.
+    query = apply_provenance_filter(query)
+    result = await query.limit(limit).execute()
+    rows = result.data or []
+
+    numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        record: Dict[str, Any] = {}
+        usable = True
+        for col in select_cols:
+            value = row.get(col)
+            if col in numeric_cols and value is not None:
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    value = None
+            # A missing treatment/outcome value makes the row unusable for
+            # estimation — drop it rather than impute.
+            if col in (treatment_var, outcome_var) and value is None:
+                usable = False
+                break
+            record[col] = value
+        if usable:
+            records.append(record)
+
+    if not records:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No usable estimation rows for the requested variables "
+                f"({treatment_var} -> {outcome_var}) in dataset '{dataset}'."
+            ),
+        )
+
+    return EstimationDataResponse(
+        dataset=dataset,
+        columns=select_cols,
+        n_rows=len(records),
+        estimation_data_records=records,
     )
 
 

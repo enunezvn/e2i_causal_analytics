@@ -558,26 +558,37 @@ export async function mockApiRoutes(page: Page): Promise<void> {
     })
   })
 
-  // System Health card + Model Health (GET /health-score/quick).
-  await page.route('**/health-score/quick**', async (route: Route) => {
+  // System Health card + Model Health (GET /health-score/full).
+  // The Home System Health card uses the FULL (all-dimension) check via
+  // useFullHealthCheck() — it renders Components/Models/Pipelines/Agents rows
+  // from the four per-dimension scores, omitting any that are null (unmeasured).
+  // Per-dimension scores are 0-1 fractions; overall is 0-100; grade A is
+  // self-consistent with these scores. Detail arrays mirror the schema-verified
+  // shape used in ai-insights.spec.ts (HealthScoreResponseWireSchema).
+  await page.route('**/health-score/full**', async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         check_id: 'e2e-health-1',
-        check_scope: 'quick',
+        check_scope: 'full',
         overall_health_score: 92,
         health_grade: 'A',
         component_health_score: 0.95,
         model_health_score: 0.88,
         pipeline_health_score: 0.82,
         agent_health_score: 0.92,
+        component_statuses: [],
+        model_metrics: [],
+        pipeline_statuses: [],
+        agent_statuses: [],
         critical_issues: [],
         warnings: [],
         recommendations: [],
         health_summary: 'All systems operational',
         check_latency_ms: 120,
         timestamp: new Date().toISOString(),
+        data_provenance: 'measured',
       }),
     })
   })

@@ -28,6 +28,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
+  MinusCircle,
   Search,
   Filter,
   Table as TableIcon,
@@ -53,6 +54,7 @@ import {
 import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { useKPIList, useKPIDetail } from '@/hooks/api/use-kpi';
+import { formatKpiValue } from '@/lib/kpi-format';
 import {
   useLatestDriftStatus,
   useDriftHistory,
@@ -60,7 +62,7 @@ import {
 } from '@/hooks/api/use-monitoring';
 import { toast } from '@/hooks/use-toast';
 import { Workstream } from '@/types/kpi';
-import type { KPIMetadata, KPIThreshold } from '@/types/kpi';
+import type { KPIMetadata } from '@/types/kpi';
 
 // =============================================================================
 // CONSTANTS
@@ -75,6 +77,36 @@ import type { KPIMetadata, KPIThreshold } from '@/types/kpi';
  * their own model id.
  */
 const DQ_MODEL_ID = 'data_quality_pipeline';
+
+/**
+ * Brand / region cuts the DQ rule values can be sliced by.
+ *
+ * The KPI calculators are brand- and region-aware (mig 078) and `GET
+ * /api/kpis/{id}` accepts both, but the page never forwarded either — so every
+ * rule value read the portfolio aggregate ("why only aggregated metrics?").
+ * `All` / `All US` mean "no filter" (portfolio). Region is sent lowercased to
+ * match the backend (KPI SQL matches case-insensitively; region data is stored
+ * lowercase) — mirrors Home.tsx's `regionToParam`.
+ *
+ * SCOPE (honest): only the per-rule values in the Validation Rules table are
+ * brand/region-aware. The drift-derived dimension cards and the Drift Status
+ * section reflect the `data_quality_pipeline` model, which is NOT brand-scoped,
+ * so they intentionally stay portfolio-level regardless of these selectors.
+ */
+const DQ_BRAND_OPTIONS = [
+  { value: 'All', label: 'All Brands' },
+  { value: 'Remibrutinib', label: 'Remibrutinib' },
+  { value: 'Fabhalta', label: 'Fabhalta' },
+  { value: 'Kisqali', label: 'Kisqali' },
+] as const;
+
+const DQ_REGION_OPTIONS = [
+  { value: 'All US', label: 'All US Regions' },
+  { value: 'Northeast', label: 'Northeast' },
+  { value: 'South', label: 'South' },
+  { value: 'Midwest', label: 'Midwest' },
+  { value: 'West', label: 'West' },
+] as const;
 
 // =============================================================================
 // HELPERS
@@ -96,17 +128,31 @@ function formatTimestamp(timestamp: string | undefined): string {
   }
 }
 
-function statusFromThreshold(
-  value: number | undefined,
-  threshold?: KPIThreshold
-): 'pass' | 'warning' | 'fail' {
-  if (value === undefined || Number.isNaN(value)) return 'fail';
-  if (threshold?.critical !== undefined && value < threshold.critical) return 'fail';
-  if (threshold?.warning !== undefined && value < threshold.warning) return 'warning';
-  return 'pass';
+/** Row status — backend-authoritative; `unknown` = no data, NOT a failure. */
+type RuleStatus = 'pass' | 'warning' | 'fail' | 'unknown';
+
+// Map the backend KPIStatus (good/warning/critical/unknown) to the row's
+// display status. The backend status is AUTHORITATIVE and direction-aware:
+// lower-is-better DQ KPIs (geographic gap, data lag, time-to-release) are scored
+// correctly server-side, and a null/no-rows value comes back as `unknown` with
+// an error reason. The page previously RE-derived status from (value, threshold)
+// with a naive higher-is-better rule that (a) turned an UNKNOWN/null value into a
+// fail-X — showing "no data" as a quality failure — and (b) mis-scored
+// lower-is-better KPIs. Trust the backend status instead.
+function ruleStatusFromKPI(value?: { status?: string | null }): RuleStatus {
+  switch ((value?.status ?? '').toString().toLowerCase()) {
+    case 'good':
+      return 'pass';
+    case 'warning':
+      return 'warning';
+    case 'critical':
+      return 'fail';
+    default:
+      return 'unknown';
+  }
 }
 
-function statusIcon(status: 'pass' | 'warning' | 'fail') {
+function statusIcon(status: RuleStatus) {
   switch (status) {
     case 'pass':
       return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
@@ -114,6 +160,8 @@ function statusIcon(status: 'pass' | 'warning' | 'fail') {
       return <AlertTriangle className="h-4 w-4 text-amber-500" />;
     case 'fail':
       return <XCircle className="h-4 w-4 text-rose-500" />;
+    case 'unknown':
+      return <MinusCircle className="h-4 w-4 text-muted-foreground" />;
   }
 }
 
@@ -140,24 +188,29 @@ function KPIDrilldownRow({
   kpi,
   statusFilter = 'all',
   onStatusComputed,
+  brand,
+  region,
 }: {
   kpi: KPIMetadata;
   statusFilter?: string;
-  onStatusComputed?: (kpiId: string, status: 'pass' | 'warning' | 'fail') => void;
+  onStatusComputed?: (kpiId: string, status: RuleStatus) => void;
+  brand?: string;
+  region?: string;
 }) {
-  const { metadata, value, isLoading, error } = useKPIDetail(kpi.id);
+  const { metadata, value, isLoading, error } = useKPIDetail(kpi.id, brand, region);
 
   // Prefer freshly fetched metadata; fall back to the list item to avoid a flash
   const effectiveMeta = metadata ?? kpi;
   const numericValue = typeof value?.value === 'number' ? value.value : undefined;
   const threshold = effectiveMeta.threshold;
-  const ruleStatus = statusFromThreshold(numericValue, threshold);
+  // Backend-authoritative, direction-aware status (unknown = no data, not fail).
+  const ruleStatus = ruleStatusFromKPI(value);
 
-  // #322 — wire status filter to the computed per-rule status. The KPI list
-  // endpoint does NOT return a rolled-up status; we compute it here from
-  // (value, threshold) using the same helper that drives the row's status
-  // icon. Selecting Pass/Warning/Fail hides non-matching rows; parent uses
-  // the reported status to drive the empty-state when ALL rows are filtered.
+  // #322 — wire the status filter to the per-rule status. The per-KPI value
+  // endpoint returns the backend `status` (good/warning/critical/unknown);
+  // selecting Pass/Warning/Fail hides non-matching rows and the parent uses the
+  // reported status to drive the empty-state when ALL rows are filtered.
+  // `unknown` rows never match Pass/Warning/Fail — "no data" is not a failure.
   useEffect(() => {
     onStatusComputed?.(kpi.id, ruleStatus);
   }, [kpi.id, ruleStatus, onStatusComputed]);
@@ -197,16 +250,26 @@ function KPIDrilldownRow({
           <span className="text-rose-500 text-sm">error</span>
         ) : numericValue !== undefined ? (
           <span className="font-medium">
-            {numericValue.toFixed(1)}
-            {effectiveMeta.unit ? effectiveMeta.unit : ''}
+            {formatKpiValue(numericValue, {
+              unit: effectiveMeta.unit,
+              valueFormat: effectiveMeta.value_format,
+            })}
           </span>
         ) : (
-          <span className="text-muted-foreground">—</span>
+          <span
+            className="text-muted-foreground"
+            title={ruleStatus === 'unknown' ? (value?.error ?? undefined) : undefined}
+          >
+            {ruleStatus === 'unknown' ? 'No data' : '—'}
+          </span>
         )}
         {threshold?.target !== undefined && (
           <span className="text-muted-foreground text-xs ml-1">
-            / target {threshold.target}
-            {effectiveMeta.unit ?? ''}
+            / target{' '}
+            {formatKpiValue(threshold.target, {
+              unit: effectiveMeta.unit,
+              valueFormat: effectiveMeta.value_format,
+            })}
           </span>
         )}
         {/* Synthetic-mode provenance: label the figure so a reviewer never reads
@@ -231,12 +294,13 @@ function KPIDrilldownRow({
 function DataQuality() {
   const [searchQuery, setSearchQuery] = useState('');
   const [ruleStatusFilter, setRuleStatusFilter] = useState<string>('all');
+  // F3 — brand/region cut for the per-rule values. Default = portfolio aggregate.
+  const [selectedBrand, setSelectedBrand] = useState<string>('All');
+  const [selectedRegion, setSelectedRegion] = useState<string>('All US');
   // #322 — per-row computed status reported up by each KPIDrilldownRow.
   // Lets us render the "No data quality KPIs match your filters" empty-state
   // when the status filter hides every row.
-  const [kpiStatuses, setKpiStatuses] = useState<Record<string, 'pass' | 'warning' | 'fail'>>(
-    {}
-  );
+  const [kpiStatuses, setKpiStatuses] = useState<Record<string, RuleStatus>>({});
 
   // ---------------------------------------------------------------------------
   // LIVE DATA — KPI workstream ws1_data_quality
@@ -286,6 +350,12 @@ function DataQuality() {
   // ---------------------------------------------------------------------------
   const allKpis = useMemo<KPIMetadata[]>(() => kpiList?.kpis ?? [], [kpiList]);
 
+  // F3 — map the selected cut to backend query params. 'All' / 'All US' = no
+  // filter (portfolio); region lowercased to match the backend's stored case.
+  const brandParam = selectedBrand === 'All' ? undefined : selectedBrand;
+  const regionParam =
+    selectedRegion === 'All US' ? undefined : selectedRegion.toLowerCase();
+
   const filteredKpis = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return allKpis.filter((kpi) => {
@@ -313,29 +383,57 @@ function DataQuality() {
     }, 0);
   }, [filteredKpis, ruleStatusFilter, kpiStatuses]);
 
-  // Derive dimension scores from drift signal + KPI count health.
-  // overall_drift_score is in [0, 1] where higher = worse; we invert to a
-  // percentage-style "quality" score.
-  const qualityScores = useMemo(() => {
+  // The drift-derived dimensions (accuracy/consistency/timeliness) are only
+  // meaningful when real drift monitoring has actually run for the DQ pipeline.
+  // When NO drift records exist (features_checked === 0 and no results — the
+  // prod reality for `data_quality_pipeline`, which nothing currently monitors),
+  // the old `1 - (driftScore ?? 0) = 100%` default manufactured a fake-healthy
+  // score that contradicted the failing validation rules below. Treat "no
+  // monitoring" as honestly UNKNOWN (undefined → "No data") instead of green.
+  const hasDriftData =
+    !!latestDrift &&
+    ((latestDrift.features_checked ?? 0) > 0 || (latestDrift.results?.length ?? 0) > 0);
+
+  const qualityScores = useMemo<{
+    completeness: number | undefined;
+    accuracy: number | undefined;
+    consistency: number | undefined;
+    timeliness: number | undefined;
+    overall: number | undefined;
+  }>(() => {
+    const kpiCount = allKpis.length;
+    // Monitoring-coverage proxy (registry size) — independent of drift, so it
+    // stays available even when drift hasn't run.
+    const completeness =
+      kpiCount > 0 ? Math.min(100, 70 + Math.min(30, kpiCount * 2)) : undefined;
+
+    if (!hasDriftData) {
+      return {
+        completeness,
+        accuracy: undefined,
+        consistency: undefined,
+        timeliness: undefined,
+        overall: undefined,
+      };
+    }
+
     const driftScore = latestDrift?.overall_drift_score ?? 0;
     const driftHealth = Math.max(0, Math.min(100, (1 - driftScore) * 100));
     const featuresChecked = latestDrift?.features_checked ?? 0;
     const driftedFeatures = latestDrift?.features_with_drift?.length ?? 0;
-    const accuracy = featuresChecked > 0
-      ? Math.max(0, Math.min(100, ((featuresChecked - driftedFeatures) / featuresChecked) * 100))
-      : driftHealth;
-
-    const kpiCount = allKpis.length;
-    // Use registry size as a proxy for "completeness of monitoring coverage"
-    // (we have N DQ KPIs registered).
-    const completeness = kpiCount > 0 ? Math.min(100, 70 + Math.min(30, kpiCount * 2)) : 0;
-
-    const consistency = driftHealth; // alias until a dedicated signal lands
+    const accuracy =
+      featuresChecked > 0
+        ? Math.max(0, Math.min(100, ((featuresChecked - driftedFeatures) / featuresChecked) * 100))
+        : driftHealth;
+    const consistency = driftHealth;
     const timeliness = driftHealth;
-    const overall = (completeness + accuracy + consistency + timeliness) / 4;
+    const overall =
+      completeness !== undefined
+        ? (completeness + accuracy + consistency + timeliness) / 4
+        : (accuracy + consistency + timeliness) / 3;
 
     return { completeness, accuracy, consistency, timeliness, overall };
-  }, [latestDrift, allKpis.length]);
+  }, [latestDrift, allKpis.length, hasDriftData]);
 
   const dimensionsLoading = kpiLoading || driftLoading;
 
@@ -438,51 +536,48 @@ function DataQuality() {
           </div>
         ) : (
           <>
-            <KPICard
-              title="Overall Quality"
-              value={qualityScores.overall}
-              unit="%"
-              status={getStatusFromScore(qualityScores.overall)}
-              description="Composite score across the four DQ dimensions"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Completeness"
-              value={qualityScores.completeness}
-              unit="%"
-              status={getStatusFromScore(qualityScores.completeness)}
-              description="Monitoring coverage across registered DQ KPIs"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Accuracy"
-              value={qualityScores.accuracy}
-              unit="%"
-              status={getStatusFromScore(qualityScores.accuracy)}
-              description="Drift-free feature share"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Consistency"
-              value={qualityScores.consistency}
-              unit="%"
-              status={getStatusFromScore(qualityScores.consistency)}
-              description="Inverse of overall drift severity"
-              sparklineData={[]}
-              higherIsBetter
-            />
-            <KPICard
-              title="Timeliness"
-              value={qualityScores.timeliness}
-              unit="%"
-              status={getStatusFromScore(qualityScores.timeliness)}
-              description="Pipeline freshness vs baseline window"
-              sparklineData={[]}
-              higherIsBetter
-            />
+            {(
+              [
+                {
+                  title: 'Overall Quality',
+                  v: qualityScores.overall,
+                  description: 'Composite score across the available DQ dimensions',
+                },
+                {
+                  title: 'Completeness',
+                  v: qualityScores.completeness,
+                  description: 'Monitoring coverage across registered DQ KPIs',
+                },
+                {
+                  title: 'Accuracy',
+                  v: qualityScores.accuracy,
+                  description: 'Drift-free feature share (requires drift monitoring)',
+                },
+                {
+                  title: 'Consistency',
+                  v: qualityScores.consistency,
+                  description: 'Inverse of overall drift severity (requires drift monitoring)',
+                },
+                {
+                  title: 'Timeliness',
+                  v: qualityScores.timeliness,
+                  description: 'Drift-stability of the pipeline vs baseline (requires drift monitoring)',
+                },
+              ] as const
+            ).map((d) => (
+              <KPICard
+                key={d.title}
+                title={d.title}
+                // Honest "No data" when the backing signal is absent — never a
+                // fabricated 100% from a `1 - 0` default (see qualityScores).
+                value={d.v === undefined ? 'No data' : d.v}
+                unit={d.v === undefined ? '' : '%'}
+                status={d.v === undefined ? 'neutral' : getStatusFromScore(d.v)}
+                description={d.description}
+                sparklineData={[]}
+                higherIsBetter
+              />
+            ))}
           </>
         )}
       </div>
@@ -506,10 +601,12 @@ function DataQuality() {
               <Loader2 className="h-4 w-4 animate-spin" />
               <span>Loading drift status...</span>
             </div>
-          ) : !latestDrift ? (
+          ) : !latestDrift || !hasDriftData ? (
             <p className="text-muted-foreground text-sm">
-              No drift detection results yet. Click <strong>Refresh</strong> to trigger
-              detection.
+              No drift monitoring has run for the data quality pipeline yet
+              {latestDrift?.drift_summary ? ` (${latestDrift.drift_summary})` : ''}. The
+              quality dimensions above read <strong>No data</strong> until a run records
+              drift. Click <strong>Refresh</strong> to trigger detection.
             </p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -578,7 +675,8 @@ function DataQuality() {
                 <div>
                   <CardTitle>Validation Rules</CardTitle>
                   <CardDescription>
-                    Data quality KPIs from workstream <code>ws1_data_quality</code>
+                    Data quality KPIs from workstream <code>ws1_data_quality</code>. Rule
+                    values reflect the selected brand and region.
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -599,6 +697,33 @@ function DataQuality() {
                       className="pl-9 w-64"
                     />
                   </div>
+                  {/* F3 — brand/region cut selectors. Scoped here (Validation
+                      Rules header) because only these per-rule values are
+                      brand/region-aware; the dimension/drift cards are not. */}
+                  <Select value={selectedBrand} onValueChange={setSelectedBrand}>
+                    <SelectTrigger className="w-40" aria-label="Filter rules by brand">
+                      <SelectValue placeholder="Brand" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DQ_BRAND_OPTIONS.map((b) => (
+                        <SelectItem key={b.value} value={b.value}>
+                          {b.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={selectedRegion} onValueChange={setSelectedRegion}>
+                    <SelectTrigger className="w-44" aria-label="Filter rules by region">
+                      <SelectValue placeholder="Region" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DQ_REGION_OPTIONS.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>
+                          {r.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Select value={ruleStatusFilter} onValueChange={setRuleStatusFilter}>
                     {/* #328 — aria-label gives the SelectTrigger an accessible name */}
                     <SelectTrigger className="w-32" aria-label="Filter rules by status">
@@ -655,6 +780,8 @@ function DataQuality() {
                           key={kpi.id}
                           kpi={kpi}
                           statusFilter={ruleStatusFilter}
+                          brand={brandParam}
+                          region={regionParam}
                           onStatusComputed={(id, status) =>
                             setKpiStatuses((prev) =>
                               prev[id] === status ? prev : { ...prev, [id]: status }

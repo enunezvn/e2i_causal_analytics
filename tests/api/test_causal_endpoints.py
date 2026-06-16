@@ -10,6 +10,7 @@ Endpoints covered:
 - Batch 1C.3: Pipeline Execution (POST /pipeline/sequential, POST /pipeline/parallel, GET /pipeline/{id})
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -397,7 +398,27 @@ class TestRouteCausalQuery:
         assert response.status_code == 200
         data = response.json()
         assert data["primary_library"] == "causalml"
-        assert data["routing_confidence"] == 0.9
+        # The /route endpoint now delegates to the real LibraryRouter; a forced
+        # library override returns confidence 1.0 ("Forced libraries: ...")
+        # instead of the former hardcoded-stub value of 0.9.
+        assert data["routing_confidence"] == 1.0
+
+    def test_route_confidence_is_computed_not_fabricated(self):
+        """Routing confidence must be computed by the real LibraryRouter, not
+        the former hardcoded stub (which always returned 0.75 for any matched
+        query). An unclassifiable query honestly reports 0.0 confidence; a
+        strong causal-effect query reports a positive, non-0.75 value."""
+        garbage = client.post("/api/causal/route", json={"query": "zzz qqq wxyz"})
+        assert garbage.status_code == 200
+        assert garbage.json()["routing_confidence"] == 0.0
+
+        strong = client.post(
+            "/api/causal/route",
+            json={"query": "Does detailing cause higher prescriptions?"},
+        )
+        conf = strong.json()["routing_confidence"]
+        assert 0.0 < conf <= 1.0
+        assert conf != 0.75  # not the old fabricated constant
 
 
 class TestCausalHealthCheck:
@@ -606,3 +627,109 @@ class TestGetPipelineStatus:
         response = client.get("/api/causal/pipeline/nonexistent-pipeline-12345")
 
         assert response.status_code == 404
+
+
+def _fake_async_client(rows):
+    """Build a MagicMock supabase client whose query chain
+    (.select/.eq/.limit) is fluent and .execute() is awaitable."""
+    query = MagicMock()
+    query.select.return_value = query
+    query.eq.return_value = query
+    query.limit.return_value = query
+    query.execute = AsyncMock(return_value=SimpleNamespace(data=rows))
+    client_mock = MagicMock()
+    client_mock.table.return_value = query
+    return client_mock
+
+
+_FACTORY = "src.memory.services.factories.get_async_supabase_client"
+
+
+class TestCausalVariablesAndEstimationData:
+    """Tests for GET /causal/variables and GET /causal/estimation-data.
+
+    These back the data-driven dropdowns and server-side estimation-data
+    loading that make the causal-discovery page run on real gold-standard data.
+    """
+
+    def test_variables_unknown_dataset_404(self):
+        """Unknown dataset is rejected before any DB access."""
+        response = client.get("/api/causal/variables?dataset=not_a_dataset")
+        assert response.status_code == 404
+
+    def test_variables_happy_path_intersects_live_columns(self):
+        """Candidates are the curated roles intersected with live columns."""
+        row = {
+            "treatment_arm": 1,
+            "treatment_initiated": 0,
+            "persistent_180d": 1,
+            "discontinued_180d": 0,
+            "disease_severity": 3.2,
+            "engagement_score": 8.1,
+            "age_at_diagnosis": 60,
+            "zip_code": "00000",  # present but not a candidate
+        }
+        with patch(_FACTORY, AsyncMock(return_value=_fake_async_client([row]))):
+            response = client.get("/api/causal/variables?dataset=patient_journeys")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["treatment_candidates"] == ["treatment_arm", "treatment_initiated"]
+        assert "persistent_180d" in data["outcome_candidates"]
+        assert data["covariate_candidates"] == [
+            "disease_severity",
+            "engagement_score",
+            "age_at_diagnosis",
+        ]
+        # zip_code is a real column but never offered as a causal candidate
+        assert "zip_code" not in data["treatment_candidates"]
+        assert "zip_code" in data["columns"]
+
+    def test_estimation_data_disallowed_column_400(self):
+        """A column outside the dataset allowlist is rejected (no arbitrary reads)."""
+        response = client.get(
+            "/api/causal/estimation-data",
+            params={
+                "treatment_var": "zip_code",
+                "outcome_var": "persistent_180d",
+                "dataset": "patient_journeys",
+            },
+        )
+        assert response.status_code == 400
+
+    def test_estimation_data_happy_path_drops_missing_and_coerces(self):
+        """Returns numeric records and drops rows missing treatment/outcome."""
+        rows = [
+            {"treatment_arm": "1", "persistent_180d": "0", "disease_severity": "3.0"},
+            {"treatment_arm": "0", "persistent_180d": "1", "disease_severity": "5.0"},
+            {"treatment_arm": None, "persistent_180d": "1", "disease_severity": "2.0"},  # dropped
+        ]
+        with patch(_FACTORY, AsyncMock(return_value=_fake_async_client(rows))):
+            response = client.get(
+                "/api/causal/estimation-data",
+                params={
+                    "treatment_var": "treatment_arm",
+                    "outcome_var": "persistent_180d",
+                    "dataset": "patient_journeys",
+                    "covariates": "disease_severity",
+                },
+            )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["n_rows"] == 2  # the None-treatment row was dropped
+        assert data["columns"] == ["treatment_arm", "persistent_180d", "disease_severity"]
+        first = data["estimation_data_records"][0]
+        assert first["treatment_arm"] == 1.0  # coerced str -> float
+        assert isinstance(first["disease_severity"], float)
+
+    def test_estimation_data_no_usable_rows_503(self):
+        """Empty result fails closed with 503 (never fabricates rows)."""
+        with patch(_FACTORY, AsyncMock(return_value=_fake_async_client([]))):
+            response = client.get(
+                "/api/causal/estimation-data",
+                params={
+                    "treatment_var": "treatment_arm",
+                    "outcome_var": "persistent_180d",
+                    "dataset": "patient_journeys",
+                },
+            )
+        assert response.status_code == 503

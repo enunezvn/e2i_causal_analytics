@@ -70,6 +70,13 @@ export interface ExplainRequest {
   hcp_id?: string;
   /** Type of model to explain */
   model_type: ModelType;
+  /**
+   * Brand for the gold-standard per-brand cohort models (#39/#967):
+   * Remibrutinib | Fabhalta | Kisqali. Selects which per-brand model to
+   * explain (serving name `f"{cohort}_{brand}_goldstd_lr_v1"`). Ignored by
+   * the legacy single-model cohorts. See src/api/routes/explain.py.
+   */
+  brand?: string;
   /** Specific model version (latest if not specified) */
   model_version_id?: string;
   /** Pre-computed features (fetched from Feast if not provided) */
@@ -196,7 +203,16 @@ export interface ExplainableModelInfo {
   /** Latest version */
   latest_version: string;
   /** Type of SHAP explainer used */
-  explainer_type: 'TreeExplainer' | 'KernelExplainer';
+  explainer_type: 'TreeExplainer' | 'KernelExplainer' | 'LinearExplainer';
+  /**
+   * Whether this is a gold-standard per-brand cohort model (#39/#967).
+   * When true the FE offers a brand selector (Remibrutinib | Fabhalta |
+   * Kisqali) so all per-brand serving bundles are reachable. Emitted by the
+   * backend `/api/explain/models` handler (src/api/routes/explain.py).
+   */
+  is_gold_standard?: boolean;
+  /** Human-readable description emitted by `/api/explain/models`. */
+  description?: string;
   /**
    * Average latency in milliseconds.
    * Optional: the backend `/api/explain/models` handler does not emit this

@@ -115,6 +115,9 @@ class KPIMetadata(BaseModel):
     view: str | None = None
     threshold: KPIThreshold | None = None
     unit: str | None = None
+    # Display-format hint for value-rendering surfaces: 'percent' => the value is
+    # a 0-1 ratio to be shown as NN.N% (×100); None/other => render as-is + `unit`.
+    value_format: str | None = None
     frequency: str = "daily"
     primary_causal_library: CausalLibrary = CausalLibrary.NONE
     secondary_causal_library: CausalLibrary | None = None

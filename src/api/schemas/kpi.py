@@ -235,6 +235,10 @@ class KPIMetadataResponse(BaseModel):
     view: str | None = Field(None, description="Database view name if applicable")
     threshold: KPIThresholdResponse | None = Field(None, description="Threshold configuration")
     unit: str | None = Field(None, description="Unit of measurement")
+    value_format: str | None = Field(
+        None,
+        description="Display-format hint: 'percent' (value is a 0-1 ratio shown as %) or None",
+    )
     frequency: str = Field("daily", description="Calculation frequency")
     primary_causal_library: str = Field("none", description="Primary causal library for this KPI")
     brand: str | None = Field(None, description="Brand filter if applicable")

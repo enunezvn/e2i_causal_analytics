@@ -15,6 +15,7 @@ import { ApiError } from '@/lib/api-client';
 import {
   runHierarchicalAnalysis,
   getHierarchicalAnalysis,
+  getCausalVariables,
   routeQuery,
   runSequentialPipeline,
   runParallelPipeline,
@@ -31,6 +32,7 @@ import {
 import type {
   CausalAnalysisHistoryResponse,
   CausalLibrary,
+  CausalVariablesResponse,
   CrossValidationRequest,
   CrossValidationResponse,
   EstimatorListResponse,
@@ -73,6 +75,35 @@ export function useHierarchicalAnalysis(
     queryKey: queryKeys.causal.hierarchicalAnalysis(analysisId),
     queryFn: () => getHierarchicalAnalysis(analysisId),
     enabled: !!analysisId,
+    ...options,
+  });
+}
+
+/**
+ * Hook to list candidate treatment / outcome / covariate variables for a
+ * dataset.
+ *
+ * Feeds the Causal Discovery page's variable selectors so they only offer
+ * columns that exist in the real estimation frame.
+ *
+ * @param dataset - Dataset to introspect (default: 'patient_journeys')
+ * @param options - Additional query options
+ * @returns Query result with candidate variable lists
+ *
+ * @example
+ * ```tsx
+ * const { data: variables } = useCausalVariables('patient_journeys');
+ * variables?.treatment_candidates.forEach((c) => console.log(c));
+ * ```
+ */
+export function useCausalVariables(
+  dataset: string = 'patient_journeys',
+  options?: Omit<UseQueryOptions<CausalVariablesResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<CausalVariablesResponse, ApiError>({
+    queryKey: queryKeys.causal.variables(dataset),
+    queryFn: () => getCausalVariables(dataset),
+    staleTime: 5 * 60 * 1000, // 5 minutes - dataset schema rarely changes
     ...options,
   });
 }

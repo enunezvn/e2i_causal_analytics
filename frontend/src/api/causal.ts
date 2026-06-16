@@ -25,8 +25,10 @@ import {
 import type {
   CausalAnalysisHistoryResponse,
   CausalLibrary,
+  CausalVariablesResponse,
   CrossValidationRequest,
   CrossValidationResponse,
+  EstimationDataResponse,
   EstimatorListResponse,
   HierarchicalAnalysisRequest,
   HierarchicalAnalysisResponse,
@@ -147,6 +149,71 @@ export async function routeQuery(
     `${CAUSAL_BASE}/route`,
     request
   );
+}
+
+// =============================================================================
+// DATASET / VARIABLE DISCOVERY ENDPOINTS
+// =============================================================================
+
+/**
+ * List candidate treatment / outcome / covariate variables for a dataset.
+ *
+ * Powers the page's variable selectors so they only offer columns that exist
+ * in the real estimation frame (no fictional `rep_visits` / `trx_count`
+ * defaults).
+ *
+ * @param dataset - Dataset to introspect (default: 'patient_journeys')
+ * @returns Candidate variable lists and the full column set
+ *
+ * @example
+ * ```typescript
+ * const vars = await getCausalVariables('patient_journeys');
+ * console.log(vars.treatment_candidates); // ['treatment_arm', 'treatment_initiated']
+ * ```
+ */
+export async function getCausalVariables(
+  dataset: string = 'patient_journeys'
+): Promise<CausalVariablesResponse> {
+  return get<CausalVariablesResponse>(`${CAUSAL_BASE}/variables`, {
+    params: { dataset },
+  });
+}
+
+/**
+ * Fetch real estimation-ready records for the chosen variables.
+ *
+ * The returned `estimation_data_records` are passed verbatim into the parallel
+ * pipeline request's `filters` so the libraries estimate effects on real rows.
+ *
+ * @param args - Dataset + treatment / outcome / covariates + row limit
+ * @returns Estimation-ready records and their columns
+ *
+ * @example
+ * ```typescript
+ * const data = await getCausalEstimationData({
+ *   treatment_var: 'treatment_arm',
+ *   outcome_var: 'persistent_180d',
+ *   covariates: ['disease_severity', 'engagement_score', 'age_at_diagnosis'],
+ * });
+ * console.log(`${data.n_rows} rows ready for estimation`);
+ * ```
+ */
+export async function getCausalEstimationData(args: {
+  dataset?: string;
+  treatment_var: string;
+  outcome_var: string;
+  covariates?: string[];
+  limit?: number;
+}): Promise<EstimationDataResponse> {
+  return get<EstimationDataResponse>(`${CAUSAL_BASE}/estimation-data`, {
+    params: {
+      dataset: args.dataset ?? 'patient_journeys',
+      treatment_var: args.treatment_var,
+      outcome_var: args.outcome_var,
+      covariates: (args.covariates ?? []).join(','),
+      limit: args.limit ?? 4000,
+    },
+  });
 }
 
 // =============================================================================

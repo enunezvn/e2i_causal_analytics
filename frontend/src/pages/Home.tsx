@@ -24,7 +24,7 @@ import { useKPIList, useKPIHealth, useBatchCalculateKPIs, useKPIValue } from '@/
 import { useGraphStats } from '@/hooks/api/use-graph';
 import { useAlerts } from '@/hooks/api/use-monitoring';
 import { AlertStatus } from '@/types/monitoring';
-import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
+import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
 import { useOpportunities } from '@/hooks/api/use-gaps';
@@ -445,11 +445,15 @@ function Home() {
   );
 
   // System Health card: real agent-computed aggregate scores.
+  // FULL check (all four dimensions), NOT quick: the quick (component-only)
+  // check returns null model/pipeline/agent scores, which this card rendered as
+  // a fabricated "0%" beside a component-only "100 (A)" overall. Full measures
+  // every dimension (e.g. 88/B) so the card is honest and self-consistent.
   const {
     data: health,
     isLoading: healthLoading,
     error: healthError,
-  } = useQuickHealthCheck({ refetchInterval: 30000 });
+  } = useFullHealthCheck({ refetchInterval: 60000 });
 
   // Agent Status card: real agent roster.
   const { data: agentStatus, isLoading: agentsLoading } = useQuery({
@@ -1258,14 +1262,18 @@ function Home() {
                     ['Models', health.model_health_score],
                     ['Pipelines', health.pipeline_health_score],
                     ['Agents', health.agent_health_score],
-                  ] as [string, number][]).map(([label, score]) => (
-                    <div key={label} className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">{label}</span>
-                      <span className={cn('font-medium', healthScoreClass(score))}>
-                        {Math.round(score * 100)}%
-                      </span>
-                    </div>
-                  ))}
+                  ] as [string, number | null | undefined][])
+                    // A null/undefined dimension is UNMEASURED — omit it rather
+                    // than rendering Math.round(null*100) as a fabricated "0%".
+                    .filter((entry): entry is [string, number] => entry[1] != null)
+                    .map(([label, score]) => (
+                      <div key={label} className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className={cn('font-medium', healthScoreClass(score))}>
+                          {Math.round(score * 100)}%
+                        </span>
+                      </div>
+                    ))}
                   {health.warnings?.some((w) => w.toLowerCase().includes('mock data')) && (
                     <p className="text-xs text-amber-600">Awaiting Health Score agent</p>
                   )}
