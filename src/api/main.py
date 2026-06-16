@@ -1295,10 +1295,18 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
             window_seconds=60,
         )
     elif exc.status_code == 503:
+        detail = str(exc.detail) if exc.detail else None
         e2i_error = DependencyError(
             dependency="service",
-            original_error=Exception(str(exc.detail)) if exc.detail else None,
+            original_error=Exception(detail) if detail else None,
         )
+        # Preserve the endpoint's honest 503 reason instead of masking it behind
+        # the generic "Dependency 'service' is unavailable". Endpoints that fail
+        # closed with an explanatory detail (e.g. the causal pipeline's "no real
+        # data backend wired … pass demo_mode=true") were otherwise surfaced to
+        # users as a misleading generic service outage.
+        if detail:
+            e2i_error.message = detail
     elif exc.status_code == 504:
         e2i_error = E2ITimeoutError(
             operation="request",

@@ -12,7 +12,47 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-20250514"
+# Legacy fallback only. The live default is resolved from env at call time by
+# ``get_default_dspy_model()`` so DSPy uses the same *working* provider/model as
+# the rest of the app (src.utils.llm_factory). A bare ``claude-sonnet-4-*`` model
+# that the deployed Anthropic key cannot serve raises litellm.NotFoundError (404),
+# which is exactly what broke the Executive AI Brief.
+DEFAULT_MODEL = "openai/gpt-4o"
+
+
+def get_default_dspy_model() -> str:
+    """Resolve the DSPy/litellm model string from env, provider-aware.
+
+    DSPy talks to providers through litellm, so the model string must carry a
+    ``<provider>/<model>`` prefix. This mirrors ``src.utils.llm_factory`` provider
+    selection so DSPy paths use the same model the rest of the app uses instead of
+    a hardcoded one that may be retired for the deployed key.
+
+    Resolution order:
+      1. ``DSPY_LM_MODEL`` env override — used verbatim (already prefixed).
+      2. ``LLM_PROVIDER=anthropic`` -> ``anthropic/{ANTHROPIC_MODEL}``.
+      3. Otherwise (default ``openai``) -> ``openai/gpt-4o`` (the standard tier).
+    """
+    explicit = os.getenv("DSPY_LM_MODEL")
+    if explicit:
+        return explicit
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    if provider == "anthropic":
+        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+        return model if "/" in model else f"anthropic/{model}"
+    return "openai/gpt-4o"
+
+
+def dspy_provider_api_key_present() -> bool:
+    """Whether the API key for the env-configured DSPy provider is set.
+
+    Provider-aware so an OpenAI-configured deployment is not blocked by a missing
+    ``ANTHROPIC_API_KEY`` (and vice-versa).
+    """
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+    if provider == "anthropic":
+        return bool(os.getenv("ANTHROPIC_API_KEY"))
+    return bool(os.getenv("OPENAI_API_KEY"))
 
 
 def ensure_dspy_configured(model: Optional[str] = None, force: bool = False) -> bool:
@@ -30,11 +70,11 @@ def ensure_dspy_configured(model: Optional[str] = None, force: bool = False) -> 
     if not force and getattr(dspy.settings, "lm", None) is not None:
         return True
 
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        logger.warning("ANTHROPIC_API_KEY not set; DSPy LM not configured")
+    if not dspy_provider_api_key_present():
+        logger.warning("No API key for the configured DSPy provider; DSPy LM not configured")
         return False
 
-    model = model or os.getenv("DSPY_LM_MODEL", DEFAULT_MODEL)
+    model = model or get_default_dspy_model()
     lm = dspy.LM(model)
     dspy.configure(lm=lm)
     logger.info("DSPy LM configured: %s", model)
