@@ -72,16 +72,68 @@ export enum FidelityGrade {
 // =============================================================================
 
 /**
- * Types of interventions that can be simulated
- * @deprecated Use intervention_type string field instead
+ * Canonical intervention types — channel-level tactics that mirror the backend
+ * `INTERVENTION_CATALOG` (src/digital_twin/effect/provider.py) and the
+ * `/digital-twin/intervention-types` endpoint, so FE and backend cannot drift.
+ *
+ * NOTE: the previous program-level values (hcp_engagement, rep_training, pricing,
+ * digital_marketing, formulary_access, patient_support) were disjoint from the
+ * backend allowlist, so every UI simulation 422'd "unsupported intervention".
+ * These are the values `/simulate` actually accepts.
  */
 export enum InterventionType {
-  HCP_ENGAGEMENT = 'hcp_engagement',
-  PATIENT_SUPPORT = 'patient_support',
-  PRICING = 'pricing',
-  REP_TRAINING = 'rep_training',
-  DIGITAL_MARKETING = 'digital_marketing',
-  FORMULARY_ACCESS = 'formulary_access',
+  EMAIL_CAMPAIGN = 'email_campaign',
+  CALL_FREQUENCY_INCREASE = 'call_frequency_increase',
+  SPEAKER_PROGRAM_INVITATION = 'speaker_program_invitation',
+  SAMPLE_DISTRIBUTION = 'sample_distribution',
+  PEER_INFLUENCE_ACTIVATION = 'peer_influence_activation',
+  DIGITAL_ENGAGEMENT = 'digital_engagement',
+}
+
+/**
+ * FE fallback mirroring the backend `INTERVENTION_CATALOG`
+ * (`src/digital_twin/effect/provider.py`). Used ONLY when the
+ * `/digital-twin/intervention-types` endpoint is unreachable, so the dropdown
+ * stays usable on a transient fetch failure. The endpoint is the source of
+ * truth (brand-aware availability); `/simulate` is the authoritative gate.
+ */
+export const FALLBACK_INTERVENTION_TYPES: ReadonlyArray<{
+  value: InterventionType;
+  label: string;
+}> = [
+  { value: InterventionType.EMAIL_CAMPAIGN, label: 'Email Campaign' },
+  { value: InterventionType.CALL_FREQUENCY_INCREASE, label: 'Increased Call Frequency' },
+  { value: InterventionType.SPEAKER_PROGRAM_INVITATION, label: 'Speaker Program Invitation' },
+  { value: InterventionType.SAMPLE_DISTRIBUTION, label: 'Sample Distribution' },
+  { value: InterventionType.PEER_INFLUENCE_ACTIVATION, label: 'Peer Influence Activation' },
+  { value: InterventionType.DIGITAL_ENGAGEMENT, label: 'Digital Engagement' },
+];
+
+/**
+ * A canonical, selectable intervention type as served by
+ * `GET /digital-twin/intervention-types` (single source of truth for the
+ * simulation dropdown — FE and backend can never drift).
+ */
+export interface InterventionTypeItem {
+  /** Canonical intervention_type value (matches the backend allowlist). */
+  value: string;
+  /** Human-readable label. */
+  label: string;
+  /** 'synthetic' (v1, intervention-agnostic uplift) or 'modeled' (Phase 2: real per-brand CATE). */
+  effect_basis: string;
+  /** True when a trained twin model exists for the requested brand/twin_type (else `/simulate` 503s). */
+  available: boolean;
+}
+
+/** Brand-aware list of canonical intervention types for the dropdown. */
+export interface InterventionTypesResponse {
+  interventions: InterventionTypeItem[];
+  /** Brand the availability was resolved for (null when no brand was passed). */
+  brand: string | null;
+  /** Twin type the availability was resolved for. */
+  twin_type: string;
+  /** Response timestamp (ISO-8601). */
+  timestamp: string;
 }
 
 /**

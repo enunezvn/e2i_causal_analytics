@@ -646,6 +646,109 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
 
 
 # =============================================================================
+# INTERVENTION TAXONOMY ENDPOINT (single source of truth for the dropdown)
+# =============================================================================
+
+
+class InterventionTypeItem(BaseModel):
+    """A canonical, selectable intervention type for the simulation dropdown."""
+
+    value: str = Field(..., description="Canonical intervention_type value")
+    label: str = Field(..., description="Human-readable label")
+    effect_basis: str = Field(
+        ...,
+        description=(
+            "'synthetic' (v1: SyntheticEffectDataProvider, intervention-agnostic uplift) "
+            "or 'modeled' (Phase 2: real per-brand CATE)"
+        ),
+    )
+    available: bool = Field(
+        ...,
+        description=(
+            "True if a trained twin model exists for the requested brand/twin_type "
+            "(else /simulate would 503). The frontend exposes only available types."
+        ),
+    )
+
+
+class InterventionTypesResponse(BaseModel):
+    """Brand-aware list of canonical intervention types for the dropdown."""
+
+    interventions: List[InterventionTypeItem] = Field(default_factory=list)
+    brand: Optional[str] = Field(None, description="Brand the availability was resolved for")
+    twin_type: str = Field(..., description="Twin type the availability was resolved for")
+    timestamp: datetime = Field(..., description="Response timestamp")
+
+
+@router.get(
+    "/intervention-types",
+    response_model=InterventionTypesResponse,
+    summary="List canonical intervention types (brand-aware availability)",
+    operation_id="list_intervention_types",
+)
+async def list_intervention_types(
+    brand: Optional[BrandEnum] = Query(None, description="Resolve availability for this brand"),
+    twin_type: TwinTypeEnum = Query(TwinTypeEnum.HCP, description="Twin type"),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> InterventionTypesResponse:
+    """
+    Return the canonical intervention taxonomy — the single source of truth the
+    frontend dropdown reads, so FE and backend can never drift.
+
+    Availability is **brand-aware**: an intervention is ``available`` only when a
+    trained twin model exists for the brand/twin_type (otherwise ``/simulate``
+    would 503 "no trained model"). The frontend exposes only available types, so
+    the menu reflects what can actually be simulated. ``effect_basis`` is
+    ``"synthetic"`` in v1 (the DGP is intervention-agnostic) and becomes
+    ``"modeled"`` per type as Phase 2 wires real per-brand CATE.
+    """
+    from src.digital_twin.effect.cohort_loader import brand_has_cohort
+    from src.digital_twin.effect.provider import (
+        COHORT_ESTIMABLE_INTERVENTIONS,
+        INTERVENTION_CATALOG,
+    )
+    from src.digital_twin.models.twin_models import TwinType
+
+    available = False
+    has_cohort = False
+    if brand is not None:
+        try:
+            repo = await _get_twin_repo()
+            actives = await repo.list_active_models(
+                twin_type=TwinType(twin_type.value), brand=brand.value
+            )
+            available = len(actives) > 0
+            # Phase 2: cohort-estimable interventions report effect_basis
+            # "cohort_estimated" only when the brand has a usable synthetic-gold
+            # cohort to estimate from (else they fall back to the uniform basis).
+            has_cohort = await brand_has_cohort(repo.client, brand.value)
+        except Exception as e:  # repo/DB unreachable — degrade, never fabricate
+            logger.warning("intervention-types: availability/cohort check failed: %s", e)
+            available = False
+            has_cohort = False
+
+    items = [
+        InterventionTypeItem(
+            value=value,
+            label=label,
+            effect_basis=(
+                "cohort_estimated"
+                if (has_cohort and value in COHORT_ESTIMABLE_INTERVENTIONS)
+                else "synthetic"
+            ),
+            available=available,
+        )
+        for value, label in INTERVENTION_CATALOG
+    ]
+    return InterventionTypesResponse(
+        interventions=items,
+        brand=brand.value if brand else None,
+        twin_type=twin_type.value,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+# =============================================================================
 # SIMULATION ENDPOINTS
 # =============================================================================
 
@@ -789,9 +892,32 @@ async def run_simulation(
                 twin_type=twin_type, brand=brand, model_row=model_row
             )
 
+            # Phase 2: for the cohort-estimable interventions, prefer a
+            # cohort-ESTIMATED effect (region-standardized ATE from the brand's
+            # synthetic-gold cohort) over the flat synthetic uplift — when the
+            # brand has a usable cohort. Loaded async here and injected into the
+            # (sync, off-event-loop) engine; None → synthetic fallback (never a
+            # fabricated effect). The dark offload path stays synthetic in v1.
+            from src.digital_twin.effect import PROVENANCE_COHORT, TwinEffectEstimator
+            from src.digital_twin.effect.cohort_loader import (
+                build_cohort_provider_or_none,
+            )
+
+            cohort_provider = await build_cohort_provider_or_none(
+                repo.client, intervention.intervention_type, brand.value
+            )
+
             def _do_sim():
                 population = generator.generate(n=request.twin_count)
-                engine = SimulationEngine(population=population)
+                engine = SimulationEngine(
+                    population=population,
+                    effect_provider=cohort_provider,
+                    effect_estimator=(
+                        TwinEffectEstimator(provenance=PROVENANCE_COHORT)
+                        if cohort_provider is not None
+                        else None
+                    ),
+                )
                 # Pin the resolved DB model id so twin_simulations.model_id FK holds
                 # (engine derives self.model_id from population otherwise) (#705 H4).
                 engine.model_id = model_id

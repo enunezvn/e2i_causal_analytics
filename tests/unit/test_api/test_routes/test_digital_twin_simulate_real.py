@@ -84,6 +84,9 @@ def test_failed_simulation_is_not_persisted_as_200(monkeypatch):
                 }
             ]
         ),
+        # Phase-2 cohort lookup reads repo.client; None → no cohort provider
+        # (synthetic-uplift fallback), which is what this real-engine test wants.
+        client=None,
     )
     monkeypatch.setattr(dt, "_get_twin_repo", AsyncMock(return_value=repo))
 
