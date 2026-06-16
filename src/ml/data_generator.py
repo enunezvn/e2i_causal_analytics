@@ -345,8 +345,34 @@ class E2IDataGenerator:
         self._print_summary()
 
     def _generate_reference_universe(self):
-        """Generate reference universe for coverage calculations."""
+        """Generate reference universe for coverage calculations.
+
+        `target_count` is the addressable target this dataset aims to cover, so it
+        must be DERIVED FROM THE MODELED POPULATION — otherwise source-coverage KPIs
+        (WS1-DQ-001 = covered/SUM(target_count); WS1-DQ-002 likewise for HCPs) read a
+        meaningless ratio. The old random target_count (10k-50k patient, 100-500 hcp)
+        was unrelated to the generated population, so coverage read an artificial ~6%
+        / ~24%. We now size target_count so coverage lands in a realistic band.
+        `total_count` stays the broader (random) universe size, which only feeds the
+        geographic-consistency share metric.
+        """
         print("  - Generating reference universe...")
+
+        # Target coverage bands the synthetic data should read at.
+        DQ_PATIENT_COVERAGE = 0.87  # WS1-DQ-001 (target 0.85)
+        DQ_HCP_COVERAGE = 0.85  # WS1-DQ-002 (target 0.80)
+        HCP_COVERAGE_RATE = 0.9  # share of HCPs with coverage_status=True (see _generate_hcp_profiles)
+
+        # Patient coverage = COUNT(DISTINCT patient) / SUM(target_count) per (brand,region).
+        # Covered ≈ the modeled patients in each (brands x regions) cut (assigned ~uniformly).
+        patient_cuts = max(1, len(TARGET_BRANDS) * len(REGIONS))
+        patient_target = max(1, round((NUM_PATIENTS / patient_cuts) / DQ_PATIENT_COVERAGE))
+
+        # HCP coverage is GLOBAL = covered HCPs / SUM(target_count) over the whole hcp
+        # universe. Covered ≈ HCP_COVERAGE_RATE * NUM_HCPS; spread the target across all
+        # (brands x regions x specialties) rows so the SUM lands covered / ~DQ_HCP_COVERAGE.
+        hcp_rows = max(1, len(TARGET_BRANDS) * len(REGIONS) * len(SPECIALTIES))
+        hcp_target = max(1, round((HCP_COVERAGE_RATE * NUM_HCPS / DQ_HCP_COVERAGE) / hcp_rows))
 
         for brand in TARGET_BRANDS:
             for region in REGIONS:
@@ -359,7 +385,7 @@ class E2IDataGenerator:
                             "region": region,
                             "specialty": specialty,
                             "total_count": random.randint(500, 2000),
-                            "target_count": random.randint(100, 500),
+                            "target_count": hcp_target,
                             "effective_date": self.config.data_start_date.isoformat(),
                             "expiration_date": None,
                             "data_source": SYNTHETIC_DATA_SOURCE,
@@ -380,7 +406,7 @@ class E2IDataGenerator:
                         "region": region,
                         "specialty": None,
                         "total_count": random.randint(50000, 200000),
-                        "target_count": random.randint(10000, 50000),
+                        "target_count": patient_target,
                         "effective_date": self.config.data_start_date.isoformat(),
                         "expiration_date": None,
                         "data_source": SYNTHETIC_DATA_SOURCE,
