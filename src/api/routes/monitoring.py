@@ -1009,6 +1009,9 @@ class PerformanceTrendResponse(BaseModel):
     trend: str  # improving, stable, degrading
     is_significant: bool
     alert_threshold_breached: bool
+    # Metric level below which an alert fires (lower-bound line for the chart).
+    # 0.0 when there is no history to derive a baseline from.
+    alert_threshold: float = 0.0
     history: List[PerformanceMetricItem] = []
 
 
@@ -1162,6 +1165,7 @@ async def get_performance_trend(
             trend=trend.trend,
             is_significant=trend.is_significant,
             alert_threshold_breached=trend.alert_threshold_breached,
+            alert_threshold=trend.alert_threshold,
             history=history,
         )
 

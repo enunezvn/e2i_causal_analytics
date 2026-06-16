@@ -164,6 +164,8 @@ export interface KPIMetadata {
   threshold?: KPIThreshold;
   /** Unit of measurement */
   unit?: string;
+  /** Display-format hint: 'percent' = value is a 0-1 ratio rendered as NN.N%. */
+  value_format?: string;
   /** Calculation frequency (e.g., 'daily') */
   frequency: string;
   /** Primary causal library for this KPI */

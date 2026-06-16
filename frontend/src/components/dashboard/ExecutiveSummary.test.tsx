@@ -11,7 +11,7 @@
  *
  * Real substrate exists and must be wired instead:
  * - useGraphStats()           -> relationships/nodes/communities/episodes
- * - useQuickHealthCheck()     -> real overall_health_score + grade
+ * - useFullHealthCheck()     -> real overall_health_score + grade
  * - GET /agents/status        -> real agent roster (active/total)
  *
  * Everything without substrate must be honestly absent.
@@ -29,7 +29,7 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIHealth: vi.fn(),
 }));
 vi.mock('@/hooks/api/use-health-score', () => ({
-  useQuickHealthCheck: vi.fn(),
+  useFullHealthCheck: vi.fn(),
 }));
 vi.mock('@/lib/api-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api-client')>();
@@ -38,7 +38,7 @@ vi.mock('@/lib/api-client', async (importOriginal) => {
 
 import { useGraphStats } from '@/hooks/api/use-graph';
 import { useKPIHealth } from '@/hooks/api/use-kpi';
-import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
+import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { getValidated } from '@/lib/api-client';
 
 function setDefaults() {
@@ -48,7 +48,7 @@ function setDefaults() {
     error: null,
   });
   (useKPIHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
-  (useQuickHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+  (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
     isLoading: false,
     error: null,
@@ -107,7 +107,7 @@ describe('ExecutiveSummary', () => {
       isLoading: false,
       error: null,
     });
-    (useQuickHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         check_id: 'c1',
         check_scope: 'quick',
@@ -162,7 +162,7 @@ describe('ExecutiveSummary', () => {
       isLoading: false,
       error: new Error('graph service down'),
     });
-    (useQuickHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       isLoading: false,
       error: new Error('health service down'),

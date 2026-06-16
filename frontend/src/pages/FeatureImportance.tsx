@@ -347,7 +347,11 @@ function FeatureImportance() {
     { enabled: viewMode === 'individual' && !!effectiveModelType }
   );
   const entityIds = useMemo(() => sampleEntities?.entities ?? [], [sampleEntities]);
+  // Grain word for prose/placeholders ("hcp"/"patient"); the HCP-grain cohort
+  // keys on hcp_id, every other cohort on patient_id.
   const grainLabel = isHcpCohort ? 'HCP' : 'Patient';
+  // Field label for the ID picker — the HCP cohort reads "HCP ID" (#967).
+  const entityLabel = isHcpCohort ? 'HCP ID' : 'Patient ID';
 
   const [selectedEntityId, setSelectedEntityId] = useState<string>('');
 
@@ -557,7 +561,7 @@ function FeatureImportance() {
           <CardContent className="pt-6">
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex-1 min-w-[260px]">
-                <label className="block text-sm font-medium mb-1">{grainLabel}</label>
+                <label className="block text-sm font-medium mb-1">{entityLabel}</label>
                 <Select
                   value={selectedEntityId}
                   onValueChange={(v) => setSelectedEntityId(v)}

@@ -23,6 +23,7 @@ import { Brain, FlaskConical, GitBranch, Shield, Loader2 } from 'lucide-react';
 import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
 import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
 import type { CausalEffect } from '@/components/visualizations/causal/EffectsTable';
+import { CovariateMultiSelect } from '@/components/causal/CovariateMultiSelect';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -35,8 +36,20 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { QueryErrorState } from '@/components/ui/query-error-state';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
-import { useRouteQuery, useRunParallelPipeline } from '@/hooks/api/use-causal';
+import {
+  useCausalVariables,
+  useRouteQuery,
+  useRunParallelPipeline,
+} from '@/hooks/api/use-causal';
+import { getCausalEstimationData } from '@/api/causal';
 import { useCausalChains } from '@/hooks/api/use-graph';
 import type {
   CausalLibrary,
@@ -49,16 +62,8 @@ import type { CausalChainRequest } from '@/types/graph';
 // HELPERS
 // =============================================================================
 
-/**
- * Parse a comma- or whitespace-separated string of variable names into a
- * trimmed, non-empty list. Returns an empty array when no tokens are present.
- */
-function parseCovariates(raw: string): string[] {
-  return raw
-    .split(/[,\n]/g)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-}
+/** Dataset whose gold-standard causal frame this page operates on. */
+const DATASET = 'patient_journeys';
 
 /** Format a number safely, returning a dash if undefined / null / NaN. */
 function fmtNumber(value: unknown, digits: number = 3): string {
@@ -79,11 +84,25 @@ function fmtCI(lower: unknown, upper: unknown): string {
 function CausalDiscovery() {
   // Form state ---------------------------------------------------------------
   const [queryText, setQueryText] = useState('Does X cause Y?');
-  const [treatmentVar, setTreatmentVar] = useState('rep_visits');
-  const [outcomeVar, setOutcomeVar] = useState('trx_count');
-  const [covariatesText, setCovariatesText] = useState('age, region');
+  const [treatmentVar, setTreatmentVar] = useState('treatment_arm');
+  const [outcomeVar, setOutcomeVar] = useState('persistent_180d');
+  const [covariatesSelected, setCovariatesSelected] = useState<string[]>([
+    'disease_severity',
+    'engagement_score',
+    'age_at_diagnosis',
+  ]);
+
+  // Local error / busy state for the estimation-data fetch that precedes the
+  // pipeline run (the data fetch happens BEFORE the mutation fires).
+  const [pipelinePrepError, setPipelinePrepError] = useState<Error | null>(null);
+  const [isPreparingPipeline, setIsPreparingPipeline] = useState(false);
 
   // Hooks --------------------------------------------------------------------
+  const {
+    data: variables,
+    isLoading: isLoadingVariables,
+  } = useCausalVariables(DATASET);
+
   const {
     mutate: routeMutate,
     data: routeData,
@@ -108,7 +127,7 @@ function CausalDiscovery() {
   // Handlers -----------------------------------------------------------------
   const handleRouteSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const covariates = parseCovariates(covariatesText);
+    const covariates = covariatesSelected;
     // The backend router (`src/causal_engine/pipeline/router.py`) classifies
     // by question keywords. Use the user-typed question verbatim so the
     // router can branch to EconML / CausalML / NetworkX when the user is
@@ -128,7 +147,7 @@ function CausalDiscovery() {
       // RouteQueryRequest does not expose `covariates` directly. Pass via
       // `context` so the backend routing layer can use it for downstream
       // pipeline selection without breaking schema.
-      context: covariates.length > 0 ? { covariates } : undefined,
+      context: covariates.length > 0 ? { covariates: covariatesSelected } : undefined,
     };
     routeMutate(request);
   };
@@ -147,8 +166,14 @@ function CausalDiscovery() {
    * recommendation when present, otherwise the canonical pharma-comm trio
    * (DoWhy / EconML / CausalML). The result populates real effect estimates
    * and CIs in the results table.
+   *
+   * BEFORE running, fetch the REAL estimation-ready rows from the backend and
+   * attach them to the request `filters`. Without this the pipeline has no
+   * data to estimate on and 503s. The records come from
+   * `GET /causal/estimation-data` for the chosen treatment / outcome /
+   * covariates on the gold-standard `patient_journeys` frame.
    */
-  const handleRunPipeline = () => {
+  const handleRunPipeline = async () => {
     const libraries: CausalLibrary[] = [];
     if (routeData?.primary_library) {
       libraries.push(routeData.primary_library);
@@ -170,16 +195,50 @@ function CausalDiscovery() {
       }
     }
 
-    const request: ParallelPipelineRequest = {
-      treatment_var: treatmentVar,
-      outcome_var: outcomeVar,
-      covariates: parseCovariates(covariatesText),
-      libraries: libraries.slice(0, 4),
-    };
-    runPipelineMutate({ request, asyncMode: false });
+    setPipelinePrepError(null);
+    setIsPreparingPipeline(true);
+    try {
+      const data = await getCausalEstimationData({
+        dataset: DATASET,
+        treatment_var: treatmentVar,
+        outcome_var: outcomeVar,
+        covariates: covariatesSelected,
+      });
+
+      const request: ParallelPipelineRequest = {
+        treatment_var: treatmentVar,
+        outcome_var: outcomeVar,
+        covariates: covariatesSelected,
+        libraries: libraries.slice(0, 4),
+        // Real estimation rows so the libraries fit on actual data rather than
+        // failing on an empty payload.
+        filters: { estimation_data_records: data.estimation_data_records },
+      };
+      runPipelineMutate({ request, asyncMode: false });
+    } catch (error) {
+      setPipelinePrepError(
+        error instanceof Error
+          ? error
+          : new Error('Failed to load estimation data for the pipeline.')
+      );
+    } finally {
+      setIsPreparingPipeline(false);
+    }
   };
 
   // Derived ------------------------------------------------------------------
+  const treatmentCandidates = variables?.treatment_candidates ?? [];
+  const outcomeCandidates = variables?.outcome_candidates ?? [];
+  // The chosen treatment / outcome must never appear in the covariate list —
+  // a variable cannot control for itself. Filter them out of the options.
+  const covariateOptions = useMemo(
+    () =>
+      (variables?.covariate_candidates ?? []).filter(
+        (candidate) => candidate !== treatmentVar && candidate !== outcomeVar
+      ),
+    [variables, treatmentVar, outcomeVar]
+  );
+
   const primaryLibrary = routeData?.primary_library;
   const secondaryLibraries = routeData?.secondary_libraries ?? [];
   const recommendedEstimators = routeData?.recommended_estimators ?? [];
@@ -357,29 +416,49 @@ function CausalDiscovery() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="treatment-var">Treatment variable</Label>
-              <Input
-                id="treatment-var"
+              <Select
                 value={treatmentVar}
-                placeholder="e.g. rep_visits"
-                onChange={(event) => setTreatmentVar(event.target.value)}
-              />
+                onValueChange={setTreatmentVar}
+                disabled={isLoadingVariables}
+              >
+                <SelectTrigger id="treatment-var" aria-label="Treatment variable">
+                  <SelectValue placeholder="Select treatment" />
+                </SelectTrigger>
+                <SelectContent>
+                  {treatmentCandidates.map((candidate) => (
+                    <SelectItem key={candidate} value={candidate}>
+                      {candidate}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="outcome-var">Outcome variable</Label>
-              <Input
-                id="outcome-var"
+              <Select
                 value={outcomeVar}
-                placeholder="e.g. trx_count"
-                onChange={(event) => setOutcomeVar(event.target.value)}
-              />
+                onValueChange={setOutcomeVar}
+                disabled={isLoadingVariables}
+              >
+                <SelectTrigger id="outcome-var" aria-label="Outcome variable">
+                  <SelectValue placeholder="Select outcome" />
+                </SelectTrigger>
+                <SelectContent>
+                  {outcomeCandidates.map((candidate) => (
+                    <SelectItem key={candidate} value={candidate}>
+                      {candidate}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="covariates">Covariates (comma-separated)</Label>
-              <Input
-                id="covariates"
-                value={covariatesText}
-                placeholder="e.g. age, region, specialty"
-                onChange={(event) => setCovariatesText(event.target.value)}
+              <Label htmlFor="covariates">Covariates</Label>
+              <CovariateMultiSelect
+                options={covariateOptions}
+                selected={covariatesSelected}
+                onChange={setCovariatesSelected}
+                disabled={isLoadingVariables}
               />
             </div>
             <div className="md:col-span-3 flex flex-wrap items-center gap-3">
@@ -412,12 +491,17 @@ function CausalDiscovery() {
                 type="button"
                 variant="secondary"
                 onClick={handleRunPipeline}
-                disabled={isRunningPipeline || !treatmentVar || !outcomeVar}
+                disabled={
+                  isRunningPipeline ||
+                  isPreparingPipeline ||
+                  !treatmentVar ||
+                  !outcomeVar
+                }
               >
-                {isRunningPipeline ? (
+                {isRunningPipeline || isPreparingPipeline ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Running pipeline...
+                    {isPreparingPipeline ? 'Preparing data...' : 'Running pipeline...'}
                   </>
                 ) : (
                   'Run parallel pipeline'
@@ -459,10 +543,20 @@ function CausalDiscovery() {
             className="mt-2"
           />
 
+          {/* Estimation-data preparation error (fetch that precedes the run) */}
+          <QueryErrorState
+            error={pipelinePrepError}
+            onRetry={() => void handleRunPipeline()}
+            isRetrying={isPreparingPipeline}
+            title="Could not load estimation data"
+            size="sm"
+            className="mt-2"
+          />
+
           {/* Pipeline error */}
           <QueryErrorState
             error={pipelineError}
-            onRetry={handleRunPipeline}
+            onRetry={() => void handleRunPipeline()}
             isRetrying={isRunningPipeline}
             title="Parallel pipeline failed"
             size="sm"
@@ -711,7 +805,7 @@ function CausalDiscovery() {
         edges={vizEdges}
         effects={vizEffects}
         refutationResults={[]}
-        isLoading={isRunningPipeline || isDiscoveringChains}
+        isLoading={isRunningPipeline || isPreparingPipeline || isDiscoveringChains}
       />
     </div>
   );

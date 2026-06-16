@@ -453,6 +453,8 @@ export const queryKeys = {
    */
   causal: {
     all: () => [...queryKeys.all, 'causal'] as const,
+    variables: (dataset?: string) =>
+      [...queryKeys.causal.all(), 'variables', dataset ?? 'patient_journeys'] as const,
     hierarchicalAnalysis: (analysisId: string) =>
       [...queryKeys.causal.all(), 'hierarchical', analysisId] as const,
     estimators: (library?: string) =>

@@ -420,11 +420,21 @@ async def run_health_check(
         result.check_latency_ms = check_latency
         result.check_id = f"hs_{uuid4().hex[:12]}"
 
-        # Store in history
-        _health_history.append(result)
-        # Keep only last 100 checks
-        while len(_health_history) > 100:
-            _health_history.pop(0)
+        # Store in history — ONLY full-scope checks. A QUICK check measures
+        # components only (model/pipeline/agent UNMEASURED), so its overall score
+        # is component-only (e.g. 100/A) and would pollute the health TREND with a
+        # misleadingly-rosy flat line; single-dimension scopes (models/pipelines/
+        # agents) are not an overall measurement either. Only the FULL
+        # all-dimension check is a faithful overall data point for the trend.
+        # NOTE: _health_history is process-local + in-memory (per gunicorn worker,
+        # reset on restart) — a durable health-history table + a scheduled full
+        # check is a tracked follow-up; this guard at least keeps the recorded
+        # trend honest (real full scores, not a fabricated flat 100).
+        if scope == CheckScope.FULL:
+            _health_history.append(result)
+            # Keep only last 100 checks
+            while len(_health_history) > 100:
+                _health_history.pop(0)
 
         return result
 
@@ -488,11 +498,14 @@ async def get_component_health() -> ComponentHealthResponse:
 
     Checks: Database, Cache (Redis), Vector Store, API, Message Queue
 
-    Behavior: runs the REAL component check (Health Score agent +
-    SupabaseHealthClient live probes of db/cache/vector/api/queue) and tags the
-    response ``data_provenance="measured"``. Only when the real backend is
-    unavailable does it fall back to the #429 guard: a 503 in production, or
-    clearly-tagged ``placeholder`` sample data in dev/test.
+    Behavior: probes the five components DIRECTLY via SupabaseHealthClient
+    (``_fetch_component_health``) and tags the response
+    ``data_provenance="measured"`` — mirroring the /models, /pipelines, /agents
+    readers. This replaces the prior composite-agent path, whose
+    ``HealthScoreOutput`` never surfaced the per-component status list (so this
+    endpoint always fell back to placeholder and the dashboard's Services card
+    showed 0/0). Only when every probe fails does it fall back to the #429 guard:
+    a 503 in production, or clearly-tagged ``placeholder`` sample data in dev/test.
 
     Returns:
         Component health details (measured live, or honest placeholder in dev)
@@ -501,18 +514,12 @@ async def get_component_health() -> ComponentHealthResponse:
 
     start_time = time.time()
 
-    try:
-        result = await _execute_health_check(CheckScope.QUICK)
-    except HTTPException:
-        raise  # #429 fail-closed 503 in production
-
-    if result.data_provenance in ("measured", "partial") and result.component_statuses:
-        components = result.component_statuses
-        provenance = DataProvenance.MEASURED
-    else:
-        # Real check did not run (dev ImportError fallback): serve clearly-tagged
-        # placeholder rather than presenting unmeasured data as real.
-        provenance = _resolve_health_provenance(agent_name="Health Score")
+    components, provenance = await _fetch_component_health()
+    if provenance is None:
+        # Backend unreachable: fail closed in prod (503), clearly-tagged
+        # placeholder only in an explicit dev/test environment.
+        _fail_closed_if_no_backend()
+        provenance = DataProvenance.PLACEHOLDER
         components = _get_mock_component_health()
     check_latency = int((time.time() - start_time) * 1000)
 
@@ -954,6 +961,98 @@ def _fail_closed_if_no_backend() -> None:
                 ),
             },
         )
+
+
+# The five infrastructure components, mirroring the agent's
+# ``ComponentHealthNode.DEFAULT_COMPONENTS`` so /components reports the SAME set
+# (database / cache / vector store / API gateway / message queue).
+_HEALTH_COMPONENTS = [
+    ("database", "/health/db"),
+    ("cache", "/health/cache"),
+    ("vector_store", "/health/vectors"),
+    ("api_gateway", "/health/api"),
+    ("message_queue", "/health/queue"),
+]
+
+
+async def _fetch_component_health() -> tuple[List[ComponentHealth], Optional[DataProvenance]]:
+    """Real component health: live probes via ``SupabaseHealthClient``.
+
+    A DIRECT measured reader (mirrors ``_fetch_model_health`` / ``_fetch_pipeline_health``
+    / ``_fetch_agent_health``), NOT the composite agent. The composite path could
+    not feed this endpoint: the agent's ``HealthScoreOutput`` carries the component
+    SCORE but never the per-component STATUS list, so ``/components`` always fell
+    back to placeholder and the dashboard's Services card rendered 0/0. Here we
+    probe each component directly: ``ok`` -> healthy, ``degraded`` -> degraded,
+    else -> unhealthy; a probe that RAISES -> ``unknown`` (never fabricated).
+    Returns ``None`` provenance ONLY when every probe raised (backend genuinely
+    unreachable) so the caller fails closed; otherwise MEASURED (the per-component
+    statuses are real live measurements).
+    """
+    import asyncio
+
+    try:
+        from src.agents.health_score.health_client import SupabaseHealthClient
+    except Exception as e:  # pragma: no cover - defensive import guard
+        logger.warning(f"component health: SupabaseHealthClient import failed ({e})")
+        return [], None
+
+    client = SupabaseHealthClient()
+    try:
+        results = await asyncio.gather(
+            *[client.check(endpoint) for _, endpoint in _HEALTH_COMPONENTS],
+            return_exceptions=True,
+        )
+    except Exception as e:
+        logger.warning(f"component health: probe gather failed ({e})")
+        return [], None
+    finally:
+        try:
+            await client.close()
+        except Exception:  # pragma: no cover - best-effort cleanup
+            pass
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    components: List[ComponentHealth] = []
+    measured_any = False
+    for (name, _endpoint), res in zip(_HEALTH_COMPONENTS, results, strict=True):
+        # NOTE: the real SupabaseHealthClient.check() catches all exceptions
+        # internally and ALWAYS returns a dict (a down backend -> {"ok": False}
+        # -> UNHEALTHY, measured), so this BaseException branch is DEFENSIVE only
+        # (e.g. a test double that raises, or a future raising client). It is the
+        # sole path to the ([], None) fail-closed return below.
+        if isinstance(res, BaseException):
+            components.append(
+                ComponentHealth(
+                    component_name=name,
+                    status=ComponentStatus.UNKNOWN,
+                    latency_ms=None,
+                    last_check=now_iso,
+                    error_message=str(res),
+                )
+            )
+            continue
+        measured_any = True
+        if res.get("ok"):
+            status = ComponentStatus.HEALTHY
+        elif res.get("degraded"):
+            status = ComponentStatus.DEGRADED
+        else:
+            status = ComponentStatus.UNHEALTHY
+        components.append(
+            ComponentHealth(
+                component_name=name,
+                status=status,
+                latency_ms=res.get("latency_ms"),
+                last_check=now_iso,
+                error_message=res.get("error"),
+            )
+        )
+
+    if not measured_any:
+        # Every probe raised -> the health backend is genuinely unreachable.
+        return [], None
+    return components, DataProvenance.MEASURED
 
 
 def _fetch_model_health() -> tuple[List[ModelHealth], Optional[DataProvenance]]:

@@ -28,7 +28,7 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIValue: vi.fn(),
 }));
 vi.mock('@/hooks/api/use-health-score', () => ({
-  useQuickHealthCheck: vi.fn(),
+  useFullHealthCheck: vi.fn(),
 }));
 vi.mock('@/hooks/api/use-home-stats', () => ({
   useKpiSummary: vi.fn(),
@@ -58,7 +58,7 @@ import {
   useBatchCalculateKPIs,
   useKPIValue,
 } from '@/hooks/api/use-kpi';
-import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
+import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
 import { useOpportunities } from '@/hooks/api/use-gaps';
@@ -82,7 +82,7 @@ function resetHomeHookDefaults() {
     data: undefined,
     isLoading: false,
   });
-  (useQuickHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+  (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
     isLoading: false,
     error: null,
@@ -459,7 +459,7 @@ describe('Home', () => {
     });
 
     it('renders REAL System Health dimension scores (no fabricated latencies)', () => {
-      (useQuickHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+      (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
         data: {
           check_id: 'c1',
           check_scope: 'quick',
@@ -485,6 +485,36 @@ describe('Home', () => {
       // The anti-fabrication guards still hold.
       expect(screen.queryByText('API Gateway')).not.toBeInTheDocument();
       expect(screen.queryByText('45ms')).not.toBeInTheDocument();
+    });
+
+    it('does NOT render an UNMEASURED dimension as a fabricated 0%', () => {
+      // A component-only payload leaves model/pipeline/agent null. They must be
+      // OMITTED, never rendered as Math.round(null*100) = "0%" (the bug the
+      // adversarial review caught: null dims shown as alarming 0% scores).
+      (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          check_id: 'c1',
+          check_scope: 'full',
+          overall_health_score: 88,
+          health_grade: 'B',
+          component_health_score: 1.0,
+          model_health_score: null,
+          pipeline_health_score: null,
+          agent_health_score: null,
+          critical_issues: [],
+          warnings: [],
+          recommendations: [],
+        },
+        isLoading: false,
+        error: null,
+      });
+
+      renderWithAllProviders(<Home />);
+
+      // The one MEASURED dimension renders; the null ones are omitted, and NO
+      // fabricated "0%" appears anywhere in the System Health card.
+      expect(screen.getByText('Components')).toBeInTheDocument();
+      expect(screen.queryAllByText('0%')).toHaveLength(0);
     });
   });
 

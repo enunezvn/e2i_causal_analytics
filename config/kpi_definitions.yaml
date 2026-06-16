@@ -31,6 +31,7 @@ ws1_data_quality:
   source_coverage_patients:
     id: "WS1-DQ-001"
     name: "Source Coverage - Patients"
+    value_format: percent
     definition: "Percentage of eligible patients present in source vs reference universe"
     formula: "covered_patients / reference_patients"
     calculation_type: derived
@@ -51,6 +52,7 @@ ws1_data_quality:
   source_coverage_hcps:
     id: "WS1-DQ-002"
     name: "Source Coverage - HCPs"
+    value_format: percent
     definition: "Percentage of priority HCPs present in source vs universe"
     formula: "covered_hcps / reference_hcps"
     calculation_type: derived
@@ -71,6 +73,7 @@ ws1_data_quality:
   cross_source_match_rate:
     id: "WS1-DQ-003"
     name: "Cross-source Match Rate"
+    value_format: percent
     definition: "Percentage of entities linkable across data sources"
     formula: "records_matched / total_records"
     calculation_type: direct
@@ -92,6 +95,7 @@ ws1_data_quality:
   stacking_lift:
     id: "WS1-DQ-004"
     name: "Stacking Lift"
+    value_format: percent
     definition: "Incremental value from combining multiple data sources"
     formula: "(stacked_value - baseline) / baseline"
     calculation_type: direct
@@ -113,6 +117,7 @@ ws1_data_quality:
   completeness_pass_rate:
     id: "WS1-DQ-005"
     name: "Completeness Pass Rate"
+    value_format: percent
     definition: "1 minus null rate across brand-critical fields"
     formula: "1 - (null_critical / total_records)"
     calculation_type: derived
@@ -131,6 +136,7 @@ ws1_data_quality:
   geographic_consistency:
     id: "WS1-DQ-006"
     name: "Geographic Consistency"
+    value_format: percent
     definition: "Max absolute gap between source share and universe share across regions"
     formula: "max_region(|share_source - share_universe|)"
     calculation_type: derived
@@ -173,6 +179,7 @@ ws1_data_quality:
   label_quality_iaa:
     id: "WS1-DQ-008"
     name: "Label Quality (IAA)"
+    value_format: percent
     definition: "Inter-annotator agreement score for labeled data"
     formula: "avg(agreement_score) for iaa_groups"
     calculation_type: direct

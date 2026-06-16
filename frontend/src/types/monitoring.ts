@@ -340,6 +340,8 @@ export interface PerformanceTrendResponse {
   trend: 'improving' | 'stable' | 'degrading';
   is_significant: boolean;
   alert_threshold_breached: boolean;
+  /** Metric level below which an alert fires (lower-bound line for the chart). */
+  alert_threshold: number;
   history: PerformanceMetricItem[];
 }
 
