@@ -36,6 +36,7 @@ import {
 } from '@/hooks/api/use-predictions';
 import type {
   ModelEndpointHealth,
+  ModelInfoResponse,
   PredictionRequest,
 } from '@/types/predictions';
 
@@ -70,6 +71,88 @@ function PredictiveAnalyticsModelSelector({
       </SelectContent>
     </Select>
   );
+}
+
+// =============================================================================
+// FORM FIELD DERIVATION
+// =============================================================================
+
+type FormFieldType = 'number' | 'string' | 'category';
+
+interface FormField {
+  name: string;
+  type: FormFieldType;
+  /** Allowed values for a categorical field (one-hot-encoded covariate). */
+  options?: string[];
+}
+
+/**
+ * Derive the input form from the model's metadata.
+ *
+ * PRIMARY (gold-standard raw-covariate path): the live BentoML `/model_info`
+ * exposes `keep_columns` (the model's RAW human inputs — e.g. disease_severity,
+ * academic_hcp, geographic_region) alongside `feature_columns` (the ENCODED
+ * columns the model actually scores). The prediction route forwards the raw
+ * covariates as `raw_features` and the bundled FeatureBuilder one-hot-encodes
+ * them server-side, so the form must collect the RAW inputs — NOT the
+ * engineered columns (`geographic_region_south`, `academic_hcp__isna`, …),
+ * which a human cannot meaningfully fill.
+ *
+ * A `keep_column` is CATEGORICAL when the encoded `feature_columns` contain
+ * one-hot expansions `${kc}_<value>` (single underscore). The `${kc}__isna`
+ * missingness flag uses a DOUBLE underscore and is excluded, as is the `nan`
+ * placeholder the encoder emits for a missing categorical.
+ *
+ * FALLBACK (legacy / non-gold-standard models): use the coarse `legacySchema`
+ * extracted from input_schema / metadata / features / feature_names; then the
+ * raw `feature_columns` names as numeric fields; else an empty form.
+ */
+function deriveFormFields(
+  info: ModelInfoResponse | undefined,
+  legacySchema: Record<string, 'number' | 'string' | 'unknown'>
+): FormField[] {
+  if (!info) return [];
+  const bag = info as unknown as Record<string, unknown>;
+
+  const asStringList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : [];
+
+  const featureColumns = asStringList(bag['feature_columns']);
+  const keepColumns = asStringList(bag['keep_columns']);
+
+  // PRIMARY — gold-standard raw covariate inputs.
+  if (keepColumns.length > 0) {
+    return keepColumns.map((kc): FormField => {
+      const singlePrefix = `${kc}_`;
+      const doublePrefix = `${kc}__`;
+      const options = featureColumns
+        .filter((f) => f.startsWith(singlePrefix) && !f.startsWith(doublePrefix))
+        .map((f) => f.slice(singlePrefix.length))
+        .filter((opt) => opt !== '' && opt !== 'nan');
+      return options.length > 0
+        ? { name: kc, type: 'category', options }
+        : { name: kc, type: 'number' };
+    });
+  }
+
+  // FALLBACK — legacy coarse schema (input_schema / metadata / features).
+  const legacyKeys = Object.keys(legacySchema);
+  if (legacyKeys.length > 0) {
+    return legacyKeys.map(
+      (name): FormField => ({
+        // 'unknown' → string input (never coerce an ID-like value to a number).
+        name,
+        type: legacySchema[name] === 'number' ? 'number' : 'string',
+      })
+    );
+  }
+
+  // LAST RESORT — raw encoded column names as numeric inputs.
+  if (featureColumns.length > 0) {
+    return featureColumns.map((name): FormField => ({ name, type: 'number' }));
+  }
+
+  return [];
 }
 
 // =============================================================================
@@ -212,9 +295,11 @@ function PredictiveAnalytics() {
     return {};
   }, [modelInfoQuery.data]);
 
-  const featureKeys = React.useMemo<string[]>(
-    () => Object.keys(featureSchema),
-    [featureSchema]
+  // The typed input form. Prefers the gold-standard raw covariates
+  // (keep_columns), falling back to the legacy coarse schema.
+  const formFields = React.useMemo<FormField[]>(
+    () => deriveFormFields(modelInfoQuery.data, featureSchema),
+    [modelInfoQuery.data, featureSchema]
   );
 
   // Feature values keyed by feature name
@@ -239,27 +324,39 @@ function PredictiveAnalytics() {
     setFeatureValues((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleRunPrediction = () => {
-    if (!selectedModel) return;
+  // The gold-standard raw-covariate path (and the legacy positional path) BOTH
+  // require every declared input to be present — the served FeatureBuilder
+  // rejects a row that omits a keep_column. Gate the Run button on completeness
+  // so we never send an incomplete row that the service would reject.
+  const allFieldsFilled =
+    formFields.length > 0 &&
+    formFields.every((field) => (featureValues[field.name] ?? '') !== '');
 
-    // Coerce values based on the declared feature schema type. When the
-    // schema doesn't say (unknown), keep the raw string to avoid silently
-    // turning ID-like strings into numbers.
+  const handleRunPrediction = () => {
+    if (!selectedModel || !allFieldsFilled) return;
+
+    // Build the raw covariate dict by declared field type. Categorical/string
+    // values are sent verbatim (the server-side FeatureBuilder one-hot-encodes
+    // them); numeric fields are coerced to numbers. An empty field is omitted
+    // (the completeness gate above means this only trims accidental blanks).
     const features: Record<string, unknown> = {};
-    for (const [key, raw] of Object.entries(featureValues)) {
-      if (raw === '') continue;
-      const declaredType = featureSchema[key] ?? 'unknown';
-      if (declaredType === 'number') {
+    for (const field of formFields) {
+      const raw = featureValues[field.name];
+      if (raw === undefined || raw === '') continue;
+      if (field.type === 'number') {
         const asNumber = Number(raw);
-        features[key] = Number.isFinite(asNumber) ? asNumber : raw;
+        features[field.name] = Number.isFinite(asNumber) ? asNumber : raw;
       } else {
-        features[key] = raw;
+        features[field.name] = raw;
       }
     }
 
     const request: PredictionRequest = {
       features,
       return_probabilities: true,
+      // Populate "Feature Contributions" with REAL per-prediction SHAP — the
+      // backend delegates to the BentoML /shap endpoint for this exact input.
+      return_feature_importance: true,
     };
 
     predictMutation.mutate({ modelName: selectedModel, request });
@@ -397,12 +494,12 @@ function PredictiveAnalytics() {
               )}
               {!modelInfoQuery.isLoading &&
                 !modelInfoQuery.error &&
-                featureKeys.length === 0 && (
+                formFields.length === 0 && (
                   <p className="text-sm text-muted-foreground py-4">
                     No input schema available for this model.
                   </p>
                 )}
-              {featureKeys.length > 0 && (
+              {formFields.length > 0 && (
                 <form
                   className="space-y-3"
                   onSubmit={(e) => {
@@ -410,23 +507,46 @@ function PredictiveAnalytics() {
                     handleRunPrediction();
                   }}
                 >
-                  {featureKeys.map((key) => (
-                    <div key={key} className="space-y-1">
-                      <Label htmlFor={`feature-${key}`}>{key}</Label>
-                      <Input
-                        id={`feature-${key}`}
-                        value={featureValues[key] ?? ''}
-                        onChange={(e) => handleFeatureChange(key, e.target.value)}
-                        placeholder={`Enter ${key}`}
-                        disabled={isPredicting}
-                      />
+                  {formFields.map((field) => (
+                    <div key={field.name} className="space-y-1">
+                      <Label htmlFor={`feature-${field.name}`}>{field.name}</Label>
+                      {field.type === 'category' ? (
+                        <Select
+                          value={featureValues[field.name] ?? ''}
+                          onValueChange={(value) => handleFeatureChange(field.name, value)}
+                          disabled={isPredicting}
+                        >
+                          <SelectTrigger
+                            id={`feature-${field.name}`}
+                            aria-label={field.name}
+                          >
+                            <SelectValue placeholder={`Select ${field.name}`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {field.options?.map((opt) => (
+                              <SelectItem key={opt} value={opt}>
+                                {opt}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          id={`feature-${field.name}`}
+                          type={field.type === 'number' ? 'number' : 'text'}
+                          value={featureValues[field.name] ?? ''}
+                          onChange={(e) => handleFeatureChange(field.name, e.target.value)}
+                          placeholder={`Enter ${field.name}`}
+                          disabled={isPredicting}
+                        />
+                      )}
                     </div>
                   ))}
 
                   <Button
                     type="submit"
                     className="w-full mt-4"
-                    disabled={isPredicting || !selectedModel}
+                    disabled={isPredicting || !selectedModel || !allFieldsFilled}
                   >
                     {isPredicting ? (
                       <>

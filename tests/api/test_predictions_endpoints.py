@@ -181,7 +181,7 @@ class TestSinglePrediction:
     """Tests for POST /api/models/predict/{model_name}."""
 
     def test_predict_success(self, mock_bentoml_client):
-        """Should return prediction result (feature dict vectorized to a row)."""
+        """User-provided features go via the raw-covariate path, routed by name."""
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/churn_model",
@@ -198,10 +198,16 @@ class TestSinglePrediction:
         assert "confidence" in data
         assert "latency_ms" in data
         assert "timestamp" in data
-        # The feature dict was vectorized into a positional ordered row.
+        # The raw feature dict is forwarded as ``raw_features`` (the bundle's
+        # FeatureBuilder encodes it server-side) and the request is ROUTED by
+        # ``model_name`` — without that key the multi-model service falls back to
+        # the unloaded default and returns empty predictions (the original bug).
         sent = mock_bentoml_client.predict.call_args[0][1]
-        assert sent["features"] == [[12.0, 5.0, 0.83]]
+        assert sent["raw_features"] == [_full_features()]
+        assert sent["model_name"] == "churn_model"
         assert sent["model_type"] == "classification"
+        # The legacy positional ``features`` matrix is NOT sent on this path.
+        assert "features" not in sent
 
     def test_predict_maps_flat_probabilities_to_positive_class(self, mock_bentoml_client):
         """The live flat ``probabilities`` list maps to {"positive_class": p}."""
@@ -289,6 +295,116 @@ class TestSinglePrediction:
         assert response.status_code == 200
         assert response.json()["prediction"] == 0.73
 
+    def test_predict_empty_predictions_fails_closed_not_indexerror(self, mock_bentoml_client):
+        """Empty ``predictions`` must fail CLOSED with an honest 502 — never an
+        opaque 500 from indexing ``[][0]``.
+
+        Regression for the live bug: a /predict that did NOT route ``model_name``
+        hit the unloaded default bundle, which returns
+        ``{"predictions": [], "model_id": "no_model"}``. The old route did
+        ``result.get("predictions", [None])[0]`` → IndexError → 500 "Prediction
+        failed: list index out of range".
+        """
+        mock_bentoml_client.predict = AsyncMock(
+            return_value={
+                "predictions": [],
+                "probabilities": [],
+                "model_id": "no_model",
+                "error": None,
+                "_metadata": {"latency_ms": 1.0},
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.post(
+            "/api/models/predict/churn_model",
+            json={"features": _full_features()},
+        )
+        assert response.status_code == 502, response.text
+        body = response.json()
+        # The app reshapes HTTPException into an E2IError envelope (``message``),
+        # falling back to FastAPI's ``detail`` for robustness.
+        assert "no prediction" in str(body.get("message") or body.get("detail") or body).lower()
+
+    def test_predict_service_error_surfaces_422(self, mock_bentoml_client):
+        """A #39 fail-closed service error (unknown model_name → 200 + non-null
+        ``error`` + empty predictions) is surfaced as 422, not indexed."""
+        mock_bentoml_client.predict = AsyncMock(
+            return_value={
+                "predictions": [],
+                "probabilities": [],
+                "model_id": "unknown",
+                "error": "Unknown model_name: bogus_model",
+                "_metadata": {"latency_ms": 1.0},
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.post(
+            "/api/models/predict/bogus_model",
+            json={"features": _full_features()},
+        )
+        assert response.status_code == 422, response.text
+        body = response.json()
+        assert "Unknown model_name" in str(body.get("message") or body.get("detail") or body)
+
+    def test_predict_return_feature_importance_delegates_to_shap(self, mock_bentoml_client):
+        """``return_feature_importance`` populates feature_importance from the
+        BentoML /shap endpoint (real per-prediction SHAP), dropping ~0 noise."""
+        mock_bentoml_client.get_shap = AsyncMock(
+            return_value={
+                "shap_values": {
+                    "disease_severity": 0.9244,
+                    "academic_hcp": 0.2109,
+                    "geographic_region_south": 0.0159,
+                    "geographic_region_west": 0.0,  # near-zero -> dropped
+                    "geographic_region_north": -2e-9,  # near-zero -> dropped
+                },
+                "base_value": -0.7069,
+                "explainer_type": "LinearExplainer",
+                "model_id": "churn_model",
+                "error": None,
+            }
+        )
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.post(
+            "/api/models/predict/churn_model",
+            json={"features": _full_features(), "return_feature_importance": True},
+        )
+        assert response.status_code == 200, response.text
+        fi = response.json()["feature_importance"]
+        assert fi is not None
+        assert fi["disease_severity"] == pytest.approx(0.9244)
+        assert fi["academic_hcp"] == pytest.approx(0.2109)
+        # Near-zero encoded one-hots are dropped (display-noise).
+        assert "geographic_region_west" not in fi
+        assert "geographic_region_north" not in fi
+        # SHAP was computed for the SAME raw covariate row, routed by name.
+        shap_call = mock_bentoml_client.get_shap.call_args
+        assert shap_call[0][0] == "churn_model"
+        assert shap_call[0][1] == [_full_features()]
+
+    def test_predict_shap_failure_is_non_fatal(self, mock_bentoml_client):
+        """A SHAP failure must NOT fail the prediction — feature_importance is
+        left null and the prediction still returns 200."""
+        mock_bentoml_client.get_shap = AsyncMock(side_effect=RuntimeError("shap boom"))
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.post(
+            "/api/models/predict/churn_model",
+            json={"features": _full_features(), "return_feature_importance": True},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["feature_importance"] is None
+
+    def test_predict_does_not_call_shap_without_flag(self, mock_bentoml_client):
+        """Default callers pay no SHAP latency: get_shap is not invoked."""
+        mock_bentoml_client.get_shap = AsyncMock()
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+        response = client.post(
+            "/api/models/predict/churn_model",
+            json={"features": _full_features()},
+        )
+        assert response.status_code == 200
+        mock_bentoml_client.get_shap.assert_not_called()
+
     def test_predict_with_entity_id(self, mock_bentoml_client, mock_feast_client):
         """Should accept entity_id for feature store lookup."""
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
@@ -364,7 +480,8 @@ class TestSinglePrediction:
         mock_feast_client.get_online_features.assert_not_called()
 
         bento_payload = mock_bentoml_client.predict.call_args[0][1]
-        assert bento_payload["features"] == [[12.0, 5.0, 0.83]]
+        assert bento_payload["raw_features"] == [_full_features()]
+        assert bento_payload["model_name"] == "churn_model"
         assert bento_payload["feature_source"] == "user_provided"
 
     def test_predictions_feast_wins_when_both_features_and_entity_id_provided(

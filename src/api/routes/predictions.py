@@ -197,6 +197,17 @@ class PredictionRequest(BaseModel):
         default=False,
         description="Return prediction intervals (regression models)",
     )
+    return_feature_importance: bool = Field(
+        default=False,
+        description=(
+            "Populate ``feature_importance`` with REAL per-prediction SHAP "
+            "contributions for this exact input. Computed on the gold-standard "
+            "raw-covariate path by delegating to the BentoML ``/shap`` endpoint "
+            "(LinearExplainer over the routed model). Off by default so legacy "
+            "callers pay no SHAP latency; best-effort (a SHAP failure does NOT "
+            "fail the prediction — feature_importance is simply left null)."
+        ),
+    )
 
 
 class PredictionResponse(BaseModel):
@@ -431,31 +442,78 @@ async def predict(
                 model_name,
             )
 
-        # Vectorize the feature dict into the model's authoritative POSITIONAL
-        # order. The live service expects ``features`` as a 2D numeric matrix
-        # (samples x features) ordered by the model's own feature_columns —
-        # resolved from /model_info, never guessed. Fails closed on a missing
-        # required feature (no silent zero-fill).
-        feature_order = await _resolve_feature_order(client, model_name)
-        ordered_row = _vectorize_feature_dict(
-            features_payload, feature_order, context=f"predict(model={model_name})"
-        )
-
-        # Build input data for BentoML (flat single-model contract, verified
-        # live): {"input_data": {"features": [[...]], "model_type": ...}}.
-        input_data: Dict[str, Any] = {
-            "features": [ordered_row],
-            "model_type": "classification",
-            "return_proba": request.return_probabilities,
-            "return_intervals": request.return_intervals,
-            "feature_source": feature_source,
-        }
-
+        # Build the BentoML input. ALL paths now carry ``model_name`` so the
+        # multi-model service routes to the requested bundle. Without it the
+        # service falls back to the unloaded legacy default ("no_model") and
+        # returns an EMPTY ``predictions`` list — #39 routed /model_info + /shap
+        # by name but left this plain /predict path unrouted, so every
+        # gold-standard prediction hit "no_model" and 500'd on the empty index.
+        input_data: Dict[str, Any]
+        used_raw_path = False
         if request.entity_id:
-            input_data["entity_id"] = request.entity_id
+            # Feast path: the online store yields a feature row that we vectorize
+            # into the model's authoritative POSITIONAL order (resolved from
+            # /model_info, never guessed). Fails closed on a missing required
+            # feature (no silent zero-fill).
+            feature_order = await _resolve_feature_order(client, model_name)
+            ordered_row = _vectorize_feature_dict(
+                features_payload, feature_order, context=f"predict(model={model_name})"
+            )
+            input_data = {
+                "features": [ordered_row],
+                "model_name": model_name,
+                "model_type": "classification",
+                "return_proba": request.return_probabilities,
+                "return_intervals": request.return_intervals,
+                "feature_source": feature_source,
+                "entity_id": request.entity_id,
+            }
+        else:
+            # User-provided RAW covariates (the Predictive Analytics page sends
+            # the model's ``keep_columns`` — e.g. disease_severity, academic_hcp,
+            # geographic_region). Forward them as ``raw_features`` so the bundle's
+            # fitted FeatureBuilder one-hot-encodes them server-side, instead of
+            # demanding the caller pre-engineer the positional encoded vector
+            # (which a human cannot do). Verified live: the raw path returns a
+            # real per-model prediction + positive-class probability.
+            used_raw_path = True
+            input_data = {
+                "raw_features": [features_payload],
+                "model_name": model_name,
+                "model_type": "classification",
+                "return_proba": request.return_probabilities,
+                "return_intervals": request.return_intervals,
+                "feature_source": feature_source,
+            }
 
         # Call BentoML endpoint
         result = await client.predict(model_name, input_data)
+
+        # Fail closed on a service-reported error (the #39 contract returns an
+        # unknown ``model_name`` as a 200 with a non-null ``error`` + empty
+        # predictions). Surface it instead of indexing the empty list.
+        service_error = result.get("error")
+        if service_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Model '{model_name}': {service_error}",
+            )
+
+        # Resolve the scalar prediction WITHOUT an unguarded ``[0]``. The prior
+        # ``result.get("predictions", [None])[0]`` raised "list index out of
+        # range" (opaque 500) whenever the service returned an empty list — the
+        # exact symptom of the unrouted-model bug above. A legitimately falsy
+        # prediction (0, 0.0, False) must still pass through, so the fallback is
+        # gated on ``is None``, not truthiness.
+        raw_prediction = result.get("prediction")
+        if raw_prediction is None:
+            preds = result.get("predictions") or []
+            raw_prediction = preds[0] if preds else None
+        if raw_prediction is None:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Model '{model_name}' returned no prediction",
+            )
 
         # Extract metadata
         metadata = result.get("_metadata", {})
@@ -478,6 +536,32 @@ async def predict(
         else:
             probabilities = None
 
+        # Real per-prediction feature contributions (opt-in). The /predict
+        # contract carries no feature_importance, so when the caller asks for it
+        # on the raw-covariate path we delegate to the BentoML ``/shap`` endpoint
+        # (LinearExplainer over the routed model's inner LR) for the SAME raw row.
+        # Best-effort: a SHAP failure must NOT fail the prediction — we log and
+        # leave feature_importance null (the UI hides the contributions block).
+        feature_importance = result.get("feature_importance")
+        if request.return_feature_importance and used_raw_path and feature_importance is None:
+            try:
+                shap_result = await client.get_shap(model_name, [features_payload])
+                if not shap_result.get("error"):
+                    shap_values = shap_result.get("shap_values") or {}
+                    # Drop display-noise: encoded one-hots with no contribution
+                    # for this row (|shap| ~ 0) would render as "+0.0%" bars.
+                    feature_importance = {
+                        name: float(value)
+                        for name, value in shap_values.items()
+                        if abs(float(value)) >= 1e-6
+                    } or None
+            except Exception as shap_exc:  # noqa: BLE001 — contributions are best-effort
+                logger.warning(
+                    "SHAP feature_importance unavailable for model=%s (non-fatal): %s",
+                    model_name,
+                    shap_exc,
+                )
+
         # 3A-I-3: route is the source of truth for feature_source.
         # If we invoked Feast (entity_id was set + lookup succeeded), the
         # user request was Feast-driven regardless of what BentoML reports —
@@ -488,19 +572,11 @@ async def predict(
         # a downstream value.
         return PredictionResponse(
             model_name=model_name,
-            prediction=(
-                # Explicit None check: a legitimate falsy prediction (0, 0.0,
-                # False — e.g. binary class 0 or a regressor emitting exactly
-                # 0.0) must NOT be dropped by an ``or`` short-circuit. Only fall
-                # back to ``predictions[0]`` when ``prediction`` is truly absent.
-                result.get("prediction")
-                if result.get("prediction") is not None
-                else result.get("predictions", [None])[0]
-            ),
+            prediction=raw_prediction,
             confidence=confidence,
             probabilities=probabilities,
             prediction_interval=result.get("prediction_interval"),
-            feature_importance=result.get("feature_importance"),
+            feature_importance=feature_importance,
             latency_ms=metadata.get("latency_ms", 0),
             # Live contract carries ``model_id``; legacy mocks carry ``model_version``.
             model_version=result.get("model_version") or result.get("model_id"),
