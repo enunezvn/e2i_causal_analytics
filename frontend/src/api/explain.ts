@@ -24,7 +24,11 @@ import type {
   ExplainResponse,
   ExplanationHistoryParams,
   ExplanationHistoryResponse,
+  GlobalFeatureImportanceParams,
+  GlobalFeatureImportanceResponse,
   ListExplainableModelsResponse,
+  ModelType,
+  SampleEntitiesResponse,
 } from '@/types/explain';
 
 // =============================================================================
@@ -143,6 +147,43 @@ export async function getExplanationHistory(
  */
 export async function listExplainableModels(): Promise<ListExplainableModelsResponse> {
   return get<ListExplainableModelsResponse>(`${EXPLAIN_BASE}/models`);
+}
+
+// =============================================================================
+// COHORT-LEVEL (GLOBAL) FEATURE IMPORTANCE (#39 — option 2)
+// =============================================================================
+
+/**
+ * Get cohort-level (global) SHAP feature importance for one per-brand model.
+ *
+ * Mean |SHAP| aggregated over a sample of real cohort entities. The backend
+ * reads a durable precomputed row when available (instant) or computes it once
+ * and stores it. Only the gold-standard cohorts are supported.
+ */
+export async function getGlobalFeatureImportance(
+  params: GlobalFeatureImportanceParams
+): Promise<GlobalFeatureImportanceResponse> {
+  return get<GlobalFeatureImportanceResponse>(`${EXPLAIN_BASE}/global`, {
+    model_type: params.model_type,
+    brand: params.brand,
+    sample_size: params.sample_size,
+    max_points: params.max_points,
+    refresh: params.refresh,
+  });
+}
+
+/**
+ * Get real cohort entity IDs (patient_id, or hcp_id for hcp_adoption) for the
+ * per-entity SHAP picker.
+ */
+export async function getSampleEntities(
+  modelType: ModelType | string,
+  limit = 25
+): Promise<SampleEntitiesResponse> {
+  return get<SampleEntitiesResponse>(`${EXPLAIN_BASE}/sample-entities`, {
+    model_type: modelType,
+    limit,
+  });
 }
 
 // =============================================================================

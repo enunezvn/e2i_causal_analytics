@@ -441,8 +441,46 @@ export async function mockApiRoutes(page: Page): Promise<void> {
     })
   })
 
-  // Causal analysis endpoints
+  // Causal analysis endpoints. The Intervention Impact "Causal Impact" tab
+  // fetches GET /api/causal/history on load, which expects the
+  // CausalAnalysisHistoryResponse shape ({ items, total }); the generic
+  // causal_graph body would fail its wire-schema parse. Branch on the path so
+  // /history returns a valid history payload and everything else keeps the
+  // generic estimate shape.
   await page.route('**/api/causal/**', async (route: Route) => {
+    const url = route.request().url()
+    if (url.includes('/causal/history')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          total: 2,
+          items: [
+            {
+              memory_id: 'mem_e2e_1',
+              event_type: 'causal_analysis_completed',
+              description: 'Causal analysis: treatment -> outcome',
+              occurred_at: '2026-06-15T12:00:00Z',
+              agent_name: 'causal_impact',
+              ate_estimate: 0.185,
+              confidence: 0.9,
+              model_used: 'linear_regression',
+            },
+            {
+              memory_id: 'mem_e2e_2',
+              event_type: 'causal_analysis_completed',
+              description: 'Causal analysis: engagement -> conversion',
+              occurred_at: '2026-06-14T09:30:00Z',
+              agent_name: 'causal_impact',
+              ate_estimate: 0.238,
+              confidence: 0.78,
+              model_used: 'linear_regression',
+            },
+          ],
+        }),
+      })
+      return
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -520,26 +558,37 @@ export async function mockApiRoutes(page: Page): Promise<void> {
     })
   })
 
-  // System Health card + Model Health (GET /health-score/quick).
-  await page.route('**/health-score/quick**', async (route: Route) => {
+  // System Health card + Model Health (GET /health-score/full).
+  // The Home System Health card uses the FULL (all-dimension) check via
+  // useFullHealthCheck() — it renders Components/Models/Pipelines/Agents rows
+  // from the four per-dimension scores, omitting any that are null (unmeasured).
+  // Per-dimension scores are 0-1 fractions; overall is 0-100; grade A is
+  // self-consistent with these scores. Detail arrays mirror the schema-verified
+  // shape used in ai-insights.spec.ts (HealthScoreResponseWireSchema).
+  await page.route('**/health-score/full**', async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         check_id: 'e2e-health-1',
-        check_scope: 'quick',
+        check_scope: 'full',
         overall_health_score: 92,
         health_grade: 'A',
         component_health_score: 0.95,
         model_health_score: 0.88,
         pipeline_health_score: 0.82,
         agent_health_score: 0.92,
+        component_statuses: [],
+        model_metrics: [],
+        pipeline_statuses: [],
+        agent_statuses: [],
         critical_issues: [],
         warnings: [],
         recommendations: [],
         health_summary: 'All systems operational',
         check_latency_ms: 120,
         timestamp: new Date().toISOString(),
+        data_provenance: 'measured',
       }),
     })
   })

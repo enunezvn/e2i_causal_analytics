@@ -281,6 +281,10 @@ export const queryKeys = {
     history: (patientId: string) =>
       [...queryKeys.explain.all(), 'history', patientId] as const,
     health: () => [...queryKeys.explain.all(), 'health'] as const,
+    global: (modelType: string, brand: string, sampleSize: number) =>
+      [...queryKeys.explain.all(), 'global', modelType, brand, sampleSize] as const,
+    sampleEntities: (modelType: string, limit: number) =>
+      [...queryKeys.explain.all(), 'sample-entities', modelType, limit] as const,
   },
 
   /**
@@ -449,6 +453,8 @@ export const queryKeys = {
    */
   causal: {
     all: () => [...queryKeys.all, 'causal'] as const,
+    variables: (dataset?: string) =>
+      [...queryKeys.causal.all(), 'variables', dataset ?? 'patient_journeys'] as const,
     hierarchicalAnalysis: (analysisId: string) =>
       [...queryKeys.causal.all(), 'hierarchical', analysisId] as const,
     estimators: (library?: string) =>
@@ -463,6 +469,13 @@ export const queryKeys = {
         brand ?? 'All',
         region ?? 'All',
         limit ?? 3,
+      ] as const,
+    treatmentEffects: (cohort?: string, brand?: string) =>
+      [
+        ...queryKeys.causal.all(),
+        'treatment-effects',
+        cohort ?? '',
+        brand ?? '',
       ] as const,
   },
 

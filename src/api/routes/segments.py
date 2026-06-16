@@ -111,7 +111,26 @@ class RunSegmentAnalysisRequest(BaseModel):
     effect_modifiers: Optional[List[str]] = Field(
         default=None, description="Variables that modify treatment effect"
     )
-    data_source: str = Field(default="hcp_data", description="Data source identifier")
+    confounders: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Confounders to adjust for. Routed into the DML nuisance model (W) "
+            "and residualized out, NOT modeled as effect modifiers — so the "
+            "reported per-segment CATE reflects the de-confounded treatment "
+            "effect rather than selection bias. Distinct from segment_vars "
+            "(reporting grouping) and effect_modifiers (heterogeneity features)."
+        ),
+    )
+    data_source: str = Field(
+        default="business_metrics",
+        description=(
+            "Data source table identifier. Defaults to 'business_metrics' "
+            "(the live per-HCP rollup substrate the CATE engine reads); the "
+            "page also passes this explicitly so neither the default nor the "
+            "request silently targets a non-existent table. Must be a table in "
+            "HeterogeneousOptimizerDataConnector.SUPPORTED_TABLES."
+        ),
+    )
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Additional filters")
 
     # Configuration
@@ -130,12 +149,13 @@ class RunSegmentAnalysisRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "query": "Which HCP segments respond best to rep visits?",
-                "treatment_var": "rep_visits",
-                "outcome_var": "trx",
-                "segment_vars": ["region", "specialty"],
-                "effect_modifiers": ["practice_size", "years_experience"],
-                "data_source": "hcp_data",
+                "query": ("Treatment effect heterogeneity of engagement on conversion by region"),
+                "treatment_var": "engagement_score",
+                "outcome_var": "conversion_rate",
+                "segment_vars": ["region"],
+                "effect_modifiers": ["market_share", "total_rx_count"],
+                "data_source": "business_metrics",
+                "filters": {"metric_type": "per_hcp_rollup"},
                 "n_estimators": 100,
                 "top_segments_count": 10,
             }
@@ -1155,6 +1175,11 @@ async def _execute_segment_analysis(
                 "outcome_var": request.outcome_var,
                 "segment_vars": request.segment_vars,
                 "effect_modifiers": request.effect_modifiers or [],
+                # Explicit confounders take precedence-1 in cate_estimator's
+                # _resolve_confounders and are residualized as the DML W (issue
+                # #237). Empty list = no explicit confounders (falls back to
+                # role_attributions / W=None), preserving prior behavior.
+                "confounders": request.confounders or [],
                 "data_source": request.data_source,
                 "filters": request.filters,
                 "n_estimators": request.n_estimators,
@@ -1170,7 +1195,14 @@ async def _execute_segment_analysis(
             },
         )
 
-        # Create and run graph
+        # Create and run graph. The factory resolves a SINGLE shared data
+        # connector (when none is supplied) and passes it to BOTH data-fetching
+        # nodes (cate_estimator + hierarchical_analyzer) so they read the same
+        # live substrate; hierarchical_analyzer previously had no source and
+        # raised RuntimeError mid-graph in production (#30). The resolution lives
+        # in the factory (not here) so this function's import-guard / mock-
+        # fallback contract — and the unit tests that patch the factory — stay
+        # intact.
         graph = create_heterogeneous_optimizer_graph()
         result = await graph.ainvoke(initial_state)
 

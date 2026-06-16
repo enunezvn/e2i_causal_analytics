@@ -38,6 +38,20 @@ const hoisted = vi.hoisted(() => ({
   simulationState: {
     isPending: false,
     response: null as unknown,
+    error: null as unknown,
+  },
+  // useCausalAnalysisHistory() stub (Causal Impact tab).
+  causalHistoryState: {
+    data: undefined as unknown,
+    isLoading: false,
+    isError: false,
+  },
+  // useTreatmentEffects() stub (Treatment Effects tab).
+  treatmentEffectsState: {
+    data: undefined as unknown,
+    isFetching: false,
+    isError: false,
+    error: null as unknown,
   },
 }));
 
@@ -69,12 +83,18 @@ vi.mock('@/components/digital-twin', () => ({
   ScenarioResults: ({
     results,
     isLoading,
+    error,
   }: {
     results: SimulationResponse | null;
     isLoading?: boolean;
+    error?: { message?: string } | null;
   }) => (
-    <div data-testid="scenario-results" data-loading={String(isLoading)}>
-      {results ? `ate:${results.simulated_ate}` : 'results:null'}
+    <div
+      data-testid="scenario-results"
+      data-loading={String(isLoading)}
+      data-error={error ? (error.message ?? 'error') : 'null'}
+    >
+      {results ? `ate:${results.simulated_ate}` : error ? `error:${error.message}` : 'results:null'}
     </div>
   ),
   RecommendationCards: ({
@@ -100,15 +120,34 @@ vi.mock('@/components/digital-twin', () => ({
 }));
 
 // useRunSimulation: calling mutate() invokes the page's onSuccess with a
-// REAL-shaped SimulationResponse (mirrors the live OpenAPI schema).
+// REAL-shaped SimulationResponse (mirrors the live OpenAPI schema). When the
+// hoisted simulationState.error is set, it invokes onError instead so the
+// honest error-state wiring can be exercised.
 vi.mock('@/hooks/api/use-digital-twin', () => ({
-  useRunSimulation: (options?: { onSuccess?: (data: unknown) => void }) => ({
+  useRunSimulation: (options?: {
+    onSuccess?: (data: unknown) => void;
+    onError?: (err: unknown) => void;
+  }) => ({
     mutate: (req: unknown) => {
       hoisted.mockMutate(req);
-      options?.onSuccess?.(hoisted.simulationState.response);
+      if (hoisted.simulationState.error) {
+        options?.onError?.(hoisted.simulationState.error);
+      } else {
+        options?.onSuccess?.(hoisted.simulationState.response);
+      }
     },
     isPending: hoisted.simulationState.isPending,
   }),
+}));
+
+// use-causal: the Causal Impact tab reads useCausalAnalysisHistory and the
+// Treatment Effects tab reads useTreatmentEffects. Both are mocked to thin,
+// controllable query-result stubs so the page renders deterministically
+// without real network calls. Defaults: history empty (honest empty state),
+// treatment effects idle (the "select & Run" prompt).
+vi.mock('@/hooks/api/use-causal', () => ({
+  useCausalAnalysisHistory: () => hoisted.causalHistoryState,
+  useTreatmentEffects: () => hoisted.treatmentEffectsState,
 }));
 
 const REAL_SIMULATION: SimulationResponse = {
@@ -151,6 +190,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   hoisted.simulationState.isPending = false;
   hoisted.simulationState.response = REAL_SIMULATION;
+  hoisted.simulationState.error = null;
+  hoisted.causalHistoryState.data = undefined;
+  hoisted.causalHistoryState.isLoading = false;
+  hoisted.causalHistoryState.isError = false;
+  hoisted.treatmentEffectsState.data = undefined;
+  hoisted.treatmentEffectsState.isFetching = false;
+  hoisted.treatmentEffectsState.isError = false;
+  hoisted.treatmentEffectsState.error = null;
 });
 
 // ----------------------------------------------------------------------------
@@ -196,11 +243,14 @@ describe('InterventionImpact — fabricated intervention catalog removed', () =>
   });
 });
 
-describe('InterventionImpact - F-002 empty states', () => {
-  it('renders empty state on Causal Impact tab when no API data', () => {
+describe('InterventionImpact - empty/honest states', () => {
+  it('renders the honest "no analyses recorded" empty state on Causal Impact when history is empty', () => {
     render(<InterventionImpact />, { wrapper: createWrapper() });
 
-    expect(screen.getByText(/No causal impact data available/)).toBeInTheDocument();
+    // Causal Impact now shows real recorded analyses (GET /api/causal/history).
+    // With an empty list it must show the honest empty state, never a fabricated row.
+    expect(screen.getByText('Recent Causal Analyses')).toBeInTheDocument();
+    expect(screen.getByText(/No causal analyses recorded yet/)).toBeInTheDocument();
     expect(screen.queryByText('Positive Impact Detected')).not.toBeInTheDocument();
   });
 
@@ -214,25 +264,63 @@ describe('InterventionImpact - F-002 empty states', () => {
     expect(screen.queryByText('Detailed Comparison')).not.toBeInTheDocument();
   });
 
-  it('renders empty state on Treatment Effects tab when no API data', async () => {
+  it('renders the "select a cohort and brand" prompt on Treatment Effects before a run', async () => {
     const user = userEvent.setup();
     render(<InterventionImpact />, { wrapper: createWrapper() });
 
     await user.click(screen.getByRole('tab', { name: /Treatment Effects/i }));
 
-    expect(screen.getByText(/No treatment effect estimates available/)).toBeInTheDocument();
+    // Idle (no data, not fetching, no error): the page prompts to pick & Run,
+    // never showing a fabricated estimate.
+    expect(screen.getByText(/Select a cohort and brand, then Run/i)).toBeInTheDocument();
     expect(screen.queryByText('large effect')).not.toBeInTheDocument();
   });
 
-  it('renders empty state on Segment Analysis tab when no API data', async () => {
+  it('Segment Analysis tab is wired: idle prompts to Run, never fabricates CATE', async () => {
     const user = userEvent.setup();
     render(<InterventionImpact />, { wrapper: createWrapper() });
 
     await user.click(screen.getByRole('tab', { name: /Segment Analysis/i }));
 
-    expect(screen.getByText(/No segment heterogeneity data available/)).toBeInTheDocument();
+    // Idle (no run yet): an honest empty-state + a Run control, never a
+    // pre-baked CATE estimate.
+    expect(screen.getByText(/No segment analysis run yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run segment analysis/i })).toBeInTheDocument();
     expect(screen.queryByText('High-Volume HCPs')).not.toBeInTheDocument();
     expect(screen.queryByText('Northeast Region')).not.toBeInTheDocument();
+  });
+});
+
+describe('InterventionImpact - Causal Impact tab (real history wiring)', () => {
+  it('renders a row per recorded causal analysis (no fabrication)', () => {
+    hoisted.causalHistoryState.data = {
+      total: 1,
+      items: [
+        {
+          memory_id: 'mem_1',
+          event_type: 'causal_analysis_completed',
+          description: 'Causal analysis: treatment -> outcome, ATE=0.185',
+          occurred_at: '2026-06-13T11:35:11.002171Z',
+          agent_name: 'causal_impact',
+          ate_estimate: 0.185,
+          confidence: 0.78,
+          model_used: 'linear_regression',
+        },
+      ],
+    };
+    render(<InterventionImpact />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('causal_impact')).toBeInTheDocument();
+    expect(screen.getByText('0.185')).toBeInTheDocument();
+    expect(screen.getByText('78%')).toBeInTheDocument();
+    expect(screen.getByText('linear_regression')).toBeInTheDocument();
+  });
+
+  it('shows an honest error state when history fails to load', () => {
+    hoisted.causalHistoryState.isError = true;
+    render(<InterventionImpact />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/Could not load causal analyses/)).toBeInTheDocument();
   });
 });
 
@@ -260,6 +348,22 @@ describe('InterventionImpact - Digital Twin tab (real wiring)', () => {
     // response must now reach the results panel.
     expect(hoisted.mockMutate).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId('scenario-results')).toHaveTextContent('ate:0.142');
+  });
+
+  it('surfaces a failed simulation honestly (onError) instead of the empty state', async () => {
+    // A 503 (e.g. no trained twin for this brand) must reach ScenarioResults
+    // as an error, not be silently swallowed into "results:null".
+    hoisted.simulationState.error = { status: 503, message: 'No trained twin model is available' };
+    const user = userEvent.setup();
+    render(<InterventionImpact />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Digital Twin/i }));
+    await user.click(screen.getByRole('button', { name: /Run Simulation/i }));
+
+    expect(hoisted.mockMutate).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('scenario-results')).toHaveTextContent(
+      'error:No trained twin model is available',
+    );
   });
 
   it('does NOT wire console.log no-op handlers into RecommendationCards', async () => {

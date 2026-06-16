@@ -582,6 +582,24 @@ describe('useKPIDetail', () => {
     expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', 'remibrutinib', undefined);
   });
 
+  it('passes region to value query (F3 — DQ brand/region selector)', async () => {
+    // useKPIValue already accepts (id, brand, region); useKPIDetail dropped the
+    // region arg, so the DataQuality page could never request a per-region cut.
+    // Forward it so getKPIValue receives the region the caller selected.
+    vi.mocked(kpiApi.getKPIMetadata).mockResolvedValueOnce(mockKPIMetadata);
+    vi.mocked(kpiApi.getKPIValue).mockResolvedValueOnce(mockKPIResult);
+    const { wrapper } = createWrapper();
+
+    const { result } = renderHook(
+      () => useKPIDetail('WS1-DQ-001', 'remibrutinib', 'west'),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(kpiApi.getKPIValue).toHaveBeenCalledWith('WS1-DQ-001', 'remibrutinib', 'west');
+  });
+
   it('reports loading state correctly', async () => {
     // Use a deferred promise we resolve explicitly instead of an arbitrary
     // setTimeout. A real timer races the synchronous `isLoading === true`

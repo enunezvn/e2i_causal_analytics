@@ -551,15 +551,11 @@ def _measured_components() -> list:
 
 
 def _patch_measured_component_check():
-    """Patch _execute_health_check to return a MEASURED result with real
-    component_statuses (mirrors the live agent path)."""
-    result = MagicMock(
-        data_provenance="measured",
-        component_statuses=_measured_components(),
-    )
+    """Patch _fetch_component_health to return MEASURED component statuses
+    (mirrors the live SupabaseHealthClient direct-probe path)."""
     return patch(
-        "src.api.routes.health_score._execute_health_check",
-        new=AsyncMock(return_value=result),
+        "src.api.routes.health_score._fetch_component_health",
+        new=AsyncMock(return_value=(_measured_components(), DataProvenance.MEASURED)),
     )
 
 
@@ -622,37 +618,158 @@ async def test_get_component_health_includes_real_components():
 
 @pytest.mark.asyncio
 async def test_get_component_health_fails_closed_in_production(monkeypatch):
-    """In a fail-closed environment, /components must raise 503 rather than
-    return fabricated component health data."""
+    """In a fail-closed environment, /components must raise 503 when the live
+    component probe is unreachable, rather than return fabricated data."""
     monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
-    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+    with patch(
+        "src.api.routes.health_score._fetch_component_health",
+        new=AsyncMock(return_value=([], None)),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await get_component_health()
     assert exc_info.value.status_code == 503
-    assert exc_info.value.detail["error"] == "agent_unavailable"
+    assert exc_info.value.detail["error"] == "health_source_unavailable"
 
 
 @pytest.mark.asyncio
 async def test_get_component_health_discloses_placeholder_provenance(monkeypatch):
-    """When mock-fallback is explicitly allowed (dev), /components must DISCLOSE
-    that the data is placeholder/fabricated rather than presenting it as real."""
+    """When mock-fallback is explicitly allowed (dev) and the probe is
+    unreachable, /components must DISCLOSE placeholder provenance rather than
+    presenting fabricated data as real."""
     monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
-    with patch("src.agents.health_score.HealthScoreAgent", side_effect=ImportError):
+    with patch(
+        "src.api.routes.health_score._fetch_component_health",
+        new=AsyncMock(return_value=([], None)),
+    ):
         result = await get_component_health()
     assert result.data_provenance == "placeholder"
     assert result.total_components > 0
 
 
 @pytest.mark.asyncio
-async def test_get_component_health_measured_when_agent_runs():
-    """REWIRED (was 'serves_placeholder_even_when_agent_available'): /components
-    now INVOKES the real agent and tags genuinely measured component data
-    'measured', never 'placeholder'."""
+async def test_get_component_health_measured_via_direct_probe():
+    """REWIRED: /components now probes SupabaseHealthClient DIRECTLY (not the
+    composite agent, whose output never surfaced per-component statuses) and tags
+    genuinely measured component data 'measured', never 'placeholder'."""
     with _patch_measured_component_check():
         result = await get_component_health()
     assert result.data_provenance == DataProvenance.MEASURED
     # No fabricated 'opik @ 250ms' mock component leaks through.
     assert not any(c.latency_ms == 250 for c in result.components)
+
+
+# =============================================================================
+# C: health TREND must record only FULL-scope checks (no quick-100 pollution)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_run_health_check_quick_scope_not_recorded_in_history():
+    """A QUICK (component-only) check must NOT pollute the health trend: its
+    overall score is component-only (e.g. 100/A) and would render a misleadingly
+    flat line. Only FULL all-dimension checks are faithful overall data points."""
+    with patch("src.api.routes.health_score._execute_health_check") as mock_execute:
+        mock_result = MagicMock(
+            check_id="",
+            check_scope=CheckScope.QUICK,
+            overall_health_score=100.0,
+            health_grade=HealthGrade.A,
+        )
+        mock_result.check_latency_ms = 0
+        mock_execute.return_value = mock_result
+
+        await run_health_check(scope=CheckScope.QUICK)
+
+    assert len(_health_history) == 0
+
+
+# =============================================================================
+# _fetch_component_health (direct SupabaseHealthClient probe — B)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_fetch_component_health_maps_probe_results(monkeypatch):
+    """Each component is probed; ok -> healthy, degraded -> degraded, and the
+    dimension is tagged MEASURED (real live statuses)."""
+    from src.api.routes import health_score as hs
+
+    class _FakeClient:
+        async def check(self, endpoint: str):
+            return {
+                "/health/db": {"ok": True, "latency_ms": 10},
+                "/health/cache": {"ok": True, "latency_ms": 2},
+                "/health/vectors": {"ok": True, "latency_ms": 5},
+                "/health/api": {"ok": True, "latency_ms": 3},
+                "/health/queue": {"ok": False, "degraded": True, "latency_ms": 0},
+            }[endpoint]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "src.agents.health_score.health_client.SupabaseHealthClient",
+        lambda *a, **k: _FakeClient(),
+    )
+    components, provenance = await hs._fetch_component_health()
+    assert provenance == DataProvenance.MEASURED
+    assert len(components) == 5
+    by_name = {c.component_name: c.status for c in components}
+    assert by_name["database"] == ComponentStatus.HEALTHY
+    assert by_name["message_queue"] == ComponentStatus.DEGRADED
+
+
+@pytest.mark.asyncio
+async def test_fetch_component_health_all_fail_returns_none(monkeypatch):
+    """If EVERY probe raises, the backend is genuinely unreachable -> return None
+    provenance so the caller fails closed (never fabricated)."""
+    from src.api.routes import health_score as hs
+
+    class _BoomClient:
+        async def check(self, endpoint: str):
+            raise RuntimeError("backend down")
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "src.agents.health_score.health_client.SupabaseHealthClient",
+        lambda *a, **k: _BoomClient(),
+    )
+    components, provenance = await hs._fetch_component_health()
+    assert provenance is None
+    assert components == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_component_health_mixed_results_are_measured(monkeypatch):
+    """The likely production case: a MIX of healthy / degraded / unhealthy probe
+    dicts is tagged MEASURED with the correct per-component status mapping."""
+    from src.api.routes import health_score as hs
+
+    class _MixedClient:
+        async def check(self, endpoint: str):
+            return {
+                "/health/db": {"ok": True, "latency_ms": 10},  # healthy
+                "/health/cache": {"ok": True, "latency_ms": 2},  # healthy
+                "/health/vectors": {"ok": False, "degraded": True},  # degraded
+                "/health/api": {"ok": True, "latency_ms": 3},  # healthy
+                "/health/queue": {"ok": False, "error": "broker down"},  # unhealthy
+            }[endpoint]
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "src.agents.health_score.health_client.SupabaseHealthClient",
+        lambda *a, **k: _MixedClient(),
+    )
+    components, provenance = await hs._fetch_component_health()
+    assert provenance == DataProvenance.MEASURED
+    by_name = {c.component_name: c.status for c in components}
+    assert by_name["database"] == ComponentStatus.HEALTHY
+    assert by_name["vector_store"] == ComponentStatus.DEGRADED
+    assert by_name["message_queue"] == ComponentStatus.UNHEALTHY
 
 
 @pytest.mark.asyncio

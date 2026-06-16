@@ -622,7 +622,7 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
 
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    const statusTrigger = screen.getByRole('combobox');
+    const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
     fireEvent.click(statusTrigger);
     const failOpt = screen.getByRole('option', { name: /^Fail$/ });
     fireEvent.click(failOpt);
@@ -682,7 +682,7 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
     expect(screen.getAllByText('Completeness - HCP Master').length).toBeGreaterThanOrEqual(1);
 
     // Open the status filter and pick "Warning"
-    const statusTrigger = screen.getByRole('combobox');
+    const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
     fireEvent.click(statusTrigger);
     const warningOpt = screen.getByRole('option', { name: /^Warning$/ });
     fireEvent.click(warningOpt);
@@ -789,5 +789,229 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
     // Status select trigger must carry an aria-label
     const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
     expect(statusTrigger).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// HONESTY — drift-empty dimension cards + drift card.
+// `data_quality_pipeline` has NO drift monitoring in prod (0 records, confirmed
+// live). The cards must read "No data", NOT a fabricated ~100% from a `1 - 0`
+// default that contradicts the failing validation rules.
+// =============================================================================
+
+describe('DataQuality honesty — empty drift signal', () => {
+  const emptyDrift: DriftDetectionResponse = {
+    task_id: 'history',
+    model_id: 'data_quality_pipeline',
+    status: 'retrieved',
+    overall_drift_score: 0,
+    features_checked: 0,
+    features_with_drift: [],
+    results: [],
+    drift_summary: 'Retrieved 0 drift records',
+    recommended_actions: [],
+    detection_latency_ms: 0,
+    timestamp: '2026-06-16T00:00:00Z',
+  };
+
+  beforeEach(() => {
+    (useLatestDriftStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: emptyDrift,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    (useDriftHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { model_id: 'data_quality_pipeline', total_records: 0, records: [] },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+  });
+
+  it('shows "No data" (not a fabricated 100%) for the drift-derived dimension cards', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    for (const title of ['Accuracy', 'Consistency', 'Timeliness', 'Overall Quality']) {
+      const call = kpiCardCalls.find((c) => c.title === title);
+      expect(call, `${title} card must render`).toBeDefined();
+      expect(call!.value, `${title} must read "No data" when no drift records exist`).toBe(
+        'No data'
+      );
+      // Must NOT be a number masquerading as a healthy score.
+      expect(typeof call!.value).not.toBe('number');
+    }
+  });
+
+  it('drift status card honestly states no monitoring has run (not "0.0% / 0 of 0 features")', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    expect(
+      screen.getByText(/No drift monitoring has run for the data quality pipeline/i)
+    ).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// HONESTY — validation rule status comes from the backend `value.status`
+// (good/warning/critical/unknown), NOT a naive client-side higher-is-better
+// recompute. A null/UNKNOWN value is "No data", NOT a fail-X. (Live: 4/9
+// ws1_data_quality KPIs return null → were rendering as X's.)
+// =============================================================================
+
+describe('DataQuality honesty — backend rule status (no null→X)', () => {
+  function mockDetail(unknownId: string) {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const meta = dqKpis.find((k) => k.id === kpiId) ?? dqKpis[0];
+      const isUnknown = kpiId === unknownId;
+      return {
+        metadata: meta,
+        value: {
+          kpi_id: meta.id,
+          value: isUnknown ? undefined : 90,
+          status: isUnknown ? 'unknown' : 'good',
+          error: isUnknown ? 'KPI unavailable: no data for cross-source match' : undefined,
+          calculated_at: '2026-01-02T08:30:00Z',
+          cached: false,
+          metadata: {},
+        },
+        isLoading: false,
+        error: null,
+        isMetadataLoading: false,
+        isValueLoading: false,
+        refetch: vi.fn(),
+      };
+    });
+  }
+
+  it('renders an UNKNOWN (null-value) KPI as "No data", not a value', () => {
+    mockDetail('WS1-DQ-002');
+    render(<DataQuality />, { wrapper: createWrapper() });
+    // KPICard is stubbed to render only its title, so "No data" here is
+    // unambiguously the unknown rule row's value cell (drift has data → cards
+    // show numbers).
+    expect(screen.getByText('No data')).toBeInTheDocument();
+  });
+
+  it('does NOT classify an UNKNOWN (no-data) KPI as Fail — the old null→X bug', async () => {
+    mockDetail('WS1-DQ-002');
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // Select "Fail". DQ-001='good'(pass), DQ-002='unknown'. Under the OLD bug a
+    // null value scored as 'fail' and DQ-002 stayed visible. Now NEITHER is a
+    // fail → the empty-state appears and the unknown row is hidden.
+    const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
+    fireEvent.click(statusTrigger);
+    fireEvent.click(screen.getByRole('option', { name: /^Fail$/ }));
+
+    expect(
+      await screen.findByText(/No data quality KPIs match your filters/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Completeness - HCP Master')).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// F3 — Brand / Region cut selectors.
+// The KPI calculators are brand/region-aware (mig 078) and the value endpoint
+// accepts both, but the page never passed either, so every rule value read the
+// portfolio aggregate ("why only aggregated metrics?"). The selectors must (a)
+// render with the real gold-standard brands + US regions, (b) default to the
+// portfolio (no brand/region), and (c) forward the selection — region lowercased
+// to match the backend's case — down to the per-row useKPIDetail fetch.
+// =============================================================================
+
+describe('DataQuality — F3 brand/region cut selectors', () => {
+  it('renders Brand and Region selectors alongside the status filter', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    expect(screen.getByRole('combobox', { name: /brand/i })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /region/i })).toBeInTheDocument();
+    // The pre-existing status filter must remain distinct (not swallowed).
+    expect(screen.getByRole('combobox', { name: /status/i })).toBeInTheDocument();
+  });
+
+  it('Brand selector lists the three gold-standard brands (+ All Brands)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));
+    expect(screen.getByRole('option', { name: 'All Brands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Remibrutinib' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Fabhalta' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Kisqali' })).toBeInTheDocument();
+  });
+
+  it('Region selector lists the four US regions (+ All US Regions)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /region/i }));
+    expect(screen.getByRole('option', { name: 'All US Regions' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Northeast' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'South' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Midwest' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'West' })).toBeInTheDocument();
+  });
+
+  it('defaults to the portfolio aggregate (no brand/region passed to useKPIDetail)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    const calls = (useKPIDetail as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === 'WS1-DQ-001'
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c[1] === undefined && c[2] === undefined)).toBe(true);
+  });
+
+  it('selecting a brand forwards it to the per-rule value fetch', async () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'Remibrutinib' }));
+    await waitFor(() =>
+      expect(useKPIDetail).toHaveBeenCalledWith('WS1-DQ-001', 'Remibrutinib', undefined)
+    );
+  });
+
+  it('selecting a region forwards the lowercased region to the per-rule value fetch', async () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /region/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'West' }));
+    await waitFor(() =>
+      expect(useKPIDetail).toHaveBeenCalledWith('WS1-DQ-001', undefined, 'west')
+    );
+  });
+});
+
+// =============================================================================
+// value_format='percent' — ratio KPIs (value is 0-1) must render as NN.N%, not
+// a raw fraction. toFixed(1) on a fraction collapses 0.87 -> "0.9" AND hides the
+// per-cut differences F3 exposes (DQ-006 0.1053 vs 0.1095 both -> "0.1"). The
+// backend now stamps value_format='percent' (mig: kpi_definitions.yaml); the row
+// must honor it.
+// =============================================================================
+
+describe('DataQuality — value_format=percent rendering', () => {
+  it('renders a percent KPI as NN.N% (value*100), not the raw 0-1 fraction', () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockReturnValue({
+      metadata: {
+        ...dqKpis[0],
+        unit: undefined,
+        value_format: 'percent',
+        threshold: { target: 0.85, warning: 0.7, critical: 0.5 },
+      },
+      value: {
+        kpi_id: 'WS1-DQ-001',
+        value: 0.870049,
+        status: 'good',
+        calculated_at: '2026-01-02T08:30:00Z',
+        cached: false,
+        metadata: {},
+      },
+      isLoading: false,
+      error: null,
+      isMetadataLoading: false,
+      isValueLoading: false,
+      refetch: vi.fn(),
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // The percent form appears; the raw fraction "0.9" must NOT.
+    expect(screen.getAllByText('87.0%').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('0.9')).not.toBeInTheDocument();
   });
 });

@@ -107,6 +107,49 @@ export enum CausalAnalysisStatus {
 }
 
 // =============================================================================
+// DATASET / VARIABLE DISCOVERY TYPES
+// =============================================================================
+
+/**
+ * Candidate treatment / outcome / covariate variables for a dataset.
+ *
+ * Returned by `GET /causal/variables?dataset=...`. Drives the page's
+ * treatment / outcome / covariate selectors so they only offer columns that
+ * actually exist in the estimation frame (no fictional defaults).
+ */
+export interface CausalVariablesResponse {
+  /** Dataset the candidates were derived from (e.g. 'patient_journeys') */
+  dataset: string;
+  /** Columns suitable as the treatment variable */
+  treatment_candidates: string[];
+  /** Columns suitable as the outcome variable */
+  outcome_candidates: string[];
+  /** Columns suitable as covariates / controls */
+  covariate_candidates: string[];
+  /** All columns available in the dataset */
+  columns: string[];
+}
+
+/**
+ * Real estimation-ready records for a chosen treatment / outcome / covariates.
+ *
+ * Returned by `GET /causal/estimation-data?dataset=...&treatment_var=...`. The
+ * `estimation_data_records` are fed verbatim to the parallel pipeline (via the
+ * request `filters`) so the libraries estimate effects on real rows rather than
+ * 503-ing on an empty payload.
+ */
+export interface EstimationDataResponse {
+  /** Dataset the records were drawn from */
+  dataset: string;
+  /** Columns present in each record */
+  columns: string[];
+  /** Number of rows returned */
+  n_rows: number;
+  /** Estimation-ready rows (one record per row) */
+  estimation_data_records: Array<Record<string, unknown>>;
+}
+
+// =============================================================================
 // HIERARCHICAL ANALYSIS TYPES
 // =============================================================================
 
@@ -591,4 +634,60 @@ export interface CausalAnalysisHistoryResponse {
   items: CausalAnalysisHistoryItem[];
   /** Number of items returned */
   total: number;
+}
+
+// =============================================================================
+// TREATMENT EFFECTS (GET /causal/treatment-effects — cohort x brand ATE)
+// =============================================================================
+
+/** The four cohorts the Treatment Effects surface supports. */
+export type CohortName =
+  | 'initiation'
+  | 'persistence'
+  | 'discontinuation'
+  | 'hcp_adoption';
+
+/**
+ * A REAL estimated average treatment effect for one (cohort, brand) cell.
+ *
+ * Produced by the live DoWhy+EconML sequential pipeline over a confounded cohort
+ * frame. `ci_lower`/`ci_upper` are EconML's analytic CI (null on the DoWhy
+ * fallback path). `p_value` is a model-based two-sided z-test (NOT a refutation
+ * p-value). `warnings` always carries an honest robustness-not-validated caveat.
+ */
+export interface TreatmentEffectResponse {
+  /** Cohort name */
+  cohort: string;
+  /** Brand */
+  brand: string;
+  /** Treatment column used (treatment_arm) */
+  treatment_var: string;
+  /** Outcome column used */
+  outcome_var: string;
+  /** Numeric confounders adjusted for (backdoor set) */
+  confounders: string[];
+  /** Average treatment effect */
+  ate: number;
+  /** Lower bound of the 95% CI (null on DoWhy fallback) */
+  ci_lower?: number | null;
+  /** Upper bound of the 95% CI (null on DoWhy fallback) */
+  ci_upper?: number | null;
+  /** Model-based two-sided z-test p-value (null when no usable std_error) */
+  p_value?: number | null;
+  /** Standard error of the ATE */
+  std_error?: number | null;
+  /** Rows in the estimation frame after numeric-coerce + dropna */
+  n: number;
+  /** EconML selected estimator (e.g. 'ols'); null on DoWhy fallback */
+  estimator?: string | null;
+  /** Estimation method/pipeline */
+  method: string;
+  /** Confidence level of the reported CI */
+  confidence_level: number;
+  /** End-to-end compute latency in milliseconds */
+  latency_ms: number;
+  /** True: showcase substrate is synthetic-gold (warning, not gate) */
+  is_synthetic: boolean;
+  /** Honest caveats (always includes the robustness-not-validated note) */
+  warnings: string[];
 }

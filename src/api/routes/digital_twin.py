@@ -260,7 +260,7 @@ class SimulateRequest(BaseModel):
     twin_type: TwinTypeEnum = Field(default=TwinTypeEnum.HCP)
     population_filters: Optional[PopulationFilterRequest] = None
     twin_count: int = Field(
-        default=10000, ge=100, le=100000, description="Number of twins to simulate"
+        default=1000, ge=100, le=100000, description="Number of twins to simulate"
     )
     confidence_level: float = Field(
         default=0.95,
@@ -288,7 +288,7 @@ class SimulateRequest(BaseModel):
                 },
                 "brand": "Remibrutinib",
                 "twin_type": "hcp",
-                "twin_count": 10000,
+                "twin_count": 1000,
                 "population_filters": {"deciles": [1, 2, 3]},
             }
         }
@@ -447,7 +447,7 @@ class ScenarioSimulateRequest(BaseModel):
     sample_size: int = Field(default=1000, ge=1)
     duration_days: int = Field(default=90, ge=1)
     twin_type: TwinTypeEnum = Field(default=TwinTypeEnum.HCP)
-    twin_count: int = Field(default=10000, ge=100, le=100000)
+    twin_count: int = Field(default=1000, ge=100, le=100000)
     target_regions: List[str] = Field(default=[])
     target_segments: List[str] = Field(default=[])
     budget: Optional[float] = Field(default=None)

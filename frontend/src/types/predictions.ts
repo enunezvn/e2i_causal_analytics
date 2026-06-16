@@ -48,6 +48,13 @@ export interface PredictionRequest {
   return_probabilities?: boolean;
   /** Return prediction intervals (regression models) */
   return_intervals?: boolean;
+  /**
+   * Populate `feature_importance` with REAL per-prediction SHAP contributions
+   * for this exact input. The backend delegates to the BentoML `/shap` endpoint
+   * (LinearExplainer over the routed model). Off by default; the Predictive
+   * Analytics page sets it true so the result card shows Feature Contributions.
+   */
+  return_feature_importance?: boolean;
 }
 
 /**
@@ -170,6 +177,19 @@ export interface ModelInfoResponse {
   description?: string;
   /** Input feature schema */
   input_schema?: Record<string, unknown>;
+  /**
+   * Authoritative ENCODED feature columns the model scores — one-hot
+   * expansions + `__isna` flags (e.g. `geographic_region_south`,
+   * `academic_hcp__isna`). Returned verbatim by the live BentoML `/model_info`.
+   * Used to detect which `keep_columns` are categorical and their options.
+   */
+  feature_columns?: string[];
+  /**
+   * RAW human-meaningful covariates the served FeatureBuilder encodes (e.g.
+   * `disease_severity`, `academic_hcp`, `geographic_region`). The Predictive
+   * Analytics form collects THESE; the backend forwards them as `raw_features`.
+   */
+  keep_columns?: string[];
   /** Output schema */
   output_schema?: Record<string, unknown>;
   /** Training date */

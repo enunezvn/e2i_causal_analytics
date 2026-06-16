@@ -365,6 +365,47 @@ class RouteQueryResponse(BaseModel):
     )
 
 
+class CausalVariablesResponse(BaseModel):
+    """Available causal variables for a gold-standard dataset.
+
+    Drives the causal-discovery page's treatment / outcome / covariate
+    dropdowns. The candidate lists are the curated, causally-meaningful columns
+    for the dataset intersected with its LIVE schema, so a dropdown never offers
+    a column that is not actually present in the data.
+    """
+
+    dataset: str = Field(..., description="Gold-standard dataset the variables come from")
+    treatment_candidates: List[str] = Field(
+        default_factory=list, description="Columns valid as a treatment variable"
+    )
+    outcome_candidates: List[str] = Field(
+        default_factory=list, description="Columns valid as an outcome variable"
+    )
+    covariate_candidates: List[str] = Field(
+        default_factory=list, description="Columns valid as covariates/confounders"
+    )
+    columns: List[str] = Field(
+        default_factory=list, description="All columns present in the dataset sample"
+    )
+
+
+class EstimationDataResponse(BaseModel):
+    """Real estimation records loaded server-side from a gold-standard dataset.
+
+    The frontend posts ``estimation_data_records`` into a pipeline request's
+    ``filters.estimation_data_records`` so the parallel/sequential pipeline can
+    estimate a real effect. Records are loaded from the live table (never
+    fabricated); rows missing a treatment/outcome value are dropped.
+    """
+
+    dataset: str = Field(..., description="Dataset the records were loaded from")
+    columns: List[str] = Field(..., description="Columns included in each record")
+    n_rows: int = Field(..., description="Number of usable estimation rows returned")
+    estimation_data_records: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Row records for the pipeline DataFrame"
+    )
+
+
 # =============================================================================
 # PIPELINE SCHEMAS
 # =============================================================================
@@ -1027,6 +1068,124 @@ class CausalAnalysisHistoryResponse(BaseModel):
                         "confidence": 0.78,
                         "model_used": "linear_regression",
                     }
+                ],
+            }
+        }
+    )
+
+
+# =============================================================================
+# TREATMENT EFFECTS (GET /causal/treatment-effects — cohort x brand ATE)
+# =============================================================================
+
+
+class CohortName(str, Enum):
+    """The four cohorts the Treatment Effects surface supports.
+
+    Each cohort selects WHICH outcome column is the label:
+    - initiation       -> patient_journeys.treatment_initiated
+    - persistence      -> patient_journeys.persistent_180d
+    - discontinuation  -> patient_journeys.discontinued_180d
+    - hcp_adoption     -> hcp_brand_adoption.adopted
+    """
+
+    INITIATION = "initiation"
+    PERSISTENCE = "persistence"
+    DISCONTINUATION = "discontinuation"
+    HCP_ADOPTION = "hcp_adoption"
+
+
+class BrandName(str, Enum):
+    """The three brands the Treatment Effects surface supports."""
+
+    REMIBRUTINIB = "Remibrutinib"
+    FABHALTA = "Fabhalta"
+    KISQALI = "Kisqali"
+
+
+class TreatmentEffectResponse(BaseModel):
+    """A REAL estimated average treatment effect for one (cohort, brand) cell.
+
+    Produced by the live DoWhy+EconML sequential pipeline over a confounded
+    cohort frame loaded from the DB. Every numeric field traces to a real
+    estimator output — no fabricated/placeholder values. ``ci_lower``/``ci_upper``
+    come from EconML's analytic CI; ``p_value`` is a model-based two-sided
+    z-test ``2*(1-Phi(|ate|/std_error))`` (NOT a refutation p-value), and
+    ``std_error`` is EconML's ``ate_std`` (or DoWhy's ``standard_error`` on the
+    DoWhy fallback path, where no CI is available and ci_lower/ci_upper are None).
+
+    The pipeline does NOT run refutation/sensitivity checks, so ``warnings``
+    always carries an honest 'robustness not validated' caveat — the UI must
+    never present this as a validated causal claim.
+    """
+
+    cohort: str = Field(
+        ..., description="Cohort name (initiation/persistence/discontinuation/hcp_adoption)"
+    )
+    brand: str = Field(..., description="Brand (Remibrutinib/Fabhalta/Kisqali)")
+    treatment_var: str = Field(..., description="Treatment column used (treatment_arm)")
+    outcome_var: str = Field(
+        ...,
+        description="Outcome column used (treatment_initiated/persistent_180d/discontinued_180d/adopted)",
+    )
+    confounders: List[str] = Field(
+        default_factory=list, description="The numeric confounders adjusted for (backdoor set)"
+    )
+    ate: float = Field(
+        ..., description="Average treatment effect (EconML ate; agrees with DoWhy causal_effect)"
+    )
+    ci_lower: Optional[float] = Field(
+        None, description="Lower bound of the EconML 95% CI (None on DoWhy fallback)"
+    )
+    ci_upper: Optional[float] = Field(
+        None, description="Upper bound of the EconML 95% CI (None on DoWhy fallback)"
+    )
+    p_value: Optional[float] = Field(
+        None,
+        description="Model-based two-sided z-test p-value 2*(1-Phi(|ate|/std_error)); None when no usable std_error",
+    )
+    std_error: Optional[float] = Field(
+        None,
+        description="Standard error of the ATE (EconML ate_std, or DoWhy standard_error fallback)",
+    )
+    n: int = Field(..., description="Rows in the estimation frame after numeric-coerce + dropna")
+    estimator: Optional[str] = Field(
+        None, description="EconML selected estimator (e.g. 'ols'); None on DoWhy fallback"
+    )
+    method: str = Field("dowhy+econml sequential", description="Estimation method/pipeline")
+    confidence_level: float = Field(0.95, description="Confidence level of the reported CI")
+    latency_ms: int = Field(..., description="End-to-end compute latency in milliseconds")
+    is_synthetic: bool = Field(
+        True,
+        description="True: this showcase substrate is synthetic-gold (E2I_INCLUDE_SYNTHETIC=true). Warning, not gate.",
+    )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Honest caveats (always includes the robustness-not-validated note)",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "cohort": "hcp_adoption",
+                "brand": "Fabhalta",
+                "treatment_var": "treatment_arm",
+                "outcome_var": "adopted",
+                "confounders": ["peer_influence_score", "influence_network_size"],
+                "ate": 0.1916,
+                "ci_lower": 0.1644,
+                "ci_upper": 0.2189,
+                "p_value": 0.0,
+                "std_error": 0.0139,
+                "n": 5000,
+                "estimator": "ols",
+                "method": "dowhy+econml sequential",
+                "confidence_level": 0.95,
+                "latency_ms": 4200,
+                "is_synthetic": True,
+                "warnings": [
+                    "robustness_validation_performed=false: this ATE was estimated but NOT "
+                    "refutation-tested; do not present it as a validated causal claim."
                 ],
             }
         }

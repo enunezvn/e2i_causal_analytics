@@ -171,8 +171,13 @@ function ModelPerformance() {
     [models, effectiveModelId]
   );
 
+  // Performance metrics are recorded ~monthly (backtest sweep), so a 30-day
+  // window catches only ~1-2 points and the trend chart renders degenerate /
+  // empty. Use a 1-year window to surface the full accuracy-over-time history
+  // (the backend's own default is also 365). Cards (current/baseline/trend)
+  // come from the tracker independently of this window.
   const trendQuery = usePerformanceTrend(
-    { model_id: effectiveModelId, metric_name: 'accuracy', days: 30 },
+    { model_id: effectiveModelId, metric_name: 'accuracy', days: 365 },
     { enabled: !!effectiveModelId }
   );
 
@@ -429,9 +434,23 @@ function ModelPerformance() {
                           {
                             value: trendQuery.data.baseline_value,
                             label: 'Baseline',
-                            type: 'target',
+                            type: 'target' as const,
                             color: '#22c55e',
                           },
+                          // Alert-threshold line: the level below which a
+                          // performance alert fires. Only plotted when the API
+                          // reports a real (>0) threshold (it is 0 when there
+                          // is no baseline history to derive it from).
+                          ...(trendQuery.data.alert_threshold > 0
+                            ? [
+                                {
+                                  value: trendQuery.data.alert_threshold,
+                                  label: 'Alert threshold',
+                                  type: 'lower' as const,
+                                  color: '#ef4444',
+                                },
+                              ]
+                            : []),
                         ]
                       : []
                   }

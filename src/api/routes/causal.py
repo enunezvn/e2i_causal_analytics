@@ -50,8 +50,10 @@ from src.api.schemas.causal import (
     CausalAnalysisHistoryResponse,
     CausalHealthResponse,
     CausalLibrary,
+    CausalVariablesResponse,
     CrossValidationRequest,
     CrossValidationResponse,
+    EstimationDataResponse,
     EstimatorInfo,
     EstimatorListResponse,
     HierarchicalAnalysisRequest,
@@ -59,6 +61,7 @@ from src.api.schemas.causal import (
     NestedCIResult,
     ParallelPipelineRequest,
     ParallelPipelineResponse,
+    PipelineMode,
     PipelineStageResult,
     QuestionType,
     RouteQueryRequest,
@@ -67,6 +70,7 @@ from src.api.schemas.causal import (
     SegmentCATEResult,
     SequentialPipelineRequest,
     SequentialPipelineResponse,
+    TreatmentEffectResponse,
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.causal.stats import z_score_for_confidence
@@ -77,6 +81,12 @@ from src.causal.stats import z_score_for_confidence
 # dependencies (dowhy/econml/causalml/networkx availability), so importing
 # the orchestrator classes is cheap.
 from src.causal_engine.pipeline.parallel import ParallelPipeline
+from src.causal_engine.pipeline.router import (
+    LibraryRouter,
+)
+from src.causal_engine.pipeline.router import (
+    QuestionType as RouterQuestionType,
+)
 from src.causal_engine.pipeline.sequential import SequentialPipeline
 from src.causal_engine.pipeline.state import (
     PipelineInput,
@@ -626,54 +636,52 @@ async def route_causal_query(
     Returns:
         RouteQueryResponse with recommended library and estimators
     """
-    logger.info(f"Routing query: {request.query[:50]}...")
+    logger.info(f"Routing query: {(request.query or '')[:50]}...")
 
-    # Simple keyword-based routing (replace with NLP classifier in production)
-    query_lower = request.query.lower()
-
-    # Override if preference specified
+    # Delegate to the production LibraryRouter — the same weighted
+    # regex/keyword classifier the pipeline orchestrator uses — instead of the
+    # former hardcoded keyword stub. The stub fabricated a fixed 0.75/0.9
+    # routing_confidence and ignored this router entirely; the real router
+    # computes a confidence from pattern-match strength (0.0 when it cannot
+    # classify), so the number shown to the user is earned, not invented.
     if request.prefer_library:
-        return _create_routing_response(
-            request.query,
-            _library_to_question_type(request.prefer_library),
-            request.prefer_library,
-            confidence=0.9,
-            rationale=f"User preference: {request.prefer_library.value}",
+        # Explicit override: force the chosen library. question_type is derived
+        # from the library so the UI still shows a precise label, and the
+        # router returns confidence=1.0 with a "Forced libraries" rationale.
+        decision = _library_router.route(
+            request.query or "",
+            force_libraries=[request.prefer_library.value],
         )
-
-    # Classify question type
-    if any(kw in query_lower for kw in ["cause", "causes", "effect of", "impact of", "does"]):
-        question_type = QuestionType.CAUSAL_EFFECT
-        primary_library = CausalLibrary.DOWHY
-        rationale = "Question asks about causal relationship - DoWhy is best for identification"
-    elif any(kw in query_lower for kw in ["vary", "heterogen", "different", "segment", "subgroup"]):
-        question_type = QuestionType.EFFECT_HETEROGENEITY
-        primary_library = CausalLibrary.ECONML
-        rationale = "Question asks about effect heterogeneity - EconML provides CATE estimates"
-    elif any(kw in query_lower for kw in ["target", "who should", "which", "optimize", "best"]):
-        question_type = QuestionType.TARGETING
-        primary_library = CausalLibrary.CAUSALML
-        rationale = "Question about targeting - CausalML provides uplift modeling"
-    elif any(kw in query_lower for kw in ["flow", "propagate", "system", "network", "dependency"]):
-        question_type = QuestionType.SYSTEM_DEPENDENCIES
-        primary_library = CausalLibrary.NETWORKX
-        rationale = "Question about system dependencies - NetworkX for graph analysis"
+        api_question_type = _library_to_question_type(request.prefer_library)
     else:
-        question_type = QuestionType.COMPREHENSIVE
-        primary_library = CausalLibrary.ECONML
-        rationale = "Ambiguous question - defaulting to EconML for comprehensive analysis"
+        decision = _library_router.route(request.query or "")
+        api_question_type = _router_question_type_to_api(decision.question_type)
 
-    return _create_routing_response(
-        request.query,
-        question_type,
-        primary_library,
-        confidence=0.75,
-        rationale=rationale,
+    # router.CausalLibrary and api.CausalLibrary are distinct enum classes with
+    # identical string values — translate by value.
+    primary_library = CausalLibrary(decision.primary_library.value)
+    secondary_libraries = [CausalLibrary(lib.value) for lib in decision.secondary_libraries]
+
+    return RouteQueryResponse(
+        query=request.query,
+        question_type=api_question_type,
+        primary_library=primary_library,
+        secondary_libraries=secondary_libraries,
+        recommended_estimators=_RECOMMENDED_ESTIMATORS.get(primary_library, []),
+        routing_confidence=decision.confidence,
+        routing_rationale=decision.rationale,
+        suggested_pipeline=_recommended_mode_to_pipeline(decision.recommended_mode),
     )
 
 
+# Module-level singleton: the production question-type classifier, shared with
+# the pipeline orchestrator. Stateless after construction (compiles its regex
+# patterns once); safe to reuse across requests.
+_library_router = LibraryRouter()
+
+
 def _library_to_question_type(library: CausalLibrary) -> QuestionType:
-    """Map library to question type."""
+    """Map a forced/preferred library to its natural API question type."""
     mapping = {
         CausalLibrary.DOWHY: QuestionType.CAUSAL_EFFECT,
         CausalLibrary.ECONML: QuestionType.EFFECT_HETEROGENEITY,
@@ -683,39 +691,252 @@ def _library_to_question_type(library: CausalLibrary) -> QuestionType:
     return mapping.get(library, QuestionType.COMPREHENSIVE)
 
 
-def _create_routing_response(
-    query: str,
-    question_type: QuestionType,
-    primary_library: CausalLibrary,
-    confidence: float,
-    rationale: str,
-) -> RouteQueryResponse:
-    """Create routing response with recommendations."""
-    # Recommended estimators by library
-    estimator_recommendations = {
-        CausalLibrary.DOWHY: ["propensity_score_matching", "inverse_propensity_weighting"],
-        CausalLibrary.ECONML: ["causal_forest", "linear_dml", "dr_learner"],
-        CausalLibrary.CAUSALML: ["uplift_random_forest", "uplift_gradient_boosting"],
-        CausalLibrary.NETWORKX: [],
-    }
+# Recommended estimators per library (informational; the router does not pick
+# estimators). NetworkX is a graph/path tool with no point-estimator.
+_RECOMMENDED_ESTIMATORS: Dict[CausalLibrary, List[str]] = {
+    CausalLibrary.DOWHY: ["propensity_score_matching", "inverse_propensity_weighting"],
+    CausalLibrary.ECONML: ["causal_forest", "linear_dml", "dr_learner"],
+    CausalLibrary.CAUSALML: ["uplift_random_forest", "uplift_gradient_boosting"],
+    CausalLibrary.NETWORKX: [],
+}
 
-    # Secondary libraries
-    secondary_map = {
-        CausalLibrary.DOWHY: [CausalLibrary.ECONML],
-        CausalLibrary.ECONML: [CausalLibrary.CAUSALML, CausalLibrary.DOWHY],
-        CausalLibrary.CAUSALML: [CausalLibrary.ECONML],
-        CausalLibrary.NETWORKX: [CausalLibrary.DOWHY],
-    }
+# RouterQuestionType (causal_engine) -> API QuestionType. The two enums were
+# defined independently with different member names; this is the single
+# translation point. router.UNKNOWN has no API peer -> COMPREHENSIVE (the
+# router already reports confidence 0.0 for unclassifiable queries, so the low
+# confidence — not a fabricated label — signals the uncertainty to the UI).
+_ROUTER_QT_TO_API: Dict[RouterQuestionType, QuestionType] = {
+    RouterQuestionType.CAUSAL_RELATIONSHIP: QuestionType.CAUSAL_EFFECT,
+    RouterQuestionType.EFFECT_HETEROGENEITY: QuestionType.EFFECT_HETEROGENEITY,
+    RouterQuestionType.TARGETING_OPTIMIZATION: QuestionType.TARGETING,
+    RouterQuestionType.IMPACT_FLOW: QuestionType.SYSTEM_DEPENDENCIES,
+    RouterQuestionType.COMPREHENSIVE: QuestionType.COMPREHENSIVE,
+    RouterQuestionType.UNKNOWN: QuestionType.COMPREHENSIVE,
+}
 
-    return RouteQueryResponse(
-        query=query,
-        question_type=question_type,
-        primary_library=primary_library,
-        secondary_libraries=secondary_map.get(primary_library, []),
-        recommended_estimators=estimator_recommendations.get(primary_library, []),
-        routing_confidence=confidence,
-        routing_rationale=rationale,
-        suggested_pipeline=None,
+
+def _router_question_type_to_api(router_type: RouterQuestionType) -> QuestionType:
+    """Translate a causal_engine RouterQuestionType to the API QuestionType."""
+    return _ROUTER_QT_TO_API.get(router_type, QuestionType.COMPREHENSIVE)
+
+
+def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
+    """Map RoutingDecision.recommended_mode to the API PipelineMode.
+
+    The router emits 'sequential', 'parallel', or 'validation_loop'. The API
+    PipelineMode exposes only SEQUENTIAL/PARALLEL; a validation_loop (iterative
+    cross-library refutation) is surfaced as PARALLEL since it engages multiple
+    libraries. An unrecognized mode yields None (no suggestion).
+    """
+    if mode in ("parallel", "validation_loop"):
+        return PipelineMode.PARALLEL
+    if mode == "sequential":
+        return PipelineMode.SEQUENTIAL
+    return None
+
+
+# =============================================================================
+# GOLD-STANDARD VARIABLE DISCOVERY + ESTIMATION DATA
+# =============================================================================
+#
+# The causal-discovery page used to free-type treatment/outcome/covariate
+# column names (defaults rep_visits/trx_count were not real columns) and never
+# attached data, so "Run parallel pipeline" fail-closed with 503. These two
+# read-only endpoints fix both: /variables drives data-backed dropdowns, and
+# /estimation-data loads REAL gold-standard rows server-side that the frontend
+# posts into the existing (unchanged) pipeline path.
+#
+# patient_journeys is the gold-standard causal frame: a fully-populated,
+# patient-level cohort (treatment_arm -> persistent_180d, controlling for
+# disease_severity / engagement_score / age_at_diagnosis) — the same cohort the
+# gold-standard models use, with a known TRUE_ATE. (business_metrics is sparse:
+# its causal columns are mostly NULL, so it is not offered here.)
+#
+# Covariate candidates are intentionally restricted to NUMERIC confounders that
+# the executors consume directly. Categorical confounders (geographic_region,
+# brand) are excluded for now — they would need server-side encoding before the
+# DoWhy/EconML executors could use them, which is out of scope for this pass.
+_CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
+    "patient_journeys": {
+        "treatment": ["treatment_arm", "treatment_initiated"],
+        "outcome": ["persistent_180d", "discontinued_180d", "treatment_initiated"],
+        "covariate": ["disease_severity", "engagement_score", "age_at_diagnosis"],
+    },
+}
+_DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+# Columns coerced to float before handing the frame to the executors. Every
+# curated candidate above is numeric, so all are coerced; a value that cannot
+# be coerced becomes None and (for treatment/outcome) drops the row.
+_CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
+    "patient_journeys": {
+        "treatment_arm",
+        "treatment_initiated",
+        "persistent_180d",
+        "discontinued_180d",
+        "disease_severity",
+        "engagement_score",
+        "age_at_diagnosis",
+    },
+}
+
+
+@router.get(
+    "/variables",
+    response_model=CausalVariablesResponse,
+    summary="List causal variables for a gold-standard dataset",
+    operation_id="list_causal_variables",
+)
+async def list_causal_variables(
+    dataset: str = Query(
+        _DEFAULT_CAUSAL_DATASET,
+        description="Gold-standard dataset to enumerate (e.g. patient_journeys)",
+    ),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> CausalVariablesResponse:
+    """Return treatment/outcome/covariate candidates for the causal-discovery
+    dropdowns.
+
+    Candidates are the curated causally-meaningful columns for ``dataset``,
+    intersected with the columns actually present in the live table — so the
+    dropdowns are data-driven and never offer a non-existent column.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Causal data store unavailable")
+
+    # Probe one row to learn the columns actually present in the live schema.
+    probe = await client.table(dataset).select("*").limit(1).execute()
+    rows = probe.data or []
+    present = set(rows[0].keys()) if rows else set()
+
+    def _available(role: str) -> List[str]:
+        # If the probe returned nothing (empty table), fall back to the curated
+        # list so the dropdowns still populate rather than collapsing to empty.
+        if not present:
+            return list(spec[role])
+        return [c for c in spec[role] if c in present]
+
+    return CausalVariablesResponse(
+        dataset=dataset,
+        treatment_candidates=_available("treatment"),
+        outcome_candidates=_available("outcome"),
+        covariate_candidates=_available("covariate"),
+        columns=sorted(present),
+    )
+
+
+@router.get(
+    "/estimation-data",
+    response_model=EstimationDataResponse,
+    summary="Load real estimation records from a gold-standard dataset",
+    operation_id="get_causal_estimation_data",
+)
+async def get_causal_estimation_data(
+    treatment_var: str = Query(..., description="Treatment column to load"),
+    outcome_var: str = Query(..., description="Outcome column to load"),
+    dataset: str = Query(_DEFAULT_CAUSAL_DATASET, description="Gold-standard dataset"),
+    covariates: Optional[str] = Query(
+        None, description="Comma-separated covariate columns (confounders)"
+    ),
+    limit: int = Query(4000, ge=100, le=20000, description="Max rows to load"),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> EstimationDataResponse:
+    """Load REAL estimation rows for the requested variables, server-side.
+
+    The frontend posts the returned ``estimation_data_records`` into a pipeline
+    request's ``filters`` so the (unchanged) parallel/sequential pipeline can
+    estimate a real effect. Requested columns are validated against the
+    dataset's curated allowlist (an arbitrary column/table cannot be read), and
+    rows missing a treatment/outcome value are dropped. Never fabricates data:
+    if no usable rows exist the endpoint fails closed with 503.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
+    covs = [c.strip() for c in (covariates or "").split(",") if c.strip()]
+    requested = [treatment_var, outcome_var, *covs]
+    not_allowed = [c for c in requested if c not in allowed]
+    if not_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {not_allowed} are not permitted for dataset "
+                f"'{dataset}'. Allowed: {sorted(allowed)}"
+            ),
+        )
+
+    # De-duplicate while preserving order (treatment/outcome may also be covariates).
+    select_cols = list(dict.fromkeys(requested))
+
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Causal data store unavailable")
+
+    query = client.table(dataset).select(",".join(select_cols))
+    # Synthetic-showcase aware: on a synthetic-gold instance the synthetic rows
+    # ARE the substrate; on a strict real-data instance they are excluded.
+    query = apply_provenance_filter(query)
+    result = await query.limit(limit).execute()
+    rows = result.data or []
+
+    numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        record: Dict[str, Any] = {}
+        usable = True
+        for col in select_cols:
+            value = row.get(col)
+            if col in numeric_cols and value is not None:
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    value = None
+            # A missing treatment/outcome value makes the row unusable for
+            # estimation — drop it rather than impute.
+            if col in (treatment_var, outcome_var) and value is None:
+                usable = False
+                break
+            record[col] = value
+        if usable:
+            records.append(record)
+
+    if not records:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No usable estimation rows for the requested variables "
+                f"({treatment_var} -> {outcome_var}) in dataset '{dataset}'."
+            ),
+        )
+
+    return EstimationDataResponse(
+        dataset=dataset,
+        columns=select_cols,
+        n_rows=len(records),
+        estimation_data_records=records,
     )
 
 
@@ -2784,3 +3005,382 @@ async def get_causal_value_chains(
     except Exception as exc:
         logger.exception("Causal value-chains query failed")
         raise HTTPException(status_code=500, detail="Causal value-chains query failed") from exc
+
+
+# =============================================================================
+# TREATMENT EFFECTS (GET /causal/treatment-effects — cohort x brand ATE)
+# =============================================================================
+
+# The four cohorts the Treatment Effects surface supports. Each maps to the
+# outcome column that becomes the binary label. The patient cohorts read
+# patient_journeys; hcp_adoption reads hcp_brand_adoption JOIN hcp_profiles.
+_TE_PATIENT_OUTCOME = {
+    "initiation": "treatment_initiated",
+    "persistence": "persistent_180d",
+    "discontinuation": "discontinued_180d",
+}
+_TE_COHORTS = set(_TE_PATIENT_OUTCOME) | {"hcp_adoption"}
+_TE_BRANDS = {"Remibrutinib", "Fabhalta", "Kisqali"}
+
+# treatment column shared by all four cohorts (binary 0/1 arm).
+_TE_TREATMENT_VAR = "treatment_arm"
+
+# Numeric confounders per cohort family. geographic_region is DELIBERATELY
+# EXCLUDED for the patient cohorts: it is a categorical string column that breaks
+# DoWhy/EconML (they require numeric inputs). The HCP cohort joins hcp_profiles
+# for the centrality confounders that drive treatment_arm by construction.
+_TE_PATIENT_CONFOUNDERS = ["disease_severity", "academic_hcp"]
+_TE_HCP_CONFOUNDERS = ["peer_influence_score", "influence_network_size"]
+
+# Paged-read page size. PostgREST returns at most ~1000 rows/request by default;
+# patient cohorts have ~8.4k rows and the HCP cohorts 5k — a single unpaged
+# .select() would SILENTLY truncate the cohort to a non-representative sample and
+# misreport the ATE. We page with .range() until a short page is returned.
+_TE_PAGE_SIZE = 1000
+# Hard ceiling on pages so a runaway loop cannot exhaust memory; 20 pages * 1000
+# = 20k rows comfortably covers the largest cohort (~8.4k) with headroom.
+_TE_MAX_PAGES = 20
+
+# Per-request compute budget (seconds) for the DoWhy+EconML fit under the
+# heavy-compute slot. A single cohort fit is seconds; this bounds a degenerate
+# run so a slow/contended box returns 408 rather than holding the slot forever.
+_TE_TIMEOUT_SECONDS = 90.0
+
+
+async def _te_paged_select(
+    client: Any,
+    table: str,
+    columns: str,
+    brand: str,
+) -> List[Dict[str, Any]]:
+    """Read ALL synthetic rows for ``brand`` from ``table`` via paged .range().
+
+    Mirrors the audit.py .range() paging pattern. Returns the full row list —
+    NEVER a silently-truncated sample (the single highest-risk fabrication bug for
+    this surface). Raises on PostgREST/transport errors so the caller fail-closes.
+    """
+    rows: List[Dict[str, Any]] = []
+    for page in range(_TE_MAX_PAGES):
+        offset = page * _TE_PAGE_SIZE
+        query = (
+            client.table(table)
+            .select(columns)
+            .eq("brand", brand)
+            .eq("is_synthetic", True)
+            .range(offset, offset + _TE_PAGE_SIZE - 1)
+        )
+        result = await query.execute()
+        batch: List[Dict[str, Any]] = result.data or []
+        rows.extend(batch)
+        if len(batch) < _TE_PAGE_SIZE:
+            break
+    return rows
+
+
+async def _resolve_treatment_effect_frame(
+    cohort: str,
+    brand: str,
+) -> Optional["_TEFrameSpec"]:
+    """Load a confounded estimation frame for (cohort, brand) from the DB.
+
+    Returns a ``_TEFrameSpec`` (numeric-coerced + dropna'd DataFrame +
+    treatment/outcome/confounder names) or ``None`` (caller fail-closes 503) when
+    the cohort frame cannot be resolved or is empty after coercion. NEVER
+    fabricates rows. The async Supabase client mirrors /value-chains.
+    """
+    import pandas as pd
+
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        return None
+
+    if cohort in _TE_PATIENT_OUTCOME:
+        outcome_var = _TE_PATIENT_OUTCOME[cohort]
+        confounders = list(_TE_PATIENT_CONFOUNDERS)
+        columns = ",".join([_TE_TREATMENT_VAR, outcome_var, *confounders])
+        rows = await _te_paged_select(client, "patient_journeys", columns, brand)
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+    else:
+        # hcp_adoption: hcp_brand_adoption (treatment_arm, adopted) JOIN
+        # hcp_profiles (peer_influence_score, influence_network_size) on hcp_id.
+        # Two reads + a pandas merge (not the cohort_resolution hcp_profiles
+        # branch, which uses a DIFFERENT continuous-treatment substrate).
+        outcome_var = "adopted"
+        confounders = list(_TE_HCP_CONFOUNDERS)
+        adoption_rows = await _te_paged_select(
+            client,
+            "hcp_brand_adoption",
+            "hcp_id,treatment_arm,adopted",
+            brand,
+        )
+        if not adoption_rows:
+            return None
+        # hcp_profiles is NOT brand-partitioned; read its centrality covariates
+        # paged across is_synthetic rows and merge by hcp_id (100% coverage
+        # verified). brand filter does not apply here, so read without it.
+        profile_rows: List[Dict[str, Any]] = []
+        for page in range(_TE_MAX_PAGES):
+            offset = page * _TE_PAGE_SIZE
+            prof_q = (
+                client.table("hcp_profiles")
+                .select("hcp_id,peer_influence_score,influence_network_size")
+                .eq("is_synthetic", True)
+                .range(offset, offset + _TE_PAGE_SIZE - 1)
+            )
+            prof_res = await prof_q.execute()
+            prof_batch: List[Dict[str, Any]] = prof_res.data or []
+            profile_rows.extend(prof_batch)
+            if len(prof_batch) < _TE_PAGE_SIZE:
+                break
+        if not profile_rows:
+            return None
+        adoption_df = pd.DataFrame(adoption_rows)
+        profile_df = pd.DataFrame(profile_rows).drop_duplicates(subset="hcp_id")
+        df = adoption_df.merge(profile_df, on="hcp_id", how="inner")
+        if df.empty:
+            return None
+
+    # Build the numeric estimation frame: coerce treatment/outcome/confounders to
+    # numeric, drop any row with a non-coercible/NA cell. n = surviving rows. An
+    # empty frame after coercion -> None (honest 503), never a fabricated fit.
+    use_cols = [_TE_TREATMENT_VAR, outcome_var, *confounders]
+    missing = [c for c in use_cols if c not in df.columns]
+    if missing:
+        logger.warning(
+            "treatment-effects: cohort=%s brand=%s frame missing columns %s",
+            cohort,
+            brand,
+            missing,
+        )
+        return None
+    est = df[use_cols].apply(pd.to_numeric, errors="coerce").dropna()
+    if est.empty:
+        return None
+    return _TEFrameSpec(
+        frame=est.reset_index(drop=True),
+        treatment_var=_TE_TREATMENT_VAR,
+        outcome_var=outcome_var,
+        confounders=confounders,
+    )
+
+
+class _TEFrameSpec(NamedTuple):
+    """Resolved estimation frame + runnable var-set for one (cohort, brand) cell."""
+
+    frame: Any  # pd.DataFrame
+    treatment_var: str
+    outcome_var: str
+    confounders: List[str]
+
+
+def _te_pvalue_from_z(ate: float, std_error: Optional[float]) -> Optional[float]:
+    """Two-sided model-based z-test p-value, mirroring the agent estimation path.
+
+    ``p = 2*(1 - Phi(|ate|/std_error))``. Returns None when std_error is missing
+    or not a usable positive finite value (we never emit p=NaN). This is a
+    model-based p-value, NOT a refutation p-value.
+    """
+    if std_error is None:
+        return None
+    try:
+        se = float(std_error)
+    except (TypeError, ValueError):
+        return None
+    import math as _math
+
+    if not _math.isfinite(se) or se <= 0.0:
+        return None
+    from scipy import stats as _scipy_stats
+
+    z = abs(float(ate)) / se
+    return float(2.0 * (1.0 - _scipy_stats.norm.cdf(z)))
+
+
+async def _run_treatment_effect_estimate(
+    cohort: str,
+    brand: str,
+    spec: "_TEFrameSpec",
+) -> TreatmentEffectResponse:
+    """Run the wired DoWhy+EconML sequential pipeline on the resolved frame.
+
+    Prefers EconML's ate/ci/std (it carries the CI); falls back to DoWhy's
+    causal_effect/standard_error (no CI) when EconML fails. Raises
+    HTTPException(503) when NEITHER executor produces a usable estimate. NEVER
+    fabricates a number.
+    """
+    start = time.time()
+    n = int(len(spec.frame))
+
+    pipeline_input = PipelineInput(
+        query=f"Treatment effect: cohort={cohort}, brand={brand}",
+        treatment_var=spec.treatment_var,
+        outcome_var=spec.outcome_var,
+        confounders=list(spec.confounders),
+        effect_modifiers=None,
+        data_source=f"{cohort}/{brand}",
+        filters={},
+        estimation_data=spec.frame,
+        mode="sequential",
+        # Only DoWhy + EconML: NetworkX/CausalML are not needed for a single ATE
+        # cell and would add latency. _get_execution_order filters SEQUENTIAL_ORDER
+        # by this set, so DoWhy then EconML run in order.
+        libraries_enabled=["dowhy", "econml"],
+        cross_validate=None,
+        run_refutation=False,
+    )
+
+    pipeline = _SurfaceCSequentialPipeline(fail_fast=False)
+    await pipeline.execute(pipeline_input)
+    state: Mapping[str, Any] = pipeline.last_state or {}
+
+    # ---- Prefer EconML (carries CI) ----
+    econml_result = state.get("econml_result")
+    econml_payload = (
+        econml_result.get("result")
+        if isinstance(econml_result, dict) and isinstance(econml_result.get("result"), dict)
+        else None
+    )
+    dowhy_result = state.get("dowhy_result")
+    dowhy_payload = (
+        dowhy_result.get("result")
+        if isinstance(dowhy_result, dict) and isinstance(dowhy_result.get("result"), dict)
+        else None
+    )
+
+    ate: Optional[float] = None
+    ci_lower: Optional[float] = None
+    ci_upper: Optional[float] = None
+    std_error: Optional[float] = None
+    estimator: Optional[str] = None
+
+    if econml_payload is not None and econml_payload.get("ate") is not None:
+        ate = _as_optional_float(econml_payload.get("ate"))
+        ci_lower = _as_optional_float(econml_payload.get("ate_ci_lower"))
+        ci_upper = _as_optional_float(econml_payload.get("ate_ci_upper"))
+        std_error = _as_optional_float(econml_payload.get("ate_std"))
+        est_name = econml_payload.get("estimator")
+        estimator = str(est_name) if est_name is not None else None
+    elif dowhy_payload is not None and dowhy_payload.get("causal_effect") is not None:
+        # DoWhy fallback: no CI (linear_regression provides only an SE).
+        ate = _as_optional_float(dowhy_payload.get("causal_effect"))
+        std_error = _as_optional_float(dowhy_payload.get("standard_error"))
+        estimator = dowhy_payload.get("dowhy_method")
+
+    if ate is None:
+        # Neither executor produced a usable estimate — honest fail-close.
+        logger.warning(
+            "treatment-effects: no usable estimate (cohort=%s brand=%s n=%d errors=%s)",
+            cohort,
+            brand,
+            n,
+            state.get("errors"),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Causal pipeline produced no usable treatment-effect estimate for "
+                f"cohort={cohort!r} brand={brand!r} (both DoWhy and EconML failed)."
+            ),
+        )
+
+    p_value = _te_pvalue_from_z(ate, std_error)
+    latency_ms = int((time.time() - start) * 1000)
+
+    return TreatmentEffectResponse(
+        cohort=cohort,
+        brand=brand,
+        treatment_var=spec.treatment_var,
+        outcome_var=spec.outcome_var,
+        confounders=list(spec.confounders),
+        ate=ate,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        p_value=p_value,
+        std_error=std_error,
+        n=n,
+        estimator=estimator,
+        method="dowhy+econml sequential",
+        confidence_level=0.95,
+        latency_ms=latency_ms,
+        is_synthetic=True,
+        warnings=[_ROBUSTNESS_UNVALIDATED_WARNING],
+    )
+
+
+@router.get(
+    "/treatment-effects",
+    response_model=TreatmentEffectResponse,
+    summary="Estimate the treatment effect for a (cohort, brand) cell",
+    operation_id="get_treatment_effect",
+)
+async def get_treatment_effect(
+    cohort: str = Query(
+        ...,
+        description="Cohort: initiation | persistence | discontinuation | hcp_adoption",
+    ),
+    brand: str = Query(
+        ...,
+        description="Brand: Remibrutinib | Fabhalta | Kisqali",
+    ),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> TreatmentEffectResponse:
+    """Return a REAL average treatment effect for one (cohort, brand) cell.
+
+    Loads a confounded cohort frame from the DB (patient_journeys for the patient
+    cohorts; hcp_brand_adoption JOIN hcp_profiles for hcp_adoption), then runs the
+    EXISTING DoWhy+EconML sequential pipeline to recover a de-confounded ATE + CI
+    + p_value + n. Honors the synthetic-showcase substrate (is_synthetic=true).
+
+    Fail-closed: 422 on an unknown cohort/brand; 503 when the cohort frame cannot
+    be resolved (no rows) or the pipeline yields no usable estimate; 408 on
+    timeout; 503 (Retry-After) when the heavy-compute slot is saturated. NEVER
+    fabricates an effect.
+    """
+    cohort_key = cohort.strip().lower()
+    if cohort_key not in _TE_COHORTS:
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Unknown cohort {cohort!r}. Expected one of: {sorted(_TE_COHORTS)}."),
+        )
+    if brand not in _TE_BRANDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown brand {brand!r}. Expected one of: {sorted(_TE_BRANDS)}.",
+        )
+
+    try:
+        spec = await _resolve_treatment_effect_frame(cohort_key, brand)
+        if spec is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"No resolvable cohort data for cohort={cohort_key!r} brand={brand!r}. "
+                    "The cohort frame was empty or unavailable; refusing to fabricate an effect."
+                ),
+            )
+        # The DoWhy+EconML fit is the genuinely heavy in-process compute. Bound it
+        # to ONE per-worker heavy-compute slot (OOM guard) + a wall-clock timeout
+        # so a contended box returns 408 rather than holding the slot forever.
+        async with heavy_compute_slot():
+            return await asyncio.wait_for(
+                _run_treatment_effect_estimate(cohort_key, brand, spec),
+                timeout=_TE_TIMEOUT_SECONDS,
+            )
+    except HTTPException:
+        raise
+    except asyncio.TimeoutError as e:
+        raise HTTPException(
+            status_code=408,
+            detail=f"Treatment-effect estimation timed out after {_TE_TIMEOUT_SECONDS}s",
+        ) from e
+    except HeavyComputeSaturated:
+        # Reject fast under load — mapped to 503 + Retry-After by the app handler.
+        # Must precede the broad handler so it is not swallowed into a 500.
+        raise
+    except Exception as e:  # noqa: BLE001 - last-resort 500
+        logger.error(f"Treatment-effect estimation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=_GENERIC_500_DETAIL) from e

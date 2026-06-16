@@ -89,6 +89,7 @@ const mockTrend = {
   trend: 'improving' as const,
   is_significant: true,
   alert_threshold_breached: false,
+  alert_threshold: 0.81,
   history: [
     { metric_name: 'accuracy', metric_value: 0.9, recorded_at: '2026-05-10T00:00:00Z' },
     { metric_name: 'accuracy', metric_value: 0.918, recorded_at: '2026-05-17T00:00:00Z' },

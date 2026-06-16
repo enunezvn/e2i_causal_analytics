@@ -206,8 +206,13 @@ class TestOpikConnector:
         assert connector.config is not None
         assert connector.config.project_name == "e2i-causal-analytics"
 
-    def test_is_enabled_default(self):
+    def test_is_enabled_default(self, monkeypatch):
         """Test is_enabled property."""
+        # OpikConfig.enabled resolves from OPIK_ENABLED (default "true" when
+        # unset). Pin to the unset state so this asserts the CODE default,
+        # independent of the serviceless CI lane's OPIK_ENABLED=false opt-out
+        # (set to stop the teardown trace-flush hang; see backend-tests.yml).
+        monkeypatch.delenv("OPIK_ENABLED", raising=False)
         connector = OpikConnector()
 
         # Without API key, should still show as enabled in config

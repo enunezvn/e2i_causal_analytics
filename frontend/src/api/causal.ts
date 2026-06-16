@@ -25,8 +25,10 @@ import {
 import type {
   CausalAnalysisHistoryResponse,
   CausalLibrary,
+  CausalVariablesResponse,
   CrossValidationRequest,
   CrossValidationResponse,
+  EstimationDataResponse,
   EstimatorListResponse,
   HierarchicalAnalysisRequest,
   HierarchicalAnalysisResponse,
@@ -37,6 +39,7 @@ import type {
   SequentialPipelineRequest,
   SequentialPipelineResponse,
   CausalHealthResponse,
+  TreatmentEffectResponse,
 } from '@/types/causal';
 
 // =============================================================================
@@ -146,6 +149,71 @@ export async function routeQuery(
     `${CAUSAL_BASE}/route`,
     request
   );
+}
+
+// =============================================================================
+// DATASET / VARIABLE DISCOVERY ENDPOINTS
+// =============================================================================
+
+/**
+ * List candidate treatment / outcome / covariate variables for a dataset.
+ *
+ * Powers the page's variable selectors so they only offer columns that exist
+ * in the real estimation frame (no fictional `rep_visits` / `trx_count`
+ * defaults).
+ *
+ * @param dataset - Dataset to introspect (default: 'patient_journeys')
+ * @returns Candidate variable lists and the full column set
+ *
+ * @example
+ * ```typescript
+ * const vars = await getCausalVariables('patient_journeys');
+ * console.log(vars.treatment_candidates); // ['treatment_arm', 'treatment_initiated']
+ * ```
+ */
+export async function getCausalVariables(
+  dataset: string = 'patient_journeys'
+): Promise<CausalVariablesResponse> {
+  return get<CausalVariablesResponse>(`${CAUSAL_BASE}/variables`, {
+    params: { dataset },
+  });
+}
+
+/**
+ * Fetch real estimation-ready records for the chosen variables.
+ *
+ * The returned `estimation_data_records` are passed verbatim into the parallel
+ * pipeline request's `filters` so the libraries estimate effects on real rows.
+ *
+ * @param args - Dataset + treatment / outcome / covariates + row limit
+ * @returns Estimation-ready records and their columns
+ *
+ * @example
+ * ```typescript
+ * const data = await getCausalEstimationData({
+ *   treatment_var: 'treatment_arm',
+ *   outcome_var: 'persistent_180d',
+ *   covariates: ['disease_severity', 'engagement_score', 'age_at_diagnosis'],
+ * });
+ * console.log(`${data.n_rows} rows ready for estimation`);
+ * ```
+ */
+export async function getCausalEstimationData(args: {
+  dataset?: string;
+  treatment_var: string;
+  outcome_var: string;
+  covariates?: string[];
+  limit?: number;
+}): Promise<EstimationDataResponse> {
+  return get<EstimationDataResponse>(`${CAUSAL_BASE}/estimation-data`, {
+    params: {
+      dataset: args.dataset ?? 'patient_journeys',
+      treatment_var: args.treatment_var,
+      outcome_var: args.outcome_var,
+      covariates: (args.covariates ?? []).join(','),
+      limit: args.limit ?? 4000,
+    },
+  });
 }
 
 // =============================================================================
@@ -356,6 +424,38 @@ export async function getCausalAnalysisHistory(
     { limit },
     { schema: CausalAnalysisHistoryResponseWireSchema }
   );
+}
+
+// =============================================================================
+// TREATMENT EFFECTS ENDPOINTS
+// =============================================================================
+
+/**
+ * Estimate the treatment effect for one (cohort, brand) cell.
+ *
+ * Loads a confounded cohort frame from the DB and runs the live DoWhy+EconML
+ * sequential pipeline to recover a de-confounded ATE + CI + p_value + n. This is
+ * a HEAVY synchronous compute (~5-30s); call it only when both cohort and brand
+ * are chosen (ideally behind an explicit Run affordance).
+ *
+ * @param cohort - initiation | persistence | discontinuation | hcp_adoption
+ * @param brand - Remibrutinib | Fabhalta | Kisqali
+ * @returns Real treatment-effect estimate for the cell
+ *
+ * @example
+ * ```typescript
+ * const te = await getTreatmentEffects('hcp_adoption', 'Fabhalta');
+ * console.log(`ATE: ${te.ate} [${te.ci_lower}, ${te.ci_upper}]`);
+ * ```
+ */
+export async function getTreatmentEffects(
+  cohort: string,
+  brand: string
+): Promise<TreatmentEffectResponse> {
+  return get<TreatmentEffectResponse>(`${CAUSAL_BASE}/treatment-effects`, {
+    cohort,
+    brand,
+  });
 }
 
 // =============================================================================

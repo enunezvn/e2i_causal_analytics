@@ -21,6 +21,8 @@ import {
   getExplanation,
   getBatchExplanations,
   getExplanationHistory,
+  getGlobalFeatureImportance,
+  getSampleEntities,
   listExplainableModels,
   getExplainHealth,
 } from '@/api/explain';
@@ -32,8 +34,10 @@ import type {
   ExplainResponse,
   ExplanationHistoryParams,
   ExplanationHistoryResponse,
+  GlobalFeatureImportanceResponse,
   ListExplainableModelsResponse,
   ModelType,
+  SampleEntitiesResponse,
 } from '@/types/explain';
 import type { ApiError } from '@/lib/api-client';
 
@@ -129,6 +133,66 @@ export function useExplainHealth(
     // Health checks should be fresh
     staleTime: 30 * 1000, // 30 seconds
     refetchInterval: 60 * 1000, // Refetch every minute
+    ...options,
+  });
+}
+
+/**
+ * Hook for cohort-level (global) SHAP feature importance (#39 — option 2).
+ *
+ * Mean |SHAP| aggregated over a sample of real cohort entities for one
+ * per-brand gold-standard model. No entity selection required.
+ *
+ * @example
+ * ```tsx
+ * const { data } = useGlobalFeatureImportance(ModelType.INITIATION, 'Kisqali');
+ * ```
+ */
+export function useGlobalFeatureImportance(
+  modelType: ModelType | string,
+  brand: string,
+  sampleSize = 25,
+  options?: Omit<
+    UseQueryOptions<GlobalFeatureImportanceResponse, ApiError>,
+    'queryKey' | 'queryFn'
+  >
+) {
+  return useQuery<GlobalFeatureImportanceResponse, ApiError>({
+    queryKey: queryKeys.explain.global(String(modelType), brand, sampleSize),
+    queryFn: () =>
+      getGlobalFeatureImportance({
+        model_type: modelType,
+        brand,
+        sample_size: sampleSize,
+      }),
+    enabled: !!modelType && !!brand,
+    // A computed aggregate is stable; cache it generously.
+    staleTime: 10 * 60 * 1000, // 10 minutes
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch real cohort entity IDs for the per-entity SHAP picker.
+ *
+ * @example
+ * ```tsx
+ * const { data } = useSampleEntities(ModelType.INITIATION);
+ * ```
+ */
+export function useSampleEntities(
+  modelType: ModelType | string,
+  limit = 25,
+  options?: Omit<
+    UseQueryOptions<SampleEntitiesResponse, ApiError>,
+    'queryKey' | 'queryFn'
+  >
+) {
+  return useQuery<SampleEntitiesResponse, ApiError>({
+    queryKey: queryKeys.explain.sampleEntities(String(modelType), limit),
+    queryFn: () => getSampleEntities(modelType, limit),
+    enabled: !!modelType,
+    staleTime: 30 * 60 * 1000, // 30 minutes — entity set is stable
     ...options,
   });
 }
