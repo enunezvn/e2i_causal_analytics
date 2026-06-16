@@ -381,3 +381,41 @@ class KPIHealthResponse(BaseModel):
             }
         }
     )
+
+
+# =============================================================================
+# KPI HISTORY (time-series KPI-history view; migration 079 + history_backfill)
+# =============================================================================
+
+
+class KPIHistoryPoint(BaseModel):
+    """One materialized monthly KPI value."""
+
+    metric_date: str = Field(..., description="Month (YYYY-MM-DD, first of month)")
+    value: float = Field(..., description="KPI value for that month")
+    status: str | None = Field(None, description="on/warning/critical/unknown vs threshold")
+
+
+class KPIHistoryResponse(BaseModel):
+    """Date-ordered KPI history for one KPI (empty when no real series exists)."""
+
+    kpi_id: str
+    brand: str = Field("", description="'' = global / all brands")
+    region: str = Field("", description="'' = all regions")
+    count: int = Field(..., description="Number of points")
+    points: list[KPIHistoryPoint] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "kpi_id": "WS3-BI-010",
+                "brand": "",
+                "region": "",
+                "count": 2,
+                "points": [
+                    {"metric_date": "2026-05-01", "value": 1.83, "status": "warning"},
+                    {"metric_date": "2026-06-01", "value": 1.85, "status": "warning"},
+                ],
+            }
+        }
+    )

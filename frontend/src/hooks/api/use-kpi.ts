@@ -22,6 +22,7 @@ import {
   getWorkstreams,
   getKPIMetadata,
   getKPIValue,
+  getKPIHistory,
   calculateKPI,
   batchCalculateKPIs,
   invalidateKPICache,
@@ -35,6 +36,7 @@ import type {
   CacheInvalidationResponse,
   KPICalculationRequest,
   KPIHealthResponse,
+  KPIHistoryResponse,
   KPIListParams,
   KPIListResponse,
   KPIMetadata,
@@ -220,6 +222,27 @@ export function useKPIValue(
     queryKey: [...queryKeys.kpi.detail(kpiId), 'value', brand, region ?? null] as const,
     queryFn: () => getKPIValue(kpiId, brand, region),
     staleTime: 2 * 60 * 1000, // 2 minutes
+    enabled: !!kpiId,
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch the monthly KPI history (time series) for a KPI.
+ *
+ * Returns an empty `points` array for point-in-time KPIs that have no real
+ * history (the UI then shows an honest empty-state).
+ */
+export function useKPIHistory(
+  kpiId: string,
+  brand?: string,
+  region?: string,
+  options?: Omit<UseQueryOptions<KPIHistoryResponse, Error>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery({
+    queryKey: queryKeys.kpi.history(kpiId, brand ?? ''),
+    queryFn: () => getKPIHistory(kpiId, brand, region),
+    staleTime: 10 * 60 * 1000, // 10 minutes — history is stable
     enabled: !!kpiId,
     ...options,
   });
