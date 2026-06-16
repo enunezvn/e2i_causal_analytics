@@ -1,17 +1,22 @@
 /**
- * ResourceOptimization Page Tests — pre-run empty state + live scenarios (H4)
+ * ResourceOptimization Page Tests
+ * ================================
+ * Covers: pre-run empty state, live result rendering, the async run-and-WAIT
+ * wiring (empty synthetic targets + polling options), honest failure surface,
+ * synthetic-data provenance banner, running indicator, and the no-fabricated-
+ * trend guarantee.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('@/hooks/api', () => ({
   useResourceHealth: vi.fn(),
-  useRunOptimization: vi.fn(),
+  useRunOptimizationAndWait: vi.fn(),
   useScenarios: vi.fn(),
 }));
 
-import { useResourceHealth, useRunOptimization, useScenarios } from '@/hooks/api';
+import { useResourceHealth, useRunOptimizationAndWait, useScenarios } from '@/hooks/api';
 import ResourceOptimization from './ResourceOptimization';
 
 function createWrapper() {
@@ -23,14 +28,53 @@ function createWrapper() {
   );
 }
 
+const mockRun = (overrides: Record<string, unknown> = {}) => {
+  (useRunOptimizationAndWait as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: undefined,
+    error: null,
+    isPending: false,
+    mutate: vi.fn(),
+    ...overrides,
+  });
+};
+
+function completedResult(overrides: Record<string, unknown> = {}) {
+  return {
+    optimization_id: 'opt_live_9',
+    status: 'completed',
+    resource_type: 'budget',
+    objective: 'maximize_roi',
+    optimal_allocations: [],
+    objective_value: 1,
+    solver_status: 'optimal',
+    solve_time_ms: 5,
+    scenarios: [],
+    sensitivity_analysis: {},
+    projected_total_outcome: 1000,
+    projected_roi: 0.0166,
+    impact_by_segment: {},
+    optimization_summary: 'done',
+    recommendations: [],
+    formulation_latency_ms: 1,
+    optimization_latency_ms: 2,
+    total_latency_ms: 3,
+    timestamp: '2026-06-01T00:00:00Z',
+    warnings: [],
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  (useResourceHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: { agent_available: true, scipy_available: true }, isLoading: false });
+  (useResourceHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: { agent_available: true, scipy_available: true },
+    isLoading: false,
+  });
   (useScenarios as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
-  (useRunOptimization as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined, isPending: false, mutate: vi.fn() });
+  mockRun();
 });
 
-describe('ResourceOptimization (H4)', () => {
+describe('ResourceOptimization', () => {
   it('shows a pre-run prompt (not sample data) before an optimization is run', () => {
     render(<ResourceOptimization />, { wrapper: createWrapper() });
     expect(screen.getByText(/Run an optimization to see results/i)).toBeInTheDocument();
@@ -38,55 +82,68 @@ describe('ResourceOptimization (H4)', () => {
     expect(screen.queryByText('opt_abc123')).not.toBeInTheDocument();
   });
 
-  it('renders the live optimization result after a run', () => {
-    (useRunOptimization as ReturnType<typeof vi.fn>).mockReturnValue({
-      isPending: false,
-      mutate: vi.fn(),
-      data: {
-        optimization_id: 'opt_live_9',
-        status: 'completed',
-        resource_type: 'budget',
-        objective: 'maximize_roi',
-        optimal_allocations: [],
-        objective_value: 1,
-        solver_status: 'optimal',
-        solve_time_ms: 5,
-        scenarios: [],
-        sensitivity_analysis: {},
-        projected_total_outcome: 1000,
-        projected_roi: 1.5,
-        impact_by_segment: {},
-        optimization_summary: 'done',
-        recommendations: [],
-        formulation_latency_ms: 1,
-        optimization_latency_ms: 2,
-        total_latency_ms: 3,
-        timestamp: '2026-06-01T00:00:00Z',
-        warnings: [],
-      },
-    });
+  it('always surfaces the illustrative / synthetic-data badge', () => {
     render(<ResourceOptimization />, { wrapper: createWrapper() });
-    // The live KPI summary renders the result's projected ROI (1.50x) — the
-    // pre-run prompt is gone and the sample optimization id is never shown.
-    expect(screen.getByText('1.50x')).toBeInTheDocument();
+    expect(screen.getByText(/Illustrative · synthetic data/i)).toBeInTheDocument();
+  });
+
+  it('runs via run-and-wait: sends empty targets + polling options (no chicken-and-egg seed)', () => {
+    const mutate = vi.fn();
+    mockRun({ mutate });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+
+    fireEvent.click(screen.getByRole('button', { name: /Run Optimization/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const arg = mutate.mock.calls[0][0];
+    // Backend seeds synthetic targets — the page must NOT re-send prior allocations.
+    expect(arg.request.allocation_targets).toEqual([]);
+    // Polling must be configured (fire-and-forget was the original "does nothing" bug).
+    expect(arg.pollIntervalMs).toBeGreaterThan(0);
+    expect(arg.maxWaitMs).toBeGreaterThan(0);
+  });
+
+  it('shows a running indicator while the optimization is pending', () => {
+    mockRun({ isPending: true });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Running optimization for/i)).toBeInTheDocument();
+  });
+
+  it('surfaces an honest failure banner when the run errors', () => {
+    mockRun({ error: new Error('Optimization timed out after 120000ms') });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Optimization failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/timed out after 120000ms/i)).toBeInTheDocument();
+  });
+
+  it('renders the live optimization result and the honest outcome-lift KPI', () => {
+    mockRun({ data: completedResult() });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    // projected_roi 0.0166 is an incremental ratio -> shown as "+1.7%", NOT a
+    // misleading "0.02x" multiple.
+    expect(screen.getByText('+1.7%')).toBeInTheDocument();
+    expect(screen.getByText(/Projected Outcome Lift/i)).toBeInTheDocument();
     expect(screen.queryByText(/Run an optimization to see results/i)).not.toBeInTheDocument();
     expect(screen.queryByText('opt_abc123')).not.toBeInTheDocument();
   });
 
+  it('surfaces the synthetic-data provenance banner on the result', () => {
+    mockRun({
+      data: completedResult({
+        warnings: [
+          'SYNTHETIC DATA: no real per-entity budget source is wired, so this optimization ran on 10 territories seeded from synthetic territory_metrics.',
+        ],
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Illustrative result — synthetic data/i)).toBeInTheDocument();
+    expect(screen.getByText(/seeded from synthetic territory_metrics/i)).toBeInTheDocument();
+  });
+
   it('does NOT fabricate an allocation trend; renders an honest empty state', () => {
-    // A completed result WITH allocations (entity has distinct current vs
-    // optimized). The old AllocationTrendChart invented "Q1/Q2/Q3/Q4" series
-    // from hardcoded 0.9/0.95 multipliers of current_allocation. After the
-    // anti-fabrication fix, NO fabricated quarter series may render — instead
-    // the honest "no trend data" state appears.
-    (useRunOptimization as ReturnType<typeof vi.fn>).mockReturnValue({
-      isPending: false,
-      mutate: vi.fn(),
-      data: {
+    mockRun({
+      data: completedResult({
         optimization_id: 'opt_live_trend',
-        status: 'completed',
-        resource_type: 'budget',
-        objective: 'maximize_roi',
         optimal_allocations: [
           {
             entity_id: 'territory_northeast',
@@ -98,22 +155,7 @@ describe('ResourceOptimization (H4)', () => {
             expected_impact: 1.3,
           },
         ],
-        objective_value: 1,
-        solver_status: 'optimal',
-        solve_time_ms: 5,
-        scenarios: [],
-        sensitivity_analysis: {},
-        projected_total_outcome: 1000,
-        projected_roi: 1.5,
-        impact_by_segment: {},
-        optimization_summary: 'done',
-        recommendations: [],
-        formulation_latency_ms: 1,
-        optimization_latency_ms: 2,
-        total_latency_ms: 3,
-        timestamp: '2026-06-01T00:00:00Z',
-        warnings: [],
-      },
+      }),
     });
     render(<ResourceOptimization />, { wrapper: createWrapper() });
 
