@@ -161,8 +161,7 @@ class HealthCheckerNode:
                 query = (
                     client.table("ml_experiments")
                     .select(
-                        "id, experiment_name, status, prediction_target, "
-                        "created_at, is_synthetic"
+                        "id, experiment_name, status, prediction_target, created_at, is_synthetic"
                     )
                     .eq("status", "running")
                     .order("created_at", desc=True)
@@ -176,8 +175,7 @@ class HealthCheckerNode:
                 query = (
                     client.table("ml_experiments")
                     .select(
-                        "id, experiment_name, status, prediction_target, "
-                        "created_at, is_synthetic"
+                        "id, experiment_name, status, prediction_target, created_at, is_synthetic"
                     )
                     .in_("id", state["experiment_ids"])
                 )
