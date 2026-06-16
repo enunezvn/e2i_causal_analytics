@@ -140,6 +140,16 @@ class ModelDriftNode:
                 filters=filters if filters else None,
             )
 
+            # Insufficient predictions (e.g. a freshly-served model with no
+            # logged predictions yet) -> honest empty results; never run the
+            # KS / chi-square math on empty arrays (which raises).
+            if (
+                baseline_preds.scores.size < self._min_samples
+                or current_preds.scores.size < self._min_samples
+            ):
+                state["model_drift_results"] = []
+                return state
+
             # Detect drift
             drift_results = []
 

@@ -223,8 +223,8 @@ test.describe('Monitoring Page', () => {
       expect(hasTabs).toBeTruthy()
     })
 
-    test('should show API Usage tab', async () => {
-      await expect(monitoringPage.apiUsageTab).toBeVisible()
+    test('should show Drift Trend tab', async () => {
+      await expect(monitoringPage.driftTrendTab).toBeVisible()
     })
 
     test('should show Runs tab', async () => {
@@ -245,10 +245,10 @@ test.describe('Monitoring Page', () => {
     })
   })
 
-  test.describe('API Usage Tab', () => {
-    test('should display API usage', async () => {
-      const hasUsage = await monitoringPage.verifyAPIUsageDisplayed()
-      expect(hasUsage).toBeTruthy()
+  test.describe('Drift Trend Tab', () => {
+    test('should display drift trend telemetry', async () => {
+      const hasTelemetry = await monitoringPage.verifyDriftTrendDisplayed()
+      expect(hasTelemetry).toBeTruthy()
     })
   })
 

@@ -975,9 +975,8 @@ async def test_drift_query_features_excludes_synthetic() -> None:
     from datetime import datetime, timezone
     from unittest.mock import MagicMock as _MM
 
-    client = _RecordingClient(sync=True)
+    client = _RecordingClient(sync=True, data={"features": [{"id": "feat-1", "name": "f1"}]})
     connector = _bare_connector(client)
-    connector._get_feature_id_subquery = lambda name: "feat-1"  # type: ignore[method-assign]
 
     window = _MM()
     window.start = datetime.now(timezone.utc)
@@ -986,9 +985,8 @@ async def test_drift_query_features_excludes_synthetic() -> None:
     await connector.query_features(["f1"], window)
     _assert_excludes(client.last("feature_values"), "query_features")
 
-    client2 = _RecordingClient(sync=True)
+    client2 = _RecordingClient(sync=True, data={"features": [{"id": "feat-1", "name": "f1"}]})
     connector2 = _bare_connector(client2)
-    connector2._get_feature_id_subquery = lambda name: "feat-1"  # type: ignore[method-assign]
     await connector2.query_features(["f1"], window, include_synthetic=True)
     _assert_no_predicate(client2.last("feature_values"), "query_features opt-in")
 

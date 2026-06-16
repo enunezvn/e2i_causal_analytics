@@ -26,7 +26,6 @@ import {
   Search,
   Filter,
   Server,
-  Globe,
   BarChart3,
   List,
   Brain,
@@ -507,8 +506,8 @@ function Monitoring() {
       <Tabs defaultValue="api" className="space-y-4">
         <TabsList>
           <TabsTrigger value="api" className="flex items-center gap-2">
-            <Globe className="h-4 w-4" />
-            API Usage
+            <BarChart3 className="h-4 w-4" />
+            Drift Trend
           </TabsTrigger>
           <TabsTrigger value="activity" className="flex items-center gap-2">
             <List className="h-4 w-4" />
@@ -530,7 +529,8 @@ function Monitoring() {
           </TabsTrigger>
         </TabsList>
 
-        {/* API Usage Tab */}
+        {/* Drift Trend Tab — per-run features-checked vs drift-detected (NOT API
+            usage; this was mislabeled "API Usage" while charting drift telemetry). */}
         <TabsContent value="api" className="space-y-4">
           {/* Run Volume / Drift Chart */}
           <Card>

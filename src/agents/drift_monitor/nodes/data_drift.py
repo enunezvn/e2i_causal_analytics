@@ -310,6 +310,23 @@ class DataDriftNode:
         if len(baseline) < self._min_samples or len(current) < self._min_samples:
             return None
 
+        # Categorical (non-numeric) features: jointly label-encode baseline +
+        # current so they share ONE code map, then run the numeric PSI/KS math on
+        # the codes (mirrors the tier0 path). Without this, ks_2samp/PSI raise on
+        # string labels — which silently failed the entire data-drift node once
+        # the connector started preserving categorical values.
+        if not np.issubdtype(np.asarray(baseline).dtype, np.number) or not np.issubdtype(
+            np.asarray(current).dtype, np.number
+        ):
+            cats = np.unique(
+                np.concatenate(
+                    [np.asarray(baseline, dtype=object), np.asarray(current, dtype=object)]
+                )
+            )
+            code = {c: i for i, c in enumerate(cats)}
+            baseline = np.array([code.get(v, -1) for v in baseline], dtype=float)
+            current = np.array([code.get(v, -1) for v in current], dtype=float)
+
         # Calculate PSI
         psi = self._calculate_psi(baseline, current)
 

@@ -177,6 +177,15 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
     });
   });
 
+  it('labels the run-telemetry tab honestly as "Drift Trend", not "API Usage"', () => {
+    // The tab charts per-run features-checked vs drift-detected (drift telemetry),
+    // NOT API usage — it was mislabeled. Assert the honest label + absence of the
+    // misleading one.
+    render(<Monitoring />, { wrapper: createWrapper() });
+    expect(screen.getByRole('tab', { name: /Drift Trend/i })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /API Usage/i })).not.toBeInTheDocument();
+  });
+
   it('calls useAlerts, useMonitoringRuns, and useModelHealth (live-data wiring)', () => {
     render(<Monitoring />, { wrapper: createWrapper() });
 

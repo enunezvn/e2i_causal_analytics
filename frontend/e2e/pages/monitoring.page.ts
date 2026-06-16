@@ -80,8 +80,10 @@ export class MonitoringPage extends BasePage {
     return this.page.getByRole('tablist')
   }
 
-  get apiUsageTab(): Locator {
-    return this.page.getByRole('tab', { name: /api usage/i })
+  get driftTrendTab(): Locator {
+    // #996 relabeled this tab "API Usage" → "Drift Trend" (it charts drift
+    // run-telemetry, not API usage). Locate by the live tab text.
+    return this.page.getByRole('tab', { name: /drift trend/i })
   }
 
   get runsTab(): Locator {
@@ -99,7 +101,7 @@ export class MonitoringPage extends BasePage {
     return this.page.getByRole('tab', { name: /system/i })
   }
 
-  // API Usage Tab Content
+  // Drift Trend Tab Content
   get featuresCheckedCard(): Locator {
     // Live CardTitle: "Features Checked & Drift Detected"
     return this.page.getByText(/Features Checked/i).first()
@@ -194,8 +196,8 @@ export class MonitoringPage extends BasePage {
       await this.tabsList.waitFor({ state: 'visible', timeout: 5000 })
       return await this.tabsList.isVisible()
     } catch {
-      const hasApiTab = await this.page
-        .getByRole('tab', { name: /api/i })
+      const hasDriftTab = await this.page
+        .getByRole('tab', { name: /drift/i })
         .first()
         .isVisible({ timeout: 2000 })
         .catch(() => false)
@@ -204,11 +206,11 @@ export class MonitoringPage extends BasePage {
         .first()
         .isVisible({ timeout: 2000 })
         .catch(() => false)
-      return hasApiTab || hasErrorsTab
+      return hasDriftTab || hasErrorsTab
     }
   }
 
-  async verifyAPIUsageDisplayed(): Promise<boolean> {
+  async verifyDriftTrendDisplayed(): Promise<boolean> {
     try {
       // Live CardTitle: "Features Checked & Drift Detected"
       await this.page
