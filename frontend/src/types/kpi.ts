@@ -296,3 +296,26 @@ export interface KPIHealthResponse {
   /** Error message if unhealthy */
   error?: string;
 }
+
+// =============================================================================
+// KPI HISTORY (time-series KPI-history view)
+// =============================================================================
+
+/** One materialized monthly KPI value. */
+export interface KPIHistoryPoint {
+  /** Month (YYYY-MM-DD, first of month). */
+  metric_date: string;
+  value: number;
+  status?: string | null;
+}
+
+/** Date-ordered KPI history for one KPI (empty when no real series exists). */
+export interface KPIHistoryResponse {
+  kpi_id: string;
+  /** '' = global / all brands. */
+  brand: string;
+  /** '' = all regions. */
+  region: string;
+  count: number;
+  points: KPIHistoryPoint[];
+}

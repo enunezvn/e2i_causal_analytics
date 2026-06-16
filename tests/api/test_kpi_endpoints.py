@@ -459,3 +459,112 @@ class TestKPIHealthCheck:
         assert response.status_code == 200
         data = response.json()
         assert "workstreams_available" in data
+
+
+# =============================================================================
+# KPI HISTORY (time-series KPI-history view; migration 079 + history_backfill)
+# =============================================================================
+
+import asyncio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+
+class _FakeQuery:
+    """Fluent stand-in for the async Supabase query builder used by the
+    kpi_history repo + the ROI backfill handler."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def table(self, *a, **k):
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def gte(self, *a, **k):
+        return self
+
+    def lte(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, *a, **k):
+        return self
+
+    async def execute(self):
+        return SimpleNamespace(data=self._rows)
+
+
+class TestKPIHistoryEndpoint:
+    """GET /api/kpis/{kpi_id}/history."""
+
+    def test_history_returns_points(self):
+        rows = [
+            {"metric_date": "2026-05-01", "value": 1.83, "status": "warning"},
+            {"metric_date": "2026-06-01", "value": 1.85, "status": "warning"},
+        ]
+        fake_repo = SimpleNamespace(get_history=AsyncMock(return_value=rows))
+        with patch(
+            "src.repositories.kpi_history.get_kpi_history_repository",
+            new=AsyncMock(return_value=fake_repo),
+        ):
+            resp = client.get("/api/kpis/WS3-BI-010/history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["kpi_id"] == "WS3-BI-010"
+        assert body["count"] == 2
+        assert [p["metric_date"] for p in body["points"]] == ["2026-05-01", "2026-06-01"]
+        assert body["points"][0]["value"] == 1.83
+
+    def test_history_empty_for_point_in_time_kpi(self):
+        fake_repo = SimpleNamespace(get_history=AsyncMock(return_value=[]))
+        with patch(
+            "src.repositories.kpi_history.get_kpi_history_repository",
+            new=AsyncMock(return_value=fake_repo),
+        ):
+            resp = client.get("/api/kpis/WS1-DQ-001/history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["count"] == 0
+        assert body["points"] == []
+
+
+class TestROIHistoryHandler:
+    """The ROI backfill handler aggregates real business_metrics.roi monthly."""
+
+    def test_aggregates_mean_roi_per_month_and_brand(self):
+        from src.kpi.history_backfill import _backfill_roi
+
+        rows = [
+            {"metric_date": "2026-05-01", "brand": "Kisqali", "roi": 1.8},
+            {"metric_date": "2026-05-01", "brand": "Fabhalta", "roi": 2.0},
+            {"metric_date": "2026-06-01", "brand": "Kisqali", "roi": 1.9},
+        ]
+        kpi_meta = SimpleNamespace(id="WS3-BI-010", threshold=None)
+        points = asyncio.run(_backfill_roi(_FakeQuery(rows), kpi_meta))
+
+        # Global (brand='') = mean roi per month across brands.
+        glob = {p["metric_date"]: p for p in points if p["brand"] == ""}
+        assert glob["2026-05-01"]["value"] == pytest.approx((1.8 + 2.0) / 2)
+        assert glob["2026-06-01"]["value"] == pytest.approx(1.9)
+        assert glob["2026-05-01"]["source"] == "business_metrics.roi"
+        assert glob["2026-05-01"]["region"] == ""
+        # Per-brand series present too.
+        kis = {p["metric_date"]: p for p in points if p["brand"] == "Kisqali"}
+        assert kis["2026-05-01"]["value"] == pytest.approx(1.8)
+        # Every point carries the KPI id + synthetic provenance.
+        assert all(p["kpi_id"] == "WS3-BI-010" and p["is_synthetic"] for p in points)

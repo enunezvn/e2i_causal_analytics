@@ -22,16 +22,18 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
 
 vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIValue: vi.fn(),
+  useKPIHistory: vi.fn(),
   useKPIMetadata: vi.fn(),
   useKPIList: vi.fn(),
 }));
 
 import { usePerformanceTrend, useDriftHistory } from '@/hooks/api/use-monitoring';
-import { useKPIValue, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
+import { useKPIValue, useKPIHistory, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
 
 const mockUsePerformanceTrend = usePerformanceTrend as unknown as ReturnType<typeof vi.fn>;
 const mockUseDriftHistory = useDriftHistory as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIValue = useKPIValue as unknown as ReturnType<typeof vi.fn>;
+const mockUseKPIHistory = useKPIHistory as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIMetadata = useKPIMetadata as unknown as ReturnType<typeof vi.fn>;
 const mockUseKPIList = useKPIList as unknown as ReturnType<typeof vi.fn>;
 
@@ -117,6 +119,25 @@ beforeEach(() => {
   });
   mockUseKPIValue.mockReturnValue({
     data: sampleKPIValue,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+    isRefetching: false,
+  });
+  // Default: a real monthly KPI history series from the /history endpoint.
+  mockUseKPIHistory.mockReturnValue({
+    data: {
+      kpi_id: 'WS3-BI-010',
+      brand: '',
+      region: '',
+      count: 3,
+      points: [
+        { metric_date: '2026-04-01', value: 1.83, status: 'warning' },
+        { metric_date: '2026-05-01', value: 1.84, status: 'warning' },
+        { metric_date: '2026-06-01', value: 1.85, status: 'warning' },
+      ],
+    },
     isLoading: false,
     isError: false,
     error: null,
@@ -219,10 +240,10 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     const today = new Date();
     const longHistory = Array.from({ length: 2000 }, (_, i) => {
       const d = new Date(today.getTime() - (2000 - i) * 24 * 60 * 60 * 1000);
-      return { recorded_at: d.toISOString(), value: 0.5 + i * 0.001 };
+      return { metric_date: d.toISOString().slice(0, 10), value: 0.5 + i * 0.001, status: 'warning' };
     });
-    mockUseKPIValue.mockReturnValue({
-      data: { ...sampleKPIValue, metadata: { history: longHistory } },
+    mockUseKPIHistory.mockReturnValue({
+      data: { kpi_id: 'WS3-BI-010', brand: '', region: '', count: longHistory.length, points: longHistory },
       isLoading: false,
       isError: false,
       error: null,
@@ -399,9 +420,10 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     expect(selection.compareDocumentPosition(chart) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('KPI history shows an honest empty-state when the API returns no time series', async () => {
+  it('KPI history shows an honest empty-state when a KPI has no time series', async () => {
     const user = userEvent.setup();
-    // Real-world shape today: a current value but NO metadata.history.
+    // A point-in-time KPI: a current value, but the /history endpoint returns
+    // no points (it isn't backfillable) — never a fabricated flat series.
     mockUseKPIValue.mockReturnValue({
       data: {
         kpi_id: 'WS1-DQ-001',
@@ -411,6 +433,14 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
         cached: false,
         metadata: { include_synthetic: true },
       },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+      isRefetching: false,
+    });
+    mockUseKPIHistory.mockReturnValue({
+      data: { kpi_id: 'WS1-DQ-001', brand: '', region: '', count: 0, points: [] },
       isLoading: false,
       isError: false,
       error: null,

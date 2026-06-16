@@ -52,7 +52,7 @@ import { cn } from '@/lib/utils';
 import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { usePerformanceTrend } from '@/hooks/api/use-monitoring';
-import { useKPIValue, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
+import { useKPIValue, useKPIHistory, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
 
 // =============================================================================
 // CONSTANTS
@@ -129,34 +129,6 @@ interface ChartPoint {
   value: number;
 }
 
-/**
- * Extract a `[{date, value}]` series from a `KPIResult.metadata.history` shape.
- *
- * The backend embeds history as a `metadata` blob; tolerate a few common
- * shapes (`{recorded_at, value}` or `{date, value}`) without throwing.
- */
-function kpiHistoryToSeries(metadata: Record<string, unknown> | undefined): ChartPoint[] {
-  if (!metadata) return [];
-  const raw = (metadata as { history?: unknown }).history;
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((entry): ChartPoint | null => {
-      if (typeof entry !== 'object' || entry === null) return null;
-      const e = entry as Record<string, unknown>;
-      const date =
-        typeof e.recorded_at === 'string'
-          ? e.recorded_at
-          : typeof e.date === 'string'
-            ? e.date
-            : null;
-      const valueRaw = e.value ?? e.metric_value;
-      const value = typeof valueRaw === 'number' ? valueRaw : Number(valueRaw);
-      if (date === null || Number.isNaN(value)) return null;
-      return { date, value };
-    })
-    .filter((p): p is ChartPoint => p !== null);
-}
-
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -197,7 +169,12 @@ function TimeSeries() {
   // ---- KPI mode hooks ----
   const kpiList = useKPIList();
   const kpiMetadata = useKPIMetadata(kpiId);
-  const kpiValue = useKPIValue(kpiId);
+  const kpiValue = useKPIValue(kpiId); // current point-in-time value (status card)
+  // Real monthly history from the backend (kpi_history). Empty for point-in-time
+  // KPIs — the chart then shows an honest empty-state, never a fabricated series.
+  const kpiHistory = useKPIHistory(kpiId, undefined, undefined, {
+    enabled: mode === 'kpi',
+  });
 
   // ---- Chart series ----
   const performanceSeries: ChartPoint[] = useMemo(() => {
@@ -206,7 +183,10 @@ function TimeSeries() {
   }, [performanceTrend.data]);
 
   const kpiSeries: ChartPoint[] = useMemo(() => {
-    const full = kpiHistoryToSeries(kpiValue.data?.metadata);
+    const full = (kpiHistory.data?.points ?? []).map((p) => ({
+      date: p.metric_date,
+      value: p.value,
+    }));
     if (full.length === 0) return full;
     // Apply the same time-range filter to KPI history (AC #2 — both modes).
     const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -214,7 +194,7 @@ function TimeSeries() {
       const t = Date.parse(p.date);
       return Number.isNaN(t) ? true : t >= cutoffMs;
     });
-  }, [kpiValue.data, days]);
+  }, [kpiHistory.data, days]);
 
   const currentSeries = mode === 'performance' ? performanceSeries : kpiSeries;
   const currentSeriesLabel =
@@ -247,15 +227,17 @@ function TimeSeries() {
   );
 
   // ---- Loading / error per mode ----
+  // KPI mode drives the chart from kpiHistory (the time series); kpiValue backs
+  // only the current-status card.
   const isLoading =
-    mode === 'performance' ? performanceTrend.isLoading : kpiValue.isLoading;
-  const error = mode === 'performance' ? performanceTrend.error : kpiValue.error;
+    mode === 'performance' ? performanceTrend.isLoading : kpiHistory.isLoading;
+  const error = mode === 'performance' ? performanceTrend.error : kpiHistory.error;
   const refetch =
-    mode === 'performance' ? performanceTrend.refetch : kpiValue.refetch;
+    mode === 'performance' ? performanceTrend.refetch : kpiHistory.refetch;
   const isRefetching =
     mode === 'performance'
       ? performanceTrend.isRefetching
-      : kpiValue.isRefetching;
+      : kpiHistory.isRefetching;
 
   const handleRefresh = () => {
     refetch();
