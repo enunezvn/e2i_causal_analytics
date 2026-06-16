@@ -218,6 +218,7 @@ async def _get_or_create_experiment(
     created_by: str = "prediction_synthesizer_deploy",
     description: str = "Real deployable models backing live chat predictions (#840).",
     prediction_target: str | None = None,
+    training_provenance: str | None = None,
 ) -> str:
     """Resolve (or create) the dedicated real deploy experiment id.
 
@@ -259,6 +260,10 @@ async def _get_or_create_experiment(
         "created_by": created_by,
         "description": description,
     }
+    if training_provenance is not None:
+        # #968: stamp the experiment row's training-data origin on creation so the
+        # catalog is self-describing (only at INSERT, matching created_by/description).
+        row["training_provenance"] = training_provenance
     created = await client.table("ml_experiments").insert(row).execute()
     if not created.data:
         raise RuntimeError(f"failed to create experiment '{experiment_name}' (no row returned)")
@@ -279,6 +284,7 @@ async def register_model_row(
     stage: str = "production",
     is_champion: bool = True,
     is_synthetic: bool = False,
+    training_provenance: str | None = None,
     promoted: bool | None = None,
 ) -> str:
     """Write ONE ``ml_model_registry`` row idempotently, then verify it landed.
@@ -331,6 +337,11 @@ async def register_model_row(
     }
     if training_samples is not None:
         row["training_samples"] = training_samples
+    if training_provenance is not None:
+        # #968: self-describing training-data origin ('synthetic_gold' | 'real' |
+        # 'mixed'). NULL = legacy/unknown. Kept SEPARATE from is_synthetic (which
+        # stays False so the model remains servable/explainable).
+        row["training_provenance"] = training_provenance
     if promoted:
         row["promoted_at"] = now
     await client.table("ml_model_registry").insert(row).execute()

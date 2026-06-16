@@ -182,6 +182,17 @@ function TimeSeries() {
     return history.map((h) => ({ date: h.recorded_at, value: h.metric_value }));
   }, [performanceTrend.data]);
 
+  // #970: ml_performance_metrics.measured_at (surfaced as recorded_at) is the DATA
+  // boundary (the latest holdout journey_start_date), NOT wall-clock now. Surface
+  // the latest covered date so the x-axis is read as data coverage, not "today".
+  const latestDataDate = useMemo<string | null>(() => {
+    if (performanceSeries.length === 0) return null;
+    return performanceSeries.reduce(
+      (max, p) => (Date.parse(p.date) > Date.parse(max) ? p.date : max),
+      performanceSeries[0].date,
+    );
+  }, [performanceSeries]);
+
   const kpiSeries: ChartPoint[] = useMemo(() => {
     const full = (kpiHistory.data?.points ?? []).map((p) => ({
       date: p.metric_date,
@@ -498,6 +509,23 @@ function TimeSeries() {
                     {currentSeriesLabel} over the last {days} days for model{' '}
                     <Badge variant="outline">{modelId}</Badge>
                   </CardDescription>
+                  {/* #969 + #970: be honest about what this trend is. It is a
+                      per-month walk-forward backtest (source='backtest_wf'), an
+                      UNCALIBRATED LogisticRegression refit each month — not the
+                      served CalibratedClassifierCV champion. AUC-ROC is
+                      calibration-invariant (exact), but threshold metrics differ.
+                      And measured_at is the data boundary, not wall-clock. */}
+                  <p
+                    data-testid="perf-trend-provenance-note"
+                    className="mt-1 max-w-prose text-xs text-muted-foreground"
+                  >
+                    Per-month walk-forward backtest (uncalibrated): AUC-ROC matches the
+                    served champion, but threshold metrics (accuracy / precision / recall /
+                    F1) are a diagnostic, not the calibrated champion.
+                    {latestDataDate
+                      ? ` Dates reflect data coverage through ${formatDate(latestDataDate)}, not wall-clock.`
+                      : ''}
+                  </p>
                 </div>
               </div>
             </CardHeader>
