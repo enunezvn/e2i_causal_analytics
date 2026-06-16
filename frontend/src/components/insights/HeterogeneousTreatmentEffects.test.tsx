@@ -149,6 +149,34 @@ describe('HeterogeneousTreatmentEffects — no fabricated segments', () => {
     expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
   });
 
+  it('shows an honest "data not wired" state for a 503 no-data-backend error (not a red failure)', () => {
+    mockHierarchical({
+      error: Object.assign(
+        new Error(
+          'Causal pipeline endpoints have no real data backend wired. ' +
+            'Pass demo_mode=true to get a clearly-labeled pinned-zero placeholder.',
+        ),
+        { status: 503 },
+      ),
+    } as unknown as Partial<HierMutation>);
+    render(<HeterogeneousTreatmentEffects />);
+
+    // Honest informational state, not the red "CATE analysis failed" alarm.
+    expect(screen.getByText(/Live CATE data isn.t wired yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/CATE analysis failed/i)).not.toBeInTheDocument();
+    // The dev-facing "pass demo_mode=true" detail is not leaked to the user here.
+    expect(screen.queryByText(/demo_mode=true/i)).not.toBeInTheDocument();
+  });
+
+  it('still shows a red error for a genuine non-503 failure', () => {
+    mockHierarchical({
+      error: Object.assign(new Error('CATE estimation failed'), { status: 500 }),
+    } as unknown as Partial<HierMutation>);
+    render(<HeterogeneousTreatmentEffects />);
+    expect(screen.getByText(/cate analysis failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Live CATE data isn.t wired yet/i)).not.toBeInTheDocument();
+  });
+
   it('treats a demo-mode placeholder response as not-real (no fake numbers)', () => {
     mockHierarchical({
       data: { ...COMPLETED_RESPONSE, is_demo: true } as HierarchicalAnalysisResponse,

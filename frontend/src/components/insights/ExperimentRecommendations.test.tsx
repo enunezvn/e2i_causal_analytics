@@ -75,4 +75,52 @@ describe('ExperimentRecommendations (H3)', () => {
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.getByText('Kisqali Outreach')).toBeInTheDocument();
   });
+
+  it('shows REAL health fields and never fabricates a Digital-Twin score or lift', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue({
+      isPending: false,
+      mutate: vi.fn(),
+      data: {
+        experiments_checked: 1,
+        healthy_count: 0,
+        warning_count: 1,
+        critical_count: 0,
+        experiments: [
+          {
+            experiment_id: 'exp_live_2',
+            experiment_name: 'Fabhalta Adoption',
+            health_status: 'warning',
+            total_enrolled: 1200,
+            enrollment_rate_per_day: 25,
+            current_information_fraction: 0.6,
+            has_srm: false,
+            active_alerts: 0,
+            last_checked: '2026-06-01T00:00:00Z',
+          },
+        ],
+        alerts: [],
+        monitor_summary: '',
+        recommended_actions: [],
+        check_latency_ms: 10,
+        timestamp: '2026-06-01T00:00:00Z',
+      },
+    });
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+
+    // Real, sourced fields render.
+    expect(screen.getByText('Enrolled')).toBeInTheDocument();
+    expect(screen.getByText('1,200')).toBeInTheDocument();
+    expect(screen.getByText('Information fraction')).toBeInTheDocument();
+    expect(screen.getByText('60%')).toBeInTheDocument();
+    expect(screen.getByText('Open Alerts')).toBeInTheDocument();
+
+    // Fabricated Digital-Twin metrics / claims must NOT render.
+    expect(screen.queryByText('Digital Twin Score')).not.toBeInTheDocument();
+    expect(screen.queryByText('Expected Lift')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/simulated using our Digital Twin environment/i),
+    ).not.toBeInTheDocument();
+    // The honest disclosure that twin pre-screening is not wired IS present.
+    expect(screen.getByText(/not yet wired/i)).toBeInTheDocument();
+  });
 });
