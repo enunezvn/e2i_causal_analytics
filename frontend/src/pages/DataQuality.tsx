@@ -28,6 +28,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
+  MinusCircle,
   Search,
   Filter,
   Table as TableIcon,
@@ -60,7 +61,7 @@ import {
 } from '@/hooks/api/use-monitoring';
 import { toast } from '@/hooks/use-toast';
 import { Workstream } from '@/types/kpi';
-import type { KPIMetadata, KPIThreshold } from '@/types/kpi';
+import type { KPIMetadata } from '@/types/kpi';
 
 // =============================================================================
 // CONSTANTS
@@ -96,17 +97,31 @@ function formatTimestamp(timestamp: string | undefined): string {
   }
 }
 
-function statusFromThreshold(
-  value: number | undefined,
-  threshold?: KPIThreshold
-): 'pass' | 'warning' | 'fail' {
-  if (value === undefined || Number.isNaN(value)) return 'fail';
-  if (threshold?.critical !== undefined && value < threshold.critical) return 'fail';
-  if (threshold?.warning !== undefined && value < threshold.warning) return 'warning';
-  return 'pass';
+/** Row status — backend-authoritative; `unknown` = no data, NOT a failure. */
+type RuleStatus = 'pass' | 'warning' | 'fail' | 'unknown';
+
+// Map the backend KPIStatus (good/warning/critical/unknown) to the row's
+// display status. The backend status is AUTHORITATIVE and direction-aware:
+// lower-is-better DQ KPIs (geographic gap, data lag, time-to-release) are scored
+// correctly server-side, and a null/no-rows value comes back as `unknown` with
+// an error reason. The page previously RE-derived status from (value, threshold)
+// with a naive higher-is-better rule that (a) turned an UNKNOWN/null value into a
+// fail-X — showing "no data" as a quality failure — and (b) mis-scored
+// lower-is-better KPIs. Trust the backend status instead.
+function ruleStatusFromKPI(value?: { status?: string | null }): RuleStatus {
+  switch ((value?.status ?? '').toString().toLowerCase()) {
+    case 'good':
+      return 'pass';
+    case 'warning':
+      return 'warning';
+    case 'critical':
+      return 'fail';
+    default:
+      return 'unknown';
+  }
 }
 
-function statusIcon(status: 'pass' | 'warning' | 'fail') {
+function statusIcon(status: RuleStatus) {
   switch (status) {
     case 'pass':
       return <CheckCircle2 className="h-4 w-4 text-emerald-500" />;
@@ -114,6 +129,8 @@ function statusIcon(status: 'pass' | 'warning' | 'fail') {
       return <AlertTriangle className="h-4 w-4 text-amber-500" />;
     case 'fail':
       return <XCircle className="h-4 w-4 text-rose-500" />;
+    case 'unknown':
+      return <MinusCircle className="h-4 w-4 text-muted-foreground" />;
   }
 }
 
@@ -143,7 +160,7 @@ function KPIDrilldownRow({
 }: {
   kpi: KPIMetadata;
   statusFilter?: string;
-  onStatusComputed?: (kpiId: string, status: 'pass' | 'warning' | 'fail') => void;
+  onStatusComputed?: (kpiId: string, status: RuleStatus) => void;
 }) {
   const { metadata, value, isLoading, error } = useKPIDetail(kpi.id);
 
@@ -151,13 +168,14 @@ function KPIDrilldownRow({
   const effectiveMeta = metadata ?? kpi;
   const numericValue = typeof value?.value === 'number' ? value.value : undefined;
   const threshold = effectiveMeta.threshold;
-  const ruleStatus = statusFromThreshold(numericValue, threshold);
+  // Backend-authoritative, direction-aware status (unknown = no data, not fail).
+  const ruleStatus = ruleStatusFromKPI(value);
 
-  // #322 — wire status filter to the computed per-rule status. The KPI list
-  // endpoint does NOT return a rolled-up status; we compute it here from
-  // (value, threshold) using the same helper that drives the row's status
-  // icon. Selecting Pass/Warning/Fail hides non-matching rows; parent uses
-  // the reported status to drive the empty-state when ALL rows are filtered.
+  // #322 — wire the status filter to the per-rule status. The per-KPI value
+  // endpoint returns the backend `status` (good/warning/critical/unknown);
+  // selecting Pass/Warning/Fail hides non-matching rows and the parent uses the
+  // reported status to drive the empty-state when ALL rows are filtered.
+  // `unknown` rows never match Pass/Warning/Fail — "no data" is not a failure.
   useEffect(() => {
     onStatusComputed?.(kpi.id, ruleStatus);
   }, [kpi.id, ruleStatus, onStatusComputed]);
@@ -201,7 +219,12 @@ function KPIDrilldownRow({
             {effectiveMeta.unit ? effectiveMeta.unit : ''}
           </span>
         ) : (
-          <span className="text-muted-foreground">—</span>
+          <span
+            className="text-muted-foreground"
+            title={ruleStatus === 'unknown' ? (value?.error ?? undefined) : undefined}
+          >
+            {ruleStatus === 'unknown' ? 'No data' : '—'}
+          </span>
         )}
         {threshold?.target !== undefined && (
           <span className="text-muted-foreground text-xs ml-1">
@@ -234,9 +257,7 @@ function DataQuality() {
   // #322 — per-row computed status reported up by each KPIDrilldownRow.
   // Lets us render the "No data quality KPIs match your filters" empty-state
   // when the status filter hides every row.
-  const [kpiStatuses, setKpiStatuses] = useState<Record<string, 'pass' | 'warning' | 'fail'>>(
-    {}
-  );
+  const [kpiStatuses, setKpiStatuses] = useState<Record<string, RuleStatus>>({});
 
   // ---------------------------------------------------------------------------
   // LIVE DATA — KPI workstream ws1_data_quality

@@ -849,3 +849,63 @@ describe('DataQuality honesty — empty drift signal', () => {
     ).toBeInTheDocument();
   });
 });
+
+// =============================================================================
+// HONESTY — validation rule status comes from the backend `value.status`
+// (good/warning/critical/unknown), NOT a naive client-side higher-is-better
+// recompute. A null/UNKNOWN value is "No data", NOT a fail-X. (Live: 4/9
+// ws1_data_quality KPIs return null → were rendering as X's.)
+// =============================================================================
+
+describe('DataQuality honesty — backend rule status (no null→X)', () => {
+  function mockDetail(unknownId: string) {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockReset();
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockImplementation((kpiId: string) => {
+      const meta = dqKpis.find((k) => k.id === kpiId) ?? dqKpis[0];
+      const isUnknown = kpiId === unknownId;
+      return {
+        metadata: meta,
+        value: {
+          kpi_id: meta.id,
+          value: isUnknown ? undefined : 90,
+          status: isUnknown ? 'unknown' : 'good',
+          error: isUnknown ? 'KPI unavailable: no data for cross-source match' : undefined,
+          calculated_at: '2026-01-02T08:30:00Z',
+          cached: false,
+          metadata: {},
+        },
+        isLoading: false,
+        error: null,
+        isMetadataLoading: false,
+        isValueLoading: false,
+        refetch: vi.fn(),
+      };
+    });
+  }
+
+  it('renders an UNKNOWN (null-value) KPI as "No data", not a value', () => {
+    mockDetail('WS1-DQ-002');
+    render(<DataQuality />, { wrapper: createWrapper() });
+    // KPICard is stubbed to render only its title, so "No data" here is
+    // unambiguously the unknown rule row's value cell (drift has data → cards
+    // show numbers).
+    expect(screen.getByText('No data')).toBeInTheDocument();
+  });
+
+  it('does NOT classify an UNKNOWN (no-data) KPI as Fail — the old null→X bug', async () => {
+    mockDetail('WS1-DQ-002');
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // Select "Fail". DQ-001='good'(pass), DQ-002='unknown'. Under the OLD bug a
+    // null value scored as 'fail' and DQ-002 stayed visible. Now NEITHER is a
+    // fail → the empty-state appears and the unknown row is hidden.
+    const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
+    fireEvent.click(statusTrigger);
+    fireEvent.click(screen.getByRole('option', { name: /^Fail$/ }));
+
+    expect(
+      await screen.findByText(/No data quality KPIs match your filters/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Completeness - HCP Master')).not.toBeInTheDocument();
+  });
+});
