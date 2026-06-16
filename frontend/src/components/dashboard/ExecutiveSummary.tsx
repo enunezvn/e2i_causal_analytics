@@ -7,7 +7,7 @@
  *
  * - Graph metrics ............ useGraphStats() (relationships, nodes,
  *                              communities, episodes)
- * - System health ............ useQuickHealthCheck() (Health Score agent's
+ * - System health ............ useFullHealthCheck() (Health Score agent's
  *                              real overall_health_score + grade)
  * - Agent roster ............. GET /agents/status (real active/total counts)
  *
