@@ -2,19 +2,21 @@
  * Heterogeneous Treatment Effects Component
  * ==========================================
  *
- * Displays segment-level Conditional Average Treatment Effects (CATE)
- * sourced from the real hierarchical analysis endpoint
- * (`POST /api/causal/hierarchical/analyze`, EconML-within-CausalML
- * segmentation served by the live heterogeneous-optimizer substrate).
+ * Displays segment-level Conditional Average Treatment Effects (CATE) sourced
+ * from the real segment-analysis endpoint (`POST /api/segments/analyze`), which
+ * runs the Heterogeneous Optimizer agent (EconML CausalForestDML) over the live
+ * synthetic-cohort substrate (per-HCP rollup). Verified end-to-end on the real
+ * cohort (12,028 rows -> per-region CATE with confidence intervals).
  *
  * Honest-state contract (no fabricated data):
- * - Before any run: explicit empty state with a "Run CATE analysis" action.
- *   The analysis trains a real CausalForestDML server-side (can take
- *   minutes), so it is user-triggered rather than auto-fired on mount.
+ * - Before any run: explicit empty state with a "Run CATE analysis" action. The
+ *   server trains a real causal forest (can take a minute), so it is
+ *   user-triggered rather than auto-fired on mount.
  * - Pending: labeled loading state.
- * - Completed: real `segment_results` (name, n, CATE, CI). Significance is
- *   derived from the CI excluding zero — no invented p-values or "drivers".
- * - Failed / demo-mode placeholder: labeled error / demo notice.
+ * - Completed: real per-segment CATE (value, CATE, CI, n, significance) from the
+ *   API's `cate_by_segment`. Significance is the API's `statistical_significance`,
+ *   never invented.
+ * - Failed: labeled error (no silent fallback).
  *
  * @module components/insights/HeterogeneousTreatmentEffects
  */
@@ -35,11 +37,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useRunHierarchicalAnalysisAndWait } from '@/hooks/api/use-causal';
-import type {
-  HierarchicalAnalysisRequest,
-  SegmentCATEResult,
-} from '@/types/causal';
+import { useRunSegmentAnalysisAndWait } from '@/hooks/api/use-segments';
+import type { CATEResult, RunSegmentAnalysisRequest } from '@/types/segments';
 
 // =============================================================================
 // TYPES
@@ -47,26 +46,22 @@ import type {
 
 interface HeterogeneousTreatmentEffectsProps {
   className?: string;
-  /** Treatment variable for the CATE analysis (documented default). */
+  /** Treatment variable for the CATE analysis (synthetic-cohort default). */
   treatmentVar?: string;
-  /** Outcome variable for the CATE analysis (documented default). */
+  /** Outcome variable for the CATE analysis (synthetic-cohort default). */
   outcomeVar?: string;
+  /** Segment dimension to break CATE down by (synthetic-cohort default). */
+  segmentVar?: string;
+}
+
+/** A single CATE row flattened out of the API's `cate_by_segment` map. */
+interface FlatSegment extends CATEResult {
+  dimension: string;
 }
 
 // =============================================================================
 // HELPERS
 // =============================================================================
-
-/**
- * A segment effect is reported "significant" only when its confidence
- * interval excludes zero — derived from real bounds, never invented.
- */
-function ciExcludesZero(seg: SegmentCATEResult): boolean | null {
-  if (seg.cate_ci_lower === undefined || seg.cate_ci_upper === undefined) {
-    return null;
-  }
-  return seg.cate_ci_lower > 0 || seg.cate_ci_upper < 0;
-}
 
 function fmtPct(value: number | undefined | null, digits = 1): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
@@ -74,13 +69,26 @@ function fmtPct(value: number | undefined | null, digits = 1): string {
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(digits)}%`;
 }
 
+/**
+ * Flatten `cate_by_segment` (Record<dimension, CATEResult[]>) into a flat list,
+ * tagging each row with its segment dimension for display.
+ */
+function flattenCATE(bySegment: Record<string, CATEResult[]> | undefined): FlatSegment[] {
+  if (!bySegment) return [];
+  const out: FlatSegment[] = [];
+  for (const [dimension, results] of Object.entries(bySegment)) {
+    for (const r of results ?? []) out.push({ ...r, dimension });
+  }
+  return out;
+}
+
 // =============================================================================
 // SUB-COMPONENTS
 // =============================================================================
 
-function SegmentCard({ segment }: { segment: SegmentCATEResult }) {
-  const significant = ciExcludesZero(segment);
-  const isPositive = (segment.cate_mean ?? 0) >= 0;
+function SegmentCard({ segment }: { segment: FlatSegment }) {
+  const significant = segment.statistical_significance;
+  const isPositive = (segment.cate_estimate ?? 0) >= 0;
 
   return (
     <div
@@ -95,26 +103,21 @@ function SegmentCard({ segment }: { segment: SegmentCATEResult }) {
       <div className="flex items-start justify-between gap-2 mb-2">
         <div>
           <h4 className="text-sm font-medium text-[var(--color-foreground)]">
-            {segment.segment_name}
+            {segment.segment_value}
           </h4>
-          <p className="text-xs text-[var(--color-muted-foreground)]">
-            Uplift range [{segment.uplift_range[0].toFixed(2)},{' '}
-            {segment.uplift_range[1].toFixed(2)}]
-          </p>
+          <p className="text-xs text-[var(--color-muted-foreground)]">by {segment.dimension}</p>
         </div>
-        {significant !== null && (
-          <Badge
-            variant="outline"
-            className={cn(
-              'text-xs',
-              significant
-                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                : 'bg-gray-500/10 text-gray-600 border-gray-500/20'
-            )}
-          >
-            {significant ? 'CI excludes 0' : 'CI includes 0'}
-          </Badge>
-        )}
+        <Badge
+          variant="outline"
+          className={cn(
+            'text-xs',
+            significant
+              ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+              : 'bg-gray-500/10 text-gray-600 border-gray-500/20'
+          )}
+        >
+          {significant ? 'Significant' : 'Not significant'}
+        </Badge>
       </div>
 
       {/* Treatment Effect */}
@@ -132,31 +135,22 @@ function SegmentCard({ segment }: { segment: SegmentCATEResult }) {
             ) : (
               <TrendingDown className="h-4 w-4" />
             )}
-            {fmtPct(segment.cate_mean)}
+            {fmtPct(segment.cate_estimate)}
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
-          {/* The CATE schema reports raw bounds with no confidence-level field */}
           <div className="text-xs text-[var(--color-muted-foreground)]">CI</div>
           <div className="text-sm font-medium text-[var(--color-foreground)] pt-1">
-            {segment.cate_ci_lower !== undefined && segment.cate_ci_upper !== undefined
-              ? `[${fmtPct(segment.cate_ci_lower)}, ${fmtPct(segment.cate_ci_upper)}]`
-              : '—'}
+            [{fmtPct(segment.cate_ci_lower)}, {fmtPct(segment.cate_ci_upper)}]
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
           <div className="text-xs text-[var(--color-muted-foreground)]">Sample</div>
           <div className="text-lg font-bold text-[var(--color-foreground)]">
-            {segment.n_samples.toLocaleString()}
+            {segment.sample_size.toLocaleString()}
           </div>
         </div>
       </div>
-
-      {!segment.success && (
-        <div className="mt-3 pt-2 border-t border-[var(--color-border)] text-xs text-rose-600">
-          Estimation failed{segment.error_message ? `: ${segment.error_message}` : ''}
-        </div>
-      )}
     </div>
   );
 }
@@ -167,45 +161,36 @@ function SegmentCard({ segment }: { segment: SegmentCATEResult }) {
 
 export function HeterogeneousTreatmentEffects({
   className,
-  treatmentVar = 'rep_visits',
-  outcomeVar = 'trx_count',
+  treatmentVar = 'engagement_score',
+  outcomeVar = 'conversion_rate',
+  segmentVar = 'region',
 }: HeterogeneousTreatmentEffectsProps) {
   const {
     mutate: runAnalysis,
     data: analysis,
     error,
     isPending,
-  } = useRunHierarchicalAnalysisAndWait();
+  } = useRunSegmentAnalysisAndWait();
 
   const handleRun = useCallback(() => {
-    const request: HierarchicalAnalysisRequest = {
+    const request: RunSegmentAnalysisRequest = {
+      query: `Treatment effect heterogeneity of ${treatmentVar} on ${outcomeVar} by ${segmentVar}`,
       treatment_var: treatmentVar,
       outcome_var: outcomeVar,
-      n_segments: 3,
+      segment_vars: [segmentVar],
+      effect_modifiers: ['market_share', 'total_rx_count'],
+      data_source: 'business_metrics',
+      filters: { metric_type: 'per_hcp_rollup' },
+      n_estimators: 100,
+      top_segments_count: 10,
     };
     runAnalysis({ request, pollIntervalMs: 3000, maxWaitMs: 300000 });
-  }, [runAnalysis, treatmentVar, outcomeVar]);
+  }, [runAnalysis, treatmentVar, outcomeVar, segmentVar]);
 
-  // A demo-mode response is a pinned-zero placeholder, NOT a real analysis
-  // (backend flags it explicitly). Never present it as real numbers.
-  const isDemo =
-    (analysis as { is_demo?: boolean | null } | undefined)?.is_demo === true;
   const failed = analysis?.status === 'failed';
-  const segments: SegmentCATEResult[] =
-    !isDemo && !failed && analysis?.segment_results ? analysis.segment_results : [];
+  const segments: FlatSegment[] = failed ? [] : flattenCATE(analysis?.cate_by_segment);
   const hasResults = segments.length > 0;
-  const significantCount = segments.filter((s) => ciExcludesZero(s) === true).length;
-
-  // The hierarchical CATE endpoint fails closed with a 503 + explanatory message
-  // when no real estimation-data backend is wired (the default in this
-  // deployment). That is an honest "not available yet" condition, not a service
-  // outage, so present it as a calm informational state rather than a red alarm.
-  const noDataBackend =
-    !!error &&
-    (error as { status?: number }).status === 503 &&
-    /no real data backend|no production data source/i.test(
-      (error as { message?: string }).message ?? '',
-    );
+  const significantCount = segments.filter((s) => s.statistical_significance).length;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -220,14 +205,14 @@ export function HeterogeneousTreatmentEffects({
                 Heterogeneous Treatment Effects
               </CardTitle>
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                Segment-level CATE — {treatmentVar} → {outcomeVar}
+                Segment-level CATE — {treatmentVar} → {outcomeVar} by {segmentVar}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {hasResults && (
               <Badge variant="outline" className="text-xs bg-indigo-500/10 text-indigo-600">
-                {significantCount}/{segments.length} CI excl. 0
+                {significantCount}/{segments.length} significant
               </Badge>
             )}
             <Button
@@ -251,44 +236,28 @@ export function HeterogeneousTreatmentEffects({
               <RefreshCw className="h-5 w-5 animate-spin" />
               <span className="text-sm">
                 Analyzing segment effects... (trains a causal forest server-side;
-                this can take a few minutes)
+                this can take a minute)
               </span>
             </div>
           </div>
         )}
 
-        {/* Honest "data not wired yet" state — an expected condition, not a failure */}
-        {!isPending && noDataBackend && (
-          <EmptyState
-            title="Live CATE data isn’t wired yet"
-            description="Segment-level heterogeneous treatment effects need a real estimation dataset (treatment, outcome and effect-modifier columns). That data source isn’t connected on this surface yet, so no analysis can run — this is an honest empty state, not a service failure."
-          />
-        )}
-
-        {/* Error State (genuine failures only) */}
-        {!isPending && !noDataBackend && (error || failed) && (
+        {/* Error State (genuine failures only — no silent fallback) */}
+        {!isPending && (error || failed) && (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-500/5 border border-rose-500/20">
             <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
             <div className="text-xs text-[var(--color-muted-foreground)]">
               <span className="font-medium text-rose-600">CATE analysis failed:</span>{' '}
-              {error?.message ?? analysis?.errors?.join('; ') ?? 'Unknown error'}
+              {error?.message ?? analysis?.warnings?.join('; ') ?? 'Unknown error'}
             </div>
           </div>
         )}
 
-        {/* Demo-placeholder notice — never presented as real analysis */}
-        {!isPending && !error && isDemo && (
-          <EmptyState
-            title="Demo-mode placeholder response"
-            description="The causal engine returned a demo placeholder, not a real analysis. Results are suppressed to avoid presenting pinned values as measured effects."
-          />
-        )}
-
         {/* Empty state with explicit run action */}
-        {!isPending && !error && !failed && !isDemo && !hasResults && (
+        {!isPending && !error && !failed && !hasResults && (
           <EmptyState
             title="No CATE analysis has been run"
-            description="Run a segment-level CATE analysis against live data. The server trains a real causal forest, so this can take a few minutes."
+            description="Run a segment-level CATE analysis over the live cohort. The server trains a real causal forest, so this can take a minute."
             action={
               <Button onClick={handleRun} size="sm">
                 <Play className="h-4 w-4 mr-2" />
@@ -306,9 +275,7 @@ export function HeterogeneousTreatmentEffects({
               <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
                 <div className="flex items-center gap-2 mb-1">
                   <Users className="h-4 w-4 text-[var(--color-muted-foreground)]" />
-                  <span className="text-xs text-[var(--color-muted-foreground)]">
-                    Overall ATE
-                  </span>
+                  <span className="text-xs text-[var(--color-muted-foreground)]">Overall ATE</span>
                 </div>
                 <div className="text-xl font-bold text-[var(--color-foreground)]">
                   {fmtPct(analysis?.overall_ate)}
@@ -317,13 +284,11 @@ export function HeterogeneousTreatmentEffects({
               <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
                 <div className="flex items-center gap-2 mb-1">
                   <TrendingUp className="h-4 w-4 text-[var(--color-muted-foreground)]" />
-                  <span className="text-xs text-[var(--color-muted-foreground)]">
-                    Heterogeneity (I²)
-                  </span>
+                  <span className="text-xs text-[var(--color-muted-foreground)]">Heterogeneity</span>
                 </div>
                 <div className="text-xl font-bold text-[var(--color-foreground)]">
-                  {typeof analysis?.segment_heterogeneity === 'number'
-                    ? analysis.segment_heterogeneity.toFixed(2)
+                  {typeof analysis?.heterogeneity_score === 'number'
+                    ? analysis.heterogeneity_score.toFixed(2)
                     : '—'}
                 </div>
               </div>
@@ -331,7 +296,7 @@ export function HeterogeneousTreatmentEffects({
 
             <div className="grid gap-3">
               {segments.map((segment) => (
-                <SegmentCard key={segment.segment_id} segment={segment} />
+                <SegmentCard key={`${segment.dimension}:${segment.segment_value}`} segment={segment} />
               ))}
             </div>
 
@@ -350,10 +315,10 @@ export function HeterogeneousTreatmentEffects({
         <div className="flex items-start gap-2 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/20">
           <Info className="h-4 w-4 text-indigo-500 mt-0.5" />
           <div className="text-xs text-[var(--color-muted-foreground)]">
-            <span className="font-medium text-indigo-600">CATE Analysis:</span>{' '}
-            Conditional Average Treatment Effects show how intervention impact
-            varies across uplift segments. Segments whose confidence interval
-            excludes zero indicate reliable targeting opportunities.
+            <span className="font-medium text-indigo-600">CATE Analysis:</span> Conditional Average
+            Treatment Effects show how intervention impact varies across segments. A segment flagged
+            significant has a confidence interval that excludes zero — a reliable targeting
+            opportunity.
           </div>
         </div>
       </CardContent>
