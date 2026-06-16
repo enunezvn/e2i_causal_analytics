@@ -177,15 +177,28 @@ export async function getRecentWorkflows(
 export async function getWorkflowDetails(workflowId: string): Promise<{
   entries: AuditEntryResponse[];
   summary: WorkflowSummaryResponse;
-  verification: ChainVerificationResponse;
+  verification: ChainVerificationResponse | null;
 }> {
-  const [entries, summary, verification] = await Promise.all([
+  // entries + summary are REQUIRED; verification is BEST-EFFORT. The chain-verify
+  // endpoint can fail independently (e.g. a 500 when the pgcrypto `digest()`
+  // function is unavailable). With `Promise.all` that single failure rejected
+  // the whole call and blanked the Details / Verification / Timeline tabs.
+  // `allSettled` lets verification degrade to `null` (surfaced by the UI as
+  // "verification unavailable") without taking down the rest of the drill-down.
+  const [entriesResult, summaryResult, verificationResult] = await Promise.allSettled([
     getWorkflowEntries(workflowId),
     getWorkflowSummary(workflowId),
     verifyWorkflowChain(workflowId),
   ]);
 
-  return { entries, summary, verification };
+  if (entriesResult.status === 'rejected') throw entriesResult.reason;
+  if (summaryResult.status === 'rejected') throw summaryResult.reason;
+
+  return {
+    entries: entriesResult.value,
+    summary: summaryResult.value,
+    verification: verificationResult.status === 'fulfilled' ? verificationResult.value : null,
+  };
 }
 
 /**

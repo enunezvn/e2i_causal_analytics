@@ -728,6 +728,50 @@ class TestAuditChainService:
             "verify_chain_integrity", {"p_workflow_id": str(workflow_id)}
         )
 
+    def test_verify_workflow_falls_back_to_local_when_rpc_fails(self, service, mock_supabase):
+        """The DB-side ``verify_chain_integrity`` RPC depends on pgcrypto
+        ``digest()``; where that is unavailable it raises 42883
+        (``function digest(text, unknown) does not exist``). ``verify_workflow``
+        must fall back to the self-contained Python ``verify_workflow_local``
+        verifier instead of propagating a 500 — otherwise the audit-chain page's
+        whole workflow drill-down (Promise.all([entries, summary, verify])) breaks.
+        """
+        workflow_id = uuid4()
+        mock_supabase.rpc.return_value.execute.side_effect = Exception(
+            "function digest(text, unknown) does not exist"
+        )
+        sentinel = ChainVerificationResult(is_valid=True, entries_checked=3)
+        service.verify_workflow_local = MagicMock(return_value=sentinel)
+
+        result = service.verify_workflow(workflow_id, log_verification=False)
+
+        assert result is sentinel
+        service.verify_workflow_local.assert_called_once_with(workflow_id)
+
+    def test_verify_workflow_logging_failure_is_non_fatal(self, service, mock_supabase):
+        """A failure writing the verification-log row must NOT break the verify
+        result the caller asked for (the endpoint must not 500 because a
+        best-effort audit-log insert failed)."""
+        workflow_id = uuid4()
+        mock_result = MagicMock()
+        mock_result.data = [
+            {
+                "is_valid": True,
+                "entries_checked": 2,
+                "first_invalid_entry": None,
+                "error_message": None,
+            }
+        ]
+        mock_supabase.rpc.return_value.execute.return_value = mock_result
+        service._log_verification = MagicMock(
+            side_effect=Exception("verification log table missing")
+        )
+
+        result = service.verify_workflow(workflow_id, log_verification=True)
+
+        assert result.is_valid is True
+        assert result.entries_checked == 2
+
     def test_verify_workflow_local_valid_chain(self, service, mock_supabase):
         """Test verify_workflow_local with valid chain."""
         workflow_id = uuid4()
