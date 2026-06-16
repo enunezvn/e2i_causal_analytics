@@ -55,7 +55,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import {
   useOpportunities,
   useGapHealth,
-  useRunGapAnalysis,
+  useRunGapAnalysisAndWait,
 } from '@/hooks/api';
 
 // =============================================================================
@@ -128,7 +128,10 @@ function GapAnalysis() {
     limit: 50,
   });
   const { data: healthData, isLoading: _healthLoading } = useGapHealth();
-  const runGapAnalysisMutation = useRunGapAnalysis();
+  // Poll-to-completion variant: keeps `isPending` true until the background
+  // analysis reaches a terminal state, then invalidates the opportunities query
+  // so the new results render. See `handleRunAnalysis` for the why.
+  const runGapAnalysisMutation = useRunGapAnalysisAndWait();
 
   // F-002 fix: no fabricated `SAMPLE_OPPORTUNITIES` fallback. Data comes
   // strictly from API; absence renders empty state below.
@@ -139,8 +142,12 @@ function GapAnalysis() {
 
   // F-010: surface backend-reported warnings from the analysis mutation
   // (the opportunities-list endpoint does not currently return warnings —
-  // only the analysis-run endpoint does).
+  // only the analysis-run endpoint does). The mutation now waits for the
+  // background analysis to complete before resolving, so `.data` is the
+  // COMPLETED analysis and `.error` carries a genuine failure/timeout — both
+  // surfaced below instead of being silently dropped.
   const apiWarnings = runGapAnalysisMutation.data?.warnings ?? [];
+  const runError = runGapAnalysisMutation.error;
 
   // Calculate metrics
   const metrics = useMemo(() => {
@@ -205,6 +212,12 @@ function GapAnalysis() {
   };
 
   const handleRunAnalysis = () => {
+    // The backend runs the gap analysis as a background task (~8s on the live
+    // cohort). The previous fire-and-forget call (async mode, no polling)
+    // refetched opportunities *immediately* — racing ahead of the still-running
+    // job — so the page never showed the new result and the button appeared to
+    // "do nothing". Polling to completion keeps the button in its running state
+    // and refreshes the opportunities list once the analysis finishes.
     runGapAnalysisMutation.mutate({
       request: {
         query: `Identify performance gaps for ${selectedBrand}`,
@@ -212,7 +225,8 @@ function GapAnalysis() {
         metrics: ['trx', 'nrx', 'market_share'],
         segments: ['region', 'specialty', 'account_type'],
       },
-      asyncMode: true,
+      pollIntervalMs: 3000,
+      maxWaitMs: 120000,
     });
   };
 
@@ -281,6 +295,34 @@ function GapAnalysis() {
           </Button>
         </div>
       </div>
+
+      {/* Run-in-progress indicator — the background analysis takes a few
+          seconds; keep the user informed instead of showing a silent spinner
+          that returns to idle with no visible change. */}
+      {runGapAnalysisMutation.isPending && (
+        <div className="mb-6">
+          <Card className="border-blue-200">
+            <CardContent className="py-3">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                Running gap analysis for {selectedBrand}… results will appear here when it completes.
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Analysis failure/timeout — the run mutation now waits for completion,
+          so a rejection here is a genuine failed/timed-out analysis. Surface it
+          rather than swallowing it. */}
+      {runError && (
+        <div className="mb-6">
+          <WarningBanner
+            title="Gap analysis failed"
+            messages={[runError.message || 'The gap analysis did not complete. Please try again.']}
+          />
+        </div>
+      )}
 
       {/* API-reported warnings (F-010) — surfaced prominently so users
           see when the backend fell through to mock or degraded mode. */}
@@ -389,7 +431,7 @@ function GapAnalysis() {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search opportunities..."
+                placeholder="Filter loaded opportunities by action, metric, or segment…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9"
