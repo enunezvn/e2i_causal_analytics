@@ -7,7 +7,7 @@ import { gotoAndWaitForHeading } from '../fixtures/page-harness'
  *
  * A/B testing & experiment-monitoring dashboard. Experiments are derived from
  * live monitor data ONLY — no sample fallback. Honest states this POM exposes:
- *  - no monitor data yet -> EmptyState "No experiments to display"
+ *  - no monitor data yet -> EmptyState "No experiments loaded yet"
  *  - after "Run Monitoring" -> experiment cards from the real monitor response
  */
 export class ExperimentsPage extends BasePage {
@@ -36,7 +36,7 @@ export class ExperimentsPage extends BasePage {
 
   // Honest empty state before any monitoring run.
   get emptyState(): Locator {
-    return this.page.getByText('No experiments to display', { exact: true }).first()
+    return this.page.getByText('No experiments loaded yet', { exact: true }).first()
   }
 
   get runMonitoringButton(): Locator {
