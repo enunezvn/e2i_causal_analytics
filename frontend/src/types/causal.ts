@@ -635,3 +635,59 @@ export interface CausalAnalysisHistoryResponse {
   /** Number of items returned */
   total: number;
 }
+
+// =============================================================================
+// TREATMENT EFFECTS (GET /causal/treatment-effects — cohort x brand ATE)
+// =============================================================================
+
+/** The four cohorts the Treatment Effects surface supports. */
+export type CohortName =
+  | 'initiation'
+  | 'persistence'
+  | 'discontinuation'
+  | 'hcp_adoption';
+
+/**
+ * A REAL estimated average treatment effect for one (cohort, brand) cell.
+ *
+ * Produced by the live DoWhy+EconML sequential pipeline over a confounded cohort
+ * frame. `ci_lower`/`ci_upper` are EconML's analytic CI (null on the DoWhy
+ * fallback path). `p_value` is a model-based two-sided z-test (NOT a refutation
+ * p-value). `warnings` always carries an honest robustness-not-validated caveat.
+ */
+export interface TreatmentEffectResponse {
+  /** Cohort name */
+  cohort: string;
+  /** Brand */
+  brand: string;
+  /** Treatment column used (treatment_arm) */
+  treatment_var: string;
+  /** Outcome column used */
+  outcome_var: string;
+  /** Numeric confounders adjusted for (backdoor set) */
+  confounders: string[];
+  /** Average treatment effect */
+  ate: number;
+  /** Lower bound of the 95% CI (null on DoWhy fallback) */
+  ci_lower?: number | null;
+  /** Upper bound of the 95% CI (null on DoWhy fallback) */
+  ci_upper?: number | null;
+  /** Model-based two-sided z-test p-value (null when no usable std_error) */
+  p_value?: number | null;
+  /** Standard error of the ATE */
+  std_error?: number | null;
+  /** Rows in the estimation frame after numeric-coerce + dropna */
+  n: number;
+  /** EconML selected estimator (e.g. 'ols'); null on DoWhy fallback */
+  estimator?: string | null;
+  /** Estimation method/pipeline */
+  method: string;
+  /** Confidence level of the reported CI */
+  confidence_level: number;
+  /** End-to-end compute latency in milliseconds */
+  latency_ms: number;
+  /** True: showcase substrate is synthetic-gold (warning, not gate) */
+  is_synthetic: boolean;
+  /** Honest caveats (always includes the robustness-not-validated note) */
+  warnings: string[];
+}

@@ -23,6 +23,7 @@ import {
   listEstimators,
   getCausalHealth,
   getCausalAnalysisHistory,
+  getTreatmentEffects,
   runHierarchicalAnalysisAndWait,
   routeAndRunAnalysis,
   quickEffectEstimate,
@@ -44,6 +45,7 @@ import type {
   SequentialPipelineRequest,
   SequentialPipelineResponse,
   CausalHealthResponse,
+  TreatmentEffectResponse,
 } from '@/types/causal';
 
 // =============================================================================
@@ -181,6 +183,45 @@ export function useCausalAnalysisHistory(
     queryFn: () => getCausalAnalysisHistory(limit),
     staleTime: 30 * 1000,
     ...options,
+  });
+}
+
+/**
+ * Hook to estimate the treatment effect for one (cohort, brand) cell.
+ *
+ * Runs the live DoWhy+EconML sequential pipeline server-side (~5-30s heavy
+ * compute). DISABLED by default until both `cohort` and `brand` are set AND
+ * `enabled` is true — the page gates it behind an explicit Run button so the
+ * heavy endpoint is not spammed on every selector change.
+ *
+ * @param cohort - Cohort name (initiation/persistence/discontinuation/hcp_adoption)
+ * @param brand - Brand (Remibrutinib/Fabhalta/Kisqali)
+ * @param options - Additional query options (commonly `{ enabled }`)
+ * @returns Query result with the real treatment-effect estimate
+ *
+ * @example
+ * ```tsx
+ * const { data, isFetching } = useTreatmentEffects(cohort, brand, { enabled: run });
+ * ```
+ */
+export function useTreatmentEffects(
+  cohort: string | null,
+  brand: string | null,
+  options?: Omit<UseQueryOptions<TreatmentEffectResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<TreatmentEffectResponse, ApiError>({
+    queryKey: queryKeys.causal.treatmentEffects(cohort ?? undefined, brand ?? undefined),
+    queryFn: () => getTreatmentEffects(cohort as string, brand as string),
+    // Heavy compute: cache aggressively and never auto-refetch in the
+    // background; re-running is an explicit user action.
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    retry: false,
+    refetchOnWindowFocus: false,
+    ...options,
+    // Caller-supplied enabled is ANDed with both selections being present so the
+    // long query never fires on a half-specified cell.
+    enabled: Boolean(cohort) && Boolean(brand) && (options?.enabled ?? true),
   });
 }
 

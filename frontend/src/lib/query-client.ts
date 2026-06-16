@@ -466,6 +466,13 @@ export const queryKeys = {
         region ?? 'All',
         limit ?? 3,
       ] as const,
+    treatmentEffects: (cohort?: string, brand?: string) =>
+      [
+        ...queryKeys.causal.all(),
+        'treatment-effects',
+        cohort ?? '',
+        brand ?? '',
+      ] as const,
   },
 
   /**

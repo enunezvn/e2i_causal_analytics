@@ -63,6 +63,51 @@ describe('ScenarioResults — real SimulationResponse rendering', () => {
     expect(screen.getByText(/Running simulation/)).toBeInTheDocument();
   });
 
+  it('renders an HONEST 503 error card (no trained model) with the backend detail', () => {
+    const error = {
+      status: 503,
+      message: 'Service unavailable',
+      data: { detail: 'No trained digital-twin model is available for Fabhalta/hcp.' },
+      isNetworkError: false,
+      isServerError: false,
+    } as unknown as Parameters<typeof ScenarioResults>[0]['error'];
+
+    render(<ScenarioResults results={null} error={error} />);
+
+    // Must NOT look like "never ran".
+    expect(screen.queryByText('No Simulation Results')).not.toBeInTheDocument();
+    expect(screen.getByText(/No trained twin model is available/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/No trained digital-twin model is available for Fabhalta\/hcp\./),
+    ).toBeInTheDocument();
+  });
+
+  it('renders an HONEST timeout (408) error card', () => {
+    const error = {
+      status: 408,
+      message: 'Request timeout',
+      data: { detail: 'Twin simulation timed out; retry shortly.' },
+      isNetworkError: false,
+      isServerError: false,
+    } as unknown as Parameters<typeof ScenarioResults>[0]['error'];
+
+    render(<ScenarioResults results={null} error={error} />);
+    expect(screen.getByText(/Simulation timed out/)).toBeInTheDocument();
+  });
+
+  it('loading takes precedence over an error (retry shows the spinner)', () => {
+    const error = {
+      status: 500,
+      message: 'boom',
+      data: null,
+      isNetworkError: false,
+      isServerError: true,
+    } as unknown as Parameters<typeof ScenarioResults>[0]['error'];
+
+    render(<ScenarioResults results={null} error={error} isLoading />);
+    expect(screen.getByText(/Running simulation/)).toBeInTheDocument();
+  });
+
   it('renders the real simulated ATE and confidence interval', () => {
     render(<ScenarioResults results={createSimulationResponse()} />);
 

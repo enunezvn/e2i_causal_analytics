@@ -42,7 +42,7 @@ import { WarningBanner } from '@/components/ui/WarningBanner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import {
   useSegmentHealth,
-  useRunSegmentAnalysis,
+  useRunSegmentAnalysisAndWait,
   usePolicies,
 } from '@/hooks/api';
 import { useQueryErrorToast, useMutationError } from '@/hooks/use-query-error';
@@ -322,14 +322,23 @@ function ResponderCard({ profile }: ResponderCardProps) {
 
 export default function SegmentAnalysis() {
   const [activeTab, setActiveTab] = useState('cate');
-  const [selectedTreatment, setSelectedTreatment] = useState('rep_visits');
-  const [selectedOutcome, setSelectedOutcome] = useState('trx');
+  // The live business_metrics per_hcp_rollup substrate supports exactly one
+  // planted treatment->outcome pair: engagement_score -> conversion_rate, with
+  // a real CATE that varies by region (#26). These are fixed (not free-select)
+  // because any other column would 42703 on the backend and re-introduce the
+  // fabricated-column failure that previously made every run fail.
+  const selectedTreatment = 'engagement_score';
+  const selectedOutcome = 'conversion_rate';
 
   // API hooks
   const { data: healthData, isLoading: healthLoading, error: healthError, refetch: refetchHealth, isRefetching: isRefetchingHealth } = useSegmentHealth();
   const { data: _policiesData, error: policiesError } = usePolicies({ limit: 10 });
   const onMutationError = useMutationError({ context: 'running segment analysis' });
-  const runAnalysis = useRunSegmentAnalysis({ onError: onMutationError });
+  // Use the polling variant: async_mode=true returns a PENDING stub first and
+  // the result is computed in a background task. useRunSegmentAnalysis alone
+  // would only ever show the empty pending response; this polls the analysis_id
+  // to COMPLETED before exposing cate_by_segment.
+  const runAnalysis = useRunSegmentAnalysisAndWait({ onError: onMutationError });
 
   // Automatic error toasts for query errors
   useQueryErrorToast(healthError, { context: 'loading segment health' });
@@ -345,15 +354,42 @@ export default function SegmentAnalysis() {
     healthData?.agent_available &&
     (healthData?.econml_available || healthData?.causalml_available);
 
-  // Handle analysis run
+  // Handle analysis run.
+  //
+  // The request targets the live business_metrics per_hcp_rollup substrate:
+  //   - treatment_var/outcome_var: the one planted causal pair (engagement ->
+  //     conversion) with a real region-varying CATE.
+  //   - segment_vars: ['region'] ONLY (the sole segment column with a planted
+  //     CATE; 'specialty' does not exist and would 42703).
+  //   - effect_modifiers: ['region'] — region is the heterogeneity dimension, so
+  //     CausalForestDML estimates the per-region treatment effect directly. (The
+  //     prior version put market_share/total_rx_count in X and averaged the
+  //     effect over region post-hoc, which swapped the low-effect south/midwest
+  //     pair. Adversarial review showed keeping the continuous covariates in X
+  //     also inflates the per-region CIs ~5.7x and flips the true-positive
+  //     midwest to "not significant" — so they are W-only here.)
+  //   - confounders: ['market_share','total_rx_count'] — routed into the DML
+  //     nuisance model (W) and residualized out, adjusting for the continuous
+  //     confounding. With region in X + these in W the CATE is DE-CONFOUNDED:
+  //     recovers the planted ordering NE>W>S>MW, all four regions significant,
+  //     tight CIs. (Cost: the uplift/hierarchical responder sub-view has lower
+  //     within-segment X variance and may report fewer uplift segments.)
+  //   - data_source + filters: passed EXPLICITLY so the page never relies on the
+  //     request default to hit the right table.
   const handleRunAnalysis = () => {
     runAnalysis.mutate({
       request: {
-        query: `Analyze treatment effect heterogeneity for ${selectedTreatment} on ${selectedOutcome}`,
+        query: 'Treatment effect heterogeneity of engagement on conversion by region',
         treatment_var: selectedTreatment,
         outcome_var: selectedOutcome,
-        segment_vars: ['region', 'specialty'],
-        effect_modifiers: ['practice_size', 'years_experience', 'digital_engagement'],
+        segment_vars: ['region'],
+        effect_modifiers: ['region'],
+        confounders: ['market_share', 'total_rx_count'],
+        data_source: 'business_metrics',
+        filters: { metric_type: 'per_hcp_rollup' },
+        n_estimators: 100,
+        min_samples_leaf: 10,
+        significance_level: 0.05,
       },
     });
   };
@@ -458,7 +494,11 @@ export default function SegmentAnalysis() {
           />
           <KPICard
             title="Expected Lift"
-            value={`+${analysisResult.expected_total_lift}`}
+            value={
+              analysisResult.expected_total_lift != null
+                ? `+${analysisResult.expected_total_lift.toFixed(3)}`
+                : 'N/A'
+            }
             description="from optimal targeting"
           />
           <KPICard
@@ -469,41 +509,32 @@ export default function SegmentAnalysis() {
         </div>
       )}
 
-      {/* Configuration Panel */}
+      {/* Configuration Panel.
+          Fixed configuration (no free-select): the live per-HCP substrate
+          supports exactly one planted causal pair, so a dropdown of other
+          columns would silently fail. We surface the real, working
+          configuration instead. */}
       <Card>
         <CardHeader>
           <CardTitle>Analysis Configuration</CardTitle>
           <CardDescription>
-            Select treatment and outcome variables for heterogeneity analysis
+            Heterogeneity of HCP engagement on conversion, segmented by region,
+            over the live per-HCP rollup data
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-sm font-medium mb-2 block">Treatment Variable</label>
-              <select
-                className="w-full p-2 border rounded-md"
-                value={selectedTreatment}
-                onChange={(e) => setSelectedTreatment(e.target.value)}
-              >
-                <option value="rep_visits">Rep Visits</option>
-                <option value="email_campaigns">Email Campaigns</option>
-                <option value="samples">Samples</option>
-                <option value="speaker_programs">Speaker Programs</option>
-              </select>
+              <div className="w-full p-2 border rounded-md bg-muted/50 text-sm">
+                Engagement Score
+              </div>
             </div>
             <div>
               <label className="text-sm font-medium mb-2 block">Outcome Variable</label>
-              <select
-                className="w-full p-2 border rounded-md"
-                value={selectedOutcome}
-                onChange={(e) => setSelectedOutcome(e.target.value)}
-              >
-                <option value="trx">TRx (Total Prescriptions)</option>
-                <option value="nrx">NRx (New Prescriptions)</option>
-                <option value="conversion">Conversion Rate</option>
-                <option value="revenue">Revenue</option>
-              </select>
+              <div className="w-full p-2 border rounded-md bg-muted/50 text-sm">
+                Conversion Rate
+              </div>
             </div>
             <div className="flex items-end">
               <Button
@@ -515,6 +546,11 @@ export default function SegmentAnalysis() {
               </Button>
             </div>
           </div>
+          <p className="text-xs text-muted-foreground mt-3">
+            Segmented by <span className="font-medium">region</span> · de-confounded
+            by market share &amp; total Rx count · source: business_metrics
+            (per-HCP rollup)
+          </p>
           {/* Mutation Error Display */}
           <QueryErrorState
             error={runAnalysis.error}
@@ -551,7 +587,11 @@ export default function SegmentAnalysis() {
               <CardHeader>
                 <CardTitle>CATE by {segmentName.replace(/\b\w/g, (l) => l.toUpperCase())}</CardTitle>
                 <CardDescription>
-                  Conditional Average Treatment Effect with 95% confidence intervals
+                  Conditional Average Treatment Effect with{' '}
+                  {analysisResult.confidence_level != null
+                    ? `${(analysisResult.confidence_level * 100).toFixed(0)}%`
+                    : '95%'}{' '}
+                  confidence intervals
                 </CardDescription>
               </CardHeader>
               <CardContent>

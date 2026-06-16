@@ -98,6 +98,7 @@ class HierarchicalAnalyzerNode:
         confidence_level: float = 0.95,
         aggregation_method: str = "variance_weighted",
         timeout_seconds: int = 180,
+        data_connector: Any = None,
     ):
         """Initialize Hierarchical Analyzer node.
 
@@ -109,6 +110,12 @@ class HierarchicalAnalyzerNode:
             confidence_level: CI confidence level (default: 0.95)
             aggregation_method: How to aggregate CATEs: "variance_weighted", "sample_weighted", "bootstrap"
             timeout_seconds: Maximum execution time (default: 180)
+            data_connector: Optional data connector for re-fetching the analysis
+                frame. The graph factory propagates the SAME connector the CATE
+                estimator received so this node reads the same live substrate
+                (#30). When None, ``_get_data`` keeps its existing tier0 /
+                env-gated fail-closed behavior unchanged — construction has no
+                side effects, so the connector is NOT eagerly resolved here.
         """
         self.n_segments = n_segments
         self.segmentation_method = segmentation_method
@@ -117,6 +124,10 @@ class HierarchicalAnalyzerNode:
         self.confidence_level = confidence_level
         self.aggregation_method = aggregation_method
         self.timeout_seconds = timeout_seconds
+        # Store as-is (may be None). Resolution/fail-closed stays in _get_data
+        # so the existing unit contract (no connector + mock forbidden ->
+        # RuntimeError) and side-effect-free construction are both preserved.
+        self.data_connector = data_connector
 
     async def execute(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Execute hierarchical analysis.

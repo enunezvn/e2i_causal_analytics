@@ -168,8 +168,78 @@ class CATEEstimatorNode:
                 }
 
             # Prepare data
-            Y = df[state["outcome_var"]].values
-            T_raw = df[state["treatment_var"]].values
+            #
+            # Fail-honest null/empty guard (#30): coerce the outcome and
+            # treatment columns to numeric and DROP rows where either is
+            # null/NaN BEFORE any median/unique computation. Without this a
+            # future all-null (or partially-null) column would either crash
+            # np.median/np.unique with a TypeError ("'<' not supported between
+            # NoneType and float") or, worse, silently binarize NaN-as-False
+            # into a degenerate all-control treatment that fabricates a
+            # plausible-looking ATE. We mirror the existing :161-168
+            # "Insufficient data" fail shape: return status="failed" with a
+            # clear error, never a fabricated value.
+            outcome_var = state["outcome_var"]
+            treatment_var = state["treatment_var"]
+            Y_series = pd.to_numeric(df[outcome_var], errors="coerce")
+            T_series = pd.to_numeric(df[treatment_var], errors="coerce")
+            finite_mask = (Y_series.notna() & T_series.notna()).to_numpy()
+            n_finite = int(finite_mask.sum())
+
+            if n_finite < 100:
+                if n_finite == 0:
+                    detail = (
+                        f"treatment '{treatment_var}' or outcome "
+                        f"'{outcome_var}' is entirely null/non-numeric "
+                        f"after coercion (0 usable rows from {len(df)})"
+                    )
+                else:
+                    detail = (
+                        f"only {n_finite} rows have a non-null numeric "
+                        f"treatment '{treatment_var}' AND outcome "
+                        f"'{outcome_var}' (need >= 100, from {len(df)} fetched)"
+                    )
+                logger.error(
+                    "CATE estimation aborted: insufficient usable rows after null/numeric coercion",
+                    extra={
+                        "node": "cate_estimator",
+                        "treatment_var": treatment_var,
+                        "outcome_var": outcome_var,
+                        "rows_fetched": len(df),
+                        "rows_usable": n_finite,
+                    },
+                )
+                return {
+                    **state,
+                    "errors": [
+                        {
+                            "node": "cate_estimator",
+                            "error": f"Insufficient usable data: {detail}",
+                        }
+                    ],
+                    "status": "failed",
+                }
+
+            # Apply the finite mask consistently to df, Y and T so the forest,
+            # the per-segment CATE design matrix, and the segment masks all see
+            # the SAME aligned rows (df is reused downstream by
+            # _calculate_cate_by_segment).
+            if n_finite < len(df):
+                df = df.loc[finite_mask].reset_index(drop=True)
+                Y_series = Y_series.loc[finite_mask].reset_index(drop=True)
+                T_series = T_series.loc[finite_mask].reset_index(drop=True)
+                logger.info(
+                    "Dropped rows with null/non-numeric treatment or outcome "
+                    "before CATE estimation",
+                    extra={
+                        "node": "cate_estimator",
+                        "rows_dropped": len(finite_mask) - n_finite,
+                        "rows_remaining": n_finite,
+                    },
+                )
+
+            Y = Y_series.to_numpy()
+            T_raw = T_series.to_numpy()
 
             # Binarize continuous treatment at median (consistent with causal_impact agent)
             # This ensures comparable results between agents and better CATE estimation
@@ -432,6 +502,10 @@ class CATEEstimatorNode:
             [state["treatment_var"], state["outcome_var"]]
             + state["effect_modifiers"]
             + state["segment_vars"]
+            # Confounders (issue #237) are residualized as the DML W; they must
+            # be fetched too, or _resolve_confounders silently drops them as
+            # "absent from available_columns" and the CATE stays confounded.
+            + list(state.get("confounders") or [])
         )
         # is_synthetic must never be an effect modifier / segment var (Shard 07 C2).
         from src.repositories.provenance import PROVENANCE_DROP_COLS

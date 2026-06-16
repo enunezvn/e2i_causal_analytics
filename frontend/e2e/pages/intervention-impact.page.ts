@@ -249,13 +249,16 @@ export class InterventionImpactPage extends BasePage {
   }
 
   async verifyKPISummaryDisplayed(): Promise<boolean> {
-    // F-002: KPI summary is rendered only when API analysis data is loaded;
-    // otherwise the page renders a top-level empty state. Treat either as
-    // "summary section rendered correctly."
+    // F-002: there is no fabricated KPI summary; the page renders a top-level
+    // honest empty state ("No intervention catalog available") plus the wired
+    // tabs (the default Causal Impact tab now renders "Recent Causal Analyses").
+    // Treat any of those always-present, honest sections as "rendered correctly"
+    // (the old "No causal impact data available" copy was removed when the tab
+    // was wired to GET /api/causal/history).
     try {
       await this.page
         .getByText(
-          /Average Treatment Effect|No analysis data for this intervention|No causal impact data available/
+          /Average Treatment Effect|No intervention catalog available|Recent Causal Analyses/
         )
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })
@@ -281,13 +284,12 @@ export class InterventionImpactPage extends BasePage {
   }
 
   async verifyCausalImpactDisplayed(): Promise<boolean> {
-    // F-002: when no API analysis data is loaded the page now renders
-    // an explicit empty state instead of fabricated counterfactual data.
-    // Treat either the real-data title or the empty-state copy as
-    // "tab content rendered correctly."
+    // The Causal Impact tab is wired to GET /api/causal/history: the
+    // "Recent Causal Analyses" card title always renders, then a real table /
+    // loading / error / empty-state branch underneath. Anchor on the title.
     try {
       await this.page
-        .getByText(/Causal Impact Analysis|No causal impact data available/)
+        .getByText(/Recent Causal Analyses/)
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })
       return true
@@ -309,9 +311,12 @@ export class InterventionImpactPage extends BasePage {
   }
 
   async verifyTreatmentEffectsDisplayed(): Promise<boolean> {
+    // Wired to GET /api/causal/treatment-effects: the "Treatment Effect by
+    // Cohort & Brand" card title + cohort/brand selectors always render,
+    // gated behind an explicit Run. Anchor on the title.
     try {
       await this.page
-        .getByText(/Treatment Effect Estimates|No treatment effect estimates available/)
+        .getByText(/Treatment Effect by Cohort/)
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })
       return true
@@ -321,9 +326,12 @@ export class InterventionImpactPage extends BasePage {
   }
 
   async verifySegmentAnalysisDisplayed(): Promise<boolean> {
+    // Wired to POST /api/segments/analyze: the "Segment heterogeneity (CATE by
+    // region)" card title + Run control always render, gated behind a Run.
+    // Anchor on the title.
     try {
       await this.page
-        .getByText(/Heterogeneous Treatment Effects|No segment heterogeneity data available/)
+        .getByText(/Segment heterogeneity/)
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })
       return true

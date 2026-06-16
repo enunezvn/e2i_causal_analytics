@@ -63,6 +63,13 @@ export interface RunSegmentAnalysisRequest {
   segment_vars: string[];
   /** Variables that modify treatment effect */
   effect_modifiers?: string[];
+  /**
+   * Confounders to adjust for. Routed into the DML nuisance model (W) and
+   * residualized out, so the reported per-segment CATE is de-confounded
+   * (reflects the true treatment effect, not selection bias). Distinct from
+   * segment_vars (reporting grouping) and effect_modifiers (heterogeneity).
+   */
+  confounders?: string[];
   /** Data source identifier */
   data_source?: string;
   /** Additional filters */
@@ -105,9 +112,9 @@ export interface CATEResult {
   segment_value: string;
   /** Conditional Average Treatment Effect */
   cate_estimate: number;
-  /** CI lower bound (the API does not report a confidence level) */
+  /** CI lower bound at the response's confidence_level (default 0.95) */
   cate_ci_lower: number;
-  /** CI upper bound (the API does not report a confidence level) */
+  /** CI upper bound at the response's confidence_level (default 0.95) */
   cate_ci_upper: number;
   /** Number of observations in segment */
   sample_size: number;
@@ -181,6 +188,13 @@ export interface SegmentAnalysisResponse {
   cate_by_segment: Record<string, CATEResult[]>;
   /** Overall Average Treatment Effect */
   overall_ate?: number;
+  /**
+   * Confidence level the CATE CIs (cate_by_segment[*].cate_ci_lower/upper)
+   * are computed at, e.g. 0.95 => a 95% CI. Derived from the request's
+   * significance_level (confidence_level = 1 - significance_level). Optional
+   * for backward-compatibility with older responses; backend always sets it.
+   */
+  confidence_level?: number;
   /** Treatment effect heterogeneity (0-1) */
   heterogeneity_score?: number;
   /** Feature importance for CATE */
@@ -261,4 +275,10 @@ export interface SegmentHealthResponse {
   last_analysis?: string;
   /** Analyses in last 24 hours */
   analyses_24h: number;
+  /**
+   * Analyses-store backing: 'durable' (Redis, shared across workers) or
+   * 'degraded' (process-local in-memory fallback — Redis unreachable from
+   * this worker, so cross-worker reads may 404). Optional for older responses.
+   */
+  storage_mode?: string;
 }
