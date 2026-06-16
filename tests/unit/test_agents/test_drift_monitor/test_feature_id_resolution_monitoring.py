@@ -98,7 +98,9 @@ _TW = TimeWindow(
 
 
 def _fv_feature_id_filters(sink: dict[str, Any]) -> list[Any]:
-    return [v for (t, c, v) in sink.get("eq_calls", []) if t == "feature_values" and c == "feature_id"]
+    return [
+        v for (t, c, v) in sink.get("eq_calls", []) if t == "feature_values" and c == "feature_id"
+    ]
 
 
 @pytest.mark.asyncio

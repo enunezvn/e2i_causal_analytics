@@ -552,9 +552,7 @@ class SupabaseDataConnector(BaseDataConnector):
             cache = self._feature_id_cache = {}
         missing = [n for n in feature_names if n not in cache]
         if missing:
-            resp = (
-                self._client.table("features").select("id, name").in_("name", missing).execute()
-            )
+            resp = self._client.table("features").select("id, name").in_("name", missing).execute()
             for row in resp.data or []:
                 cache[row["name"]] = row["id"]
         return {n: cache[n] for n in feature_names if n in cache}
