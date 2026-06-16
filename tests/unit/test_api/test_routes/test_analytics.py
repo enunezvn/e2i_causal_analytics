@@ -442,3 +442,94 @@ class TestQueryVolumeCountedPerWorkflowNotPerEntry:
         assert response.status_code == 200
         # Both workflows still counted (counting doesn't depend on ts parse).
         assert response.json()["summary"]["total_queries"] == 2
+
+
+class TestBackgroundPollerExcludedAndDisclosed:
+    """The automated health poller (health_score_quick) must be excluded from
+    every headline metric (it is ~97% of audit entries and would otherwise
+    dominate Total Queries / Top Agents / latency) AND disclosed transparently,
+    not silently dropped. Lower-volume monitoring agents stay in the metrics.
+    """
+
+    async def _mixed_fetch(self, *args, **kwargs):
+        return {
+            "success": True,
+            "data": [
+                # Two health-poller workflows (3 entries) -> EXCLUDED.
+                {
+                    "workflow_id": "poll-1",
+                    "agent_name": "health_score_quick",
+                    "agent_tier": 0,
+                    "duration_ms": 5.0,
+                    "validation_passed": True,
+                    "created_at": "2026-06-01T12:00:00Z",
+                    "action_type": "workflow_start",
+                },
+                {
+                    "workflow_id": "poll-1",
+                    "agent_name": "health_score_quick",
+                    "agent_tier": 0,
+                    "duration_ms": 3.0,
+                    "validation_passed": True,
+                    "created_at": "2026-06-01T12:00:01Z",
+                    "action_type": "component",
+                },
+                {
+                    "workflow_id": "poll-2",
+                    "agent_name": "health_score_quick",
+                    "agent_tier": 0,
+                    "duration_ms": 4.0,
+                    "validation_passed": True,
+                    "created_at": "2026-06-01T12:01:00Z",
+                    "action_type": "workflow_start",
+                },
+                # One real analytical workflow -> KEPT.
+                {
+                    "workflow_id": "real-1",
+                    "agent_name": "gap_analyzer",
+                    "agent_tier": 2,
+                    "duration_ms": None,
+                    "validation_passed": None,
+                    "created_at": "2026-06-01T12:05:00Z",
+                    "action_type": "workflow_start",
+                },
+                {
+                    "workflow_id": "real-1",
+                    "agent_name": "gap_analyzer",
+                    "agent_tier": 2,
+                    "duration_ms": 120.0,
+                    "validation_passed": True,
+                    "created_at": "2026-06-01T12:05:01Z",
+                    "action_type": "detect_gaps",
+                },
+            ],
+        }
+
+    def test_poller_excluded_from_metrics_and_disclosed(self, client):
+        with (
+            patch(
+                "src.api.routes.analytics._get_supabase_client",
+                return_value=_FakeDB(),
+            ),
+            patch(
+                "src.api.routes.analytics._fetch_audit_metrics",
+                side_effect=self._mixed_fetch,
+            ),
+        ):
+            response = client.get("/analytics/dashboard?period=7d")
+
+        assert response.status_code == 200
+        body = response.json()
+        summary = body["summary"]
+
+        # Only the real workflow is counted; the 2 poller workflows are excluded.
+        assert summary["total_queries"] == 1
+        # Top agents + per-agent table exclude the poller entirely.
+        assert "health_score_quick" not in summary["top_agents"]
+        assert summary["top_agents"] == ["gap_analyzer"]
+        assert [m["agent_name"] for m in body["agent_metrics"]] == ["gap_analyzer"]
+        # Latency reflects the real node (120ms), NOT the poller's 3-5ms entries.
+        assert summary["avg_latency_ms"] == 120.0
+        # Transparency: the excluded volume is disclosed, not silently dropped.
+        assert body["excluded_background_count"] == 3
+        assert body["excluded_agents"] == ["health_score_quick"]
