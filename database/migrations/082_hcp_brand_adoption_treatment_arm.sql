@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 080: hcp_brand_adoption.treatment_arm — TRACKING migration
+-- Migration 082: hcp_brand_adoption.treatment_arm — TRACKING migration
 -- ============================================================================
 -- WHY: the binary HCP-adoption treatment arm (`treatment_arm`, 0/1) and its
 -- CHECK constraint (`ck_hcp_brand_adoption_treatment_arm`) were applied to the
