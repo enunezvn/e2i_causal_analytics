@@ -249,13 +249,16 @@ export class InterventionImpactPage extends BasePage {
   }
 
   async verifyKPISummaryDisplayed(): Promise<boolean> {
-    // F-002: KPI summary is rendered only when API analysis data is loaded;
-    // otherwise the page renders a top-level empty state. Treat either as
-    // "summary section rendered correctly."
+    // F-002: there is no fabricated KPI summary; the page renders a top-level
+    // honest empty state ("No intervention catalog available") plus the wired
+    // tabs (the default Causal Impact tab now renders "Recent Causal Analyses").
+    // Treat any of those always-present, honest sections as "rendered correctly"
+    // (the old "No causal impact data available" copy was removed when the tab
+    // was wired to GET /api/causal/history).
     try {
       await this.page
         .getByText(
-          /Average Treatment Effect|No analysis data for this intervention|No causal impact data available/
+          /Average Treatment Effect|No intervention catalog available|Recent Causal Analyses/
         )
         .first()
         .waitFor({ state: 'visible', timeout: 5000 })

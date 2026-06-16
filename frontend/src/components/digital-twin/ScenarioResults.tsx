@@ -115,7 +115,10 @@ export function ScenarioResults({
   // Honest error state — a failed run must NOT look like "never ran".
   // The backend detail is surfaced verbatim; no fabricated numbers.
   if (error) {
-    const detail = error.data?.message ?? error.message;
+    // FastAPI raises HTTPException(detail=...), so the error envelope carries a
+    // `detail` field at runtime even though the typed ApiErrorResponse models
+    // `message`. Read `detail` type-safely (cast), then fall back to message.
+    const detail = (error.data as { detail?: string } | null)?.detail ?? error.message;
     let title = 'Simulation failed';
     let hint =
       'The simulation could not be completed. See the details below and try again.';
