@@ -457,14 +457,23 @@ class TestDeriveLiveStatuses:
     def test_old_row_is_idle(self):
         now = datetime.now(timezone.utc)
         old = now - timedelta(hours=6)
-        rows = [{"agent_name": "gap_analyzer", "created_at": _iso(old), "action_type": "gap_detector"}]
+        rows = [
+            {"agent_name": "gap_analyzer", "created_at": _iso(old), "action_type": "gap_detector"}
+        ]
         live = _derive_live_statuses(rows, now)
         assert live["gap-analyzer"]["status"] == AgentStatusEnum.IDLE
         assert live["gap-analyzer"]["last_activity"] == _iso(old)
 
     def test_failed_latest_is_error(self):
         now = datetime.now(timezone.utc)
-        rows = [{"agent_name": "drift_monitor", "created_at": _iso(now), "validation_passed": False, "action_type": "agent"}]
+        rows = [
+            {
+                "agent_name": "drift_monitor",
+                "created_at": _iso(now),
+                "validation_passed": False,
+                "action_type": "agent",
+            }
+        ]
         live = _derive_live_statuses(rows, now)
         assert live["drift-monitor"]["status"] == AgentStatusEnum.ERROR
 
@@ -482,7 +491,13 @@ class TestDeriveLiveStatuses:
 
     def test_poller_counts_for_health_score_status(self):
         now = datetime.now(timezone.utc)
-        rows = [{"agent_name": "health_score_quick", "created_at": _iso(now), "action_type": "component"}]
+        rows = [
+            {
+                "agent_name": "health_score_quick",
+                "created_at": _iso(now),
+                "action_type": "component",
+            }
+        ]
         live = _derive_live_statuses(rows, now)
         assert live["health-score"]["status"] == AgentStatusEnum.ACTIVE
 

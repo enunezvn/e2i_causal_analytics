@@ -443,9 +443,7 @@ def _fetch_audit_rows(
         return []
 
 
-def _derive_live_statuses(
-    rows: List[Dict[str, Any]], now: datetime
-) -> Dict[str, Dict[str, Any]]:
+def _derive_live_statuses(rows: List[Dict[str, Any]], now: datetime) -> Dict[str, Dict[str, Any]]:
     """Compute ``{registry_id: {status, last_activity}}`` from recent rows.
 
     ``rows`` must be newest-first, so the first row seen for an agent is its
@@ -488,9 +486,7 @@ def _apply_live_statuses(live: Dict[str, Dict[str, Any]]) -> List[AgentInfo]:
             )
         else:
             agents.append(
-                agent.model_copy(
-                    update={"status": AgentStatusEnum.IDLE, "last_activity": None}
-                )
+                agent.model_copy(update={"status": AgentStatusEnum.IDLE, "last_activity": None})
             )
     return agents
 
