@@ -81,9 +81,7 @@ def create_heterogeneous_optimizer_graph(
     cate_estimator = CATEEstimatorNode(data_connector)
     segment_analyzer = SegmentAnalyzerNode()
     hierarchical_analyzer = (
-        HierarchicalAnalyzerNode(data_connector=data_connector)
-        if enable_hierarchical
-        else None
+        HierarchicalAnalyzerNode(data_connector=data_connector) if enable_hierarchical else None
     )
     policy_learner = PolicyLearnerNode()
     profile_generator = ProfileGeneratorNode()

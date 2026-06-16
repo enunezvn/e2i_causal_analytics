@@ -200,8 +200,7 @@ class CATEEstimatorNode:
                         f"'{outcome_var}' (need >= 100, from {len(df)} fetched)"
                     )
                 logger.error(
-                    "CATE estimation aborted: insufficient usable rows after "
-                    "null/numeric coercion",
+                    "CATE estimation aborted: insufficient usable rows after null/numeric coercion",
                     extra={
                         "node": "cate_estimator",
                         "treatment_var": treatment_var,

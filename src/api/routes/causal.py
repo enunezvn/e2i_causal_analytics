@@ -3124,10 +3124,7 @@ async def get_treatment_effect(
     if cohort_key not in _TE_COHORTS:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"Unknown cohort {cohort!r}. Expected one of: "
-                f"{sorted(_TE_COHORTS)}."
-            ),
+            detail=(f"Unknown cohort {cohort!r}. Expected one of: {sorted(_TE_COHORTS)}."),
         )
     if brand not in _TE_BRANDS:
         raise HTTPException(

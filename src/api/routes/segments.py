@@ -139,10 +139,7 @@ class RunSegmentAnalysisRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "query": (
-                    "Treatment effect heterogeneity of engagement on "
-                    "conversion by region"
-                ),
+                "query": ("Treatment effect heterogeneity of engagement on conversion by region"),
                 "treatment_var": "engagement_score",
                 "outcome_var": "conversion_rate",
                 "segment_vars": ["region"],

@@ -1078,27 +1078,39 @@ class TreatmentEffectResponse(BaseModel):
     never present this as a validated causal claim.
     """
 
-    cohort: str = Field(..., description="Cohort name (initiation/persistence/discontinuation/hcp_adoption)")
+    cohort: str = Field(
+        ..., description="Cohort name (initiation/persistence/discontinuation/hcp_adoption)"
+    )
     brand: str = Field(..., description="Brand (Remibrutinib/Fabhalta/Kisqali)")
     treatment_var: str = Field(..., description="Treatment column used (treatment_arm)")
     outcome_var: str = Field(
-        ..., description="Outcome column used (treatment_initiated/persistent_180d/discontinued_180d/adopted)"
+        ...,
+        description="Outcome column used (treatment_initiated/persistent_180d/discontinued_180d/adopted)",
     )
     confounders: List[str] = Field(
         default_factory=list, description="The numeric confounders adjusted for (backdoor set)"
     )
-    ate: float = Field(..., description="Average treatment effect (EconML ate; agrees with DoWhy causal_effect)")
-    ci_lower: Optional[float] = Field(None, description="Lower bound of the EconML 95% CI (None on DoWhy fallback)")
-    ci_upper: Optional[float] = Field(None, description="Upper bound of the EconML 95% CI (None on DoWhy fallback)")
+    ate: float = Field(
+        ..., description="Average treatment effect (EconML ate; agrees with DoWhy causal_effect)"
+    )
+    ci_lower: Optional[float] = Field(
+        None, description="Lower bound of the EconML 95% CI (None on DoWhy fallback)"
+    )
+    ci_upper: Optional[float] = Field(
+        None, description="Upper bound of the EconML 95% CI (None on DoWhy fallback)"
+    )
     p_value: Optional[float] = Field(
         None,
         description="Model-based two-sided z-test p-value 2*(1-Phi(|ate|/std_error)); None when no usable std_error",
     )
     std_error: Optional[float] = Field(
-        None, description="Standard error of the ATE (EconML ate_std, or DoWhy standard_error fallback)"
+        None,
+        description="Standard error of the ATE (EconML ate_std, or DoWhy standard_error fallback)",
     )
     n: int = Field(..., description="Rows in the estimation frame after numeric-coerce + dropna")
-    estimator: Optional[str] = Field(None, description="EconML selected estimator (e.g. 'ols'); None on DoWhy fallback")
+    estimator: Optional[str] = Field(
+        None, description="EconML selected estimator (e.g. 'ols'); None on DoWhy fallback"
+    )
     method: str = Field("dowhy+econml sequential", description="Estimation method/pipeline")
     confidence_level: float = Field(0.95, description="Confidence level of the reported CI")
     latency_ms: int = Field(..., description="End-to-end compute latency in milliseconds")
@@ -1107,7 +1119,8 @@ class TreatmentEffectResponse(BaseModel):
         description="True: this showcase substrate is synthetic-gold (E2I_INCLUDE_SYNTHETIC=true). Warning, not gate.",
     )
     warnings: List[str] = Field(
-        default_factory=list, description="Honest caveats (always includes the robustness-not-validated note)"
+        default_factory=list,
+        description="Honest caveats (always includes the robustness-not-validated note)",
     )
 
     model_config = ConfigDict(
