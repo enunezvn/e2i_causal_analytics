@@ -107,9 +107,10 @@ describe('ExperimentRecommendations (H3)', () => {
     });
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
 
-    // Real, sourced fields render.
+    // Real, sourced fields render. Compute the formatted value the same way the
+    // component does (toLocaleString) so the assertion is locale-agnostic.
     expect(screen.getByText('Enrolled')).toBeInTheDocument();
-    expect(screen.getByText('1,200')).toBeInTheDocument();
+    expect(screen.getByText((1200).toLocaleString())).toBeInTheDocument();
     expect(screen.getByText('Information fraction')).toBeInTheDocument();
     expect(screen.getByText('60%')).toBeInTheDocument();
     expect(screen.getByText('Open Alerts')).toBeInTheDocument();

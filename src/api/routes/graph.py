@@ -723,7 +723,14 @@ def _clean_causal_chains(chains: List[GraphPath]) -> List[GraphPath]:
     for chain in chains:
         if not _is_simple_chain(chain):
             continue
-        key = "\x1f".join(n.id for n in chain.nodes)
+        # Key on the node sequence AND the relationship types, so two genuinely
+        # distinct chains over the same nodes via different edge types (e.g.
+        # A —CAUSES→ B vs A —IMPACTS→ B) both survive; only true near-duplicates
+        # (same nodes AND same edges, differing in confidence) collapse.
+        key = "\x1f".join(
+            [n.id for n in chain.nodes]
+            + [getattr(r.type, "value", str(r.type)) for r in chain.relationships]
+        )
         existing = best.get(key)
         if existing is None:
             order.append(key)

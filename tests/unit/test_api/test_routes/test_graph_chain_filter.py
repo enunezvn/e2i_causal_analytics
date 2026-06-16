@@ -76,3 +76,24 @@ def test_clean_no_surviving_chain_repeats_a_node():
     for c in cleaned:
         ids = [n.id for n in c.nodes]
         assert len(set(ids)) == len(ids)
+
+
+def test_clean_keeps_distinct_relationship_typed_chains_over_same_nodes():
+    # Same node sequence but DIFFERENT edge types (CAUSES vs IMPACTS) are
+    # genuinely distinct causal chains and must both survive (dedup keys on
+    # nodes AND relationship types), not collapse to one.
+    causes = _path(["a", "b"], 0.8)  # _path builds CAUSES edges
+    impacts = GraphPath(
+        nodes=[
+            GraphNode(id="a", type="Variable", name="a"),
+            GraphNode(id="b", type="Variable", name="b"),
+        ],
+        relationships=[
+            GraphRelationship(id="r0", type="IMPACTS", source_id="a", target_id="b", confidence=0.7)
+        ],
+        total_confidence=0.7,
+        path_length=1,
+    )
+    cleaned = _clean_causal_chains([causes, impacts])
+    assert len(cleaned) == 2
+    assert {c.relationships[0].type.value for c in cleaned} == {"CAUSES", "IMPACTS"}

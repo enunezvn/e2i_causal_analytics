@@ -524,6 +524,26 @@ class OrchestratorError(AgentError):
 
 
 # =============================================================================
+# CURATED USER-SAFE 503 DETAIL (opt-in surfacing)
+# =============================================================================
+
+# By default the global 503 handler MASKS HTTPException(503) details behind a
+# generic "Dependency 'service' is unavailable" message, because many 503 sites
+# interpolate raw caught exceptions (e.g. detail=f"... {e}") whose text must not
+# reach clients (information disclosure). An endpoint that wants its 503 reason
+# shown to users opts in by wrapping its curated, exception-free message with
+# ``user_safe_503_detail``; the handler recognizes the marker, strips it, and
+# surfaces the message. Raw/unmarked 503 details stay masked. The marker uses
+# RS control chars so it cannot collide with normal exception text.
+SAFE_503_DETAIL_PREFIX = "\x1e\x1euser-safe\x1e\x1e"
+
+
+def user_safe_503_detail(message: str) -> str:
+    """Mark a curated 503 detail as safe for the global handler to surface verbatim."""
+    return f"{SAFE_503_DETAIL_PREFIX}{message}"
+
+
+# =============================================================================
 # DEPENDENCY ERRORS (503)
 # =============================================================================
 

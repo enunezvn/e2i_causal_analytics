@@ -12,21 +12,17 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Legacy fallback only. The live default is resolved from env at call time by
-# ``get_default_dspy_model()`` so DSPy uses the same *working* provider/model as
-# the rest of the app (src.utils.llm_factory). A bare ``claude-sonnet-4-*`` model
-# that the deployed Anthropic key cannot serve raises litellm.NotFoundError (404),
-# which is exactly what broke the Executive AI Brief.
-DEFAULT_MODEL = "openai/gpt-4o"
-
 
 def get_default_dspy_model() -> str:
     """Resolve the DSPy/litellm model string from env, provider-aware.
 
     DSPy talks to providers through litellm, so the model string must carry a
-    ``<provider>/<model>`` prefix. This mirrors ``src.utils.llm_factory`` provider
-    selection so DSPy paths use the same model the rest of the app uses instead of
-    a hardcoded one that may be retired for the deployed key.
+    ``<provider>/<model>`` prefix. This mirrors ``src.utils.llm_factory``'s
+    PROVIDER selection (openai -> ``openai/gpt-4o``, the model the rest of the app
+    uses in prod where ``LLM_PROVIDER=openai``). The Anthropic model is taken from
+    ``ANTHROPIC_MODEL`` independently of llm_factory's hardcoded mapping, so the
+    default is a current model rather than the retired ``claude-sonnet-4-20250514``
+    that 404'd the Executive AI Brief.
 
     Resolution order:
       1. ``DSPY_LM_MODEL`` env override — used verbatim (already prefixed).
