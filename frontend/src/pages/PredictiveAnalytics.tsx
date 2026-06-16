@@ -616,18 +616,34 @@ function PredictiveAnalytics() {
                   )}
 
                   {prediction.feature_importance &&
-                    Object.keys(prediction.feature_importance).length > 0 && (
-                      <div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <TrendingUp className="h-4 w-4 text-emerald-600" />
-                          <p className="text-sm font-medium">
-                            Feature Contributions
+                    Object.keys(prediction.feature_importance).length > 0 &&
+                    (() => {
+                      // These are signed SHAP contributions (log-odds), NOT
+                      // percentages — render them as raw decimals (matching the
+                      // app's SHAP components) so they are not misread against the
+                      // Confidence % above. The bar shows each contribution's
+                      // MAGNITUDE relative to the largest in this prediction (no
+                      // *100, no hard cap that would truncate values > 1).
+                      const contributions = Object.entries(
+                        prediction.feature_importance
+                      ).sort(([, a], [, b]) => Math.abs(b) - Math.abs(a));
+                      const maxAbs = Math.max(
+                        ...contributions.map(([, v]) => Math.abs(v)),
+                        Number.EPSILON
+                      );
+                      return (
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <TrendingUp className="h-4 w-4 text-emerald-600" />
+                            <p className="text-sm font-medium">
+                              Feature Contributions
+                            </p>
+                          </div>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Signed SHAP contributions (log-odds) to this prediction
                           </p>
-                        </div>
-                        <div className="space-y-2">
-                          {Object.entries(prediction.feature_importance)
-                            .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
-                            .map(([feature, impact]) => (
+                          <div className="space-y-2">
+                            {contributions.map(([feature, impact]) => (
                               <div key={feature} className="space-y-1">
                                 <div className="flex items-center justify-between text-xs">
                                   <span className="font-mono">{feature}</span>
@@ -639,18 +655,19 @@ function PredictiveAnalytics() {
                                     }
                                   >
                                     {impact >= 0 ? '+' : ''}
-                                    {(impact * 100).toFixed(1)}%
+                                    {impact.toFixed(3)}
                                   </span>
                                 </div>
                                 <Progress
-                                  value={Math.min(Math.abs(impact) * 100, 100)}
+                                  value={(Math.abs(impact) / maxAbs) * 100}
                                   className="h-1.5"
                                 />
                               </div>
                             ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                   <div className="grid grid-cols-2 gap-3 pt-2 border-t text-xs">
                     <div>

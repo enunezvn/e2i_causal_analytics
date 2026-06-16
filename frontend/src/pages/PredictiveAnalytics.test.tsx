@@ -323,15 +323,36 @@ describe('PredictiveAnalytics (live API)', () => {
     });
 
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
-    // "Feature Contributions" section title proves the section rendered
+    // "Feature Contributions" section + the honest SHAP unit label.
     expect(screen.getByText('Feature Contributions')).toBeInTheDocument();
-    // Each feature key from feature_importance also appears as a percentage
-    // (the keys themselves also appear as form labels, so we assert the
-    // signed percentage strings rendered next to each contribution)
-    expect(screen.getByText('+40.0%')).toBeInTheDocument(); // visits_last_quarter 0.4
-    expect(screen.getByText('+34.0%')).toBeInTheDocument(); // specialty 0.34
-    expect(screen.getByText('+21.0%')).toBeInTheDocument(); // territory 0.21
-    expect(screen.getByText('+5.0%')).toBeInTheDocument(); // hcp_id 0.05
+    expect(
+      screen.getByText(/Signed SHAP contributions \(log-odds\)/i)
+    ).toBeInTheDocument();
+    // SHAP values are signed log-odds contributions — rendered as RAW signed
+    // decimals, NOT percentages (a SHAP of 0.4 is not "40%").
+    expect(screen.getByText('+0.400')).toBeInTheDocument(); // visits_last_quarter 0.4
+    expect(screen.getByText('+0.340')).toBeInTheDocument(); // specialty 0.34
+    expect(screen.getByText('+0.210')).toBeInTheDocument(); // territory 0.21
+    expect(screen.getByText('+0.050')).toBeInTheDocument(); // hcp_id 0.05
+    // The misleading percentage rendering must be gone.
+    expect(screen.queryByText('+40.0%')).not.toBeInTheDocument();
+  });
+
+  it('renders a SHAP contribution > 1.0 verbatim (no percent, no 100%% cap)', () => {
+    // SHAP log-odds routinely exceed |1.0|; the old "(impact*100)%" + Progress
+    // cap rendered "+158.9%" and truncated the bar. Assert the raw decimal.
+    (usePredict as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      data: { ...mockPredictionResponse, feature_importance: { disease_severity: 1.589 } },
+      isPending: false,
+      isError: false,
+      error: null,
+      reset: vi.fn(),
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    expect(screen.getByText('+1.589')).toBeInTheDocument();
+    expect(screen.queryByText('+158.9%')).not.toBeInTheDocument();
   });
 
   it('does NOT render synthetic risk score entities (Generate sample data removed)', () => {

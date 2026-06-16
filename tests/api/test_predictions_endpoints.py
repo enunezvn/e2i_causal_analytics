@@ -134,6 +134,20 @@ def _full_features():
     }
 
 
+def _goldstd_model_info():
+    """Model info for a GOLD-STANDARD (FeatureBuilder) model: exposes
+    ``keep_columns`` (the RAW human covariates), so the route takes the
+    raw-covariate path. ``keep_columns`` deliberately equals the keys of
+    ``_full_features()`` so a complete row satisfies the completeness check.
+    """
+    return {
+        "model_id": "goldstd_lr_v1:abc",
+        "model_loaded": True,
+        "keep_columns": list(_full_features().keys()),
+        "feature_columns": ["enc_a", "enc_b", "enc_c"],
+    }
+
+
 @pytest.fixture
 def mock_feast_client(monkeypatch):
     """Mock FeastClient and patch the route's resolver to return it.
@@ -181,7 +195,13 @@ class TestSinglePrediction:
     """Tests for POST /api/models/predict/{model_name}."""
 
     def test_predict_success(self, mock_bentoml_client):
-        """User-provided features go via the raw-covariate path, routed by name."""
+        """A LEGACY/positional model (feature_columns, no keep_columns) vectorizes
+        the user-provided dict into the ordered row — and is now ROUTED by name.
+
+        ``mock_model_info`` exposes ``feature_columns`` but NO ``keep_columns``, so
+        the route takes the positional path (the original contract, preserved).
+        The gold-standard raw path is covered by the keep_columns tests below.
+        """
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
             "/api/models/predict/churn_model",
@@ -198,16 +218,14 @@ class TestSinglePrediction:
         assert "confidence" in data
         assert "latency_ms" in data
         assert "timestamp" in data
-        # The raw feature dict is forwarded as ``raw_features`` (the bundle's
-        # FeatureBuilder encodes it server-side) and the request is ROUTED by
-        # ``model_name`` — without that key the multi-model service falls back to
-        # the unloaded default and returns empty predictions (the original bug).
+        # The dict is vectorized into the positional row AND routed by name —
+        # without ``model_name`` the multi-model service falls back to the
+        # unloaded default and returns empty predictions (the original bug).
         sent = mock_bentoml_client.predict.call_args[0][1]
-        assert sent["raw_features"] == [_full_features()]
+        assert sent["features"] == [[12.0, 5.0, 0.83]]
         assert sent["model_name"] == "churn_model"
         assert sent["model_type"] == "classification"
-        # The legacy positional ``features`` matrix is NOT sent on this path.
-        assert "features" not in sent
+        assert "raw_features" not in sent
 
     def test_predict_maps_flat_probabilities_to_positive_class(self, mock_bentoml_client):
         """The live flat ``probabilities`` list maps to {"positive_class": p}."""
@@ -348,7 +366,12 @@ class TestSinglePrediction:
 
     def test_predict_return_feature_importance_delegates_to_shap(self, mock_bentoml_client):
         """``return_feature_importance`` populates feature_importance from the
-        BentoML /shap endpoint (real per-prediction SHAP), dropping ~0 noise."""
+        BentoML /shap endpoint (real per-prediction SHAP), dropping ~0 noise.
+
+        SHAP is only wired on the gold-standard (keep_columns) raw path, so the
+        model exposes keep_columns == the keys of ``_full_features()``.
+        """
+        mock_bentoml_client.get_model_info = AsyncMock(return_value=_goldstd_model_info())
         mock_bentoml_client.get_shap = AsyncMock(
             return_value={
                 "shap_values": {
@@ -385,6 +408,7 @@ class TestSinglePrediction:
     def test_predict_shap_failure_is_non_fatal(self, mock_bentoml_client):
         """A SHAP failure must NOT fail the prediction — feature_importance is
         left null and the prediction still returns 200."""
+        mock_bentoml_client.get_model_info = AsyncMock(return_value=_goldstd_model_info())
         mock_bentoml_client.get_shap = AsyncMock(side_effect=RuntimeError("shap boom"))
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
@@ -395,7 +419,9 @@ class TestSinglePrediction:
         assert response.json()["feature_importance"] is None
 
     def test_predict_does_not_call_shap_without_flag(self, mock_bentoml_client):
-        """Default callers pay no SHAP latency: get_shap is not invoked."""
+        """Default callers pay no SHAP latency: get_shap is not invoked even on
+        the gold-standard raw path when return_feature_importance is unset."""
+        mock_bentoml_client.get_model_info = AsyncMock(return_value=_goldstd_model_info())
         mock_bentoml_client.get_shap = AsyncMock()
         app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
         response = client.post(
@@ -404,6 +430,34 @@ class TestSinglePrediction:
         )
         assert response.status_code == 200
         mock_bentoml_client.get_shap.assert_not_called()
+
+    def test_predict_goldstd_raw_path_routes_and_validates(self, mock_bentoml_client):
+        """A gold-standard model (keep_columns) forwards ``raw_features`` routed by
+        name; a missing raw covariate fails closed with a 422 naming it (instead
+        of the opaque 500 the served FeatureBuilder would raise)."""
+        mock_bentoml_client.get_model_info = AsyncMock(return_value=_goldstd_model_info())
+        app.dependency_overrides[get_bentoml_client] = lambda: mock_bentoml_client
+
+        # Complete row -> raw_features + model_name, NOT a positional matrix.
+        ok = client.post(
+            "/api/models/predict/initiation_fabhalta_goldstd_lr_v1",
+            json={"features": _full_features()},
+        )
+        assert ok.status_code == 200, ok.text
+        sent = mock_bentoml_client.predict.call_args[0][1]
+        assert sent["raw_features"] == [_full_features()]
+        assert sent["model_name"] == "initiation_fabhalta_goldstd_lr_v1"
+        assert "features" not in sent
+
+        # Missing a required raw covariate -> honest 422 naming the missing field.
+        partial = {k: v for k, v in _full_features().items() if k != "therapy_adherence_score"}
+        bad = client.post(
+            "/api/models/predict/initiation_fabhalta_goldstd_lr_v1",
+            json={"features": partial},
+        )
+        assert bad.status_code == 422, bad.text
+        body = bad.json()
+        assert "therapy_adherence_score" in str(body.get("message") or body.get("detail") or body)
 
     def test_predict_with_entity_id(self, mock_bentoml_client, mock_feast_client):
         """Should accept entity_id for feature store lookup."""
@@ -480,7 +534,8 @@ class TestSinglePrediction:
         mock_feast_client.get_online_features.assert_not_called()
 
         bento_payload = mock_bentoml_client.predict.call_args[0][1]
-        assert bento_payload["raw_features"] == [_full_features()]
+        # churn_model is positional (no keep_columns) -> vectorized + routed.
+        assert bento_payload["features"] == [[12.0, 5.0, 0.83]]
         assert bento_payload["model_name"] == "churn_model"
         assert bento_payload["feature_source"] == "user_provided"
 

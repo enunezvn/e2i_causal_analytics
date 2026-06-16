@@ -469,22 +469,81 @@ async def predict(
                 "entity_id": request.entity_id,
             }
         else:
-            # User-provided RAW covariates (the Predictive Analytics page sends
-            # the model's ``keep_columns`` — e.g. disease_severity, academic_hcp,
-            # geographic_region). Forward them as ``raw_features`` so the bundle's
-            # fitted FeatureBuilder one-hot-encodes them server-side, instead of
-            # demanding the caller pre-engineer the positional encoded vector
-            # (which a human cannot do). Verified live: the raw path returns a
-            # real per-model prediction + positive-class probability.
-            used_raw_path = True
-            input_data = {
-                "raw_features": [features_payload],
-                "model_name": model_name,
-                "model_type": "classification",
-                "return_proba": request.return_probabilities,
-                "return_intervals": request.return_intervals,
-                "feature_source": feature_source,
-            }
+            # User-provided features. Resolve the model's contract from
+            # /model_info to choose the encoding path WITHOUT guessing:
+            #   - gold-standard models bundle a FeatureBuilder and expose
+            #     ``keep_columns`` (RAW human covariates — e.g. disease_severity,
+            #     academic_hcp, geographic_region) -> forward ``raw_features`` and
+            #     let the bundle one-hot-encode them server-side (a human cannot
+            #     pre-engineer the positional encoded vector).
+            #   - legacy/positional models expose only ``feature_columns`` -> the
+            #     caller already supplies encoded numeric values, so vectorize the
+            #     dict into the ordered positional row (the original contract).
+            # Branching keeps BOTH families correct: a FeatureBuilder model fed a
+            # raw dict it cannot encode, or a positional model fed raw_features,
+            # would otherwise 500.
+            try:
+                model_info = await client.get_model_info(model_name)
+            except Exception as e:
+                logger.error("Could not fetch model_info for predict (model=%s): %s", model_name, e)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Model metadata unavailable for '{model_name}'",
+                )
+
+            keep_columns = model_info.get("keep_columns")
+            if isinstance(keep_columns, list) and keep_columns:
+                # Gold-standard raw-covariate path. Validate completeness HERE for
+                # an honest 422 — the served FeatureBuilder rejects an incomplete
+                # row with an opaque 500, so we name the missing covariates instead.
+                missing = [
+                    c
+                    for c in keep_columns
+                    if c not in features_payload or features_payload[c] is None
+                ]
+                if missing:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            f"Missing required covariate(s) for '{model_name}': {missing}. "
+                            f"Expected raw covariates: {list(keep_columns)}"
+                        ),
+                    )
+                used_raw_path = True
+                input_data = {
+                    "raw_features": [features_payload],
+                    "model_name": model_name,
+                    "model_type": "classification",
+                    "return_proba": request.return_probabilities,
+                    "return_intervals": request.return_intervals,
+                    "feature_source": feature_source,
+                }
+            else:
+                # Legacy positional path (original contract). The dict carries
+                # already-encoded numeric values; vectorize into feature_columns
+                # order, failing closed on a missing column or an absent order
+                # (mirrors ``_resolve_feature_order`` using the fetched metadata).
+                columns = model_info.get("feature_columns")
+                if not columns or not isinstance(columns, list):
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=(
+                            f"Model '{model_name}' does not expose a feature order; "
+                            "cannot vectorize feature dictionary"
+                        ),
+                    )
+                feature_order = [str(c) for c in columns]
+                ordered_row = _vectorize_feature_dict(
+                    features_payload, feature_order, context=f"predict(model={model_name})"
+                )
+                input_data = {
+                    "features": [ordered_row],
+                    "model_name": model_name,
+                    "model_type": "classification",
+                    "return_proba": request.return_probabilities,
+                    "return_intervals": request.return_intervals,
+                    "feature_source": feature_source,
+                }
 
         # Call BentoML endpoint
         result = await client.predict(model_name, input_data)
