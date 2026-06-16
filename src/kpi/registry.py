@@ -128,6 +128,7 @@ class KPIRegistry:
             view=data.get("view"),
             threshold=threshold,
             unit=data.get("unit"),
+            value_format=data.get("value_format"),
             frequency=data.get("frequency", "daily"),
             primary_causal_library=primary_causal,
             brand=data.get("brand"),
