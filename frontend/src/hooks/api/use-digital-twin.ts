@@ -141,7 +141,7 @@ export function useDigitalTwinHealth(
  *
  * const handleSimulate = () => {
  *   simulate({
- *     intervention_type: InterventionType.HCP_ENGAGEMENT,
+ *     intervention_type: InterventionType.EMAIL_CAMPAIGN,
  *     brand: 'Remibrutinib',
  *     sample_size: 1000,
  *     duration_days: 90,

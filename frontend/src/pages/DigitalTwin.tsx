@@ -165,7 +165,7 @@ function SimulationForm({
   onSubmit: (data: { interventionType: InterventionType; brand: string; sampleSize: number; durationDays: number }) => void;
   isLoading: boolean;
 }) {
-  const [interventionType, setInterventionType] = useState<InterventionType>(InterventionType.HCP_ENGAGEMENT);
+  const [interventionType, setInterventionType] = useState<InterventionType>(InterventionType.EMAIL_CAMPAIGN);
   const [brand, setBrand] = useState('Remibrutinib');
   const [sampleSize, setSampleSize] = useState(1000);
   const [durationDays, setDurationDays] = useState(90);
@@ -186,12 +186,12 @@ function SimulationForm({
           onChange={(e) => setInterventionType(e.target.value as InterventionType)}
           className="w-full px-3 py-2 bg-[var(--color-background)] border border-[var(--color-border)] rounded-lg text-[var(--color-text-primary)]"
         >
-          <option value={InterventionType.HCP_ENGAGEMENT}>HCP Engagement</option>
-          <option value={InterventionType.PATIENT_SUPPORT}>Patient Support</option>
-          <option value={InterventionType.DIGITAL_MARKETING}>Digital Marketing</option>
-          <option value={InterventionType.REP_TRAINING}>Rep Training</option>
-          <option value={InterventionType.PRICING}>Pricing</option>
-          <option value={InterventionType.FORMULARY_ACCESS}>Formulary Access</option>
+          <option value={InterventionType.EMAIL_CAMPAIGN}>Email Campaign</option>
+          <option value={InterventionType.CALL_FREQUENCY_INCREASE}>Increased Call Frequency</option>
+          <option value={InterventionType.SPEAKER_PROGRAM_INVITATION}>Speaker Program Invitation</option>
+          <option value={InterventionType.SAMPLE_DISTRIBUTION}>Sample Distribution</option>
+          <option value={InterventionType.PEER_INFLUENCE_ACTIVATION}>Peer Influence Activation</option>
+          <option value={InterventionType.DIGITAL_ENGAGEMENT}>Digital Engagement</option>
         </select>
       </div>
 

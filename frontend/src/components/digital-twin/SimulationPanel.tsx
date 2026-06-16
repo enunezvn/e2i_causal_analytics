@@ -73,13 +73,14 @@ export interface SimulationPanelProps {
 // CONSTANTS
 // =============================================================================
 
+// Canonical channel-level labels — mirror the backend INTERVENTION_CATALOG.
 const INTERVENTION_TYPE_LABELS: Record<InterventionType, string> = {
-  [InterventionType.HCP_ENGAGEMENT]: 'HCP Engagement Campaign',
-  [InterventionType.PATIENT_SUPPORT]: 'Patient Support Program',
-  [InterventionType.PRICING]: 'Pricing Change',
-  [InterventionType.REP_TRAINING]: 'Rep Training Program',
-  [InterventionType.DIGITAL_MARKETING]: 'Digital Marketing',
-  [InterventionType.FORMULARY_ACCESS]: 'Formulary Access Initiative',
+  [InterventionType.EMAIL_CAMPAIGN]: 'Email Campaign',
+  [InterventionType.CALL_FREQUENCY_INCREASE]: 'Increased Call Frequency',
+  [InterventionType.SPEAKER_PROGRAM_INVITATION]: 'Speaker Program Invitation',
+  [InterventionType.SAMPLE_DISTRIBUTION]: 'Sample Distribution',
+  [InterventionType.PEER_INFLUENCE_ACTIVATION]: 'Peer Influence Activation',
+  [InterventionType.DIGITAL_ENGAGEMENT]: 'Digital Engagement',
 };
 
 const DEFAULT_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali'];
@@ -114,7 +115,7 @@ export function SimulationPanel({
   className = '',
 }: SimulationPanelProps) {
   const [formValues, setFormValues] = useState<SimulationFormValues>({
-    interventionType: InterventionType.HCP_ENGAGEMENT,
+    interventionType: InterventionType.EMAIL_CAMPAIGN,
     brand: initialBrand,
     sampleSize: 1000,
     durationDays: 90,

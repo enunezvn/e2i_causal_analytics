@@ -646,6 +646,92 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
 
 
 # =============================================================================
+# INTERVENTION TAXONOMY ENDPOINT (single source of truth for the dropdown)
+# =============================================================================
+
+
+class InterventionTypeItem(BaseModel):
+    """A canonical, selectable intervention type for the simulation dropdown."""
+
+    value: str = Field(..., description="Canonical intervention_type value")
+    label: str = Field(..., description="Human-readable label")
+    effect_basis: str = Field(
+        ...,
+        description=(
+            "'synthetic' (v1: SyntheticEffectDataProvider, intervention-agnostic uplift) "
+            "or 'modeled' (Phase 2: real per-brand CATE)"
+        ),
+    )
+    available: bool = Field(
+        ...,
+        description=(
+            "True if a trained twin model exists for the requested brand/twin_type "
+            "(else /simulate would 503). The frontend exposes only available types."
+        ),
+    )
+
+
+class InterventionTypesResponse(BaseModel):
+    """Brand-aware list of canonical intervention types for the dropdown."""
+
+    interventions: List[InterventionTypeItem] = Field(default_factory=list)
+    brand: Optional[str] = Field(None, description="Brand the availability was resolved for")
+    twin_type: str = Field(..., description="Twin type the availability was resolved for")
+    timestamp: datetime = Field(..., description="Response timestamp")
+
+
+@router.get(
+    "/intervention-types",
+    response_model=InterventionTypesResponse,
+    summary="List canonical intervention types (brand-aware availability)",
+    operation_id="list_intervention_types",
+)
+async def list_intervention_types(
+    brand: Optional[BrandEnum] = Query(None, description="Resolve availability for this brand"),
+    twin_type: TwinTypeEnum = Query(TwinTypeEnum.HCP, description="Twin type"),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> InterventionTypesResponse:
+    """
+    Return the canonical intervention taxonomy — the single source of truth the
+    frontend dropdown reads, so FE and backend can never drift.
+
+    Availability is **brand-aware**: an intervention is ``available`` only when a
+    trained twin model exists for the brand/twin_type (otherwise ``/simulate``
+    would 503 "no trained model"). The frontend exposes only available types, so
+    the menu reflects what can actually be simulated. ``effect_basis`` is
+    ``"synthetic"`` in v1 (the DGP is intervention-agnostic) and becomes
+    ``"modeled"`` per type as Phase 2 wires real per-brand CATE.
+    """
+    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
+    from src.digital_twin.models.twin_models import TwinType
+
+    available = False
+    if brand is not None:
+        try:
+            repo = await _get_twin_repo()
+            actives = await repo.list_active_models(
+                twin_type=TwinType(twin_type.value), brand=brand.value
+            )
+            available = len(actives) > 0
+        except Exception as e:  # repo/DB unreachable — degrade to "unavailable", never fabricate
+            logger.warning("intervention-types: model availability check failed: %s", e)
+            available = False
+
+    items = [
+        InterventionTypeItem(
+            value=value, label=label, effect_basis="synthetic", available=available
+        )
+        for value, label in INTERVENTION_CATALOG
+    ]
+    return InterventionTypesResponse(
+        interventions=items,
+        brand=brand.value if brand else None,
+        twin_type=twin_type.value,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+# =============================================================================
 # SIMULATION ENDPOINTS
 # =============================================================================
 

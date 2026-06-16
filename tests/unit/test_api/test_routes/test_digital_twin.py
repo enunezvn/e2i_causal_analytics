@@ -409,6 +409,56 @@ async def test_get_simulation_history_repo_error_is_generic(mock_twin_repository
 
 
 # =============================================================================
+# TESTS - Intervention Types (contract: GET /intervention-types)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_list_intervention_types_is_canonical_source_of_truth(mock_twin_repository):
+    """The endpoint must serve exactly the backend SUPPORTED_INTERVENTIONS — the
+    single source of truth the FE dropdown mirrors (so they can never drift)."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        TwinTypeEnum,
+        list_intervention_types,
+    )
+    from src.digital_twin.effect.provider import SUPPORTED_INTERVENTIONS
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+
+    result = await list_intervention_types(
+        brand=BrandEnum.REMIBRUTINIB, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+
+    assert {i.value for i in result.interventions} == SUPPORTED_INTERVENTIONS
+    assert len(result.interventions) == 6
+    assert all(i.effect_basis == "synthetic" for i in result.interventions)
+    # A trained twin model exists for the brand -> every type is available.
+    assert all(i.available for i in result.interventions)
+    assert result.brand == "Remibrutinib"
+
+
+@pytest.mark.asyncio
+async def test_list_intervention_types_unavailable_without_trained_model(mock_twin_repository):
+    """Brand-aware availability: no trained twin model for the brand -> the types
+    are reported unavailable (honest — /simulate would 503), never fabricated."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        TwinTypeEnum,
+        list_intervention_types,
+    )
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[])
+
+    result = await list_intervention_types(
+        brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+
+    assert len(result.interventions) == 6
+    assert all(not i.available for i in result.interventions)
+
+
+# =============================================================================
 # TESTS - Scenario Comparison (contract: POST /simulations/compare)
 # =============================================================================
 

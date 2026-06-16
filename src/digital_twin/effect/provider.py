@@ -16,14 +16,28 @@ import pandas as pd
 
 from src.digital_twin.effect.errors import EffectDataUnavailable
 
-SUPPORTED_INTERVENTIONS = {
-    "email_campaign",
-    "call_frequency_increase",
-    "speaker_program_invitation",
-    "sample_distribution",
-    "peer_influence_activation",
-    "digital_engagement",
-}
+# Canonical intervention taxonomy — the single source of truth for the
+# digital-twin intervention vocabulary (value + human label). The
+# /digital-twin/intervention-types endpoint and the frontend dropdown both
+# source from this, so FE and backend can never drift. (The prior FE enum —
+# hcp_engagement, rep_training, ... — was @deprecated and DISJOINT from this
+# set, so every UI simulation 422'd "unsupported intervention".)
+#
+# v1 effect basis is "synthetic": the SyntheticEffectDataProvider DGP is
+# intervention-agnostic (effect == true_ate for every supported type), so the
+# type is an allowlist gate, not an effect differentiator. A future
+# CohortEffectDataProvider (Phase 2) sources a real per-brand CATE for the
+# mappable types and flips their basis to "modeled".
+INTERVENTION_CATALOG: tuple[tuple[str, str], ...] = (
+    ("email_campaign", "Email Campaign"),
+    ("call_frequency_increase", "Increased Call Frequency"),
+    ("speaker_program_invitation", "Speaker Program Invitation"),
+    ("sample_distribution", "Sample Distribution"),
+    ("peer_influence_activation", "Peer Influence Activation"),
+    ("digital_engagement", "Digital Engagement"),
+)
+
+SUPPORTED_INTERVENTIONS = {value for value, _label in INTERVENTION_CATALOG}
 
 _CONFOUNDERS = ["decile", "engagement_score", "adoption_propensity", "tenure_years"]
 

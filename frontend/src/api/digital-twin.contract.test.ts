@@ -55,14 +55,14 @@ describe('digital-twin API contract', () => {
     it('calls POST /digital-twin/simulations/compare with the request body', async () => {
       const request: ScenarioComparisonRequest = {
         base_scenario: {
-          intervention_type: InterventionType.HCP_ENGAGEMENT,
+          intervention_type: InterventionType.EMAIL_CAMPAIGN,
           brand: 'Remibrutinib',
           sample_size: 1000,
           duration_days: 90,
         },
         alternative_scenarios: [
           {
-            intervention_type: InterventionType.DIGITAL_MARKETING,
+            intervention_type: InterventionType.DIGITAL_ENGAGEMENT,
             brand: 'Remibrutinib',
             sample_size: 1000,
             duration_days: 90,

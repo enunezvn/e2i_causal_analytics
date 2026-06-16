@@ -156,7 +156,7 @@ describe('SimulationPanel', () => {
       expect(mockOnSimulate).toHaveBeenCalledTimes(1);
       expect(mockOnSimulate).toHaveBeenCalledWith(
         expect.objectContaining({
-          intervention_type: InterventionType.HCP_ENGAGEMENT,
+          intervention_type: InterventionType.EMAIL_CAMPAIGN,
           brand: 'Remibrutinib',
           sample_size: 1000,
           duration_days: 90,
@@ -208,12 +208,12 @@ describe('SimulationPanel', () => {
       await user.click(trigger);
 
       // Use role to get options specifically (avoids multiple element issues)
-      expect(screen.getByRole('option', { name: 'HCP Engagement Campaign' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Patient Support Program' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Pricing Change' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Rep Training Program' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Digital Marketing' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Formulary Access Initiative' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Email Campaign' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Increased Call Frequency' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Speaker Program Invitation' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Sample Distribution' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Peer Influence Activation' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Digital Engagement' })).toBeInTheDocument();
     }, 15000); // Increased timeout for userEvent interactions
 
     it('changes intervention type when option selected', async () => {
@@ -223,7 +223,7 @@ describe('SimulationPanel', () => {
       const trigger = screen.getByLabelText(/Intervention Type/i);
       await user.click(trigger);
 
-      await user.click(screen.getByRole('option', { name: 'Patient Support Program' }));
+      await user.click(screen.getByRole('option', { name: 'Sample Distribution' }));
 
       // Submit to verify the change was captured
       const submitButton = screen.getByRole('button', { name: /Run Simulation/i });
@@ -231,7 +231,7 @@ describe('SimulationPanel', () => {
 
       expect(mockOnSimulate).toHaveBeenCalledWith(
         expect.objectContaining({
-          intervention_type: InterventionType.PATIENT_SUPPORT,
+          intervention_type: InterventionType.SAMPLE_DISTRIBUTION,
         })
       );
     });
@@ -516,7 +516,7 @@ describe('SimulationPanel', () => {
       await user.click(submitButton);
 
       expect(mockOnSimulate).toHaveBeenCalledWith({
-        intervention_type: InterventionType.HCP_ENGAGEMENT,
+        intervention_type: InterventionType.EMAIL_CAMPAIGN,
         brand: 'Remibrutinib',
         sample_size: 1000,
         duration_days: 90,

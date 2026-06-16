@@ -73,7 +73,7 @@ const mockHistory = {
     {
       simulation_id: 'real-sim-001',
       created_at: '2026-06-04T10:00:00Z',
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
+      intervention_type: InterventionType.EMAIL_CAMPAIGN,
       brand: 'Remibrutinib',
       ate_estimate: 0.085,
       recommendation_type: RecommendationType.DEPLOY,
@@ -81,7 +81,7 @@ const mockHistory = {
     {
       simulation_id: 'real-sim-002',
       created_at: '2026-06-03T14:30:00Z',
-      intervention_type: InterventionType.DIGITAL_MARKETING,
+      intervention_type: InterventionType.DIGITAL_ENGAGEMENT,
       brand: 'Fabhalta',
       ate_estimate: 0.012,
       recommendation_type: RecommendationType.REFINE,
@@ -234,7 +234,7 @@ describe('DigitalTwin', () => {
     });
     expect(mockMutate).toHaveBeenCalledWith({
       intervention: {
-        intervention_type: InterventionType.HCP_ENGAGEMENT,
+        intervention_type: InterventionType.EMAIL_CAMPAIGN,
         duration_weeks: 13, // Math.ceil(90 / 7)
       },
       brand: 'Remibrutinib',
@@ -392,8 +392,8 @@ describe('DigitalTwin', () => {
     await act(async () => {
       await user.click(historyTab);
     });
-    // /Hcp Engagement/i also matches the form's <option>; pick the history row <p>.
-    const matches = await screen.findAllByText(/Hcp Engagement/i);
+    // /Email Campaign/i also matches the form's <option>; pick the history row <p>.
+    const matches = await screen.findAllByText(/Email Campaign/i);
     const row = matches.find((el) => el.tagName === 'P') ?? matches[matches.length - 1];
     await act(async () => {
       await user.click(row);
@@ -442,7 +442,7 @@ describe('DigitalTwin', () => {
     await act(async () => {
       await user.click(screen.getByRole('button', { name: /History/i }));
     });
-    const matches = await screen.findAllByText(/Hcp Engagement/i);
+    const matches = await screen.findAllByText(/Email Campaign/i);
     const row = matches.find((el) => el.tagName === 'P') ?? matches[matches.length - 1];
     await act(async () => {
       await user.click(row);

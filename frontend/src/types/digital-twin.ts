@@ -72,16 +72,22 @@ export enum FidelityGrade {
 // =============================================================================
 
 /**
- * Types of interventions that can be simulated
- * @deprecated Use intervention_type string field instead
+ * Canonical intervention types — channel-level tactics that mirror the backend
+ * `INTERVENTION_CATALOG` (src/digital_twin/effect/provider.py) and the
+ * `/digital-twin/intervention-types` endpoint, so FE and backend cannot drift.
+ *
+ * NOTE: the previous program-level values (hcp_engagement, rep_training, pricing,
+ * digital_marketing, formulary_access, patient_support) were disjoint from the
+ * backend allowlist, so every UI simulation 422'd "unsupported intervention".
+ * These are the values `/simulate` actually accepts.
  */
 export enum InterventionType {
-  HCP_ENGAGEMENT = 'hcp_engagement',
-  PATIENT_SUPPORT = 'patient_support',
-  PRICING = 'pricing',
-  REP_TRAINING = 'rep_training',
-  DIGITAL_MARKETING = 'digital_marketing',
-  FORMULARY_ACCESS = 'formulary_access',
+  EMAIL_CAMPAIGN = 'email_campaign',
+  CALL_FREQUENCY_INCREASE = 'call_frequency_increase',
+  SPEAKER_PROGRAM_INVITATION = 'speaker_program_invitation',
+  SAMPLE_DISTRIBUTION = 'sample_distribution',
+  PEER_INFLUENCE_ACTIVATION = 'peer_influence_activation',
+  DIGITAL_ENGAGEMENT = 'digital_engagement',
 }
 
 /**
