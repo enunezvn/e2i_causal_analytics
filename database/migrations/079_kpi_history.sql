@@ -33,3 +33,9 @@ CREATE INDEX IF NOT EXISTS idx_kpi_history_lookup
 
 COMMENT ON TABLE kpi_history IS
     'Materialized monthly KPI values (real backfill / as-of recompute) for the time-series KPI-history view. Populated by src/kpi/history_backfill.py.';
+
+-- PostgREST caches the schema; a freshly-created table is invisible to the REST
+-- API (and thus to the backfill's upsert and the /api/kpis/{id}/history read)
+-- until the cache is reloaded. Mirrors migration 074. NOTIFY is transactional —
+-- it delivers on COMMIT, so it is safe inside run_migrations.sh's wrapped txn.
+NOTIFY pgrst, 'reload schema';
