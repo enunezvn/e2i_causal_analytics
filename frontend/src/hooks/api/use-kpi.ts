@@ -479,6 +479,7 @@ export function prefetchKPIHealth(): Promise<void> {
  *
  * @param kpiId - KPI identifier
  * @param brand - Optional brand filter
+ * @param region - Optional region filter (forwarded to the value query)
  * @returns Combined query results for metadata and value
  *
  * @example
@@ -498,9 +499,9 @@ export function prefetchKPIHealth(): Promise<void> {
  * );
  * ```
  */
-export function useKPIDetail(kpiId: string, brand?: string) {
+export function useKPIDetail(kpiId: string, brand?: string, region?: string) {
   const metadataQuery = useKPIMetadata(kpiId);
-  const valueQuery = useKPIValue(kpiId, brand);
+  const valueQuery = useKPIValue(kpiId, brand, region);
 
   return {
     metadata: metadataQuery.data,

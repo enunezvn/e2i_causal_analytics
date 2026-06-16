@@ -77,6 +77,36 @@ import type { KPIMetadata } from '@/types/kpi';
  */
 const DQ_MODEL_ID = 'data_quality_pipeline';
 
+/**
+ * Brand / region cuts the DQ rule values can be sliced by.
+ *
+ * The KPI calculators are brand- and region-aware (mig 078) and `GET
+ * /api/kpis/{id}` accepts both, but the page never forwarded either — so every
+ * rule value read the portfolio aggregate ("why only aggregated metrics?").
+ * `All` / `All US` mean "no filter" (portfolio). Region is sent lowercased to
+ * match the backend (KPI SQL matches case-insensitively; region data is stored
+ * lowercase) — mirrors Home.tsx's `regionToParam`.
+ *
+ * SCOPE (honest): only the per-rule values in the Validation Rules table are
+ * brand/region-aware. The drift-derived dimension cards and the Drift Status
+ * section reflect the `data_quality_pipeline` model, which is NOT brand-scoped,
+ * so they intentionally stay portfolio-level regardless of these selectors.
+ */
+const DQ_BRAND_OPTIONS = [
+  { value: 'All', label: 'All Brands' },
+  { value: 'Remibrutinib', label: 'Remibrutinib' },
+  { value: 'Fabhalta', label: 'Fabhalta' },
+  { value: 'Kisqali', label: 'Kisqali' },
+] as const;
+
+const DQ_REGION_OPTIONS = [
+  { value: 'All US', label: 'All US Regions' },
+  { value: 'Northeast', label: 'Northeast' },
+  { value: 'South', label: 'South' },
+  { value: 'Midwest', label: 'Midwest' },
+  { value: 'West', label: 'West' },
+] as const;
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -157,12 +187,16 @@ function KPIDrilldownRow({
   kpi,
   statusFilter = 'all',
   onStatusComputed,
+  brand,
+  region,
 }: {
   kpi: KPIMetadata;
   statusFilter?: string;
   onStatusComputed?: (kpiId: string, status: RuleStatus) => void;
+  brand?: string;
+  region?: string;
 }) {
-  const { metadata, value, isLoading, error } = useKPIDetail(kpi.id);
+  const { metadata, value, isLoading, error } = useKPIDetail(kpi.id, brand, region);
 
   // Prefer freshly fetched metadata; fall back to the list item to avoid a flash
   const effectiveMeta = metadata ?? kpi;
@@ -254,6 +288,9 @@ function KPIDrilldownRow({
 function DataQuality() {
   const [searchQuery, setSearchQuery] = useState('');
   const [ruleStatusFilter, setRuleStatusFilter] = useState<string>('all');
+  // F3 — brand/region cut for the per-rule values. Default = portfolio aggregate.
+  const [selectedBrand, setSelectedBrand] = useState<string>('All');
+  const [selectedRegion, setSelectedRegion] = useState<string>('All US');
   // #322 — per-row computed status reported up by each KPIDrilldownRow.
   // Lets us render the "No data quality KPIs match your filters" empty-state
   // when the status filter hides every row.
@@ -306,6 +343,12 @@ function DataQuality() {
   // DERIVED VALUES
   // ---------------------------------------------------------------------------
   const allKpis = useMemo<KPIMetadata[]>(() => kpiList?.kpis ?? [], [kpiList]);
+
+  // F3 — map the selected cut to backend query params. 'All' / 'All US' = no
+  // filter (portfolio); region lowercased to match the backend's stored case.
+  const brandParam = selectedBrand === 'All' ? undefined : selectedBrand;
+  const regionParam =
+    selectedRegion === 'All US' ? undefined : selectedRegion.toLowerCase();
 
   const filteredKpis = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -626,7 +669,8 @@ function DataQuality() {
                 <div>
                   <CardTitle>Validation Rules</CardTitle>
                   <CardDescription>
-                    Data quality KPIs from workstream <code>ws1_data_quality</code>
+                    Data quality KPIs from workstream <code>ws1_data_quality</code>. Rule
+                    values reflect the selected brand and region.
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
@@ -647,6 +691,33 @@ function DataQuality() {
                       className="pl-9 w-64"
                     />
                   </div>
+                  {/* F3 — brand/region cut selectors. Scoped here (Validation
+                      Rules header) because only these per-rule values are
+                      brand/region-aware; the dimension/drift cards are not. */}
+                  <Select value={selectedBrand} onValueChange={setSelectedBrand}>
+                    <SelectTrigger className="w-40" aria-label="Filter rules by brand">
+                      <SelectValue placeholder="Brand" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DQ_BRAND_OPTIONS.map((b) => (
+                        <SelectItem key={b.value} value={b.value}>
+                          {b.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={selectedRegion} onValueChange={setSelectedRegion}>
+                    <SelectTrigger className="w-44" aria-label="Filter rules by region">
+                      <SelectValue placeholder="Region" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DQ_REGION_OPTIONS.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>
+                          {r.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <Select value={ruleStatusFilter} onValueChange={setRuleStatusFilter}>
                     {/* #328 — aria-label gives the SelectTrigger an accessible name */}
                     <SelectTrigger className="w-32" aria-label="Filter rules by status">
@@ -703,6 +774,8 @@ function DataQuality() {
                           key={kpi.id}
                           kpi={kpi}
                           statusFilter={ruleStatusFilter}
+                          brand={brandParam}
+                          region={regionParam}
                           onStatusComputed={(id, status) =>
                             setKpiStatuses((prev) =>
                               prev[id] === status ? prev : { ...prev, [id]: status }

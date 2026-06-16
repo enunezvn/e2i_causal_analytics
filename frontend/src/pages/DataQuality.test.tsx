@@ -622,7 +622,7 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
 
     render(<DataQuality />, { wrapper: createWrapper() });
 
-    const statusTrigger = screen.getByRole('combobox');
+    const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
     fireEvent.click(statusTrigger);
     const failOpt = screen.getByRole('option', { name: /^Fail$/ });
     fireEvent.click(failOpt);
@@ -682,7 +682,7 @@ describe('PR #322-326,328 — adversarial-review fixes', () => {
     expect(screen.getAllByText('Completeness - HCP Master').length).toBeGreaterThanOrEqual(1);
 
     // Open the status filter and pick "Warning"
-    const statusTrigger = screen.getByRole('combobox');
+    const statusTrigger = screen.getByRole('combobox', { name: /filter.*status|status/i });
     fireEvent.click(statusTrigger);
     const warningOpt = screen.getByRole('option', { name: /^Warning$/ });
     fireEvent.click(warningOpt);
@@ -907,5 +907,71 @@ describe('DataQuality honesty — backend rule status (no null→X)', () => {
       await screen.findByText(/No data quality KPIs match your filters/i)
     ).toBeInTheDocument();
     expect(screen.queryByText('Completeness - HCP Master')).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// F3 — Brand / Region cut selectors.
+// The KPI calculators are brand/region-aware (mig 078) and the value endpoint
+// accepts both, but the page never passed either, so every rule value read the
+// portfolio aggregate ("why only aggregated metrics?"). The selectors must (a)
+// render with the real gold-standard brands + US regions, (b) default to the
+// portfolio (no brand/region), and (c) forward the selection — region lowercased
+// to match the backend's case — down to the per-row useKPIDetail fetch.
+// =============================================================================
+
+describe('DataQuality — F3 brand/region cut selectors', () => {
+  it('renders Brand and Region selectors alongside the status filter', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    expect(screen.getByRole('combobox', { name: /brand/i })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /region/i })).toBeInTheDocument();
+    // The pre-existing status filter must remain distinct (not swallowed).
+    expect(screen.getByRole('combobox', { name: /status/i })).toBeInTheDocument();
+  });
+
+  it('Brand selector lists the three gold-standard brands (+ All Brands)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));
+    expect(screen.getByRole('option', { name: 'All Brands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Remibrutinib' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Fabhalta' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Kisqali' })).toBeInTheDocument();
+  });
+
+  it('Region selector lists the four US regions (+ All US Regions)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /region/i }));
+    expect(screen.getByRole('option', { name: 'All US Regions' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Northeast' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'South' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Midwest' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'West' })).toBeInTheDocument();
+  });
+
+  it('defaults to the portfolio aggregate (no brand/region passed to useKPIDetail)', () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    const calls = (useKPIDetail as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => c[0] === 'WS1-DQ-001'
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c[1] === undefined && c[2] === undefined)).toBe(true);
+  });
+
+  it('selecting a brand forwards it to the per-rule value fetch', async () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /brand/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'Remibrutinib' }));
+    await waitFor(() =>
+      expect(useKPIDetail).toHaveBeenCalledWith('WS1-DQ-001', 'Remibrutinib', undefined)
+    );
+  });
+
+  it('selecting a region forwards the lowercased region to the per-rule value fetch', async () => {
+    render(<DataQuality />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('combobox', { name: /region/i }));
+    fireEvent.click(screen.getByRole('option', { name: 'West' }));
+    await waitFor(() =>
+      expect(useKPIDetail).toHaveBeenCalledWith('WS1-DQ-001', undefined, 'west')
+    );
   });
 });
