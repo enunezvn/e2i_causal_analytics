@@ -91,6 +91,52 @@ export enum InterventionType {
 }
 
 /**
+ * FE fallback mirroring the backend `INTERVENTION_CATALOG`
+ * (`src/digital_twin/effect/provider.py`). Used ONLY when the
+ * `/digital-twin/intervention-types` endpoint is unreachable, so the dropdown
+ * stays usable on a transient fetch failure. The endpoint is the source of
+ * truth (brand-aware availability); `/simulate` is the authoritative gate.
+ */
+export const FALLBACK_INTERVENTION_TYPES: ReadonlyArray<{
+  value: InterventionType;
+  label: string;
+}> = [
+  { value: InterventionType.EMAIL_CAMPAIGN, label: 'Email Campaign' },
+  { value: InterventionType.CALL_FREQUENCY_INCREASE, label: 'Increased Call Frequency' },
+  { value: InterventionType.SPEAKER_PROGRAM_INVITATION, label: 'Speaker Program Invitation' },
+  { value: InterventionType.SAMPLE_DISTRIBUTION, label: 'Sample Distribution' },
+  { value: InterventionType.PEER_INFLUENCE_ACTIVATION, label: 'Peer Influence Activation' },
+  { value: InterventionType.DIGITAL_ENGAGEMENT, label: 'Digital Engagement' },
+];
+
+/**
+ * A canonical, selectable intervention type as served by
+ * `GET /digital-twin/intervention-types` (single source of truth for the
+ * simulation dropdown — FE and backend can never drift).
+ */
+export interface InterventionTypeItem {
+  /** Canonical intervention_type value (matches the backend allowlist). */
+  value: string;
+  /** Human-readable label. */
+  label: string;
+  /** 'synthetic' (v1, intervention-agnostic uplift) or 'modeled' (Phase 2: real per-brand CATE). */
+  effect_basis: string;
+  /** True when a trained twin model exists for the requested brand/twin_type (else `/simulate` 503s). */
+  available: boolean;
+}
+
+/** Brand-aware list of canonical intervention types for the dropdown. */
+export interface InterventionTypesResponse {
+  interventions: InterventionTypeItem[];
+  /** Brand the availability was resolved for (null when no brand was passed). */
+  brand: string | null;
+  /** Twin type the availability was resolved for. */
+  twin_type: string;
+  /** Response timestamp (ISO-8601). */
+  timestamp: string;
+}
+
+/**
  * @deprecated Use Recommendation enum instead
  */
 export enum RecommendationType {

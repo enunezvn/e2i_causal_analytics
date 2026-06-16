@@ -410,6 +410,15 @@ export const queryKeys = {
         params?.offset ?? 0,
       ] as const,
     health: () => [...queryKeys.digitalTwin.all(), 'health'] as const,
+    // Brand-aware availability is folded into the key so switching brands
+    // refetches (and does not collide with another brand's cached result).
+    interventionTypes: (params?: { brand?: string; twin_type?: string }) =>
+      [
+        ...queryKeys.digitalTwin.all(),
+        'intervention-types',
+        params?.brand ?? null,
+        params?.twin_type ?? 'hcp',
+      ] as const,
   },
 
   /**

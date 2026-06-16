@@ -25,7 +25,11 @@ vi.mock('@/lib/api-client', () => ({
 }));
 
 import { get, post } from '@/lib/api-client';
-import { getSimulationHistory, compareScenarios } from './digital-twin';
+import {
+  getSimulationHistory,
+  compareScenarios,
+  listInterventionTypes,
+} from './digital-twin';
 import type { ScenarioComparisonRequest } from '@/types/digital-twin';
 import { InterventionType } from '@/types/digital-twin';
 
@@ -76,6 +80,23 @@ describe('digital-twin API contract', () => {
       const [url, body] = (post as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(url).toBe('/digital-twin/simulations/compare');
       expect(body).toEqual(request);
+    });
+  });
+
+  describe('listInterventionTypes', () => {
+    it('calls GET /digital-twin/intervention-types with no params', async () => {
+      await listInterventionTypes();
+      expect(get).toHaveBeenCalledTimes(1);
+      const [url, params] = (get as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(url).toBe('/digital-twin/intervention-types');
+      expect(params).toBeUndefined();
+    });
+
+    it('forwards brand (and twin_type) so availability is brand-aware', async () => {
+      await listInterventionTypes({ brand: 'Remibrutinib', twin_type: 'hcp' });
+      const [url, params] = (get as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(url).toBe('/digital-twin/intervention-types');
+      expect(params).toEqual({ brand: 'Remibrutinib', twin_type: 'hcp' });
     });
   });
 });

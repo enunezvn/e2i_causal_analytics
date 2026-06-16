@@ -16,7 +16,7 @@
  * @module pages/DigitalTwin
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   FlaskConical,
   Play,
@@ -35,6 +35,7 @@ import {
   useSimulationHistory,
   useRunSimulation,
   useSimulation,
+  useInterventionTypes,
 } from '@/hooks/api/use-digital-twin';
 import { toast } from '@/hooks/use-toast';
 import { useDataFreshness } from '@/hooks/use-data-freshness';
@@ -42,6 +43,7 @@ import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator
 import {
   InterventionType,
   SimulationStatus,
+  FALLBACK_INTERVENTION_TYPES,
   type SimulationResponse,
   type SimulationDetailResponse,
 } from '@/types/digital-twin';
@@ -170,6 +172,40 @@ function SimulationForm({
   const [sampleSize, setSampleSize] = useState(1000);
   const [durationDays, setDurationDays] = useState(90);
 
+  // Phase 1b: the intervention dropdown is driven by the backend's canonical
+  // /digital-twin/intervention-types endpoint (brand-aware availability), so
+  // FE/BE can never drift and the menu exposes only interventions that can
+  // actually be simulated for the selected brand (a trained twin model exists).
+  // Folding `brand` into the query key refetches on brand change.
+  const {
+    data: typesData,
+    isLoading: typesLoading,
+    isError: typesError,
+  } = useInterventionTypes({ brand });
+
+  const availableInterventions = useMemo(() => {
+    if (typesError) {
+      // Endpoint unreachable → degrade to the full canonical fallback so the
+      // form stays usable; /simulate remains the authoritative availability gate.
+      return FALLBACK_INTERVENTION_TYPES.map((i) => ({ value: i.value as string, label: i.label }));
+    }
+    return (typesData?.interventions ?? [])
+      .filter((i) => i.available)
+      .map((i) => ({ value: i.value, label: i.label }));
+  }, [typesData, typesError]);
+
+  const noneAvailable =
+    !typesLoading && !typesError && availableInterventions.length === 0;
+
+  // Keep the selected intervention valid as availability changes (e.g. the user
+  // switches to a brand with a different available set).
+  useEffect(() => {
+    if (availableInterventions.length === 0) return;
+    if (!availableInterventions.some((i) => i.value === interventionType)) {
+      setInterventionType(availableInterventions[0].value as InterventionType);
+    }
+  }, [availableInterventions, interventionType]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({ interventionType, brand, sampleSize, durationDays });
@@ -184,15 +220,30 @@ function SimulationForm({
         <select
           value={interventionType}
           onChange={(e) => setInterventionType(e.target.value as InterventionType)}
-          className="w-full px-3 py-2 bg-[var(--color-background)] border border-[var(--color-border)] rounded-lg text-[var(--color-text-primary)]"
+          disabled={typesLoading || noneAvailable}
+          className="w-full px-3 py-2 bg-[var(--color-background)] border border-[var(--color-border)] rounded-lg text-[var(--color-text-primary)] disabled:opacity-50"
         >
-          <option value={InterventionType.EMAIL_CAMPAIGN}>Email Campaign</option>
-          <option value={InterventionType.CALL_FREQUENCY_INCREASE}>Increased Call Frequency</option>
-          <option value={InterventionType.SPEAKER_PROGRAM_INVITATION}>Speaker Program Invitation</option>
-          <option value={InterventionType.SAMPLE_DISTRIBUTION}>Sample Distribution</option>
-          <option value={InterventionType.PEER_INFLUENCE_ACTIVATION}>Peer Influence Activation</option>
-          <option value={InterventionType.DIGITAL_ENGAGEMENT}>Digital Engagement</option>
+          {availableInterventions.map((i) => (
+            <option key={i.value} value={i.value}>
+              {i.label}
+            </option>
+          ))}
         </select>
+        {typesLoading && (
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+            Loading available interventions…
+          </p>
+        )}
+        {typesError && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            Could not verify availability — showing all interventions.
+          </p>
+        )}
+        {noneAvailable && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            No trained twin model for {brand} yet — simulations are unavailable for this brand.
+          </p>
+        )}
       </div>
 
       <div>
@@ -241,7 +292,7 @@ function SimulationForm({
 
       <button
         type="submit"
-        disabled={isLoading}
+        disabled={isLoading || typesLoading || noneAvailable}
         className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary-hover)] transition-colors disabled:opacity-50"
       >
         {isLoading ? (

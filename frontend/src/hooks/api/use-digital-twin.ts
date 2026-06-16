@@ -24,6 +24,7 @@ import {
   getSimulation,
   getSimulationHistory,
   getDigitalTwinHealth,
+  listInterventionTypes,
 } from '@/api/digital-twin';
 import type {
   SimulateRequest,
@@ -33,6 +34,7 @@ import type {
   ScenarioComparisonResult,
   SimulationHistoryResponse,
   DigitalTwinHealthResponse,
+  InterventionTypesResponse,
 } from '@/types/digital-twin';
 import type { ApiError } from '@/lib/api-client';
 
@@ -121,6 +123,38 @@ export function useDigitalTwinHealth(
     queryFn: getDigitalTwinHealth,
     staleTime: 30 * 1000, // 30 seconds
     refetchInterval: 60 * 1000, // Refetch every minute
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch the canonical intervention types with brand-aware availability.
+ *
+ * Drives the simulation dropdown (single source of truth — FE/BE cannot drift).
+ * Folding `brand` into the query key means switching brands refetches and the
+ * menu exposes only interventions that can actually be simulated for that brand.
+ *
+ * @param params - Brand + twin_type to resolve availability for
+ * @param options - Additional TanStack Query options
+ * @returns Query result with the canonical intervention types
+ *
+ * @example
+ * ```tsx
+ * const { data } = useInterventionTypes({ brand });
+ * const selectable = data?.interventions.filter((i) => i.available) ?? [];
+ * ```
+ */
+export function useInterventionTypes(
+  params?: { brand?: string; twin_type?: string },
+  options?: Omit<
+    UseQueryOptions<InterventionTypesResponse, ApiError>,
+    'queryKey' | 'queryFn'
+  >
+) {
+  return useQuery<InterventionTypesResponse, ApiError>({
+    queryKey: queryKeys.digitalTwin.interventionTypes(params),
+    queryFn: () => listInterventionTypes(params),
+    staleTime: 5 * 60 * 1000, // 5 minutes — availability changes only on (re)training
     ...options,
   });
 }

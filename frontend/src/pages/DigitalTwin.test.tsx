@@ -31,6 +31,7 @@ vi.mock('@/hooks/api/use-digital-twin', () => ({
   useSimulationHistory: vi.fn(),
   useRunSimulation: vi.fn(),
   useSimulation: vi.fn(),
+  useInterventionTypes: vi.fn(),
 }));
 
 import {
@@ -38,6 +39,7 @@ import {
   useSimulationHistory,
   useRunSimulation,
   useSimulation,
+  useInterventionTypes,
 } from '@/hooks/api/use-digital-twin';
 
 // Create wrapper with QueryClientProvider
@@ -140,6 +142,38 @@ const mockDetail: SimulationDetailResponse = {
   completed_at: '2026-06-04T10:05:00Z',
 };
 
+// Canonical intervention catalog (mirrors backend INTERVENTION_CATALOG) for
+// building brand-aware /intervention-types responses in tests.
+const INTERVENTION_CATALOG: ReadonlyArray<[string, string]> = [
+  ['email_campaign', 'Email Campaign'],
+  ['call_frequency_increase', 'Increased Call Frequency'],
+  ['speaker_program_invitation', 'Speaker Program Invitation'],
+  ['sample_distribution', 'Sample Distribution'],
+  ['peer_influence_activation', 'Peer Influence Activation'],
+  ['digital_engagement', 'Digital Engagement'],
+];
+const ALL_INTERVENTION_VALUES = INTERVENTION_CATALOG.map(([v]) => v);
+
+// Build a useInterventionTypes() hook return where only `availableValues` are
+// flagged available (the component exposes only available types).
+function interventionTypesResult(availableValues: string[]) {
+  return {
+    data: {
+      interventions: INTERVENTION_CATALOG.map(([value, label]) => ({
+        value,
+        label,
+        effect_basis: 'synthetic',
+        available: availableValues.includes(value),
+      })),
+      brand: 'Remibrutinib',
+      twin_type: 'hcp',
+      timestamp: '2026-06-16T00:00:00Z',
+    },
+    isLoading: false,
+    isError: false,
+  };
+}
+
 // Markers that ONLY appear in the old fabricated shape — must never render.
 const FABRICATED_MARKERS = [
   'TRx Lift',
@@ -182,6 +216,10 @@ describe('DigitalTwin', () => {
         isLoading: false,
         isError: false,
       })
+    );
+    // Default: all interventions available for the (Remibrutinib) brand.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(ALL_INTERVENTION_VALUES)
     );
   });
 
@@ -240,6 +278,38 @@ describe('DigitalTwin', () => {
       brand: 'Remibrutinib',
       twin_count: 1000,
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 1b — the intervention dropdown is driven by /intervention-types
+  // (brand-aware availability), not a hardcoded list.
+  // -------------------------------------------------------------------------
+
+  it('lists ONLY backend-available interventions in the dropdown', () => {
+    // Only two interventions available for this brand.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(['email_campaign', 'digital_engagement'])
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    // The two available types are present as <option>s …
+    expect(screen.getByRole('option', { name: 'Email Campaign' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Digital Engagement' })).toBeInTheDocument();
+    // … and the unavailable ones are NOT rendered (would 503 on /simulate).
+    expect(screen.queryByRole('option', { name: 'Sample Distribution' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Speaker Program Invitation' })).not.toBeInTheDocument();
+  });
+
+  it('disables Run and explains when no twin model exists for the brand', () => {
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult([]) // no trained model → nothing available
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(
+      screen.getByText(/No trained twin model for Remibrutinib yet/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
   });
 
   it('shows loading state when simulation is running', () => {
