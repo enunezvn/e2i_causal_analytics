@@ -54,6 +54,7 @@ import {
 import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { useKPIList, useKPIDetail } from '@/hooks/api/use-kpi';
+import { formatKpiValue } from '@/lib/kpi-format';
 import {
   useLatestDriftStatus,
   useDriftHistory,
@@ -249,8 +250,10 @@ function KPIDrilldownRow({
           <span className="text-rose-500 text-sm">error</span>
         ) : numericValue !== undefined ? (
           <span className="font-medium">
-            {numericValue.toFixed(1)}
-            {effectiveMeta.unit ? effectiveMeta.unit : ''}
+            {formatKpiValue(numericValue, {
+              unit: effectiveMeta.unit,
+              valueFormat: effectiveMeta.value_format,
+            })}
           </span>
         ) : (
           <span
@@ -262,8 +265,11 @@ function KPIDrilldownRow({
         )}
         {threshold?.target !== undefined && (
           <span className="text-muted-foreground text-xs ml-1">
-            / target {threshold.target}
-            {effectiveMeta.unit ?? ''}
+            / target{' '}
+            {formatKpiValue(threshold.target, {
+              unit: effectiveMeta.unit,
+              valueFormat: effectiveMeta.value_format,
+            })}
           </span>
         )}
         {/* Synthetic-mode provenance: label the figure so a reviewer never reads

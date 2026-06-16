@@ -975,3 +975,43 @@ describe('DataQuality — F3 brand/region cut selectors', () => {
     );
   });
 });
+
+// =============================================================================
+// value_format='percent' — ratio KPIs (value is 0-1) must render as NN.N%, not
+// a raw fraction. toFixed(1) on a fraction collapses 0.87 -> "0.9" AND hides the
+// per-cut differences F3 exposes (DQ-006 0.1053 vs 0.1095 both -> "0.1"). The
+// backend now stamps value_format='percent' (mig: kpi_definitions.yaml); the row
+// must honor it.
+// =============================================================================
+
+describe('DataQuality — value_format=percent rendering', () => {
+  it('renders a percent KPI as NN.N% (value*100), not the raw 0-1 fraction', () => {
+    (useKPIDetail as ReturnType<typeof vi.fn>).mockReturnValue({
+      metadata: {
+        ...dqKpis[0],
+        unit: undefined,
+        value_format: 'percent',
+        threshold: { target: 0.85, warning: 0.7, critical: 0.5 },
+      },
+      value: {
+        kpi_id: 'WS1-DQ-001',
+        value: 0.870049,
+        status: 'good',
+        calculated_at: '2026-01-02T08:30:00Z',
+        cached: false,
+        metadata: {},
+      },
+      isLoading: false,
+      error: null,
+      isMetadataLoading: false,
+      isValueLoading: false,
+      refetch: vi.fn(),
+    });
+
+    render(<DataQuality />, { wrapper: createWrapper() });
+
+    // The percent form appears; the raw fraction "0.9" must NOT.
+    expect(screen.getAllByText('87.0%').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('0.9')).not.toBeInTheDocument();
+  });
+});

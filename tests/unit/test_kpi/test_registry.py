@@ -26,6 +26,7 @@ ws1_data_quality:
       warning: 0.70
       critical: 0.50
     frequency: daily
+    value_format: percent
 
 ws2_triggers:
   trigger_precision:
@@ -79,6 +80,20 @@ class TestKPIRegistry:
         assert kpi is not None
         assert kpi.name == "Source Coverage - Patients"
         assert kpi.workstream == Workstream.WS1_DATA_QUALITY
+
+    @patch("builtins.open", mock_open(read_data=SAMPLE_KPI_YAML))
+    @patch("pathlib.Path.exists", return_value=True)
+    def test_value_format_parsed_and_defaults_none(self, mock_exists):
+        """value_format is parsed from YAML; KPIs without it default to None."""
+        registry = KPIRegistry()
+
+        dq = registry.get("WS1-DQ-001")
+        assert dq is not None
+        assert dq.value_format == "percent"
+
+        tr = registry.get("WS2-TR-001")
+        assert tr is not None
+        assert tr.value_format is None
 
     @patch("builtins.open", mock_open(read_data=SAMPLE_KPI_YAML))
     @patch("pathlib.Path.exists", return_value=True)
