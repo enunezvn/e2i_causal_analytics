@@ -442,3 +442,145 @@ class TestQueryVolumeCountedPerWorkflowNotPerEntry:
         assert response.status_code == 200
         # Both workflows still counted (counting doesn't depend on ts parse).
         assert response.json()["summary"]["total_queries"] == 2
+
+
+# =============================================================================
+# PER-TIER METRICS (GET /analytics/tier-metrics)
+# =============================================================================
+
+
+class TestTierMetricsEndpoint:
+    """GET /analytics/tier-metrics rolls audit_chain_entries up per tier.
+
+    Backs the Agent Orchestration "Tier Metrics" tab (Avg Response / Tasks),
+    which previously rendered "—" for all tiers. Per-tier success rate stays
+    unmeasured (None -> "—") because validation_passed is too sparse to compute
+    honestly. The automated health poller is excluded so the counts reflect
+    meaningful agent work rather than polling volume.
+    """
+
+    async def _ok_fetch(self, *args, **kwargs):
+        return {
+            "success": True,
+            "data": [
+                # Tier 2: two real causal-agent actions, both timed.
+                {
+                    "agent_name": "gap_analyzer",
+                    "agent_tier": 2,
+                    "duration_ms": 800.0,
+                    "validation_passed": None,
+                    "created_at": "2026-06-16T12:00:00Z",
+                    "action_type": "gap_detector",
+                },
+                {
+                    "agent_name": "heterogeneous_optimizer",
+                    "agent_tier": 2,
+                    "duration_ms": 1200.0,
+                    "validation_passed": True,
+                    "created_at": "2026-06-16T12:01:00Z",
+                    "action_type": "estimate_cate",
+                },
+                # Tier 3: one real monitoring action ...
+                {
+                    "agent_name": "experiment_monitor",
+                    "agent_tier": 3,
+                    "duration_ms": 200.0,
+                    "validation_passed": None,
+                    "created_at": "2026-06-16T12:02:00Z",
+                    "action_type": "srm_detector",
+                },
+                # ... PLUS automated health-poller rows that MUST be excluded
+                # from both the task count and the latency average.
+                {
+                    "agent_name": "health_score_quick",
+                    "agent_tier": 3,
+                    "duration_ms": 120.0,
+                    "validation_passed": None,
+                    "created_at": "2026-06-16T12:03:00Z",
+                    "action_type": "component",
+                },
+                {
+                    "agent_name": "health_score_quick",
+                    "agent_tier": 3,
+                    "duration_ms": 130.0,
+                    "validation_passed": None,
+                    "created_at": "2026-06-16T12:03:01Z",
+                    "action_type": "compose",
+                },
+            ],
+        }
+
+    def _get(self, client):
+        with (
+            patch(
+                "src.api.routes.analytics._get_supabase_client",
+                return_value=_FakeDB(),
+            ),
+            patch(
+                "src.api.routes.analytics._fetch_audit_metrics",
+                side_effect=self._ok_fetch,
+            ),
+        ):
+            return client.get("/analytics/tier-metrics?hours=24")
+
+    def test_returns_all_six_tiers_in_order(self, client):
+        resp = self._get(client)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [t["tier"] for t in body["tiers"]] == [0, 1, 2, 3, 4, 5]
+        assert body["window_hours"] == 24
+
+    def test_real_tasks_and_avg_latency_per_tier(self, client):
+        resp = self._get(client)
+        by_tier = {t["tier"]: t for t in resp.json()["tiers"]}
+        # Tier 2: two timed tasks -> avg (800 + 1200) / 2 = 1000.0
+        assert by_tier[2]["tasks_completed"] == 2
+        assert by_tier[2]["avg_response_time_ms"] == 1000.0
+
+    def test_poller_excluded_from_counts_and_latency(self, client):
+        resp = self._get(client)
+        by_tier = {t["tier"]: t for t in resp.json()["tiers"]}
+        # Tier 3 has 1 real action + 2 poller rows; only the real one counts,
+        # so the latency is the real 200ms, NOT poller-diluted (~150ms).
+        assert by_tier[3]["tasks_completed"] == 1
+        assert by_tier[3]["avg_response_time_ms"] == 200.0
+
+    def test_idle_tier_is_zero_tasks_null_latency(self, client):
+        resp = self._get(client)
+        by_tier = {t["tier"]: t for t in resp.json()["tiers"]}
+        # Tiers 0/1/4/5 had no rows -> honest empties (0 tasks, unmeasured ms).
+        for tier in (0, 1, 4, 5):
+            assert by_tier[tier]["tasks_completed"] == 0
+            assert by_tier[tier]["avg_response_time_ms"] is None
+
+    def test_success_rate_is_honest_null_for_every_tier(self, client):
+        resp = self._get(client)
+        for t in resp.json()["tiers"]:
+            # validation_passed is too sparse to compute per-tier honestly.
+            assert t["success_rate"] is None
+
+    def test_fetch_failure_returns_503_not_zeroed_tiers(self, client):
+        async def _failing(*args, **kwargs):
+            return {"success": False, "data": [], "error": "connection reset"}
+
+        with (
+            patch(
+                "src.api.routes.analytics._get_supabase_client",
+                return_value=_FakeDB(),
+            ),
+            patch(
+                "src.api.routes.analytics._fetch_audit_metrics",
+                side_effect=_failing,
+            ),
+        ):
+            resp = client.get("/analytics/tier-metrics?hours=24")
+        # Honest degradation: never present fabricated zeroed tiers as real.
+        assert resp.status_code == 503
+
+    def test_client_unavailable_returns_503(self, client):
+        with patch(
+            "src.api.routes.analytics._get_supabase_client",
+            return_value=None,
+        ):
+            resp = client.get("/analytics/tier-metrics?hours=24")
+        assert resp.status_code == 503

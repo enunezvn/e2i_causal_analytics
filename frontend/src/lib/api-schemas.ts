@@ -567,6 +567,26 @@ export const AgentStatusResponseSchema = z.object({
   timestamp: z.string().optional(),
 });
 
+/**
+ * Per-tier performance item (matches TierMetricsItem in analytics.py).
+ * avg_response_time_ms / success_rate are null when unmeasured (-> "—").
+ */
+export const TierMetricsItemSchema = z.object({
+  tier: z.number().int().min(0).max(5),
+  tasks_completed: z.number().int().nonnegative(),
+  avg_response_time_ms: z.number().nullable().optional(),
+  success_rate: z.number().nullable().optional(),
+});
+
+/**
+ * Per-tier metrics response (matches TierMetricsResponse in analytics.py).
+ */
+export const TierMetricsResponseSchema = z.object({
+  tiers: z.array(TierMetricsItemSchema),
+  window_hours: z.number().int(),
+  generated_at: z.string().optional(),
+});
+
 // =============================================================================
 // CHAT/COPILOTKIT SCHEMAS
 // =============================================================================
@@ -1411,6 +1431,7 @@ export const schemaRegistry = {
 
   // Agents
   'agents.status': AgentStatusResponseSchema,
+  'analytics.tier-metrics': TierMetricsResponseSchema,
 
   // Audit
   'audit.entries': AuditEntriesResponseSchema,
@@ -1521,6 +1542,7 @@ export type CausalAnalysisResponseValidated = z.infer<typeof CausalAnalysisRespo
 export type ChatResponseValidated = z.infer<typeof ChatResponseSchema>;
 export type AgentValidated = z.infer<typeof AgentSchema>;
 export type AgentStatusResponseValidated = z.infer<typeof AgentStatusResponseSchema>;
+export type TierMetricsResponseValidated = z.infer<typeof TierMetricsResponseSchema>;
 export type AuditEntryValidated = z.infer<typeof AuditEntrySchema>;
 export type ChainVerificationValidated = z.infer<typeof ChainVerificationSchema>;
 export type WorkflowSummaryValidated = z.infer<typeof WorkflowSummarySchema>;
