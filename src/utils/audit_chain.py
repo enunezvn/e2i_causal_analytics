@@ -560,9 +560,7 @@ class AuditChainService:
             try:
                 self._log_verification(workflow_id, verification)
             except Exception as log_exc:
-                logger.warning(
-                    "Failed to persist verification log (non-fatal): %s", log_exc
-                )
+                logger.warning("Failed to persist verification log (non-fatal): %s", log_exc)
 
         return verification
 
