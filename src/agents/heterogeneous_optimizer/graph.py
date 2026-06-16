@@ -72,10 +72,19 @@ def create_heterogeneous_optimizer_graph(
         Compiled LangGraph workflow
     """
 
-    # Initialize nodes
+    # Initialize nodes. Both data-fetching nodes (cate_estimator and
+    # hierarchical_analyzer) receive the SAME connector so they read the same
+    # live substrate and we avoid instantiating two Supabase clients. Passing
+    # data_connector to hierarchical_analyzer is required: without it the node
+    # had no real source and raised RuntimeError in production (mock forbidden),
+    # failing every analysis after the CATE step (#30).
     cate_estimator = CATEEstimatorNode(data_connector)
     segment_analyzer = SegmentAnalyzerNode()
-    hierarchical_analyzer = HierarchicalAnalyzerNode() if enable_hierarchical else None
+    hierarchical_analyzer = (
+        HierarchicalAnalyzerNode(data_connector=data_connector)
+        if enable_hierarchical
+        else None
+    )
     policy_learner = PolicyLearnerNode()
     profile_generator = ProfileGeneratorNode()
 

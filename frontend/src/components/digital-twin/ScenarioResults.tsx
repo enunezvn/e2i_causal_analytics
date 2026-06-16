@@ -33,6 +33,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import type { SimulationResponse } from '@/types/digital-twin';
+import type { ApiError } from '@/lib/api-client';
 
 // =============================================================================
 // TYPES
@@ -43,6 +44,13 @@ export interface ScenarioResultsProps {
   results: SimulationResponse | null;
   /** Whether results are loading */
   isLoading?: boolean;
+  /**
+   * The error from a failed simulation run, if any. When present (and not
+   * loading), an HONEST error card is shown instead of the neutral
+   * "No Simulation Results" empty state — so a 503/408/500 is never silently
+   * indistinguishable from "never ran".
+   */
+  error?: ApiError | null;
   /** Additional CSS classes */
   className?: string;
 }
@@ -87,6 +95,7 @@ function StatCard({
 export function ScenarioResults({
   results,
   isLoading = false,
+  error = null,
   className = '',
 }: ScenarioResultsProps) {
   if (isLoading) {
@@ -97,6 +106,45 @@ export function ScenarioResults({
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
             <p className="mt-4 text-muted-foreground">Running simulation...</p>
             <p className="text-sm text-muted-foreground">This may take a few moments</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Honest error state — a failed run must NOT look like "never ran".
+  // The backend detail is surfaced verbatim; no fabricated numbers.
+  if (error) {
+    const detail = error.data?.detail ?? error.message;
+    let title = 'Simulation failed';
+    let hint =
+      'The simulation could not be completed. See the details below and try again.';
+    if (error.status === 503) {
+      title = 'No trained twin model is available';
+      hint =
+        'No trained digital-twin model is available for this brand/cohort, or the model registry is temporarily unavailable. Try a brand with a trained twin, or retry shortly.';
+    } else if (error.status === 408) {
+      title = 'Simulation timed out';
+      hint = 'The simulation took too long. Try again with a smaller twin count.';
+    } else if (error.isNetworkError) {
+      title = 'Could not reach the simulation service';
+      hint = 'A network error occurred. Check your connection and try again.';
+    } else if (error.isServerError) {
+      title = 'Simulation failed';
+      hint = 'An unexpected server error occurred while running the simulation.';
+    }
+    return (
+      <Card className={cn('border-destructive/40', className)}>
+        <CardContent className="pt-6">
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <AlertTriangle className="h-12 w-12 text-destructive mb-4" />
+            <h3 className="text-lg font-medium mb-2">{title}</h3>
+            <p className="text-muted-foreground max-w-md">{hint}</p>
+            {detail && (
+              <p className="mt-3 text-sm text-destructive/90 max-w-md break-words">
+                {detail}
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>

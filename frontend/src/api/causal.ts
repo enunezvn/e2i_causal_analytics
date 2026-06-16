@@ -37,6 +37,7 @@ import type {
   SequentialPipelineRequest,
   SequentialPipelineResponse,
   CausalHealthResponse,
+  TreatmentEffectResponse,
 } from '@/types/causal';
 
 // =============================================================================
@@ -356,6 +357,38 @@ export async function getCausalAnalysisHistory(
     { limit },
     { schema: CausalAnalysisHistoryResponseWireSchema }
   );
+}
+
+// =============================================================================
+// TREATMENT EFFECTS ENDPOINTS
+// =============================================================================
+
+/**
+ * Estimate the treatment effect for one (cohort, brand) cell.
+ *
+ * Loads a confounded cohort frame from the DB and runs the live DoWhy+EconML
+ * sequential pipeline to recover a de-confounded ATE + CI + p_value + n. This is
+ * a HEAVY synchronous compute (~5-30s); call it only when both cohort and brand
+ * are chosen (ideally behind an explicit Run affordance).
+ *
+ * @param cohort - initiation | persistence | discontinuation | hcp_adoption
+ * @param brand - Remibrutinib | Fabhalta | Kisqali
+ * @returns Real treatment-effect estimate for the cell
+ *
+ * @example
+ * ```typescript
+ * const te = await getTreatmentEffects('hcp_adoption', 'Fabhalta');
+ * console.log(`ATE: ${te.ate} [${te.ci_lower}, ${te.ci_upper}]`);
+ * ```
+ */
+export async function getTreatmentEffects(
+  cohort: string,
+  brand: string
+): Promise<TreatmentEffectResponse> {
+  return get<TreatmentEffectResponse>(`${CAUSAL_BASE}/treatment-effects`, {
+    cohort,
+    brand,
+  });
 }
 
 // =============================================================================

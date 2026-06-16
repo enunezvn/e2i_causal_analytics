@@ -111,7 +111,16 @@ class RunSegmentAnalysisRequest(BaseModel):
     effect_modifiers: Optional[List[str]] = Field(
         default=None, description="Variables that modify treatment effect"
     )
-    data_source: str = Field(default="hcp_data", description="Data source identifier")
+    data_source: str = Field(
+        default="business_metrics",
+        description=(
+            "Data source table identifier. Defaults to 'business_metrics' "
+            "(the live per-HCP rollup substrate the CATE engine reads); the "
+            "page also passes this explicitly so neither the default nor the "
+            "request silently targets a non-existent table. Must be a table in "
+            "HeterogeneousOptimizerDataConnector.SUPPORTED_TABLES."
+        ),
+    )
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Additional filters")
 
     # Configuration
@@ -130,12 +139,16 @@ class RunSegmentAnalysisRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "query": "Which HCP segments respond best to rep visits?",
-                "treatment_var": "rep_visits",
-                "outcome_var": "trx",
-                "segment_vars": ["region", "specialty"],
-                "effect_modifiers": ["practice_size", "years_experience"],
-                "data_source": "hcp_data",
+                "query": (
+                    "Treatment effect heterogeneity of engagement on "
+                    "conversion by region"
+                ),
+                "treatment_var": "engagement_score",
+                "outcome_var": "conversion_rate",
+                "segment_vars": ["region"],
+                "effect_modifiers": ["market_share", "total_rx_count"],
+                "data_source": "business_metrics",
+                "filters": {"metric_type": "per_hcp_rollup"},
                 "n_estimators": 100,
                 "top_segments_count": 10,
             }
@@ -1170,8 +1183,23 @@ async def _execute_segment_analysis(
             },
         )
 
-        # Create and run graph
-        graph = create_heterogeneous_optimizer_graph()
+        # Create and run graph.
+        #
+        # Resolve the production data connector ONCE and pass it into the graph
+        # so BOTH data-fetching nodes (cate_estimator and hierarchical_analyzer)
+        # read the same live substrate (#30). Without an explicit connector the
+        # graph factory builds one only for cate_estimator; hierarchical_analyzer
+        # would then have no real source and — because the prod env forbids the
+        # mock fallback — RAISE RuntimeError, failing every analysis AFTER the
+        # (correct) CATE step. Resolving the real connector here keeps the whole
+        # graph on real data while preserving fail-closed behavior (a missing-
+        # credentials env still raises explicitly rather than fabricating).
+        from src.agents.heterogeneous_optimizer.nodes.cate_estimator import (
+            _get_default_data_connector,
+        )
+
+        data_connector = _get_default_data_connector()
+        graph = create_heterogeneous_optimizer_graph(data_connector=data_connector)
         result = await graph.ainvoke(initial_state)
 
         # Convert agent output to API response

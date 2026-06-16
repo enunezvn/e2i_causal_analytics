@@ -22,10 +22,13 @@ vi.mock('recharts', async () => {
   };
 });
 
-// Mock API hooks so we can drive `warnings[]` directly.
+// Mock API hooks so we can drive `warnings[]` directly. The page uses the
+// polling mutation (useRunSegmentAnalysisAndWait) so async results resolve to
+// COMPLETED before render; its mutation API surface (data/mutate/isPending/
+// error) is identical to useRunSegmentAnalysis.
 vi.mock('@/hooks/api', () => ({
   useSegmentHealth: vi.fn(),
-  useRunSegmentAnalysis: vi.fn(),
+  useRunSegmentAnalysisAndWait: vi.fn(),
   usePolicies: vi.fn(),
 }));
 
@@ -36,7 +39,7 @@ vi.mock('@/hooks/use-query-error', () => ({
 
 import {
   useSegmentHealth,
-  useRunSegmentAnalysis,
+  useRunSegmentAnalysisAndWait,
   usePolicies,
 } from '@/hooks/api';
 
@@ -59,7 +62,7 @@ describe('SegmentAnalysis — F-002 empty state + F-010 warnings', () => {
       isRefetching: false,
     });
     (usePolicies as ReturnType<typeof vi.fn>).mockReturnValue({ data: { policies: [] }, error: null });
-    (useRunSegmentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useRunSegmentAnalysisAndWait as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutate: vi.fn(),
       isPending: false,
@@ -98,7 +101,7 @@ describe('SegmentAnalysis — warnings rendering (F-010-frontend)', () => {
   });
 
   it('does not render a WarningBanner when no API response has been received', () => {
-    (useRunSegmentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useRunSegmentAnalysisAndWait as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutate: vi.fn(),
       isPending: false,
@@ -111,7 +114,7 @@ describe('SegmentAnalysis — warnings rendering (F-010-frontend)', () => {
   });
 
   it('renders WarningBanner with each warning string when API returns warnings[]', () => {
-    (useRunSegmentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useRunSegmentAnalysisAndWait as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         analysis_id: 'a1',
         warnings: ['Using mock data', 'CATE bounds approximate'],
@@ -149,7 +152,7 @@ describe('SegmentAnalysis — warnings rendering (F-010-frontend)', () => {
   });
 
   it('does not render WarningBanner when API returns empty warnings[]', () => {
-    (useRunSegmentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useRunSegmentAnalysisAndWait as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         analysis_id: 'a2',
         warnings: [],

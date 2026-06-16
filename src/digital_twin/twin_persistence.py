@@ -123,12 +123,29 @@ def load_twin_bundle(
     *,
     tracking_uri: Optional[str] = None,
 ) -> Tuple[Any, Dict[str, Any]]:
-    """Load the estimator + preprocessor bundle for a persisted twin model."""
+    """Load the estimator + preprocessor bundle for a persisted twin model.
+
+    With an HTTP tracking server (``MLFLOW_TRACKING_URI=http://...``) both
+    ``mlflow.sklearn.load_model`` and ``mlflow.artifacts.download_artifacts``
+    materialise the artifacts into a fresh local directory. If we let MLflow pick
+    its own temp dir on every call, the downloads accumulate in ``/tmp`` forever
+    and eventually fill the (RAM-backed) tmpfs → ``ENOSPC`` (#705). To prevent
+    that leak we route every download into a ``TemporaryDirectory`` (passed as
+    ``dst_path``) that is auto-removed when this function returns.
+
+    The estimator and the unpickled bundle are both fully materialised IN MEMORY
+    inside the ``with`` block, so deleting the on-disk downloads afterward is safe.
+    """
     mlflow = _mlflow(tracking_uri)
-    model = mlflow.sklearn.load_model(model_uri)
-    local = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=_BUNDLE_ARTIFACT_PATH)
-    with open(local, "rb") as fh:
-        bundle: Dict[str, Any] = pickle.load(fh)
+    with tempfile.TemporaryDirectory() as dst:
+        # load_model returns a fully in-memory estimator; the on-disk copy under
+        # dst is no longer referenced once load_model returns.
+        model = mlflow.sklearn.load_model(model_uri, dst_path=dst)
+        local = mlflow.artifacts.download_artifacts(
+            run_id=run_id, artifact_path=_BUNDLE_ARTIFACT_PATH, dst_path=dst
+        )
+        with open(local, "rb") as fh:
+            bundle: Dict[str, Any] = pickle.load(fh)
     return model, bundle
 
 
