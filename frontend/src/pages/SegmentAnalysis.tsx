@@ -361,9 +361,19 @@ export default function SegmentAnalysis() {
   //     conversion) with a real region-varying CATE.
   //   - segment_vars: ['region'] ONLY (the sole segment column with a planted
   //     CATE; 'specialty' does not exist and would 42703).
-  //   - effect_modifiers: ['market_share','total_rx_count'] — REQUIRED non-empty
-  //     (CausalForestDML needs X with >=1 feature) and also the de-confounding
-  //     covariates the planted DGP uses.
+  //   - effect_modifiers: ['region'] — region is the heterogeneity dimension, so
+  //     CausalForestDML estimates the per-region treatment effect directly. (The
+  //     prior version put market_share/total_rx_count in X and averaged the
+  //     effect over region post-hoc, which swapped the low-effect south/midwest
+  //     pair. Adversarial review showed keeping the continuous covariates in X
+  //     also inflates the per-region CIs ~5.7x and flips the true-positive
+  //     midwest to "not significant" — so they are W-only here.)
+  //   - confounders: ['market_share','total_rx_count'] — routed into the DML
+  //     nuisance model (W) and residualized out, adjusting for the continuous
+  //     confounding. With region in X + these in W the CATE is DE-CONFOUNDED:
+  //     recovers the planted ordering NE>W>S>MW, all four regions significant,
+  //     tight CIs. (Cost: the uplift/hierarchical responder sub-view has lower
+  //     within-segment X variance and may report fewer uplift segments.)
   //   - data_source + filters: passed EXPLICITLY so the page never relies on the
   //     request default to hit the right table.
   const handleRunAnalysis = () => {
@@ -373,7 +383,8 @@ export default function SegmentAnalysis() {
         treatment_var: selectedTreatment,
         outcome_var: selectedOutcome,
         segment_vars: ['region'],
-        effect_modifiers: ['market_share', 'total_rx_count'],
+        effect_modifiers: ['region'],
+        confounders: ['market_share', 'total_rx_count'],
         data_source: 'business_metrics',
         filters: { metric_type: 'per_hcp_rollup' },
         n_estimators: 100,

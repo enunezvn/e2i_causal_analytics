@@ -111,6 +111,16 @@ class RunSegmentAnalysisRequest(BaseModel):
     effect_modifiers: Optional[List[str]] = Field(
         default=None, description="Variables that modify treatment effect"
     )
+    confounders: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Confounders to adjust for. Routed into the DML nuisance model (W) "
+            "and residualized out, NOT modeled as effect modifiers — so the "
+            "reported per-segment CATE reflects the de-confounded treatment "
+            "effect rather than selection bias. Distinct from segment_vars "
+            "(reporting grouping) and effect_modifiers (heterogeneity features)."
+        ),
+    )
     data_source: str = Field(
         default="business_metrics",
         description=(
@@ -1165,6 +1175,11 @@ async def _execute_segment_analysis(
                 "outcome_var": request.outcome_var,
                 "segment_vars": request.segment_vars,
                 "effect_modifiers": request.effect_modifiers or [],
+                # Explicit confounders take precedence-1 in cate_estimator's
+                # _resolve_confounders and are residualized as the DML W (issue
+                # #237). Empty list = no explicit confounders (falls back to
+                # role_attributions / W=None), preserving prior behavior.
+                "confounders": request.confounders or [],
                 "data_source": request.data_source,
                 "filters": request.filters,
                 "n_estimators": request.n_estimators,

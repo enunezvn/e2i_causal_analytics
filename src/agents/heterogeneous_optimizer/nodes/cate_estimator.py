@@ -502,6 +502,10 @@ class CATEEstimatorNode:
             [state["treatment_var"], state["outcome_var"]]
             + state["effect_modifiers"]
             + state["segment_vars"]
+            # Confounders (issue #237) are residualized as the DML W; they must
+            # be fetched too, or _resolve_confounders silently drops them as
+            # "absent from available_columns" and the CATE stays confounded.
+            + list(state.get("confounders") or [])
         )
         # is_synthetic must never be an effect modifier / segment var (Shard 07 C2).
         from src.repositories.provenance import PROVENANCE_DROP_COLS

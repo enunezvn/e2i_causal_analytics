@@ -63,6 +63,13 @@ export interface RunSegmentAnalysisRequest {
   segment_vars: string[];
   /** Variables that modify treatment effect */
   effect_modifiers?: string[];
+  /**
+   * Confounders to adjust for. Routed into the DML nuisance model (W) and
+   * residualized out, so the reported per-segment CATE is de-confounded
+   * (reflects the true treatment effect, not selection bias). Distinct from
+   * segment_vars (reporting grouping) and effect_modifiers (heterogeneity).
+   */
+  confounders?: string[];
   /** Data source identifier */
   data_source?: string;
   /** Additional filters */

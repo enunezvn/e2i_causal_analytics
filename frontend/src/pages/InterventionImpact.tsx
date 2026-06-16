@@ -110,12 +110,21 @@ function InterventionImpact() {
     error: teError,
   } = useTreatmentEffects(teCohort, teBrand, { enabled: teRun });
 
-  // Segment Analysis tab: real CATE-by-region over the live business_metrics
-  // per_hcp_rollup substrate (engagement_score -> conversion_rate by region).
-  // Gated behind an explicit Run — the agent fits EconML/CausalML (~10-60s).
-  // Mirrors the standalone SegmentAnalysis page request EXACTLY (same treatment/
-  // outcome, segment=['region'], the de-confounding effect_modifiers, data_source
-  // + filters) so the two surfaces report the identical effect.
+  // Segment Analysis tab: real DE-CONFOUNDED CATE-by-region over the live
+  // business_metrics per_hcp_rollup substrate (engagement_score -> conversion_rate
+  // by region). Gated behind an explicit Run — the agent fits EconML/CausalML
+  // (~10-60s). Mirrors the standalone SegmentAnalysis page request EXACTLY.
+  //   - effect_modifiers (X) = ['region']: region is the heterogeneity dimension,
+  //     so CausalForestDML estimates the treatment effect PER region directly
+  //     (rather than post-hoc averaging a market/volume-indexed effect, which is
+  //     what swapped the low-effect south/midwest pair in the prior version).
+  //   - confounders (W) = market_share + total_rx_count: routed into the DML
+  //     nuisance model and residualized out, adjusting for the continuous
+  //     confounding. Together these recover the planted ordering NE>W>S>MW with
+  //     all four regions significant and tight CIs. (Keeping the continuous
+  //     covariates in X too was rejected after adversarial review: it inflates
+  //     the per-region CIs ~5.7x and flips the true-positive midwest to "not
+  //     significant" — a precision regression on this primary view.)
   const segmentRun = useRunSegmentAnalysisAndWait();
   const runSegmentAnalysis = () => {
     segmentRun.mutate({
@@ -124,7 +133,8 @@ function InterventionImpact() {
         treatment_var: 'engagement_score',
         outcome_var: 'conversion_rate',
         segment_vars: ['region'],
-        effect_modifiers: ['market_share', 'total_rx_count'],
+        effect_modifiers: ['region'],
+        confounders: ['market_share', 'total_rx_count'],
         data_source: 'business_metrics',
         filters: { metric_type: 'per_hcp_rollup' },
         n_estimators: 100,
