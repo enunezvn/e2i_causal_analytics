@@ -226,6 +226,42 @@ class TestHealthCheckerExecute:
                 assert "current_information_fraction" in exp
 
 
+class TestDedupeByName:
+    """Tests for _dedupe_by_name (collapses duplicate-named running experiments).
+
+    The synthetic generator leaves many perpetually-"running" rows sharing an
+    experiment_name (e.g. "Kisqali - Predict prescribing" x252). Without dedup
+    the newest-N slice surfaced many identical cards in the UI.
+    """
+
+    def test_keeps_most_recent_per_name(self):
+        # Rows arrive created_at-desc, so the FIRST occurrence per name is newest.
+        rows = [
+            {"id": "1", "experiment_name": "A"},
+            {"id": "2", "experiment_name": "B"},
+            {"id": "3", "experiment_name": "A"},  # older dup of A — dropped
+            {"id": "4", "experiment_name": "A"},  # older dup of A — dropped
+            {"id": "5", "experiment_name": "C"},
+        ]
+        out = HealthCheckerNode._dedupe_by_name(rows, cap=10)
+        assert [r["experiment_name"] for r in out] == ["A", "B", "C"]
+        assert [r["id"] for r in out] == ["1", "2", "5"]
+
+    def test_respects_cap(self):
+        rows = [{"id": str(i), "experiment_name": f"E{i}"} for i in range(50)]
+        out = HealthCheckerNode._dedupe_by_name(rows, cap=25)
+        assert len(out) == 25
+
+    def test_unnamed_rows_fall_back_to_id_and_are_not_collapsed(self):
+        # Two distinct unnamed rows must not collapse to a single "None" key.
+        rows = [{"id": "1"}, {"id": "2"}]
+        out = HealthCheckerNode._dedupe_by_name(rows, cap=10)
+        assert len(out) == 2
+
+    def test_empty_input(self):
+        assert HealthCheckerNode._dedupe_by_name([], cap=25) == []
+
+
 class TestGetExperiments:
     """Tests for _get_experiments method."""
 
@@ -272,9 +308,52 @@ class TestGetExperiments:
         mock_query.eq.assert_any_call("status", "running")
         # #894: the enumeration default-excludes synthetic experiments
         mock_query.eq.assert_any_call("is_synthetic", False)
-        # WS-BACKEND: the sweep is bounded (most-recent 25), not an unbounded scan.
+        # The sweep fetches a wide newest-first window (then collapses duplicate
+        # names via _dedupe_by_name); only the deduped subset incurs checks.
         mock_query.order.assert_called_once_with("created_at", desc=True)
-        mock_query.limit.assert_called_once_with(25)
+        mock_query.limit.assert_called_once_with(1000)
+
+    @pytest.mark.asyncio
+    async def test_get_experiments_dedups_duplicate_names(self, node, monkeypatch):
+        """check_all_active collapses duplicate-named rows + uses the wide fetch.
+
+        Forces real-mode (deployment_includes_synthetic -> False) so the path is
+        deterministic regardless of the ambient E2I_INCLUDE_SYNTHETIC flag, and
+        verifies the wide fetch limit (1000) plus the name-dedup actually run
+        inside _get_experiments (not just _dedupe_by_name in isolation).
+        """
+        import src.repositories.provenance as prov
+
+        monkeypatch.setattr(prov, "deployment_includes_synthetic", lambda: False)
+
+        mock_client = MagicMock()
+        mock_result = MagicMock()
+        mock_result.data = [
+            {"id": "1", "experiment_name": "Dup", "status": "running"},
+            {"id": "2", "experiment_name": "Dup", "status": "running"},  # collapsed
+            {"id": "3", "experiment_name": "Unique", "status": "running"},
+        ]
+        mock_query = MagicMock()
+        mock_query.select.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.order.return_value = mock_query
+        mock_query.limit.return_value = mock_query
+        mock_query.execute = AsyncMock(return_value=mock_result)
+        mock_client.table.return_value = mock_query
+
+        state: ExperimentMonitorState = {
+            "check_all_active": True,
+            "experiment_ids": [],
+            "status": "pending",
+        }
+
+        result = await node._get_experiments(mock_client, state)
+
+        # 3 rows in, 2 distinct names out (Dup collapsed to its first/newest row).
+        assert [r["id"] for r in result] == ["1", "3"]
+        # Wide newest-first fetch, then dedup (not a narrow .limit(25)).
+        mock_query.limit.assert_called_once_with(1000)
+        mock_query.eq.assert_any_call("is_synthetic", False)
 
     @pytest.mark.asyncio
     async def test_get_experiments_specific_ids(self, node):
