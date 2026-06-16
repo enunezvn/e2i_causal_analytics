@@ -92,6 +92,60 @@ class TestHierarchicalAnalyzerNode:
         assert node.timeout_seconds == 300
 
     @pytest.mark.asyncio
+    async def test_get_data_self_heals_connector_when_mock_forbidden(
+        self,
+        node: HierarchicalAnalyzerNode,
+        base_state: HeterogeneousOptimizerState,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#30 self-heal: no tier0_data + no connector in a mock-forbidden
+        (production) env -> _get_data resolves the default connector the same way
+        CATEEstimatorNode does and fetches, instead of raising the #30 error that
+        crashed the analysis after the CATE step had already succeeded on the
+        identical substrate."""
+        import src.agents.heterogeneous_optimizer.nodes.cate_estimator as ce
+
+        required = ["treatment", "outcome", "feature_1", "feature_2", "segment_a"]
+        df = pd.DataFrame({c: np.arange(120, dtype=float) for c in required})
+
+        class _FakeConnector:
+            def __init__(self) -> None:
+                self.queried = False
+
+            async def query(self, source: str, columns: object, filters: object) -> pd.DataFrame:
+                self.queried = True
+                return df
+
+        fake = _FakeConnector()
+        monkeypatch.setattr(ce, "_mock_connector_allowed", lambda: False)
+        monkeypatch.setattr(ce, "_get_default_data_connector", lambda: fake)
+
+        result = await node._get_data(base_state)
+
+        assert fake.queried is True
+        assert result is df  # self-healed + fetched; did NOT raise the #30 error
+
+    @pytest.mark.asyncio
+    async def test_get_data_still_fails_closed_when_no_real_connector(
+        self,
+        node: HierarchicalAnalyzerNode,
+        base_state: HeterogeneousOptimizerState,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The self-heal never fabricates: if no real connector can be built in a
+        mock-forbidden env, the honest fail-closed error still propagates."""
+        import src.agents.heterogeneous_optimizer.nodes.cate_estimator as ce
+
+        def _raise() -> object:
+            raise RuntimeError("Failed to initialize Supabase data connector")
+
+        monkeypatch.setattr(ce, "_mock_connector_allowed", lambda: False)
+        monkeypatch.setattr(ce, "_get_default_data_connector", _raise)
+
+        with pytest.raises(RuntimeError):
+            await node._get_data(base_state)
+
+    @pytest.mark.asyncio
     async def test_execute_success(
         self,
         node: HierarchicalAnalyzerNode,
