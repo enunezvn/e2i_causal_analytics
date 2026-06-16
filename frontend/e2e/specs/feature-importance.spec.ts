@@ -5,24 +5,76 @@ import { TIMEOUTS } from '../fixtures/test-data'
 import { assertNotLoading, assertNoErrors } from '../utils/assertions'
 
 // =============================================================================
-// LOCAL MOCK OVERRIDES (post-PR #316 live-wired contract)
+// LOCAL MOCK OVERRIDES (post-PR #985 cohort/individual redesign)
 // =============================================================================
 //
-// PR #316 rewired src/pages/FeatureImportance.tsx onto the real `/api/explain/*`
-// endpoints. The shared `mockApiRoutes` fixture serves a legacy `{ features:
-// [...] }` payload for `**/api/explain/**`, which:
-//   1. Leaves the model selector empty (model list never resolves), and
-//   2. Means the Model Info / Base Value / Top Feature card never renders
-//      because `hasExplanation` is false.
+// PR #985 redesigned src/pages/FeatureImportance.tsx into two modes:
+//   - **Cohort (global)** — the DEFAULT. On arrival it calls
+//     `GET /api/explain/global` (mean |SHAP| over a real cohort sample) and
+//     `GET /api/explain/models`. The summary card (Base Value / Top Feature) and
+//     the Bar/Beeswarm viz tabs are populated WITHOUT any entity selection.
+//   - **Individual** — reached via the "Individual" tab. It lists real entity
+//     IDs from `GET /api/explain/sample-entities` and AUTO-RUNS
+//     `POST /api/explain/predict` on selection (no Explain button). Waterfall +
+//     History viz tabs only exist here.
 //
-// We register more specific routes here AFTER mockApiRoutes so Playwright's
-// route-dispatch ordering picks ours first (last-registered wins on
-// per-request match). This keeps the fix scoped to spec + page-object per
-// the agent contract (do not modify api-mocks.ts).
+// The shared `mockApiRoutes` fixture serves a legacy `{ features: [...] }`
+// payload for `**/api/explain/**`, which does not match any of the redesigned
+// response shapes. We register more specific routes here AFTER mockApiRoutes so
+// Playwright's last-registered-wins dispatch picks ours first for the
+// `/api/explain/*` URLs. This keeps the fix scoped to spec + page-object (do not
+// modify api-mocks.ts).
 // =============================================================================
 
-const MOCK_MODEL_TYPES = ['propensity', 'churn_prediction'] as const
+// Only the real gold-standard cohort families are explainable; the page filters
+// the model list down to `is_gold_standard` (or, as a fallback, the
+// GOLD_STANDARD_COHORTS taxonomy). Serve two of those so the cohort selector is
+// populated and selectable. `formatModelLabel('initiation')` → "Initiation".
+const MOCK_MODEL_TYPES = ['initiation', 'persistence'] as const
 
+// Cohort-level (global) features — GlobalImportanceFeature[] shape from
+// src/types/explain.ts (mean_abs_shap / mean_shap / mean_feature_value /
+// contribution_rank). The page maps these into the bar chart + summary card.
+// `prior_visits` is intentionally rank 1 so the "Top Feature" stat renders
+// "prior visits" (the falsifiability anchor below).
+const MOCK_GLOBAL_FEATURES = [
+  {
+    feature_name: 'prior_visits',
+    mean_abs_shap: 0.31,
+    mean_shap: 0.27,
+    mean_feature_value: 4,
+    contribution_rank: 1,
+  },
+  {
+    feature_name: 'rx_count_90d',
+    mean_abs_shap: 0.18,
+    mean_shap: 0.18,
+    mean_feature_value: 12,
+    contribution_rank: 2,
+  },
+  {
+    feature_name: 'days_since_last_fill',
+    mean_abs_shap: 0.12,
+    mean_shap: -0.12,
+    mean_feature_value: 28,
+    contribution_rank: 3,
+  },
+]
+
+// Per-entity SHAP points — GlobalImportancePoint[] shape (real beeswarm dots).
+const MOCK_GLOBAL_POINTS = [
+  { feature_name: 'prior_visits', shap_value: 0.34, feature_value: 5 },
+  { feature_name: 'prior_visits', shap_value: 0.21, feature_value: 3 },
+  { feature_name: 'rx_count_90d', shap_value: 0.2, feature_value: 14 },
+  { feature_name: 'rx_count_90d', shap_value: 0.15, feature_value: 9 },
+  { feature_name: 'days_since_last_fill', shap_value: -0.14, feature_value: 31 },
+  { feature_name: 'days_since_last_fill', shap_value: -0.09, feature_value: 22 },
+]
+
+// Real entity IDs for the individual-mode picker.
+const MOCK_ENTITY_IDS = ['patient_e2e_001', 'patient_e2e_002', 'patient_e2e_003'] as const
+
+// Local (per-entity) feature contributions — FeatureContribution[] shape.
 const MOCK_FEATURES = [
   {
     feature_name: 'prior_visits',
@@ -48,25 +100,69 @@ const MOCK_FEATURES = [
 ]
 
 async function stubExplainEndpoints(page: Page): Promise<void> {
-  // Models list — drives the Select dropdown options.
+  // Models list — drives the cohort Select dropdown options. Mark the served
+  // types as gold-standard so the page's `is_gold_standard` filter keeps them.
   await page.route('**/api/explain/models', async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        supported_models: MOCK_MODEL_TYPES.map((model_type) => ({
+        supported_models: MOCK_MODEL_TYPES.map((model_type, i) => ({
           model_type,
-          latest_version: '4.7.0',
-          explainer_type: 'TreeExplainer',
-          avg_latency_ms: 42,
+          latest_version: '1.0.0',
+          explainer_type: 'LinearExplainer',
+          is_gold_standard: true,
+          description: `${model_type} gold-standard cohort model`,
+          avg_latency_ms: 42 + i,
         })),
         total_models: MOCK_MODEL_TYPES.length,
       }),
     })
   })
 
-  // Predict — fires on Explain / Refresh click. Returns the ExplainResponse
-  // shape declared in src/types/explain.ts.
+  // Cohort (global) feature importance — fires on arrival in the DEFAULT mode.
+  // GlobalFeatureImportanceResponse shape from src/types/explain.ts. `**` after
+  // the path matches the `?model_type=…&brand=…&sample_size=…` query string.
+  await page.route('**/api/explain/global**', async (route: Route) => {
+    const url = new URL(route.request().url())
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        model_type: url.searchParams.get('model_type') ?? MOCK_MODEL_TYPES[0],
+        brand: url.searchParams.get('brand') ?? 'Remibrutinib',
+        model_name: 'initiation_remibrutinib_goldstd_lr_v1',
+        // base_value 0.25 → formatBaseValue() renders "0.250" (anchor below).
+        base_value: 0.25,
+        sample_size: 25,
+        requested_sample_size: 25,
+        computation_method: 'LinearExplainer',
+        computed_at: new Date().toISOString(),
+        cached: false,
+        features: MOCK_GLOBAL_FEATURES,
+        points: MOCK_GLOBAL_POINTS,
+      }),
+    })
+  })
+
+  // Sample entities — drives the individual-mode picker. SampleEntitiesResponse
+  // shape. `**` matches the `?model_type=…&limit=…` query string.
+  await page.route('**/api/explain/sample-entities**', async (route: Route) => {
+    const url = new URL(route.request().url())
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        model_type: url.searchParams.get('model_type') ?? MOCK_MODEL_TYPES[0],
+        grain: 'patient',
+        id_field: 'patient_id',
+        entities: MOCK_ENTITY_IDS,
+      }),
+    })
+  })
+
+  // Predict — auto-fires when an entity is picked in individual mode. Returns
+  // the ExplainResponse shape declared in src/types/explain.ts.
   await page.route('**/api/explain/predict', async (route: Route) => {
     const request = route.request()
     let body: { patient_id?: string; model_type?: string } = {}
@@ -81,9 +177,9 @@ async function stubExplainEndpoints(page: Page): Promise<void> {
       body: JSON.stringify({
         explanation_id: 'e2e-mock-explanation-id',
         request_timestamp: new Date().toISOString(),
-        patient_id: body.patient_id ?? 'patient_e2e_001',
+        patient_id: body.patient_id ?? MOCK_ENTITY_IDS[0],
         model_type: body.model_type ?? MOCK_MODEL_TYPES[0],
-        model_version_id: '4.7.0',
+        model_version_id: '1.0.0',
         prediction_class: 'positive',
         prediction_probability: 0.78,
         base_value: 0.25,
@@ -101,7 +197,7 @@ async function stubExplainEndpoints(page: Page): Promise<void> {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        patient_id: 'patient_e2e_001',
+        patient_id: MOCK_ENTITY_IDS[0],
         total_explanations: 0,
         explanations: [],
       }),
@@ -148,49 +244,47 @@ test.describe('Feature Importance Page', () => {
   })
 
   test.describe('Model Selector', () => {
-    test('should display model selector', async () => {
+    test('should display cohort selector', async () => {
       await expect(featurePage.modelSelector).toBeVisible()
     })
 
+    test('should display brand selector', async () => {
+      await expect(featurePage.brandSelector).toBeVisible()
+    })
+
     test('should allow model selection', async () => {
-      // `Propensity` is the formatModelLabel() output for model_type='propensity'
-      // — one of the entries we serve from the stubbed /api/explain/models above.
-      await featurePage.selectModel('Propensity')
+      // `Initiation` is the formatModelLabel() output for model_type='initiation'
+      // — one of the gold-standard entries we serve from /api/explain/models.
+      await featurePage.selectModel('Initiation')
       await featurePage.page.waitForTimeout(300)
     })
   })
 
   test.describe('Model Info', () => {
     test('should display model info', async () => {
+      // DEFAULT (cohort) mode: the summary card is populated on arrival from
+      // /api/explain/global — no entity selection needed.
       const hasModelInfo = await featurePage.verifyModelInfoDisplayed()
       expect(hasModelInfo).toBeTruthy()
     })
 
     test('should show Base Value stat', async () => {
-      // Base Value only renders post-Explain; drive the mutation first.
-      await featurePage.runExplanation()
+      // Cohort mode renders `formatBaseValue(global.base_value)`; the global mock
+      // returns `base_value=0.25` → formatted "0.250".
       await expect(featurePage.baseValueDisplay).toBeVisible()
-      // Falsifiability anchor: the rendered value reflects MOCK_RESPONSE
-      // (`base_value=0.25` → formatted as "0.250"). A 200 with the wrong
-      // payload shape would leave the number at the `?? 0` fallback ("0.000"),
-      // so this catches a regression in the ExplainResponse contract.
-      // Scoped to modelInfoCard so an unrelated "0.250" elsewhere in the
-      // page (e.g. a tooltip / feature row) cannot satisfy the assertion.
+      // Falsifiability anchor: a 200 with the wrong global shape (no base_value)
+      // would render "—" instead. Scoped to modelInfoCard so an unrelated
+      // "0.250" elsewhere on the page cannot satisfy the assertion.
       await expect(featurePage.modelInfoCard.getByText('0.250')).toBeVisible()
     })
 
     test('should show Top Feature stat', async () => {
-      await featurePage.runExplanation()
       await expect(featurePage.topFeatureDisplay).toBeVisible()
-      // Top Feature renders `features[0]?.feature_name.replace(/_/g, ' ')`. If
-      // the mock returned a 200 without `top_features`, this would render "—"
-      // and the assertion would fail — pinning the test to the live shape
-      // beyond just the label visibility (codex iter-2 MED).
-      // SCOPED to the model-info card: `prior visits` also appears in the
-      // Feature Rankings list and chart labels from the same `top_features`
-      // payload, so a page-wide `getByText(/prior visits/i)` would pass even
-      // when the Top Feature stat fell back to "—". The card-scoped locator
-      // only matches the value next to the `Top Feature` label (codex iter-3 MED).
+      // Top Feature renders `features[0]?.feature_name.replace(/_/g, ' ')`. The
+      // global mock ranks `prior_visits` first → "prior visits". A 200 missing
+      // `features` would render "—" and fail this. SCOPED to the summary card so
+      // the same name appearing in the Feature Rankings list / chart labels
+      // cannot satisfy a fallen-back "—" Top Feature stat.
       await expect(
         featurePage.modelInfoCard.getByText(/prior visits/i),
       ).toBeVisible()
@@ -203,6 +297,11 @@ test.describe('Feature Importance Page', () => {
       expect(hasTabs).toBeTruthy()
     })
 
+    test('should show mode tabs (Cohort + Individual)', async () => {
+      await expect(featurePage.cohortModeTab).toBeVisible()
+      await expect(featurePage.individualModeTab).toBeVisible()
+    })
+
     test('should show Bar Chart tab', async () => {
       await expect(featurePage.barChartTab).toBeVisible()
     })
@@ -211,7 +310,11 @@ test.describe('Feature Importance Page', () => {
       await expect(featurePage.beeswarmTab).toBeVisible()
     })
 
-    test('should show Waterfall tab', async () => {
+    test('should show Waterfall tab in individual mode', async () => {
+      // Waterfall is an individual-mode-only viz tab (PR #985). It does not
+      // exist on the default cohort view.
+      await expect(featurePage.waterfallTab).toHaveCount(0)
+      await featurePage.switchToIndividualMode()
       await expect(featurePage.waterfallTab).toBeVisible()
     })
 
@@ -238,6 +341,9 @@ test.describe('Feature Importance Page', () => {
 
   test.describe('Waterfall Tab', () => {
     test('should display waterfall when tab clicked', async () => {
+      // Waterfall lives only in individual mode; drive the per-entity
+      // explanation first so the tab exists and has data, then click it.
+      await featurePage.runIndividualExplanation()
       await featurePage.clickTab('Waterfall')
       const hasWaterfall = await featurePage.verifyWaterfallDisplayed()
       expect(hasWaterfall).toBeTruthy()
@@ -250,8 +356,8 @@ test.describe('Feature Importance Page', () => {
     })
 
     test('should allow refresh', async () => {
-      // Refresh is disabled until a patient ID is set; clickRefresh() handles
-      // that by driving a baseline explanation when the button isn't enabled.
+      // In the default cohort mode the Refresh button is enabled as soon as the
+      // global query settles — no entity needed — so it can be clicked directly.
       await featurePage.clickRefresh()
       await featurePage.page.waitForTimeout(300)
     })
