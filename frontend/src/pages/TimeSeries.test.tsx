@@ -459,6 +459,28 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     expect(screen.getByText('Current KPI Status')).toBeInTheDocument();
   });
 
+  it('labels the performance trend as an uncalibrated walk-forward diagnostic (#969)', () => {
+    render(<TimeSeries />, { wrapper: createWrapper() });
+    const note = screen.getByTestId('perf-trend-provenance-note');
+    expect(note).toBeInTheDocument();
+    const text = note.textContent ?? '';
+    // It is a per-month walk-forward backtest, NOT the served calibrated champion.
+    expect(text).toMatch(/walk-forward/i);
+    expect(text).toMatch(/uncalibrated|diagnostic/i);
+    // Honest about which metrics are affected: AUC is calibration-invariant (exact),
+    // threshold metrics are the diagnostic.
+    expect(text).toMatch(/AUC/i);
+  });
+
+  it('notes the x-axis dates are the data-coverage boundary, not wall-clock (#970)', () => {
+    render(<TimeSeries />, { wrapper: createWrapper() });
+    const note = screen.getByTestId('perf-trend-provenance-note');
+    const text = note.textContent ?? '';
+    // Mock history ends 2024-01-03 — the note reflects data coverage, not "today".
+    expect(text).toMatch(/data coverage/i);
+    expect(text).toMatch(/not wall-clock/i);
+  });
+
   it('source file contains NO sample/mock data — by identifier AND by behavior', () => {
     const sourcePath = path.resolve(__dirname, 'TimeSeries.tsx');
     const source = fs.readFileSync(sourcePath, 'utf-8');
