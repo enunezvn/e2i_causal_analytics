@@ -702,10 +702,15 @@ async def list_intervention_types(
     ``"synthetic"`` in v1 (the DGP is intervention-agnostic) and becomes
     ``"modeled"`` per type as Phase 2 wires real per-brand CATE.
     """
-    from src.digital_twin.effect.provider import INTERVENTION_CATALOG
+    from src.digital_twin.effect.cohort_loader import brand_has_cohort
+    from src.digital_twin.effect.provider import (
+        COHORT_ESTIMABLE_INTERVENTIONS,
+        INTERVENTION_CATALOG,
+    )
     from src.digital_twin.models.twin_models import TwinType
 
     available = False
+    has_cohort = False
     if brand is not None:
         try:
             repo = await _get_twin_repo()
@@ -713,13 +718,25 @@ async def list_intervention_types(
                 twin_type=TwinType(twin_type.value), brand=brand.value
             )
             available = len(actives) > 0
-        except Exception as e:  # repo/DB unreachable — degrade to "unavailable", never fabricate
-            logger.warning("intervention-types: model availability check failed: %s", e)
+            # Phase 2: cohort-estimable interventions report effect_basis
+            # "cohort_estimated" only when the brand has a usable synthetic-gold
+            # cohort to estimate from (else they fall back to the uniform basis).
+            has_cohort = await brand_has_cohort(repo.client, brand.value)
+        except Exception as e:  # repo/DB unreachable — degrade, never fabricate
+            logger.warning("intervention-types: availability/cohort check failed: %s", e)
             available = False
+            has_cohort = False
 
     items = [
         InterventionTypeItem(
-            value=value, label=label, effect_basis="synthetic", available=available
+            value=value,
+            label=label,
+            effect_basis=(
+                "cohort_estimated"
+                if (has_cohort and value in COHORT_ESTIMABLE_INTERVENTIONS)
+                else "synthetic"
+            ),
+            available=available,
         )
         for value, label in INTERVENTION_CATALOG
     ]
@@ -875,9 +892,32 @@ async def run_simulation(
                 twin_type=twin_type, brand=brand, model_row=model_row
             )
 
+            # Phase 2: for the cohort-estimable interventions, prefer a
+            # cohort-ESTIMATED effect (region-standardized ATE from the brand's
+            # synthetic-gold cohort) over the flat synthetic uplift — when the
+            # brand has a usable cohort. Loaded async here and injected into the
+            # (sync, off-event-loop) engine; None → synthetic fallback (never a
+            # fabricated effect). The dark offload path stays synthetic in v1.
+            from src.digital_twin.effect import PROVENANCE_COHORT, TwinEffectEstimator
+            from src.digital_twin.effect.cohort_loader import (
+                build_cohort_provider_or_none,
+            )
+
+            cohort_provider = await build_cohort_provider_or_none(
+                repo.client, intervention.intervention_type, brand.value
+            )
+
             def _do_sim():
                 population = generator.generate(n=request.twin_count)
-                engine = SimulationEngine(population=population)
+                engine = SimulationEngine(
+                    population=population,
+                    effect_provider=cohort_provider,
+                    effect_estimator=(
+                        TwinEffectEstimator(provenance=PROVENANCE_COHORT)
+                        if cohort_provider is not None
+                        else None
+                    ),
+                )
                 # Pin the resolved DB model id so twin_simulations.model_id FK holds
                 # (engine derives self.model_id from population otherwise) (#705 H4).
                 engine.model_id = model_id

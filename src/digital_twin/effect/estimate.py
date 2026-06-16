@@ -8,6 +8,11 @@ import numpy as np
 
 PROVENANCE_SYNTHETIC = "synthetic_uplift_v1"
 PROVENANCE_RWD = "rwd_uplift"
+# Phase 2: the effect MAGNITUDE is estimated (region-standardized) from the
+# brand's synthetic-gold cohort (business_metrics/per_hcp_rollup), so the ATE is
+# brand- and intervention-differentiated rather than the flat synthetic uplift.
+# Still synthetic-gold data (NOT real-world); the UI keeps the SYNTHETIC badge.
+PROVENANCE_COHORT = "cohort_estimated_synthetic_gold_v1"
 
 
 @dataclass

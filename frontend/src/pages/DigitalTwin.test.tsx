@@ -155,14 +155,18 @@ const INTERVENTION_CATALOG: ReadonlyArray<[string, string]> = [
 const ALL_INTERVENTION_VALUES = INTERVENTION_CATALOG.map(([v]) => v);
 
 // Build a useInterventionTypes() hook return where only `availableValues` are
-// flagged available (the component exposes only available types).
-function interventionTypesResult(availableValues: string[]) {
+// flagged available (the component exposes only available types) and
+// `cohortEstimated` values report effect_basis 'cohort_estimated' (Phase 2).
+function interventionTypesResult(
+  availableValues: string[],
+  cohortEstimated: string[] = []
+) {
   return {
     data: {
       interventions: INTERVENTION_CATALOG.map(([value, label]) => ({
         value,
         label,
-        effect_basis: 'synthetic',
+        effect_basis: cohortEstimated.includes(value) ? 'cohort_estimated' : 'synthetic',
         available: availableValues.includes(value),
       })),
       brand: 'Remibrutinib',
@@ -310,6 +314,33 @@ describe('DigitalTwin', () => {
       screen.getByText(/No trained twin model for Remibrutinib yet/i)
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
+  });
+
+  // Phase 2 — the dropdown surfaces HOW the selected intervention's effect is
+  // computed: cohort-estimated (brand-specific) vs uniform synthetic.
+  it('shows the brand cohort–estimated basis note for a cohort-estimated intervention', async () => {
+    // Only the cohort-estimable types are available → selection resets to the
+    // first available one (digital_engagement, cohort-estimated).
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(
+        ['digital_engagement', 'call_frequency_increase'],
+        ['digital_engagement', 'call_frequency_increase']
+      )
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText(/brand cohort/i)).toBeInTheDocument();
+    expect(screen.queryByText(/uniform synthetic uplift/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the uniform synthetic basis note for a non-cohort intervention', () => {
+    // Default selection is email_campaign (synthetic, not cohort-estimable).
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(ALL_INTERVENTION_VALUES, ['digital_engagement'])
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/uniform synthetic uplift/i)).toBeInTheDocument();
   });
 
   it('shows loading state when simulation is running', () => {

@@ -187,15 +187,26 @@ function SimulationForm({
     if (typesError) {
       // Endpoint unreachable → degrade to the full canonical fallback so the
       // form stays usable; /simulate remains the authoritative availability gate.
-      return FALLBACK_INTERVENTION_TYPES.map((i) => ({ value: i.value as string, label: i.label }));
+      return FALLBACK_INTERVENTION_TYPES.map((i) => ({
+        value: i.value as string,
+        label: i.label,
+        effect_basis: 'synthetic',
+      }));
     }
     return (typesData?.interventions ?? [])
       .filter((i) => i.available)
-      .map((i) => ({ value: i.value, label: i.label }));
+      .map((i) => ({ value: i.value, label: i.label, effect_basis: i.effect_basis }));
   }, [typesData, typesError]);
 
   const noneAvailable =
     !typesLoading && !typesError && availableInterventions.length === 0;
+
+  // Phase 2: surface HOW the selected intervention's effect is computed —
+  // "cohort_estimated" (brand/intervention-specific, estimated from the
+  // synthetic-gold cohort) vs the uniform synthetic uplift.
+  const selectedBasis = availableInterventions.find(
+    (i) => i.value === interventionType
+  )?.effect_basis;
 
   // Keep the selected intervention valid as availability changes (e.g. the user
   // switches to a brand with a different available set).
@@ -242,6 +253,17 @@ function SimulationForm({
         {noneAvailable && (
           <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
             No trained twin model for {brand} yet — simulations are unavailable for this brand.
+          </p>
+        )}
+        {!typesLoading && !noneAvailable && selectedBasis === 'cohort_estimated' && (
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+            Effect basis: <span className="font-medium">brand cohort–estimated</span> — the
+            ATE is estimated per brand from the synthetic-gold cohort (not a uniform assumption).
+          </p>
+        )}
+        {!typesLoading && !noneAvailable && selectedBasis === 'synthetic' && (
+          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+            Effect basis: uniform synthetic uplift (not brand-specific).
           </p>
         )}
       </div>
@@ -307,6 +329,22 @@ function SimulationForm({
 }
 
 /**
+ * Friendly label for the backend `data_provenance` marker — honest about the
+ * effect basis. Both values are synthetic data (the SYNTHETIC badge stays); the
+ * cohort one is a brand/intervention-ESTIMATED effect, the other a flat uniform.
+ */
+function provenanceLabel(provenance: string): string {
+  switch (provenance) {
+    case 'synthetic_uplift_v1':
+      return 'synthetic uplift model (v1 — uniform, not brand-specific)';
+    case 'cohort_estimated_synthetic_gold_v1':
+      return 'brand cohort–estimated (synthetic-gold; not real-world data)';
+    default:
+      return provenance;
+  }
+}
+
+/**
  * Results panel for a single real simulation (SimulationResponse shape).
  * Renders only fields the backend returns.
  */
@@ -320,7 +358,7 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
         <div>
           <div className="flex items-center gap-3 mb-2">
             <RecommendationBadge recommendation={simulation.recommendation} />
-            {simulation.data_provenance?.startsWith('synthetic') && (
+            {simulation.data_provenance?.includes('synthetic') && (
               <span
                 className="inline-flex items-center rounded-full bg-amber-100 dark:bg-amber-900/30 px-2 py-0.5 text-xs font-semibold text-amber-800 dark:text-amber-300"
                 title="This estimate comes from synthetic data, not a real-world feed."
@@ -337,9 +375,7 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
           </p>
           {simulation.data_provenance && (
             <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              Estimate source: {simulation.data_provenance === 'synthetic_uplift_v1'
-                ? 'synthetic uplift model (v1 — not brand-specific)'
-                : simulation.data_provenance}
+              Estimate source: {provenanceLabel(simulation.data_provenance)}
             </p>
           )}
         </div>
