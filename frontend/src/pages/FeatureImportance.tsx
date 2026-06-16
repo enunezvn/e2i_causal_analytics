@@ -49,6 +49,7 @@ import {
 import {
   ExplanationFormat,
   ModelType,
+  type ExplainRequest,
   type ExplainableModelInfo,
   type FeatureContribution,
 } from '@/types/explain';
@@ -65,18 +66,50 @@ import { cn } from '@/lib/utils';
 
 const DEFAULT_TOP_K = 10;
 
+/**
+ * Gold-standard cohort families (#39) served by the REAL per-brand
+ * `*_goldstd_lr_v1` registry models. For these cohorts the page offers a brand
+ * selector so all 12 (4 cohorts × 3 brands) serving bundles are reachable
+ * (#967). Mirrors `GOLDSTD_COHORT_MODEL_TYPES` in src/api/routes/explain.py.
+ * Used only as a fallback when the backend `/explain/models` response omits the
+ * authoritative `is_gold_standard` flag.
+ */
+const GOLDSTD_COHORTS = new Set<string>([
+  'initiation',
+  'persistence',
+  'discontinuation',
+  'hcp_adoption',
+]);
+
+/** The HCP-grain gold-standard cohort — keyed on hcp_id, not patient_id. */
+const HCP_COHORT = 'hcp_adoption';
+
+/**
+ * Brands the gold-standard models are registered for. Mirrors `GOLDSTD_BRANDS`
+ * in src/api/routes/explain.py; the backend resolves the serving name as
+ * `f"{cohort}_{brand.toLowerCase()}_goldstd_lr_v1"` and FAILS CLOSED (422) on
+ * an unknown brand.
+ */
+const GOLDSTD_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
+const DEFAULT_BRAND: (typeof GOLDSTD_BRANDS)[number] = 'Remibrutinib';
+
 // =============================================================================
 // HELPERS
 // =============================================================================
 
+/** Word fragments that should render as acronyms, not Title-cased. */
+const LABEL_ACRONYMS: Record<string, string> = { hcp: 'HCP' };
+
 /**
  * Human-readable label for a backend model_type enum value.
+ * e.g. `hcp_adoption` → "HCP Adoption" (matches the cohort labels in
+ * TimeSeries.tsx), `initiation` → "Initiation".
  */
 function formatModelLabel(model: ExplainableModelInfo): string {
   const raw = String(model.model_type);
   return raw
     .split('_')
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .map((part) => LABEL_ACRONYMS[part] ?? part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
 }
 
@@ -222,6 +255,7 @@ function FeatureImportance() {
     [modelsData]
   );
   const [selectedModelType, setSelectedModelType] = useState<string>('');
+  const [brand, setBrand] = useState<string>(DEFAULT_BRAND);
   const [patientId, setPatientId] = useState<string>('');
   const [submittedPatientId, setSubmittedPatientId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -245,6 +279,23 @@ function FeatureImportance() {
     () => supportedModels.find((m) => String(m.model_type) === effectiveModelType),
     [supportedModels, effectiveModelType]
   );
+
+  // Gold-standard cohorts (#967) get a brand selector so all per-brand serving
+  // bundles are reachable. Trust the backend's authoritative `is_gold_standard`
+  // flag when present; fall back to the known cohort set otherwise.
+  const isGoldStandard = useMemo(() => {
+    if (typeof selectedModelInfo?.is_gold_standard === 'boolean') {
+      return selectedModelInfo.is_gold_standard;
+    }
+    return GOLDSTD_COHORTS.has(effectiveModelType);
+  }, [selectedModelInfo, effectiveModelType]);
+
+  // The HCP-grain cohort keys on hcp_id; every other cohort keys on patient_id.
+  const isHcpCohort = effectiveModelType === HCP_COHORT;
+  const entityLabel = isHcpCohort ? 'HCP ID' : 'Patient ID';
+  const entityPlaceholder = isHcpCohort
+    ? 'Enter HCP ID (e.g. HCP-NE-5678)'
+    : 'Enter patient ID (e.g. patient_123)';
 
   // -- Derived data from live response -------------------------------------
   const features: FeatureContribution[] = useMemo(
@@ -276,13 +327,25 @@ function FeatureImportance() {
     // stale info from a prior patient/model while the new explanation loads.
     setSelectedFeature(null);
     setSubmittedPatientId(trimmed);
-    runExplain({
+    const request: ExplainRequest = {
       patient_id: trimmed,
       model_type: effectiveModelType as ModelType,
       format: ExplanationFormat.TOP_K,
       top_k: DEFAULT_TOP_K,
-    });
-  }, [patientId, effectiveModelType, runExplain, resetExplain]);
+    };
+    // HCP-grain cohort: the entered value IS an hcp_id — send it explicitly so
+    // Feast keys the lookup on hcp_id (backend falls back to patient_id only if
+    // hcp_id is absent). See resolve_features() in src/api/routes/explain.py.
+    if (isHcpCohort) {
+      request.hcp_id = trimmed;
+    }
+    // Gold-standard cohorts select one of 3 per-brand serving bundles; legacy
+    // single-model cohorts ignore brand, so only send it when it matters.
+    if (isGoldStandard) {
+      request.brand = brand;
+    }
+    runExplain(request);
+  }, [patientId, effectiveModelType, isHcpCohort, isGoldStandard, brand, runExplain, resetExplain]);
 
   const handleRefresh = useCallback(() => {
     if (!patientId.trim()) return;
@@ -349,6 +412,32 @@ function FeatureImportance() {
             </SelectContent>
           </Select>
 
+          {/* Brand selector — only the gold-standard cohorts have per-brand
+              serving bundles (#967). Native <select> keeps it accessible
+              (aria-label drives the name) and aligned with the model Select.
+              The chosen brand PERSISTS across cohort changes (mirrors
+              TimeSeries.tsx's handleCohortChange) so a user can explore one
+              brand across cohorts; the selector always shows the active brand,
+              so there is no hidden/stale state. */}
+          {isGoldStandard && (
+            <select
+              aria-label="Brand"
+              value={brand}
+              onChange={(e) => {
+                setBrand(e.target.value);
+                setSelectedFeature(null);
+                resetExplain();
+              }}
+              className="h-10 px-3 border rounded-md text-sm bg-background"
+            >
+              {GOLDSTD_BRANDS.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </select>
+          )}
+
           <Button variant="outline" size="icon" onClick={handleRefresh} disabled={isExplaining || !patientId.trim()}>
             <RefreshCw className={`h-4 w-4 ${isExplaining ? 'animate-spin' : ''}`} />
           </Button>
@@ -369,11 +458,11 @@ function FeatureImportance() {
                 htmlFor="patient-id-input"
                 className="block text-sm font-medium mb-1"
               >
-                Patient ID
+                {entityLabel}
               </label>
               <Input
                 id="patient-id-input"
-                placeholder="Enter patient ID (e.g. patient_123)"
+                placeholder={entityPlaceholder}
                 value={patientId}
                 onChange={(e) => setPatientId(e.target.value)}
                 onKeyDown={(e) => {
@@ -435,8 +524,9 @@ function FeatureImportance() {
                 No explanation yet
               </h2>
               <p className="text-sm text-muted-foreground max-w-md">
-                Enter a patient ID and click <strong>Explain</strong> to compute live SHAP
-                feature contributions from the model.
+                Enter {isHcpCohort ? 'an HCP ID' : 'a patient ID'} and click{' '}
+                <strong>Explain</strong> to compute live SHAP feature
+                contributions from the model.
               </p>
             </div>
           </CardContent>

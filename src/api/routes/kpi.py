@@ -167,6 +167,7 @@ def _metadata_to_response(kpi: Any) -> KPIMetadataResponse:
         view=kpi.view,
         threshold=threshold_resp,
         unit=kpi.unit,
+        value_format=kpi.value_format,
         frequency=kpi.frequency,
         primary_causal_library=kpi.primary_causal_library.value,
         brand=kpi.brand,

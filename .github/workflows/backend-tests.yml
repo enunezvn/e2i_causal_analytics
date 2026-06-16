@@ -177,6 +177,12 @@ jobs:
       # FalkorDB are gated on ``requires_falkordb`` and skip automatically.
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
+      # OPIK is intentionally offline (stopped to save memory). Without this
+      # opt-out the SDK buffers traces during the run and HANGS on flush at
+      # session teardown (ConnectTimeout retry-forever → ~20-min job cancel,
+      # intermittent), tipping Backend CI Success red. Mirror the integration
+      # lane's switch (issue #952). With it false the SDK never uploads.
+      OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
     steps:
       - name: Checkout repository
@@ -312,6 +318,9 @@ jobs:
       # FALKORDB_URL intentionally unset (issue #183) — no FalkorDB service here.
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
+      # OPIK intentionally offline — opt out so trace flush can't hang teardown
+      # (see Unit Tests lane above; issue #952).
+      OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
     steps:
       - name: Checkout repository
@@ -627,6 +636,9 @@ jobs:
       # conftest treats an empty FALKORDB_URL as UNCONFIGURED (no noisy probe).
       MLFLOW_TRACKING_URI: 'http://localhost:5000'
       OPIK_URL: 'http://localhost:5173'
+      # OPIK intentionally offline — opt out so trace flush can't hang teardown
+      # (see Unit Tests lane above; issue #952).
+      OPIK_ENABLED: 'false'
       ANTHROPIC_API_KEY: 'test-key'
       OPENAI_API_KEY: 'test-key'
       # Pin BLAS/OpenMP thread counts to 1 — deterministic FP reductions and

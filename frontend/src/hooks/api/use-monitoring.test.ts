@@ -255,6 +255,7 @@ const mockPerformanceTrendResponse: PerformanceTrendResponse = {
   trend: 'stable',
   is_significant: false,
   alert_threshold_breached: false,
+  alert_threshold: 0.828,
   history: [mockPerformanceMetricItem],
 };
 

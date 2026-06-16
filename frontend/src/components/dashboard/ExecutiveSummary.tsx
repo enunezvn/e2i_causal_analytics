@@ -7,7 +7,7 @@
  *
  * - Graph metrics ............ useGraphStats() (relationships, nodes,
  *                              communities, episodes)
- * - System health ............ useQuickHealthCheck() (Health Score agent's
+ * - System health ............ useFullHealthCheck() (Health Score agent's
  *                              real overall_health_score + grade)
  * - Agent roster ............. GET /agents/status (real active/total counts)
  *
@@ -28,7 +28,7 @@ import { Activity, Brain, Target, CheckCircle2, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useGraphStats } from '@/hooks/api/use-graph';
-import { useQuickHealthCheck } from '@/hooks/api/use-health-score';
+import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { getValidated } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 
@@ -71,9 +71,11 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
   } = useGraphStats();
 
   // Real system health from the Health Score agent (same source as the Home
-  // System Health card) — NOT a number invented from a KPI status string.
-  const { data: health, error: healthError } = useQuickHealthCheck({
-    refetchInterval: 30000,
+  // System Health card) — NOT a number invented from a KPI status string. Uses
+  // the FULL (all-dimension) check, not the component-only quick check whose
+  // overall score is a misleading component-only 100/A.
+  const { data: health, error: healthError } = useFullHealthCheck({
+    refetchInterval: 60000,
   });
 
   // Real agent roster (same source as the Home Agent Status card).
