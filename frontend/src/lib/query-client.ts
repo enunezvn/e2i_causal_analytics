@@ -358,6 +358,8 @@ export const queryKeys = {
     health: () => [...queryKeys.kpi.all(), 'health'] as const,
     detail: (kpiId: string) =>
       [...queryKeys.kpi.all(), 'detail', kpiId] as const,
+    history: (kpiId: string, brand: string) =>
+      [...queryKeys.kpi.all(), 'history', kpiId, brand] as const,
   },
 
   /**

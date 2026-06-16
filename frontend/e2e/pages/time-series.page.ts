@@ -158,9 +158,15 @@ export class TimeSeriesPage extends BasePage {
     return this.page.locator('svg.recharts-surface').first()
   }
 
-  // Model selector (footer card, performance mode only).
-  get modelIdInput(): Locator {
-    return this.page.getByLabel(/model id/i).first()
+  // Model selector (Model Selection card, performance mode only). #986 retired
+  // the free-text "Model ID" override in favour of Cohort × Brand native
+  // <select>s that resolve the serving handle `{cohort}_{brand}_goldstd_lr_v1`.
+  get cohortSelect(): Locator {
+    return this.page.locator('#ts-cohort')
+  }
+
+  get brandSelect(): Locator {
+    return this.page.locator('#ts-brand')
   }
 
   // Actions
@@ -195,15 +201,19 @@ export class TimeSeriesPage extends BasePage {
   }
 
   /**
-   * Enter a model ID into the free-text "Model ID" field (performance mode).
-   * `usePerformanceTrend` is `enabled: !!model_id` and `DEFAULT_MODEL_ID` is
-   * '', so the performance view — KPI summary stats, the chart line, and the
-   * "Trend Summary" card — stays empty until a model is entered. Driving this
-   * the way a real user does is what enables the trend fetch (and lets the
-   * spec's inline `/trend` mock fulfil it).
+   * Select a cohort / brand by visible label (e.g. "Initiation", "Fabhalta").
+   * The Model Selection card resolves cohort × brand into the serving model
+   * handle and drives the performance-trend fetch. Unlike the retired free-text
+   * "Model ID" override, `modelId` defaults to a real handle on load, so the
+   * trend view renders without manual entry — these just exercise switching the
+   * selection (the spec's inline `/trend` mock fulfils any resolved handle).
    */
-  async enterModelId(modelId: string): Promise<void> {
-    await this.modelIdInput.fill(modelId)
+  async selectCohort(label: string): Promise<void> {
+    await this.cohortSelect.selectOption({ label })
+  }
+
+  async selectBrand(label: string): Promise<void> {
+    await this.brandSelect.selectOption({ label })
   }
 
   // Verification helpers

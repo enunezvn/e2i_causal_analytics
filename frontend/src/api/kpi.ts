@@ -30,6 +30,7 @@ import type {
   CacheInvalidationResponse,
   KPICalculationRequest,
   KPIHealthResponse,
+  KPIHistoryResponse,
   KPIListParams,
   KPIListResponse,
   KPIMetadata,
@@ -149,6 +150,23 @@ export async function getKPIValue(
     },
     { schema: KPIResultWireSchema }
   );
+}
+
+/**
+ * Get the monthly KPI history (time series) for a KPI.
+ *
+ * Reads materialized real points from the backend (kpi_history). Returns an
+ * empty `points` array for point-in-time KPIs that have no real history.
+ */
+export async function getKPIHistory(
+  kpiId: string,
+  brand?: string,
+  region?: string
+): Promise<KPIHistoryResponse> {
+  return get<KPIHistoryResponse>(`${KPI_BASE}/${encodeURIComponent(kpiId)}/history`, {
+    brand,
+    region,
+  });
 }
 
 /**
