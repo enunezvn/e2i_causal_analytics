@@ -256,8 +256,11 @@ class GapDetectorNode:
             # Calculate total gap value
             total_gap_value = sum(gap["gap_size"] for gap in all_gaps)
 
-            # Sort gaps by gap_percentage (descending)
-            all_gaps.sort(key=lambda g: abs(g["gap_percentage"]), reverse=True)
+            # Rank by shortfall magnitude (largest first). All retained gaps are
+            # positive shortfalls (see _detect_segment_gaps), so abs() is no
+            # longer needed; the final opportunity ordering is by ROI downstream
+            # in the prioritizer.
+            all_gaps.sort(key=lambda g: g["gap_percentage"], reverse=True)
 
             detection_latency_ms = int((time.time() - start_time) * 1000)
 
@@ -585,7 +588,17 @@ class GapDetectorNode:
                         gap_type=gtype,
                     )
 
-                    if gap and abs(gap["gap_percentage"]) >= min_gap_threshold:
+                    # A capturable opportunity is a genuine SHORTFALL: current is
+                    # BELOW the reference (target / peer benchmark / top-decile
+                    # potential / prior period). Since gap_size = reference -
+                    # current, that means gap_percentage > 0. Over-performance
+                    # (current EXCEEDS the reference -> negative gap) is NOT an
+                    # opportunity to "close"; it previously leaked through
+                    # abs(...) and was ranked as a top opportunity with absurd
+                    # ROI (e.g. a region 54% OVER its TRx target surfaced as a
+                    # $63M / 848x-ROI "opportunity", inflating Total Addressable
+                    # Value). Require a positive shortfall of at least threshold.
+                    if gap and gap["gap_percentage"] >= min_gap_threshold:
                         gaps.append(gap)
 
         return (segment, gaps)
