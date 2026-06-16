@@ -197,9 +197,7 @@ def region_standardized_ate(
         )
     t_raw = pd.to_numeric(cohort[treatment_col], errors="coerce")
     y_raw = pd.to_numeric(cohort[outcome_col], errors="coerce")
-    work = pd.DataFrame(
-        {"t_raw": t_raw, "y_raw": y_raw, "region": cohort[region_col]}
-    ).dropna()
+    work = pd.DataFrame({"t_raw": t_raw, "y_raw": y_raw, "region": cohort[region_col]}).dropna()
     if len(work) < COHORT_MIN_ROWS:
         raise EffectDataUnavailable(
             f"CohortEffectDataProvider: only {len(work)} usable cohort rows "

@@ -470,17 +470,13 @@ async def test_list_intervention_types_cohort_estimable_flip_when_cohort_present
         brand=BrandEnum.REMIBRUTINIB, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
     )
 
-    by_basis = {
-        i.value: i.effect_basis for i in result.interventions
-    }
+    by_basis = {i.value: i.effect_basis for i in result.interventions}
     cohort_types = {v for v, b in by_basis.items() if b == "cohort_estimated"}
     assert cohort_types == set(COHORT_ESTIMABLE_INTERVENTIONS)
     assert {"digital_engagement", "call_frequency_increase"} == cohort_types
     # Everything else stays on the uniform synthetic basis.
     assert all(
-        b == "synthetic"
-        for v, b in by_basis.items()
-        if v not in COHORT_ESTIMABLE_INTERVENTIONS
+        b == "synthetic" for v, b in by_basis.items() if v not in COHORT_ESTIMABLE_INTERVENTIONS
     )
 
 

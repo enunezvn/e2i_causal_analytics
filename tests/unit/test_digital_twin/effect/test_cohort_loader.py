@@ -77,42 +77,32 @@ def _cohort_rows(n: int = 600, seed: int = 0):
 
 async def test_returns_provider_for_estimable_intervention_with_cohort():
     client = _FakeClient(_FakeResult(data=_cohort_rows(600)))
-    provider = await build_cohort_provider_or_none(
-        client, "digital_engagement", "Remibrutinib"
-    )
+    provider = await build_cohort_provider_or_none(client, "digital_engagement", "Remibrutinib")
     assert isinstance(provider, CohortEffectDataProvider)
 
 
 async def test_returns_none_for_non_estimable_intervention():
     # email_campaign has no cohort treatment column → never cohort-estimated.
     client = _FakeClient(_FakeResult(data=_cohort_rows(600)))
-    provider = await build_cohort_provider_or_none(
-        client, "email_campaign", "Remibrutinib"
-    )
+    provider = await build_cohort_provider_or_none(client, "email_campaign", "Remibrutinib")
     assert provider is None
 
 
 async def test_returns_none_on_empty_cohort():
     client = _FakeClient(_FakeResult(data=[]))
-    provider = await build_cohort_provider_or_none(
-        client, "digital_engagement", "Fabhalta"
-    )
+    provider = await build_cohort_provider_or_none(client, "digital_engagement", "Fabhalta")
     assert provider is None
 
 
 async def test_returns_none_on_insufficient_rows():
     client = _FakeClient(_FakeResult(data=_cohort_rows(COHORT_MIN_ROWS - 50)))
-    provider = await build_cohort_provider_or_none(
-        client, "call_frequency_increase", "Kisqali"
-    )
+    provider = await build_cohort_provider_or_none(client, "call_frequency_increase", "Kisqali")
     assert provider is None
 
 
 async def test_returns_none_on_db_error_never_raises():
     client = _FakeClient(_FakeResult(data=None), raise_on_execute=True)
-    provider = await build_cohort_provider_or_none(
-        client, "digital_engagement", "Remibrutinib"
-    )
+    provider = await build_cohort_provider_or_none(client, "digital_engagement", "Remibrutinib")
     assert provider is None
 
 
@@ -124,8 +114,6 @@ async def test_brand_has_cohort_true_when_count_meets_threshold():
 async def test_brand_has_cohort_false_below_threshold_and_on_error():
     assert await brand_has_cohort(_FakeClient(_FakeResult(count=10)), "X") is False
     assert (
-        await brand_has_cohort(
-            _FakeClient(_FakeResult(count=None), raise_on_execute=True), "X"
-        )
+        await brand_has_cohort(_FakeClient(_FakeResult(count=None), raise_on_execute=True), "X")
         is False
     )

@@ -34,12 +34,7 @@ def _make_cohort(n: int = 3000, seed: int = 0) -> pd.DataFrame:
     engagement = np.clip(base * 6 + rng.uniform(0, 5, size=n), 0, 10)
     call_frequency = rng.uniform(0, 14, size=n)
     # Conversion: STRONG engagement effect, WEAK call_frequency effect, + region base.
-    conversion = (
-        base
-        + 0.06 * engagement
-        + 0.01 * call_frequency
-        + rng.normal(0, 0.08, size=n)
-    )
+    conversion = base + 0.06 * engagement + 0.01 * call_frequency + rng.normal(0, 0.08, size=n)
     return pd.DataFrame(
         {
             "region": regions,
@@ -90,9 +85,7 @@ def test_cohort_provider_frame_carries_data_derived_ate():
     cohort = _make_cohort()
     expected = region_standardized_ate(cohort, "engagement_score")
     provider = CohortEffectDataProvider(cohort, seed=42)
-    frame = provider.get_training_frame(
-        "digital_engagement", brand="Remibrutinib", twin_type="hcp"
-    )
+    frame = provider.get_training_frame("digital_engagement", brand="Remibrutinib", twin_type="hcp")
     # The frame's injected ground-truth equals the data-derived cohort ATE.
     assert frame.ground_truth_ate == pytest.approx(expected)
     assert frame.treatment_var == "treatment"
