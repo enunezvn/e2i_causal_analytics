@@ -72,6 +72,9 @@ class SupabaseDataConnector(BaseDataConnector):
 
         self._client: Any = None
         self._initialized = False
+        # feature_name -> feature_id (uuid) cache. feature_values.feature_id is a
+        # uuid FK to features.id; query_features resolves names through this.
+        self._feature_id_cache: dict[str, str] = {}
 
     async def _ensure_initialized(self) -> None:
         """Lazily initialize Supabase client."""
@@ -121,13 +124,27 @@ class SupabaseDataConnector(BaseDataConnector):
 
         result = {}
 
+        feature_id_map = self._resolve_feature_ids(feature_names)
         for feature_name in feature_names:
+            feature_id = feature_id_map.get(feature_name)
+            if feature_id is None:
+                # Not in the `features` registry -> honest empty FeatureData.
+                # NEVER query feature_values by a bare name (the 22P02 uuid bug
+                # that made every monitoring run hollow).
+                result[feature_name] = FeatureData(
+                    feature_name=feature_name,
+                    values=np.array([]),
+                    timestamps=np.array([]),
+                    time_window=time_window,
+                )
+                logger.warning(f"Feature '{feature_name}' not in `features` registry; skipping")
+                continue
             try:
-                # Query feature values for this feature
+                # Query feature values for this feature by its resolved uuid id
                 query = (
                     self._client.table("feature_values")
                     .select("value, event_timestamp, entity_values")
-                    .eq("feature_id", self._get_feature_id_subquery(feature_name))
+                    .eq("feature_id", feature_id)
                     .gte("event_timestamp", time_window.start.isoformat())
                     .lte("event_timestamp", time_window.end.isoformat())
                 )
@@ -224,7 +241,7 @@ class SupabaseDataConnector(BaseDataConnector):
 
             query = (
                 self._client.table("ml_predictions")
-                .select("confidence_score, prediction_value, created_at, entity_id")
+                .select("confidence_score, prediction_value, created_at, patient_id, hcp_id")
                 .eq("model_version", model_id)
                 .or_(
                     f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
@@ -256,7 +273,9 @@ class SupabaseDataConnector(BaseDataConnector):
                         for row in response.data
                     ]
                 )
-                entity_ids = np.array([row.get("entity_id", "") for row in response.data])
+                entity_ids = np.array(
+                    [row.get("patient_id") or row.get("hcp_id") or "" for row in response.data]
+                )
 
                 return PredictionData(
                     model_id=model_id,
@@ -318,7 +337,10 @@ class SupabaseDataConnector(BaseDataConnector):
 
             query = (
                 self._client.table("ml_predictions")
-                .select("confidence_score, prediction_value, created_at, entity_id, actual_outcome")
+                .select(
+                    "confidence_score, prediction_value, created_at, "
+                    "patient_id, hcp_id, actual_outcome"
+                )
                 .eq("model_version", model_id)
                 .or_(
                     f"prediction_class.is.null,prediction_class.neq.{GATED_HONEST_FAILURE_SENTINEL}"
@@ -353,7 +375,9 @@ class SupabaseDataConnector(BaseDataConnector):
                         for row in response.data
                     ]
                 )
-                entity_ids = np.array([row.get("entity_id", "") for row in response.data])
+                entity_ids = np.array(
+                    [row.get("patient_id") or row.get("hcp_id") or "" for row in response.data]
+                )
 
                 return PredictionData(
                     model_id=model_id,
@@ -510,44 +534,54 @@ class SupabaseDataConnector(BaseDataConnector):
         self._initialized = False
         logger.info("SupabaseDataConnector closed")
 
-    def _get_feature_id_subquery(self, feature_name: str) -> str:
-        """Get feature ID for a feature name.
+    def _resolve_feature_ids(self, feature_names: list[str]) -> dict[str, str]:
+        """Resolve feature names to their ``feature_id`` (uuid) via the
+        ``features`` registry, cached on the instance.
 
-        This is a simplified version - in production, you'd want to
-        cache feature IDs or use a join.
-
-        Args:
-            feature_name: Name of the feature
-
-        Returns:
-            Feature ID (or the name as fallback)
+        ``feature_values.feature_id`` is a UUID FK to ``features.id``. Filtering
+        it with a bare feature NAME raises 22P02 (invalid input syntax for type
+        uuid) and silently drops every feature — the bug that left all
+        monitoring runs hollow ("15 checks / 0 drift") and ml_drift_history
+        empty. Resolve each unseen name once and reuse. Names absent from the
+        registry are omitted; the caller emits honest empty FeatureData.
         """
-        # For simplicity, using feature name directly
-        # In production, implement proper feature ID lookup
-        return feature_name
+        # Lazy-init: some call sites construct the connector via __new__ (tests),
+        # bypassing __init__, so don't assume the attribute exists.
+        cache = getattr(self, "_feature_id_cache", None)
+        if cache is None:
+            cache = self._feature_id_cache = {}
+        missing = [n for n in feature_names if n not in cache]
+        if missing:
+            resp = (
+                self._client.table("features").select("id, name").in_("name", missing).execute()
+            )
+            for row in resp.data or []:
+                cache[row["name"]] = row["id"]
+        return {n: cache[n] for n in feature_names if n in cache}
 
-    def _extract_value(self, value: Any) -> float:
-        """Extract numeric value from feature value.
+    def _extract_value(self, value: Any) -> Any:
+        """Extract a feature value, PRESERVING categorical labels.
 
-        Handles JSONB values that may be wrapped.
-
-        Args:
-            value: Raw value from database
-
-        Returns:
-            Numeric value as float
+        Numeric values (incl. numeric strings and JSONB-wrapped numbers) become
+        float. Non-numeric categorical labels (e.g. 'rheumatology', 'low') are
+        returned UNCHANGED so the drift node's non-numeric path label-encodes
+        them. Forcing float here silently zeroed categoricals (str branch) AND
+        raised on a JSONB-wrapped category (dict branch) — leaving every
+        categorical feature unusable for drift.
         """
         if isinstance(value, dict):
-            # Handle JSONB wrapper
-            return float(value.get("value", value.get("v", 0)))  # type: ignore[arg-type]
-        elif isinstance(value, (int, float)):
+            # Unwrap JSONB {"value": ...} / {"v": ...}
+            value = value.get("value", value.get("v"))
+        if isinstance(value, bool):
             return float(value)
-        elif isinstance(value, str):
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
             try:
                 return float(value)
             except ValueError:
-                return 0.0
-        return 0.0
+                return value  # categorical label preserved for the drift node
+        return value
 
     def _prediction_to_label(self, value: Any) -> int:
         """Convert prediction value to integer label.

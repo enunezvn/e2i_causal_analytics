@@ -172,6 +172,18 @@ class ConceptDriftNode:
                 baseline_preds_task, current_preds_task
             )
 
+            # Insufficient labeled predictions -> honest empty results; never
+            # crash the concept-drift math on empty arrays. Drain any pending
+            # feature tasks first to avoid un-awaited coroutines.
+            if (
+                baseline_preds.scores.size < self._min_samples
+                or current_preds.scores.size < self._min_samples
+            ):
+                if baseline_features_task is not None and current_features_task is not None:
+                    await asyncio.gather(baseline_features_task, current_features_task)
+                state["concept_drift_results"] = []
+                return state
+
             # Await features if available
             baseline_features: dict[str, Any] = {}
             current_features: dict[str, Any] = {}
