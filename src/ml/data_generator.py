@@ -361,7 +361,9 @@ class E2IDataGenerator:
         # Target coverage bands the synthetic data should read at.
         DQ_PATIENT_COVERAGE = 0.87  # WS1-DQ-001 (target 0.85)
         DQ_HCP_COVERAGE = 0.85  # WS1-DQ-002 (target 0.80)
-        HCP_COVERAGE_RATE = 0.9  # share of HCPs with coverage_status=True (see _generate_hcp_profiles)
+        HCP_COVERAGE_RATE = (
+            0.9  # share of HCPs with coverage_status=True (see _generate_hcp_profiles)
+        )
 
         # Patient coverage = COUNT(DISTINCT patient) / SUM(target_count) per (brand,region).
         # Covered ≈ the modeled patients in each (brands x regions) cut (assigned ~uniformly).
