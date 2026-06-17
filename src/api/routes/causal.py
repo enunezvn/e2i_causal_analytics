@@ -45,10 +45,14 @@ from src.api.models.graph import (
     RelationshipType,
 )
 from src.api.schemas.causal import (
+    AGENT_FORCEABLE_ESTIMATORS,
+    AgentCausalAnalysisRequest,
+    AgentCausalAnalysisResponse,
     AggregationMethod,
     AnalysisStatus,
     CausalAnalysisHistoryItem,
     CausalAnalysisHistoryResponse,
+    CausalDAGModel,
     CausalHealthResponse,
     CausalLibrary,
     CausalVariablesResponse,
@@ -65,6 +69,7 @@ from src.api.schemas.causal import (
     PipelineMode,
     PipelineStageResult,
     QuestionType,
+    RefutationSummary,
     RouteQueryRequest,
     RouteQueryResponse,
     SegmentationMethod,
@@ -103,7 +108,7 @@ from src.causal_engine.pipeline.state import (
 # read functions are patchable in tests as ``causal.count_memories_by_type`` /
 # ``causal.get_recent_memories``.
 from src.memory.episodic_memory import count_memories_by_type, get_recent_memories
-from src.repositories.provenance import apply_provenance_filter
+from src.repositories.provenance import apply_provenance_filter, deployment_includes_synthetic
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +194,10 @@ router = APIRouter(
 _analysis_cache: Dict[str, HierarchicalAnalysisResponse] = {}
 _pipeline_cache: Dict[str, Dict[str, Any]] = {}
 _validation_cache: Dict[str, CrossValidationResponse] = {}
+# causal_impact agent runs (POST /causal/agent-analyze submit -> GET poll). The
+# agent's energy-score selection + refutation is too slow for a synchronous
+# request (~minutes), so it runs as a background task and the FE polls.
+_agent_analysis_cache: Dict[str, "AgentCausalAnalysisResponse"] = {}
 
 
 # =============================================================================
@@ -938,6 +947,375 @@ async def get_causal_estimation_data(
         columns=select_cols,
         n_rows=len(records),
         estimation_data_records=records,
+    )
+
+
+# =============================================================================
+# AGENT ANALYSIS ENDPOINT (causal_impact agent, end-to-end)
+# =============================================================================
+
+
+async def _load_agent_estimation_frame(
+    *,
+    dataset: str,
+    treatment_var: str,
+    outcome_var: str,
+    covariates: List[str],
+    limit: int,
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """Load a REAL estimation DataFrame for the causal_impact agent.
+
+    Mirrors :func:`get_causal_estimation_data` (validates columns against the
+    dataset's curated allowlist, provenance-filters, drops rows missing a
+    treatment/outcome value) but returns a pandas DataFrame ready for the agent's
+    ``data_cache['estimation_data']``. Fail-closed: raises ``HTTPException`` (404
+    unknown dataset, 400 disallowed column, 503 no data store / no usable rows) —
+    never fabricates rows.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
+    requested = [treatment_var, outcome_var, *covariates]
+    not_allowed = [c for c in requested if c not in allowed]
+    if not_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {not_allowed} are not permitted for dataset "
+                f"'{dataset}'. Allowed: {sorted(allowed)}"
+            ),
+        )
+
+    select_cols = list(dict.fromkeys(requested))
+
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Causal data store unavailable")
+
+    query = client.table(dataset).select(",".join(select_cols))
+    query = apply_provenance_filter(query)
+    result = await query.limit(limit).execute()
+    rows = result.data or []
+
+    numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        record: Dict[str, Any] = {}
+        usable = True
+        for col in select_cols:
+            value = row.get(col)
+            if col in numeric_cols and value is not None:
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    value = None
+            if col in (treatment_var, outcome_var) and value is None:
+                usable = False
+                break
+            record[col] = value
+        if usable:
+            records.append(record)
+
+    if not records:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No usable estimation rows for the requested variables "
+                f"({treatment_var} -> {outcome_var}) in dataset '{dataset}'."
+            ),
+        )
+
+    import pandas as pd
+
+    return pd.DataFrame(records), select_cols
+
+
+@router.post(
+    "/agent-analyze",
+    response_model=AgentCausalAnalysisResponse,
+    summary="Run the causal_impact agent end-to-end (DAG + effect + refutation)",
+    operation_id="run_causal_agent_analysis",
+)
+async def run_causal_agent_analysis(
+    request: AgentCausalAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> AgentCausalAnalysisResponse:
+    """Submit a causal_impact agent run (async) and return a pending handle.
+
+    Leverages the agent: it builds the causal DAG, selects an estimator
+    DATA-DRIVENLY via the energy-score router across the registry (or the forced
+    one when ``estimator`` is set), estimates the treatment->outcome effect, and
+    runs refutation + sensitivity. That work takes MINUTES, so it runs as a
+    BackgroundTask and the client polls ``GET /causal/agent-analyze/{id}`` (same
+    submit->poll shape as the hierarchical / pipeline endpoints).
+
+    Data is validated + loaded SYNCHRONOUSLY here, so bad columns / no data
+    fail-closed immediately with the right HTTP status (400/404/503); only the
+    heavy agent run is deferred. Fail-closed throughout — never a fabricated ATE.
+    """
+    # Validate the optional estimator override BEFORE loading — the agent
+    # restricts forced methods to _VALID_EXPLICIT_METHODS; surface an honest 400.
+    if request.estimator and request.estimator not in AGENT_FORCEABLE_ESTIMATORS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Estimator '{request.estimator}' cannot be forced. Supported "
+                f"overrides: {list(AGENT_FORCEABLE_ESTIMATORS)}. Omit `estimator` "
+                "for Auto (the agent's data-driven routing across the registry)."
+            ),
+        )
+
+    # Covariates default to the dataset's curated confounders (data-driven), and
+    # can never include the treatment/outcome themselves.
+    spec = _CAUSAL_DATASET_SPECS.get(request.dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{request.dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+    covariates = [
+        c
+        for c in (request.covariates if request.covariates is not None else spec["covariate"])
+        if c not in (request.treatment_var, request.outcome_var)
+    ]
+
+    # Load synchronously -> fail-closed early (400 bad column / 404 dataset /
+    # 503 no data) before scheduling the heavy run.
+    df, _select_cols = await _load_agent_estimation_frame(
+        dataset=request.dataset,
+        treatment_var=request.treatment_var,
+        outcome_var=request.outcome_var,
+        covariates=covariates,
+        limit=request.limit,
+    )
+
+    analysis_id = str(uuid.uuid4())
+    data_source = "synthetic" if deployment_includes_synthetic() else "database"
+    pending = AgentCausalAnalysisResponse(
+        analysis_id=analysis_id,
+        status="pending",
+        treatment_var=request.treatment_var,
+        outcome_var=request.outcome_var,
+        dataset=request.dataset,
+        n_rows=int(df.shape[0]),
+        data_source=data_source,
+        dag=CausalDAGModel(),
+        statistical_significance=False,
+        refutation=RefutationSummary(),
+        warnings=["Analysis submitted; poll GET /causal/agent-analyze/{id} for the result."],
+        latency_ms=0,
+    )
+    _agent_analysis_cache[analysis_id] = pending
+    background_tasks.add_task(
+        _run_agent_analysis_task, analysis_id, request, df, covariates, data_source
+    )
+    return pending
+
+
+@router.get(
+    "/agent-analyze/{analysis_id}",
+    response_model=AgentCausalAnalysisResponse,
+    summary="Poll a causal_impact agent run by id",
+    operation_id="get_causal_agent_analysis",
+)
+async def get_causal_agent_analysis(analysis_id: str) -> AgentCausalAnalysisResponse:
+    """Poll a submitted agent run. 404 until the submit registered it; then
+    pending -> running -> completed / needs_review / failed."""
+    if analysis_id not in _agent_analysis_cache:
+        raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found")
+    return _agent_analysis_cache[analysis_id]
+
+
+async def _run_agent_analysis_task(
+    analysis_id: str,
+    request: AgentCausalAnalysisRequest,
+    df: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    covariates: List[str],
+    data_source: str,
+) -> None:
+    """Background: run the agent on the pre-loaded frame; cache the result.
+
+    The state is built DIRECTLY (not via CausalImpactAgent, whose wrapper would
+    short-circuit a "synthetic" data_source to fast OLS) — so "Auto" runs the
+    real energy-score selection across the registry. ``data_source`` here is only
+    the response provenance label; the data always comes from data_cache. The
+    refutation is bounded so the run completes in minutes (not the full
+    ~610-re-estimation suite), with a generous wall-clock cap.
+    """
+    import time as _time
+
+    prev = _agent_analysis_cache.get(analysis_id)
+    if prev is not None:
+        _agent_analysis_cache[analysis_id] = prev.model_copy(update={"status": "running"})
+
+    parameters: Dict[str, Any] = {}
+    if request.estimator:
+        parameters["method"] = request.estimator
+    parameters.setdefault(
+        "refutation_config",
+        {
+            "bootstrap": {"num_bootstraps": 20},
+            "placebo_treatment": {"num_simulations": 10},
+            "data_subset": {"num_subsets": 5},
+            "random_common_cause": {"num_simulations": 10},
+        },
+    )
+    initial_state: Dict[str, Any] = {
+        "query": (
+            f"What is the causal effect of {request.treatment_var} on {request.outcome_var}?"
+        ),
+        "query_id": analysis_id,
+        "treatment_var": request.treatment_var,
+        "outcome_var": request.outcome_var,
+        "confounders": covariates,
+        "data_source": data_source,
+        "data_cache": {"estimation_data": df},
+        "parameters": parameters,
+        "interpretation_depth": "standard",
+        "brand": request.brand,
+        "errors": [],
+        "warnings": [],
+        "fallback_used": False,
+        "retry_count": 0,
+    }
+
+    start = _time.time()
+    try:
+        from src.agents.causal_impact.graph import create_causal_impact_graph
+
+        graph = create_causal_impact_graph()
+        # Bound concurrency to ONE per-worker heavy-compute slot (OOM guard),
+        # mirroring the hierarchical / parallel endpoints.
+        async with heavy_compute_slot():
+            final_state = await asyncio.wait_for(graph.ainvoke(initial_state), timeout=900.0)
+        _agent_analysis_cache[analysis_id] = _agent_state_to_response(
+            analysis_id=analysis_id,
+            request=request,
+            data_source=data_source,
+            n_rows=int(df.shape[0]),
+            final_state=final_state,
+            latency_ms=int((_time.time() - start) * 1000),
+        )
+    except Exception as e:  # noqa: BLE001 — cache a generic FAILED record
+        logger.error(f"Background causal agent analysis failed: {e}", exc_info=True)
+        _agent_analysis_cache[analysis_id] = AgentCausalAnalysisResponse(
+            analysis_id=analysis_id,
+            status="failed",
+            treatment_var=request.treatment_var,
+            outcome_var=request.outcome_var,
+            dataset=request.dataset,
+            n_rows=int(df.shape[0]),
+            data_source=data_source,
+            dag=CausalDAGModel(),
+            statistical_significance=False,
+            refutation=RefutationSummary(),
+            warnings=["Analysis failed due to an internal error."],
+            latency_ms=int((_time.time() - start) * 1000),
+        )
+
+
+def _agent_state_to_response(
+    *,
+    analysis_id: str,
+    request: AgentCausalAnalysisRequest,
+    data_source: str,
+    n_rows: int,
+    final_state: Dict[str, Any],
+    latency_ms: int,
+) -> AgentCausalAnalysisResponse:
+    """Map the causal_impact agent's final state onto the API response.
+
+    Fail-closed status mirrors the agent's own gate (CausalImpactAgent
+    ._build_output): a run is ``completed`` only with a real ATE, a non-blocked
+    refutation gate, and no sensitivity failure; ``review`` band is surfaced as
+    ``needs_review``; anything else is ``failed`` with the reason in warnings.
+    """
+    causal_graph = final_state.get("causal_graph") or {}
+    estimation = final_state.get("estimation_result") or {}
+    refutation = final_state.get("refutation_results") or {}
+    sensitivity = final_state.get("sensitivity_analysis") or {}
+    interpretation = final_state.get("interpretation") or {}
+
+    dag = CausalDAGModel(
+        nodes=list(causal_graph.get("nodes", []) or []),
+        edges=[list(e) for e in (causal_graph.get("edges", []) or []) if len(e) == 2],
+        treatment_nodes=list(causal_graph.get("treatment_nodes", []) or []),
+        outcome_nodes=list(causal_graph.get("outcome_nodes", []) or []),
+        adjustment_sets=[list(s) for s in (causal_graph.get("adjustment_sets", []) or [])],
+        dag_dot=causal_graph.get("dag_dot"),
+    )
+
+    ate = estimation.get("ate")
+    gate_decision = refutation.get("gate_decision") or final_state.get("gate_decision")
+    refutation_error = final_state.get("refutation_error")
+    sensitivity_failed = bool(final_state.get("sensitivity_error"))
+    refutation_ran = bool(refutation) and not refutation_error
+    gate_blocked = gate_decision == "block"
+    needs_review = gate_decision == "review"
+
+    if ate is not None and refutation_ran and not gate_blocked and not sensitivity_failed:
+        status = "needs_review" if needs_review else "completed"
+    else:
+        status = "failed"
+
+    refutation_summary = RefutationSummary(
+        gate_decision=gate_decision,
+        passed=bool(refutation_ran and gate_decision == "proceed"),
+        needs_review=needs_review,
+        tests_passed=refutation.get("tests_passed"),
+        tests_total=refutation.get("total_tests"),
+        sensitivity_e_value=sensitivity.get("e_value"),
+    )
+
+    # Surface honest warnings when the run did not yield a usable, validated effect.
+    warnings: List[str] = list(final_state.get("warnings", []) or [])
+    if ate is None:
+        warnings.append("No treatment effect was estimated (the agent fail-closed on the data).")
+    if not refutation_ran:
+        warnings.append("Refutation did not run — the effect is unvalidated.")
+    elif gate_blocked:
+        warnings.append("Refutation gate BLOCKED — the estimate did not survive robustness checks.")
+    if sensitivity_failed:
+        warnings.append("Sensitivity analysis failed — robustness is unvalidated.")
+
+    return AgentCausalAnalysisResponse(
+        analysis_id=analysis_id,
+        status=status,
+        treatment_var=request.treatment_var,
+        outcome_var=request.outcome_var,
+        dataset=request.dataset,
+        n_rows=n_rows,
+        data_source=data_source,
+        dag=dag,
+        ate=ate,
+        ate_ci_lower=estimation.get("ate_ci_lower"),
+        ate_ci_upper=estimation.get("ate_ci_upper"),
+        standard_error=estimation.get("standard_error"),
+        p_value=estimation.get("p_value"),
+        statistical_significance=bool(estimation.get("statistical_significance", False)),
+        selected_estimator=estimation.get("method") or estimation.get("selected_estimator"),
+        confidence=final_state.get("overall_confidence"),
+        refutation=refutation_summary,
+        narrative=interpretation.get("narrative"),
+        executive_summary=interpretation.get("executive_summary"),
+        recommendations=list(interpretation.get("recommendations", []) or []),
+        key_insights=list(interpretation.get("key_findings", []) or []),
+        warnings=warnings,
+        latency_ms=latency_ms,
     )
 
 

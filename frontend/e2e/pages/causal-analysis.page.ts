@@ -5,12 +5,13 @@ import { gotoAndWaitForHeading } from '../fixtures/page-harness'
 /**
  * Page Object Model for the Causal Analysis page (`/causal-analysis`).
  *
- * Multi-library causal inference dashboard (DoWhy / EconML / CausalML) with
- * hierarchical CATE estimation. Honest states this POM exposes:
+ * Agent-driven causal inference dashboard (DoWhy / EconML / CausalML). The page
+ * leverages the causal_impact agent to build the DAG and estimate the
+ * treatment->outcome effect. Honest states this POM exposes:
  *  - healthy banner: "Causal Engine Healthy" (from GET /api/causal/health)
  *  - degraded banner: "Service Issue" when status != 'healthy'
  *  - overview KPI cards driven by real health/estimator data
- *  - empty: EmptyState "No hierarchical CATE analysis available" (before a run)
+ *  - empty: EmptyState "No analysis run yet" (before a run)
  */
 export class CausalAnalysisPage extends BasePage {
   readonly url = '/causal-analysis'
@@ -29,7 +30,7 @@ export class CausalAnalysisPage extends BasePage {
   }
 
   get pageDescription(): Locator {
-    return this.page.getByText(/Multi-library causal inference/i).first()
+    return this.page.getByText(/Agent-driven causal inference/i).first()
   }
 
   get healthyBanner(): Locator {
@@ -48,16 +49,16 @@ export class CausalAnalysisPage extends BasePage {
     return this.page.getByText('Estimators', { exact: true }).first()
   }
 
-  // Honest empty state on the default (Hierarchical CATE) tab before a run.
+  // Honest empty state on the default (Analysis) tab before a run.
   get emptyState(): Locator {
-    return this.page.getByText('No hierarchical CATE analysis available', { exact: true }).first()
+    return this.page.getByText('No analysis run yet', { exact: true }).first()
   }
 
   get runAnalysisButton(): Locator {
     return this.page.getByRole('button', { name: /Run Analysis/i }).first()
   }
 
-  get hierarchicalTab(): Locator {
-    return this.page.getByRole('tab', { name: /Hierarchical CATE/i }).first()
+  get analysisTab(): Locator {
+    return this.page.getByRole('tab', { name: /Analysis/i }).first()
   }
 }

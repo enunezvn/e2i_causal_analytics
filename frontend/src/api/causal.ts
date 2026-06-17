@@ -23,6 +23,8 @@ import {
   EstimatorListResponseWireSchema,
 } from '@/lib/api-schemas';
 import type {
+  AgentCausalAnalysisRequest,
+  AgentCausalAnalysisResponse,
   CausalAnalysisHistoryResponse,
   CausalLibrary,
   CausalVariablesResponse,
@@ -90,6 +92,72 @@ export async function runHierarchicalAnalysis(
     request,
     { params: { async_mode: asyncMode } }
   );
+}
+
+/**
+ * Run the causal_impact agent end-to-end.
+ *
+ * Leverages the agent (NOT the manual hierarchical/pipeline knobs): it builds the
+ * causal DAG, selects an estimator data-drivenly via the energy-score router
+ * (or the forced `estimator`), estimates the treatment->outcome effect, and runs
+ * refutation + sensitivity. Real data is loaded server-side from the gold-standard
+ * dataset; the agent fails closed (no fabricated ATE) when it cannot estimate.
+ *
+ * @example
+ * ```typescript
+ * const result = await runCausalAgentAnalysis({
+ *   treatment_var: 'treatment_arm',
+ *   outcome_var: 'persistent_180d',
+ *   // estimator omitted => Auto (agent picks from the registry)
+ * });
+ * console.log(result.ate, result.selected_estimator, result.dag.edges);
+ * ```
+ */
+export async function runCausalAgentAnalysis(
+  request: AgentCausalAnalysisRequest
+): Promise<AgentCausalAnalysisResponse> {
+  return post<AgentCausalAnalysisResponse, AgentCausalAnalysisRequest>(
+    `${CAUSAL_BASE}/agent-analyze`,
+    request
+  );
+}
+
+/** Poll a submitted agent run by id. */
+export async function getCausalAgentAnalysis(
+  analysisId: string
+): Promise<AgentCausalAnalysisResponse> {
+  return get<AgentCausalAnalysisResponse>(
+    `${CAUSAL_BASE}/agent-analyze/${encodeURIComponent(analysisId)}`
+  );
+}
+
+/**
+ * Submit an agent run and poll until it finishes.
+ *
+ * The agent's energy-score selection + refutation takes minutes, so the run is
+ * async (submit -> poll). Resolves with the final response for ANY terminal
+ * status — including `failed` (the page renders the honest fail-closed result
+ * with its warnings); only a network error or a poll timeout throws.
+ */
+export async function runCausalAgentAnalysisAndWait(
+  request: AgentCausalAnalysisRequest,
+  pollIntervalMs: number = 2500,
+  maxWaitMs: number = 900000
+): Promise<AgentCausalAnalysisResponse> {
+  const isTerminal = (s: string) =>
+    s === 'completed' || s === 'needs_review' || s === 'failed';
+
+  const initial = await runCausalAgentAnalysis(request);
+  if (isTerminal(initial.status)) return initial;
+
+  const startTime = Date.now();
+  const analysisId = initial.analysis_id;
+  while (Date.now() - startTime < maxWaitMs) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    const result = await getCausalAgentAnalysis(analysisId);
+    if (isTerminal(result.status)) return result;
+  }
+  throw new Error(`Causal agent analysis timed out after ${maxWaitMs}ms`);
 }
 
 /**

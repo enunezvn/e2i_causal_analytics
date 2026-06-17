@@ -150,6 +150,77 @@ export interface EstimationDataResponse {
 }
 
 // =============================================================================
+// AGENT ANALYSIS TYPES (causal_impact agent, end-to-end)
+// =============================================================================
+
+/** Run the causal_impact agent: builds the DAG, picks an estimator data-drivenly
+ *  (or the forced one), estimates treatment->outcome, runs refutation. */
+export interface AgentCausalAnalysisRequest {
+  treatment_var: string;
+  outcome_var: string;
+  /** Gold-standard dataset (default 'patient_journeys') */
+  dataset?: string;
+  /** Confounders; omit to use the dataset's curated covariates */
+  covariates?: string[];
+  /** Force one estimator; omit for Auto (the agent's data-driven routing) */
+  estimator?: string;
+  brand?: string;
+  limit?: number;
+}
+
+/** The causal DAG the agent's graph_builder constructed. */
+export interface CausalDAGModel {
+  nodes: string[];
+  /** Directed [from, to] edges */
+  edges: string[][];
+  treatment_nodes: string[];
+  outcome_nodes: string[];
+  adjustment_sets: string[][];
+  dag_dot?: string | null;
+}
+
+/** Robustness gate + refutation/sensitivity summary. */
+export interface RefutationSummary {
+  /** proceed / review / block */
+  gate_decision?: string | null;
+  passed: boolean;
+  needs_review: boolean;
+  tests_passed?: number | null;
+  tests_total?: number | null;
+  sensitivity_e_value?: number | null;
+}
+
+/** Full result of an end-to-end causal_impact agent run. */
+export interface AgentCausalAnalysisResponse {
+  analysis_id: string;
+  /** completed / needs_review / failed */
+  status: string;
+  treatment_var: string;
+  outcome_var: string;
+  dataset: string;
+  n_rows: number;
+  /** database / synthetic */
+  data_source: string;
+  dag: CausalDAGModel;
+  ate?: number | null;
+  ate_ci_lower?: number | null;
+  ate_ci_upper?: number | null;
+  standard_error?: number | null;
+  p_value?: number | null;
+  statistical_significance: boolean;
+  /** Estimator the agent actually used (data-driven or forced) */
+  selected_estimator?: string | null;
+  confidence?: number | null;
+  refutation: RefutationSummary;
+  narrative?: string | null;
+  executive_summary?: string | null;
+  recommendations: string[];
+  key_insights: string[];
+  warnings: string[];
+  latency_ms: number;
+}
+
+// =============================================================================
 // HIERARCHICAL ANALYSIS TYPES
 // =============================================================================
 
