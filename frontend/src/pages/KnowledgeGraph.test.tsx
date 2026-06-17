@@ -73,20 +73,29 @@ function createWrapper() {
 // Kisqali, whose chain (treatment -> outcome -> trx) yields 3 nodes / 2 edges.
 // The Fabhalta chain (adherence -> persistence) must NOT appear under Kisqali.
 const mockNodes = [
+  // Kisqali main chain (3 nodes -> kept).
   { id: 'var:treatment', name: 'treatment', type: 'Variable', properties: {}, created_at: '2026-01-04' },
   { id: 'var:outcome', name: 'outcome', type: 'Variable', properties: {}, created_at: '2026-01-04' },
   { id: 'var:trx', name: 'trx', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  // Kisqali off-chain pair (size-2 component -> pruned).
+  { id: 'var:sideA', name: 'sideA', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  { id: 'var:sideB', name: 'sideB', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  // Fabhalta chain (3 nodes -> kept).
   { id: 'var:adherence', name: 'adherence', type: 'Variable', properties: {}, created_at: '2026-01-04' },
   { id: 'var:persistence', name: 'persistence', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  { id: 'var:discontinuation', name: 'discontinuation', type: 'Variable', properties: {}, created_at: '2026-01-04' },
 ];
 
 const mockRelationships = [
-  // Kisqali chain (default). Second edge uses lowercase 'kisqali' to prove the
-  // brand match is case-insensitive (the graph has Kisqali AND kisqali dupes).
+  // Kisqali main chain (default). Second edge uses lowercase 'kisqali' to prove
+  // the brand match is case-insensitive (the graph has Kisqali AND kisqali dupes).
   { id: 'k1', type: 'CAUSES', source_id: 'var:treatment', target_id: 'var:outcome', properties: { brand: 'Kisqali' }, confidence: 0.9, created_at: '2026-01-04' },
   { id: 'k2', type: 'CAUSES', source_id: 'var:outcome', target_id: 'var:trx', properties: { brand: 'kisqali' }, confidence: 0.9, created_at: '2026-01-04' },
+  // Kisqali off-chain PAIR — a within-brand size-2 component that must be pruned.
+  { id: 'k3', type: 'CAUSES', source_id: 'var:sideA', target_id: 'var:sideB', properties: { brand: 'Kisqali' }, confidence: 0.7, created_at: '2026-01-04' },
   // Fabhalta chain (different brand — excluded when Kisqali is selected).
   { id: 'f1', type: 'CAUSES', source_id: 'var:adherence', target_id: 'var:persistence', properties: { brand: 'Fabhalta' }, confidence: 0.8, created_at: '2026-01-04' },
+  { id: 'f2', type: 'CAUSES', source_id: 'var:persistence', target_id: 'var:discontinuation', properties: { brand: 'Fabhalta' }, confidence: 0.8, created_at: '2026-01-04' },
 ];
 
 /** Assert a number is shown inside the stats card identified by its description. */
@@ -243,12 +252,24 @@ describe('KnowledgeGraphPage', () => {
     it('re-scopes to another brand when the dropdown changes', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      // Switch the brand dropdown to Fabhalta -> only its 1-edge/2-node chain.
+      // Switch the brand dropdown to Fabhalta -> only its 3-node / 2-edge chain.
       const select = screen.getByRole('combobox', { name: /brand/i });
       fireEvent.change(select, { target: { value: 'Fabhalta' } });
 
-      expect(screen.getByTestId('nodes-count')).toHaveTextContent('2');
-      expect(screen.getByTestId('relationships-count')).toHaveTextContent('1');
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
+    });
+
+    it('prunes within-brand singletons and pairs (off-chain fragments)', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      // Kisqali has 5 variables / 3 CAUSES edges, but the sideA-sideB pair is a
+      // size-2 component -> dropped. Only the 3-node main chain renders (3 nodes /
+      // 2 edges); without pruning this would be 5 nodes / 3 edges.
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
+      // The pruned variables are not counted in the stats badge either.
+      expect(screen.getByText('Variable: 3')).toBeInTheDocument();
     });
 
     it('renders a brand dropdown defaulting to Kisqali', () => {

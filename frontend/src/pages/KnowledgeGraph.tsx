@@ -46,12 +46,21 @@ const NODE_FETCH_LIMIT = 2000;
 const REL_FETCH_LIMIT = 2000;
 
 /**
+ * Minimum connected-component size to render WITHIN a brand's causal graph. A
+ * brand's gold standard can include a tiny off-chain causal pair; isolated
+ * singletons and 2-node pairs carry little signal and read as a stray
+ * "disconnected secondary graph", so they are pruned. K = 3 keeps every genuine
+ * multi-node chain. Tunable.
+ */
+const MIN_COMPONENT_SIZE = 3;
+
+/**
  * Derive the selected brand's causal subgraph: keep the ``CAUSES`` edges tagged
- * with that brand (case-insensitive) and the ``Variable`` nodes they connect.
- * This IS the brand's synthetic gold-standard causal graph — no other entity
- * types, no cross-brand edges, no disconnected satellites. (Replaces the old
- * connected-component filter: when the page renders one brand's curated chains,
- * every node is causal by construction, so there is nothing to prune.)
+ * with that brand (case-insensitive) and the ``Variable`` nodes they connect,
+ * THEN drop within-brand singletons and 2-node pairs (connected components
+ * smaller than ``MIN_COMPONENT_SIZE``) so the canvas shows the brand's connected
+ * causal chain(s), not stray off-chain fragments. This IS the brand's synthetic
+ * gold-standard causal graph — no other entity types, no cross-brand edges.
  */
 function causalSubgraphForBrand(
   nodes: GraphNode[],
@@ -59,18 +68,49 @@ function causalSubgraphForBrand(
   brand: string
 ): { nodes: GraphNode[]; relationships: GraphRelationship[] } {
   const target = brand.toLowerCase();
-  const rels = relationships.filter((r) => {
+  const brandRels = relationships.filter((r) => {
     const b = r.properties?.brand;
     return r.type === 'CAUSES' && typeof b === 'string' && b.toLowerCase() === target;
   });
-  const ids = new Set<string>();
-  for (const r of rels) {
-    ids.add(r.source_id);
-    ids.add(r.target_id);
+
+  // Undirected adjacency over the brand's causal Variables.
+  const adjacency = new Map<string, string[]>();
+  const touch = (id: string) => {
+    if (!adjacency.has(id)) adjacency.set(id, []);
+  };
+  for (const r of brandRels) {
+    touch(r.source_id);
+    touch(r.target_id);
+    adjacency.get(r.source_id)!.push(r.target_id);
+    adjacency.get(r.target_id)!.push(r.source_id);
   }
+
+  // BFS each connected component; keep only those with >= MIN_COMPONENT_SIZE nodes.
+  const seen = new Set<string>();
+  const keep = new Set<string>();
+  for (const start of adjacency.keys()) {
+    if (seen.has(start)) continue;
+    seen.add(start);
+    const component = [start];
+    const queue = [start];
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      for (const neighbor of adjacency.get(current)!) {
+        if (!seen.has(neighbor)) {
+          seen.add(neighbor);
+          component.push(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+    if (component.length >= MIN_COMPONENT_SIZE) {
+      for (const id of component) keep.add(id);
+    }
+  }
+
   return {
-    nodes: nodes.filter((n) => ids.has(n.id)),
-    relationships: rels,
+    nodes: nodes.filter((n) => keep.has(n.id)),
+    relationships: brandRels.filter((r) => keep.has(r.source_id) && keep.has(r.target_id)),
   };
 }
 
