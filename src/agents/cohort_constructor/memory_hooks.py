@@ -472,13 +472,18 @@ class CohortConstructorMemoryHooks:
                 },
             )
 
-            # Create brand node and relationship
-            brand_id = f"brand:{brand}"
+            # Create brand node and relationship. Canonicalise the brand casing
+            # (Remibrutinib, not remibrutinib) so this write MERGEs onto the one
+            # canonical Brand node instead of minting a lowercase duplicate.
+            from src.memory.episodic_memory import canonical_brand
+
+            brand_name = canonical_brand(brand) or brand
+            brand_id = f"brand:{brand_name}"
             self.semantic_memory.add_e2i_entity(
                 entity_type="Brand",
                 entity_id=brand_id,
                 properties={
-                    "name": brand,
+                    "name": brand_name,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -536,6 +541,13 @@ class CohortConstructorMemoryHooks:
 
         try:
             cohort_entity_id = f"cohort:{cohort_id}"
+
+            # Canonicalise the brand casing once so the CohortConfig property and
+            # the Brand node below share the one canonical identity (no lowercase
+            # duplicate Brand node).
+            from src.memory.episodic_memory import canonical_brand
+
+            brand = canonical_brand(brand) or brand
 
             # Create cohort config node
             self.semantic_memory.add_e2i_entity(

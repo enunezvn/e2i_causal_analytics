@@ -81,6 +81,28 @@ class E2IBrand(str, Enum):
     ALL = "all"
 
 
+def canonical_brand(value: Optional[str]) -> Optional[str]:
+    """Map a brand string (any casing) to its canonical :class:`E2IBrand` value.
+
+    The graph was being polluted with duplicate Brand nodes because different
+    writers used different casing — the demo seed wrote ``Remibrutinib`` while the
+    cohort-constructor agent wrote a lowercase ``remibrutinib`` (a separate node).
+    Routing every brand write through this canonicaliser collapses them onto one
+    proper-case identity. Matching is case-insensitive on the enum value.
+
+    Unknown brands are returned stripped but otherwise unchanged (never silently
+    dropped — an unrecognised brand is surfaced as-is, not erased). ``None``/empty
+    pass through unchanged.
+    """
+    if not value:
+        return value
+    key = value.strip().lower()
+    for brand in E2IBrand:
+        if brand.value.lower() == key:
+            return brand.value
+    return value.strip()
+
+
 class E2IRegion(str, Enum):
     """E2I region values."""
 
