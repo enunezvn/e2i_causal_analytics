@@ -87,6 +87,36 @@ class DiscoveredEdge:
 
 
 @dataclass
+class CausalPriorKnowledge:
+    """Domain priors that constrain causal structure learning.
+
+    Observational discovery only recovers a Markov equivalence class — edge
+    ORIENTATION is underdetermined, so unconstrained PC/GES can emit
+    implausibly-directed edges (e.g. ``treatment -> confounder``). These priors
+    anchor what is KNOWN so the DATA still decides the rest. Maps onto
+    causal-learn's ``BackgroundKnowledge`` (see ``build_background_knowledge``):
+
+    - ``tiers``: ordered groups; a variable in an earlier tier is causally PRIOR
+      to (cannot be caused by) one in a later tier. E.g.
+      ``[[confounders...], [treatment], [outcome]]`` forbids treatment->confounder
+      and outcome->anything, so confounder/treatment/outcome edges orient
+      correctly while the data still selects WHICH covariates are confounders
+      (validated on patient_journeys).
+    - ``required_edges``: ``(from, to)`` directed edges that must be present
+      (e.g. the treatment->outcome hypothesis under test).
+    - ``forbidden_edges``: ``(from, to)`` directed edges that must be absent.
+    """
+
+    tiers: Optional[List[List[str]]] = None
+    required_edges: Optional[List[Tuple[str, str]]] = None
+    forbidden_edges: Optional[List[Tuple[str, str]]] = None
+
+    def is_empty(self) -> bool:
+        """True when no prior is set (discovery runs fully unconstrained)."""
+        return not (self.tiers or self.required_edges or self.forbidden_edges)
+
+
+@dataclass
 class DiscoveryConfig:
     """Configuration for causal structure learning.
 
@@ -117,6 +147,11 @@ class DiscoveryConfig:
     assume_gaussian: bool = False
     use_process_pool: bool = False
     max_workers: Optional[int] = None
+    # Domain priors (tiers / required / forbidden edges) for GUIDED discovery.
+    # Only the PC algorithm consumes these (causal-learn BackgroundKnowledge);
+    # when set, prefer ``algorithms=[PC]`` so the ensemble is not polluted by
+    # unconstrained orientations from algorithms that ignore the priors.
+    prior_knowledge: Optional[CausalPriorKnowledge] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -132,6 +167,19 @@ class DiscoveryConfig:
             "assume_gaussian": self.assume_gaussian,
             "use_process_pool": self.use_process_pool,
             "max_workers": self.max_workers,
+            "prior_knowledge": (
+                {
+                    "tiers": self.prior_knowledge.tiers,
+                    "required_edges": [
+                        list(e) for e in (self.prior_knowledge.required_edges or [])
+                    ],
+                    "forbidden_edges": [
+                        list(e) for e in (self.prior_knowledge.forbidden_edges or [])
+                    ],
+                }
+                if self.prior_knowledge is not None
+                else None
+            ),
         }
 
 
