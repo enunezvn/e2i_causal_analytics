@@ -2626,78 +2626,30 @@ Synthesize these results into a natural, conversational response. Include specif
 
 
 def generate_e2i_response(query: str) -> str:
+    """Honest fallback used ONLY when the LLM chat path raises.
+
+    The chat node (``chat_node``) drives the real Anthropic-backed LLM, which
+    fetches live data through the bound tools and synthesizes the answer. This
+    function is reached ONLY in the ``except`` arm of that call — i.e. the model
+    invocation actually failed (provider outage, auth/model error, timeout).
+
+    It deliberately does NOT fabricate a data answer or echo a generic
+    capability list dressed up as a reply. The previous implementation
+    keyword-matched the query and returned canned text like "Use the
+    **getKPISummary** action…", which (a) referenced internal action names the
+    user can't invoke, (b) read like a confident real answer, and (c) silently
+    masked the underlying failure — exactly the "not optimal" response users hit
+    when the configured LLM model 404'd. Honesty over plausibility: return a
+    short "temporarily unavailable" message that names the situation and invites
+    a retry, fabricating nothing. ``query`` is intentionally unused — there is no
+    honest query-specific answer to give once the reasoning backend is down.
     """
-    Generate a contextual response for E2I queries.
-
-    This is a simple response generator. In production, this would
-    integrate with Claude API for more sophisticated responses.
-    """
-    query_lower = query.lower()
-
-    # KPI-related queries
-    if any(kw in query_lower for kw in ["kpi", "trx", "nrx", "market share", "metric"]):
-        return (
-            "I can help you with KPI analysis! Use the **getKPISummary** action to get detailed metrics "
-            "for any brand (Remibrutinib, Fabhalta, Kisqali, or All). This includes TRx volume, NRx volume, "
-            "market share, conversion rate, HCP reach, and patient starts."
-        )
-
-    # Agent-related queries
-    if any(kw in query_lower for kw in ["agent", "status", "tier", "orchestrator"]):
-        return (
-            "The E2I platform uses a 21-agent tiered architecture:\n\n"
-            "- **Tier 0**: ML Foundation (8 agents)\n"
-            "- **Tier 1**: Orchestration (2 agents)\n"
-            "- **Tier 2**: Causal Analytics (3 agents)\n"
-            "- **Tier 3**: Monitoring (4 agents)\n"
-            "- **Tier 4**: ML Predictions (2 agents)\n"
-            "- **Tier 5**: Self-Improvement (2 agents)\n\n"
-            "Use the **getAgentStatus** action to see which agents are currently active."
-        )
-
-    # Causal analysis queries
-    if any(kw in query_lower for kw in ["causal", "impact", "intervention", "effect", "ate"]):
-        return (
-            "I can run causal impact analyses! Use the **runCausalAnalysis** action with:\n\n"
-            "- **intervention**: Type of intervention (e.g., 'HCP Engagement', 'Marketing Campaign')\n"
-            "- **target_kpi**: KPI to measure (e.g., 'TRx Volume', 'Market Share')\n"
-            "- **brand**: Brand to analyze\n\n"
-            "The analysis uses DoWhy/EconML for rigorous causal inference."
-        )
-
-    # Recommendation queries
-    if any(kw in query_lower for kw in ["recommend", "suggest", "improve", "optimize"]):
-        return (
-            "I can provide AI-powered recommendations! Use the **getRecommendations** action with a brand name "
-            "to get prioritized suggestions for HCP targeting, patient journey optimization, and market access strategies."
-        )
-
-    # Search/insight queries
-    if any(kw in query_lower for kw in ["search", "find", "insight", "trend"]):
-        return (
-            "I can search the E2I knowledge base for insights! Use the **searchInsights** action with your query "
-            "to find causal paths, trends, and agent outputs. You can optionally filter by brand."
-        )
-
-    # Brand-specific queries
-    if any(brand.lower() in query_lower for brand in ["remibrutinib", "fabhalta", "kisqali"]):
-        return (
-            "I see you're asking about a specific brand. I have data for:\n\n"
-            "- **Remibrutinib** (CSU indication)\n"
-            "- **Fabhalta** (PNH indication)\n"
-            "- **Kisqali** (HR+/HER2- breast cancer)\n\n"
-            "Use the **getKPISummary** action to get detailed metrics, or **runCausalAnalysis** for impact analysis."
-        )
-
-    # Default response
     return (
-        "I'm the E2I Analytics Assistant. I can help you with:\n\n"
-        "1. **KPI Analysis** - Get metrics for pharmaceutical brands\n"
-        "2. **Agent Status** - Check the 21-agent system status\n"
-        "3. **Causal Analysis** - Run causal impact analyses\n"
-        "4. **Recommendations** - Get AI-powered suggestions\n"
-        "5. **Insights Search** - Find trends and causal paths\n\n"
-        "What would you like to explore?"
+        "⚠️ I couldn't complete that request just now — the analytics assistant "
+        "hit a temporary error reaching its data and reasoning backend, so I don't "
+        "have a reliable answer to give you yet. Please try again in a moment. If "
+        "this keeps happening, the assistant's LLM connection likely needs "
+        "attention (it isn't a problem with your question)."
     )
 
 

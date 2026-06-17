@@ -87,3 +87,23 @@ async def test_flag_on_uses_twins_and_synthetic_source(recording_client, monkeyp
     assert result["metrics"]["trx_volume"] == 42642
     # Honest labelling: synthetic mode is NOT reported as production "database".
     assert result["data_source"] != "database"
+
+
+def test_fallback_response_is_honest_transient_not_canned_actions():
+    """The chat node's LLM-failure fallback (``generate_e2i_response``) must be
+    an honest "temporarily unavailable" message -- not the old keyword-canned
+    text that dumped internal CopilotKit action names and read like a real
+    answer (the exact "not optimal" reply the user reported). It must never
+    fabricate a data figure for the question it could not actually answer."""
+    from src.api.routes.copilotkit import generate_e2i_response
+
+    msg = generate_e2i_response("what was the Fabhalta NBRx for the past 3 months?")
+    low = msg.lower()
+    # Honest about a transient failure and invites a retry.
+    assert "try again" in low
+    # Does NOT masquerade as a working answer / dump internal action names.
+    assert "getkpisummary" not in low
+    assert "21-agent" not in low
+    assert "use the **get" not in low
+    # No fabricated metric value for a request it did not actually compute.
+    assert "3168" not in msg and "3298" not in msg

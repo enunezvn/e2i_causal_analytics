@@ -1347,12 +1347,34 @@ class KpiCalculateInput(BaseModel):
     region: Optional[str] = Field(default=None, description="Optional region/territory filter.")
 
 
+# Reporting window per KPI id, MIRRORED from the vetted SQL in the kpi_query
+# allowlist registry (database/migrations/044_kpi_query_allowlist.sql and 066).
+# The WS3 volume KPIs count prescriptions over a ROLLING 30-day window
+# (`... WHERE first_date >= NOW() - INTERVAL '30 days'`). The engine does NOT
+# accept a caller-supplied date range: params bind positionally to the
+# immutable vetted statement ($1=brand, $2=region), so there is nowhere to
+# inject a custom period without a new migration. Surfacing the real window
+# lets the chatbot CITE it instead of silently presenting, say, a 30-day NBRx
+# as a user-requested "past 3 months". Only KPIs whose window we have verified
+# against the registry are listed; for any other KPI the field is omitted
+# (honest absence over a guessed period). KEEP IN SYNC with those migrations.
+KPI_REPORTING_WINDOWS = {
+    "WS3-BI-005": "rolling last 30 days",  # TRx
+    "WS3-BI-006": "rolling last 30 days",  # NRx
+    "WS3-BI-007": "rolling last 30 days",  # NBRx
+}
+
+
 def _kpi_result_to_response(kpi: Any, result: Any) -> Dict[str, Any]:
     """Map a ``KPIResult`` onto the chatbot tool response (pure; unit-tested, no DB).
 
     Surfaces ``data_source='synthetic'`` when the engine answered from the
     synthetic-gold substrate so the chatbot/FE badges the figure honestly rather
     than passing it off as real-world data.
+
+    For KPIs computed over a fixed rolling window (the WS3 volume metrics), also
+    surfaces ``reporting_window`` so the chatbot states the period the figure
+    actually covers rather than echoing whatever range the user asked for.
     """
     if getattr(result, "error", None):
         return {
@@ -1363,7 +1385,7 @@ def _kpi_result_to_response(kpi: Any, result: Any) -> Dict[str, Any]:
             "error": result.error,
         }
     include_synthetic = bool((getattr(result, "metadata", None) or {}).get("include_synthetic"))
-    return {
+    response: Dict[str, Any] = {
         "success": True,
         "query_type": "kpi_calculate",
         "kpi_id": kpi.id,
@@ -1372,6 +1394,10 @@ def _kpi_result_to_response(kpi: Any, result: Any) -> Dict[str, Any]:
         "status": result.status,
         "data_source": "synthetic" if include_synthetic else "database",
     }
+    window = KPI_REPORTING_WINDOWS.get(kpi.id)
+    if window:
+        response["reporting_window"] = window
+    return response
 
 
 @tool(args_schema=KpiCalculateInput)
@@ -1389,13 +1415,22 @@ async def kpi_calculate_tool(
     name to its definition and CALCULATES it from the real substrate (e.g. NBRx =
     count of each patient's first-brand prescription over ``treatment_events``).
 
+    TIME WINDOW: the volume KPIs (TRx/NRx/NBRx) are computed over the engine's
+    FIXED rolling window — currently the last 30 days — and this tool does NOT
+    accept a caller-supplied date range. When that window is known it is returned
+    as ``reporting_window``. If the user asks for a specific period (e.g. "past 3
+    months"), report the value together with its ``reporting_window`` and say a
+    custom range isn't available — do NOT imply the figure covers the requested
+    period.
+
     Args:
         kpi_name: the KPI to compute (resolved against the 46 defined KPIs).
         brand: optional brand filter (case-insensitive).
         region: optional region/territory filter.
 
     Returns:
-        Dict with success, kpi_id, kpi_name, value, status, data_source.
+        Dict with success, kpi_id, kpi_name, value, status, data_source, and
+        (for fixed-window volume KPIs) reporting_window.
     """
     kpi = kpi_resolution.recognize_kpi(kpi_name)
     if kpi is None:
