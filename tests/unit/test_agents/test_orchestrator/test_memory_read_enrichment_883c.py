@@ -99,25 +99,51 @@ class TestLatencyBudget:
     @pytest.mark.asyncio
     async def test_hung_read_respects_budget_and_does_not_poison_run(self):
         """A read that would take 30s is cut at MEMORY_READ_BUDGET_SECONDS;
-        the run completes promptly, status unaffected, NO context fabricated."""
+        the run completes promptly, status unaffected, NO context fabricated.
+
+        The wall-clock proof is measured RELATIVE to an identical no-hang run,
+        not as an absolute threshold: a loaded CI runner inflates graph/event-
+        loop overhead unpredictably (observed ~16s for the very same mock
+        graph), so an absolute bound conflates "the budget cut the hang" (what
+        this pins) with "the runner is slow" (what it must not). The budget is
+        proven by the 30s hang adding at most ~one budget over the baseline —
+        never the full ~30s a leak would add.
+        """
         agent = _make_agent()
+        spy = _spy_on(agent)
+
+        # Baseline: same agent/graph, the read returns instantly. Whatever this
+        # costs is the pure runtime overhead the hung run also pays.
+        agent._memory_hooks = _HooksStub(history=[])
+        t0 = time.monotonic()
+        baseline_result = await agent.run(
+            {"query": _PATTERN_QUERY, "session_id": "883c-baseline"}
+        )
+        baseline = time.monotonic() - t0
+        assert baseline_result["status"] in ("completed", "partial_success")
+
+        # Now inject a 30s hang on the read. If the budget cuts it the run
+        # costs ~baseline (+ the 0.5s budget); if it leaks, ~baseline + 30s.
         hooks = _HooksStub(
             history=[{"role": "user", "content": "MUST NEVER ARRIVE"}],
             delay_seconds=30.0,
         )
         agent._memory_hooks = hooks  # lazy property short-circuits to this
-        spy = _spy_on(agent)
 
         start = time.monotonic()
         result = await agent.run({"query": _PATTERN_QUERY, "session_id": "883c-budget"})
         elapsed = time.monotonic() - start
 
         assert result["status"] in ("completed", "partial_success")
-        # Generous slack over the 0.5s budget for graph overhead — the point
-        # is that the 30s hang did NOT propagate.
-        assert elapsed < 10.0, f"run took {elapsed:.1f}s — the budget did not cut the hung read"
+        # The 30s hang must add at most ~one budget over the baseline. The 10s
+        # slack absorbs run-to-run overhead variance while staying far below
+        # the ~30s a budget leak would add — so a real leak is still caught.
+        assert elapsed < baseline + agent.MEMORY_READ_BUDGET_SECONDS + 10.0, (
+            f"run took {elapsed:.1f}s vs {baseline:.1f}s baseline — "
+            "the budget did not cut the hung read"
+        )
         assert hooks.calls, "the read was never attempted"
-        assert spy.seen_states[0].get("conversation_history") is None, (
+        assert spy.seen_states[-1].get("conversation_history") is None, (
             "a timed-out read must yield NO context — not a late/fabricated one"
         )
 
