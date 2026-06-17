@@ -27,14 +27,22 @@ import { assertNotLoading, assertNoErrors } from '../utils/assertions'
 // remains the catch-all for other graph endpoints (e.g. /traverse, /search)
 // that this spec doesn't exercise. We do NOT mutate `api-mocks.ts`: it is
 // shared by 15+ specs and out of scope for this Cat-B baseline repair.
+// The KG page now loads each brand's synthetic gold-standard CAUSAL graph: it
+// fetches Variable nodes + brand-tagged CAUSES edges and derives the selected
+// brand's subgraph client-side (`causalSubgraphForBrand`), dropping any node not
+// on a brand CAUSES chain and pruning components < 3 nodes. The page defaults to
+// the first brand, Kisqali, so the fixture below is a single Kisqali causal
+// component of 3 Variable nodes — exactly one of which ("TRx Volume") matches
+// the case-insensitive search substring "TRx", anchoring the "Found 1 nodes"
+// assertion to the real filter. (The old Brand/KPI/HCP/Patient mock predated the
+// per-brand causal rework and produced an empty subgraph: no CAUSES edges.)
 const mockNodesResponse = {
   nodes: [
-    { id: 'brand-1', type: 'Brand', name: 'Remibrutinib', properties: {}, created_at: '2026-01-01T00:00:00Z' },
-    { id: 'kpi-1', type: 'KPI', name: 'TRx Volume', properties: {}, created_at: '2026-01-01T00:00:00Z' },
-    { id: 'hcp-1', type: 'HCP', name: 'Dr Smith', properties: {}, created_at: '2026-01-01T00:00:00Z' },
-    { id: 'patient-1', type: 'Patient', name: 'Patient Cohort A', properties: {}, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'var-trx', type: 'Variable', name: 'TRx Volume', properties: {}, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'var-eng', type: 'Variable', name: 'HCP Engagement', properties: {}, created_at: '2026-01-01T00:00:00Z' },
+    { id: 'var-adh', type: 'Variable', name: 'Patient Adherence', properties: {}, created_at: '2026-01-01T00:00:00Z' },
   ],
-  total: 4,
+  total: 3,
   limit: 100,
   offset: 0,
   has_more: false,
@@ -44,11 +52,10 @@ const mockNodesResponse = {
 
 const mockRelationshipsResponse = {
   relationships: [
-    { id: 'rel-1', type: 'INFLUENCES', source_id: 'brand-1', target_id: 'kpi-1', properties: {}, confidence: 0.85 },
-    { id: 'rel-2', type: 'PRESCRIBES', source_id: 'hcp-1', target_id: 'brand-1', properties: {}, confidence: 0.91 },
-    { id: 'rel-3', type: 'TREATED_BY', source_id: 'patient-1', target_id: 'brand-1', properties: {}, confidence: 0.78 },
+    { id: 'rel-1', type: 'CAUSES', source_id: 'var-eng', target_id: 'var-trx', properties: { brand: 'Kisqali' }, confidence: 0.85 },
+    { id: 'rel-2', type: 'CAUSES', source_id: 'var-adh', target_id: 'var-trx', properties: { brand: 'Kisqali' }, confidence: 0.78 },
   ],
-  total: 3,
+  total: 2,
   limit: 200,
   offset: 0,
   has_more: false,
@@ -57,10 +64,10 @@ const mockRelationshipsResponse = {
 }
 
 const mockGraphStatsResponse = {
-  total_nodes: 4,
-  total_relationships: 3,
-  nodes_by_type: { Brand: 1, KPI: 1, HCP: 1, Patient: 1 },
-  relationships_by_type: { INFLUENCES: 1, PRESCRIBES: 1, TREATED_BY: 1 },
+  total_nodes: 3,
+  total_relationships: 2,
+  nodes_by_type: { Variable: 3 },
+  relationships_by_type: { CAUSES: 2 },
   total_episodes: 0,
   total_communities: 0,
   timestamp: '2026-05-18T00:00:00Z',
@@ -159,12 +166,13 @@ test.describe('Knowledge Graph Page', () => {
     })
 
     test('should show search results after search', async ({ page }) => {
-      // The mock node set contains exactly one node whose `name` matches the
-      // case-insensitive substring "TRx" (the "TRx Volume" KPI node). Once
-      // the page filters, the results banner must render and report
-      // exactly 1 node found. Anchored to the page's literal output so a
-      // regression that breaks the filter or the banner trips this test
-      // instead of passing on a typeof check.
+      // Within the default brand's (Kisqali) causal subgraph, exactly one
+      // Variable node's `name` matches the case-insensitive substring "TRx"
+      // (the "TRx Volume" node). Once the page filters, the results banner
+      // must render and report exactly 1 node found. Anchored to the page's
+      // literal output so a regression that breaks the brand filter, the
+      // search, or the banner trips this test instead of passing on a typeof
+      // check.
       const searchInput = graphPage.searchInput
       await expect(searchInput).toBeVisible()
       await graphPage.search('TRx')
