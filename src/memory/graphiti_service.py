@@ -690,10 +690,15 @@ class E2IGraphitiService:
 
         try:
             if kpi_name:
-                # Find causes of a KPI
+                # Find causes of an outcome. Causal chains terminate at :Variable
+                # nodes named after the outcome (e.g. var:treatment_initiated),
+                # NOT :KPI nodes — a hardcoded `(:KPI {name})` terminal matched
+                # nothing on the real graph, so every outcome returned 0 chains.
+                # Match the terminal by name OR id regardless of label.
                 cypher = f"""
-                MATCH path = (cause)-[:CAUSES|IMPACTS*1..{max_depth}]->(kpi:KPI {{name: $kpi_name}})
-                WHERE all(r in relationships(path) WHERE r.confidence >= $min_confidence)
+                MATCH path = (cause)-[:CAUSES|IMPACTS*1..{max_depth}]->(kpi)
+                WHERE (kpi.name = $kpi_name OR kpi.id = $kpi_name)
+                  AND all(r in relationships(path) WHERE r.confidence >= $min_confidence)
                 RETURN path
                 LIMIT 20
                 """

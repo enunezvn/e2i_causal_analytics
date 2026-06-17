@@ -9,7 +9,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { getCausalHealth, listEstimators } from './causal';
+import {
+  getCausalHealth,
+  listEstimators,
+  getCausalEstimationData,
+  getCausalVariables,
+} from './causal';
 import { server } from '@/mocks/server';
 import { env } from '@/config/env';
 import { ApiValidationError } from '@/lib/api-client';
@@ -94,6 +99,66 @@ describe('Causal API Client', () => {
       );
 
       await expect(listEstimators()).rejects.toBeInstanceOf(ApiValidationError);
+    });
+  });
+
+  // Regression: the page's "Run parallel pipeline" prefetch 422'd live because
+  // these two GETs passed `{ params: {...} }` to get(), which takes a FLAT
+  // params object — so axios serialized `params[treatment_var]=...` and the
+  // backend's REQUIRED treatment_var/outcome_var arrived missing (422).
+  describe('query param serialization (flat, not params[...] wrapped)', () => {
+    it('getCausalEstimationData sends flat treatment_var/outcome_var/covariates', async () => {
+      let captured: URLSearchParams | null = null;
+      server.use(
+        http.get(`${env.apiUrl}/causal/estimation-data`, ({ request }) => {
+          captured = new URL(request.url).searchParams;
+          return HttpResponse.json({
+            dataset: 'patient_journeys',
+            columns: ['treatment_arm', 'persistent_180d'],
+            n_rows: 1,
+            estimation_data_records: [{ treatment_arm: 1, persistent_180d: 0 }],
+          });
+        })
+      );
+
+      await getCausalEstimationData({
+        treatment_var: 'treatment_arm',
+        outcome_var: 'persistent_180d',
+        covariates: ['disease_severity', 'engagement_score'],
+        limit: 4000,
+      });
+
+      const params = captured as unknown as URLSearchParams;
+      expect(params.get('treatment_var')).toBe('treatment_arm');
+      expect(params.get('outcome_var')).toBe('persistent_180d');
+      expect(params.get('covariates')).toBe('disease_severity,engagement_score');
+      expect(params.get('dataset')).toBe('patient_journeys');
+      expect(params.get('limit')).toBe('4000');
+      // The double-wrap bug would have produced these instead:
+      expect(params.get('params[treatment_var]')).toBeNull();
+      expect(params.has('params[outcome_var]')).toBe(false);
+    });
+
+    it('getCausalVariables sends a flat dataset param', async () => {
+      let captured: URLSearchParams | null = null;
+      server.use(
+        http.get(`${env.apiUrl}/causal/variables`, ({ request }) => {
+          captured = new URL(request.url).searchParams;
+          return HttpResponse.json({
+            dataset: 'patient_journeys',
+            treatment_candidates: ['treatment_arm'],
+            outcome_candidates: ['persistent_180d'],
+            covariate_candidates: ['disease_severity'],
+            columns: ['treatment_arm', 'persistent_180d', 'disease_severity'],
+          });
+        })
+      );
+
+      await getCausalVariables('patient_journeys');
+
+      const params = captured as unknown as URLSearchParams;
+      expect(params.get('dataset')).toBe('patient_journeys');
+      expect(params.get('params[dataset]')).toBeNull();
     });
   });
 });

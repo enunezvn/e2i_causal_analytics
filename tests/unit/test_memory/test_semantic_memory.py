@@ -978,6 +978,28 @@ class TestFindCausalChains:
 
         assert result == []
 
+    def test_find_causal_chains_kpi_matches_terminal_by_name_not_kpi_label(
+        self, semantic_memory, mock_graph
+    ):
+        """Regression: real causal chains terminate at :Variable nodes
+        (e.g. var:treatment_initiated), NOT :KPI nodes. A hardcoded
+        `(t:KPI {name: $kpi_name})` terminal matched nothing, so every page
+        outcome returned 0 chains while the unfiltered query returned 7. The
+        terminal must match by name OR id regardless of label."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.find_causal_chains(kpi_name="treatment_initiated", max_length=4)
+
+        query = mock_graph.query.call_args[0][0]
+        params = mock_graph.query.call_args[0][1]
+        # The bug: a label-locked terminal. Must NOT require the :KPI label.
+        assert ":KPI" not in query
+        # Still scoped by the requested outcome, matched on name OR id.
+        assert params.get("kpi_name") == "treatment_initiated"
+        assert "$kpi_name" in query
+        assert ".name = $kpi_name" in query
+        assert ".id = $kpi_name" in query
+
 
 class TestSemanticSearch:
     """semantic_search (used by /search fallback)."""

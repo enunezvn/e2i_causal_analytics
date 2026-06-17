@@ -1538,8 +1538,17 @@ class FalkorDBSemanticMemory:
         safe_length = max(1, min(10, int(max_length)))
 
         start_match = "(s {id: $source_id})" if source_entity_id else "(s)"
+        where_parts = [
+            "all(r IN relationships(path) WHERE coalesce(r.confidence, 1.0) >= $min_confidence)"
+        ]
         if kpi_name:
-            end_match = "(t:KPI {name: $kpi_name})"
+            # Causal chains terminate at :Variable / :CausalPath nodes named after
+            # the outcome (e.g. var:treatment_initiated), NOT a :KPI label. A
+            # hardcoded `(t:KPI {name})` terminal matched nothing on the real
+            # graph, so every page outcome returned 0 chains. Match the terminal
+            # by name OR id regardless of label so real chains surface.
+            end_match = "(t)"
+            where_parts.append("(t.name = $kpi_name OR t.id = $kpi_name)")
         elif target_entity_id:
             end_match = "(t {id: $target_id})"
         else:
@@ -1547,7 +1556,7 @@ class FalkorDBSemanticMemory:
 
         query = f"""
         MATCH path = {start_match}-[:CAUSES|IMPACTS*1..{safe_length}]->{end_match}
-        WHERE all(r IN relationships(path) WHERE coalesce(r.confidence, 1.0) >= $min_confidence)
+        WHERE {" AND ".join(where_parts)}
         RETURN
             [n IN nodes(path) | {{id: n.id, type: labels(n)[0]}}] as nodes,
             [r IN relationships(path) | {{type: type(r), confidence: r.confidence}}] as rels,

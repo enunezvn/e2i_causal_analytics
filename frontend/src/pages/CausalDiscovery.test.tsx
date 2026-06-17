@@ -154,8 +154,14 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
     showDetails?: boolean;
     showEffectsTable?: boolean;
     showRefutationTests?: boolean;
-    nodes?: Array<{ id: string; label: string }>;
-    edges?: Array<{ id: string }>;
+    nodes?: Array<{ id: string; label: string; type?: string }>;
+    edges?: Array<{
+      id: string;
+      source?: string;
+      target?: string;
+      type?: string;
+      effect?: number;
+    }>;
     effects?: Array<{
       id: string;
       estimate: number;
@@ -186,6 +192,11 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
           .join('|')}
       </div>
       <div data-testid="viz-node-labels">{(nodes ?? []).map((n) => n.label).join('|')}</div>
+      <div data-testid="viz-edge-detail">
+        {(edges ?? [])
+          .map((e) => `${e.source}->${e.target}:${e.type ?? 'none'}:${e.effect ?? 'none'}`)
+          .join('|')}
+      </div>
     </div>
   ),
 }));
@@ -487,6 +498,77 @@ describe('CausalDiscovery Page', () => {
       expect(screen.getByTestId('viz-nodes-count')).toHaveTextContent(/^2$/);
       expect(screen.getByTestId('viz-edges-count')).toHaveTextContent(/^1$/);
       expect(screen.getByTestId('viz-node-labels')).toHaveTextContent('Rep Visits|TRx Count');
+    });
+
+    it('builds a backdoor-adjustment DAG from a pipeline run so the graph is not empty', () => {
+      // Default treatment_arm -> persistent_180d controlling for the three
+      // gold-standard covariates. The KG has no chains for persistent_180d, so
+      // historically the DAG stayed "No causal graph to display" even after a
+      // successful run. The page must derive the estimated causal model.
+      pipelineState.data = {
+        pipeline_id: 'pp_dag',
+        status: 'completed',
+        libraries_succeeded: ['dowhy'],
+        libraries_failed: [],
+        library_results: { dowhy: { effect_estimate: 0.137 } },
+        consensus_effect: 0.137,
+        consensus_method: 'variance_weighted',
+        total_latency_ms: 50,
+        created_at: '2026-06-17T00:00:00Z',
+        warnings: [],
+      };
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const labels = screen.getByTestId('viz-node-labels').textContent ?? '';
+      expect(labels).toContain('treatment_arm');
+      expect(labels).toContain('persistent_180d');
+      expect(labels).toContain('disease_severity');
+      // confounder->treatment, confounder->outcome, and treatment->outcome
+      expect(
+        Number(screen.getByTestId('viz-edges-count').textContent),
+      ).toBeGreaterThan(0);
+      // The treatment->outcome edge carries the REAL estimated effect (not faked).
+      expect(screen.getByTestId('viz-edge-detail').textContent).toContain(
+        'treatment_arm->persistent_180d:causal:0.137',
+      );
+    });
+  });
+
+  // =========================================================================
+  // HONEST EMPTY-STATE TESTS (#2 KG gap, #4 refutation not run)
+  // =========================================================================
+  describe('Honest empty states', () => {
+    it('explains the empty KG result and guides the user (not a bare "no chains" line)', () => {
+      chainsState.data = { chains: [], total_chains: 0, query_latency_ms: 10 };
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const panel = screen.getByTestId('kg-chains-panel');
+      expect(panel.textContent ?? '').toMatch(/knowledge graph/i);
+      // Guidance: try another outcome or run the pipeline to estimate directly.
+      expect(panel.textContent ?? '').toMatch(/another outcome|run the parallel pipeline/i);
+    });
+
+    it('explains the empty Refutation panel after a parallel-pipeline run', () => {
+      pipelineState.data = {
+        pipeline_id: 'pp_ref',
+        status: 'completed',
+        libraries_succeeded: ['dowhy'],
+        libraries_failed: [],
+        library_results: { dowhy: { effect_estimate: 0.1 } },
+        consensus_effect: 0.1,
+        consensus_method: 'variance_weighted',
+        total_latency_ms: 50,
+        created_at: '2026-06-17T00:00:00Z',
+        warnings: [],
+      };
+
+      renderWithAllProviders(<CausalDiscovery />);
+
+      const note = screen.getByTestId('refutation-note');
+      expect(note.textContent ?? '').toMatch(/refutation/i);
+      expect(note.textContent ?? '').toMatch(/parallel pipeline|not run|does not run/i);
     });
   });
 
