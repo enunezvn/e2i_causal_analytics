@@ -101,9 +101,9 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
                 "uc_priority": -1,  # No priority for unshielded colliders
                 "show_progress": False,
             }
-            prior = getattr(config, "prior_knowledge", None)
+            prior = config.prior_knowledge
             guided = prior is not None and not prior.is_empty()
-            if guided:
+            if guided and prior is not None:
                 from ..background_knowledge import build_background_knowledge
 
                 pc_kwargs["node_names"] = node_names

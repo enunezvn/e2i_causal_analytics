@@ -526,7 +526,10 @@ class GraphBuilderNode:
         # flipped the treatment->outcome edge. Tiers [covariates < treatment <
         # outcome] + a required treatment->outcome edge let the DATA decide WHICH
         # covariates are confounders while keeping orientation correct.
-        guided = bool(state.get("discovery_guided", True))
+        # Guided discovery (priors-constrained PC) is OPT-IN: the agent endpoints
+        # set discovery_guided=True. Other consumers of this node keep the legacy
+        # multi-algorithm ensemble default (False) so their behavior is unchanged.
+        guided = bool(state.get("discovery_guided", False))
         prior_knowledge: Optional[CausalPriorKnowledge] = None
         if guided and treatment in data.columns and outcome in data.columns:
             from src.repositories.provenance import PROVENANCE_DROP_COLS

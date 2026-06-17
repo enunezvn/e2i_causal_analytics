@@ -1068,7 +1068,7 @@ async def _run_discover_effects_task(
             )
             aid = str(uuid.uuid4())
             req = AgentCausalAnalysisRequest(
-                treatment_var=t, outcome_var=o, dataset=dataset, limit=1500
+                treatment_var=t, outcome_var=o, dataset=dataset, limit=1500, auto_discover=True
             )
             _agent_analysis_cache[aid] = AgentCausalAnalysisResponse(
                 analysis_id=aid,
