@@ -20,6 +20,16 @@ from src.agents.experiment_monitor.state import (
     StaleDataIssue,
 )
 
+# Bound the interactive sweep. The synthetic generator leaves 1000+ running
+# experiments heavily DUPLICATED by name (e.g. "Kisqali - Predict prescribing"
+# x252). Fetch a wide newest-first window so duplicates can be collapsed and we
+# still surface up to _MAX_EXPERIMENTS DISTINCT experiment names. The wide fetch
+# is a single lightweight select; only the deduped subset incurs the
+# per-experiment assignment/SRM/freshness checks (an unbounded check-loop blew
+# past the 30s client timeout — see _get_experiments).
+_RAW_FETCH_LIMIT = 1000
+_MAX_EXPERIMENTS = 25
+
 
 class HealthCheckerNode:
     """Checks experiment health and enrollment rates.
@@ -143,25 +153,30 @@ class HealthCheckerNode:
 
         try:
             if state.get("check_all_active"):
-                # Get all active experiments
+                # Fetch a wide newest-first window, then collapse same-named
+                # duplicates to the most-recent row (_dedupe_by_name) and cap the
+                # result so per-experiment checks stay bounded. Without the dedup
+                # the newest-N slice was dominated by duplicate-named synthetic
+                # rows, surfacing many identical cards in the UI.
                 query = (
                     client.table("ml_experiments")
-                    .select("id, experiment_name, status, prediction_target, created_at")
+                    .select(
+                        "id, experiment_name, status, prediction_target, created_at, is_synthetic"
+                    )
                     .eq("status", "running")
-                    # Bound the interactive sweep: there are 700+ running experiments
-                    # (the synthetic generator leaves many perpetually-"running"), so
-                    # an unbounded scan + per-experiment checks blew past the 30s
-                    # client timeout and surfaced "no recommendations". Most-recent 25.
                     .order("created_at", desc=True)
-                    .limit(25)
+                    .limit(_RAW_FETCH_LIMIT)
                 )
                 result = await apply_provenance_filter(query, include_synthetic).execute()
+                return self._dedupe_by_name(result.data or [], cap=_MAX_EXPERIMENTS)
             elif state.get("experiment_ids"):
                 # Get specific experiments (a synthetic id must not resolve in
                 # real mode either — same semantics as BaseRepository.get_by_id)
                 query = (
                     client.table("ml_experiments")
-                    .select("id, experiment_name, status, prediction_target, created_at")
+                    .select(
+                        "id, experiment_name, status, prediction_target, created_at, is_synthetic"
+                    )
                     .in_("id", state["experiment_ids"])
                 )
                 result = await apply_provenance_filter(query, include_synthetic).execute()
@@ -172,6 +187,36 @@ class HealthCheckerNode:
 
         except Exception:
             return []
+
+    @staticmethod
+    def _dedupe_by_name(rows: List[Dict], cap: int) -> List[Dict]:
+        """Collapse same-named running experiments to the most-recent row.
+
+        The synthetic generator leaves many perpetually-"running" rows that share
+        an ``experiment_name``. Rows arrive ``created_at``-desc, so the first
+        occurrence per name is the most recent; later duplicates are dropped.
+        Returns at most ``cap`` rows so the per-experiment checks stay bounded.
+
+        Args:
+            rows: Experiment rows, newest first.
+            cap: Maximum number of distinct-named rows to return.
+
+        Returns:
+            Up to ``cap`` rows, one per experiment_name (most recent kept).
+        """
+        seen: set = set()
+        deduped: List[Dict] = []
+        for row in rows:
+            # Distinct rows share names; fall back to id so an unnamed row is
+            # never silently dropped as a "duplicate" of another unnamed row.
+            key = row.get("experiment_name") or row.get("id")
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
+            if len(deduped) >= cap:
+                break
+        return deduped
 
     async def _check_experiment_health(
         self, experiment: Dict, client: Optional[Any], include_synthetic: bool = False
@@ -234,6 +279,7 @@ class HealthCheckerNode:
             total_enrolled=total_enrolled,
             enrollment_rate=round(enrollment_rate, 2),
             current_information_fraction=round(information_fraction, 4),
+            is_synthetic=bool(experiment.get("is_synthetic", False)),
         )
 
     def _determine_health_status(

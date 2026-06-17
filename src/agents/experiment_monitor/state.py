@@ -28,6 +28,9 @@ class ExperimentSummary(TypedDict):
     total_enrolled: int
     enrollment_rate: float
     current_information_fraction: float
+    # Provenance (#894): whether this experiment row is synthetic-gold. Optional
+    # so older construction sites / fixtures that omit it stay valid.
+    is_synthetic: NotRequired[bool]
 
 
 class SRMIssue(TypedDict):

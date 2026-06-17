@@ -298,23 +298,19 @@ class AlertGeneratorNode:
         Returns:
             Formatted message string
         """
-        if self.dspy_integration:
-            try:
-                return cast(
-                    str,
-                    self.dspy_integration.get_srm_prompt(
-                        experiment_name=exp_name,
-                        chi_squared=chi_squared,
-                        p_value=p_value,
-                        expected_ratio=expected_ratio,
-                        actual_counts=actual_counts,
-                    ),
-                )
-            except Exception as e:
-                logger.debug(f"DSPy prompt failed, using fallback: {e}")
-
-        # Fallback to hardcoded message
-        return f"Sample Ratio Mismatch detected in '{exp_name}' (p={p_value:.6f})"
+        # HONESTY FIX: `get_srm_prompt` returns an LLM *prompt* ("Describe Sample
+        # Ratio Mismatch for experiment '...'"), NOT a finished message — and this
+        # Recipient integration has no generation step that turns the prompt into
+        # text. Surfacing it verbatim leaked the raw instruction into the UI alert
+        # (e.g. "Describe enrollment issue for experiment '...'"). Until a real
+        # DSPy *generation* path is wired (feedback_learner/MIPROv2), return the
+        # deterministic human-readable message. The prompt templates remain
+        # available via `self.dspy_integration` for that future generation step.
+        return (
+            f"Sample Ratio Mismatch detected in '{exp_name}': "
+            f"chi-squared={chi_squared:.2f}, p={p_value:.6f} "
+            f"(expected {expected_ratio}, observed {actual_counts})"
+        )
 
     def _generate_srm_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
         """Generate alerts for SRM issues.
@@ -386,24 +382,13 @@ class AlertGeneratorNode:
         Returns:
             Formatted message string
         """
-        if self.dspy_integration:
-            try:
-                return cast(
-                    str,
-                    self.dspy_integration.get_enrollment_prompt(
-                        experiment_name=exp_name,
-                        current_rate=current_rate,
-                        expected_rate=expected_rate,
-                        days_below_threshold=days_below_threshold,
-                    ),
-                )
-            except Exception as e:
-                logger.debug(f"DSPy prompt failed, using fallback: {e}")
-
-        # Fallback to hardcoded message
+        # HONESTY FIX (see _get_srm_message): `get_enrollment_prompt` returns an
+        # LLM prompt, not a message, and there is no generation step. Return the
+        # deterministic human-readable message instead of leaking the instruction.
         return (
             f"Low enrollment rate in '{exp_name}': "
-            f"{current_rate:.1f}/day (expected: {expected_rate:.1f}/day)"
+            f"{current_rate:.1f}/day (expected: {expected_rate:.1f}/day, "
+            f"below threshold for {days_below_threshold} days)"
         )
 
     def _generate_enrollment_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
@@ -562,32 +547,20 @@ class AlertGeneratorNode:
         Returns:
             Formatted message string
         """
-        if self.dspy_integration:
-            try:
-                return cast(
-                    str,
-                    self.dspy_integration.get_fidelity_prompt(
-                        experiment_name=exp_name,
-                        predicted_effect=predicted_effect,
-                        actual_effect=actual_effect,
-                        prediction_error=prediction_error,
-                        calibration_needed=calibration_needed,
-                    ),
-                )
-            except Exception as e:
-                logger.debug(f"DSPy prompt failed, using fallback: {e}")
-
-        # Fallback to hardcoded message
+        # HONESTY FIX (see _get_srm_message): `get_fidelity_prompt` returns an LLM
+        # prompt, not a message, and there is no generation step. Return the
+        # deterministic human-readable message instead of leaking the instruction.
         if calibration_needed:
             return (
-                f"Digital Twin calibration needed for '{exp_name}': "
-                f"prediction error = {prediction_error:.2%}"
+                f"Digital Twin calibration needed for '{exp_name}': predicted "
+                f"{predicted_effect:.3f} vs actual {actual_effect:.3f} "
+                f"(prediction error = {prediction_error:.2%})"
             )
-        else:
-            return (
-                f"Digital Twin fidelity check for '{exp_name}': "
-                f"prediction error = {prediction_error:.2%}"
-            )
+        return (
+            f"Digital Twin fidelity check for '{exp_name}': predicted "
+            f"{predicted_effect:.3f} vs actual {actual_effect:.3f} "
+            f"(prediction error = {prediction_error:.2%})"
+        )
 
     def _generate_fidelity_alerts(self, state: ExperimentMonitorState) -> List[MonitorAlert]:
         """Generate alerts for fidelity issues.

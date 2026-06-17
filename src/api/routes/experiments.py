@@ -394,6 +394,9 @@ class ExperimentHealthSummary(BaseModel):
     has_srm: bool
     active_alerts: int
     last_checked: datetime
+    # Provenance (#894): this experiment row is synthetic-gold (is_synthetic).
+    # Lets the UI badge synthetic experiments instead of presenting them as live.
+    is_synthetic: bool = False
 
 
 class MonitorResponse(BaseModel):
@@ -413,6 +416,15 @@ class MonitorResponse(BaseModel):
     # the DB). Surfaces failures to the client instead of masking a crash as an
     # honest-looking empty result (HTTP 200 with experiments=[]).
     errors: List[str] = []
+    # Provenance honesty (#894): true when any returned experiment is
+    # synthetic-gold. The substrate in this deployment is seeded synthetic data
+    # with no live feed, so freshness/enrollment alerts reflect the static
+    # dataset rather than a broken pipeline — the UI surfaces a context banner.
+    synthetic_data_included: bool = False
+    # True when the deployment FORCES synthetic inclusion (E2I_INCLUDE_SYNTHETIC),
+    # so the request's `include_synthetic` flag is inert. The UI disables the
+    # "Include synthetic data" checkbox and explains it is always on here.
+    synthetic_data_forced: bool = False
 
 
 # =============================================================================
@@ -1138,7 +1150,7 @@ async def get_fidelity_comparisons(
 
     try:
         repo = ABResultsRepository()
-        comparisons = await repo.get_fidelity_comparisons(UUID(experiment_id), limit=limit)  # type: ignore[call-arg]
+        comparisons = await repo.get_fidelity_comparisons(UUID(experiment_id), limit=limit)
 
         return {
             "experiment_id": experiment_id,
@@ -1312,6 +1324,7 @@ async def trigger_experiment_monitoring(
                 has_srm=bool(exp.get("has_srm", False)),
                 active_alerts=int(exp.get("active_alerts", 0)),  # type: ignore[call-overload]
                 last_checked=datetime.now(timezone.utc),
+                is_synthetic=bool(exp.get("is_synthetic", False)),
             )
             for exp in result.experiments
         ]
@@ -1345,6 +1358,15 @@ async def trigger_experiment_monitoring(
                 f"{'; '.join(agent_errors[:3])}"
             )
 
+        # Provenance honesty (#894): flag the synthetic-gold substrate so the UI
+        # can contextualize the alerts. `forced` means the deployment includes
+        # synthetic rows regardless of the request flag (E2I_INCLUDE_SYNTHETIC),
+        # making the "Include synthetic data" checkbox inert here.
+        from src.repositories.provenance import deployment_includes_synthetic
+
+        synthetic_forced = deployment_includes_synthetic()
+        synthetic_included = any(e.is_synthetic for e in experiments)
+
         return MonitorResponse(
             experiments_checked=result.experiments_checked,
             healthy_count=result.healthy_count,
@@ -1357,6 +1379,8 @@ async def trigger_experiment_monitoring(
             check_latency_ms=result.check_latency_ms,
             timestamp=datetime.now(timezone.utc),
             errors=agent_errors,
+            synthetic_data_included=synthetic_included,
+            synthetic_data_forced=synthetic_forced,
         )
 
     except Exception as e:
@@ -1419,6 +1443,7 @@ async def get_experiment_health(
                 [a for a in result.alerts if a.get("experiment_id") == experiment_id]
             ),
             last_checked=datetime.now(timezone.utc),
+            is_synthetic=bool(exp.get("is_synthetic", False)),
         )
 
     except HTTPException:
