@@ -771,6 +771,137 @@ _optimizations_store: _DurableOptimizationsStore = _DurableOptimizationsStore()
 # =============================================================================
 
 
+# -----------------------------------------------------------------------------
+# Synthetic-gold allocation targets (showcase substrate)
+# -----------------------------------------------------------------------------
+#
+# The resource optimizer is a real scipy solver, but the platform has NO real
+# per-entity budget/allocation data: the territory_metrics columns meant to hold
+# it (market_potential, resource_allocation_score) are 100% NULL, and no other
+# table carries a current budget/spend per territory. So when a caller runs an
+# optimization WITHOUT supplying allocation_targets, we seed a clearly-labelled
+# SYNTHETIC problem from the real-shaped (but synthetic) territory_metrics
+# activity data: current_allocation is a NOTIONAL budget (HCP coverage x a
+# documented per-HCP rate) and expected_response is a real-shaped productivity
+# coefficient (TRx per HCP). The OPTIMIZATION MATH IS REAL; the dollar values are
+# illustrative. This mirrors the digital-twin "synthetic gold standard to
+# showcase capabilities before real data" posture, and every such response is
+# tagged with SYNTHETIC_PROVENANCE_PREFIX so the UI can label it honestly.
+#
+# Pass allocation_targets explicitly to skip synthetic seeding, or wire a real
+# budget source into this helper once one exists.
+
+SYNTHETIC_PROVENANCE_PREFIX = "SYNTHETIC DATA:"
+NOTIONAL_BUDGET_PER_HCP = 1500.0  # USD/period — documented notional field cost per HCP
+SYNTHETIC_TERRITORY_LIMIT = 10  # top-N territories by activity (keeps LP + UI readable)
+_SYNTHETIC_MIN_FACTOR = 0.5  # solver may cut a territory to 50% of current
+_SYNTHETIC_MAX_FACTOR = 1.5  # ...or grow it to 150%
+
+
+async def _build_synthetic_allocation_inputs(
+    resource_type: ResourceType,
+    limit: int = SYNTHETIC_TERRITORY_LIMIT,
+) -> tuple[List[AllocationTarget], Optional[Constraint], List[str]]:
+    """Seed a SYNTHETIC, clearly-labelled allocation problem from territory_metrics.
+
+    Returns ``(targets, budget_constraint, provenance_warnings)``. On any failure
+    or missing data returns ``([], None, [warning])`` so the caller still responds
+    honestly (an empty problem -> honest validation failure) rather than crashing.
+    """
+    try:
+        from src.memory.services.factories import get_async_supabase_client
+
+        client = await get_async_supabase_client()
+        if client is None:
+            return (
+                [],
+                None,
+                [
+                    f"{SYNTHETIC_PROVENANCE_PREFIX} territory data store unavailable; "
+                    "could not seed synthetic allocation targets."
+                ],
+            )
+
+        # Latest snapshot first, then highest activity. Over-fetch recent rows so
+        # we can dedupe to one (latest) row per territory below.
+        resp = (
+            await client.table("territory_metrics")
+            .select("territory_id, total_trx, active_hcp_count, covered_lives, metric_date")
+            .order("metric_date", desc=True)
+            .order("total_trx", desc=True)
+            .limit(max(limit * 6, 60))
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"Synthetic target seeding failed: {e}")
+        return (
+            [],
+            None,
+            [
+                f"{SYNTHETIC_PROVENANCE_PREFIX} could not load territory data ({e}); "
+                "no allocation targets seeded."
+            ],
+        )
+
+    # Dedupe to one (latest) row per territory; take the top-N usable by TRx.
+    seen: set = set()
+    picked: List[Dict[str, Any]] = []
+    for r in rows:
+        tid = r.get("territory_id")
+        hcp = r.get("active_hcp_count") or 0
+        trx = r.get("total_trx") or 0
+        if not tid or tid in seen or hcp <= 0 or trx <= 0:
+            continue
+        seen.add(tid)
+        picked.append(r)
+        if len(picked) >= limit:
+            break
+
+    if not picked:
+        return (
+            [],
+            None,
+            [
+                f"{SYNTHETIC_PROVENANCE_PREFIX} no usable territory rows found; "
+                "no allocation targets seeded."
+            ],
+        )
+
+    targets: List[AllocationTarget] = []
+    for r in picked:
+        hcp = float(r["active_hcp_count"])
+        trx = float(r["total_trx"])
+        current = round(hcp * NOTIONAL_BUDGET_PER_HCP, 2)
+        targets.append(
+            AllocationTarget(
+                entity_id=str(r["territory_id"]),
+                entity_type="territory",
+                current_allocation=current,
+                min_allocation=round(current * _SYNTHETIC_MIN_FACTOR, 2),
+                max_allocation=round(current * _SYNTHETIC_MAX_FACTOR, 2),
+                # Real-shaped productivity: outcome (TRx) per unit of allocation (HCP).
+                expected_response=round(trx / hcp, 4),
+            )
+        )
+
+    total_budget = round(sum(t.current_allocation for t in targets), 2)
+    budget = Constraint(
+        constraint_type=ConstraintType.BUDGET,
+        value=total_budget,
+        scope=ConstraintScope.GLOBAL,
+    )
+    warning = (
+        f"{SYNTHETIC_PROVENANCE_PREFIX} no real per-entity budget source is wired, so this "
+        f"optimization ran on {len(targets)} territories seeded from synthetic territory_metrics. "
+        f"current_allocation is a NOTIONAL budget (${NOTIONAL_BUDGET_PER_HCP:,.0f}/HCP) and "
+        f"expected_response is TRx-per-HCP; total budget ${total_budget:,.0f} "
+        f"({resource_type.value}). The optimization math is real but the dollar values are "
+        "illustrative."
+    )
+    return targets, budget, [warning]
+
+
 @router.post(
     "/optimize",
     response_model=OptimizationResponse,
@@ -804,12 +935,29 @@ async def run_optimization(
     """
     optimization_id = f"opt_{uuid4().hex[:12]}"
 
+    # No allocation targets supplied -> seed a clearly-labelled SYNTHETIC problem
+    # from territory_metrics (no real budget substrate exists; see
+    # _build_synthetic_allocation_inputs). Real targets passed by the caller are
+    # respected as-is and never overwritten.
+    provenance_warnings: List[str] = []
+    if not request.allocation_targets:
+        targets, budget, provenance_warnings = await _build_synthetic_allocation_inputs(
+            request.resource_type
+        )
+        if targets:
+            request.allocation_targets = targets
+            if budget is not None and not any(
+                c.constraint_type == ConstraintType.BUDGET for c in request.constraints
+            ):
+                request.constraints = [*request.constraints, budget]
+
     # Create initial response
     response = OptimizationResponse(
         optimization_id=optimization_id,
         status=OptimizationStatus.PENDING if async_mode else OptimizationStatus.FORMULATING,
         resource_type=request.resource_type,
         objective=request.objective,
+        warnings=list(provenance_warnings),
     )
 
     if async_mode:
@@ -821,6 +969,7 @@ async def run_optimization(
             _run_optimization_task,
             optimization_id=optimization_id,
             request=request,
+            provenance_warnings=provenance_warnings,
         )
 
         logger.info(f"Optimization {optimization_id} queued for background execution")
@@ -828,7 +977,7 @@ async def run_optimization(
 
     # Synchronous execution
     try:
-        result = await _execute_optimization(request)
+        result = await _execute_optimization(request, provenance_warnings=provenance_warnings)
         result.optimization_id = optimization_id
         await _optimizations_store.set(optimization_id, result)
         return result
@@ -993,6 +1142,7 @@ async def get_optimization(optimization_id: str) -> OptimizationResponse:
 async def _run_optimization_task(
     optimization_id: str,
     request: RunOptimizationRequest,
+    provenance_warnings: Optional[List[str]] = None,
 ) -> None:
     """Background task to run optimization."""
     try:
@@ -1005,7 +1155,7 @@ async def _run_optimization_task(
             await _optimizations_store.set(optimization_id, pending)
 
         # Execute optimization
-        result = await _execute_optimization(request)
+        result = await _execute_optimization(request, provenance_warnings=provenance_warnings)
         result.optimization_id = optimization_id
 
         # Store result
@@ -1024,6 +1174,7 @@ async def _run_optimization_task(
 
 async def _execute_optimization(
     request: RunOptimizationRequest,
+    provenance_warnings: Optional[List[str]] = None,
 ) -> OptimizationResponse:
     """
     Execute optimization using Resource Optimizer agent.
@@ -1082,7 +1233,10 @@ async def _execute_optimization(
             "scenario_count": request.scenario_count,
             "status": "pending",
             "errors": [],
-            "warnings": [],
+            # Seed provenance (e.g. SYNTHETIC-data notice) so it flows through the
+            # agent nodes (which append to, never overwrite, warnings) into the
+            # final response and is surfaced honestly by the UI.
+            "warnings": list(provenance_warnings or []),
             "formulation_latency_ms": 0,
             "optimization_latency_ms": 0,
             "total_latency_ms": 0,
