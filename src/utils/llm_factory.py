@@ -24,15 +24,15 @@ Environment Variables:
 
 Model Mappings:
     Fast (classification/routing):
-        - Anthropic: claude-haiku-4-20250414
+        - Anthropic: claude-haiku-4-5-20251001
         - OpenAI: gpt-4o-mini
 
     Standard (general chat):
-        - Anthropic: claude-sonnet-4-20250514
+        - Anthropic: claude-sonnet-4-6
         - OpenAI: gpt-4o
 
     Reasoning (complex analysis):
-        - Anthropic: claude-sonnet-4-20250514
+        - Anthropic: claude-sonnet-4-6
         - OpenAI: gpt-4o
 """
 
@@ -45,12 +45,17 @@ logger = logging.getLogger(__name__)
 # Type alias for LLM providers
 LLMProvider = Literal["anthropic", "openai"]
 
-# Model mappings for each tier
+# Model mappings for each tier.
+# NOTE: the previous Anthropic ids (claude-haiku-4-20250414 / claude-sonnet-4-
+# 20250514) were deprecated and return HTTP 404 not_found_error — every chatbot
+# LLM call threw, so the CopilotKit chat node fell back to canned keyword
+# responses. These are the current ids, verified callable on the deployment's
+# ANTHROPIC_API_KEY (Sonnet 4.6 for chat/reasoning, Haiku 4.5 for the fast tier).
 MODEL_MAPPINGS = {
     "anthropic": {
-        "fast": "claude-haiku-4-20250414",
-        "standard": "claude-sonnet-4-20250514",
-        "reasoning": "claude-sonnet-4-20250514",
+        "fast": "claude-haiku-4-5-20251001",
+        "standard": "claude-sonnet-4-6",
+        "reasoning": "claude-sonnet-4-6",
     },
     "openai": {
         "fast": "gpt-4o-mini",

@@ -96,6 +96,20 @@ class TestModelMappings:
         assert "sonnet" in MODEL_MAPPINGS["anthropic"]["standard"]
         assert "sonnet" in MODEL_MAPPINGS["anthropic"]["reasoning"]
 
+    def test_anthropic_models_are_not_the_deprecated_404_ids(self):
+        """Regression: the previous Anthropic ids were deprecated and returned
+        HTTP 404 (not_found_error), so every chatbot LLM call threw and the
+        CopilotKit chat node fell back to canned keyword responses. Pin the
+        current, verified-callable ids and forbid the dead ones."""
+        dead_ids = {"claude-haiku-4-20250414", "claude-sonnet-4-20250514"}
+        for tier in ("fast", "standard", "reasoning"):
+            assert MODEL_MAPPINGS["anthropic"][tier] not in dead_ids, (
+                f"anthropic.{tier} is a deprecated 404 model id"
+            )
+        assert MODEL_MAPPINGS["anthropic"]["fast"] == "claude-haiku-4-5-20251001"
+        assert MODEL_MAPPINGS["anthropic"]["standard"] == "claude-sonnet-4-6"
+        assert MODEL_MAPPINGS["anthropic"]["reasoning"] == "claude-sonnet-4-6"
+
     def test_openai_model_names(self):
         """Test openai model names are correct."""
         assert MODEL_MAPPINGS["openai"]["fast"] == "gpt-4o-mini"

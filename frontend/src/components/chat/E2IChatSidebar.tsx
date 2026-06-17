@@ -245,7 +245,7 @@ export function E2IChatSidebar({
                 <div>
                   <h2 className="font-semibold">E2I Assistant</h2>
                   <p className="text-xs text-muted-foreground">
-                    {filters.brand} | {activeAgentCount} agents active
+                    Strategic analytics · {filters.brand}
                   </p>
                 </div>
               </div>
@@ -311,7 +311,7 @@ Available actions:
 - highlightCausalPaths: Highlight paths on visualizations
 - setDetailLevel: Adjust response complexity
 
-Be concise and helpful. Focus on pharmaceutical commercial analytics (TRx, NRx, market share, etc.).`}
+Always fetch real data with the available tools before answering, cite the actual metric values and their source, and deliver rich, evidence-based strategic insight — what the numbers mean for the business and the concrete next action — not just the figure. Focus on pharmaceutical commercial analytics (TRx, NRx, market share, causal drivers).`}
                 labels={{
                   initial: 'How can I help you explore E2I analytics?',
                   placeholder: 'Ask about KPIs, agents, or insights...',
@@ -324,7 +324,6 @@ Be concise and helpful. Focus on pharmaceutical commercial analytics (TRx, NRx, 
             <div className="p-3 border-t bg-muted/30 text-xs text-muted-foreground">
               <div className="flex items-center justify-between mb-1.5">
                 <span>Press ⌘/ to toggle</span>
-                <span>{filters.brand}</span>
               </div>
               {/* Trace ID for support ticket correlation */}
               <div className="flex items-center justify-between pt-1.5 border-t border-border/50">

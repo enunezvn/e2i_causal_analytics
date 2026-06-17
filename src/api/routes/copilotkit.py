@@ -2384,6 +2384,20 @@ def create_e2i_chat_agent():
             logger.error(f"[CopilotKit] LLM invocation failed: {e}", exc_info=True)
             fallback = generate_e2i_response(last_human_message)  # type: ignore[arg-type]
             await copilotkit_emit_message(config, fallback)
+            # Emit a TERMINAL state so the UI progress does not freeze. The chat
+            # node set progress_percent=25 ("Processing your query...") on entry;
+            # without this, an LLM failure left it stuck at 25% forever (the
+            # success path resets to 100, the error path used to skip it). A
+            # response WAS delivered (the fallback), so this is "complete", with
+            # the underlying error recorded for support.
+            state["current_node"] = "idle"
+            state["progress_percent"] = 100
+            state["agent_status"] = "complete"
+            state["error_message"] = str(e)
+            try:
+                await copilotkit_emit_state(config, state)
+            except Exception as emit_err:
+                logger.debug(f"[CopilotKit] Terminal state emission skipped: {emit_err}")
             # Persist fallback response
             if session_id:
                 try:
