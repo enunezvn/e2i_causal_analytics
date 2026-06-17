@@ -12,7 +12,7 @@ Phase B10: Causal API endpoints for:
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -455,9 +455,7 @@ class CausalDAGModel(BaseModel):
     """The causal DAG the agent's graph_builder constructed for this analysis."""
 
     nodes: List[str] = Field(default_factory=list, description="Variable names")
-    edges: List[Tuple[str, str]] = Field(
-        default_factory=list, description="Directed (from, to) edges"
-    )
+    edges: List[List[str]] = Field(default_factory=list, description="Directed [from, to] edges")
     treatment_nodes: List[str] = Field(default_factory=list)
     outcome_nodes: List[str] = Field(default_factory=list)
     adjustment_sets: List[List[str]] = Field(

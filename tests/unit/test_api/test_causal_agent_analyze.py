@@ -75,7 +75,7 @@ def test_completed_run_maps_dag_effect_and_estimator():
     # DAG mapped faithfully (raw nodes/edges, not a summary string).
     assert resp.dag.treatment_nodes == ["treatment_arm"]
     assert resp.dag.outcome_nodes == ["persistent_180d"]
-    assert ("treatment_arm", "persistent_180d") in resp.dag.edges
+    assert ["treatment_arm", "persistent_180d"] in resp.dag.edges
     assert resp.dag.adjustment_sets == [["disease_severity"]]
     # Robustness surfaced from the real gate.
     assert resp.refutation.gate_decision == "proceed"

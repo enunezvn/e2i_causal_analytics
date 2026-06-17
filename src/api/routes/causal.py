@@ -1252,7 +1252,7 @@ def _agent_state_to_response(
 
     dag = CausalDAGModel(
         nodes=list(causal_graph.get("nodes", []) or []),
-        edges=[tuple(e) for e in (causal_graph.get("edges", []) or []) if len(e) == 2],
+        edges=[list(e) for e in (causal_graph.get("edges", []) or []) if len(e) == 2],
         treatment_nodes=list(causal_graph.get("treatment_nodes", []) or []),
         outcome_nodes=list(causal_graph.get("outcome_nodes", []) or []),
         adjustment_sets=[list(s) for s in (causal_graph.get("adjustment_sets", []) or [])],

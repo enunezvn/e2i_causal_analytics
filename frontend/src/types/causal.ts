@@ -172,7 +172,7 @@ export interface AgentCausalAnalysisRequest {
 export interface CausalDAGModel {
   nodes: string[];
   /** Directed [from, to] edges */
-  edges: Array<[string, string]>;
+  edges: string[][];
   treatment_nodes: string[];
   outcome_nodes: string[];
   adjustment_sets: string[][];
