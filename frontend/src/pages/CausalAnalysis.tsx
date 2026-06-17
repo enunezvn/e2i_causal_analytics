@@ -304,6 +304,19 @@ export default function CausalAnalysis() {
         </Alert>
       )}
 
+      {/* Running — the agent's energy-score selection + refutation runs server-side
+          (submit -> poll), which takes a minute or two. */}
+      {runAgent.isPending && (
+        <Alert className="mb-6 border-blue-200 bg-blue-50">
+          <Activity className="h-4 w-4 text-blue-600 animate-pulse" />
+          <AlertTitle className="text-blue-800">Analyzing…</AlertTitle>
+          <AlertDescription className="text-blue-700">
+            The agent is building the causal DAG, selecting an estimator across the registry, and
+            running robustness checks. This can take a minute or two.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Overview Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <KPICard

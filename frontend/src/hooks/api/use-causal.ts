@@ -14,7 +14,7 @@ import { queryKeys } from '@/lib/query-client';
 import { ApiError } from '@/lib/api-client';
 import {
   runHierarchicalAnalysis,
-  runCausalAgentAnalysis,
+  runCausalAgentAnalysisAndWait,
   getHierarchicalAnalysis,
   getCausalVariables,
   routeQuery,
@@ -419,7 +419,9 @@ export function useRunCausalAgentAnalysis(
   >
 ) {
   return useMutation<AgentCausalAnalysisResponse, ApiError, AgentCausalAnalysisRequest>({
-    mutationFn: (request) => runCausalAgentAnalysis(request),
+    // Submit -> poll: the agent run takes minutes; `isPending` stays true for the
+    // whole wait, and `data` is the final response (including honest `failed`).
+    mutationFn: (request) => runCausalAgentAnalysisAndWait(request),
     ...options,
   });
 }

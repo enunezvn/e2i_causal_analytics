@@ -122,6 +122,44 @@ export async function runCausalAgentAnalysis(
   );
 }
 
+/** Poll a submitted agent run by id. */
+export async function getCausalAgentAnalysis(
+  analysisId: string
+): Promise<AgentCausalAnalysisResponse> {
+  return get<AgentCausalAnalysisResponse>(
+    `${CAUSAL_BASE}/agent-analyze/${encodeURIComponent(analysisId)}`
+  );
+}
+
+/**
+ * Submit an agent run and poll until it finishes.
+ *
+ * The agent's energy-score selection + refutation takes minutes, so the run is
+ * async (submit -> poll). Resolves with the final response for ANY terminal
+ * status — including `failed` (the page renders the honest fail-closed result
+ * with its warnings); only a network error or a poll timeout throws.
+ */
+export async function runCausalAgentAnalysisAndWait(
+  request: AgentCausalAnalysisRequest,
+  pollIntervalMs: number = 2500,
+  maxWaitMs: number = 900000
+): Promise<AgentCausalAnalysisResponse> {
+  const isTerminal = (s: string) =>
+    s === 'completed' || s === 'needs_review' || s === 'failed';
+
+  const initial = await runCausalAgentAnalysis(request);
+  if (isTerminal(initial.status)) return initial;
+
+  const startTime = Date.now();
+  const analysisId = initial.analysis_id;
+  while (Date.now() - startTime < maxWaitMs) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    const result = await getCausalAgentAnalysis(analysisId);
+    if (isTerminal(result.status)) return result;
+  }
+  throw new Error(`Causal agent analysis timed out after ${maxWaitMs}ms`);
+}
+
 /**
  * Get hierarchical analysis results by ID.
  *
