@@ -117,6 +117,26 @@ function deriveFormFields(
   const asStringList = (value: unknown): string[] =>
     Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : [];
 
+  // PRIORITY 0 — the backend's curated, brand/cohort-appropriate `input_fields`
+  // (routes/predictions.build_curated_input_fields): the SSOT for clinically
+  // coherent features + choices (e.g. Kisqali -> oncology). It wins over the
+  // generic keep_columns/feature_columns derivation, which would otherwise
+  // surface every brand's full specialty pool (CSU specialties on an oncology
+  // model). Fields with no usable choices degrade to a typed free input.
+  const curatedFields = Array.isArray(bag['input_fields'])
+    ? (bag['input_fields'] as Array<Record<string, unknown>>)
+        .filter((f) => typeof f?.['name'] === 'string')
+        .map((f): FormField => {
+          const name = f['name'] as string;
+          const choices = asStringList(f['choices']);
+          if (f['type'] === 'category' && choices.length > 0) {
+            return { name, type: 'category', options: choices };
+          }
+          return { name, type: f['type'] === 'number' ? 'number' : 'string' };
+        })
+    : [];
+  if (curatedFields.length > 0) return curatedFields;
+
   const featureColumns = asStringList(bag['feature_columns']);
   const keepColumns = asStringList(bag['keep_columns']);
 
