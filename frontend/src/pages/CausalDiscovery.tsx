@@ -2,28 +2,29 @@
  * CausalDiscovery Page
  * ====================
  *
- * Page component for causal discovery analysis. Combines:
+ * Agent-driven causal discovery. The analyst picks ONLY the causal question
+ * (treatment -> outcome); the `causal_impact` agent does everything else:
  *
- * - Library routing form (`useRouteQuery`) — given treatment / outcome /
- *   covariates, recommend the best causal-inference library + alternatives.
- * - Optional KG chain discovery (`useCausalChains`) — find causal chains
- *   in the knowledge graph for the chosen outcome KPI.
- * - Existing DAG visualization (`CausalDiscoveryViz`) — interactive view
- *   of effect estimates and refutation tests.
+ * 1. LEARNS the causal structure FROM THE DATA via guided structure discovery
+ *    (PC with background-knowledge tiers anchoring treatment as cause / outcome
+ *    as effect) — the data selects which covariates are confounders.
+ * 2. Estimates the treatment -> outcome effect with a data-driven estimator
+ *    (energy-score routing across the registry).
+ * 3. Runs refutation + sensitivity (the robustness gate).
  *
- * Issue #303 wires this page from a placeholder UI to the live
- * `/api/causal/route` and `/api/graph/causal-chains` endpoints.
+ * This replaced the previous manual workbench (library routing + parallel
+ * pipeline + KG-chain buttons) — those exposed agent-internal method choices as
+ * user decisions. The dedicated agent now makes them.
  *
  * @module pages/CausalDiscovery
  */
 
-import { useMemo, useState, type FormEvent } from 'react';
-import { Brain, FlaskConical, GitBranch, Shield, Loader2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { GitBranch, Network, Play, Loader2, AlertTriangle, Sparkles } from 'lucide-react';
 
 import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
 import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
-import type { CausalEffect } from '@/components/visualizations/causal/EffectsTable';
-import { CovariateMultiSelect } from '@/components/causal/CovariateMultiSelect';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -33,9 +34,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { QueryErrorState } from '@/components/ui/query-error-state';
+import { EmptyState } from '@/components/ui/EmptyState';
 import {
   Select,
   SelectContent,
@@ -44,439 +43,141 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import {
-  useCausalVariables,
-  useRouteQuery,
-  useRunParallelPipeline,
-} from '@/hooks/api/use-causal';
-import { getCausalEstimationData } from '@/api/causal';
-import { useCausalChains } from '@/hooks/api/use-graph';
-import type {
-  CausalLibrary,
-  ParallelPipelineRequest,
-  RouteQueryRequest,
-} from '@/types/causal';
-import type { CausalChainRequest } from '@/types/graph';
+import { useCausalVariables, useRunCausalAgentAnalysis } from '@/hooks/api';
 
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-/** Dataset whose gold-standard causal frame this page operates on. */
 const DATASET = 'patient_journeys';
+const DEFAULT_TREATMENT = 'treatment_arm';
+const DEFAULT_OUTCOME = 'persistent_180d';
 
-/** Format a number safely, returning a dash if undefined / null / NaN. */
-function fmtNumber(value: unknown, digits: number = 3): string {
-  if (typeof value !== 'number' || Number.isNaN(value)) return '-';
-  return value.toFixed(digits);
+function formatEffect(ate: number | null | undefined): string {
+  if (ate === null || ate === undefined || Number.isNaN(ate)) return 'N/A';
+  return ate.toFixed(4);
 }
 
-/** Format a CI tuple from a per-library result. */
-function fmtCI(lower: unknown, upper: unknown): string {
-  if (typeof lower !== 'number' || typeof upper !== 'number') return '-';
+function formatCI(lower?: number | null, upper?: number | null): string {
+  if (lower === null || lower === undefined || upper === null || upper === undefined) return '—';
   return `[${lower.toFixed(3)}, ${upper.toFixed(3)}]`;
 }
 
-// =============================================================================
-// COMPONENT
-// =============================================================================
+function gateBadge(decision?: string | null) {
+  if (decision === 'proceed') return <Badge variant="default">Proceed</Badge>;
+  if (decision === 'review') return <Badge variant="secondary">Review</Badge>;
+  if (decision === 'block') return <Badge variant="destructive">Blocked</Badge>;
+  return <Badge variant="outline">—</Badge>;
+}
 
-function CausalDiscovery() {
-  // Form state ---------------------------------------------------------------
-  const [queryText, setQueryText] = useState('Does X cause Y?');
-  const [treatmentVar, setTreatmentVar] = useState('treatment_arm');
-  const [outcomeVar, setOutcomeVar] = useState('persistent_180d');
-  const [covariatesSelected, setCovariatesSelected] = useState<string[]>([
-    'disease_severity',
-    'engagement_score',
-    'age_at_diagnosis',
-  ]);
+/** Honest label for how the DAG was built. */
+function dagSourceLabel(source?: string): { label: string; learned: boolean } {
+  switch (source) {
+    case 'discovered':
+      return { label: 'Learned from data', learned: true };
+    case 'augmented':
+      return { label: 'Domain model + data-discovered edges', learned: true };
+    default:
+      return { label: 'Domain-knowledge model', learned: false };
+  }
+}
 
-  // Local error / busy state for the estimation-data fetch that precedes the
-  // pipeline run (the data fetch happens BEFORE the mutation fires).
-  const [pipelinePrepError, setPipelinePrepError] = useState<Error | null>(null);
-  const [isPreparingPipeline, setIsPreparingPipeline] = useState(false);
+export default function CausalDiscovery() {
+  const [treatmentVar, setTreatmentVar] = useState(DEFAULT_TREATMENT);
+  const [outcomeVar, setOutcomeVar] = useState(DEFAULT_OUTCOME);
 
-  // Hooks --------------------------------------------------------------------
-  const {
-    data: variables,
-    isLoading: isLoadingVariables,
-  } = useCausalVariables(DATASET);
+  const { data: variables } = useCausalVariables(DATASET);
+  const runAgent = useRunCausalAgentAnalysis();
+  const result = runAgent.data;
 
-  const {
-    mutate: routeMutate,
-    data: routeData,
-    isPending: isRouting,
-    error: routingError,
-  } = useRouteQuery();
+  const treatmentCandidates = variables?.treatment_candidates ?? [DEFAULT_TREATMENT];
+  const outcomeCandidates = variables?.outcome_candidates ?? [DEFAULT_OUTCOME];
 
-  const {
-    mutate: chainsMutate,
-    data: chainsData,
-    isPending: isDiscoveringChains,
-    error: chainsError,
-  } = useCausalChains();
-
-  const {
-    mutate: runPipelineMutate,
-    data: pipelineData,
-    isPending: isRunningPipeline,
-    error: pipelineError,
-  } = useRunParallelPipeline();
-
-  // Handlers -----------------------------------------------------------------
-  const handleRouteSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const covariates = covariatesSelected;
-    // The backend router (`src/causal_engine/pipeline/router.py`) classifies
-    // by question keywords. Use the user-typed question verbatim so the
-    // router can branch to EconML / CausalML / NetworkX when the user is
-    // asking about heterogeneity / targeting / impact flow rather than ATE.
-    const trimmed = queryText.trim();
-    const query =
-      trimmed.length > 0
-        ? trimmed
-        : `Effect of ${treatmentVar || '<treatment>'} on ${outcomeVar || '<outcome>'}` +
-          (covariates.length > 0
-            ? ` controlling for ${covariates.join(', ')}`
-            : '');
-    const request: RouteQueryRequest = {
-      query,
-      treatment_var: treatmentVar || undefined,
-      outcome_var: outcomeVar || undefined,
-      // RouteQueryRequest does not expose `covariates` directly. Pass via
-      // `context` so the backend routing layer can use it for downstream
-      // pipeline selection without breaking schema.
-      context: covariates.length > 0 ? { covariates: covariatesSelected } : undefined,
-    };
-    routeMutate(request);
-  };
-
-  const handleDiscoverChains = () => {
-    const request: CausalChainRequest = {
-      kpi_name: outcomeVar || undefined,
-      min_confidence: 0.5,
-      max_chain_length: 4,
-    };
-    chainsMutate(request);
-  };
-
-  /**
-   * Fire a parallel multi-library pipeline. Libraries default to the routing
-   * recommendation when present, otherwise the canonical pharma-comm trio
-   * (DoWhy / EconML / CausalML). The result populates real effect estimates
-   * and CIs in the results table.
-   *
-   * BEFORE running, fetch the REAL estimation-ready rows from the backend and
-   * attach them to the request `filters`. Without this the pipeline has no
-   * data to estimate on and 503s. The records come from
-   * `GET /causal/estimation-data` for the chosen treatment / outcome /
-   * covariates on the gold-standard `patient_journeys` frame.
-   */
-  const handleRunPipeline = async () => {
-    const libraries: CausalLibrary[] = [];
-    if (routeData?.primary_library) {
-      libraries.push(routeData.primary_library);
-    }
-    for (const lib of routeData?.secondary_libraries ?? []) {
-      if (!libraries.includes(lib)) libraries.push(lib);
-    }
-    // Parallel pipeline requires 2-4 libraries
-    if (libraries.length < 2) {
-      const fallback: CausalLibrary[] = [
-        'dowhy' as CausalLibrary,
-        'econml' as CausalLibrary,
-        'causalml' as CausalLibrary,
-      ];
-      for (const lib of fallback) {
-        if (!libraries.includes(lib) && libraries.length < 3) {
-          libraries.push(lib);
-        }
-      }
-    }
-
-    setPipelinePrepError(null);
-    setIsPreparingPipeline(true);
-    try {
-      const data = await getCausalEstimationData({
-        dataset: DATASET,
-        treatment_var: treatmentVar,
-        outcome_var: outcomeVar,
-        covariates: covariatesSelected,
-      });
-
-      const request: ParallelPipelineRequest = {
-        treatment_var: treatmentVar,
-        outcome_var: outcomeVar,
-        covariates: covariatesSelected,
-        libraries: libraries.slice(0, 4),
-        // Real estimation rows so the libraries fit on actual data rather than
-        // failing on an empty payload.
-        filters: { estimation_data_records: data.estimation_data_records },
-      };
-      runPipelineMutate({ request, asyncMode: false });
-    } catch (error) {
-      setPipelinePrepError(
-        error instanceof Error
-          ? error
-          : new Error('Failed to load estimation data for the pipeline.')
-      );
-    } finally {
-      setIsPreparingPipeline(false);
-    }
-  };
-
-  // Derived ------------------------------------------------------------------
-  const treatmentCandidates = variables?.treatment_candidates ?? [];
-  const outcomeCandidates = variables?.outcome_candidates ?? [];
-  // The chosen treatment / outcome must never appear in the covariate list —
-  // a variable cannot control for itself. Filter them out of the options.
-  const covariateOptions = useMemo(
-    () =>
-      (variables?.covariate_candidates ?? []).filter(
-        (candidate) => candidate !== treatmentVar && candidate !== outcomeVar
-      ),
-    [variables, treatmentVar, outcomeVar]
-  );
-
-  const primaryLibrary = routeData?.primary_library;
-  const secondaryLibraries = routeData?.secondary_libraries ?? [];
-  const recommendedEstimators = routeData?.recommended_estimators ?? [];
-  const routingConfidencePct =
-    routeData?.routing_confidence !== undefined
-      ? Math.round(routeData.routing_confidence * 100)
-      : null;
-
-  const chains = useMemo(() => chainsData?.chains ?? [], [chainsData]);
-
-  // Backend reports a human-readable caveat when the DoWhy refutation /
-  // sensitivity suite did NOT run for this estimate. (Field exists on the
-  // wire schema; the local ParallelPipelineResponse type predates it.)
-  const robustnessWarning = (
-    pipelineData as { robustness_warning?: string | null } | undefined
-  )?.robustness_warning;
-
-  // ---------------------------------------------------------------------
-  // Real-data threading into the DAG visualization (fix: the viz formerly
-  // received NO data props and fell back to a fabricated SAMPLE_ analysis).
-  // ---------------------------------------------------------------------
-
-  /**
-   * DAG nodes/edges for the visualization. Two real sources, unioned:
-   *
-   * 1. KG chain-discovery results (when the outcome has chains in the graph).
-   * 2. The parallel-pipeline run: the backdoor-adjustment model that was
-   *    actually estimated — treatment + outcome + covariate confounders, with
-   *    the treatment→outcome edge carrying the REAL consensus effect. This is
-   *    the user-specified causal structure (not fabricated data), so the DAG is
-   *    no longer empty after a run even when the KG has no chains for the
-   *    chosen outcome (e.g. persistent_180d).
-   */
+  // Map the agent's learned DAG onto the shared causal-graph visualization.
   const { vizNodes, vizEdges } = useMemo((): {
     vizNodes: CausalNode[];
     vizEdges: CausalEdge[];
   } => {
-    const nodes: CausalNode[] = [];
-    const edges: CausalEdge[] = [];
-    const seenNodes = new Set<string>();
-    const seenEdges = new Set<string>();
-
-    const addNode = (
-      id: string | undefined,
-      label: string,
-      type: CausalNode['type']
-    ) => {
-      if (!id || seenNodes.has(id)) return;
-      seenNodes.add(id);
-      nodes.push({ id, label, type });
-    };
-    const addEdge = (
-      id: string,
-      source: string,
-      target: string,
-      type: CausalEdge['type'],
-      extra: Partial<CausalEdge> = {}
-    ) => {
-      if (!source || !target || seenEdges.has(id)) return;
-      seenEdges.add(id);
-      edges.push({ id, source, target, type, ...extra });
-    };
-
-    // (1) KG chains.
-    for (const chain of chains) {
-      for (const node of chain.nodes) {
-        addNode(node.id ?? node.name, node.name ?? node.id ?? '', 'variable');
-      }
-      for (const rel of chain.relationships ?? []) {
-        addEdge(
-          `${rel.source_id}->${rel.target_id}`,
-          rel.source_id,
-          rel.target_id,
-          'causal',
-          { confidence: rel.confidence }
-        );
-      }
-    }
-
-    // (2) Pipeline-derived backdoor-adjustment DAG. Only drawn once a run has
-    // produced a real effect estimate (consensus, else the first library that
-    // reported one). Confounder edges are the structural backdoor assumptions
-    // (no fabricated weights); the treatment→outcome edge carries the estimate.
-    let pipelineEffect: number | undefined;
-    if (typeof pipelineData?.consensus_effect === 'number') {
-      pipelineEffect = pipelineData.consensus_effect;
-    } else {
-      for (const raw of Object.values(pipelineData?.library_results ?? {})) {
-        const e = (raw as { effect_estimate?: number })?.effect_estimate;
-        if (typeof e === 'number') {
-          pipelineEffect = e;
-          break;
-        }
-      }
-    }
-    if (pipelineData && typeof pipelineEffect === 'number' && treatmentVar && outcomeVar) {
-      addNode(treatmentVar, treatmentVar, 'treatment');
-      addNode(outcomeVar, outcomeVar, 'outcome');
-      for (const cov of covariatesSelected) {
-        addNode(cov, cov, 'confounder');
-        addEdge(`${cov}->${treatmentVar}`, cov, treatmentVar, 'confounding');
-        addEdge(`${cov}->${outcomeVar}`, cov, outcomeVar, 'confounding');
-      }
-      addEdge(`${treatmentVar}->${outcomeVar}`, treatmentVar, outcomeVar, 'causal', {
-        effect: pipelineEffect,
-      });
-    }
-
-    return { vizNodes: nodes, vizEdges: edges };
-  }, [chains, pipelineData, treatmentVar, outcomeVar, covariatesSelected]);
-
-  /**
-   * Effect estimates derived from the real parallel-pipeline run:
-   * one row per library result plus the consensus row. Fields the API does
-   * not return (e.g. p-values) are simply omitted — never invented.
-   */
-  const vizEffects = useMemo((): CausalEffect[] => {
-    if (!pipelineData) return [];
-    const effects: CausalEffect[] = [];
-
-    // CI bounds are included ONLY when the backend reports both of them —
-    // a missing interval stays missing (rendered as an em dash), never
-    // synthesized from the point estimate. No confidence level is labeled
-    // either: the pipeline schema carries no confidence_level field, so
-    // asserting "95%" would be fabrication.
-    const realCI = (
-      lower: unknown,
-      upper: unknown
-    ): { ciLower: number; ciUpper: number } | undefined =>
-      typeof lower === 'number' && typeof upper === 'number'
-        ? { ciLower: lower, ciUpper: upper }
-        : undefined;
-
-    for (const [library, raw] of Object.entries(
-      pipelineData.library_results ?? {}
-    )) {
-      const result = raw as {
-        effect_estimate?: number;
-        ci_lower?: number;
-        ci_upper?: number;
+    if (!result) return { vizNodes: [], vizEdges: [] };
+    const dag = result.dag;
+    const treatmentSet = new Set(dag.treatment_nodes);
+    const outcomeSet = new Set(dag.outcome_nodes);
+    const confounderSet = new Set(dag.adjustment_sets.flat());
+    const nodes: CausalNode[] = dag.nodes.map((name) => ({
+      id: name,
+      label: name,
+      type: treatmentSet.has(name)
+        ? 'treatment'
+        : outcomeSet.has(name)
+          ? 'outcome'
+          : confounderSet.has(name)
+            ? 'confounder'
+            : 'variable',
+    }));
+    const edges: CausalEdge[] = dag.edges.map(([source, target]) => {
+      const isEffectEdge = treatmentSet.has(source) && outcomeSet.has(target);
+      return {
+        id: `${source}->${target}`,
+        source,
+        target,
+        type: 'causal' as const,
+        ...(isEffectEdge && result.ate !== null && result.ate !== undefined
+          ? { effect: result.ate }
+          : {}),
       };
-      if (typeof result?.effect_estimate !== 'number') continue;
-      effects.push({
-        id: `lib-${library}`,
-        treatment: treatmentVar,
-        outcome: outcomeVar,
-        estimate: result.effect_estimate,
-        ...realCI(result.ci_lower, result.ci_upper),
-        metadata: { library },
-      });
-    }
+    });
+    return { vizNodes: nodes, vizEdges: edges };
+  }, [result]);
 
-    if (typeof pipelineData.consensus_effect === 'number') {
-      effects.push({
-        id: 'consensus',
-        treatment: treatmentVar,
-        outcome: outcomeVar,
-        estimate: pipelineData.consensus_effect,
-        ...realCI(
-          pipelineData.consensus_ci_lower,
-          pipelineData.consensus_ci_upper
-        ),
-        metadata: { library: 'consensus' },
+  const handleAnalyze = async () => {
+    try {
+      await runAgent.mutateAsync({
+        treatment_var: treatmentVar,
+        outcome_var: outcomeVar,
+        dataset: DATASET,
+        // Learn the DAG from data (default), and let the agent pick the
+        // estimator (Auto). The analyst supplies only the question.
       });
+    } catch (error) {
+      // Surfaced via runAgent.isError below; nothing fabricated.
+      console.error('Causal discovery failed:', error);
     }
-    return effects;
-  }, [pipelineData, treatmentVar, outcomeVar]);
+  };
+
+  const source = dagSourceLabel(result?.dag_source);
 
   return (
     <div className="container mx-auto px-4 py-8 space-y-6">
-      {/* ===================================================================
-          HEADER
-          =================================================================== */}
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold mb-2">Causal Discovery</h1>
+          <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
+            <GitBranch className="h-8 w-8" />
+            Causal Discovery
+          </h1>
           <p className="text-muted-foreground">
-            Causal analysis with DAG visualization, effect estimates, and refutation tests.
+            The agent learns the causal structure from the data, then estimates and validates the
+            treatment&rarr;outcome effect — you choose only the question.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="flex items-center gap-1">
-            <Brain className="h-3 w-3" />
-            DoWhy
-          </Badge>
-          <Badge variant="outline" className="flex items-center gap-1">
-            <FlaskConical className="h-3 w-3" />
-            EconML
-          </Badge>
-          <Badge variant="outline" className="flex items-center gap-1">
-            <GitBranch className="h-3 w-3" />
-            DAG
-          </Badge>
-          <Badge variant="outline" className="flex items-center gap-1">
-            <Shield className="h-3 w-3" />
-            Refutation
-          </Badge>
-        </div>
+        <Badge variant="outline" className="flex items-center gap-1 self-start">
+          <Sparkles className="h-3 w-3" />
+          Agent-driven
+        </Badge>
       </div>
 
-      {/* ===================================================================
-          ROUTING FORM
-          =================================================================== */}
+      {/* Question form */}
       <Card>
         <CardHeader>
-          <CardTitle>Library routing</CardTitle>
+          <CardTitle>Causal question</CardTitle>
           <CardDescription>
-            Describe a causal question. We will recommend the best library and
-            estimator for it.
+            Pick a treatment and an outcome. The agent discovers the confounders, builds the DAG,
+            selects the estimator, and runs robustness checks — no method knobs to set.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form
-            onSubmit={handleRouteSubmit}
-            aria-label="Library routing form"
-            className="grid grid-cols-1 md:grid-cols-3 gap-4"
-          >
-            <div className="space-y-2 md:col-span-3">
-              <Label htmlFor="causal-query">Causal question</Label>
-              <Input
-                id="causal-query"
-                value={queryText}
-                placeholder='e.g. "Does X cause Y?", "Who should we target?", "How does effect vary?"'
-                onChange={(event) => setQueryText(event.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                The router classifies the wording to recommend DoWhy
-                (causation), EconML (heterogeneity), CausalML (targeting), or
-                NetworkX (impact flow).
-              </p>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             <div className="space-y-2">
-              <Label htmlFor="treatment-var">Treatment variable</Label>
-              <Select
-                value={treatmentVar}
-                onValueChange={setTreatmentVar}
-                disabled={isLoadingVariables}
-              >
+              <label className="text-sm font-medium block" htmlFor="treatment-var">
+                Treatment (cause)
+              </label>
+              <Select value={treatmentVar} onValueChange={setTreatmentVar}>
                 <SelectTrigger id="treatment-var" aria-label="Treatment variable">
                   <SelectValue placeholder="Select treatment" />
                 </SelectTrigger>
@@ -490,12 +191,10 @@ function CausalDiscovery() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="outcome-var">Outcome variable</Label>
-              <Select
-                value={outcomeVar}
-                onValueChange={setOutcomeVar}
-                disabled={isLoadingVariables}
-              >
+              <label className="text-sm font-medium block" htmlFor="outcome-var">
+                Outcome (effect)
+              </label>
+              <Select value={outcomeVar} onValueChange={setOutcomeVar}>
                 <SelectTrigger id="outcome-var" aria-label="Outcome variable">
                   <SelectValue placeholder="Select outcome" />
                 </SelectTrigger>
@@ -508,383 +207,210 @@ function CausalDiscovery() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="covariates">Covariates</Label>
-              <CovariateMultiSelect
-                options={covariateOptions}
-                selected={covariatesSelected}
-                onChange={setCovariatesSelected}
-                disabled={isLoadingVariables}
-              />
-            </div>
-            <div className="md:col-span-3 flex flex-wrap items-center gap-3">
-              <Button type="submit" disabled={isRouting}>
-                {isRouting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Routing...
-                  </>
-                ) : (
-                  'Run routing'
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={handleDiscoverChains}
-                disabled={isDiscoveringChains || !outcomeVar}
-              >
-                {isDiscoveringChains ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Discovering...
-                  </>
-                ) : (
-                  'Discover chains in KG'
-                )}
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={handleRunPipeline}
-                disabled={
-                  isRunningPipeline ||
-                  isPreparingPipeline ||
-                  !treatmentVar ||
-                  !outcomeVar
-                }
-              >
-                {isRunningPipeline || isPreparingPipeline ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {isPreparingPipeline ? 'Preparing data...' : 'Running pipeline...'}
-                  </>
-                ) : (
-                  'Run parallel pipeline'
-                )}
-              </Button>
-              {isRouting && (
-                <span
-                  data-testid="routing-loading"
-                  className="text-sm text-muted-foreground inline-flex items-center gap-2"
-                >
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Routing query...
-                </span>
+            <Button onClick={handleAnalyze} disabled={runAgent.isPending}>
+              {runAgent.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Discovering &amp; analyzing…
+                </>
+              ) : (
+                <>
+                  <Play className="mr-2 h-4 w-4" />
+                  Discover &amp; Analyze
+                </>
               )}
-            </div>
-          </form>
-
-          {/* Routing error */}
-          <QueryErrorState
-            error={routingError}
-            onRetry={() =>
-              handleRouteSubmit({
-                preventDefault: () => undefined,
-              } as unknown as FormEvent<HTMLFormElement>)
-            }
-            isRetrying={isRouting}
-            title="Routing failed"
-            size="sm"
-            className="mt-4"
-          />
-
-          {/* KG-chains error */}
-          <QueryErrorState
-            error={chainsError}
-            onRetry={handleDiscoverChains}
-            isRetrying={isDiscoveringChains}
-            title="KG chain discovery failed"
-            size="sm"
-            className="mt-2"
-          />
-
-          {/* Estimation-data preparation error (fetch that precedes the run) */}
-          <QueryErrorState
-            error={pipelinePrepError}
-            onRetry={() => void handleRunPipeline()}
-            isRetrying={isPreparingPipeline}
-            title="Could not load estimation data"
-            size="sm"
-            className="mt-2"
-          />
-
-          {/* Pipeline error */}
-          <QueryErrorState
-            error={pipelineError}
-            onRetry={() => void handleRunPipeline()}
-            isRetrying={isRunningPipeline}
-            title="Parallel pipeline failed"
-            size="sm"
-            className="mt-2"
-          />
+            </Button>
+          </div>
+          {runAgent.isPending && (
+            <p className="text-sm text-muted-foreground mt-4">
+              The agent is learning the DAG from the data, estimating the effect, and running
+              refutation. This can take a minute or two.
+            </p>
+          )}
+          {runAgent.isError && (
+            <Alert variant="destructive" className="mt-4">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Discovery could not run</AlertTitle>
+              <AlertDescription>
+                The causal agent did not return a result. Please try again.
+              </AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
-      {/* ===================================================================
-          ROUTING RESULTS
-          =================================================================== */}
-      {routeData && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Recommended approach</CardTitle>
-            <CardDescription>{routeData.routing_rationale}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-medium">Primary library:</span>
-              <Badge data-testid="routing-primary-library" variant="default">
-                {primaryLibrary ?? 'unknown'}
-              </Badge>
-              {routingConfidencePct !== null && (
-                <Badge variant="secondary">
-                  {routingConfidencePct}% confidence
-                </Badge>
-              )}
-            </div>
-            <div
-              data-testid="routing-alternatives"
-              className="flex flex-wrap items-center gap-2"
-            >
-              <span className="text-sm font-medium">Alternatives:</span>
-              {secondaryLibraries.length > 0 ? (
-                secondaryLibraries.map((library) => (
-                  <Badge key={library} variant="outline">
-                    {library}
-                  </Badge>
-                ))
-              ) : (
-                <span className="text-sm text-muted-foreground">none</span>
-              )}
-            </div>
+      {/* Results / empty state */}
+      {!result ? (
+        <EmptyState
+          title="No discovery run yet"
+          description="Choose a treatment and outcome, then click Discover & Analyze. The agent learns the causal graph from the data, estimates the effect, and runs robustness checks."
+        />
+      ) : (
+        <>
+          {result.status !== 'completed' && (
+            <Alert variant={result.status === 'failed' ? 'destructive' : 'default'}>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>
+                {result.status === 'failed'
+                  ? 'No validated effect was produced'
+                  : 'Estimate needs expert review'}
+              </AlertTitle>
+              <AlertDescription>
+                {result.warnings.length > 0
+                  ? result.warnings.join(' ')
+                  : 'The estimate did not fully pass the robustness gate.'}
+              </AlertDescription>
+            </Alert>
+          )}
 
-            {/* Results table: combines routing recommendations with parallel
-                pipeline outputs once available. Effect / CI columns are
-                "pending pipeline run" until the pipeline mutation resolves. */}
-            <div className="rounded-md border overflow-hidden">
-              <table
-                data-testid="routing-results-table"
-                className="w-full text-sm"
-              >
-                <thead className="bg-[var(--color-muted)]/50">
-                  <tr>
-                    <th className="text-left p-2 font-medium">Library</th>
-                    <th className="text-left p-2 font-medium">
-                      Recommended estimator
-                    </th>
-                    <th className="text-left p-2 font-medium">
-                      Effect estimate
-                    </th>
-                    {/* The pipeline schema reports raw ci_lower/ci_upper with no
-                        confidence-level field — claiming 95% would be fabrication. */}
-                    <th className="text-left p-2 font-medium">CI</th>
-                    <th className="text-left p-2 font-medium">Confidence</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[primaryLibrary, ...secondaryLibraries]
-                    .filter((library): library is CausalLibrary => Boolean(library))
-                    .map((library, idx) => {
-                      const libraryResult = pipelineData?.library_results?.[
-                        library
-                      ] as
-                        | {
-                            effect_estimate?: number;
-                            ci_lower?: number;
-                            ci_upper?: number;
-                            estimator?: string;
-                            estimator_type?: string;
-                          }
-                        | undefined;
-                      const isPrimary = idx === 0;
-                      // The routing endpoint returns `recommended_estimators`
-                      // only for the primary library. Showing them by row
-                      // index would mis-label secondary rows (e.g. DoWhy
-                      // estimators on the EconML row). Use them for the
-                      // primary row only; fall back to whatever estimator the
-                      // parallel pipeline actually used for each library.
-                      const primaryEstimator =
-                        isPrimary && recommendedEstimators.length > 0
-                          ? recommendedEstimators.join(', ')
-                          : null;
-                      const pipelineEstimator =
-                        libraryResult?.estimator ??
-                        libraryResult?.estimator_type ??
-                        null;
-                      const estimatorCell =
-                        primaryEstimator ?? pipelineEstimator ?? '-';
-                      return (
-                        <tr key={library} className="border-t">
-                          <td className="p-2 font-medium">{library}</td>
-                          <td className="p-2">{estimatorCell}</td>
-                          <td className="p-2">
-                            {libraryResult
-                              ? fmtNumber(libraryResult.effect_estimate)
-                              : (
-                                <span className="text-muted-foreground italic">
-                                  pending pipeline run
-                                </span>
-                              )}
-                          </td>
-                          <td className="p-2">
-                            {libraryResult
-                              ? fmtCI(libraryResult.ci_lower, libraryResult.ci_upper)
-                              : (
-                                <span className="text-muted-foreground italic">
-                                  pending pipeline run
-                                </span>
-                              )}
-                          </td>
-                          <td className="p-2">
-                            {isPrimary && routingConfidencePct !== null
-                              ? `${routingConfidencePct}%`
-                              : (
-                                <span className="text-muted-foreground">
-                                  alternative
-                                </span>
-                              )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Consensus row from parallel pipeline */}
-            {pipelineData && (
-              <div
-                data-testid="pipeline-consensus"
-                className="rounded-md border p-3 text-sm flex flex-wrap items-center gap-4"
-              >
-                <span className="font-medium">Consensus effect:</span>
-                <Badge variant="default">
-                  {fmtNumber(pipelineData.consensus_effect)}
-                </Badge>
-                <span className="font-medium">CI:</span>
-                <span>
-                  {fmtCI(
-                    pipelineData.consensus_ci_lower,
-                    pipelineData.consensus_ci_upper,
-                  )}
-                </span>
-                {pipelineData.library_agreement_score !== undefined && (
-                  <>
-                    <span className="font-medium">Library agreement:</span>
-                    <Badge variant="secondary">
-                      {Math.round(pipelineData.library_agreement_score * 100)}%
-                    </Badge>
-                  </>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ===================================================================
-          KG CHAINS PANEL
-          =================================================================== */}
-      {chainsData && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Knowledge graph chains</CardTitle>
-            <CardDescription>
-              Discovered causal chains from the knowledge graph for{' '}
-              <span className="font-medium">{outcomeVar || 'the outcome'}</span>
-              .
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div data-testid="kg-chains-panel" className="space-y-3">
-              {chains.length === 0 && (
-                <p className="text-sm text-muted-foreground italic">
-                  No causal chains were discovered in the knowledge graph for{' '}
-                  <span className="font-medium">
-                    {outcomeVar || 'this outcome'}
+          {/* Learned causal graph — the heart of the discovery page. */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Network className="h-5 w-5" />
+                Causal structure
+              </CardTitle>
+              <CardDescription className="flex flex-wrap items-center gap-2">
+                <Badge variant={source.learned ? 'default' : 'outline'}>{source.label}</Badge>
+                {result.discovered_confounders && result.discovered_confounders.length > 0 && (
+                  <span className="text-xs">
+                    Confounders the data identified:{' '}
+                    <span className="font-medium">
+                      {result.discovered_confounders.join(', ')}
+                    </span>
                   </span>
-                  . Try another outcome, or run the parallel pipeline above to
-                  estimate the effect directly.
-                </p>
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {vizNodes.length > 0 ? (
+                <CausalDiscoveryViz nodes={vizNodes} edges={vizEdges} showEffectsTable={false} />
+              ) : (
+                <EmptyState
+                  title="No graph produced"
+                  description="The agent did not return a causal graph for this run."
+                />
               )}
-              {chains.map((chain, idx) => {
-                const totalConfidencePct =
-                  chain.total_confidence !== undefined
-                    ? Math.round(chain.total_confidence * 100)
-                    : null;
-                return (
-                  <div
-                    key={idx}
-                    className="rounded-md border p-3 flex flex-col gap-2"
-                  >
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {chain.nodes.map((node, nodeIdx) => (
-                        <span
-                          key={node.id ?? `${idx}-${nodeIdx}`}
-                          className="inline-flex items-center gap-1"
-                        >
-                          <Badge variant="secondary">{node.name}</Badge>
-                          {nodeIdx < chain.nodes.length - 1 && (
-                            <span className="text-muted-foreground"></span>
-                          )}
-                        </span>
-                      ))}
-                    </div>
-                    <div className="text-xs text-muted-foreground flex items-center gap-3">
-                      <span>Length: {chain.path_length}</span>
-                      {totalConfidencePct !== null && (
-                        <span>Confidence: {totalConfidencePct}%</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            </CardContent>
+          </Card>
 
-      {/* ===================================================================
-          DAG VISUALIZATION — fed exclusively by the real runs above.
-          Nodes/edges come from KG chain discovery; effect rows from the
-          parallel pipeline. Refutation details are not returned by the
-          pipeline endpoint, so that table stays honestly empty (the
-          robustness caveat, when reported, is surfaced as a warning).
-          =================================================================== */}
-      {robustnessWarning && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-muted-foreground">
-          <span className="font-medium text-amber-600">Robustness caveat:</span>{' '}
-          {robustnessWarning}
-        </div>
+          {/* Effect + estimator + robustness */}
+          <div className="grid md:grid-cols-3 gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {result.treatment_var} &rarr; {result.outcome_var}
+                </CardTitle>
+                <CardDescription>Average Treatment Effect</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-center">
+                  <div className="text-4xl font-bold text-primary">{formatEffect(result.ate)}</div>
+                  <div className="text-sm text-muted-foreground mt-2">
+                    95% CI: {formatCI(result.ate_ci_lower, result.ate_ci_upper)}
+                  </div>
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    {result.statistical_significance ? (
+                      <Badge variant="default">Significant</Badge>
+                    ) : (
+                      <Badge variant="secondary">Not significant</Badge>
+                    )}
+                  </div>
+                  {result.p_value !== null && result.p_value !== undefined && (
+                    <div className="text-xs text-muted-foreground mt-2">
+                      p = {result.p_value.toFixed(4)}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Estimator</CardTitle>
+                <CardDescription>Selected data-drivenly (energy-score)</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-center">
+                  <div className="text-2xl font-bold capitalize">
+                    {result.selected_estimator
+                      ? result.selected_estimator.replace(/_/g, ' ')
+                      : 'N/A'}
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-3">
+                    Ran on {result.n_rows.toLocaleString()} rows ({result.data_source}) in{' '}
+                    {(result.latency_ms / 1000).toFixed(1)}s
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Robustness</CardTitle>
+                <CardDescription>Refutation &amp; sensitivity gate</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Gate:</span>
+                    {gateBadge(result.refutation.gate_decision)}
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Tests passed:</span>
+                    <span className="font-medium">
+                      {result.refutation.tests_passed ?? '—'}
+                      {result.refutation.tests_total !== null &&
+                      result.refutation.tests_total !== undefined
+                        ? ` / ${result.refutation.tests_total}`
+                        : ''}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Sensitivity E-value:</span>
+                    <span className="font-medium">
+                      {result.refutation.sensitivity_e_value !== null &&
+                      result.refutation.sensitivity_e_value !== undefined
+                        ? result.refutation.sensitivity_e_value.toFixed(2)
+                        : '—'}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Interpretation */}
+          {(result.narrative ||
+            result.executive_summary ||
+            result.recommendations.length > 0) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Interpretation</CardTitle>
+                <CardDescription>Natural-language reading of the result</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm">
+                {result.executive_summary && (
+                  <p className="font-medium">{result.executive_summary}</p>
+                )}
+                {result.narrative && (
+                  <p className="text-muted-foreground whitespace-pre-line">{result.narrative}</p>
+                )}
+                {result.recommendations.length > 0 && (
+                  <div>
+                    <p className="font-medium mb-1">Recommendations</p>
+                    <ul className="list-disc pl-5 text-muted-foreground space-y-1">
+                      {result.recommendations.map((rec, i) => (
+                        <li key={i}>{rec}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
-      {/* The parallel pipeline estimates effects but does NOT run refutation /
-          sensitivity tests, so the Refutation Test Results panel below is empty
-          by design after a run. Make that explicit rather than letting it read
-          as broken. */}
-      {pipelineData && (
-        <p
-          data-testid="refutation-note"
-          className="text-xs text-muted-foreground"
-        >
-          The parallel pipeline estimates effects but does not run refutation /
-          sensitivity tests, so the Refutation Test Results panel below stays
-          empty by design. Treat the estimate as unvalidated for robustness; run
-          a hierarchical analysis for refutation-tested estimates.
-        </p>
-      )}
-      <CausalDiscoveryViz
-        showControls
-        showDetails
-        showEffectsTable
-        showRefutationTests
-        nodes={vizNodes}
-        edges={vizEdges}
-        effects={vizEffects}
-        refutationResults={[]}
-        isLoading={isRunningPipeline || isPreparingPipeline || isDiscoveringChains}
-      />
     </div>
   );
 }
-
-export default CausalDiscovery;

@@ -166,6 +166,8 @@ export interface AgentCausalAnalysisRequest {
   estimator?: string;
   brand?: string;
   limit?: number;
+  /** Learn the DAG from data via guided structure discovery (default true). */
+  auto_discover?: boolean;
 }
 
 /** The causal DAG the agent's graph_builder constructed. */
@@ -202,6 +204,10 @@ export interface AgentCausalAnalysisResponse {
   /** database / synthetic */
   data_source: string;
   dag: CausalDAGModel;
+  /** How the DAG was built: 'discovered' | 'augmented' | 'domain_knowledge' */
+  dag_source?: string;
+  /** Covariates the data identified as confounders (the adjustment set). */
+  discovered_confounders?: string[];
   ate?: number | null;
   ate_ci_lower?: number | null;
   ate_ci_upper?: number | null;
