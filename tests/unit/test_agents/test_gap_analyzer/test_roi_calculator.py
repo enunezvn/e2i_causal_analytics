@@ -88,9 +88,12 @@ class TestROICalculatorNode:
     async def test_roi_calculation_formula(self):
         """Test ROI calculation uses proper methodology.
 
-        New methodology uses:
+        Methodology:
         - $850/TRx value driver (not $500)
-        - Attribution framework (full for vs_target = 100%)
+        - capture_rate (default 0.30): value sized on the fraction of the gap
+          realistically CLOSED, not the full gap
+        - Attribution framework (vs_target = PARTIAL 0.65, not FULL — a bare
+          target gap is not RCT-validated)
         - Risk adjustment
         """
         service = ROICalculationService(n_simulations=50, seed=42)
@@ -99,12 +102,10 @@ class TestROICalculatorNode:
 
         roi = node._calculate_roi(gap)
 
-        # Revenue = 100 TRx × $850 × 100% attribution (full for vs_target) = $85,000
-        # After risk adjustment it may be different
-        assert roi["estimated_revenue_impact"] == 85000.0  # Full attribution
+        # Revenue = 100 TRx × 0.30 capture × $850 × 0.65 PARTIAL attribution = $16,575
+        assert roi["estimated_revenue_impact"] == 16575.0
 
         # Cost includes engineering + potentially change management
-        # 5 base days × 1.0 scale (gap 10-100) × $2,500 = $12,500 engineering
         assert roi["estimated_cost_to_close"] > 0
 
         # ROI should be positive for this gap
@@ -135,8 +136,9 @@ class TestROICalculatorNode:
         service = ROICalculationService(n_simulations=50, seed=42)
         node = ROICalculatorNode(roi_service=service)
 
-        # vs_target = FULL (100%)
-        assert node._determine_attribution("vs_target") == AttributionLevel.FULL
+        # vs_target = PARTIAL (65%) — downgraded from FULL: an unvalidated target
+        # gap is not RCT-grade evidence, so it does not earn 100% attribution.
+        assert node._determine_attribution("vs_target") == AttributionLevel.PARTIAL
 
         # vs_benchmark = PARTIAL (65%)
         assert node._determine_attribution("vs_benchmark") == AttributionLevel.PARTIAL
@@ -506,9 +508,10 @@ class TestROICalculatorEdgeCases:
         roi_target = node._calculate_roi(gap_target)
         roi_temporal = node._calculate_roi(gap_temporal)
 
-        # Same gap size but different attribution
-        # Full attribution: 100% × $85,000 = $85,000
-        # Minimal attribution: 10% × $85,000 = $8,500
+        # Same gap size but different attribution (relative comparison holds
+        # regardless of the absolute scale). With capture 0.30 and $850/TRx, the
+        # base value is 100*0.30*850 = $25,500; vs_target PARTIAL (0.65) ->
+        # $16,575 vs temporal MINIMAL (0.10) -> $2,550.
         assert roi_target["estimated_revenue_impact"] > roi_temporal["estimated_revenue_impact"]
         assert roi_target["attribution_rate"] > roi_temporal["attribution_rate"]
 
@@ -748,14 +751,15 @@ class TestROICalculatorUpliftIntegration:
             "uplift_by_segment": None,
         }
 
-        driver = node._create_uplift_value_driver(gap, uplift_context)
+        # captured_units = gap_size(100) * capture_rate(0.30) = 30
+        driver = node._create_uplift_value_driver(gap, uplift_context, captured_units=30.0)
 
         assert driver is not None
         assert driver.driver_type == ValueDriverType.UPLIFT_TARGETING
         assert driver.auuc == 0.7
         assert driver.targeting_efficiency == 0.8
-        assert driver.baseline_treatment_value == 85000.0  # 100 * 850
-        assert driver.targeted_population_size == 100
+        assert driver.baseline_treatment_value == 25500.0  # 30 captured * 850
+        assert driver.targeted_population_size == 30
 
     def test_create_uplift_value_driver_none_for_non_targeting_metric(self):
         """Test uplift value driver returns None for metrics that don't benefit."""
@@ -770,7 +774,7 @@ class TestROICalculatorUpliftIntegration:
             "uplift_by_segment": None,
         }
 
-        driver = node._create_uplift_value_driver(gap, uplift_context)
+        driver = node._create_uplift_value_driver(gap, uplift_context, captured_units=30.0)
 
         assert driver is None
 
@@ -867,7 +871,8 @@ class TestROICalculatorUpliftIntegration:
 
         assert "roi_estimates" in result
         assert len(result["roi_estimates"]) == 1
-        assert result["roi_estimates"][0]["estimated_revenue_impact"] == 85000.0  # Base TRx only
+        # 100 TRx × 0.30 capture × $850 × 0.65 PARTIAL (vs_target) = $16,575
+        assert result["roi_estimates"][0]["estimated_revenue_impact"] == 16575.0
 
     @pytest.mark.asyncio
     async def test_multiple_gaps_with_uplift_context(self):
@@ -893,3 +898,97 @@ class TestROICalculatorUpliftIntegration:
         for roi in result["roi_estimates"]:
             assert roi["estimated_revenue_impact"] >= 0
             assert roi["estimated_cost_to_close"] > 0
+
+
+class TestROIValueRealism:
+    """Value-realism fix: capture rate on value, PARTIAL attribution for
+    vs_target, and the data-acquisition double-count removal.
+
+    Before this fix, value was computed at an implicit 100% gap capture and
+    FULL (RCT-grade) attribution for vs_target, so ROI grew without bound with
+    gap size (a 4,000-TRx gap showed ~44x; 75,000 TRx showed ~849x). These
+    tests pin the corrected, economically plausible behavior.
+    """
+
+    def _gap(self, gap_size=4000.0, metric="trx", gtype="vs_target"):
+        return {
+            "gap_id": "x",
+            "metric": metric,
+            "segment": "region",
+            "segment_value": "x",
+            "current_value": 1000.0,
+            "target_value": 1000.0 + gap_size,
+            "gap_size": float(gap_size),
+            "gap_percentage": gap_size / (1000.0 + gap_size) * 100.0,
+            "gap_type": gtype,
+        }
+
+    def test_default_capture_rate_is_loaded(self):
+        node = ROICalculatorNode(use_bootstrap=False)
+        # From config/agents/gap_analyzer.yaml economic_assumptions.capture_rate
+        # (== DEFAULT_CAPTURE_RATE fallback).
+        assert node.capture_rate == 0.30
+
+    def test_value_uses_capture_and_partial_attribution(self):
+        node = ROICalculatorNode(use_bootstrap=False, capture_rate=0.30)
+        roi = node._calculate_roi(self._gap(gap_size=4000.0, metric="trx"))
+        # 4000 × 0.30 capture × $850 × 0.65 PARTIAL = $663,000
+        assert roi["estimated_revenue_impact"] == 663000.0
+        assert roi["attribution_rate"] == 0.65  # PARTIAL, not FULL(1.0)
+        # Economically plausible (methodology's own examples are 7x-83x), NOT 44x.
+        assert roi["expected_roi"] < 15.0
+
+    def test_capture_rate_scales_value_linearly(self):
+        # Non-vacuous: a higher capture rate yields proportionally higher value,
+        # proving the factor actually reaches the dollar math.
+        low = ROICalculatorNode(use_bootstrap=False, capture_rate=0.20)
+        high = ROICalculatorNode(use_bootstrap=False, capture_rate=0.40)
+        v_low = low._calculate_roi(self._gap())["estimated_revenue_impact"]
+        v_high = high._calculate_roi(self._gap())["estimated_revenue_impact"]
+        assert v_high == pytest.approx(v_low * 2.0)  # 0.40 / 0.20
+
+    def test_capture_haircut_vs_full_capture(self):
+        # Non-vacuous vs the old 100%-capture behavior: capture 0.30 yields a
+        # value ~3.33x smaller than capture 1.0 (same PARTIAL attribution).
+        new = ROICalculatorNode(use_bootstrap=False, capture_rate=0.30)
+        old_capture = ROICalculatorNode(use_bootstrap=False, capture_rate=1.0)
+        v_new = new._calculate_roi(self._gap())["estimated_revenue_impact"]
+        v_old = old_capture._calculate_roi(self._gap())["estimated_revenue_impact"]
+        assert v_old == pytest.approx(v_new / 0.30)
+
+    def test_data_cost_not_double_counted(self):
+        # patient_identification: data cost = gap_size*100 must be counted ONCE.
+        # eng(10*1.5*2500=37,500) + change_mgmt(min(50000,1000*200)=50,000)
+        #   + data(1000*100=100,000, ONCE) = 187,500.
+        # The old double-count added the $100k data twice -> 287,500.
+        node = ROICalculatorNode(use_bootstrap=False, capture_rate=0.30)
+        roi = node._calculate_roi(self._gap(gap_size=1000.0, metric="patient_identification"))
+        assert roi["estimated_cost_to_close"] == 187500.0
+
+    def test_capture_applied_once_for_nonlinear_drivers(self):
+        # Regression: ACTION_RATE (value = pp_improvement × $45 × trigger_count)
+        # and INTENT_TO_PRESCRIBE (value = pp_improvement × $320 × hcp_count) are
+        # non-linear — both the improvement (`quantity`) and a base/population
+        # field scale with the gap. Capture must apply ONLY to the improvement;
+        # the base population derives from the RAW gap. If capture leaked into
+        # both factors the value would scale with capture_rate SQUARED (a 0.40 vs
+        # 0.20 ratio of 4x), over-suppressing these drivers. Linear (ratio 2.0)
+        # proves the single-haircut discipline holds.
+        for metric in ("trigger_acceptance", "conversion_rate"):
+            low = ROICalculatorNode(use_bootstrap=False, capture_rate=0.20)
+            high = ROICalculatorNode(use_bootstrap=False, capture_rate=0.40)
+            gap = self._gap(gap_size=1000.0, metric=metric)
+            v_low = low._calculate_roi(gap)["estimated_revenue_impact"]
+            v_high = high._calculate_roi(gap)["estimated_revenue_impact"]
+            assert v_low > 0.0, metric
+            assert v_high == pytest.approx(v_low * 2.0), metric  # linear, NOT 4x
+
+    def test_invalid_constructor_capture_rate_falls_back_to_default(self):
+        # The (0, 1] guard must protect constructor injection too, not just
+        # config loading: a caller passing 0.0 would otherwise zero out all ROI.
+        assert ROICalculatorNode(use_bootstrap=False, capture_rate=0.0).capture_rate == 0.30
+        assert ROICalculatorNode(use_bootstrap=False, capture_rate=-0.2).capture_rate == 0.30
+        assert ROICalculatorNode(use_bootstrap=False, capture_rate=1.5).capture_rate == 0.30
+        # Valid fractions (incl. the inclusive upper bound) pass through unchanged.
+        assert ROICalculatorNode(use_bootstrap=False, capture_rate=0.40).capture_rate == 0.40
+        assert ROICalculatorNode(use_bootstrap=False, capture_rate=1.0).capture_rate == 1.0

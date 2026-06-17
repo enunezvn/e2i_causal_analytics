@@ -587,6 +587,33 @@ export const TierMetricsResponseSchema = z.object({
   generated_at: z.string().optional(),
 });
 
+/**
+ * Single agent activity item (matches AgentActivityItem in agents.py).
+ * Sourced from audit_chain_entries; the wire is snake_case.
+ */
+export const AgentActivityItemSchema = z.object({
+  entry_id: z.string(),
+  agent_id: z.string(),
+  agent_name: z.string(),
+  tier: z.number().int().min(0).max(5),
+  action: z.string(),
+  action_type: z.string(),
+  timestamp: z.string(),
+  duration_ms: z.number().int().nullable().optional(),
+  status: z.enum(['completed', 'in_progress', 'failed']),
+  details: z.string().nullable().optional(),
+});
+
+/**
+ * Agent activity feed response (matches AgentActivityResponse in agents.py).
+ */
+export const AgentActivityResponseSchema = z.object({
+  activities: z.array(AgentActivityItemSchema),
+  total: z.number().int().nonnegative(),
+  window_hours: z.number().int(),
+  timestamp: z.string().optional(),
+});
+
 // =============================================================================
 // CHAT/COPILOTKIT SCHEMAS
 // =============================================================================
@@ -1432,6 +1459,7 @@ export const schemaRegistry = {
   // Agents
   'agents.status': AgentStatusResponseSchema,
   'analytics.tier-metrics': TierMetricsResponseSchema,
+  'agents.activity': AgentActivityResponseSchema,
 
   // Audit
   'audit.entries': AuditEntriesResponseSchema,
@@ -1543,6 +1571,7 @@ export type ChatResponseValidated = z.infer<typeof ChatResponseSchema>;
 export type AgentValidated = z.infer<typeof AgentSchema>;
 export type AgentStatusResponseValidated = z.infer<typeof AgentStatusResponseSchema>;
 export type TierMetricsResponseValidated = z.infer<typeof TierMetricsResponseSchema>;
+export type AgentActivityResponseValidated = z.infer<typeof AgentActivityResponseSchema>;
 export type AuditEntryValidated = z.infer<typeof AuditEntrySchema>;
 export type ChainVerificationValidated = z.infer<typeof ChainVerificationSchema>;
 export type WorkflowSummaryValidated = z.infer<typeof WorkflowSummarySchema>;

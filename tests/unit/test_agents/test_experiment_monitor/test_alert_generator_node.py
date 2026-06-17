@@ -265,6 +265,79 @@ class TestGenerateEnrollmentAlerts:
         assert alerts[0]["details"]["days_below_threshold"] == 10
 
 
+class TestNoPromptLeak:
+    """Regression: the DSPy *prompt templates* must never surface as the alert
+    message.
+
+    The production default is ``use_dspy_prompts=True`` and the Recipient
+    integration has no generation step — ``get_enrollment_prompt`` etc. simply
+    format and return the instruction template ("Describe enrollment issue for
+    experiment '...'"). Before the honesty fix that raw prompt leaked verbatim
+    into the UI alert. These tests pin the deterministic human-readable message
+    for the DEFAULT (DSPy-on) node, and would have FAILED before the fix.
+    """
+
+    @pytest.fixture
+    def node(self):
+        # Production default — DSPy prompts ON. This is the config that leaked.
+        return AlertGeneratorNode()
+
+    def test_enrollment_message_is_not_the_raw_prompt(self, node):
+        state = {
+            "experiments": [{"experiment_id": "exp-001", "name": "Test Experiment"}],
+            "enrollment_issues": [
+                {
+                    "experiment_id": "exp-001",
+                    "current_rate": 0.0,
+                    "expected_rate": 5.0,
+                    "days_below_threshold": 1,
+                    "severity": "warning",
+                }
+            ],
+        }
+        msg = node._generate_enrollment_alerts(state)[0]["message"]
+        assert "Describe enrollment issue" not in msg
+        assert msg.startswith("Low enrollment rate")
+
+    def test_srm_message_is_not_the_raw_prompt(self, node):
+        state = {
+            "experiments": [{"experiment_id": "exp-001", "name": "Test Experiment"}],
+            "srm_issues": [
+                {
+                    "experiment_id": "exp-001",
+                    "detected": True,
+                    "p_value": 0.0001,
+                    "chi_squared": 25.5,
+                    "expected_ratio": {"control": 0.5, "treatment": 0.5},
+                    "actual_counts": {"control": 700, "treatment": 300},
+                    "severity": "critical",
+                }
+            ],
+        }
+        msg = node._generate_srm_alerts(state)[0]["message"]
+        assert "Describe Sample Ratio Mismatch" not in msg
+        assert msg.startswith("Sample Ratio Mismatch detected")
+
+    def test_fidelity_message_is_not_the_raw_prompt(self, node):
+        state = {
+            "experiments": [{"experiment_id": "exp-001", "name": "Test Experiment"}],
+            "fidelity_issues": [
+                {
+                    "experiment_id": "exp-001",
+                    "twin_simulation_id": "twin-1",
+                    "predicted_effect": 0.10,
+                    "actual_effect": 0.07,
+                    "prediction_error": 0.30,
+                    "calibration_needed": True,
+                    "severity": "warning",
+                }
+            ],
+        }
+        msg = node._generate_fidelity_alerts(state)[0]["message"]
+        assert "Describe Digital Twin fidelity issue" not in msg
+        assert "Digital Twin calibration needed" in msg
+
+
 class TestGenerateInterimAlerts:
     """Tests for _generate_interim_alerts method."""
 

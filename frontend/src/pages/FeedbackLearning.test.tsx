@@ -160,3 +160,53 @@ describe('FeedbackLearning — warnings rendering (F-010-frontend)', () => {
     expect(screen.getByText('Learning cycle warnings')).toBeInTheDocument();
   });
 });
+
+describe('FeedbackLearning — no fabricated health defaults', () => {
+  // Regression: the summary cards used `cycles_24h ?? 12` and
+  // `agent_available ?? true`, so a loading/failed health query rendered a
+  // FAKE "12" cycles + "Online". The fix shows an honest "Checking…" / "—"
+  // while loading and conservative real defaults (Offline / 0) otherwise —
+  // never a fabricated plausible value. These would FAIL before the fix.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (usePatterns as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { patterns: [] }, isLoading: false, refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useKnowledgeUpdates as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { updates: [] }, isLoading: false, refetch: vi.fn().mockResolvedValue({}),
+    });
+    (useQuickLearningCycle as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useApplyUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+    (useRollbackUpdate as ReturnType<typeof vi.fn>).mockReturnValue({ mutate: vi.fn(), isPending: false });
+  });
+
+  it('shows "Checking…" / "—" while health is loading (not fabricated 12 / Online)', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined, isLoading: true, refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Checking/)).toBeInTheDocument();
+    expect(screen.queryByText('12')).not.toBeInTheDocument();
+    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+  });
+
+  it('shows conservative Offline / 0 when health is unavailable (not fabricated 12 / Online)', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined, isLoading: false, refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+    expect(screen.queryByText('12')).not.toBeInTheDocument();
+    expect(screen.queryByText('Online')).not.toBeInTheDocument();
+    expect(screen.getByText('Offline')).toBeInTheDocument();
+  });
+
+  it('reflects the real health values when present', () => {
+    (useFeedbackHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { agent_available: true, cycles_24h: 7 }, isLoading: false, refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<FeedbackLearning />, { wrapper: createWrapper() });
+    expect(screen.getByText('Online')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.queryByText(/Checking/)).not.toBeInTheDocument();
+  });
+});

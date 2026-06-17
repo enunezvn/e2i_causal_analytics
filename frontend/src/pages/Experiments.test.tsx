@@ -2,7 +2,7 @@
  * Experiments Page Tests — interim/fidelity live wiring (H2)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -144,7 +144,9 @@ describe('Experiments — enrollment honesty + synthetic opt-in', () => {
       await user.click(screen.getByLabelText(/include synthetic/i));
     });
     await act(async () => {
-      await user.click(screen.getByRole('button', { name: /run monitoring/i }));
+      // Header button (index 0); the empty-state CTA renders a second
+      // identically-named button when no experiments are loaded.
+      await user.click(screen.getAllByRole('button', { name: /run monitoring/i })[0]);
     });
 
     expect(mutate).toHaveBeenCalledWith(
@@ -162,7 +164,9 @@ describe('Experiments — enrollment honesty + synthetic opt-in', () => {
     const user = userEvent.setup();
     render(<Experiments />, { wrapper: createWrapper() });
     await act(async () => {
-      await user.click(screen.getByRole('button', { name: /run monitoring/i }));
+      // Header button (index 0); the empty-state CTA renders a second
+      // identically-named button when no experiments are loaded.
+      await user.click(screen.getAllByRole('button', { name: /run monitoring/i })[0]);
     });
     expect(mutate).toHaveBeenCalledWith(
       expect.objectContaining({ include_synthetic: false }),
@@ -249,5 +253,124 @@ describe('Experiments — fidelity (H2)', () => {
       expect(screen.getByText('90%')).toBeInTheDocument();
     });
     expect(screen.getByText('70%')).toBeInTheDocument();
+  });
+});
+
+// A monitor payload whose substrate is synthetic-gold, with a stale-data alert.
+// Overrides merge into `data` so a test can flip synthetic_data_included/forced.
+function monitorWith(overrides: Record<string, unknown>) {
+  return {
+    isPending: false,
+    mutate: vi.fn(),
+    data: {
+      experiments_checked: 1,
+      healthy_count: 0,
+      warning_count: 1,
+      critical_count: 1,
+      experiments: [
+        {
+          experiment_id: 'exp_synth_1',
+          experiment_name: 'Synthetic Experiment 1',
+          health_status: 'warning',
+          total_enrolled: 0,
+          enrollment_rate_per_day: 0,
+          current_information_fraction: 0,
+          has_srm: false,
+          active_alerts: 1,
+          last_checked: '2026-06-01T00:00:00Z',
+          is_synthetic: true,
+        },
+      ],
+      alerts: [
+        {
+          alert_id: 'a1',
+          alert_type: 'stale_data',
+          severity: 'critical',
+          experiment_id: 'exp_synth_1',
+          experiment_name: 'Synthetic Experiment 1',
+          message:
+            "Data staleness detected in 'Synthetic Experiment 1': no new data for 5.8 days (threshold: 24.0h)",
+          details: {},
+          recommended_action: 'Check data pipeline.',
+          timestamp: '2026-06-01T00:00:00Z',
+        },
+      ],
+      monitor_summary: 'ok',
+      recommended_actions: [],
+      check_latency_ms: 10,
+      timestamp: '2026-06-01T00:00:00Z',
+      ...overrides,
+    },
+  };
+}
+
+describe('Experiments — synthetic-substrate honesty + load CTA', () => {
+  it('shows a Run Monitoring CTA in the empty state that triggers a sweep', async () => {
+    const mutate = vi.fn();
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isPending: false,
+      mutate,
+    });
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    // The empty state itself carries the call-to-action button.
+    const empty = screen.getByTestId('empty-state');
+    await act(async () => {
+      await user.click(within(empty).getByRole('button', { name: /run monitoring/i }));
+    });
+    expect(mutate).toHaveBeenCalled();
+  });
+
+  it('surfaces the static-synthetic context banner when the substrate is synthetic', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      monitorWith({ synthetic_data_included: true, synthetic_data_forced: false }),
+    );
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Static synthetic-gold substrate/i)).toBeInTheDocument();
+    expect(screen.getByText(/no live feed/i)).toBeInTheDocument();
+  });
+
+  it('does NOT show the synthetic banner when the substrate is not synthetic', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      monitorWith({ synthetic_data_included: false }),
+    );
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.queryByText(/Static synthetic-gold substrate/i)).not.toBeInTheDocument();
+  });
+
+  it('disables and relabels the synthetic checkbox when the deployment forces inclusion', () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      monitorWith({ synthetic_data_included: true, synthetic_data_forced: true }),
+    );
+    render(<Experiments />, { wrapper: createWrapper() });
+    const checkbox = screen.getByLabelText(/always included in this deployment/i);
+    expect(checkbox).toBeDisabled();
+  });
+
+  it('shows the substrate banner on a forced synthetic-gold deployment even when no row is is_synthetic', () => {
+    // The goldstd experiments are tagged is_synthetic=False (kept servable in
+    // real-mode), so synthetic_data_included can be false even though the whole
+    // deployment is a synthetic-gold showcase. The deployment flag
+    // (synthetic_data_forced) must drive the banner, not the per-row flag.
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      monitorWith({ synthetic_data_forced: true, synthetic_data_included: false }),
+    );
+    render(<Experiments />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Static synthetic-gold substrate/i)).toBeInTheDocument();
+  });
+
+  it('adds a static-synthetic note on the Alerts tab', async () => {
+    (useTriggerMonitoring as ReturnType<typeof vi.fn>).mockReturnValue(
+      monitorWith({ synthetic_data_included: true, synthetic_data_forced: false }),
+    );
+    const user = userEvent.setup();
+    render(<Experiments />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getByRole('tab', { name: /alerts/i }));
+    });
+    expect(
+      screen.getByText(/computed on static synthetic-gold data/i),
+    ).toBeInTheDocument();
   });
 });

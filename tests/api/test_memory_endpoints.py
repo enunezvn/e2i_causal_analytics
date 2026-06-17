@@ -10,7 +10,7 @@ Tests the memory system endpoints:
 - GET /memory/stats
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -511,10 +511,25 @@ class TestMemoryStats:
 
         assert response.status_code == 200
         data = response.json()
+        assert "working" in data
         assert "episodic" in data
         assert "procedural" in data
         assert "semantic" in data
         assert "last_updated" in data
+
+    def test_get_stats_includes_live_working_block(self):
+        """Working-memory card is wired: live active-session count + status."""
+        wm = MagicMock()
+        wm.count_active_sessions = AsyncMock(return_value=7)
+        wm.ttl_seconds = 86400
+        with patch("src.memory.working_memory.get_working_memory", return_value=wm):
+            response = client.get("/api/memory/stats")
+
+        assert response.status_code == 200
+        working = response.json()["working"]
+        assert working["active_sessions"] == 7
+        assert working["status"] == "healthy"
+        assert working["ttl_hours"] == 24.0
 
 
 # =============================================================================

@@ -35,6 +35,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_analyst, require_viewer
 from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
+from src.api.errors import user_safe_503_detail
 from src.api.models.graph import (
     CausalChainResponse,
     EntityType,
@@ -1067,14 +1068,18 @@ async def _run_sequential_pipeline_task(
         ).model_dump()
 
 
-_NO_REAL_DATA_BACKEND_DETAIL = (
+# These are curated, exception-free explanations meant for end users, so they opt
+# in to the global 503 handler surfacing them verbatim (the FE Heterogeneous
+# Treatment Effects card matches "no real data backend" to render an honest
+# "data isn't wired yet" state). Keep the wording in sync with that FE gate.
+_NO_REAL_DATA_BACKEND_DETAIL = user_safe_503_detail(
     "Causal pipeline endpoints have no real data backend wired. "
     "There is no production data source returning treatment/outcome columns by name. "
     "Pass demo_mode=true to get a clearly-labeled pinned-zero placeholder for UI demos, "
     "or wire real data and re-issue the request."
 )
 
-_NO_RESOLVABLE_DATA_DETAIL = (
+_NO_RESOLVABLE_DATA_DETAIL = user_safe_503_detail(
     "Sequential/parallel pipeline executed but no library produced a result: "
     "no DataFrame was resolvable from the request filters and there is no "
     "production data backend wired for arbitrary data_source identifiers. "
@@ -2378,6 +2383,137 @@ async def run_cross_validation(
 # =============================================================================
 
 
+# Single source of truth for the supported causal estimators. Both
+# ``list_estimators`` (the /estimators endpoint) and ``causal_health_check``
+# (``estimators_loaded``) read from this so the health count can never drift
+# from the registry (previously ``estimators_loaded`` was a hardcoded ``12``).
+_ESTIMATOR_REGISTRY: List[EstimatorInfo] = [
+    # EconML
+    EstimatorInfo(
+        name="causal_forest",
+        library=CausalLibrary.ECONML,
+        estimator_type="CATE",
+        description="Causal Forest for heterogeneous treatment effects",
+        best_for=["Effect heterogeneity", "Feature importance"],
+        parameters=["n_estimators", "min_samples_leaf", "max_depth"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=True,
+    ),
+    EstimatorInfo(
+        name="linear_dml",
+        library=CausalLibrary.ECONML,
+        estimator_type="CATE",
+        description="Double Machine Learning with linear final stage",
+        best_for=["High-dimensional confounders", "Linear effects"],
+        parameters=["model_y", "model_t", "cv"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=True,
+    ),
+    EstimatorInfo(
+        name="ortho_forest",
+        library=CausalLibrary.ECONML,
+        estimator_type="CATE",
+        description="Orthogonal Random Forest for CATE",
+        best_for=["Non-linear effects", "SHAP integration"],
+        parameters=["n_trees", "subsample_ratio", "max_depth"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=True,
+    ),
+    EstimatorInfo(
+        name="dr_learner",
+        library=CausalLibrary.ECONML,
+        estimator_type="CATE",
+        description="Doubly Robust Learner",
+        best_for=["Robustness to misspecification"],
+        parameters=["model_propensity", "model_regression"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=True,
+    ),
+    EstimatorInfo(
+        name="x_learner",
+        library=CausalLibrary.ECONML,
+        estimator_type="Meta-Learner",
+        description="X-Learner for heterogeneous effects",
+        best_for=["Imbalanced treatment groups"],
+        parameters=["models", "propensity_model"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=True,
+    ),
+    EstimatorInfo(
+        name="t_learner",
+        library=CausalLibrary.ECONML,
+        estimator_type="Meta-Learner",
+        description="Two-Model approach",
+        best_for=["Simple interpretation"],
+        parameters=["models"],
+        supports_confidence_intervals=False,
+        supports_heterogeneous_effects=True,
+    ),
+    EstimatorInfo(
+        name="s_learner",
+        library=CausalLibrary.ECONML,
+        estimator_type="Meta-Learner",
+        description="Single-Model approach",
+        best_for=["Limited data"],
+        parameters=["overall_model"],
+        supports_confidence_intervals=False,
+        supports_heterogeneous_effects=True,
+    ),
+    # CausalML
+    EstimatorInfo(
+        name="uplift_random_forest",
+        library=CausalLibrary.CAUSALML,
+        estimator_type="Uplift",
+        description="Uplift Random Forest for targeting",
+        best_for=["Marketing optimization", "Customer targeting"],
+        parameters=["n_estimators", "max_depth", "min_samples_treatment"],
+        supports_confidence_intervals=False,
+        supports_heterogeneous_effects=True,
+    ),
+    EstimatorInfo(
+        name="uplift_gradient_boosting",
+        library=CausalLibrary.CAUSALML,
+        estimator_type="Uplift",
+        description="Uplift Gradient Boosting",
+        best_for=["High accuracy targeting"],
+        parameters=["n_estimators", "learning_rate", "max_depth"],
+        supports_confidence_intervals=False,
+        supports_heterogeneous_effects=True,
+    ),
+    # DoWhy
+    EstimatorInfo(
+        name="propensity_score_matching",
+        library=CausalLibrary.DOWHY,
+        estimator_type="Identification",
+        description="Propensity Score Matching",
+        best_for=["Observational studies", "Selection bias"],
+        parameters=["caliper", "n_neighbors"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=False,
+    ),
+    EstimatorInfo(
+        name="inverse_propensity_weighting",
+        library=CausalLibrary.DOWHY,
+        estimator_type="Identification",
+        description="Inverse Propensity Score Weighting",
+        best_for=["Survey adjustments", "Treatment weighting"],
+        parameters=["propensity_model", "stabilized"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=False,
+    ),
+    EstimatorInfo(
+        name="instrumental_variable",
+        library=CausalLibrary.DOWHY,
+        estimator_type="Identification",
+        description="Instrumental Variable (2SLS/LIML)",
+        best_for=["Endogeneity", "Unmeasured confounders"],
+        parameters=["instruments", "method"],
+        supports_confidence_intervals=True,
+        supports_heterogeneous_effects=False,
+    ),
+]
+
+
 @router.get(
     "/estimators",
     response_model=EstimatorListResponse,
@@ -2396,131 +2532,7 @@ async def list_estimators(
     Returns:
         EstimatorListResponse with estimator information
     """
-    estimators = [
-        # EconML
-        EstimatorInfo(
-            name="causal_forest",
-            library=CausalLibrary.ECONML,
-            estimator_type="CATE",
-            description="Causal Forest for heterogeneous treatment effects",
-            best_for=["Effect heterogeneity", "Feature importance"],
-            parameters=["n_estimators", "min_samples_leaf", "max_depth"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=True,
-        ),
-        EstimatorInfo(
-            name="linear_dml",
-            library=CausalLibrary.ECONML,
-            estimator_type="CATE",
-            description="Double Machine Learning with linear final stage",
-            best_for=["High-dimensional confounders", "Linear effects"],
-            parameters=["model_y", "model_t", "cv"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=True,
-        ),
-        EstimatorInfo(
-            name="ortho_forest",
-            library=CausalLibrary.ECONML,
-            estimator_type="CATE",
-            description="Orthogonal Random Forest for CATE",
-            best_for=["Non-linear effects", "SHAP integration"],
-            parameters=["n_trees", "subsample_ratio", "max_depth"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=True,
-        ),
-        EstimatorInfo(
-            name="dr_learner",
-            library=CausalLibrary.ECONML,
-            estimator_type="CATE",
-            description="Doubly Robust Learner",
-            best_for=["Robustness to misspecification"],
-            parameters=["model_propensity", "model_regression"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=True,
-        ),
-        EstimatorInfo(
-            name="x_learner",
-            library=CausalLibrary.ECONML,
-            estimator_type="Meta-Learner",
-            description="X-Learner for heterogeneous effects",
-            best_for=["Imbalanced treatment groups"],
-            parameters=["models", "propensity_model"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=True,
-        ),
-        EstimatorInfo(
-            name="t_learner",
-            library=CausalLibrary.ECONML,
-            estimator_type="Meta-Learner",
-            description="Two-Model approach",
-            best_for=["Simple interpretation"],
-            parameters=["models"],
-            supports_confidence_intervals=False,
-            supports_heterogeneous_effects=True,
-        ),
-        EstimatorInfo(
-            name="s_learner",
-            library=CausalLibrary.ECONML,
-            estimator_type="Meta-Learner",
-            description="Single-Model approach",
-            best_for=["Limited data"],
-            parameters=["overall_model"],
-            supports_confidence_intervals=False,
-            supports_heterogeneous_effects=True,
-        ),
-        # CausalML
-        EstimatorInfo(
-            name="uplift_random_forest",
-            library=CausalLibrary.CAUSALML,
-            estimator_type="Uplift",
-            description="Uplift Random Forest for targeting",
-            best_for=["Marketing optimization", "Customer targeting"],
-            parameters=["n_estimators", "max_depth", "min_samples_treatment"],
-            supports_confidence_intervals=False,
-            supports_heterogeneous_effects=True,
-        ),
-        EstimatorInfo(
-            name="uplift_gradient_boosting",
-            library=CausalLibrary.CAUSALML,
-            estimator_type="Uplift",
-            description="Uplift Gradient Boosting",
-            best_for=["High accuracy targeting"],
-            parameters=["n_estimators", "learning_rate", "max_depth"],
-            supports_confidence_intervals=False,
-            supports_heterogeneous_effects=True,
-        ),
-        # DoWhy
-        EstimatorInfo(
-            name="propensity_score_matching",
-            library=CausalLibrary.DOWHY,
-            estimator_type="Identification",
-            description="Propensity Score Matching",
-            best_for=["Observational studies", "Selection bias"],
-            parameters=["caliper", "n_neighbors"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=False,
-        ),
-        EstimatorInfo(
-            name="inverse_propensity_weighting",
-            library=CausalLibrary.DOWHY,
-            estimator_type="Identification",
-            description="Inverse Propensity Score Weighting",
-            best_for=["Survey adjustments", "Treatment weighting"],
-            parameters=["propensity_model", "stabilized"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=False,
-        ),
-        EstimatorInfo(
-            name="instrumental_variable",
-            library=CausalLibrary.DOWHY,
-            estimator_type="Identification",
-            description="Instrumental Variable (2SLS/LIML)",
-            best_for=["Endogeneity", "Unmeasured confounders"],
-            parameters=["instruments", "method"],
-            supports_confidence_intervals=True,
-            supports_heterogeneous_effects=False,
-        ),
-    ]
+    estimators = list(_ESTIMATOR_REGISTRY)
 
     # Filter by library if specified
     if library:
@@ -2629,7 +2641,7 @@ async def causal_health_check() -> CausalHealthResponse:
     return CausalHealthResponse(
         status=status,
         libraries_available=libraries_available,
-        estimators_loaded=12,  # Count from list_estimators
+        estimators_loaded=len(_ESTIMATOR_REGISTRY),  # real count from the registry
         pipeline_orchestrator_ready=pipeline_ready,
         hierarchical_analyzer_ready=hierarchical_ready,
         last_analysis=last_analysis,

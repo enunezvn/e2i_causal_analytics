@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
 
@@ -28,12 +29,16 @@ vi.mock('@/hooks/api', () => ({
   // data; the component calls this at render time, so the mock must export it
   // or every render throws "No useCausalAnalysisHistory export … on the mock".
   useCausalAnalysisHistory: vi.fn(),
+  // The Estimators tab now reads the live registry (GET /causal/estimators);
+  // the component calls this at render time, so the mock must export it.
+  useEstimators: vi.fn(),
 }));
 
 import {
   useCausalHealth,
   useRunHierarchicalAnalysis,
   useCausalAnalysisHistory,
+  useEstimators,
 } from '@/hooks/api';
 
 function createWrapper() {
@@ -53,11 +58,19 @@ describe('CausalAnalysis — F-002 empty state', () => {
       data: undefined,
       mutateAsync: vi.fn(),
       isPending: false,
+      isError: false,
+      error: null,
     });
     // No history loaded — matches the F-002 empty-state theme. The component
     // reads historyData?.total / historyData.items behind a truthiness guard,
     // so `data: undefined` renders the History tab's empty branch (no crash).
     (useCausalAnalysisHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    // Estimators registry empty by default; specific tests override it.
+    (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       isLoading: false,
       isError: false,
@@ -110,5 +123,62 @@ describe('CausalAnalysis — F-002 empty state', () => {
     expect(screen.queryByText(/42\.5%/)).not.toBeInTheDocument();
     // Fabricated segment name "High Uplift"
     expect(screen.queryByText('High Uplift')).not.toBeInTheDocument();
+  }, 20000);
+
+  // ---------------------------------------------------------------------------
+  // Honesty fixes: live estimator registry + surfaced Run-Analysis error.
+  // ---------------------------------------------------------------------------
+
+  it('shows the live estimator-registry total on the Estimators Loaded card', () => {
+    (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { estimators: [], total: 12, by_library: {} },
+      isLoading: false,
+      isError: false,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // The card reflects the registry total (12), not a hardcoded value.
+    expect(screen.getByText('12')).toBeInTheDocument();
+  }, 20000);
+
+  it('renders estimators from the live registry (not the old hardcoded 6)', async () => {
+    const user = userEvent.setup();
+    // ortho_forest was NOT in the former hardcoded SUPPORTED_ESTIMATORS, so its
+    // presence proves the tab reads the live /causal/estimators registry.
+    (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        estimators: [
+          {
+            name: 'ortho_forest',
+            library: 'econml',
+            estimator_type: 'CATE',
+            description: 'Orthogonal Random Forest for CATE',
+            best_for: [],
+            parameters: [],
+            supports_confidence_intervals: true,
+            supports_heterogeneous_effects: true,
+          },
+        ],
+        total: 12,
+        by_library: { econml: ['ortho_forest'] },
+      },
+      isLoading: false,
+      isError: false,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('tab', { name: /estimators/i }));
+    expect(await screen.findByText(/ortho forest/i)).toBeInTheDocument();
+  }, 20000);
+
+  it('surfaces a Run Analysis failure honestly (was silently swallowed)', () => {
+    (useRunHierarchicalAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync: vi.fn(),
+      isPending: false,
+      isError: true,
+      error: { message: 'No real estimation data available.' },
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Analysis could not run/i)).toBeInTheDocument();
+    expect(screen.getByText(/fail-closed/i)).toBeInTheDocument();
   }, 20000);
 });

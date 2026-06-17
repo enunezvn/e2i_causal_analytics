@@ -20,6 +20,43 @@ vi.mock('@radix-ui/react-select', async () => {
   };
 });
 
+// Phase 1b: the intervention dropdown reads /intervention-types via this hook.
+// Mock it so the panel renders without a QueryClientProvider and we control the
+// brand-aware availability the dropdown exposes.
+vi.mock('@/hooks/api/use-digital-twin', () => ({
+  useInterventionTypes: vi.fn(),
+}));
+import { useInterventionTypes } from '@/hooks/api/use-digital-twin';
+
+// Canonical intervention catalog (mirrors backend INTERVENTION_CATALOG).
+const INTERVENTION_CATALOG: ReadonlyArray<[string, string]> = [
+  ['email_campaign', 'Email Campaign'],
+  ['call_frequency_increase', 'Increased Call Frequency'],
+  ['speaker_program_invitation', 'Speaker Program Invitation'],
+  ['sample_distribution', 'Sample Distribution'],
+  ['peer_influence_activation', 'Peer Influence Activation'],
+  ['digital_engagement', 'Digital Engagement'],
+];
+const ALL_INTERVENTION_VALUES = INTERVENTION_CATALOG.map(([v]) => v);
+
+function interventionTypesResult(availableValues: string[]) {
+  return {
+    data: {
+      interventions: INTERVENTION_CATALOG.map(([value, label]) => ({
+        value,
+        label,
+        effect_basis: 'synthetic',
+        available: availableValues.includes(value),
+      })),
+      brand: 'Remibrutinib',
+      twin_type: 'hcp',
+      timestamp: '2026-06-16T00:00:00Z',
+    },
+    isLoading: false,
+    isError: false,
+  };
+}
+
 describe('SimulationPanel', () => {
   const mockOnSimulate = vi.fn();
 
@@ -30,6 +67,10 @@ describe('SimulationPanel', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: all interventions available for the brand.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(ALL_INTERVENTION_VALUES)
+    );
   });
 
   describe('Rendering', () => {
@@ -156,7 +197,7 @@ describe('SimulationPanel', () => {
       expect(mockOnSimulate).toHaveBeenCalledTimes(1);
       expect(mockOnSimulate).toHaveBeenCalledWith(
         expect.objectContaining({
-          intervention_type: InterventionType.HCP_ENGAGEMENT,
+          intervention_type: InterventionType.EMAIL_CAMPAIGN,
           brand: 'Remibrutinib',
           sample_size: 1000,
           duration_days: 90,
@@ -208,12 +249,12 @@ describe('SimulationPanel', () => {
       await user.click(trigger);
 
       // Use role to get options specifically (avoids multiple element issues)
-      expect(screen.getByRole('option', { name: 'HCP Engagement Campaign' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Patient Support Program' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Pricing Change' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Rep Training Program' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Digital Marketing' })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Formulary Access Initiative' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Email Campaign' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Increased Call Frequency' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Speaker Program Invitation' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Sample Distribution' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Peer Influence Activation' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Digital Engagement' })).toBeInTheDocument();
     }, 15000); // Increased timeout for userEvent interactions
 
     it('changes intervention type when option selected', async () => {
@@ -223,7 +264,7 @@ describe('SimulationPanel', () => {
       const trigger = screen.getByLabelText(/Intervention Type/i);
       await user.click(trigger);
 
-      await user.click(screen.getByRole('option', { name: 'Patient Support Program' }));
+      await user.click(screen.getByRole('option', { name: 'Sample Distribution' }));
 
       // Submit to verify the change was captured
       const submitButton = screen.getByRole('button', { name: /Run Simulation/i });
@@ -231,9 +272,38 @@ describe('SimulationPanel', () => {
 
       expect(mockOnSimulate).toHaveBeenCalledWith(
         expect.objectContaining({
-          intervention_type: InterventionType.PATIENT_SUPPORT,
+          intervention_type: InterventionType.SAMPLE_DISTRIBUTION,
         })
       );
+    });
+
+    // Phase 1b — availability is brand-aware: only available types are shown.
+    it('shows ONLY backend-available interventions', async () => {
+      (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+        interventionTypesResult(['email_campaign', 'digital_engagement'])
+      );
+      const user = userEvent.setup();
+      render(<SimulationPanel {...defaultProps} />);
+
+      const trigger = screen.getByLabelText(/Intervention Type/i);
+      await user.click(trigger);
+
+      expect(screen.getByRole('option', { name: 'Email Campaign' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Digital Engagement' })).toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Sample Distribution' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Speaker Program Invitation' })).not.toBeInTheDocument();
+    }, 15000);
+
+    it('disables Run and explains when no twin model exists for the brand', () => {
+      (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+        interventionTypesResult([]) // no trained model → nothing available
+      );
+      render(<SimulationPanel {...defaultProps} />);
+
+      expect(
+        screen.getByText(/No trained twin model for Remibrutinib yet/i)
+      ).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
     });
   });
 
@@ -516,7 +586,7 @@ describe('SimulationPanel', () => {
       await user.click(submitButton);
 
       expect(mockOnSimulate).toHaveBeenCalledWith({
-        intervention_type: InterventionType.HCP_ENGAGEMENT,
+        intervention_type: InterventionType.EMAIL_CAMPAIGN,
         brand: 'Remibrutinib',
         sample_size: 1000,
         duration_days: 90,

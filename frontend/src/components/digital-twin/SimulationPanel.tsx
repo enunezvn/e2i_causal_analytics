@@ -8,7 +8,7 @@
  * @module components/digital-twin/SimulationPanel
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Play, Loader2, FlaskConical, Settings, AlertCircle } from 'lucide-react';
 import { z } from 'zod';
 import { Button } from '@/components/ui/button';
@@ -18,8 +18,10 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Badge } from '@/components/ui/badge';
+import { useInterventionTypes } from '@/hooks/api/use-digital-twin';
 import {
   InterventionType,
+  FALLBACK_INTERVENTION_TYPES,
   type SimulationRequest,
   type SimulationFormValues,
 } from '@/types/digital-twin';
@@ -73,15 +75,6 @@ export interface SimulationPanelProps {
 // CONSTANTS
 // =============================================================================
 
-const INTERVENTION_TYPE_LABELS: Record<InterventionType, string> = {
-  [InterventionType.HCP_ENGAGEMENT]: 'HCP Engagement Campaign',
-  [InterventionType.PATIENT_SUPPORT]: 'Patient Support Program',
-  [InterventionType.PRICING]: 'Pricing Change',
-  [InterventionType.REP_TRAINING]: 'Rep Training Program',
-  [InterventionType.DIGITAL_MARKETING]: 'Digital Marketing',
-  [InterventionType.FORMULARY_ACCESS]: 'Formulary Access Initiative',
-};
-
 const DEFAULT_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali'];
 
 const REGIONS = [
@@ -114,7 +107,7 @@ export function SimulationPanel({
   className = '',
 }: SimulationPanelProps) {
   const [formValues, setFormValues] = useState<SimulationFormValues>({
-    interventionType: InterventionType.HCP_ENGAGEMENT,
+    interventionType: InterventionType.EMAIL_CAMPAIGN,
     brand: initialBrand,
     sampleSize: 1000,
     durationDays: 90,
@@ -125,6 +118,41 @@ export function SimulationPanel({
 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [validationErrors, setValidationErrors] = useState<ValidationErrors>({});
+
+  // Phase 1b: the intervention dropdown is driven by the backend's canonical
+  // /digital-twin/intervention-types endpoint (brand-aware availability), so
+  // FE/BE can never drift and the menu exposes only interventions that can
+  // actually be simulated for the selected brand. Refetches on brand change.
+  const {
+    data: typesData,
+    isLoading: typesLoading,
+    isError: typesError,
+  } = useInterventionTypes({ brand: formValues.brand });
+
+  const availableInterventions = useMemo(() => {
+    if (typesError) {
+      // Endpoint unreachable → degrade to the full canonical fallback so the
+      // form stays usable; /simulate remains the authoritative availability gate.
+      return FALLBACK_INTERVENTION_TYPES.map((i) => ({ value: i.value as string, label: i.label }));
+    }
+    return (typesData?.interventions ?? [])
+      .filter((i) => i.available)
+      .map((i) => ({ value: i.value, label: i.label }));
+  }, [typesData, typesError]);
+
+  const noneAvailable =
+    !typesLoading && !typesError && availableInterventions.length === 0;
+
+  // Keep the selected intervention valid as availability changes (brand switch).
+  useEffect(() => {
+    if (availableInterventions.length === 0) return;
+    if (!availableInterventions.some((i) => i.value === formValues.interventionType)) {
+      setFormValues((prev) => ({
+        ...prev,
+        interventionType: availableInterventions[0].value as InterventionType,
+      }));
+    }
+  }, [availableInterventions, formValues.interventionType]);
 
   /**
    * Validate form values before submission
@@ -224,18 +252,33 @@ export function SimulationPanel({
                 onValueChange={(value: InterventionType) =>
                   setFormValues((prev) => ({ ...prev, interventionType: value }))
                 }
+                disabled={typesLoading || noneAvailable}
               >
                 <SelectTrigger id="intervention-type">
                   <SelectValue placeholder="Select intervention type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(INTERVENTION_TYPE_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
+                  {availableInterventions.map((i) => (
+                    <SelectItem key={i.value} value={i.value}>
+                      {i.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {typesLoading && (
+                <p className="text-xs text-muted-foreground">Loading available interventions…</p>
+              )}
+              {typesError && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Could not verify availability — showing all interventions.
+                </p>
+              )}
+              {noneAvailable && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  No trained twin model for {formValues.brand} yet — simulations are
+                  unavailable for this brand.
+                </p>
+              )}
             </div>
 
             {/* Brand */}
@@ -404,7 +447,7 @@ export function SimulationPanel({
           <Button
             type="submit"
             className="w-full"
-            disabled={isSimulating}
+            disabled={isSimulating || typesLoading || noneAvailable}
             size="lg"
           >
             {isSimulating ? (

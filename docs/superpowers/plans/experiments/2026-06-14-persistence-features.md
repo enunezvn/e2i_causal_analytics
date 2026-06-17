@@ -64,9 +64,12 @@ measured sim on the real covariates (conf/noise sweep → moderate target ~0.78)
 **Targeted regeneration (NOT full re-gen — initiation/TRUE_ATE untouched):** applied
 the new DGP to the existing 25k synthetic patients' covariates and UPDATEd only
 `persistent_180d`/`discontinued_180d` (backup `~/db_backups/persist_backup_*.tsv`).
-Verified on the live DB: disc 0.497 / persistent 0.503 (in-band), 0 complement
-violations, region monotonic (midwest 0.320 → northeast 0.442 → south 0.568 →
-west 0.663), `treatment_initiated` sum unchanged (8750).
+Verified on the live DB (committed-DGP value, re-queried 2026-06-16; matches the
+deterministic `scripts/regenerate_cohort_outcomes.py` re-application at
+0.4558/0.5442): disc 0.544 / persistent 0.456 (in-band), 0 complement
+violations, region monotonic (midwest 0.369 → northeast 0.489 → south 0.622 →
+west 0.708), `treatment_initiated` sum unchanged (8750). *(The earlier 0.497/0.503
++ midwest 0.320→west 0.663 figures were a superseded pre-final cut — see #971.)*
 
 **Re-measured holdout AUC on regenerated data:** base-3 **0.7747** (was 0.5936),
 +brand 0.7748, +extras 0.7733 → base-3 still wins. `keep_columns` = base-3 stands.

@@ -55,6 +55,45 @@ def working_memory(mock_redis):
 
 
 # ============================================================================
+# SESSION COUNT TESTS (Memory Architecture working-memory stat)
+# ============================================================================
+
+
+class TestSessionCount:
+    """Tests for count_active_sessions."""
+
+    @pytest.mark.asyncio
+    async def test_counts_top_level_sessions_only(self, working_memory, mock_redis):
+        """Counts top-level session keys, skipping nested :messages/:evidence."""
+        prefix = working_memory.session_prefix
+        keys = [
+            f"{prefix}aaa",
+            f"{prefix}aaa:messages",  # nested -> skip
+            f"{prefix}bbb",
+            f"{prefix}bbb:evidence",  # nested -> skip
+            f"{prefix}ccc",
+        ]
+
+        async def _scan_iter(match=None, count=None):
+            for k in keys:
+                yield k
+
+        mock_redis.scan_iter = _scan_iter
+        assert await working_memory.count_active_sessions() == 3
+
+    @pytest.mark.asyncio
+    async def test_zero_when_no_sessions(self, working_memory, mock_redis):
+        """No session keys -> 0 (honest empty, not a fabricated count)."""
+
+        async def _scan_iter(match=None, count=None):
+            for k in []:  # empty async generator
+                yield k
+
+        mock_redis.scan_iter = _scan_iter
+        assert await working_memory.count_active_sessions() == 0
+
+
+# ============================================================================
 # SESSION MANAGEMENT TESTS
 # ============================================================================
 
