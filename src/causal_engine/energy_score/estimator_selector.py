@@ -87,6 +87,21 @@ _ESTIMATOR_SPEED_RANK: dict[EstimatorType, int] = {
 }
 
 
+# Estimators that do NOT orthogonalize / cross-fit, and so are more exposed to
+# confounding bias. The energy score measures goodness-of-fit on the outcome,
+# NOT causal validity — so a naive OLS can fit the outcome marginal as well as a
+# DML/forest estimator (an energy-score "tie") yet remain biased under
+# confounding and FAIL the downstream refutation gate. MEASURED on the
+# patient_journeys gold standard: at energy scores within ~0.0005 of each other,
+# OLS gated BLOCK (ate=0.089, CI 0.020-0.158) while the DML/forest family gated
+# PROCEED (causal_forest ate=0.120, CI 0.117-0.123). So when energy scores tie,
+# a confounding-robust estimator must be preferred over these — otherwise "Auto"
+# silently selects the fast-but-biased estimator. (#622 had broken ties by raw
+# speed, which always picked OLS; this restricts the speed tiebreak to the
+# confounding-robust subset.)
+_CONFOUNDING_BLIND_ESTIMATORS: frozenset[EstimatorType] = frozenset({EstimatorType.OLS})
+
+
 class SelectionStrategy(str, Enum):
     """Strategy for selecting among estimators."""
 
@@ -1203,25 +1218,31 @@ class EstimatorSelector:
         )
 
     def _select_best_energy(self, results: list[EstimatorResult]) -> EstimatorResult:
-        """Select estimator with lowest energy score, breaking ties by speed.
+        """Select the lowest-energy estimator, breaking ties by causal robustness then speed.
 
-        #622 fast-estimator tiebreak: ``sorted(..., key=energy_score)`` is a
-        stable sort, so previously a tie (equal energy scores — e.g. all
-        estimators score 0.5382 on a degenerate fixture) fell back to the
-        estimator-chain priority order, whose first entry is ``causal_forest``,
-        the SLOWEST estimator. That made the downstream refutation suite (which
-        re-fits the selected estimator dozens of times) cost ~35-60 min on a
-        tie instead of ~30s.
-
-        We now group the candidates whose energy score is within
+        We group the candidates whose energy score is within
         ``min_energy_score_gap`` of the global best (a statistically
-        indistinguishable "tie band") and, among that band, pick the FASTEST
-        estimator per ``_ESTIMATOR_SPEED_RANK``. When scores genuinely differ
-        by more than the gap, the lowest-energy estimator still wins outright
-        (speed never overrides a meaningfully better score). The
-        ``min_energy_score_gap`` field already existed on
-        ``EstimatorSelectorConfig`` ("Minimum gap to prefer one over another")
-        but was never wired into selection — this is its intended use.
+        indistinguishable "tie band"). When scores genuinely differ by more than
+        the gap, the lowest-energy estimator wins outright. Within the tie band
+        the key is ``(confounding_blind?, speed_rank, energy_score)``:
+
+        1. Confounding-robust estimators are preferred over confounding-blind
+           ones (``_CONFOUNDING_BLIND_ESTIMATORS``). The energy score measures
+           goodness-of-fit on the OUTCOME, not causal validity — a naive OLS can
+           tie a DML/forest estimator on fit yet stay biased under confounding
+           and fail the refutation gate (MEASURED on patient_journeys: OLS
+           gate=BLOCK while the DML/forest family gate=PROCEED at equal energy).
+           A fit-tie therefore must NOT hand the run to a confounding-blind
+           estimator just because it is fastest.
+        2. Among equally-robust candidates, prefer the FASTEST (#622 intent: the
+           downstream refutation suite re-fits the selected estimator dozens of
+           times — ~0.05s for the linear refit vs ~3.1s for CausalForestDML — so
+           on a genuine tie the fast DML beats the slow forest, turning a
+           ~35-60 min suite into ~30s). The slow forest still wins outright when
+           its energy score is meaningfully better than the gap.
+        3. Then lower energy score.
+
+        Naive OLS only wins a tie when it is the ONLY estimator in the band.
         """
         successful = [r for r in results if r.success]
 
@@ -1256,19 +1277,26 @@ class EstimatorSelector:
             tie_band = list(sorted_results)
 
         if len(tie_band) > 1:
-            # Prefer the fastest estimator in the tie band; on equal speed rank,
-            # keep the lower energy score, then the original (priority) order.
+            # Within the tie band, prefer a CONFOUNDING-ROBUST estimator over a
+            # confounding-blind one (energy score measures fit, not causal
+            # validity — see _CONFOUNDING_BLIND_ESTIMATORS). Among equally-robust
+            # candidates keep #622's intent: prefer the FASTEST to bound the
+            # downstream refutation latency, then the lower energy score. So the
+            # tiebreak key is (confounding_blind?, speed_rank, energy_score):
+            # naive OLS only wins a tie when it is the ONLY estimator in the band.
             best = min(
                 tie_band,
                 key=lambda r: (
+                    1 if r.estimator_type in _CONFOUNDING_BLIND_ESTIMATORS else 0,
                     _ESTIMATOR_SPEED_RANK.get(r.estimator_type, 99),
                     r.energy_score,
                 ),
             )
             if best is not sorted_results[0]:
                 logger.info(
-                    "Energy-score tie within gap %.4f: preferring faster estimator "
-                    "%s (energy=%.4f) over %s (energy=%.4f) to bound refutation latency.",
+                    "Energy-score tie within gap %.4f: selected confounding-robust "
+                    "estimator %s (energy=%.4f) over %s (energy=%.4f) — energy ties "
+                    "do not justify a confounding-blind estimator; fastest robust wins.",
                     gap,
                     best.estimator_type.value,
                     best.energy_score,

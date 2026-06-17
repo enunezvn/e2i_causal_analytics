@@ -109,18 +109,21 @@ class TestLegacyModeWithExplicitMethod:
         verified), so the selection is decided by the tiebreak. Previously the
         stable-sort fallthrough picked the chain-priority head ``causal_forest``
         -> ``CausalForestDML`` (the SLOWEST estimator, whose refutation suite
-        runs ~35-60 min). The #622 fast-estimator tiebreak now prefers the
-        fastest estimator on a tie (``ols`` -> ``linear_regression``), which is
-        the whole point of the fix: a tie must NOT land on causal_forest.
+        runs ~35-60 min). The tiebreak now prefers the fastest CONFOUNDING-ROBUST
+        estimator on a tie (``linear_dml`` -> ``LinearDML``): a tie must NOT land
+        on the slow causal_forest, NOR on confounding-blind ``ols`` (which ties
+        on fit but fails the refutation gate under confounding — MEASURED on the
+        patient_journeys gold standard).
         """
         base_state["parameters"] = {"use_energy_score": False}
         result = await estimation_node.execute(base_state)
 
         assert result.get("energy_score_enabled") is False
-        # On the exact energy-score tie, the fast estimator wins (was
-        # CausalForestDML pre-#622 via stable-sort fallthrough).
-        assert result["estimation_result"]["method"] == "linear_regression"
-        assert result["estimation_result"]["selected_estimator"] == "ols"
+        # On the exact energy-score tie, the fastest confounding-robust estimator
+        # wins (linear_dml -> LinearDML); naive OLS is excluded and the slow
+        # causal_forest is avoided.
+        assert result["estimation_result"]["method"] == "LinearDML"
+        assert result["estimation_result"]["selected_estimator"] == "linear_dml"
 
     @pytest.mark.asyncio
     async def test_all_legacy_methods(self, estimation_node, base_state):
