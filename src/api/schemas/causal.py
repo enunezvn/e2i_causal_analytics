@@ -449,6 +449,15 @@ class AgentCausalAnalysisRequest(BaseModel):
     # 1500 keeps the default (Causal Forest) run tractable async (~4 min); the
     # planted effect is clearly recovered at this size (probe: p~0 at 1200 rows).
     limit: int = Field(1500, ge=100, le=20000, description="Max rows to load")
+    auto_discover: bool = Field(
+        True,
+        description=(
+            "Learn the DAG from the data via GUIDED structure discovery "
+            "(PC + background-knowledge tiers anchoring treatment as cause / "
+            "outcome as effect). The data selects which covariates are "
+            "confounders. False = use the agent's domain-knowledge DAG."
+        ),
+    )
 
 
 class CausalDAGModel(BaseModel):
@@ -492,6 +501,19 @@ class AgentCausalAnalysisResponse(BaseModel):
     n_rows: int = Field(..., description="Usable estimation rows the agent ran on")
     data_source: str = Field(..., description="database / synthetic")
     dag: CausalDAGModel
+    dag_source: str = Field(
+        default="domain_knowledge",
+        description=(
+            "How the DAG was built: 'discovered' (learned from data via guided "
+            "structure discovery), 'augmented' (domain DAG + data-discovered "
+            "edges), or 'domain_knowledge' (the agent's curated DAG — discovery "
+            "skipped or not accepted)."
+        ),
+    )
+    discovered_confounders: List[str] = Field(
+        default_factory=list,
+        description="Covariates the data identified as confounders (the adjustment set).",
+    )
     ate: Optional[float] = Field(default=None, description="Average treatment effect")
     ate_ci_lower: Optional[float] = Field(default=None)
     ate_ci_upper: Optional[float] = Field(default=None)

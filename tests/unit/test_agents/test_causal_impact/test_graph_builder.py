@@ -619,3 +619,44 @@ class TestAdjustmentSetLogic:
 
         # Must not raise; trivial degenerate query yields no adjustment.
         assert node._find_adjustment_sets(dag, "T", "T") == [[]]
+
+
+class TestDiscoveredDagIncludesEstimandEdge:
+    """When the gate ACCEPTs a discovered DAG, the treatment->outcome estimand
+    edge must be present even if constraint-based discovery did not draw it (a
+    CI test can miss a real effect on binary data). The agent estimates that
+    effect, so the reported DAG must show it — as long as it stays acyclic."""
+
+    def test_accept_adds_missing_treatment_outcome_edge(self):
+        import networkx as nx
+
+        from src.causal_engine.discovery import (
+            DiscoveryConfig,
+            DiscoveryResult,
+            GateDecision,
+        )
+
+        node = GraphBuilderNode()
+        # Discovered structure: confounders -> treatment & outcome, but NO
+        # treatment -> outcome edge (mirrors the patient_journeys guided run).
+        g = nx.DiGraph()
+        g.add_edges_from(
+            [
+                ("disease_severity", "treatment_arm"),
+                ("disease_severity", "persistent_180d"),
+                ("engagement_score", "treatment_arm"),
+                ("engagement_score", "persistent_180d"),
+            ]
+        )
+        result = DiscoveryResult(success=True, config=DiscoveryConfig(), ensemble_dag=g)
+        dag, _augmented = node._build_dag_with_discovery(
+            "treatment_arm",
+            "persistent_180d",
+            ["disease_severity", "engagement_score"],
+            result,
+            {"decision": GateDecision.ACCEPT.value},
+        )
+        assert dag.has_edge("treatment_arm", "persistent_180d"), "estimand edge missing"
+        # Discovered confounder edges preserved and the graph stays acyclic.
+        assert dag.has_edge("disease_severity", "treatment_arm")
+        assert nx.is_directed_acyclic_graph(dag)

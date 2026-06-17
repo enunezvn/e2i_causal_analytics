@@ -1184,6 +1184,11 @@ async def _run_agent_analysis_task(
         "confounders": covariates,
         "data_source": data_source,
         "data_cache": {"estimation_data": df},
+        # Learn the DAG from data via GUIDED discovery (graph_builder anchors the
+        # treatment/outcome roles; the data selects the confounders). Falls back
+        # to the domain DAG if discovery is skipped or not accepted by the gate.
+        "auto_discover": request.auto_discover,
+        "discovery_guided": True,
         "parameters": parameters,
         "interpretation_depth": "standard",
         "brand": request.brand,
@@ -1259,6 +1264,27 @@ def _agent_state_to_response(
         dag_dot=causal_graph.get("dag_dot"),
     )
 
+    # How was the DAG built? 'discovered' = learned from data (guided structure
+    # discovery accepted by the gate), 'augmented' = domain DAG + discovered
+    # edges, 'domain_knowledge' = the agent's curated DAG (discovery skipped or
+    # not accepted). discovery_result is present only when discovery ran.
+    discovery_ran = final_state.get("discovery_result") is not None
+    _gate_dec = causal_graph.get("discovery_gate_decision")
+    if discovery_ran and _gate_dec == "accept":
+        dag_source = "discovered"
+    elif discovery_ran and _gate_dec == "augment":
+        dag_source = "augmented"
+    else:
+        dag_source = "domain_knowledge"
+    # Confounders the DATA identified (the backdoor adjustment set) — only
+    # surfaced when the structure was actually learned from data.
+    _adj_sets = causal_graph.get("adjustment_sets", []) or []
+    discovered_confounders = (
+        [str(c) for c in _adj_sets[0]]
+        if dag_source in ("discovered", "augmented") and _adj_sets
+        else []
+    )
+
     ate = estimation.get("ate")
     gate_decision = refutation.get("gate_decision") or final_state.get("gate_decision")
     refutation_error = final_state.get("refutation_error")
@@ -1301,6 +1327,8 @@ def _agent_state_to_response(
         n_rows=n_rows,
         data_source=data_source,
         dag=dag,
+        dag_source=dag_source,
+        discovered_confounders=discovered_confounders,
         ate=ate,
         ate_ci_lower=estimation.get("ate_ci_lower"),
         ate_ci_upper=estimation.get("ate_ci_upper"),

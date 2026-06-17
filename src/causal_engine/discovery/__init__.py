@@ -50,6 +50,7 @@ Author: E2I Causal Analytics Team
 from .base import (
     AlgorithmResult,
     BaseDiscoveryAlgorithm,
+    CausalPriorKnowledge,
     DiscoveredEdge,
     DiscoveryAlgorithm,
     DiscoveryAlgorithmType,
@@ -87,6 +88,7 @@ __all__ = [
     # Core classes
     "DiscoveryRunner",
     "DiscoveryConfig",
+    "CausalPriorKnowledge",
     "DiscoveryResult",
     "DiscoveryGate",
     "GateConfig",
