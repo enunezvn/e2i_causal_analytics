@@ -94,6 +94,10 @@ export interface AnalyticsDashboardResponse {
   query_volume_trend: TimeSeriesPoint[];
   latency_breakdown: LatencyBreakdown;
   generated_at: string;
+  /** Count of audit entries excluded as automated background (polling/monitoring). */
+  excluded_background_count: number;
+  /** Names of the automated background agents excluded from the metrics. */
+  excluded_agents: string[];
 }
 
 // =============================================================================

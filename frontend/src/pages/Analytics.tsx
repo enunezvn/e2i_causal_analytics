@@ -25,7 +25,19 @@ import {
   Zap,
   RefreshCw,
   ChevronDown,
+  Info,
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+} from 'recharts';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -51,6 +63,7 @@ import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator
 import {
   type AnalyticsPeriod,
   type AgentMetrics,
+  type TimeSeriesPoint,
   PERIOD_LABELS,
   formatLatency,
   formatPercent,
@@ -212,6 +225,98 @@ function AgentTableRow({ agent, isExpanded, onToggle }: AgentTableRowProps) {
 }
 
 // =============================================================================
+// TREND CHART
+// =============================================================================
+
+function formatTrendTime(ts: string): string {
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+interface TrendChartProps {
+  title: string;
+  description: string;
+  data: TimeSeriesPoint[];
+  kind: 'line' | 'bar';
+  color: string;
+  valueLabel: string;
+  formatValue?: (v: number) => string;
+}
+
+function TrendChart({
+  title,
+  description,
+  data,
+  kind,
+  color,
+  valueLabel,
+  formatValue,
+}: TrendChartProps) {
+  const chartData = data.map((p) => ({ time: formatTrendTime(p.timestamp), value: p.value }));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5 text-primary" />
+          {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {chartData.length === 0 ? (
+          <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
+            No data points in this period.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={240}>
+            {kind === 'line' ? (
+              <LineChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="time" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <RechartsTooltip
+                  formatter={(v) => [
+                    formatValue ? formatValue(v as number) : String(v),
+                    valueLabel,
+                  ]}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="value"
+                  stroke={color}
+                  strokeWidth={2}
+                  dot={{ r: 3 }}
+                  name={valueLabel}
+                />
+              </LineChart>
+            ) : (
+              <BarChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="time" tick={{ fontSize: 11 }} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                <RechartsTooltip
+                  formatter={(v) => [
+                    formatValue ? formatValue(v as number) : String(v),
+                    valueLabel,
+                  ]}
+                />
+                <Bar dataKey="value" fill={color} name={valueLabel} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            )}
+          </ResponsiveContainer>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// =============================================================================
 // MAIN PAGE
 // =============================================================================
 
@@ -308,6 +413,27 @@ export default function Analytics() {
           </Select>
         </div>
       </div>
+
+      {/* Transparency: disclose excluded automated background agents */}
+      {dashboard && dashboard.excluded_background_count > 0 && (
+        <div
+          role="note"
+          className="flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
+        >
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Metrics reflect analytical agent queries. Excludes{' '}
+            <span className="font-medium text-foreground">
+              {formatNumber(dashboard.excluded_background_count)}
+            </span>{' '}
+            automated health-poll entries
+            {dashboard.excluded_agents.length > 0 && (
+              <> (agents: {dashboard.excluded_agents.join(', ')})</>
+            )}{' '}
+            so the background poller doesn&apos;t dominate the numbers.
+          </span>
+        </div>
+      )}
 
       {/* Summary Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -460,6 +586,27 @@ export default function Analytics() {
             </div>
           </CardContent>
         </Card>
+      </div>
+
+      {/* Trends (latency + query volume over time) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <TrendChart
+          title="Query Volume"
+          description="Analytical queries over time"
+          data={dashboard?.query_volume_trend ?? []}
+          kind="bar"
+          color="#3b82f6"
+          valueLabel="Queries"
+        />
+        <TrendChart
+          title="Latency Trend"
+          description="Average response time over time"
+          data={dashboard?.latency_trend ?? []}
+          kind="line"
+          color="#8b5cf6"
+          valueLabel="Latency"
+          formatValue={(v) => `${Math.round(v)}ms`}
+        />
       </div>
 
       {/* Agent Metrics Table */}

@@ -132,6 +132,13 @@ class AnalyticsDashboardResponse(BaseModel):
     latency_breakdown: LatencyBreakdown
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # Transparency: automated background agents (health polling + scheduled
+    # monitoring) are excluded from every metric above so the dashboard reflects
+    # real analytical/user-driven queries. We disclose how many audit entries
+    # were excluded and which agents, rather than silently dropping them.
+    excluded_background_count: int = 0
+    excluded_agents: List[str] = Field(default_factory=list)
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -186,6 +193,22 @@ def _calculate_percentile(values: List[float], percentile: float) -> float:
 # Genesis action_type written once per workflow run by create_workflow_initializer
 # (and causal_impact). One workflow == one user-facing "query".
 _WORKFLOW_GENESIS_ACTION = "workflow_start"
+
+
+# The automated health POLLER (`health_score_quick`) runs roughly every minute
+# and at ~97% of all audit entries it single-handedly dominates every headline
+# metric (Total Queries, Top Agents, latency percentiles) — making the dashboard
+# read like heavy query traffic when real analytical activity is a few dozen
+# runs. It is REAL infrastructure work but NOT an analytical/user-driven query,
+# so we exclude it from the aggregates and DISCLOSE the excluded volume
+# (excluded_background_count / excluded_agents) rather than dropping it silently.
+# The sibling activity-feed and tier-metrics endpoints exclude the same poller.
+#
+# Scope is deliberately the poller ONLY: lower-volume monitoring agents
+# (`health_score`, `experiment_monitor`) are genuine, non-dominating agent
+# activity and stay in the metrics. Add to this set only if another agent is
+# shown to be background noise that distorts the headline numbers.
+_BACKGROUND_AGENTS = frozenset({"health_score_quick"})
 
 
 def _count_query_volume(entries: List[Dict[str, Any]]) -> tuple[int, int]:
@@ -598,7 +621,16 @@ async def get_analytics_dashboard(
             ),
         )
 
-    entries = result["data"]
+    all_entries = result["data"]
+
+    # Partition out automated background agents (health polling + scheduled
+    # monitoring). They are not analytical queries and at ~96-98% of entries
+    # would dominate every metric below. We report real analytical agent
+    # activity and disclose the excluded volume (excluded_background_count /
+    # excluded_agents) so nothing is hidden silently.
+    excluded = [e for e in all_entries if e.get("agent_name") in _BACKGROUND_AGENTS]
+    entries = [e for e in all_entries if e.get("agent_name") not in _BACKGROUND_AGENTS]
+    excluded_agents = sorted({e.get("agent_name") for e in excluded if e.get("agent_name")})
 
     # Aggregate metrics
     agent_metrics = _aggregate_agent_metrics(entries)
@@ -680,6 +712,8 @@ async def get_analytics_dashboard(
         latency_trend=latency_trend,
         query_volume_trend=volume_trend,
         latency_breakdown=breakdown,
+        excluded_background_count=len(excluded),
+        excluded_agents=excluded_agents,
     )
 
 
