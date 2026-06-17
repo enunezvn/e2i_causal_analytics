@@ -164,6 +164,21 @@ const WORKSTREAM_ORDER = [
   'ws1_data_quality',
 ];
 
+// Workstreams hidden from the executive homepage KPI grid. The brand-specific
+// clinical KPIs (% PNH Tested, AH-Uncontrolled %, Dx-Adoption, …) need real
+// RWD to be meaningful; over the synthetic showcase substrate they read as a
+// misleading "0%" / empty on an exec dashboard, so the whole tab is removed
+// here per product decision. The calculators (src/kpi/calculators/
+// brand_specific.py), the per-KPI definitions (visible in the KPI Dictionary),
+// and the Brand SELECTOR above are all retained — only the homepage tab is hidden.
+const HIDDEN_HOME_WORKSTREAMS = new Set<string>(['brand_specific']);
+
+// Per-card "View details" destination. Only the Model Performance workstream
+// has a dedicated drill-down page; every other KPI links to the KPI Dictionary
+// (the reference for what each metric means / how it is computed).
+const kpiDetailPath = (category: string): string =>
+  category === 'ws1_model_performance' ? '/model-performance' : '/kpi-dictionary';
+
 const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   All: [
     { id: 'trx_total', name: 'Total TRx', category: 'commercial', value: 125430, previousValue: 118250, target: 130000, description: 'Total prescriptions across all brands', trend: 'up', status: 'healthy', sparkline: [100, 108, 112, 115, 118, 122, 125] },
@@ -484,16 +499,21 @@ function Home() {
   const apiKPIs = useMemo((): KPIMetric[] => {
     if (!kpiListData?.kpis) return [];
 
-    return kpiListData.kpis.map((kpi) => ({
-      id: kpi.id,
-      name: kpi.name,
-      category: kpi.workstream ?? 'other',
-      value: 0, // Value comes from separate calculation endpoint
-      description: kpi.definition || '',
-      trend: 'stable' as const,
-      status: 'neutral' as const,
-      unit: kpi.unit,
-    }));
+    return kpiListData.kpis
+      // Hide brand-specific clinical KPIs from the homepage (see
+      // HIDDEN_HOME_WORKSTREAMS). Dropped at the source so they leave the tab
+      // list, the per-tab grid, AND the summary counts together — not orphaned.
+      .filter((kpi) => !HIDDEN_HOME_WORKSTREAMS.has(kpi.workstream ?? 'other'))
+      .map((kpi) => ({
+        id: kpi.id,
+        name: kpi.name,
+        category: kpi.workstream ?? 'other',
+        value: 0, // Value comes from separate calculation endpoint
+        description: kpi.definition || '',
+        trend: 'stable' as const,
+        status: 'neutral' as const,
+        unit: kpi.unit,
+      }));
   }, [kpiListData]);
 
   // Use API metadata when available; fetch the real numeric VALUES via the
@@ -1114,7 +1134,7 @@ function Home() {
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
                               description={kpi.description}
                               size="sm"
-                              onClick={() => navigate('/model-performance')}
+                              onClick={() => navigate(kpiDetailPath(kpi.category))}
                             />
                           );
                         }
@@ -1133,7 +1153,7 @@ function Home() {
                             description={kpi.description}
                             higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
                             size="sm"
-                            onClick={() => navigate('/model-performance')}
+                            onClick={() => navigate(kpiDetailPath(kpi.category))}
                           />
                         );
                       })}
