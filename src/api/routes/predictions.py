@@ -800,6 +800,88 @@ async def model_health(
     )
 
 
+# ---------------------------------------------------------------------------
+# Curated, brand/cohort-appropriate model input schema (predictive-analytics)
+# ---------------------------------------------------------------------------
+# The gold-standard models expose only their RAW encoded ``feature_columns``, so
+# a form derived from them surfaced the GENERIC specialty pool for every brand —
+# e.g. the Kisqali (HR+/HER2- breast cancer) model offered CSU specialties
+# (dermatology, allergy_immunology). We curate the input fields from the SAME
+# canonical sources the synthetic data was generated from: the cohort covariates
+# (``cohort_spec``) + brand-appropriate specialty choices
+# (``HCPGenerator.BRAND_SPECIALTY_DIST``). Returns None for any model whose
+# brand/cohort cannot be resolved, so the frontend falls back to its generic path.
+
+_CURATED_BRANDS = {
+    "kisqali": "Kisqali",
+    "fabhalta": "Fabhalta",
+    "remibrutinib": "Remibrutinib",
+}
+_PATIENT_COHORTS = ("initiation", "persistence", "discontinuation")
+_HCP_COHORT = "hcp_adoption"
+# Mirrors RegionEnum / HCPGenerator.REGION_DIST (brand-agnostic US regions).
+_REGION_CHOICES = ["northeast", "south", "midwest", "west"]
+
+
+def _parse_model_brand_cohort(model_name: str):
+    """Resolve ``(cohort, brand)`` from a ``<cohort>_<brand>_goldstd_lr_v1`` name."""
+    low = model_name.lower()
+    brand = next((b for b in _CURATED_BRANDS if b in low), None)
+    if low.startswith(_HCP_COHORT):
+        cohort = _HCP_COHORT
+    else:
+        cohort = next((c for c in _PATIENT_COHORTS if low.startswith(c)), None)
+    return cohort, brand
+
+
+def build_curated_input_fields(model_name: str) -> Optional[List[Dict[str, Any]]]:
+    """Brand/cohort-appropriate input fields for a gold-standard model, or None.
+
+    Each entry is ``{name, type, choices?}`` over the model's REAL covariates
+    (``cohort_spec`` base_covariates), with brand-appropriate categorical choices
+    so the predictive-analytics form is clinically coherent (Kisqali -> oncology,
+    Remibrutinib -> CSU specialties, Fabhalta -> PNH specialties). Numeric
+    covariates stay ``type="number"``; values map 1:1 to the model's inputs, so
+    prediction is unaffected. ``None`` (unresolved model) lets the FE fall back.
+    """
+    cohort, brand = _parse_model_brand_cohort(model_name)
+    if not cohort or not brand:
+        return None
+    brand_proper = _CURATED_BRANDS[brand]
+    try:
+        from src.mlops.gold_standard_eval.cohort_spec import (
+            make_hcp_spec,
+            make_patient_spec,
+        )
+
+        if cohort == _HCP_COHORT:
+            covariates = make_hcp_spec(brand_proper).base_covariates
+        else:
+            covariates = make_patient_spec(cohort, brand_proper).base_covariates
+    except Exception:  # unknown cohort/brand -> let the FE fall back
+        return None
+
+    specialty_choices: List[str] = []
+    try:
+        from src.ml.synthetic.config import Brand
+        from src.ml.synthetic.generators.hcp_generator import HCPGenerator
+
+        dist = HCPGenerator.BRAND_SPECIALTY_DIST.get(Brand(brand_proper), {})
+        specialty_choices = [s.value for s in dist]
+    except Exception:
+        specialty_choices = []
+
+    fields: List[Dict[str, Any]] = []
+    for cov in covariates:
+        if cov == "specialty" and specialty_choices:
+            fields.append({"name": cov, "type": "category", "choices": specialty_choices})
+        elif cov == "geographic_region":
+            fields.append({"name": cov, "type": "category", "choices": list(_REGION_CHOICES)})
+        else:
+            fields.append({"name": cov, "type": "number"})
+    return fields
+
+
 @router.get(
     "/{model_name}/info",
     summary="Get model metadata",
@@ -812,6 +894,10 @@ async def model_info(
 ) -> Dict[str, Any]:
     """Get metadata for a specific model.
 
+    Augments the BentoML metadata with a curated, brand/cohort-appropriate
+    ``input_fields`` schema (see :func:`build_curated_input_fields`) so the
+    predictive-analytics form offers clinically coherent features and choices.
+
     Args:
         model_name: Name of the model
         client: BentoML client (injected)
@@ -820,7 +906,11 @@ async def model_info(
         Model metadata and configuration
     """
     try:
-        return await client.get_model_info(model_name)
+        info = await client.get_model_info(model_name)
+        curated = build_curated_input_fields(model_name)
+        if curated:
+            info = {**info, "input_fields": curated}
+        return info
     except Exception as e:
         logger.error(f"Failed to get info for model {model_name}: {e}")
         raise HTTPException(

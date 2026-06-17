@@ -659,3 +659,51 @@ describe('PredictiveAnalytics (live API)', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe('curated input_fields drive the form (brand/cohort-appropriate)', () => {
+  it('renders the brand-appropriate specialty choices, not the generic CSU pool', async () => {
+    const user = userEvent.setup();
+    // The backend now curates input_fields (Kisqali -> oncology). The model
+    // still carries the GENERIC encoded specialty pool in feature_columns; the
+    // form must use the curated choices, never the CSU-laden generic set.
+    (useModelInfo as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        ...mockModelInfo,
+        keep_columns: ['specialty', 'geographic_region'],
+        feature_columns: [
+          'specialty_allergy_immunology',
+          'specialty_dermatology',
+          'specialty_oncology',
+          'specialty_rheumatology',
+        ],
+        input_fields: [
+          { name: 'peer_influence_score', type: 'number' },
+          { name: 'specialty', type: 'category', choices: ['oncology'] },
+          {
+            name: 'geographic_region',
+            type: 'category',
+            choices: ['northeast', 'south', 'midwest', 'west'],
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+
+    // Curated numeric covariate is a labelled input.
+    expect(screen.getByLabelText(/peer_influence_score/i)).toBeInTheDocument();
+    // specialty is categorical with ONLY the brand-appropriate choice.
+    await user.click(screen.getByRole('combobox', { name: /specialty/i }));
+    expect(
+      await screen.findByRole('option', { name: /^oncology$/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: /dermatology/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: /allergy_immunology/i })
+    ).not.toBeInTheDocument();
+  }, 15000);
+});
