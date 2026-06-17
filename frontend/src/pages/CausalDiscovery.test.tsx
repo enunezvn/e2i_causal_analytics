@@ -25,10 +25,25 @@ vi.mock('@/components/visualizations/CausalDiscovery', () => ({
 
 vi.mock('@/hooks/api', () => ({
   useCausalVariables: vi.fn(),
+  useProposeQuestions: vi.fn(),
   useRunCausalAgentAnalysis: vi.fn(),
 }));
 
-import { useCausalVariables, useRunCausalAgentAnalysis } from '@/hooks/api';
+import {
+  useCausalVariables,
+  useProposeQuestions,
+  useRunCausalAgentAnalysis,
+} from '@/hooks/api';
+
+const PROPOSALS = {
+  dataset: 'patient_journeys',
+  method: 'adjusted_partial_correlation',
+  note: 'screening signal',
+  candidates: [
+    { treatment: 'treatment_arm', outcome: 'treatment_initiated', association_strength: 0.148, direction: 'positive', n_rows: 1500 },
+    { treatment: 'treatment_arm', outcome: 'persistent_180d', association_strength: 0.068, direction: 'positive', n_rows: 1500 },
+  ],
+};
 
 const VARIABLES = {
   dataset: 'patient_journeys',
@@ -99,6 +114,7 @@ describe('CausalDiscovery — agent-driven', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (useCausalVariables as ReturnType<typeof vi.fn>).mockReturnValue({ data: VARIABLES });
+    (useProposeQuestions as ReturnType<typeof vi.fn>).mockReturnValue({ data: PROPOSALS });
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync: vi.fn(),
@@ -111,6 +127,15 @@ describe('CausalDiscovery — agent-driven', () => {
   it('renders an honest empty state before any run', () => {
     render(<CausalDiscovery />, { wrapper: createWrapper() });
     expect(screen.getByText(/No discovery run yet/i)).toBeInTheDocument();
+  }, 20000);
+
+  it('surfaces agent-proposed, data-ranked questions for the analyst to confirm', () => {
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Suggested questions/i)).toBeInTheDocument();
+    // The top-ranked proposal is offered as a clickable question.
+    expect(
+      screen.getByRole('button', { name: /treatment_arm.*treatment_initiated/i })
+    ).toBeInTheDocument();
   }, 20000);
 
   it('surfaces the learned-from-data provenance and data-identified confounders', () => {

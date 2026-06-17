@@ -17,6 +17,7 @@ import {
   runCausalAgentAnalysisAndWait,
   getHierarchicalAnalysis,
   getCausalVariables,
+  proposeCausalQuestions,
   routeQuery,
   runSequentialPipeline,
   runParallelPipeline,
@@ -36,6 +37,7 @@ import type {
   CausalAnalysisHistoryResponse,
   CausalLibrary,
   CausalVariablesResponse,
+  ProposeQuestionsResponse,
   CrossValidationRequest,
   CrossValidationResponse,
   EstimatorListResponse,
@@ -107,6 +109,25 @@ export function useCausalVariables(
     queryKey: queryKeys.causal.variables(dataset),
     queryFn: () => getCausalVariables(dataset),
     staleTime: 5 * 60 * 1000, // 5 minutes - dataset schema rarely changes
+    ...options,
+  });
+}
+
+/**
+ * Hook for agent-proposed, data-ranked candidate causal questions.
+ *
+ * The agent ranks candidate treatment->outcome pairs by a data-driven screening
+ * signal so the analyst confirms a question instead of guessing. Screening
+ * signal only — the analysis run validates it.
+ */
+export function useProposeQuestions(
+  dataset: string = 'patient_journeys',
+  options?: Omit<UseQueryOptions<ProposeQuestionsResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<ProposeQuestionsResponse, ApiError>({
+    queryKey: ['causal', 'propose-questions', dataset],
+    queryFn: () => proposeCausalQuestions(dataset),
+    staleTime: 5 * 60 * 1000,
     ...options,
   });
 }

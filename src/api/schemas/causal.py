@@ -533,6 +533,39 @@ class AgentCausalAnalysisResponse(BaseModel):
     latency_ms: int = Field(..., description="Total wall-clock latency")
 
 
+class ProposedQuestion(BaseModel):
+    """An agent-proposed treatment->outcome question, ranked by a data-driven
+    screening signal (the adjusted association strength). This is a SCREENING
+    signal to help pick a question — NOT the validated causal effect (run the
+    agent analysis for that)."""
+
+    treatment: str
+    outcome: str
+    association_strength: float = Field(
+        ..., description="|partial correlation| of treatment & outcome adjusting for covariates"
+    )
+    direction: str = Field(..., description="positive / negative / none")
+    n_rows: int = Field(..., description="Rows the screening association was computed on")
+
+
+class ProposeQuestionsResponse(BaseModel):
+    """Agent-proposed, data-ranked candidate causal questions for a dataset."""
+
+    dataset: str
+    candidates: List[ProposedQuestion] = Field(default_factory=list)
+    method: str = Field(
+        default="adjusted_partial_correlation",
+        description="The data-driven screening signal used to rank candidates.",
+    )
+    note: str = Field(
+        default=(
+            "Ranked by adjusted association strength — a screening signal to help "
+            "choose a question, not a validated causal effect. Run the analysis for "
+            "the agent's DAG, estimate, and robustness gate."
+        )
+    )
+
+
 # =============================================================================
 # PIPELINE SCHEMAS
 # =============================================================================

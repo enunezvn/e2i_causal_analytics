@@ -43,7 +43,11 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import { useCausalVariables, useRunCausalAgentAnalysis } from '@/hooks/api';
+import {
+  useCausalVariables,
+  useProposeQuestions,
+  useRunCausalAgentAnalysis,
+} from '@/hooks/api';
 
 const DATASET = 'patient_journeys';
 const DEFAULT_TREATMENT = 'treatment_arm';
@@ -83,8 +87,13 @@ export default function CausalDiscovery() {
   const [outcomeVar, setOutcomeVar] = useState(DEFAULT_OUTCOME);
 
   const { data: variables } = useCausalVariables(DATASET);
+  const { data: proposals } = useProposeQuestions(DATASET);
   const runAgent = useRunCausalAgentAnalysis();
   const result = runAgent.data;
+
+  // Agent-proposed, data-ranked candidate questions (screening signal). The
+  // analyst picks one to confirm — they don't guess from blind dropdowns.
+  const suggestions = proposals?.candidates ?? [];
 
   const treatmentCandidates = variables?.treatment_candidates ?? [DEFAULT_TREATMENT];
   const outcomeCandidates = variables?.outcome_candidates ?? [DEFAULT_OUTCOME];
@@ -172,6 +181,42 @@ export default function CausalDiscovery() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {suggestions.length > 0 && (
+            <div className="mb-5">
+              <p className="text-sm font-medium mb-2">
+                Suggested questions{' '}
+                <span className="font-normal text-muted-foreground">
+                  (ranked by the agent from the data — pick one to confirm)
+                </span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {suggestions.slice(0, 5).map((s, i) => {
+                  const active = s.treatment === treatmentVar && s.outcome === outcomeVar;
+                  return (
+                    <Button
+                      key={`${s.treatment}->${s.outcome}`}
+                      type="button"
+                      size="sm"
+                      variant={active ? 'default' : 'outline'}
+                      onClick={() => {
+                        setTreatmentVar(s.treatment);
+                        setOutcomeVar(s.outcome);
+                      }}
+                    >
+                      {i === 0 && <Sparkles className="mr-1 h-3 w-3" />}
+                      {s.treatment} &rarr; {s.outcome}
+                      <span className="ml-2 text-xs opacity-70">
+                        {s.association_strength.toFixed(2)}
+                      </span>
+                    </Button>
+                  );
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Strength = adjusted association (a screening signal, not the validated effect).
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             <div className="space-y-2">
               <label className="text-sm font-medium block" htmlFor="treatment-var">

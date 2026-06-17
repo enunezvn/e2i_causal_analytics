@@ -68,6 +68,8 @@ from src.api.schemas.causal import (
     ParallelPipelineResponse,
     PipelineMode,
     PipelineStageResult,
+    ProposedQuestion,
+    ProposeQuestionsResponse,
     QuestionType,
     RefutationSummary,
     RouteQueryRequest,
@@ -846,6 +848,105 @@ async def list_causal_variables(
         covariate_candidates=_available("covariate"),
         columns=sorted(present),
     )
+
+
+def _adjusted_partial_corr(
+    df: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    treatment: str,
+    outcome: str,
+    covariates: List[str],
+) -> Optional[float]:
+    """Frisch-Waugh-Lovell partial correlation of treatment & outcome adjusting
+    for ``covariates`` — a cheap (no-EconML) screening signal for proposing
+    questions. Residualize treatment and outcome on the covariates, correlate
+    the residuals. Returns None when undefined (zero-variance residuals)."""
+    import numpy as np
+
+    t = df[treatment].to_numpy(dtype=float)
+    o = df[outcome].to_numpy(dtype=float)
+    if t.std() == 0 or o.std() == 0:
+        return None
+    if covariates:
+        cov_mat = df[covariates].to_numpy(dtype=float)
+        design = np.column_stack([np.ones(len(cov_mat)), cov_mat])
+        beta_t, *_ = np.linalg.lstsq(design, t, rcond=None)
+        beta_o, *_ = np.linalg.lstsq(design, o, rcond=None)
+        rt = t - design @ beta_t
+        ro = o - design @ beta_o
+    else:
+        rt, ro = t - t.mean(), o - o.mean()
+    if rt.std() == 0 or ro.std() == 0:
+        return None
+    return float(np.corrcoef(rt, ro)[0, 1])
+
+
+@router.get(
+    "/propose-questions",
+    response_model=ProposeQuestionsResponse,
+    summary="Propose data-ranked candidate causal questions for a dataset",
+    operation_id="propose_causal_questions",
+)
+async def propose_causal_questions(
+    dataset: str = Query(
+        _DEFAULT_CAUSAL_DATASET,
+        description="Gold-standard dataset to propose questions for",
+    ),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> ProposeQuestionsResponse:
+    """Rank candidate treatment->outcome questions by a DATA-DRIVEN screening
+    signal, so the agent PROPOSES the question instead of the analyst guessing
+    from blind dropdowns.
+
+    For each allowed (treatment, outcome) pair the adjusted partial correlation
+    (controlling for the dataset's curated covariates) is computed and ranked by
+    magnitude. This is a SCREENING signal — NOT a validated causal effect; the
+    user confirms a question and the full agent analysis builds the DAG,
+    estimates, and refutes it. Fail-closed: unknown dataset 404, no store 503.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    covariates_all = list(spec["covariate"])
+    pairs = [(t, o) for t in spec["treatment"] for o in spec["outcome"] if t != o]
+
+    async def _score(t: str, o: str) -> Optional[ProposedQuestion]:
+        cov = [c for c in covariates_all if c not in (t, o)]
+        try:
+            df, _ = await _load_agent_estimation_frame(
+                dataset=dataset,
+                treatment_var=t,
+                outcome_var=o,
+                covariates=cov,
+                limit=1500,
+            )
+        except HTTPException:
+            # A pair with no usable data is simply omitted (never fabricated).
+            return None
+        pc = _adjusted_partial_corr(df, t, o, cov)
+        if pc is None:
+            return None
+        return ProposedQuestion(
+            treatment=t,
+            outcome=o,
+            association_strength=abs(pc),
+            direction="positive" if pc > 0 else ("negative" if pc < 0 else "none"),
+            n_rows=int(df.shape[0]),
+        )
+
+    scored = await asyncio.gather(*[_score(t, o) for t, o in pairs])
+    candidates = sorted(
+        [c for c in scored if c is not None],
+        key=lambda c: c.association_strength,
+        reverse=True,
+    )
+    return ProposeQuestionsResponse(dataset=dataset, candidates=candidates)
 
 
 @router.get(

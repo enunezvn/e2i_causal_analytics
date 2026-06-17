@@ -226,6 +226,25 @@ export interface AgentCausalAnalysisResponse {
   latency_ms: number;
 }
 
+/** An agent-proposed treatment->outcome question, ranked by a data-driven
+ * screening signal (adjusted association strength) — NOT a validated effect. */
+export interface ProposedQuestion {
+  treatment: string;
+  outcome: string;
+  /** |adjusted partial correlation|, 0-1 */
+  association_strength: number;
+  /** positive / negative / none */
+  direction: string;
+  n_rows: number;
+}
+
+export interface ProposeQuestionsResponse {
+  dataset: string;
+  candidates: ProposedQuestion[];
+  method: string;
+  note: string;
+}
+
 // =============================================================================
 // HIERARCHICAL ANALYSIS TYPES
 // =============================================================================

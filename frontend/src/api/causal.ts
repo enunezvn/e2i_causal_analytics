@@ -28,6 +28,7 @@ import type {
   CausalAnalysisHistoryResponse,
   CausalLibrary,
   CausalVariablesResponse,
+  ProposeQuestionsResponse,
   CrossValidationRequest,
   CrossValidationResponse,
   EstimationDataResponse,
@@ -246,6 +247,21 @@ export async function getCausalVariables(
   // itself. Passing `{ params: {...} }` here double-wraps it into
   // `params[dataset]=...`, which the backend ignores (dataset has a default).
   return get<CausalVariablesResponse>(`${CAUSAL_BASE}/variables`, {
+    dataset,
+  });
+}
+
+/**
+ * Fetch agent-proposed, data-ranked candidate causal questions for a dataset.
+ *
+ * The agent ranks candidate treatment->outcome pairs by a data-driven screening
+ * signal (adjusted association strength) so the analyst confirms a question
+ * rather than guessing. NOT a validated effect — run the analysis for that.
+ */
+export async function proposeCausalQuestions(
+  dataset: string = 'patient_journeys'
+): Promise<ProposeQuestionsResponse> {
+  return get<ProposeQuestionsResponse>(`${CAUSAL_BASE}/propose-questions`, {
     dataset,
   });
 }
