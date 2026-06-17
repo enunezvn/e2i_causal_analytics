@@ -6,10 +6,8 @@
  * Includes tests for:
  * - Page header
  * - Search functionality
- * - Node type legend
  * - Stats cards (computed from the RENDERED graph, not the global stats endpoint)
- * - Connectivity filter (singletons + duets are hidden)
- * - Gold-standard / show-all scope toggle
+ * - Per-brand causal graph (brand dropdown + brand-tagged CAUSES subgraph)
  * - Graph visualization
  * - Node/Edge details panel
  */
@@ -69,18 +67,26 @@ function createWrapper() {
   );
 }
 
-// Sample data: three nodes forming ONE connected component of size 3 (node-3 is
-// linked to both node-1 and node-2), so the K=3 connectivity filter keeps all of
-// them. Rendered totals are therefore 3 nodes / 2 relationships.
+// Per-brand causal gold standard: Variable nodes connected by brand-tagged
+// CAUSES edges (sync_causal_paths_to_falkordb stamps `brand` on each edge). The
+// page renders ONLY the selected brand's causal subgraph. The default brand is
+// Kisqali, whose chain (treatment -> outcome -> trx) yields 3 nodes / 2 edges.
+// The Fabhalta chain (adherence -> persistence) must NOT appear under Kisqali.
 const mockNodes = [
-  { id: 'node-1', name: 'Patient A', type: 'Patient', properties: {}, created_at: '2026-01-04' },
-  { id: 'node-2', name: 'HCP Smith', type: 'HCP', properties: {}, created_at: '2026-01-04' },
-  { id: 'node-3', name: 'Remibrutinib', type: 'Brand', properties: {}, created_at: '2026-01-04' },
+  { id: 'var:treatment', name: 'treatment', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  { id: 'var:outcome', name: 'outcome', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  { id: 'var:trx', name: 'trx', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  { id: 'var:adherence', name: 'adherence', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+  { id: 'var:persistence', name: 'persistence', type: 'Variable', properties: {}, created_at: '2026-01-04' },
 ];
 
 const mockRelationships = [
-  { id: 'rel-1', type: 'PRESCRIBES', source_id: 'node-2', target_id: 'node-3', confidence: 0.9, created_at: '2026-01-04' },
-  { id: 'rel-2', type: 'RECEIVES', source_id: 'node-1', target_id: 'node-3', confidence: 0.85, created_at: '2026-01-04' },
+  // Kisqali chain (default). Second edge uses lowercase 'kisqali' to prove the
+  // brand match is case-insensitive (the graph has Kisqali AND kisqali dupes).
+  { id: 'k1', type: 'CAUSES', source_id: 'var:treatment', target_id: 'var:outcome', properties: { brand: 'Kisqali' }, confidence: 0.9, created_at: '2026-01-04' },
+  { id: 'k2', type: 'CAUSES', source_id: 'var:outcome', target_id: 'var:trx', properties: { brand: 'kisqali' }, confidence: 0.9, created_at: '2026-01-04' },
+  // Fabhalta chain (different brand — excluded when Kisqali is selected).
+  { id: 'f1', type: 'CAUSES', source_id: 'var:adherence', target_id: 'var:persistence', properties: { brand: 'Fabhalta' }, confidence: 0.8, created_at: '2026-01-04' },
 ];
 
 /** Assert a number is shown inside the stats card identified by its description. */
@@ -178,45 +184,6 @@ describe('KnowledgeGraphPage', () => {
   });
 
   // =========================================================================
-  // LEGEND TESTS
-  // =========================================================================
-
-  describe('Node Type Legend', () => {
-    it('renders legend card', () => {
-      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
-
-      expect(screen.getByText('Node Type Legend')).toBeInTheDocument();
-    });
-
-    it('displays entity types in legend', () => {
-      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
-
-      expect(screen.getByText('Patient')).toBeInTheDocument();
-      expect(screen.getByText('HCP')).toBeInTheDocument();
-      expect(screen.getByText('Brand')).toBeInTheDocument();
-      expect(screen.getByText('Agent')).toBeInTheDocument();
-      expect(screen.getByText('KPI')).toBeInTheDocument();
-    });
-
-    it('includes the Variable causal-entity type in the legend', () => {
-      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
-
-      expect(screen.getByText('Variable')).toBeInTheDocument();
-    });
-
-    it('clicking legend item filters by type', () => {
-      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
-
-      const patientLabel = screen.getByText('Patient');
-      fireEvent.click(patientLabel);
-
-      // Should update search to filter by Patient type
-      const searchInput = screen.getByPlaceholderText(/Search nodes by name or type/) as HTMLInputElement;
-      expect(searchInput.value).toBe('Patient');
-    });
-  });
-
-  // =========================================================================
   // STATS CARDS TESTS (reflect the rendered graph)
   // =========================================================================
 
@@ -245,79 +212,51 @@ describe('KnowledgeGraphPage', () => {
     it('shows node type badges computed from the rendered nodes', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      expect(screen.getByText('Patient: 1')).toBeInTheDocument();
-      expect(screen.getByText('HCP: 1')).toBeInTheDocument();
-      expect(screen.getByText('Brand: 1')).toBeInTheDocument();
+      // The per-brand causal graph is Variable-only (3 Variables for Kisqali).
+      expect(screen.getByText('Variable: 3')).toBeInTheDocument();
     });
   });
 
   // =========================================================================
-  // CONNECTIVITY FILTER TESTS
+  // PER-BRAND CAUSAL GRAPH TESTS
   // =========================================================================
 
-  describe('Connectivity Filter', () => {
-    it('drops singletons and duets, keeping only chains of >=3 nodes', () => {
-      // A 3-node connected component (a-b-c) + an isolated singleton (d) +
-      // a 2-node duet (e-f). Only the 3-node component should render.
-      (useNodes as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: {
-          nodes: [
-            { id: 'a', name: 'A', type: 'Variable', properties: {}, created_at: '2026-01-04' },
-            { id: 'b', name: 'B', type: 'Variable', properties: {}, created_at: '2026-01-04' },
-            { id: 'c', name: 'C', type: 'Variable', properties: {}, created_at: '2026-01-04' },
-            { id: 'd', name: 'D', type: 'KPI', properties: {}, created_at: '2026-01-04' },
-            { id: 'e', name: 'E', type: 'HCP', properties: {}, created_at: '2026-01-04' },
-            { id: 'f', name: 'F', type: 'Patient', properties: {}, created_at: '2026-01-04' },
-          ],
-        },
-        isLoading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-      (useRelationships as ReturnType<typeof vi.fn>).mockReturnValue({
-        data: {
-          relationships: [
-            { id: 'r1', type: 'CAUSES', source_id: 'a', target_id: 'b', confidence: 0.9, created_at: '2026-01-04' },
-            { id: 'r2', type: 'CAUSES', source_id: 'b', target_id: 'c', confidence: 0.9, created_at: '2026-01-04' },
-            { id: 'r3', type: 'PRESCRIBES', source_id: 'e', target_id: 'f', confidence: 0.8, created_at: '2026-01-04' },
-          ],
-        },
-        isLoading: false,
-        error: null,
-        refetch: vi.fn(),
-      });
-
+  describe('Per-brand causal graph', () => {
+    it('renders only the selected brand\'s CAUSES subgraph (default Kisqali)', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      // singleton d + duet (e,f) dropped -> 3 nodes, 2 edges remain
+      // Kisqali: treatment->outcome->trx (case-insensitive 'kisqali' included);
+      // the Fabhalta chain (adherence/persistence) is excluded.
       expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
       expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
     });
-  });
 
-  // =========================================================================
-  // SCOPE TOGGLE TESTS
-  // =========================================================================
-
-  describe('Scope Toggle', () => {
-    it('defaults to gold-standard only and toggles to show all types', () => {
+    it('fetches Variable nodes and CAUSES edges (the gold-standard causal layer)', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      const toggle = screen.getByRole('button', { name: /Gold-standard only/i });
-      expect(toggle).toBeInTheDocument();
-
-      fireEvent.click(toggle);
-
-      expect(screen.getByRole('button', { name: /Showing all types/i })).toBeInTheDocument();
+      const nodesCall = (useNodes as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(nodesCall.entity_types).toBe('Variable');
+      const relCall = (useRelationships as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(relCall.relationship_types).toBe('CAUSES');
     });
 
-    it('requests gold-standard entity types by default', () => {
+    it('re-scopes to another brand when the dropdown changes', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      // useNodes is called with a comma-joined gold-standard scope (incl. Variable)
-      const call = (useNodes as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(call.entity_types).toContain('Variable');
-      expect(call.entity_types).toContain('CausalPath');
+      // Switch the brand dropdown to Fabhalta -> only its 1-edge/2-node chain.
+      const select = screen.getByRole('combobox', { name: /brand/i });
+      fireEvent.change(select, { target: { value: 'Fabhalta' } });
+
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('2');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('1');
+    });
+
+    it('renders a brand dropdown defaulting to Kisqali', () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      const select = screen.getByRole('combobox', { name: /brand/i }) as HTMLSelectElement;
+      expect(select).toBeInTheDocument();
+      expect(select.value).toBe('Kisqali');
     });
   });
 

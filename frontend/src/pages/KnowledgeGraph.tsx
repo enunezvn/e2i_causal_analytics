@@ -27,57 +27,15 @@ import type { GraphNode, GraphRelationship } from '@/types/graph';
 // =============================================================================
 
 /**
- * Entity type color mapping for the legend
- * Must match the colors in KnowledgeGraph visualization component
+ * The pharma brands whose synthetic gold-standard causal graphs are loaded.
+ * Each ``(:Variable)-[:CAUSES {brand}]->(:Variable)`` edge is stamped with its
+ * brand by ``scripts/sync_causal_paths_to_falkordb.py``, so the page renders
+ * exactly ONE brand's causal chains at a time (selected via the dropdown).
+ * Matching is case-insensitive — the graph carries both ``Kisqali`` and a
+ * legacy lowercase ``kisqali`` (and ``Remibrutinib``/``remibrutinib``).
  */
-const ENTITY_TYPE_COLORS: Record<string, string> = {
-  Patient: '#3b82f6', // blue-500
-  HCP: '#10b981', // emerald-500
-  Brand: '#f59e0b', // amber-500
-  Region: '#8b5cf6', // violet-500
-  KPI: '#ef4444', // red-500
-  CausalPath: '#06b6d4', // cyan-500
-  Trigger: '#f97316', // orange-500
-  Agent: '#ec4899', // pink-500
-  Variable: '#0d9488', // teal-600 (causal variables)
-  Episode: '#6366f1', // indigo-500
-  Community: '#14b8a6', // teal-500
-  Treatment: '#84cc16', // lime-500
-  Prediction: '#a855f7', // purple-500
-  Experiment: '#22c55e', // green-500
-  AgentActivity: '#64748b', // slate-500
-};
-
-/**
- * Gold-standard causal/clinical entity types — the "knowledge" the graph is
- * meant to convey. This is the DEFAULT render scope. ML-ops artifacts
- * (Experiment / Model / ScopeSpec / QCReport / Feature / Hyperparameters /
- * Deployment / …) remain fully present and queryable in FalkorDB; they are only
- * hidden from this page's default view. Toggle "Show all types" to include them.
- * This is purely a display filter — it never alters or restricts the graph.
- */
-const GOLD_STANDARD_LABELS = [
-  'Patient',
-  'HCP',
-  'Brand',
-  'Region',
-  'KPI',
-  'CausalPath',
-  'Trigger',
-  'Treatment',
-  'Agent',
-  'Variable',
-  'Prediction',
-] as const;
-
-/**
- * Minimum connected-component size to render. Nodes that are not part of a
- * relationship chain (isolated singletons, and 2-node "duets") carry little
- * graph signal and only add clutter, so they are dropped from the canvas.
- * K = 3 keeps every genuine multi-node structure (the data has no 3-node
- * components — it jumps from duets straight to 4+ node clusters). Tunable.
- */
-const MIN_COMPONENT_SIZE = 3;
+const BRANDS = ['Kisqali', 'Fabhalta', 'Remibrutinib'] as const;
+type Brand = (typeof BRANDS)[number];
 
 /**
  * Pull the full (scoped) graph in one window so connected-component detection
@@ -88,59 +46,31 @@ const NODE_FETCH_LIMIT = 2000;
 const REL_FETCH_LIMIT = 2000;
 
 /**
- * Keep only nodes (and the edges among them) that belong to a connected
- * component of at least `minSize` nodes. Relationships are treated as
- * undirected; edges whose endpoints are not both present are ignored for
- * component-building and excluded from the result, so the returned graph is
- * internally consistent (every edge connects two returned nodes).
+ * Derive the selected brand's causal subgraph: keep the ``CAUSES`` edges tagged
+ * with that brand (case-insensitive) and the ``Variable`` nodes they connect.
+ * This IS the brand's synthetic gold-standard causal graph — no other entity
+ * types, no cross-brand edges, no disconnected satellites. (Replaces the old
+ * connected-component filter: when the page renders one brand's curated chains,
+ * every node is causal by construction, so there is nothing to prune.)
  */
-function filterByComponentSize(
+function causalSubgraphForBrand(
   nodes: GraphNode[],
   relationships: GraphRelationship[],
-  minSize: number
+  brand: string
 ): { nodes: GraphNode[]; relationships: GraphRelationship[] } {
-  if (minSize <= 1 || nodes.length === 0) {
-    return { nodes, relationships };
+  const target = brand.toLowerCase();
+  const rels = relationships.filter((r) => {
+    const b = r.properties?.brand;
+    return r.type === 'CAUSES' && typeof b === 'string' && b.toLowerCase() === target;
+  });
+  const ids = new Set<string>();
+  for (const r of rels) {
+    ids.add(r.source_id);
+    ids.add(r.target_id);
   }
-  const nodeIds = new Set(nodes.map((n) => n.id));
-  const adjacency = new Map<string, string[]>();
-  for (const id of nodeIds) adjacency.set(id, []);
-  for (const rel of relationships) {
-    if (nodeIds.has(rel.source_id) && nodeIds.has(rel.target_id)) {
-      adjacency.get(rel.source_id)!.push(rel.target_id);
-      adjacency.get(rel.target_id)!.push(rel.source_id);
-    }
-  }
-  // BFS to label components and measure their sizes.
-  const componentOf = new Map<string, number>();
-  const componentSize = new Map<number, number>();
-  let component = 0;
-  for (const start of nodeIds) {
-    if (componentOf.has(start)) continue;
-    component += 1;
-    let size = 0;
-    const queue = [start];
-    componentOf.set(start, component);
-    while (queue.length > 0) {
-      const current = queue.pop()!;
-      size += 1;
-      for (const neighbor of adjacency.get(current)!) {
-        if (!componentOf.has(neighbor)) {
-          componentOf.set(neighbor, component);
-          queue.push(neighbor);
-        }
-      }
-    }
-    componentSize.set(component, size);
-  }
-  const keep = new Set(
-    [...nodeIds].filter((id) => (componentSize.get(componentOf.get(id)!) ?? 0) >= minSize)
-  );
   return {
-    nodes: nodes.filter((n) => keep.has(n.id)),
-    relationships: relationships.filter(
-      (r) => keep.has(r.source_id) && keep.has(r.target_id)
-    ),
+    nodes: nodes.filter((n) => ids.has(n.id)),
+    relationships: rels,
   };
 }
 
@@ -157,32 +87,31 @@ function KnowledgeGraphPage() {
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Render scope: gold-standard causal/clinical entities by default; toggle to
-  // also include ML-ops artifacts (Experiment/Model/QCReport/…). Display-only —
-  // the ML-ops data stays in FalkorDB and queryable regardless.
-  const [showAllTypes, setShowAllTypes] = useState(false);
+  // Selected brand — the page loads exactly this brand's synthetic gold-standard
+  // causal graph (its brand-tagged CAUSES chains). Defaults to the first brand.
+  const [selectedBrand, setSelectedBrand] = useState<Brand>('Kisqali');
 
-  // Fetch nodes. The default view scopes to the gold-standard entity types;
-  // "Show all types" omits the scope so every label is fetched. The full window
-  // is pulled so connectivity + stats are computed over the complete scoped graph.
+  // Fetch the causal layer's nodes: Variable entities only. The full window is
+  // pulled so every brand's chains are present and switching brands needs no
+  // refetch (the brand subgraph is derived client-side below).
   const {
     data: nodesData,
     isLoading: isLoadingNodes,
     error: nodesError,
     refetch: refetchNodes,
   } = useNodes({
-    entity_types: showAllTypes ? undefined : GOLD_STANDARD_LABELS.join(','),
+    entity_types: 'Variable',
     limit: NODE_FETCH_LIMIT,
   });
 
-  // Fetch relationships (full window). The render derives its edge set from
-  // these, keeping only edges whose endpoints are both present in the node set.
+  // Fetch the brand-tagged CAUSES edges (the synthetic gold-standard causal
+  // chains). The selected brand's subgraph is derived from these below.
   const {
     data: relationshipsData,
     isLoading: isLoadingRelationships,
     error: relationshipsError,
     refetch: refetchRelationships,
-  } = useRelationships({ limit: REL_FETCH_LIMIT });
+  } = useRelationships({ relationship_types: 'CAUSES', limit: REL_FETCH_LIMIT });
 
   // Combined loading state
   const isLoading = isLoadingNodes || isLoadingRelationships;
@@ -207,32 +136,32 @@ function KnowledgeGraphPage() {
     [relationshipsData?.relationships]
   );
 
-  // Base rendered graph: drop nodes that are not part of a relationship chain
-  // (singletons + duets) so the canvas shows connected structure, not clutter.
-  // Computed over the full (scoped) graph, independent of the search query.
-  const connectedGraph = useMemo(
-    () => filterByComponentSize(allNodes, allRelationships, MIN_COMPONENT_SIZE),
-    [allNodes, allRelationships]
+  // Base rendered graph: the selected brand's synthetic gold-standard causal
+  // subgraph (brand-tagged CAUSES chains + their Variables), independent of the
+  // search query. Switching brands re-derives without a refetch.
+  const brandGraph = useMemo(
+    () => causalSubgraphForBrand(allNodes, allRelationships, selectedBrand),
+    [allNodes, allRelationships, selectedBrand]
   );
 
-  // Filter the connected graph by the search query (matches name or type).
+  // Filter the brand graph by the search query (matches name or type).
   const filteredNodes = useMemo(() => {
-    if (!searchQuery.trim()) return connectedGraph.nodes;
+    if (!searchQuery.trim()) return brandGraph.nodes;
     const query = searchQuery.toLowerCase();
-    return connectedGraph.nodes.filter(
+    return brandGraph.nodes.filter(
       (node) =>
         node.name.toLowerCase().includes(query) ||
         node.type.toLowerCase().includes(query)
     );
-  }, [connectedGraph.nodes, searchQuery]);
+  }, [brandGraph.nodes, searchQuery]);
 
   // Keep only edges whose endpoints are both in the (possibly searched) node set.
   const filteredRelationships = useMemo(() => {
     const nodeIds = new Set(filteredNodes.map((n) => n.id));
-    return connectedGraph.relationships.filter(
+    return brandGraph.relationships.filter(
       (rel) => nodeIds.has(rel.source_id) && nodeIds.has(rel.target_id)
     );
-  }, [connectedGraph.relationships, filteredNodes]);
+  }, [brandGraph.relationships, filteredNodes]);
 
   // Use filtered data for display
   const nodes = filteredNodes;
@@ -299,49 +228,34 @@ function KnowledgeGraphPage() {
           </div>
         )}
 
-        {/* Scope toggle: gold-standard (default) vs all node types incl. ML-ops */}
+        {/* Brand selector: load this brand's synthetic gold-standard causal graph */}
         <div className="flex items-center gap-2 md:ml-auto">
-          <Button
-            variant={showAllTypes ? 'secondary' : 'default'}
-            size="sm"
-            onClick={() => setShowAllTypes((v) => !v)}
-            aria-pressed={showAllTypes}
-            title="Toggle between the gold-standard causal/clinical entities and the full graph (includes ML-ops artifacts)"
+          <label htmlFor="kg-brand" className="text-sm text-[var(--color-muted-foreground)]">
+            Brand
+          </label>
+          <select
+            id="kg-brand"
+            aria-label="Brand"
+            value={selectedBrand}
+            onChange={(e) => setSelectedBrand(e.target.value as Brand)}
+            className="h-9 rounded-md border border-[var(--color-border)] bg-[var(--color-background)] px-3 text-sm"
           >
-            {showAllTypes ? 'Showing all types' : 'Gold-standard only'}
-          </Button>
+            {BRANDS.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
-      {/* Scope/connectivity hint */}
+      {/* Scope hint */}
       <p className="text-xs text-[var(--color-muted-foreground)] mb-4">
-        Showing {showAllTypes ? 'all node types (incl. ML-ops artifacts)' : 'gold-standard causal & clinical entities'}
-        {' '}that belong to a relationship chain. Isolated singletons and 2-node pairs are hidden.
+        Showing{' '}
+        <span className="font-medium text-[var(--color-foreground)]">{selectedBrand}</span>
+        &apos;s synthetic gold-standard causal graph — its variables and their
+        brand-specific cause→effect chains. Select another brand to load its graph.
       </p>
-
-      {/* Legend */}
-      <Card className="mb-6">
-        <CardHeader className="py-3">
-          <CardTitle className="text-sm font-medium">Node Type Legend</CardTitle>
-        </CardHeader>
-        <CardContent className="py-3">
-          <div className="flex flex-wrap gap-3">
-            {Object.entries(ENTITY_TYPE_COLORS).map(([type, color]) => (
-              <div
-                key={type}
-                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
-                onClick={() => setSearchQuery(type)}
-              >
-                <div
-                  className="h-3 w-3 rounded-full border border-white/20"
-                  style={{ backgroundColor: color }}
-                />
-                <span className="text-xs text-[var(--color-foreground)]">{type}</span>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
