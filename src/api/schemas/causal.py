@@ -449,6 +449,15 @@ class AgentCausalAnalysisRequest(BaseModel):
     # 1500 keeps the default (Causal Forest) run tractable async (~4 min); the
     # planted effect is clearly recovered at this size (probe: p~0 at 1200 rows).
     limit: int = Field(1500, ge=100, le=20000, description="Max rows to load")
+    auto_discover: bool = Field(
+        True,
+        description=(
+            "Learn the DAG from the data via GUIDED structure discovery "
+            "(PC + background-knowledge tiers anchoring treatment as cause / "
+            "outcome as effect). The data selects which covariates are "
+            "confounders. False = use the agent's domain-knowledge DAG."
+        ),
+    )
 
 
 class CausalDAGModel(BaseModel):
@@ -492,6 +501,19 @@ class AgentCausalAnalysisResponse(BaseModel):
     n_rows: int = Field(..., description="Usable estimation rows the agent ran on")
     data_source: str = Field(..., description="database / synthetic")
     dag: CausalDAGModel
+    dag_source: str = Field(
+        default="domain_knowledge",
+        description=(
+            "How the DAG was built: 'discovered' (learned from data via guided "
+            "structure discovery), 'augmented' (domain DAG + data-discovered "
+            "edges), or 'domain_knowledge' (the agent's curated DAG — discovery "
+            "skipped or not accepted)."
+        ),
+    )
+    discovered_confounders: List[str] = Field(
+        default_factory=list,
+        description="Covariates the data identified as confounders (the adjustment set).",
+    )
     ate: Optional[float] = Field(default=None, description="Average treatment effect")
     ate_ci_lower: Optional[float] = Field(default=None)
     ate_ci_upper: Optional[float] = Field(default=None)
@@ -509,6 +531,88 @@ class AgentCausalAnalysisResponse(BaseModel):
     key_insights: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     latency_ms: int = Field(..., description="Total wall-clock latency")
+
+
+class ProposedQuestion(BaseModel):
+    """An agent-proposed treatment->outcome question, ranked by a data-driven
+    screening signal (the adjusted association strength). This is a SCREENING
+    signal to help pick a question — NOT the validated causal effect (run the
+    agent analysis for that)."""
+
+    treatment: str
+    outcome: str
+    association_strength: float = Field(
+        ..., description="|partial correlation| of treatment & outcome adjusting for covariates"
+    )
+    direction: str = Field(..., description="positive / negative / none")
+    n_rows: int = Field(..., description="Rows the screening association was computed on")
+
+
+class ProposeQuestionsResponse(BaseModel):
+    """Agent-proposed, data-ranked candidate causal questions for a dataset."""
+
+    dataset: str
+    candidates: List[ProposedQuestion] = Field(default_factory=list)
+    method: str = Field(
+        default="adjusted_partial_correlation",
+        description="The data-driven screening signal used to rank candidates.",
+    )
+    note: str = Field(
+        default=(
+            "Ranked by adjusted association strength — a screening signal to help "
+            "choose a question, not a validated causal effect. Run the analysis for "
+            "the agent's DAG, estimate, and robustness gate."
+        )
+    )
+
+
+class DiscoveredEffect(BaseModel):
+    """One agent-VALIDATED causal effect in the discovery leaderboard.
+
+    Unlike the screening signal in :class:`ProposedQuestion`, this is the real
+    causal_impact agent output (discovered DAG + data-driven estimator +
+    refutation gate) for a treatment->outcome question.
+    """
+
+    treatment: str
+    outcome: str
+    status: str = Field(
+        ...,
+        description="pending / running / completed / needs_review / blocked / failed",
+    )
+    ate: Optional[float] = None
+    ate_ci_lower: Optional[float] = None
+    ate_ci_upper: Optional[float] = None
+    p_value: Optional[float] = None
+    statistical_significance: bool = False
+    selected_estimator: Optional[str] = None
+    gate_decision: Optional[str] = Field(default=None, description="proceed / review / block")
+    confidence_score: float = Field(
+        default=0.0, description="0-1 ranking signal: robustness gate + statistical significance"
+    )
+    impact: Optional[float] = Field(default=None, description="Effect magnitude |ate| (ranking)")
+    n_rows: int = 0
+    analysis_id: Optional[str] = Field(
+        default=None, description="GET /causal/agent-analyze/{id} for the full DAG + refutation"
+    )
+
+
+class DiscoverEffectsResponse(BaseModel):
+    """Async job: the agent's validated causal effects across candidate questions,
+    ranked by confidence (robustness gate + significance) then impact."""
+
+    job_id: str
+    status: str = Field(..., description="pending / running / completed")
+    dataset: str
+    total: int = Field(..., description="Candidate questions the agent is validating")
+    completed: int = Field(..., description="Questions validated so far")
+    effects: List[DiscoveredEffect] = Field(default_factory=list)
+    note: str = Field(
+        default=(
+            "Validated causal effects from the causal_impact agent (discovered DAG + "
+            "data-driven estimator + refutation gate), ranked by confidence then impact."
+        )
+    )
 
 
 # =============================================================================

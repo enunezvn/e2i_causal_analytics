@@ -89,15 +89,27 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
             # Select independence test based on data type
             indep_test = self._select_independence_test(data, config)
 
-            # Run PC algorithm
-            cg = pc(
-                X,
-                alpha=config.alpha,
-                indep_test=indep_test,
-                stable=True,  # Stable PC for reproducibility
-                uc_rule=0,  # Orientation rule (0 = standard PC rules)
-                uc_priority=-1,  # No priority for unshielded colliders
-            )
+            # Run PC algorithm. When the caller supplies domain priors (GUIDED
+            # discovery), translate them into a causal-learn BackgroundKnowledge
+            # so edge orientation honors the known tiers / required / forbidden
+            # edges instead of an arbitrary member of the equivalence class.
+            pc_kwargs: dict[str, Any] = {
+                "alpha": config.alpha,
+                "indep_test": indep_test,
+                "stable": True,  # Stable PC for reproducibility
+                "uc_rule": 0,  # Orientation rule (0 = standard PC rules)
+                "uc_priority": -1,  # No priority for unshielded colliders
+                "show_progress": False,
+            }
+            prior = config.prior_knowledge
+            guided = prior is not None and not prior.is_empty()
+            if guided and prior is not None:
+                from ..background_knowledge import build_background_knowledge
+
+                pc_kwargs["node_names"] = node_names
+                pc_kwargs["background_knowledge"] = build_background_knowledge(prior, node_names)
+
+            cg = pc(X, **pc_kwargs)
 
             # Extract adjacency matrix from the result
             adj_matrix = self._graph_to_adjacency(cg.G, len(node_names))
@@ -120,6 +132,7 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
                     "n_nodes": len(node_names),
                     "node_names": node_names,
                     "n_ci_tests": getattr(cg, "no_of_ci_tests", None),
+                    "guided": guided,
                 },
             )
 

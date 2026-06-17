@@ -762,11 +762,18 @@ def _result(est_type: EstimatorType, score: float) -> EstimatorResult:
 
 
 class TestFastEstimatorTiebreak:
-    """#622: on an energy-score tie the selector must NOT pick causal_forest.
+    """Energy-score tiebreak = (confounding_blind?, speed, energy).
 
-    The downstream refutation suite re-fits the selected estimator dozens of
-    times (~0.05s/re-estimation for OLS vs ~3.1s for CausalForestDML, MEASURED),
-    so a tie that lands on causal_forest turns a ~30s suite into ~35-60 min.
+    #622 originally broke ties by raw SPEED to avoid the slow CausalForestDML
+    refutation suite (~0.05s/re-estimation for OLS vs ~3.1s for CausalForest,
+    MEASURED → ~30s vs ~35-60 min). But the energy score measures fit, not
+    causal validity: raw-speed ties always handed the run to naive OLS, which on
+    the patient_journeys gold standard fits as well as the DML/forest family yet
+    fails the refutation gate (OLS gate=BLOCK vs DML/forest gate=PROCEED at equal
+    energy). The tiebreak now prefers a CONFOUNDING-ROBUST estimator first, and
+    keeps #622's fast-among-robust preference second — so on a tie we still avoid
+    the slow forest when a faster robust estimator (e.g. linear_dml) is present,
+    but we never select confounding-blind OLS over a robust estimator.
     """
 
     def _selector(self, gap: float = 0.05) -> EstimatorSelector:
@@ -778,9 +785,11 @@ class TestFastEstimatorTiebreak:
         )
         return EstimatorSelector(config)
 
-    def test_exact_tie_prefers_ols_not_causal_forest(self):
-        """RED before #622: all-equal energy scores fell through stable-sort to
-        the chain-priority head (causal_forest). Now OLS (fastest) must win."""
+    def test_exact_tie_prefers_fastest_robust_not_ols_or_forest(self):
+        """On an exact energy-score tie the selector prefers the fastest
+        CONFOUNDING-ROBUST estimator: not naive OLS (confounding-blind, even
+        though fastest) and not the slow chain-priority head causal_forest.
+        linear_dml is the fastest robust estimator here."""
         selector = self._selector()
         # Chain-priority order: causal_forest first (the slow trap).
         results = [
@@ -790,20 +799,23 @@ class TestFastEstimatorTiebreak:
             _result(EstimatorType.OLS, 0.5382),
         ]
         selected = selector._select_best_energy(results)
-        assert selected.estimator_type == EstimatorType.OLS, (
+        assert selected.estimator_type == EstimatorType.LINEAR_DML, (
             "On an exact energy-score tie the selector must prefer the fastest "
-            "estimator (OLS), not the chain-priority head causal_forest."
+            "confounding-robust estimator (linear_dml) — never naive OLS, and "
+            "not the slow causal_forest."
         )
 
-    def test_within_gap_tie_prefers_faster(self):
-        """Scores within min_energy_score_gap form a tie band -> fastest wins."""
+    def test_within_gap_tie_excludes_naive_ols_even_when_faster(self):
+        """A confounding-robust estimator wins the tie band over naive OLS even
+        though OLS is faster: energy ties do not justify a confounding-blind
+        estimator. Here causal_forest is the only robust candidate in the band."""
         selector = self._selector(gap=0.05)
         results = [
             _result(EstimatorType.CAUSAL_FOREST, 0.500),
-            _result(EstimatorType.OLS, 0.530),  # +0.03 within gap 0.05
+            _result(EstimatorType.OLS, 0.530),  # +0.03 within gap 0.05, faster
         ]
         selected = selector._select_best_energy(results)
-        assert selected.estimator_type == EstimatorType.OLS
+        assert selected.estimator_type == EstimatorType.CAUSAL_FOREST
 
     def test_meaningfully_better_score_wins_over_speed(self):
         """Speed must NOT override a genuinely better (lower) energy score."""
@@ -834,16 +846,35 @@ class TestFastEstimatorTiebreak:
         selected = selector._select_best_energy(results)
         assert selected.estimator_type == EstimatorType.CAUSAL_FOREST
 
-    def test_all_energy_uncomputed_still_prefers_fastest(self):
-        """When energy scores are all inf (uncomputed), prefer fastest, not the
-        chain-priority causal_forest head."""
+    def test_all_energy_uncomputed_prefers_fastest_robust(self):
+        """When energy scores are all inf (uncomputed), prefer the fastest
+        confounding-ROBUST estimator (linear_dml) — not naive OLS (even though
+        fastest) and not the slow chain-priority causal_forest head."""
         selector = self._selector()
         cf = EstimatorResult(estimator_type=EstimatorType.CAUSAL_FOREST, success=True, ate=1.0)
+        ldml = EstimatorResult(estimator_type=EstimatorType.LINEAR_DML, success=True, ate=1.0)
         ols = EstimatorResult(estimator_type=EstimatorType.OLS, success=True, ate=1.0)
         assert cf.energy_score == float("inf")
         assert ols.energy_score == float("inf")
-        selected = selector._select_best_energy([cf, ols])
-        assert selected.estimator_type == EstimatorType.OLS
+        selected = selector._select_best_energy([cf, ldml, ols])
+        assert selected.estimator_type == EstimatorType.LINEAR_DML
+
+    def test_tie_band_prefers_robust_over_naive_ols_patient_journeys(self):
+        """Mirrors the patient_journeys gold standard: all four estimators tie on
+        energy (~0.36, causal_forest marginally lowest) but OLS is the fastest.
+        The fix must pick a confounding-robust estimator (fastest robust =
+        linear_dml), NOT naive OLS — which is what the raw-speed #622 tiebreak
+        wrongly did, sending every default 'Auto' run to a gate=BLOCK result."""
+        selector = self._selector(gap=0.05)
+        results = [
+            _result(EstimatorType.CAUSAL_FOREST, 0.35989),
+            _result(EstimatorType.LINEAR_DML, 0.36034),
+            _result(EstimatorType.DRLEARNER, 0.36160),
+            _result(EstimatorType.OLS, 0.36032),
+        ]
+        selected = selector._select_best_energy(results)
+        assert selected.estimator_type != EstimatorType.OLS
+        assert selected.estimator_type == EstimatorType.LINEAR_DML
 
 
 # =============================================================================

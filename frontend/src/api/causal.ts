@@ -28,6 +28,8 @@ import type {
   CausalAnalysisHistoryResponse,
   CausalLibrary,
   CausalVariablesResponse,
+  DiscoverEffectsResponse,
+  ProposeQuestionsResponse,
   CrossValidationRequest,
   CrossValidationResponse,
   EstimationDataResponse,
@@ -248,6 +250,45 @@ export async function getCausalVariables(
   return get<CausalVariablesResponse>(`${CAUSAL_BASE}/variables`, {
     dataset,
   });
+}
+
+/**
+ * Fetch agent-proposed, data-ranked candidate causal questions for a dataset.
+ *
+ * The agent ranks candidate treatment->outcome pairs by a data-driven screening
+ * signal (adjusted association strength) so the analyst confirms a question
+ * rather than guessing. NOT a validated effect — run the analysis for that.
+ */
+export async function proposeCausalQuestions(
+  dataset: string = 'patient_journeys'
+): Promise<ProposeQuestionsResponse> {
+  return get<ProposeQuestionsResponse>(`${CAUSAL_BASE}/propose-questions`, {
+    dataset,
+  });
+}
+
+/**
+ * Submit a discover-effects job: the agent validates each candidate question
+ * (DAG + estimator + refutation gate) and ranks the effects. Heavy/async →
+ * returns a pending job; poll {@link getDiscoverEffects}.
+ */
+export async function discoverCausalEffects(
+  dataset: string = 'patient_journeys'
+): Promise<DiscoverEffectsResponse> {
+  // `dataset` is a query param (no request body); pass it in the URL.
+  return post<DiscoverEffectsResponse, Record<string, never>>(
+    `${CAUSAL_BASE}/discover-effects?dataset=${encodeURIComponent(dataset)}`,
+    {}
+  );
+}
+
+/** Poll a discover-effects job by id (ranked effects fill in progressively). */
+export async function getDiscoverCausalEffects(
+  jobId: string
+): Promise<DiscoverEffectsResponse> {
+  return get<DiscoverEffectsResponse>(
+    `${CAUSAL_BASE}/discover-effects/${encodeURIComponent(jobId)}`
+  );
 }
 
 /**

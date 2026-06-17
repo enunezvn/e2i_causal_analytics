@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState
 from src.causal_engine import compute_dag_hash
 from src.causal_engine.discovery import (
+    CausalPriorKnowledge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
     DiscoveryGate,
@@ -517,22 +518,55 @@ class GraphBuilderNode:
         if not isinstance(data, pd.DataFrame):
             data = pd.DataFrame(data)
 
-        # Build discovery config from state
-        algorithms_str = state.get("discovery_algorithms", ["ges", "pc"])
-        algorithms = []
-        for algo in algorithms_str:
-            try:
-                algorithms.append(DiscoveryAlgorithmType(algo.lower()))
-            except ValueError:
-                logger.warning(f"Unknown algorithm: {algo}, skipping")
+        # GUIDED discovery: when the treatment and outcome are known (the causal
+        # question being asked), anchor their roles so observational structure
+        # learning does not emit implausibly-oriented edges. Unconstrained PC/GES
+        # only recover a Markov equivalence class — on patient_journeys that
+        # reversed the confounder edges (treatment->disease_severity) and
+        # flipped the treatment->outcome edge. Tiers [covariates < treatment <
+        # outcome] + a required treatment->outcome edge let the DATA decide WHICH
+        # covariates are confounders while keeping orientation correct.
+        # Guided discovery (priors-constrained PC) is OPT-IN: the agent endpoints
+        # set discovery_guided=True. Other consumers of this node keep the legacy
+        # multi-algorithm ensemble default (False) so their behavior is unchanged.
+        guided = bool(state.get("discovery_guided", False))
+        prior_knowledge: Optional[CausalPriorKnowledge] = None
+        if guided and treatment in data.columns and outcome in data.columns:
+            from src.repositories.provenance import PROVENANCE_DROP_COLS
 
-        if not algorithms:
-            algorithms = [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
+            covariate_cols = [
+                c
+                for c in data.columns
+                if c not in (treatment, outcome) and c not in PROVENANCE_DROP_COLS
+            ]
+            tiers = (
+                [covariate_cols, [treatment], [outcome]]
+                if covariate_cols
+                else [[treatment], [outcome]]
+            )
+            prior_knowledge = CausalPriorKnowledge(
+                tiers=tiers,
+                required_edges=[(treatment, outcome)],
+            )
+            # Only PC consumes BackgroundKnowledge; restrict to it so the ensemble
+            # is not polluted by unconstrained orientations from other algorithms.
+            algorithms = [DiscoveryAlgorithmType.PC]
+        else:
+            algorithms_str = state.get("discovery_algorithms", ["ges", "pc"])
+            algorithms = []
+            for algo in algorithms_str:
+                try:
+                    algorithms.append(DiscoveryAlgorithmType(algo.lower()))
+                except ValueError:
+                    logger.warning(f"Unknown algorithm: {algo}, skipping")
+            if not algorithms:
+                algorithms = [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
 
         config = DiscoveryConfig(
             algorithms=algorithms,
             ensemble_threshold=state.get("discovery_ensemble_threshold", 0.5),
             alpha=state.get("discovery_alpha", 0.05),
+            prior_knowledge=prior_knowledge,
         )
 
         # Run discovery
@@ -591,6 +625,17 @@ class GraphBuilderNode:
                     dag.add_node(treatment)
                 if outcome not in dag.nodes():
                     dag.add_node(outcome)
+                # The treatment->outcome edge is the estimand under test (the
+                # user's question). Constraint-based discovery may not DRAW it —
+                # a conditional-independence test can miss a real effect on
+                # binary data — but the agent DOES estimate that effect, so the
+                # reported DAG must include the estimand edge for consistency
+                # (an empty treatment->outcome path next to a non-zero ATE reads
+                # as broken). Add it only if it preserves acyclicity.
+                if treatment and outcome and not dag.has_edge(treatment, outcome):
+                    dag.add_edge(treatment, outcome)
+                    if not nx.is_directed_acyclic_graph(dag):
+                        dag.remove_edge(treatment, outcome)
                 return dag, augmented_edges
 
         elif decision == GateDecision.AUGMENT.value:

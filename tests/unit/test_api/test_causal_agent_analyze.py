@@ -154,3 +154,43 @@ def test_forceable_estimators_match_agent_allowlist():
     src = inspect.getsource(est_mod)
     for name in AGENT_FORCEABLE_ESTIMATORS:
         assert f'"{name}"' in src, f"{name} not in estimation node's valid methods"
+
+
+@pytest.mark.unit
+def test_dag_source_discovered_surfaces_confounders():
+    """When guided discovery ran and the gate ACCEPTED, the DAG is reported as
+    'discovered' and the data-identified adjustment set is surfaced as
+    discovered_confounders (so the FE can honestly say 'learned from data')."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 5}  # presence => discovery actually ran
+    state["causal_graph"]["discovery_gate_decision"] = "accept"
+    resp = _agent_state_to_response(
+        analysis_id="d1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "discovered"
+    assert resp.discovered_confounders == ["disease_severity"]
+
+
+@pytest.mark.unit
+def test_dag_source_domain_knowledge_when_discovery_absent():
+    """No discovery in the state -> the agent's domain DAG; no data-identified
+    confounders are claimed (discovered_confounders stays empty)."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    resp = _agent_state_to_response(
+        analysis_id="m1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=_base_state(),
+        latency_ms=10,
+    )
+    assert resp.dag_source == "domain_knowledge"
+    assert resp.discovered_confounders == []

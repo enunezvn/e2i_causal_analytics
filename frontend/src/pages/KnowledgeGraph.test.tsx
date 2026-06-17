@@ -201,14 +201,15 @@ describe('KnowledgeGraphPage', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       expect(screen.getByText('Total Nodes')).toBeInTheDocument();
-      expectStatValue('Total Nodes', '3');
+      // Default 'All brands': the whole causal graph (8 connected Variables).
+      expectStatValue('Total Nodes', '8');
     });
 
     it('displays total relationships count from the rendered graph', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       expect(screen.getByText('Total Relationships')).toBeInTheDocument();
-      expectStatValue('Total Relationships', '2');
+      expectStatValue('Total Relationships', '5');
     });
 
     it('displays selected info card', () => {
@@ -221,8 +222,8 @@ describe('KnowledgeGraphPage', () => {
     it('shows node type badges computed from the rendered nodes', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      // The per-brand causal graph is Variable-only (3 Variables for Kisqali).
-      expect(screen.getByText('Variable: 3')).toBeInTheDocument();
+      // Default 'All brands' shows all 8 connected Variables across brands.
+      expect(screen.getByText('Variable: 8')).toBeInTheDocument();
     });
   });
 
@@ -230,54 +231,54 @@ describe('KnowledgeGraphPage', () => {
   // PER-BRAND CAUSAL GRAPH TESTS
   // =========================================================================
 
-  describe('Per-brand causal graph', () => {
-    it('renders only the selected brand\'s CAUSES subgraph (default Kisqali)', () => {
+  describe('Causal gold-standard graph', () => {
+    it('defaults to All brands → the whole causal graph (no per-brand restriction)', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      // Kisqali: treatment->outcome->trx (case-insensitive 'kisqali' included);
-      // the Fabhalta chain (adherence/persistence) is excluded.
-      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
-      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
+      // All brands: Kisqali chain (treatment/outcome/trx + sideA/sideB) AND the
+      // Fabhalta chain (adherence/persistence/discontinuation) = 8 nodes / 5 edges.
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('8');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('5');
     });
 
-    it('fetches Variable nodes and CAUSES edges (the gold-standard causal layer)', () => {
+    it('fetches the full causal node + relationship layer', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       const nodesCall = (useNodes as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(nodesCall.entity_types).toBe('Variable');
+      expect(nodesCall.entity_types).toBe('Variable,KPI,CausalPath,Region,Treatment');
       const relCall = (useRelationships as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(relCall.relationship_types).toBe('CAUSES');
+      expect(relCall.relationship_types).toBe('CAUSES,EXPLAINS,INFLUENCES,AFFECTS');
     });
 
-    it('re-scopes to another brand when the dropdown changes', () => {
+    it('narrows to one brand when the dropdown changes (Fabhalta)', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      // Switch the brand dropdown to Fabhalta -> only its 3-node / 2-edge chain.
       const select = screen.getByRole('combobox', { name: /brand/i });
       fireEvent.change(select, { target: { value: 'Fabhalta' } });
 
+      // Only Fabhalta's chain (adherence->persistence->discontinuation): 3 / 2.
       expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
       expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
     });
 
-    it('prunes within-brand singletons and pairs (off-chain fragments)', () => {
+    it('keeps a brand\'s full chains incl. off-chain pairs (no size pruning)', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      // Kisqali has 5 variables / 3 CAUSES edges, but the sideA-sideB pair is a
-      // size-2 component -> dropped. Only the 3-node main chain renders (3 nodes /
-      // 2 edges); without pruning this would be 5 nodes / 3 edges.
-      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
-      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
-      // The pruned variables are not counted in the stats badge either.
-      expect(screen.getByText('Variable: 3')).toBeInTheDocument();
+      const select = screen.getByRole('combobox', { name: /brand/i });
+      fireEvent.change(select, { target: { value: 'Kisqali' } });
+
+      // Kisqali: main chain (treatment/outcome/trx) + the sideA-sideB pair — all
+      // KEPT now (5 nodes / 3 edges); the Fabhalta chain is excluded.
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('5');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('3');
     });
 
-    it('renders a brand dropdown defaulting to Kisqali', () => {
+    it('renders a brand dropdown defaulting to All brands', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       const select = screen.getByRole('combobox', { name: /brand/i }) as HTMLSelectElement;
       expect(select).toBeInTheDocument();
-      expect(select.value).toBe('Kisqali');
+      expect(select.value).toBe('All');
     });
   });
 
@@ -433,13 +434,14 @@ describe('KnowledgeGraphPage', () => {
     it('passes the connected nodes to visualization', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      expect(screen.getByTestId('nodes-count')).toHaveTextContent('3');
+      // Default 'All brands' → all 8 connected causal Variables.
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('8');
     });
 
     it('passes relationships to visualization', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
-      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('5');
     });
 
     it('renders graph card with title', () => {

@@ -58,6 +58,8 @@ from src.api.schemas.causal import (
     CausalVariablesResponse,
     CrossValidationRequest,
     CrossValidationResponse,
+    DiscoveredEffect,
+    DiscoverEffectsResponse,
     EstimationDataResponse,
     EstimatorInfo,
     EstimatorListResponse,
@@ -68,6 +70,8 @@ from src.api.schemas.causal import (
     ParallelPipelineResponse,
     PipelineMode,
     PipelineStageResult,
+    ProposedQuestion,
+    ProposeQuestionsResponse,
     QuestionType,
     RefutationSummary,
     RouteQueryRequest,
@@ -848,6 +852,307 @@ async def list_causal_variables(
     )
 
 
+def _adjusted_partial_corr(
+    df: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    treatment: str,
+    outcome: str,
+    covariates: List[str],
+) -> Optional[float]:
+    """Frisch-Waugh-Lovell partial correlation of treatment & outcome adjusting
+    for ``covariates`` — a cheap (no-EconML) screening signal for proposing
+    questions. Residualize treatment and outcome on the covariates, correlate
+    the residuals. Returns None when undefined (zero-variance residuals)."""
+    import numpy as np
+
+    t = df[treatment].to_numpy(dtype=float)
+    o = df[outcome].to_numpy(dtype=float)
+    if t.std() == 0 or o.std() == 0:
+        return None
+    if covariates:
+        cov_mat = df[covariates].to_numpy(dtype=float)
+        design = np.column_stack([np.ones(len(cov_mat)), cov_mat])
+        beta_t, *_ = np.linalg.lstsq(design, t, rcond=None)
+        beta_o, *_ = np.linalg.lstsq(design, o, rcond=None)
+        rt = t - design @ beta_t
+        ro = o - design @ beta_o
+    else:
+        rt, ro = t - t.mean(), o - o.mean()
+    if rt.std() == 0 or ro.std() == 0:
+        return None
+    return float(np.corrcoef(rt, ro)[0, 1])
+
+
+@router.get(
+    "/propose-questions",
+    response_model=ProposeQuestionsResponse,
+    summary="Propose data-ranked candidate causal questions for a dataset",
+    operation_id="propose_causal_questions",
+)
+async def propose_causal_questions(
+    dataset: str = Query(
+        _DEFAULT_CAUSAL_DATASET,
+        description="Gold-standard dataset to propose questions for",
+    ),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> ProposeQuestionsResponse:
+    """Rank candidate treatment->outcome questions by a DATA-DRIVEN screening
+    signal, so the agent PROPOSES the question instead of the analyst guessing
+    from blind dropdowns.
+
+    For each allowed (treatment, outcome) pair the adjusted partial correlation
+    (controlling for the dataset's curated covariates) is computed and ranked by
+    magnitude. This is a SCREENING signal — NOT a validated causal effect; the
+    user confirms a question and the full agent analysis builds the DAG,
+    estimates, and refutes it. Fail-closed: unknown dataset 404, no store 503.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    covariates_all = list(spec["covariate"])
+    pairs = [(t, o) for t in spec["treatment"] for o in spec["outcome"] if t != o]
+
+    async def _score(t: str, o: str) -> Optional[ProposedQuestion]:
+        cov = [c for c in covariates_all if c not in (t, o)]
+        try:
+            df, _ = await _load_agent_estimation_frame(
+                dataset=dataset,
+                treatment_var=t,
+                outcome_var=o,
+                covariates=cov,
+                limit=1500,
+            )
+        except HTTPException:
+            # A pair with no usable data is simply omitted (never fabricated).
+            return None
+        pc = _adjusted_partial_corr(df, t, o, cov)
+        if pc is None:
+            return None
+        return ProposedQuestion(
+            treatment=t,
+            outcome=o,
+            association_strength=abs(pc),
+            direction="positive" if pc > 0 else ("negative" if pc < 0 else "none"),
+            n_rows=int(df.shape[0]),
+        )
+
+    scored = await asyncio.gather(*[_score(t, o) for t, o in pairs])
+    candidates = sorted(
+        [c for c in scored if c is not None],
+        key=lambda c: c.association_strength,
+        reverse=True,
+    )
+    return ProposeQuestionsResponse(dataset=dataset, candidates=candidates)
+
+
+# =============================================================================
+# DISCOVER EFFECTS — validated-effects leaderboard (async submit -> poll)
+# =============================================================================
+
+# In-memory job cache (mirrors _agent_analysis_cache). Each job runs the agent
+# for a set of candidate questions and ranks the VALIDATED effects.
+_discover_effects_cache: Dict[str, "DiscoverEffectsResponse"] = {}
+
+# Complementary outcomes are 1 - each other (persistent_180d vs discontinued_180d);
+# running both is redundant, so one is skipped to dedupe the leaderboard.
+_COMPLEMENT_OUTCOMES_SKIP = {"discontinued_180d"}
+
+
+def _discover_candidate_pairs(spec: Dict[str, Any]) -> List[tuple]:
+    """Deduped (treatment, outcome) questions for the leaderboard: no self-pairs,
+    and complementary outcomes collapsed to one representative."""
+    pairs: List[tuple] = []
+    for t in spec["treatment"]:
+        for o in spec["outcome"]:
+            if t == o or o in _COMPLEMENT_OUTCOMES_SKIP:
+                continue
+            pairs.append((t, o))
+    return pairs
+
+
+def _effect_confidence_score(gate_decision: Optional[str], significant: bool) -> float:
+    """Map the robustness gate + significance to a 0-1 ranking signal."""
+    base = {"proceed": 0.6, "review": 0.35}.get(gate_decision or "", 0.1)
+    return min(1.0, base + (0.3 if significant else 0.0))
+
+
+def _effect_status_from_gate(ate: Optional[float], gate: Optional[str], resp_status: str) -> str:
+    """Honest leaderboard status. A run that produced an estimate is reported by
+    its robustness verdict (completed/needs_review/blocked) — only a run that
+    produced NO estimate is 'failed'. This separates 'the gate blocked it'
+    (computed, worth inspecting) from 'it could not run'."""
+    if ate is None:
+        return "failed" if resp_status not in {"pending", "running"} else resp_status
+    if gate == "proceed":
+        return "completed"
+    if gate == "review":
+        return "needs_review"
+    if gate == "block":
+        return "blocked"
+    return resp_status
+
+
+def _effect_from_agent_response(
+    treatment: str, outcome: str, resp: "AgentCausalAnalysisResponse", analysis_id: str
+) -> DiscoveredEffect:
+    gate = resp.refutation.gate_decision if resp.refutation else None
+    return DiscoveredEffect(
+        treatment=treatment,
+        outcome=outcome,
+        status=_effect_status_from_gate(resp.ate, gate, resp.status),
+        ate=resp.ate,
+        ate_ci_lower=resp.ate_ci_lower,
+        ate_ci_upper=resp.ate_ci_upper,
+        p_value=resp.p_value,
+        statistical_significance=bool(resp.statistical_significance),
+        selected_estimator=resp.selected_estimator,
+        gate_decision=gate,
+        confidence_score=_effect_confidence_score(gate, bool(resp.statistical_significance)),
+        impact=abs(resp.ate) if resp.ate is not None else None,
+        n_rows=resp.n_rows,
+        analysis_id=analysis_id,
+    )
+
+
+def _rank_effects(effects: List[DiscoveredEffect]) -> List[DiscoveredEffect]:
+    """Rank by confidence (gate + significance) then impact (|ate|). Not-yet-run
+    questions (score 0) sort last."""
+    return sorted(
+        effects,
+        key=lambda e: (e.confidence_score, e.impact if e.impact is not None else -1.0),
+        reverse=True,
+    )
+
+
+async def _run_discover_effects_task(
+    job_id: str, dataset: str, pairs: List[tuple], data_source: str
+) -> None:
+    """Background: validate each candidate question with the causal_impact agent
+    (serial — each acquires the heavy-compute slot), updating the cached job after
+    each so the FE leaderboard fills in progressively, ranked by confidence+impact."""
+    spec = _CAUSAL_DATASET_SPECS[dataset]
+    covariates_all = list(spec["covariate"])
+    # Keyed pending effects we mutate in place across the run.
+    effects: Dict[tuple, DiscoveredEffect] = {
+        (t, o): DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs
+    }
+
+    def _publish(status: str, completed: int) -> None:
+        _discover_effects_cache[job_id] = DiscoverEffectsResponse(
+            job_id=job_id,
+            status=status,
+            dataset=dataset,
+            total=len(pairs),
+            completed=completed,
+            effects=_rank_effects(list(effects.values())),
+        )
+
+    completed = 0
+    for t, o in pairs:
+        effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="running")
+        _publish("running", completed)
+        try:
+            cov = [c for c in covariates_all if c not in (t, o)]
+            df, _select = await _load_agent_estimation_frame(
+                dataset=dataset,
+                treatment_var=t,
+                outcome_var=o,
+                covariates=cov,
+                limit=1500,
+            )
+            aid = str(uuid.uuid4())
+            req = AgentCausalAnalysisRequest(
+                treatment_var=t, outcome_var=o, dataset=dataset, limit=1500, auto_discover=True
+            )
+            _agent_analysis_cache[aid] = AgentCausalAnalysisResponse(
+                analysis_id=aid,
+                status="pending",
+                treatment_var=t,
+                outcome_var=o,
+                dataset=dataset,
+                n_rows=int(df.shape[0]),
+                data_source=data_source,
+                dag=CausalDAGModel(),
+                statistical_significance=False,
+                refutation=RefutationSummary(),
+                latency_ms=0,
+            )
+            await _run_agent_analysis_task(aid, req, df, cov, data_source)
+            resp = _agent_analysis_cache[aid]
+            effects[(t, o)] = _effect_from_agent_response(t, o, resp, aid)
+        except HTTPException as e:
+            # Fail-closed: a question with no usable data is marked failed, not faked.
+            logger.warning(f"discover-effects: {t}->{o} failed-closed: {e.detail}")
+            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
+            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+        completed += 1
+        _publish("running" if completed < len(pairs) else "completed", completed)
+
+
+@router.post(
+    "/discover-effects",
+    response_model=DiscoverEffectsResponse,
+    summary="Discover & rank the agent's VALIDATED causal effects (async submit -> poll)",
+    operation_id="discover_causal_effects",
+)
+async def discover_causal_effects(
+    background_tasks: BackgroundTasks,
+    dataset: str = Query(_DEFAULT_CAUSAL_DATASET, description="Gold-standard dataset"),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> DiscoverEffectsResponse:
+    """Run the causal_impact agent across the dataset's candidate questions and
+    rank the VALIDATED effects (discovered DAG + estimator + refutation gate) by
+    confidence then impact. Heavy (minutes per effect) -> async: returns a pending
+    job; poll ``GET /causal/discover-effects/{job_id}``. Fail-closed per question.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+    pairs = _discover_candidate_pairs(spec)
+    job_id = str(uuid.uuid4())
+    data_source = "synthetic" if deployment_includes_synthetic() else "database"
+    _discover_effects_cache[job_id] = DiscoverEffectsResponse(
+        job_id=job_id,
+        status="pending",
+        dataset=dataset,
+        total=len(pairs),
+        completed=0,
+        effects=[DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs],
+    )
+    background_tasks.add_task(_run_discover_effects_task, job_id, dataset, pairs, data_source)
+    return _discover_effects_cache[job_id]
+
+
+@router.get(
+    "/discover-effects/{job_id}",
+    response_model=DiscoverEffectsResponse,
+    summary="Poll a discover-effects job",
+    operation_id="get_discover_causal_effects",
+)
+async def get_discover_causal_effects(
+    job_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> DiscoverEffectsResponse:
+    job = _discover_effects_cache.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
+    return job
+
+
 @router.get(
     "/estimation-data",
     response_model=EstimationDataResponse,
@@ -1184,6 +1489,11 @@ async def _run_agent_analysis_task(
         "confounders": covariates,
         "data_source": data_source,
         "data_cache": {"estimation_data": df},
+        # Learn the DAG from data via GUIDED discovery (graph_builder anchors the
+        # treatment/outcome roles; the data selects the confounders). Falls back
+        # to the domain DAG if discovery is skipped or not accepted by the gate.
+        "auto_discover": request.auto_discover,
+        "discovery_guided": True,
         "parameters": parameters,
         "interpretation_depth": "standard",
         "brand": request.brand,
@@ -1259,6 +1569,27 @@ def _agent_state_to_response(
         dag_dot=causal_graph.get("dag_dot"),
     )
 
+    # How was the DAG built? 'discovered' = learned from data (guided structure
+    # discovery accepted by the gate), 'augmented' = domain DAG + discovered
+    # edges, 'domain_knowledge' = the agent's curated DAG (discovery skipped or
+    # not accepted). discovery_result is present only when discovery ran.
+    discovery_ran = final_state.get("discovery_result") is not None
+    _gate_dec = causal_graph.get("discovery_gate_decision")
+    if discovery_ran and _gate_dec == "accept":
+        dag_source = "discovered"
+    elif discovery_ran and _gate_dec == "augment":
+        dag_source = "augmented"
+    else:
+        dag_source = "domain_knowledge"
+    # Confounders the DATA identified (the backdoor adjustment set) — only
+    # surfaced when the structure was actually learned from data.
+    _adj_sets = causal_graph.get("adjustment_sets", []) or []
+    discovered_confounders = (
+        [str(c) for c in _adj_sets[0]]
+        if dag_source in ("discovered", "augmented") and _adj_sets
+        else []
+    )
+
     ate = estimation.get("ate")
     gate_decision = refutation.get("gate_decision") or final_state.get("gate_decision")
     refutation_error = final_state.get("refutation_error")
@@ -1301,6 +1632,8 @@ def _agent_state_to_response(
         n_rows=n_rows,
         data_source=data_source,
         dag=dag,
+        dag_source=dag_source,
+        discovered_confounders=discovered_confounders,
         ate=ate,
         ate_ci_lower=estimation.get("ate_ci_lower"),
         ate_ci_upper=estimation.get("ate_ci_upper"),

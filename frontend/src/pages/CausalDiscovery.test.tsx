@@ -1,946 +1,194 @@
 /**
- * CausalDiscovery Page Tests
- * ==========================
+ * CausalDiscovery Page — validated-effects leaderboard
+ * ====================================================
  *
- * Tests for the CausalDiscovery page component.
- * Includes tests for:
- * - Page header with technology badges
- * - CausalDiscovery visualization integration
- * - Refutation tests integration (Phase 3.2)
- * - Live API wiring: useRouteQuery + useCausalChains (Issue #303)
+ * The page surfaces the agent's VALIDATED causal effects ranked by confidence +
+ * impact (discover-effects job), and drills into any validated row's DAG +
+ * refutation. These tests lock: the honest empty/running states, the ranked
+ * leaderboard rendering, kicking off discovery, and the drill-down detail.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import * as React from 'react';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
-import { renderWithAllProviders } from '@/test/utils';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalDiscovery from './CausalDiscovery';
 
-// =============================================================================
-// MOCK SETUP
-// =============================================================================
-
-// Radix <Select> relies on pointer-capture / portal behaviour that jsdom does
-// not implement, so we replace the UI primitive with a native <select> that
-// preserves the same value / onValueChange contract AND the trigger's id +
-// aria-label (so getByLabelText(/treatment variable/i) keeps working). The
-// <Select> mock walks its own children to collect the <SelectItem> values and
-// the trigger id/aria-label, then renders ONE native <select>. Tests drive it
-// with fireEvent.change like a normal control.
-vi.mock('@/components/ui/select', () => {
-  type ItemProps = { value: string; children?: React.ReactNode };
-  type TriggerProps = {
-    id?: string;
-    'aria-label'?: string;
-    children?: React.ReactNode;
-  };
-
-  const Select = ({
-    value,
-    onValueChange,
-    disabled,
-    children,
-  }: {
-    value?: string;
-    onValueChange?: (v: string) => void;
-    disabled?: boolean;
-    children?: React.ReactNode;
-  }) => {
-    const options: Array<{ value: string; label: React.ReactNode }> = [];
-    let triggerId: string | undefined;
-    let triggerAriaLabel: string | undefined;
-
-    const walk = (nodes: React.ReactNode) => {
-      React.Children.forEach(nodes, (child: unknown) => {
-        if (!React.isValidElement(child)) return;
-        const el = child as React.ReactElement<
-          Partial<ItemProps & TriggerProps> & { children?: React.ReactNode }
-        >;
-        const name = (el.type as { __mockName?: string })?.__mockName;
-        if (name === 'SelectItem' && typeof el.props.value === 'string') {
-          options.push({ value: el.props.value, label: el.props.children });
-        }
-        if (name === 'SelectTrigger') {
-          triggerId = el.props.id;
-          triggerAriaLabel = el.props['aria-label'];
-        }
-        if (el.props.children) walk(el.props.children);
-      });
-    };
-    walk(children);
-
-    return (
-      <select
-        id={triggerId}
-        aria-label={triggerAriaLabel}
-        value={value ?? ''}
-        disabled={disabled}
-        onChange={(e) => onValueChange?.(e.target.value)}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-    );
-  };
-
-  // Tagged passthroughs so the walker can identify them by name.
-  const SelectTrigger = (_props: TriggerProps) => null;
-  (SelectTrigger as { __mockName?: string }).__mockName = 'SelectTrigger';
-  const SelectItem = (_props: ItemProps) => null;
-  (SelectItem as { __mockName?: string }).__mockName = 'SelectItem';
-  const SelectValue = () => null;
-  const SelectContent = ({ children }: { children?: React.ReactNode }) => (
-    <>{children}</>
-  );
-
-  return { Select, SelectTrigger, SelectContent, SelectItem, SelectValue };
-});
-
-// Simplify the covariate multi-select to native checkboxes for deterministic
-// jsdom interaction (the real one uses a Radix popover + portal).
-vi.mock('@/components/causal/CovariateMultiSelect', () => {
-  return {
-    CovariateMultiSelect: ({
-      options,
-      selected,
-      onChange,
-      disabled,
-    }: {
-      options: string[];
-      selected: string[];
-      onChange: (next: string[]) => void;
-      disabled?: boolean;
-    }) => (
-      <div aria-label="Covariates" data-testid="covariate-multiselect">
-        {options.map((opt) => (
-          <label key={opt}>
-            <input
-              type="checkbox"
-              value={opt}
-              checked={selected.includes(opt)}
-              disabled={disabled}
-              onChange={(e) =>
-                onChange(
-                  e.target.checked
-                    ? [...selected, opt]
-                    : selected.filter((v) => v !== opt)
-                )
-              }
-            />
-            {opt}
-          </label>
-        ))}
-      </div>
-    ),
-  };
-});
-
-// Mock the CausalDiscovery visualization component to avoid D3 complexities in tests
+// Stub the heavy DAG viz — assert the page feeds it the agent's graph.
 vi.mock('@/components/visualizations/CausalDiscovery', () => ({
-  CausalDiscovery: ({
-    showControls,
-    showDetails,
-    showEffectsTable,
-    showRefutationTests,
-    nodes,
-    edges,
-    effects,
-    refutationResults,
-  }: {
-    showControls?: boolean;
-    showDetails?: boolean;
-    showEffectsTable?: boolean;
-    showRefutationTests?: boolean;
-    nodes?: Array<{ id: string; label: string; type?: string }>;
-    edges?: Array<{
-      id: string;
-      source?: string;
-      target?: string;
-      type?: string;
-      effect?: number;
-    }>;
-    effects?: Array<{
-      id: string;
-      estimate: number;
-      treatment: string;
-      ciLower?: number;
-      ciUpper?: number;
-      confidenceLevel?: number;
-    }>;
-    refutationResults?: Array<{ id: string }>;
-  }) => (
-    <div data-testid="causal-discovery-viz">
-      <div data-testid="show-controls">{String(showControls)}</div>
-      <div data-testid="show-details">{String(showDetails)}</div>
-      <div data-testid="show-effects-table">{String(showEffectsTable)}</div>
-      <div data-testid="show-refutation-tests">{String(showRefutationTests)}</div>
-      <div data-testid="viz-nodes-count">{String(nodes?.length ?? '__undefined__')}</div>
-      <div data-testid="viz-edges-count">{String(edges?.length ?? '__undefined__')}</div>
-      <div data-testid="viz-effects-count">{String(effects?.length ?? '__undefined__')}</div>
-      <div data-testid="viz-refutations-count">
-        {String(refutationResults?.length ?? '__undefined__')}
-      </div>
-      <div data-testid="viz-effect-estimates">
-        {(effects ?? [])
-          .map(
-            (e) =>
-              `${e.treatment}:${e.estimate}:ci=${e.ciLower ?? 'none'},${e.ciUpper ?? 'none'}:lvl=${e.confidenceLevel ?? 'none'}`
-          )
-          .join('|')}
-      </div>
-      <div data-testid="viz-node-labels">{(nodes ?? []).map((n) => n.label).join('|')}</div>
-      <div data-testid="viz-edge-detail">
-        {(edges ?? [])
-          .map((e) => `${e.source}->${e.target}:${e.type ?? 'none'}:${e.effect ?? 'none'}`)
-          .join('|')}
-      </div>
-    </div>
+  CausalDiscovery: ({ nodes, edges }: { nodes: unknown[]; edges: unknown[] }) => (
+    <div data-testid="causal-dag" data-nodes={nodes.length} data-edges={edges.length} />
   ),
 }));
 
-// Mock the live API hooks so we can assert calls and provide canned responses
-const mockRouteMutate = vi.fn();
-const mockChainsMutate = vi.fn();
-const mockPipelineMutate = vi.fn();
-
-// Mutable state objects (per-test) for the mutation hook returns
-type FakeMutationState<TData = unknown> = {
-  data: TData | undefined;
-  isPending: boolean;
-  error: Error | null;
-  isSuccess: boolean;
-};
-
-const routeState: FakeMutationState = {
-  data: undefined,
-  isPending: false,
-  error: null,
-  isSuccess: false,
-};
-
-const chainsState: FakeMutationState = {
-  data: undefined,
-  isPending: false,
-  error: null,
-  isSuccess: false,
-};
-
-const pipelineState: FakeMutationState = {
-  data: undefined,
-  isPending: false,
-  error: null,
-  isSuccess: false,
-};
-
-// Candidate variables returned by useCausalVariables. The page's selectors and
-// the covariate multi-select render from these.
-const variablesState: {
-  data:
-    | {
-        dataset: string;
-        treatment_candidates: string[];
-        outcome_candidates: string[];
-        covariate_candidates: string[];
-        columns: string[];
-      }
-    | undefined;
-  isLoading: boolean;
-} = {
-  data: {
-    dataset: 'patient_journeys',
-    treatment_candidates: ['treatment_arm', 'treatment_initiated'],
-    outcome_candidates: [
-      'persistent_180d',
-      'discontinued_180d',
-      'treatment_initiated',
-    ],
-    covariate_candidates: [
-      'disease_severity',
-      'engagement_score',
-      'age_at_diagnosis',
-    ],
-    columns: [],
-  },
-  isLoading: false,
-};
-
-vi.mock('@/hooks/api/use-causal', () => ({
-  useCausalVariables: () => ({
-    data: variablesState.data,
-    isLoading: variablesState.isLoading,
-  }),
-  useRouteQuery: () => ({
-    mutate: mockRouteMutate,
-    data: routeState.data,
-    isPending: routeState.isPending,
-    error: routeState.error,
-    isSuccess: routeState.isSuccess,
-  }),
-  useRunParallelPipeline: () => ({
-    mutate: mockPipelineMutate,
-    data: pipelineState.data,
-    isPending: pipelineState.isPending,
-    error: pipelineState.error,
-    isSuccess: pipelineState.isSuccess,
-  }),
-}));
-
-// The page fetches real estimation rows BEFORE running the pipeline. Mock it so
-// the pipeline test can assert the rows are threaded into the request filters.
-// NB: the impl takes an explicit arg so the mock's call signature carries it —
-// `tsc -b` (the production build) otherwise infers a zero-arg tuple and rejects
-// `mock.calls[0][0]` with TS2493.
-const mockGetCausalEstimationData = vi.fn(async (_args?: unknown) => ({
-  dataset: 'patient_journeys',
-  columns: ['treatment_arm', 'persistent_180d'],
-  n_rows: 2,
-  estimation_data_records: [
-    { treatment_arm: 1, persistent_180d: 1 },
-    { treatment_arm: 0, persistent_180d: 0 },
-  ],
+vi.mock('@/hooks/api', () => ({
+  useDiscoverEffects: vi.fn(),
 }));
 
 vi.mock('@/api/causal', () => ({
-  getCausalEstimationData: (args: unknown) => mockGetCausalEstimationData(args),
+  getCausalAgentAnalysis: vi.fn(),
 }));
 
-vi.mock('@/hooks/api/use-graph', () => ({
-  useCausalChains: () => ({
-    mutate: mockChainsMutate,
-    data: chainsState.data,
-    isPending: chainsState.isPending,
-    error: chainsState.error,
-    isSuccess: chainsState.isSuccess,
-  }),
-}));
+import { useDiscoverEffects } from '@/hooks/api';
+import { getCausalAgentAnalysis } from '@/api/causal';
 
-function resetMutationStates() {
-  routeState.data = undefined;
-  routeState.isPending = false;
-  routeState.error = null;
-  routeState.isSuccess = false;
-  chainsState.data = undefined;
-  chainsState.isPending = false;
-  chainsState.error = null;
-  chainsState.isSuccess = false;
-  pipelineState.data = undefined;
-  pipelineState.isPending = false;
-  pipelineState.error = null;
-  pipelineState.isSuccess = false;
+const EFFECTS = [
+  {
+    treatment: 'treatment_arm',
+    outcome: 'persistent_180d',
+    status: 'completed',
+    ate: 0.0875,
+    ate_ci_lower: 0.0867,
+    ate_ci_upper: 0.0884,
+    p_value: 0,
+    statistical_significance: true,
+    selected_estimator: 'LinearDML',
+    gate_decision: 'proceed',
+    confidence_score: 0.9,
+    impact: 0.0875,
+    n_rows: 1500,
+    analysis_id: 'a1',
+  },
+  {
+    treatment: 'treatment_arm',
+    outcome: 'treatment_initiated',
+    status: 'blocked',
+    ate: -0.006,
+    ate_ci_lower: -0.02,
+    ate_ci_upper: 0.008,
+    p_value: 0.01,
+    statistical_significance: true,
+    selected_estimator: 'LinearDML',
+    gate_decision: 'block',
+    confidence_score: 0.4,
+    impact: 0.006,
+    n_rows: 1500,
+    analysis_id: 'a3',
+  },
+  {
+    treatment: 'treatment_arm',
+    outcome: 'discontinued_180d',
+    status: 'failed',
+    statistical_significance: false,
+    confidence_score: 0,
+    n_rows: 0,
+    analysis_id: null,
+  },
+];
+
+const COMPLETED_JOB = {
+  job_id: 'j1',
+  status: 'completed',
+  dataset: 'patient_journeys',
+  total: 3,
+  completed: 3,
+  effects: EFFECTS,
+  note: 'ranked',
+};
+
+const DETAIL = {
+  analysis_id: 'a1',
+  status: 'completed',
+  treatment_var: 'treatment_arm',
+  outcome_var: 'persistent_180d',
+  dataset: 'patient_journeys',
+  n_rows: 1500,
+  data_source: 'synthetic',
+  dag: {
+    nodes: ['treatment_arm', 'persistent_180d', 'disease_severity'],
+    edges: [
+      ['treatment_arm', 'persistent_180d'],
+      ['disease_severity', 'persistent_180d'],
+    ],
+    treatment_nodes: ['treatment_arm'],
+    outcome_nodes: ['persistent_180d'],
+    adjustment_sets: [['disease_severity']],
+    dag_dot: null,
+  },
+  dag_source: 'discovered',
+  discovered_confounders: ['disease_severity'],
+  ate: 0.0875,
+  ate_ci_lower: 0.0867,
+  ate_ci_upper: 0.0884,
+  p_value: 0,
+  statistical_significance: true,
+  selected_estimator: 'LinearDML',
+  refutation: { gate_decision: 'proceed', passed: true, needs_review: false, tests_passed: 1, tests_total: 3, sensitivity_e_value: 1.6 },
+  narrative: 'Treatment raises persistence.',
+  executive_summary: 'Positive, robust effect.',
+  recommendations: [],
+  key_insights: [],
+  warnings: [],
+  latency_ms: 4200,
+};
+
+function createWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
 }
 
-describe('CausalDiscovery Page', () => {
+function mockHook(overrides: Record<string, unknown> = {}) {
+  (useDiscoverEffects as ReturnType<typeof vi.fn>).mockReturnValue({
+    start: vi.fn(),
+    isStarting: false,
+    startError: null,
+    job: null,
+    ...overrides,
+  });
+}
+
+describe('CausalDiscovery — validated-effects leaderboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetMutationStates();
-    variablesState.isLoading = false;
-    variablesState.data = {
-      dataset: 'patient_journeys',
-      treatment_candidates: ['treatment_arm', 'treatment_initiated'],
-      outcome_candidates: [
-        'persistent_180d',
-        'discontinued_180d',
-        'treatment_initiated',
-      ],
-      covariate_candidates: [
-        'disease_severity',
-        'engagement_score',
-        'age_at_diagnosis',
-      ],
-      columns: [],
-    };
+    mockHook();
+    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(DETAIL);
   });
 
-  // =========================================================================
-  // PAGE HEADER TESTS
-  // =========================================================================
-
-  describe('Page Header', () => {
-    it('renders page title', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByText('Causal Discovery')).toBeInTheDocument();
-    });
-
-    it('renders page description', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByText(/Causal analysis/i)).toBeInTheDocument();
-    });
-  });
-
-  // =========================================================================
-  // TECHNOLOGY BADGES TESTS (Phase 3.2)
-  // =========================================================================
-
-  describe('Technology Badges', () => {
-    it('displays DoWhy badge', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByText('DoWhy')).toBeInTheDocument();
-    });
-
-    it('displays EconML badge', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByText('EconML')).toBeInTheDocument();
-    });
-
-    it('displays DAG badge', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByText('DAG')).toBeInTheDocument();
-    });
-
-    it('displays Refutation badge', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByText('Refutation')).toBeInTheDocument();
-    });
-
-    it('renders all four technology badges', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      // Verify all 4 specific badges are present
-      expect(screen.getByText('DoWhy')).toBeInTheDocument();
-      expect(screen.getByText('EconML')).toBeInTheDocument();
-      expect(screen.getByText('DAG')).toBeInTheDocument();
-      expect(screen.getByText('Refutation')).toBeInTheDocument();
-    });
-  });
-
-  // =========================================================================
-  // VISUALIZATION COMPONENT INTEGRATION TESTS
-  // =========================================================================
-
-  describe('CausalDiscovery Visualization', () => {
-    it('renders the visualization component', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByTestId('causal-discovery-viz')).toBeInTheDocument();
-    });
-  });
-
-  // =========================================================================
-  // REAL-DATA THREADING TESTS (fix: hardcoded bottom-of-page analysis)
-  // =========================================================================
-  // The viz formerly received NO data props and fell back to fabricated
-  // SAMPLE_ analysis (ATE 0.45, all-passing refutations). The page must
-  // thread the real run's outputs down — empty until a run completes.
-
-  describe('Visualization receives real run data (no SAMPLE_ fallback)', () => {
-    it('passes EMPTY data arrays (not undefined) before any run, so the viz cannot fall back', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByTestId('viz-nodes-count')).toHaveTextContent(/^0$/);
-      expect(screen.getByTestId('viz-edges-count')).toHaveTextContent(/^0$/);
-      expect(screen.getByTestId('viz-effects-count')).toHaveTextContent(/^0$/);
-      expect(screen.getByTestId('viz-refutations-count')).toHaveTextContent(/^0$/);
-    });
-
-    it('threads parallel-pipeline results into the viz effects table', () => {
-      pipelineState.data = {
-        pipeline_id: 'pp_1',
-        status: 'completed',
-        libraries_succeeded: ['dowhy', 'econml'],
-        libraries_failed: [],
-        library_results: {
-          dowhy: { effect_estimate: 0.123, ci_lower: 0.05, ci_upper: 0.2 },
-          // econml reports an estimate WITHOUT CI bounds — nothing may be invented.
-          econml: { effect_estimate: 0.117 },
-        },
-        consensus_effect: 0.12,
-        consensus_ci_lower: 0.045,
-        consensus_ci_upper: 0.195,
-        consensus_method: 'variance_weighted',
-        total_latency_ms: 900,
-        created_at: '2026-06-12T00:00:00Z',
-        warnings: [],
-      };
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const estimates = screen.getByTestId('viz-effect-estimates').textContent ?? '';
-      expect(estimates).toContain('0.123:ci=0.05,0.2');
-      // Missing CI bounds stay missing — never synthesized from the estimate
-      // (the old code did `ci_lower ?? effect_estimate`, faking a zero-width CI).
-      expect(estimates).toContain('0.117:ci=none,none');
-      expect(estimates).not.toContain('0.117:ci=0.117');
-      // No invented confidence level: the pipeline request/response has no
-      // confidence_level field, so labeling 0.95 was fabrication.
-      expect(estimates).not.toContain('lvl=0.95');
-      // The fabricated SAMPLE effect must never appear.
-      expect(estimates).not.toContain('0.45');
-    });
-
-    it('threads discovered KG chains into the viz DAG nodes', () => {
-      chainsState.data = {
-        chains: [
-          {
-            nodes: [
-              { id: 'n1', name: 'Rep Visits', type: 'Action' },
-              { id: 'n2', name: 'TRx Count', type: 'KPI' },
-            ],
-            relationships: [{ source_id: 'n1', target_id: 'n2', confidence: 0.8 }],
-            path_length: 1,
-            total_confidence: 0.8,
-          },
-        ],
-        total_chains: 1,
-        query_latency_ms: 40,
-      };
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByTestId('viz-nodes-count')).toHaveTextContent(/^2$/);
-      expect(screen.getByTestId('viz-edges-count')).toHaveTextContent(/^1$/);
-      expect(screen.getByTestId('viz-node-labels')).toHaveTextContent('Rep Visits|TRx Count');
-    });
-
-    it('builds a backdoor-adjustment DAG from a pipeline run so the graph is not empty', () => {
-      // Default treatment_arm -> persistent_180d controlling for the three
-      // gold-standard covariates. The KG has no chains for persistent_180d, so
-      // historically the DAG stayed "No causal graph to display" even after a
-      // successful run. The page must derive the estimated causal model.
-      pipelineState.data = {
-        pipeline_id: 'pp_dag',
-        status: 'completed',
-        libraries_succeeded: ['dowhy'],
-        libraries_failed: [],
-        library_results: { dowhy: { effect_estimate: 0.137 } },
-        consensus_effect: 0.137,
-        consensus_method: 'variance_weighted',
-        total_latency_ms: 50,
-        created_at: '2026-06-17T00:00:00Z',
-        warnings: [],
-      };
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const labels = screen.getByTestId('viz-node-labels').textContent ?? '';
-      expect(labels).toContain('treatment_arm');
-      expect(labels).toContain('persistent_180d');
-      expect(labels).toContain('disease_severity');
-      // confounder->treatment, confounder->outcome, and treatment->outcome
-      expect(
-        Number(screen.getByTestId('viz-edges-count').textContent),
-      ).toBeGreaterThan(0);
-      // The treatment->outcome edge carries the REAL estimated effect (not faked).
-      expect(screen.getByTestId('viz-edge-detail').textContent).toContain(
-        'treatment_arm->persistent_180d:causal:0.137',
-      );
-    });
-  });
-
-  // =========================================================================
-  // HONEST EMPTY-STATE TESTS (#2 KG gap, #4 refutation not run)
-  // =========================================================================
-  describe('Honest empty states', () => {
-    it('explains the empty KG result and guides the user (not a bare "no chains" line)', () => {
-      chainsState.data = { chains: [], total_chains: 0, query_latency_ms: 10 };
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const panel = screen.getByTestId('kg-chains-panel');
-      expect(panel.textContent ?? '').toMatch(/knowledge graph/i);
-      // Guidance: try another outcome or run the pipeline to estimate directly.
-      expect(panel.textContent ?? '').toMatch(/another outcome|run the parallel pipeline/i);
-    });
-
-    it('explains the empty Refutation panel after a parallel-pipeline run', () => {
-      pipelineState.data = {
-        pipeline_id: 'pp_ref',
-        status: 'completed',
-        libraries_succeeded: ['dowhy'],
-        libraries_failed: [],
-        library_results: { dowhy: { effect_estimate: 0.1 } },
-        consensus_effect: 0.1,
-        consensus_method: 'variance_weighted',
-        total_latency_ms: 50,
-        created_at: '2026-06-17T00:00:00Z',
-        warnings: [],
-      };
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const note = screen.getByTestId('refutation-note');
-      expect(note.textContent ?? '').toMatch(/refutation/i);
-      expect(note.textContent ?? '').toMatch(/parallel pipeline|not run|does not run/i);
-    });
-  });
-
-  // =========================================================================
-  // LIVE API WIRING TESTS (Issue #303)
-  // =========================================================================
-
-  describe('Routing query form (Issue #303)', () => {
-    it('renders form inputs for query, treatment_var, outcome_var, and covariates', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      // Form inputs should be present
-      expect(screen.getByLabelText(/causal question/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/treatment variable/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/outcome variable/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/covariates/i)).toBeInTheDocument();
-    });
-
-    it('forwards the user-typed causal question verbatim to useRouteQuery', async () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const query = screen.getByLabelText(/causal question/i) as HTMLInputElement;
-      // A targeting question — backend router maps this to CausalML.
-      fireEvent.change(query, {
-        target: { value: 'Who should we target with rep visits?' },
-      });
-
-      const submit = screen.getByRole('button', { name: /run routing/i });
-      fireEvent.click(submit);
-
-      await waitFor(() => {
-        expect(mockRouteMutate).toHaveBeenCalledTimes(1);
-      });
-      expect(mockRouteMutate.mock.calls[0][0].query).toBe(
-        'Who should we target with rep visits?',
-      );
-    });
-
-    it('submits the form and calls useRouteQuery with treatment, outcome, and covariates', async () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLSelectElement;
-      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLSelectElement;
-
-      // Treatment / outcome are now Selects bound to the live candidate lists;
-      // pick real columns from the patient_journeys gold-standard frame.
-      fireEvent.change(treatment, { target: { value: 'treatment_arm' } });
-      fireEvent.change(outcome, { target: { value: 'persistent_180d' } });
-      // Covariates default to the three gold-standard controls; deselect
-      // engagement_score so we exercise the multi-select wiring too.
-      const engagementBox = screen.getByLabelText(
-        'engagement_score',
-      ) as HTMLInputElement;
-      fireEvent.click(engagementBox);
-
-      const submit = screen.getByRole('button', { name: /run routing/i });
-      fireEvent.click(submit);
-
-      await waitFor(() => {
-        expect(mockRouteMutate).toHaveBeenCalledTimes(1);
-      });
-      const calledWith = mockRouteMutate.mock.calls[0][0];
-      // RouteQueryRequest's schema is { query, treatment_var?, outcome_var?,
-      // context?, prefer_library? } — there is no top-level `covariates`
-      // field, so a top-level placement would be silently ignored by the
-      // backend. Assert the canonical `context.covariates` shape exactly.
-      expect(calledWith).toMatchObject({
-        treatment_var: 'treatment_arm',
-        outcome_var: 'persistent_180d',
-        context: { covariates: ['disease_severity', 'age_at_diagnosis'] },
-      });
-      expect(
-        (calledWith as Record<string, unknown>).covariates,
-      ).toBeUndefined();
-    });
-
-    it('shows recommended library and alternatives from the routing response', () => {
-      // Pre-populate routing data
-      routeState.data = {
-        query: '',
-        question_type: 'causal_effect',
-        primary_library: 'dowhy',
-        secondary_libraries: ['econml', 'causalml'],
-        recommended_estimators: ['propensity_score_matching'],
-        routing_confidence: 0.87,
-        routing_rationale: 'Direct ATE question',
-        suggested_pipeline: 'parallel',
-      };
-      routeState.isSuccess = true;
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      // Primary library surfaced
-      expect(screen.getByTestId('routing-primary-library')).toHaveTextContent(/dowhy/i);
-      // Alternatives surfaced
-      const alternatives = screen.getByTestId('routing-alternatives');
-      expect(alternatives).toHaveTextContent(/econml/i);
-      expect(alternatives).toHaveTextContent(/causalml/i);
-    });
-
-    it('shows loading state while routing is pending', () => {
-      routeState.isPending = true;
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(screen.getByTestId('routing-loading')).toBeInTheDocument();
-    });
-
-    it('shows error state when routing fails', () => {
-      routeState.error = new Error('boom from server');
-      renderWithAllProviders(<CausalDiscovery />);
-
-      // QueryErrorState renders a title plus the error message; both should
-      // be present somewhere in the page.
-      expect(screen.getAllByText(/routing failed/i).length).toBeGreaterThan(0);
-      // The original error message is surfaced too.
-      expect(screen.getByText(/boom from server/i)).toBeInTheDocument();
-    });
-  });
-
-  describe('Results table (Issue #303)', () => {
-    it('renders effect estimate, CI, and library used when routing returns recommendations', () => {
-      routeState.data = {
-        query: '',
-        question_type: 'causal_effect',
-        primary_library: 'econml',
-        secondary_libraries: ['dowhy'],
-        recommended_estimators: ['causal_forest'],
-        routing_confidence: 0.91,
-        routing_rationale: 'HTE question',
-        suggested_pipeline: 'parallel',
-      };
-      routeState.isSuccess = true;
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const table = screen.getByTestId('routing-results-table');
-      // Header / columns
-      expect(table).toHaveTextContent(/library/i);
-      expect(table).toHaveTextContent(/recommended estimator|estimator/i);
-      expect(table).toHaveTextContent(/confidence/i);
-      // Row content includes primary library
-      expect(table).toHaveTextContent(/econml/i);
-      // Row content includes the estimator
-      expect(table).toHaveTextContent(/causal_forest/i);
-      // Confidence rendered as percent (0.91 → 91%)
-      expect(table).toHaveTextContent(/91/);
-    });
-
-    it('does not mis-label DoWhy estimators on the EconML secondary row', () => {
-      // /api/causal/route returns `recommended_estimators` only for the
-      // primary library. If we naively zipped them by row index we'd render
-      // DoWhy estimators on the EconML row.
-      routeState.data = {
-        query: '',
-        question_type: 'causal_effect',
-        primary_library: 'dowhy',
-        secondary_libraries: ['econml'],
-        recommended_estimators: [
-          'propensity_score_matching',
-          'inverse_propensity_weighting',
-        ],
-        routing_confidence: 0.8,
-        routing_rationale: '',
-        suggested_pipeline: 'parallel',
-      };
-      routeState.isSuccess = true;
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const table = screen.getByTestId('routing-results-table');
-      const rows = table.querySelectorAll('tbody > tr');
-      expect(rows.length).toBe(2);
-      // Primary row (DoWhy) renders its recommended estimators
-      expect(rows[0].textContent).toMatch(/dowhy/i);
-      expect(rows[0].textContent).toMatch(/propensity_score_matching/);
-      // Secondary row (EconML) must NOT show DoWhy estimators
-      expect(rows[1].textContent).toMatch(/econml/i);
-      expect(rows[1].textContent).not.toMatch(/propensity_score_matching/);
-      expect(rows[1].textContent).not.toMatch(/inverse_propensity_weighting/);
-    });
-
-    it('renders pipeline effect estimate + CI + library agreement when pipeline returns data', () => {
-      routeState.data = {
-        query: '',
-        question_type: 'causal_effect',
-        primary_library: 'dowhy',
-        secondary_libraries: ['econml'],
-        recommended_estimators: ['propensity_score_matching', 'causal_forest'],
-        routing_confidence: 0.78,
-        routing_rationale: 'ATE question',
-        suggested_pipeline: 'parallel',
-      };
-      routeState.isSuccess = true;
-      pipelineState.data = {
-        pipeline_id: 'pl_abc',
-        status: 'completed',
-        libraries_succeeded: ['dowhy', 'econml'],
-        libraries_failed: [],
-        library_results: {
-          dowhy: {
-            effect_estimate: 0.234,
-            ci_lower: 0.123,
-            ci_upper: 0.345,
-          },
-          econml: {
-            effect_estimate: 0.211,
-            ci_lower: 0.101,
-            ci_upper: 0.321,
-          },
-        },
-        consensus_effect: 0.225,
-        consensus_ci_lower: 0.112,
-        consensus_ci_upper: 0.333,
-        library_agreement_score: 0.93,
-        consensus_method: 'variance_weighted',
-        total_latency_ms: 1234,
-        created_at: '2026-05-17T00:00:00Z',
-        warnings: [],
-      };
-      pipelineState.isSuccess = true;
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const table = screen.getByTestId('routing-results-table');
-      // Effect estimate cell shows the numeric value (0.234)
-      expect(table).toHaveTextContent(/0\.234/);
-      // CI shown as [lower, upper]
-      expect(table).toHaveTextContent(/\[0\.123, 0\.345\]/);
-
-      // Consensus block surfaces consensus + library agreement score
-      const consensus = screen.getByTestId('pipeline-consensus');
-      expect(consensus).toHaveTextContent(/0\.225/);
-      expect(consensus).toHaveTextContent(/93/);
-    });
-  });
-
-  describe('Run parallel pipeline (Issue #303)', () => {
-    it('renders a button to run the parallel pipeline', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      expect(
-        screen.getByRole('button', { name: /run parallel pipeline|run pipeline/i }),
-      ).toBeInTheDocument();
-    });
-
-    it('fetches real estimation data and threads it + treatment/outcome/covariates into the pipeline request', async () => {
-      routeState.data = {
-        query: '',
-        question_type: 'causal_effect',
-        primary_library: 'dowhy',
-        secondary_libraries: ['econml'],
-        recommended_estimators: [],
-        routing_confidence: 0.8,
-        routing_rationale: '',
-        suggested_pipeline: 'parallel',
-      };
-      routeState.isSuccess = true;
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const treatment = screen.getByLabelText(/treatment variable/i) as HTMLSelectElement;
-      const outcome = screen.getByLabelText(/outcome variable/i) as HTMLSelectElement;
-
-      // Real columns from the gold-standard frame.
-      fireEvent.change(treatment, { target: { value: 'treatment_arm' } });
-      fireEvent.change(outcome, { target: { value: 'persistent_180d' } });
-
-      const button = screen.getByRole('button', {
-        name: /run parallel pipeline|run pipeline/i,
-      });
-      fireEvent.click(button);
-
-      // The page must fetch the real estimation rows BEFORE running.
-      await waitFor(() => {
-        expect(mockGetCausalEstimationData).toHaveBeenCalledTimes(1);
-      });
-      expect(mockGetCausalEstimationData.mock.calls[0][0]).toMatchObject({
-        treatment_var: 'treatment_arm',
-        outcome_var: 'persistent_180d',
-        covariates: ['disease_severity', 'engagement_score', 'age_at_diagnosis'],
-      });
-
-      await waitFor(() => {
-        expect(mockPipelineMutate).toHaveBeenCalledTimes(1);
-      });
-      const arg = mockPipelineMutate.mock.calls[0][0];
-      // Hook expects an object: { request, asyncMode }
-      const request = (arg && (arg.request ?? arg)) as Record<string, unknown>;
-      expect(request).toMatchObject({
-        treatment_var: 'treatment_arm',
-        outcome_var: 'persistent_180d',
-      });
-      expect(request.covariates).toEqual([
-        'disease_severity',
-        'engagement_score',
-        'age_at_diagnosis',
-      ]);
-      // Real estimation rows are attached via filters so the libraries can fit.
-      expect(
-        (request.filters as { estimation_data_records?: unknown[] })
-          .estimation_data_records,
-      ).toHaveLength(2);
-      // Libraries should pull from routing (dowhy, econml) when present.
-      expect(request.libraries).toEqual(
-        expect.arrayContaining(['dowhy', 'econml']),
-      );
-    });
-  });
-
-  describe('KG chain discovery mode (Issue #303)', () => {
-    it('renders a toggle/button to switch to KG chain discovery mode', () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      // Some control labeled like "Discover chains in KG"
-      expect(
-        screen.getByRole('button', { name: /discover chains|kg chains/i }),
-      ).toBeInTheDocument();
-    });
-
-    it('invokes useCausalChains when the KG-chains action is triggered', async () => {
-      renderWithAllProviders(<CausalDiscovery />);
-
-      const outcomeInput = screen.getByLabelText(/outcome variable/i) as HTMLSelectElement;
-      // Pick a real outcome candidate from the gold-standard frame.
-      fireEvent.change(outcomeInput, { target: { value: 'discontinued_180d' } });
-
-      const kgButton = screen.getByRole('button', { name: /discover chains|kg chains/i });
-      fireEvent.click(kgButton);
-
-      await waitFor(() => {
-        expect(mockChainsMutate).toHaveBeenCalledTimes(1);
-      });
-      const calledWith = mockChainsMutate.mock.calls[0][0];
-      // Should pass the outcome as kpi_name (or include it some structured way)
-      expect(calledWith.kpi_name).toBe('discontinued_180d');
-    });
-
-    it('renders discovered chains when useCausalChains returns data', () => {
-      chainsState.data = {
-        chains: [
-          {
-            nodes: [
-              { id: 'n1', name: 'Rep Visits', type: 'Treatment' },
-              { id: 'n2', name: 'TRx', type: 'KPI' },
-            ],
-            relationships: [
-              {
-                id: 'r1',
-                source_id: 'n1',
-                target_id: 'n2',
-                type: 'IMPACTS',
-                confidence: 0.85,
-              },
-            ],
-            total_confidence: 0.85,
-            path_length: 1,
-          },
-        ],
-        total_chains: 1,
-        latency_ms: 12,
-        timestamp: '2026-05-17T00:00:00Z',
-      };
-      chainsState.isSuccess = true;
-
-      renderWithAllProviders(<CausalDiscovery />);
-
-      // Chains panel renders
-      expect(screen.getByTestId('kg-chains-panel')).toBeInTheDocument();
-      // Chain content is surfaced
-      const panel = screen.getByTestId('kg-chains-panel');
-      expect(panel).toHaveTextContent(/Rep Visits/);
-      expect(panel).toHaveTextContent(/TRx/);
-    });
-  });
+  it('shows an honest empty state before any discovery run', () => {
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    expect(screen.getByText(/No discovery run yet/i)).toBeInTheDocument();
+  }, 20000);
+
+  it('renders the ranked leaderboard of validated effects', () => {
+    mockHook({ job: COMPLETED_JOB });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    // Each candidate question (unique outcomes), and the three honest verdicts:
+    // proceed (validated), blocked (computed but failed robustness), failed (no run).
+    expect(screen.getByText('persistent_180d')).toBeInTheDocument();
+    expect(screen.getByText('treatment_initiated')).toBeInTheDocument();
+    expect(screen.getByText('discontinued_180d')).toBeInTheDocument();
+    expect(screen.getByText('Proceed')).toBeInTheDocument();
+    expect(screen.getByText('Blocked')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+    expect(screen.getByText('0.0875')).toBeInTheDocument();
+  }, 20000);
+
+  it('shows progress while the agent is validating', () => {
+    mockHook({ job: { ...COMPLETED_JOB, status: 'running', completed: 1 } });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Validating… \(1\/3\)/)).toBeInTheDocument();
+  }, 20000);
+
+  it('starts discovery when the button is clicked', () => {
+    const start = vi.fn();
+    mockHook({ start });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: /Discover causal effects/i }));
+    expect(start).toHaveBeenCalled();
+  }, 20000);
+
+  it('drills into a validated row: shows its DAG + estimator + gate', async () => {
+    mockHook({ job: COMPLETED_JOB });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    // Click the completed row (its question cell).
+    fireEvent.click(screen.getByText('persistent_180d'));
+    // The full validated detail loads (mocked getCausalAgentAnalysis) -> DAG fed.
+    const dag = await screen.findByTestId('causal-dag');
+    expect(dag).toHaveAttribute('data-edges', '2');
+    expect(screen.getByText(/Treatment raises persistence/)).toBeInTheDocument();
+    expect(getCausalAgentAnalysis).toHaveBeenCalledWith('a1');
+  }, 20000);
 });

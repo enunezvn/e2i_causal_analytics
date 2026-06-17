@@ -27,90 +27,68 @@ import type { GraphNode, GraphRelationship } from '@/types/graph';
 // =============================================================================
 
 /**
- * The pharma brands whose synthetic gold-standard causal graphs are loaded.
- * Each ``(:Variable)-[:CAUSES {brand}]->(:Variable)`` edge is stamped with its
- * brand by ``scripts/sync_causal_paths_to_falkordb.py``, so the page renders
- * exactly ONE brand's causal chains at a time (selected via the dropdown).
- * Matching is case-insensitive — the graph carries both ``Kisqali`` and a
- * legacy lowercase ``kisqali`` (and ``Remibrutinib``/``remibrutinib``).
+ * Node + relationship types that make up the synthetic gold-standard CAUSAL
+ * graph. Variables carry the brand-tagged ``CAUSES`` chains; KPIs / CausalPaths /
+ * Regions carry the cross-type causal structure (``CAUSES`` between KPIs,
+ * ``EXPLAINS`` from a CausalPath, ``INFLUENCES`` a Region, ``AFFECTS``). We pull
+ * these together so the page shows the WHOLE causal gold standard, not one
+ * brand's variable slice. (Treatment exists but has no causal edge in the data,
+ * so it drops out as isolated — shown only if it ever gains a causal link.)
  */
-const BRANDS = ['Kisqali', 'Fabhalta', 'Remibrutinib'] as const;
-type Brand = (typeof BRANDS)[number];
+const CAUSAL_NODE_TYPES = 'Variable,KPI,CausalPath,Region,Treatment';
+const CAUSAL_REL_TYPES = 'CAUSES,EXPLAINS,INFLUENCES,AFFECTS';
 
 /**
- * Pull the full (scoped) graph in one window so connected-component detection
- * and the rendered stats are computed over the complete data, not an arbitrary
- * page. The backend caps these at 2000; today's graph is ~640 nodes / ~610 edges.
+ * Brand-tagged ``(:Variable)-[:CAUSES {brand}]->(:Variable)`` chains are stamped
+ * by ``scripts/sync_causal_paths_to_falkordb.py``. The brand filter is OPTIONAL:
+ * default ``All`` shows every brand's chains + the shared causal structure.
+ * Matching is case-insensitive (the graph carries ``Kisqali`` and legacy
+ * lowercase ``kisqali``, etc.).
+ */
+const BRANDS = ['Kisqali', 'Fabhalta', 'Remibrutinib'] as const;
+const BRAND_FILTERS = ['All', ...BRANDS] as const;
+type BrandFilter = (typeof BRAND_FILTERS)[number];
+
+/**
+ * Pull the full graph in one window so the rendered stats are computed over the
+ * complete causal layer. The backend caps these at 2000.
  */
 const NODE_FETCH_LIMIT = 2000;
 const REL_FETCH_LIMIT = 2000;
 
 /**
- * Minimum connected-component size to render WITHIN a brand's causal graph. A
- * brand's gold standard can include a tiny off-chain causal pair; isolated
- * singletons and 2-node pairs carry little signal and read as a stray
- * "disconnected secondary graph", so they are pruned. K = 3 keeps every genuine
- * multi-node chain. Tunable.
+ * Derive the causal gold-standard graph to render. Keep:
+ *  - every causal edge when ``brand === 'All'``;
+ *  - otherwise the selected brand's tagged ``CAUSES`` edges PLUS the untagged,
+ *    brand-agnostic structural edges (KPI↔KPI causes, CausalPath EXPLAINS KPI,
+ *    KPI INFLUENCES Region, AFFECTS) so the brand's variables show in context.
+ * Then keep only nodes touched by ≥1 kept edge (drop isolated singletons), and
+ * only edges whose endpoints both survive. No cross-brand variable chains leak
+ * into a single-brand view; ``All`` shows the complete causal structure.
  */
-const MIN_COMPONENT_SIZE = 3;
-
-/**
- * Derive the selected brand's causal subgraph: keep the ``CAUSES`` edges tagged
- * with that brand (case-insensitive) and the ``Variable`` nodes they connect,
- * THEN drop within-brand singletons and 2-node pairs (connected components
- * smaller than ``MIN_COMPONENT_SIZE``) so the canvas shows the brand's connected
- * causal chain(s), not stray off-chain fragments. This IS the brand's synthetic
- * gold-standard causal graph — no other entity types, no cross-brand edges.
- */
-function causalSubgraphForBrand(
+function causalGoldStandardGraph(
   nodes: GraphNode[],
   relationships: GraphRelationship[],
-  brand: string
+  brand: BrandFilter
 ): { nodes: GraphNode[]; relationships: GraphRelationship[] } {
   const target = brand.toLowerCase();
-  const brandRels = relationships.filter((r) => {
+  const kept = relationships.filter((r) => {
+    if (brand === 'All') return true;
     const b = r.properties?.brand;
-    return r.type === 'CAUSES' && typeof b === 'string' && b.toLowerCase() === target;
+    // Brand-tagged edge: keep only this brand's. Untagged structural edge: keep.
+    return typeof b === 'string' ? b.toLowerCase() === target : true;
   });
 
-  // Undirected adjacency over the brand's causal Variables.
-  const adjacency = new Map<string, string[]>();
-  const touch = (id: string) => {
-    if (!adjacency.has(id)) adjacency.set(id, []);
-  };
-  for (const r of brandRels) {
-    touch(r.source_id);
-    touch(r.target_id);
-    adjacency.get(r.source_id)!.push(r.target_id);
-    adjacency.get(r.target_id)!.push(r.source_id);
+  const touched = new Set<string>();
+  for (const r of kept) {
+    touched.add(r.source_id);
+    touched.add(r.target_id);
   }
-
-  // BFS each connected component; keep only those with >= MIN_COMPONENT_SIZE nodes.
-  const seen = new Set<string>();
-  const keep = new Set<string>();
-  for (const start of adjacency.keys()) {
-    if (seen.has(start)) continue;
-    seen.add(start);
-    const component = [start];
-    const queue = [start];
-    while (queue.length > 0) {
-      const current = queue.pop()!;
-      for (const neighbor of adjacency.get(current)!) {
-        if (!seen.has(neighbor)) {
-          seen.add(neighbor);
-          component.push(neighbor);
-          queue.push(neighbor);
-        }
-      }
-    }
-    if (component.length >= MIN_COMPONENT_SIZE) {
-      for (const id of component) keep.add(id);
-    }
-  }
-
+  const keptNodes = nodes.filter((n) => touched.has(n.id));
+  const nodeIds = new Set(keptNodes.map((n) => n.id));
   return {
-    nodes: nodes.filter((n) => keep.has(n.id)),
-    relationships: brandRels.filter((r) => keep.has(r.source_id) && keep.has(r.target_id)),
+    nodes: keptNodes,
+    relationships: kept.filter((r) => nodeIds.has(r.source_id) && nodeIds.has(r.target_id)),
   };
 }
 
@@ -127,20 +105,21 @@ function KnowledgeGraphPage() {
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Selected brand — the page loads exactly this brand's synthetic gold-standard
-  // causal graph (its brand-tagged CAUSES chains). Defaults to the first brand.
-  const [selectedBrand, setSelectedBrand] = useState<Brand>('Kisqali');
+  // Optional brand filter over the causal gold-standard graph. Default 'All' —
+  // the page shows the WHOLE causal layer; a brand narrows to its variable chains
+  // (+ the shared structure). Switching needs no refetch (derived client-side).
+  const [selectedBrand, setSelectedBrand] = useState<BrandFilter>('All');
 
-  // Fetch the causal layer's nodes: Variable entities only. The full window is
-  // pulled so every brand's chains are present and switching brands needs no
-  // refetch (the brand subgraph is derived client-side below).
+  // Fetch the causal layer's nodes (Variable + KPI + CausalPath + Region +
+  // Treatment) in one full window so the whole gold-standard causal graph is
+  // available and the brand filter is derived client-side.
   const {
     data: nodesData,
     isLoading: isLoadingNodes,
     error: nodesError,
     refetch: refetchNodes,
   } = useNodes({
-    entity_types: 'Variable',
+    entity_types: CAUSAL_NODE_TYPES,
     limit: NODE_FETCH_LIMIT,
   });
 
@@ -151,7 +130,7 @@ function KnowledgeGraphPage() {
     isLoading: isLoadingRelationships,
     error: relationshipsError,
     refetch: refetchRelationships,
-  } = useRelationships({ relationship_types: 'CAUSES', limit: REL_FETCH_LIMIT });
+  } = useRelationships({ relationship_types: CAUSAL_REL_TYPES, limit: REL_FETCH_LIMIT });
 
   // Combined loading state
   const isLoading = isLoadingNodes || isLoadingRelationships;
@@ -176,11 +155,11 @@ function KnowledgeGraphPage() {
     [relationshipsData?.relationships]
   );
 
-  // Base rendered graph: the selected brand's synthetic gold-standard causal
-  // subgraph (brand-tagged CAUSES chains + their Variables), independent of the
-  // search query. Switching brands re-derives without a refetch.
+  // Base rendered graph: the causal gold-standard graph (all causal node types +
+  // edges), optionally narrowed to one brand. Independent of the search query;
+  // switching the brand filter re-derives without a refetch.
   const brandGraph = useMemo(
-    () => causalSubgraphForBrand(allNodes, allRelationships, selectedBrand),
+    () => causalGoldStandardGraph(allNodes, allRelationships, selectedBrand),
     [allNodes, allRelationships, selectedBrand]
   );
 
@@ -277,12 +256,12 @@ function KnowledgeGraphPage() {
             id="kg-brand"
             aria-label="Brand"
             value={selectedBrand}
-            onChange={(e) => setSelectedBrand(e.target.value as Brand)}
+            onChange={(e) => setSelectedBrand(e.target.value as BrandFilter)}
             className="h-9 rounded-md border border-[var(--color-border)] bg-[var(--color-background)] px-3 text-sm"
           >
-            {BRANDS.map((b) => (
+            {BRAND_FILTERS.map((b) => (
               <option key={b} value={b}>
-                {b}
+                {b === 'All' ? 'All brands' : b}
               </option>
             ))}
           </select>
@@ -291,10 +270,17 @@ function KnowledgeGraphPage() {
 
       {/* Scope hint */}
       <p className="text-xs text-[var(--color-muted-foreground)] mb-4">
-        Showing{' '}
-        <span className="font-medium text-[var(--color-foreground)]">{selectedBrand}</span>
-        &apos;s synthetic gold-standard causal graph — its variables and their
-        brand-specific cause→effect chains. Select another brand to load its graph.
+        Showing the synthetic gold-standard{' '}
+        <span className="font-medium text-[var(--color-foreground)]">causal graph</span> —{' '}
+        {selectedBrand === 'All' ? (
+          <>all brands&apos; variable cause→effect chains plus the shared KPI / causal-path structure.</>
+        ) : (
+          <>
+            <span className="font-medium text-[var(--color-foreground)]">{selectedBrand}</span>
+            &apos;s variable cause→effect chains plus the shared KPI / causal-path structure.
+          </>
+        )}{' '}
+        Use the brand filter to narrow to one brand.
       </p>
 
       {/* Stats Cards */}

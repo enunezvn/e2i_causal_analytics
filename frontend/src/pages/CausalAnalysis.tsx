@@ -71,16 +71,17 @@ const DEFAULT_TREATMENT = 'treatment_arm';
 const DEFAULT_OUTCOME = 'persistent_180d';
 
 // Estimator selection. "auto" = the agent's data-driven energy-score routing
-// across the registry; override values MUST be members of the backend's
-// AGENT_FORCEABLE_ESTIMATORS allowlist (schemas/causal.py). Causal Forest is the
-// DEFAULT because the gold-standard frame has boosted confounders that OLS
-// (Auto's energy-score pick) under-adjusts → it doesn't survive refutation,
-// whereas Causal Forest recovers the planted effect ROBUSTLY (gate=proceed).
+// across the registry — the DEFAULT, so the engine decides (not the analyst).
+// The override is an expert escape hatch; values MUST be members of the
+// backend's AGENT_FORCEABLE_ESTIMATORS allowlist (schemas/causal.py).
+// (Auto now robustly selects a confounding-adjusting estimator: the energy-score
+// tiebreak no longer hands a fit-tie to naive OLS, so on the gold-standard frame
+// Auto -> linear_dml survives refutation, gate=proceed.)
 const AUTO_ESTIMATOR = 'auto';
-const DEFAULT_ESTIMATOR = 'CausalForestDML';
+const DEFAULT_ESTIMATOR = AUTO_ESTIMATOR;
 const ESTIMATOR_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'CausalForestDML', label: 'Causal Forest (recommended)' },
-  { value: AUTO_ESTIMATOR, label: 'Auto (data-driven)' },
+  { value: AUTO_ESTIMATOR, label: 'Auto — agent decides (recommended)' },
+  { value: 'CausalForestDML', label: 'Causal Forest — EconML' },
   { value: 'LinearDML', label: 'Linear DML — EconML' },
   { value: 'drlearner', label: 'DR-Learner — EconML' },
   { value: 'ols', label: 'Linear Regression (OLS)' },
@@ -400,7 +401,9 @@ export default function CausalAnalysis() {
                   </Select>
                 </div>
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Estimator</label>
+                  <label className="text-sm font-medium mb-2 block">
+                    Estimator <span className="text-muted-foreground">(optional override)</span>
+                  </label>
                   <Select value={estimator} onValueChange={setEstimator}>
                     <SelectTrigger aria-label="Estimator">
                       <SelectValue />
