@@ -81,6 +81,22 @@ describe('KPICard', () => {
     expect(screen.getByText('Active')).toBeInTheDocument();
   });
 
+  it('normalizes a tiny-negative value to an unsigned zero (no "-0.00")', () => {
+    // A real Fleiss κ for chance-level inter-annotator agreement comes back
+    // slightly negative; rounded to 2dp it is zero and must NOT render with a
+    // misleading minus sign (the homepage "Label Quality = -0" wart).
+    render(<KPICard title="Label Quality" value={-0.003} />);
+    expect(screen.getByText('0.00')).toBeInTheDocument();
+    expect(screen.queryByText('-0.00')).not.toBeInTheDocument();
+    expect(screen.queryByText('-0')).not.toBeInTheDocument();
+  });
+
+  it('renders a genuinely negative value with its sign', () => {
+    // Guard: the negative-zero fix must not swallow real negatives.
+    render(<KPICard title="Net Change" value={-0.42} />);
+    expect(screen.getByText('-0.42')).toBeInTheDocument();
+  });
+
   it('renders with warning status color', () => {
     const { container } = render(<KPICard title="Warning KPI" value={50} status="warning" />);
     // Should have amber-500 border-left color

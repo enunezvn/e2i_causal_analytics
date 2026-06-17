@@ -51,6 +51,13 @@ vi.mock('@/lib/api-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api-client')>();
   return { ...actual, getValidated: vi.fn() };
 });
+// Spy on navigation so we can assert per-card destinations (Model Performance
+// tab → /model-performance; every other card → /kpi-dictionary).
+const { mockNavigate } = vi.hoisted(() => ({ mockNavigate: vi.fn() }));
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
 
 import {
   useKPIList,
@@ -374,6 +381,84 @@ describe('Home', () => {
 
       // Default should show commercial KPIs
       expect(screen.getByText('Total TRx')).toBeInTheDocument();
+    });
+  });
+
+  describe('KPI tabs & navigation (live mode)', () => {
+    /** Put Home into live mode with the given KPI definitions + batch values. */
+    function mockLiveKpis(
+      kpis: Array<{ id: string; name: string; workstream: string }>,
+      values: Record<string, number> = {}
+    ) {
+      (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          kpis: kpis.map((k) => ({
+            id: k.id,
+            name: k.name,
+            workstream: k.workstream,
+            unit: undefined,
+            definition: `${k.name} definition`,
+          })),
+        },
+        isLoading: false,
+        error: null,
+      });
+      (useBatchCalculateKPIs as ReturnType<typeof vi.fn>).mockReturnValue({
+        mutate: vi.fn(),
+        data: {
+          results: kpis.map((k) => ({
+            kpi_id: k.id,
+            value: k.id in values ? values[k.id] : null,
+            status: 'healthy',
+            error: null,
+            data_source: 'database',
+          })),
+        },
+        isError: false,
+      });
+    }
+
+    it('does NOT render the Brand (brand_specific) tab or its KPIs', () => {
+      mockLiveKpis(
+        [
+          { id: 'BR-003', name: '% PNH Tested', workstream: 'brand_specific' },
+          { id: 'WS1-MP-001', name: 'ROC-AUC', workstream: 'ws1_model_performance' },
+          { id: 'WS2-TR-005', name: 'False Alert Rate', workstream: 'ws2_triggers' },
+        ],
+        { 'BR-003': 0, 'WS1-MP-001': 0.82, 'WS2-TR-005': 0 }
+      );
+      renderWithAllProviders(<Home />);
+
+      const tablist = screen.getByRole('tablist');
+      // The brand-clinical tab is gone; the real workstream tabs remain.
+      expect(within(tablist).queryByText('Brand')).not.toBeInTheDocument();
+      expect(within(tablist).getByText('Model Performance')).toBeInTheDocument();
+      expect(within(tablist).getByText('Triggers')).toBeInTheDocument();
+      // ...and the brand KPI itself is not shown anywhere on the page.
+      expect(screen.queryByText('% PNH Tested')).not.toBeInTheDocument();
+    });
+
+    it('routes a Model Performance card to /model-performance', () => {
+      mockLiveKpis([{ id: 'WS1-MP-001', name: 'ROC-AUC', workstream: 'ws1_model_performance' }], {
+        'WS1-MP-001': 0.82,
+      });
+      renderWithAllProviders(<Home />);
+
+      fireEvent.click(screen.getByText('ROC-AUC').closest('div')!);
+      expect(mockNavigate).toHaveBeenCalledWith('/model-performance');
+    });
+
+    it('routes any non-Model-Performance card to /kpi-dictionary', () => {
+      mockLiveKpis([{ id: 'WS2-TR-005', name: 'False Alert Rate', workstream: 'ws2_triggers' }], {
+        'WS2-TR-005': 0,
+      });
+      renderWithAllProviders(<Home />);
+
+      // The real computed 0 renders (NOT "Not yet computed").
+      expect(screen.getByText('False Alert Rate')).toBeInTheDocument();
+      fireEvent.click(screen.getByText('False Alert Rate').closest('div')!);
+      expect(mockNavigate).toHaveBeenCalledWith('/kpi-dictionary');
+      expect(mockNavigate).not.toHaveBeenCalledWith('/model-performance');
     });
   });
 

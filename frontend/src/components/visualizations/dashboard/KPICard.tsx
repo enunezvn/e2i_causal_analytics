@@ -107,6 +107,14 @@ function formatValue(value: number | string, prefix?: string, unit?: string): st
     formatted = value.toFixed(2);
   }
 
+  // A value that ROUNDS to zero must not carry a sign: a tiny-negative real
+  // statistic (e.g. a chance-level Fleiss κ ≈ -0.003) was rendering as "-0.00"
+  // ("Label Quality = -0" on the homepage). Strip the sign only when the
+  // displayed magnitude is zero — genuine negatives (e.g. "-0.42") keep theirs.
+  if (parseFloat(formatted) === 0) {
+    formatted = formatted.replace('-', '');
+  }
+
   return `${prefix || ''}${formatted}${unit || ''}`;
 }
 
