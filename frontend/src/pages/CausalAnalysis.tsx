@@ -71,12 +71,16 @@ const DEFAULT_TREATMENT = 'treatment_arm';
 const DEFAULT_OUTCOME = 'persistent_180d';
 
 // Estimator selection. "auto" = the agent's data-driven energy-score routing
-// across the full registry (recommended). The override values MUST be members
-// of the backend's AGENT_FORCEABLE_ESTIMATORS allowlist (schemas/causal.py).
+// across the registry; override values MUST be members of the backend's
+// AGENT_FORCEABLE_ESTIMATORS allowlist (schemas/causal.py). Causal Forest is the
+// DEFAULT because the gold-standard frame has boosted confounders that OLS
+// (Auto's energy-score pick) under-adjusts → it doesn't survive refutation,
+// whereas Causal Forest recovers the planted effect ROBUSTLY (gate=proceed).
 const AUTO_ESTIMATOR = 'auto';
+const DEFAULT_ESTIMATOR = 'CausalForestDML';
 const ESTIMATOR_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: AUTO_ESTIMATOR, label: 'Auto (recommended)' },
-  { value: 'CausalForestDML', label: 'Causal Forest — EconML' },
+  { value: 'CausalForestDML', label: 'Causal Forest (recommended)' },
+  { value: AUTO_ESTIMATOR, label: 'Auto (data-driven)' },
   { value: 'LinearDML', label: 'Linear DML — EconML' },
   { value: 'drlearner', label: 'DR-Learner — EconML' },
   { value: 'ols', label: 'Linear Regression (OLS)' },
@@ -141,7 +145,7 @@ function gateBadge(gate: string | null | undefined) {
 export default function CausalAnalysis() {
   const [treatmentVar, setTreatmentVar] = useState(DEFAULT_TREATMENT);
   const [outcomeVar, setOutcomeVar] = useState(DEFAULT_OUTCOME);
-  const [estimator, setEstimator] = useState(AUTO_ESTIMATOR);
+  const [estimator, setEstimator] = useState(DEFAULT_ESTIMATOR);
   const [selectedLibrary, setSelectedLibrary] = useState<string>('all');
 
   // API hooks
@@ -483,7 +487,9 @@ export default function CausalAnalysis() {
                   <CardHeader>
                     <CardTitle>Estimator</CardTitle>
                     <CardDescription>
-                      {estimator === AUTO_ESTIMATOR ? 'Selected data-drivenly' : 'Forced by you'}
+                      {estimator === AUTO_ESTIMATOR
+                        ? 'Selected data-drivenly (energy-score)'
+                        : 'Estimator used for this run'}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>

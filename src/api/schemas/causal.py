@@ -446,7 +446,9 @@ class AgentCausalAnalysisRequest(BaseModel):
         ),
     )
     brand: Optional[str] = Field(default=None, description="Optional brand context")
-    limit: int = Field(4000, ge=100, le=20000, description="Max rows to load")
+    # 1500 keeps the default (Causal Forest) run tractable async (~4 min); the
+    # planted effect is clearly recovered at this size (probe: p~0 at 1200 rows).
+    limit: int = Field(1500, ge=100, le=20000, description="Max rows to load")
 
 
 class CausalDAGModel(BaseModel):
