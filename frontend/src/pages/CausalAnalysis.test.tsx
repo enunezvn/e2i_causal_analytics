@@ -1,9 +1,14 @@
 /**
- * CausalAnalysis Page — Empty State Coverage
- * ==========================================
+ * CausalAnalysis Page — agent-driven coverage
+ * ===========================================
  *
- * Regression tests for F-002: when API hooks return no data, the page
- * must render an explicit empty state, NOT a hardcoded SAMPLE_HIERARCHICAL_RESULT.
+ * The page leverages the causal_impact agent: pick treatment/outcome (real
+ * dropdowns from /causal/variables), Run -> the agent builds the DAG, estimates
+ * the treatment->outcome effect data-drivenly, and refutes. These tests lock:
+ * the honest empty/error states, the data-driven config (confounders from the
+ * live variables endpoint), and the rendered result (effect, estimator used,
+ * robustness gate, DAG). Radix <Select> is not interacted with (not reliably
+ * testable in jsdom); assertions use plain text / the result / Tabs.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -12,34 +17,80 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
 
-vi.mock('recharts', async () => {
-  const actual = await vi.importActual('recharts');
-  return {
-    ...actual,
-    ResponsiveContainer: ({ children }: { children: React.ReactNode }) => (
-      <div data-testid="responsive-container">{children}</div>
-    ),
-  };
-});
+// Stub the heavy DAG viz — we assert the page feeds it the agent's graph, not
+// its internal SVG rendering.
+vi.mock('@/components/visualizations/CausalDiscovery', () => ({
+  CausalDiscovery: ({ nodes, edges }: { nodes: unknown[]; edges: unknown[] }) => (
+    <div data-testid="causal-dag" data-nodes={nodes.length} data-edges={edges.length} />
+  ),
+}));
 
 vi.mock('@/hooks/api', () => ({
   useCausalHealth: vi.fn(),
-  useRunHierarchicalAnalysis: vi.fn(),
-  // Added in PR #947 (51ab0de6) to wire the History tab to real episodic
-  // data; the component calls this at render time, so the mock must export it
-  // or every render throws "No useCausalAnalysisHistory export … on the mock".
   useCausalAnalysisHistory: vi.fn(),
-  // The Estimators tab now reads the live registry (GET /causal/estimators);
-  // the component calls this at render time, so the mock must export it.
+  useCausalVariables: vi.fn(),
+  useRunCausalAgentAnalysis: vi.fn(),
   useEstimators: vi.fn(),
 }));
 
 import {
   useCausalHealth,
-  useRunHierarchicalAnalysis,
   useCausalAnalysisHistory,
+  useCausalVariables,
+  useRunCausalAgentAnalysis,
   useEstimators,
 } from '@/hooks/api';
+
+const VARIABLES = {
+  dataset: 'patient_journeys',
+  treatment_candidates: ['treatment_arm', 'treatment_initiated'],
+  outcome_candidates: ['persistent_180d', 'discontinued_180d'],
+  covariate_candidates: ['disease_severity', 'engagement_score'],
+  columns: [],
+};
+
+const RESULT = {
+  analysis_id: 'r1',
+  status: 'completed',
+  treatment_var: 'treatment_arm',
+  outcome_var: 'persistent_180d',
+  dataset: 'patient_journeys',
+  n_rows: 1200,
+  data_source: 'synthetic',
+  dag: {
+    nodes: ['treatment_arm', 'persistent_180d', 'disease_severity'],
+    edges: [
+      ['treatment_arm', 'persistent_180d'],
+      ['disease_severity', 'persistent_180d'],
+    ],
+    treatment_nodes: ['treatment_arm'],
+    outcome_nodes: ['persistent_180d'],
+    adjustment_sets: [['disease_severity']],
+    dag_dot: null,
+  },
+  ate: 0.12,
+  ate_ci_lower: 0.05,
+  ate_ci_upper: 0.19,
+  standard_error: 0.03,
+  p_value: 0.001,
+  statistical_significance: true,
+  selected_estimator: 'CausalForestDML',
+  confidence: 0.81,
+  refutation: {
+    gate_decision: 'proceed',
+    passed: true,
+    needs_review: false,
+    tests_passed: 3,
+    tests_total: 3,
+    sensitivity_e_value: 1.8,
+  },
+  narrative: 'Treatment raises persistence.',
+  executive_summary: 'Positive, robust effect.',
+  recommendations: ['Prioritize adherence support'],
+  key_insights: [],
+  warnings: [],
+  latency_ms: 4200,
+};
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -50,100 +101,89 @@ function createWrapper() {
   );
 }
 
-describe('CausalAnalysis — F-002 empty state', () => {
+describe('CausalAnalysis — agent-driven', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (useCausalHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
-    (useRunHierarchicalAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+    (useCausalAnalysisHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    (useCausalVariables as ReturnType<typeof vi.fn>).mockReturnValue({ data: VARIABLES });
+    (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+    });
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync: vi.fn(),
       isPending: false,
       isError: false,
       error: null,
     });
-    // No history loaded — matches the F-002 empty-state theme. The component
-    // reads historyData?.total / historyData.items behind a truthiness guard,
-    // so `data: undefined` renders the History tab's empty branch (no crash).
-    (useCausalAnalysisHistory as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: false,
-    });
-    // Estimators registry empty by default; specific tests override it.
-    (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: false,
-    });
   });
 
-  it('renders empty state on hierarchical tab when no analysis result', () => {
+  it('renders an honest empty state before any run', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-
-    // Page renders empty state for hierarchical results.
-    expect(
-      screen.getByText(/No hierarchical CATE analysis available/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/No analysis run yet/i)).toBeInTheDocument();
   }, 20000);
 
-  it('does not claim a 95% confidence level the schema never reports', () => {
-    // HierarchicalAnalysisResponse exposes raw overall_ci_lower/upper with NO
-    // confidence-level field — the UI must render "CI:" without inventing 95%.
-    (useRunHierarchicalAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: {
-        overall_ate: 0.18,
-        overall_ci_lower: 0.12,
-        overall_ci_upper: 0.24,
-        status: 'completed',
-        segment_results: [],
-        segment_heterogeneity: null,
-        nested_ci: null,
-        n_segments_analyzed: 0,
-        segmentation_method: 'tree',
-        estimator_type: 'dml',
-        latency_ms: 1200,
-      },
+  it('shows data-driven confounders from the live variables endpoint', () => {
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // The confounders the agent controls for come from /causal/variables —
+    // proving the config is data-driven, not hardcoded rep_visits/trx_count.
+    expect(screen.getByText(/disease_severity, engagement_score/)).toBeInTheDocument();
+  }, 20000);
+
+  it('renders the agent result: effect, estimator used, robustness gate, DAG', () => {
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: RESULT,
       mutateAsync: vi.fn(),
       isPending: false,
+      isError: false,
+      error: null,
     });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-
-    expect(screen.queryByText(/95% CI/)).not.toBeInTheDocument();
-    expect(screen.getByText(/^CI:/)).toBeInTheDocument();
+    // Treatment->outcome effect.
+    expect(screen.getByText('0.120')).toBeInTheDocument();
+    // The estimator the agent actually used (data-driven selection surfaced).
+    expect(screen.getByText('CausalForestDML')).toBeInTheDocument();
+    // Robustness gate from the real refutation.
+    expect(screen.getByText('Proceed')).toBeInTheDocument();
+    // DAG fed to the viz (2 edges from the fixture).
+    const dag = screen.getByTestId('causal-dag');
+    expect(dag).toHaveAttribute('data-edges', '2');
+    // Interpretation surfaced.
+    expect(screen.getByText('Treatment raises persistence.')).toBeInTheDocument();
   }, 20000);
 
-  it('does NOT render hardcoded SAMPLE_HIERARCHICAL_RESULT values (0.245 ATE)', () => {
+  it('surfaces a run failure honestly (fail-closed, no fabricated effect)', () => {
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync: vi.fn(),
+      isPending: false,
+      isError: true,
+      error: { message: 'No usable estimation rows.' },
+    });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-
-    // The former SAMPLE_HIERARCHICAL_RESULT.overall_ate was 0.245; assert
-    // the page no longer surfaces that fabricated value when no analysis
-    // result exists.
-    expect(screen.queryByText(/0\.245/)).not.toBeInTheDocument();
-    // Fabricated segment heterogeneity I² = 42.5%
-    expect(screen.queryByText(/42\.5%/)).not.toBeInTheDocument();
-    // Fabricated segment name "High Uplift"
-    expect(screen.queryByText('High Uplift')).not.toBeInTheDocument();
+    expect(screen.getByText(/Analysis could not run/i)).toBeInTheDocument();
+    expect(screen.getByText(/fail-closed/i)).toBeInTheDocument();
   }, 20000);
 
-  // ---------------------------------------------------------------------------
-  // Honesty fixes: live estimator registry + surfaced Run-Analysis error.
-  // ---------------------------------------------------------------------------
-
-  it('shows the live estimator-registry total on the Estimators Loaded card', () => {
+  it('shows the live estimator-registry total on the overview card', () => {
     (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { estimators: [], total: 12, by_library: {} },
       isLoading: false,
       isError: false,
     });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    // The card reflects the registry total (12), not a hardcoded value.
     expect(screen.getByText('12')).toBeInTheDocument();
   }, 20000);
 
-  it('renders estimators from the live registry (not the old hardcoded 6)', async () => {
+  it('renders estimators from the live registry (Estimators tab)', async () => {
     const user = userEvent.setup();
-    // ortho_forest was NOT in the former hardcoded SUPPORTED_ESTIMATORS, so its
-    // presence proves the tab reads the live /causal/estimators registry.
     (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         estimators: [
@@ -167,18 +207,5 @@ describe('CausalAnalysis — F-002 empty state', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     await user.click(screen.getByRole('tab', { name: /estimators/i }));
     expect(await screen.findByText(/ortho forest/i)).toBeInTheDocument();
-  }, 20000);
-
-  it('surfaces a Run Analysis failure honestly (was silently swallowed)', () => {
-    (useRunHierarchicalAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: undefined,
-      mutateAsync: vi.fn(),
-      isPending: false,
-      isError: true,
-      error: { message: 'No real estimation data available.' },
-    });
-    render(<CausalAnalysis />, { wrapper: createWrapper() });
-    expect(screen.getByText(/Analysis could not run/i)).toBeInTheDocument();
-    expect(screen.getByText(/fail-closed/i)).toBeInTheDocument();
   }, 20000);
 });

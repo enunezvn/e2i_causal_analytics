@@ -23,6 +23,8 @@ import {
   EstimatorListResponseWireSchema,
 } from '@/lib/api-schemas';
 import type {
+  AgentCausalAnalysisRequest,
+  AgentCausalAnalysisResponse,
   CausalAnalysisHistoryResponse,
   CausalLibrary,
   CausalVariablesResponse,
@@ -89,6 +91,34 @@ export async function runHierarchicalAnalysis(
     `${CAUSAL_BASE}/hierarchical/analyze`,
     request,
     { params: { async_mode: asyncMode } }
+  );
+}
+
+/**
+ * Run the causal_impact agent end-to-end.
+ *
+ * Leverages the agent (NOT the manual hierarchical/pipeline knobs): it builds the
+ * causal DAG, selects an estimator data-drivenly via the energy-score router
+ * (or the forced `estimator`), estimates the treatment->outcome effect, and runs
+ * refutation + sensitivity. Real data is loaded server-side from the gold-standard
+ * dataset; the agent fails closed (no fabricated ATE) when it cannot estimate.
+ *
+ * @example
+ * ```typescript
+ * const result = await runCausalAgentAnalysis({
+ *   treatment_var: 'treatment_arm',
+ *   outcome_var: 'persistent_180d',
+ *   // estimator omitted => Auto (agent picks from the registry)
+ * });
+ * console.log(result.ate, result.selected_estimator, result.dag.edges);
+ * ```
+ */
+export async function runCausalAgentAnalysis(
+  request: AgentCausalAnalysisRequest
+): Promise<AgentCausalAnalysisResponse> {
+  return post<AgentCausalAnalysisResponse, AgentCausalAnalysisRequest>(
+    `${CAUSAL_BASE}/agent-analyze`,
+    request
   );
 }
 

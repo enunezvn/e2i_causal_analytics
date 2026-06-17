@@ -14,6 +14,7 @@ import { queryKeys } from '@/lib/query-client';
 import { ApiError } from '@/lib/api-client';
 import {
   runHierarchicalAnalysis,
+  runCausalAgentAnalysis,
   getHierarchicalAnalysis,
   getCausalVariables,
   routeQuery,
@@ -30,6 +31,8 @@ import {
   fullCausalAnalysis,
 } from '@/api/causal';
 import type {
+  AgentCausalAnalysisRequest,
+  AgentCausalAnalysisResponse,
   CausalAnalysisHistoryResponse,
   CausalLibrary,
   CausalVariablesResponse,
@@ -394,6 +397,29 @@ export function useRunParallelPipeline(
     { request: ParallelPipelineRequest; asyncMode?: boolean }
   >({
     mutationFn: ({ request, asyncMode = true }) => runParallelPipeline(request, asyncMode),
+    ...options,
+  });
+}
+
+/**
+ * Run the causal_impact agent end-to-end (DAG + treatment->outcome effect +
+ * refutation). Synchronous: resolves with the full analysis. The agent picks an
+ * estimator data-drivenly unless `estimator` is set.
+ *
+ * @example
+ * ```typescript
+ * const { mutateAsync: runAgent, isPending } = useRunCausalAgentAnalysis();
+ * const result = await runAgent({ treatment_var: 'treatment_arm', outcome_var: 'persistent_180d' });
+ * ```
+ */
+export function useRunCausalAgentAnalysis(
+  options?: Omit<
+    UseMutationOptions<AgentCausalAnalysisResponse, ApiError, AgentCausalAnalysisRequest>,
+    'mutationFn'
+  >
+) {
+  return useMutation<AgentCausalAnalysisResponse, ApiError, AgentCausalAnalysisRequest>({
+    mutationFn: (request) => runCausalAgentAnalysis(request),
     ...options,
   });
 }

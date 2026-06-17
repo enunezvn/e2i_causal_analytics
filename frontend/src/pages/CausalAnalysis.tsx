@@ -2,29 +2,20 @@
  * Causal Analysis Page
  * ====================
  *
- * Causal inference dashboard for multi-library analysis.
- * Supports hierarchical CATE, pipeline execution, cross-validation,
- * and library routing.
+ * Agent-driven causal inference. The page leverages the causal_impact agent:
+ * the analyst picks a treatment + outcome (data-driven dropdowns from the
+ * gold-standard frame) and optionally forces an estimator; the agent then
+ * BUILDS the causal DAG, selects an estimator data-drivenly (energy-score
+ * routing across the registry) unless one is forced, estimates the
+ * treatment->outcome effect, and runs refutation + sensitivity. There are no
+ * manual segment / estimator knobs — the engine decides.
  *
  * @module pages/CausalAnalysis
  */
 
-import { useState, useMemo } from 'react';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  ErrorBar,
-  Cell,
-} from 'recharts';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -47,38 +38,57 @@ import {
 import {
   useCausalHealth,
   useCausalAnalysisHistory,
-  useRunHierarchicalAnalysis,
+  useCausalVariables,
+  useRunCausalAgentAnalysis,
   useEstimators,
 } from '@/hooks/api';
-import {
-  CausalAnalysisStatus,
-  EstimatorType,
-  SegmentationMethod,
-} from '@/types/causal';
+import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
+import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
 import { KPICard } from '@/components/visualizations';
 import {
-  RefreshCw,
   Play,
   CheckCircle,
   AlertTriangle,
   Activity,
   GitBranch,
   Layers,
-  BarChart3,
   Network,
   TrendingUp,
   Settings,
 } from 'lucide-react';
 
 // =============================================================================
-// DEFAULTS
+// CONSTANTS
 // =============================================================================
-// F-002 fix: this page no longer ships fabricated SAMPLE_* analysis results.
-// API hook results are surfaced when available; otherwise the page renders
-// explicit empty states. The Estimators tab is now driven by the live
-// GET /causal/estimators registry (useEstimators) — NOT a hardcoded list — so
-// it can never drift from the backend (which exposes 12 estimators across
-// EconML/CausalML/DoWhy).
+
+// The gold-standard causal frame the agent estimates over. Treatment / outcome
+// / covariate dropdowns are populated from GET /causal/variables for THIS
+// dataset (real columns intersected with the live table). Defaults are real
+// columns (treatment_arm -> persistent_180d), NOT the old fictional
+// rep_visits / trx_count.
+const DATASET = 'patient_journeys';
+const DEFAULT_TREATMENT = 'treatment_arm';
+const DEFAULT_OUTCOME = 'persistent_180d';
+
+// Estimator selection. "auto" = the agent's data-driven energy-score routing
+// across the full registry (recommended). The override values MUST be members
+// of the backend's AGENT_FORCEABLE_ESTIMATORS allowlist (schemas/causal.py).
+const AUTO_ESTIMATOR = 'auto';
+const ESTIMATOR_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: AUTO_ESTIMATOR, label: 'Auto (recommended)' },
+  { value: 'CausalForestDML', label: 'Causal Forest — EconML' },
+  { value: 'LinearDML', label: 'Linear DML — EconML' },
+  { value: 'drlearner', label: 'DR-Learner — EconML' },
+  { value: 'ols', label: 'Linear Regression (OLS)' },
+  { value: 'propensity_score_weighting', label: 'Propensity Score Weighting — DoWhy' },
+];
+
+const LIBRARY_COLORS: Record<string, string> = {
+  dowhy: '#3b82f6',
+  econml: '#8b5cf6',
+  causalml: '#06b6d4',
+  networkx: '#f59e0b',
+};
 
 const DEFAULT_HEALTH = {
   status: 'unknown',
@@ -96,44 +106,10 @@ const DEFAULT_HEALTH = {
 };
 
 // =============================================================================
-// CONSTANTS
-// =============================================================================
-
-const COLORS = {
-  primary: '#3b82f6',
-  secondary: '#8b5cf6',
-  tertiary: '#06b6d4',
-  success: '#10b981',
-  warning: '#f59e0b',
-  error: '#ef4444',
-};
-
-const LIBRARY_COLORS: Record<string, string> = {
-  dowhy: '#3b82f6',
-  econml: '#8b5cf6',
-  causalml: '#06b6d4',
-  networkx: '#f59e0b',
-};
-
-// =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
 
-function getStatusBadge(status: CausalAnalysisStatus) {
-  const variants: Record<CausalAnalysisStatus, 'default' | 'secondary' | 'destructive'> = {
-    [CausalAnalysisStatus.COMPLETED]: 'default',
-    [CausalAnalysisStatus.RUNNING]: 'secondary',
-    [CausalAnalysisStatus.PENDING]: 'secondary',
-    [CausalAnalysisStatus.FAILED]: 'destructive',
-  };
-  return (
-    <Badge variant={variants[status]} className="capitalize">
-      {status}
-    </Badge>
-  );
-}
-
-function formatEffect(effect: number | null | undefined, decimals: number = 3): string {
+function formatEffect(effect: number | null | undefined, decimals = 3): string {
   if (effect === null || effect === undefined) return 'N/A';
   return effect.toFixed(decimals);
 }
@@ -143,15 +119,30 @@ function formatCI(lower: number | null | undefined, upper: number | null | undef
   return `[${lower.toFixed(3)}, ${upper.toFixed(3)}]`;
 }
 
+/** Badge for the agent run status (completed / needs_review / failed). */
+function statusBadge(status: string | undefined) {
+  if (status === 'completed') return <Badge variant="default">Completed</Badge>;
+  if (status === 'needs_review') return <Badge variant="secondary">Needs review</Badge>;
+  return <Badge variant="destructive">Failed</Badge>;
+}
+
+/** Badge for the refutation robustness gate. */
+function gateBadge(gate: string | null | undefined) {
+  if (gate === 'proceed') return <Badge variant="default">Proceed</Badge>;
+  if (gate === 'review') return <Badge variant="secondary">Review</Badge>;
+  if (gate === 'block') return <Badge variant="destructive">Blocked</Badge>;
+  return <Badge variant="secondary">Not run</Badge>;
+}
+
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
 export default function CausalAnalysis() {
+  const [treatmentVar, setTreatmentVar] = useState(DEFAULT_TREATMENT);
+  const [outcomeVar, setOutcomeVar] = useState(DEFAULT_OUTCOME);
+  const [estimator, setEstimator] = useState(AUTO_ESTIMATOR);
   const [selectedLibrary, setSelectedLibrary] = useState<string>('all');
-  const [treatmentVar, setTreatmentVar] = useState('rep_visits');
-  const [outcomeVar, setOutcomeVar] = useState('trx_count');
-  const [nSegments, setNSegments] = useState(4);
 
   // API hooks
   const { data: healthData } = useCausalHealth();
@@ -160,80 +151,99 @@ export default function CausalAnalysis() {
     isLoading: historyLoading,
     isError: historyError,
   } = useCausalAnalysisHistory();
-  const runAnalysisMutation = useRunHierarchicalAnalysis();
-  // Estimators tab is driven by the live registry (GET /causal/estimators).
+  // Real treatment / outcome / covariate candidates for the dropdowns (curated
+  // causally-meaningful columns intersected with the live schema).
+  const { data: variables } = useCausalVariables(DATASET);
+  // The 12-estimator registry powers the Estimators tab AND tells the analyst
+  // what Auto routes across.
   const {
     data: estimatorsData,
     isLoading: estimatorsLoading,
     isError: estimatorsError,
   } = useEstimators();
+  const runAgent = useRunCausalAgentAnalysis();
+  const result = runAgent.data;
 
-  // Use API data or fall back to neutral defaults (no fabricated SAMPLE_).
   const health = healthData ?? DEFAULT_HEALTH;
   const estimators = estimatorsData?.estimators ?? [];
   const visibleEstimators = estimators.filter(
     (e) => selectedLibrary === 'all' || e.library === selectedLibrary
   );
-  // Hierarchical result + library comparison come ONLY from API. When the
-  // mutation has not run (or has not yet returned), these are `undefined`
-  // and the render path below surfaces explicit empty states.
-  const hierarchicalResult = runAnalysisMutation.data;
-  const libraryComparison: Array<{
-    library: string;
-    effect: number | null;
-    ci_lower: number | null;
-    ci_upper: number | null;
-    latency: number;
-    note?: string;
-  }> = []; // F-002: no longer fabricated; surfaced via API when available
 
-  // Calculate overview metrics
+  const treatmentCandidates = variables?.treatment_candidates ?? [DEFAULT_TREATMENT];
+  const outcomeCandidates = variables?.outcome_candidates ?? [DEFAULT_OUTCOME];
+  // The agent controls for these confounders (data-driven from the dataset's
+  // curated covariates); a variable can never control for itself.
+  const confounders = useMemo(
+    () =>
+      (variables?.covariate_candidates ?? []).filter(
+        (c) => c !== treatmentVar && c !== outcomeVar
+      ),
+    [variables, treatmentVar, outcomeVar]
+  );
+
   const overviewMetrics = useMemo(() => {
     const availableLibraries = Object.values(health.libraries_available).filter(Boolean).length;
     const totalLibraries = Object.keys(health.libraries_available).length;
-
     return {
       librariesAvailable: `${availableLibraries}/${totalLibraries}`,
-      // Prefer the live registry total (matches the Estimators tab); fall back
-      // to the health figure if the registry fetch hasn't resolved.
       estimatorsLoaded: estimatorsData?.total ?? health.estimators_loaded,
       analysisCount: health.analysis_count_24h,
-      avgLatency: health.average_latency_ms ? `${(health.average_latency_ms / 1000).toFixed(1)}s` : 'N/A',
-      pipelineReady: health.pipeline_orchestrator_ready,
-      hierarchicalReady: health.hierarchical_analyzer_ready,
+      avgLatency: health.average_latency_ms
+        ? `${(health.average_latency_ms / 1000).toFixed(1)}s`
+        : 'N/A',
     };
   }, [health, estimatorsData]);
 
-  // Segment chart data — empty when no analysis has been run yet
-  const segmentChartData = useMemo(() => {
-    if (!hierarchicalResult) return [];
-    return hierarchicalResult.segment_results.map((seg) => ({
-      name: seg.segment_name,
-      cate: seg.cate_mean ?? 0,
-      ci_lower: seg.cate_ci_lower ?? 0,
-      ci_upper: seg.cate_ci_upper ?? 0,
-      samples: seg.n_samples,
-      errorY: [
-        (seg.cate_mean ?? 0) - (seg.cate_ci_lower ?? 0),
-        (seg.cate_ci_upper ?? 0) - (seg.cate_mean ?? 0),
-      ],
+  // Map the agent's DAG onto the shared causal-graph visualization. The
+  // treatment->outcome edge carries the estimated effect.
+  const { vizNodes, vizEdges } = useMemo((): {
+    vizNodes: CausalNode[];
+    vizEdges: CausalEdge[];
+  } => {
+    if (!result) return { vizNodes: [], vizEdges: [] };
+    const dag = result.dag;
+    const treatmentSet = new Set(dag.treatment_nodes);
+    const outcomeSet = new Set(dag.outcome_nodes);
+    const confounderSet = new Set(dag.adjustment_sets.flat());
+    const nodes: CausalNode[] = dag.nodes.map((name) => ({
+      id: name,
+      label: name,
+      type: treatmentSet.has(name)
+        ? 'treatment'
+        : outcomeSet.has(name)
+          ? 'outcome'
+          : confounderSet.has(name)
+            ? 'confounder'
+            : 'variable',
     }));
-  }, [hierarchicalResult]);
+    const edges: CausalEdge[] = dag.edges.map(([source, target]) => {
+      const isEffectEdge = treatmentSet.has(source) && outcomeSet.has(target);
+      return {
+        id: `${source}->${target}`,
+        source,
+        target,
+        type: 'causal',
+        ...(isEffectEdge && result.ate !== null && result.ate !== undefined
+          ? { effect: result.ate }
+          : {}),
+      };
+    });
+    return { vizNodes: nodes, vizEdges: edges };
+  }, [result]);
 
   const handleRunAnalysis = async () => {
     try {
-      await runAnalysisMutation.mutateAsync({
-        request: {
-          treatment_var: treatmentVar,
-          outcome_var: outcomeVar,
-          n_segments: nSegments,
-          segmentation_method: SegmentationMethod.QUANTILE,
-          estimator_type: EstimatorType.CAUSAL_FOREST,
-        },
-        asyncMode: true,
+      await runAgent.mutateAsync({
+        treatment_var: treatmentVar,
+        outcome_var: outcomeVar,
+        dataset: DATASET,
+        // Omit covariates -> the backend uses the dataset's curated confounders.
+        estimator: estimator === AUTO_ESTIMATOR ? undefined : estimator,
       });
     } catch (error) {
-      console.error('Analysis failed:', error);
+      // Error surfaced via runAgent.isError below; nothing to fabricate.
+      console.error('Causal agent analysis failed:', error);
     }
   };
 
@@ -247,20 +257,14 @@ export default function CausalAnalysis() {
             Causal Analysis
           </h1>
           <p className="text-muted-foreground mt-1">
-            Multi-library causal inference with hierarchical CATE estimation
+            Agent-driven causal inference — builds the DAG and estimates the treatment&rarr;outcome
+            effect
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            onClick={handleRunAnalysis}
-            disabled={runAnalysisMutation.isPending}
-          >
+          <Button onClick={handleRunAnalysis} disabled={runAgent.isPending}>
             <Play className="mr-2 h-4 w-4" />
-            Run Analysis
-          </Button>
-          <Button variant="outline">
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh
+            {runAgent.isPending ? 'Running…' : 'Run Analysis'}
           </Button>
         </div>
       </div>
@@ -271,8 +275,8 @@ export default function CausalAnalysis() {
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertTitle className="text-green-800">Causal Engine Healthy</AlertTitle>
           <AlertDescription className="text-green-700">
-            All {Object.values(health.libraries_available).filter(Boolean).length} causal libraries available.
-            {' '}{health.analysis_count_24h} analyses completed in the last 24 hours.
+            All {Object.values(health.libraries_available).filter(Boolean).length} causal libraries
+            available. {health.analysis_count_24h} analyses completed in the last 24 hours.
           </AlertDescription>
         </Alert>
       ) : (
@@ -285,28 +289,23 @@ export default function CausalAnalysis() {
         </Alert>
       )}
 
-      {/* Run Analysis failure — surfaced honestly (was silently swallowed).
-          The hierarchical endpoint is fail-closed: it requires a real estimation
-          dataset and will not fabricate inputs. This page does not yet wire a
-          data source, so a run currently returns an error rather than results. */}
-      {runAnalysisMutation.isError && (
+      {/* Run failure — surfaced honestly. The agent is fail-closed: it estimates
+          on real data and never fabricates an effect. */}
+      {runAgent.isError && (
         <Alert variant="destructive" className="mb-6">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Analysis could not run</AlertTitle>
           <AlertDescription>
-            {runAnalysisMutation.error?.message
-              ? `${runAnalysisMutation.error.message} `
-              : ''}
-            The causal engine is fail-closed and requires a real estimation
-            dataset (it will not fabricate inputs). This page does not yet supply
-            one, so Hierarchical CATE and Library Comparison remain empty until a
-            data source is wired.
+            {runAgent.error?.message ? `${runAgent.error.message} ` : ''}
+            The causal agent is fail-closed: it estimates on real gold-standard data and will not
+            fabricate an effect. Try a different treatment / outcome pairing, or check the engine
+            health above.
           </AlertDescription>
         </Alert>
       )}
 
       {/* Overview Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <KPICard
           title="Libraries"
           value={overviewMetrics.librariesAvailable}
@@ -327,68 +326,57 @@ export default function CausalAnalysis() {
           value={overviewMetrics.avgLatency}
           icon={<TrendingUp className="h-5 w-5" />}
         />
-        <KPICard
-          title="Pipeline"
-          value={overviewMetrics.pipelineReady ? 'Ready' : 'Down'}
-          icon={<Network className="h-5 w-5" />}
-          valueColor={overviewMetrics.pipelineReady ? 'text-green-600' : 'text-red-600'}
-        />
-        <KPICard
-          title="Hierarchical"
-          value={overviewMetrics.hierarchicalReady ? 'Ready' : 'Down'}
-          icon={<BarChart3 className="h-5 w-5" />}
-          valueColor={overviewMetrics.hierarchicalReady ? 'text-green-600' : 'text-red-600'}
-        />
       </div>
 
       {/* Main Content Tabs */}
-      <Tabs defaultValue="hierarchical" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="hierarchical">Hierarchical CATE</TabsTrigger>
-          <TabsTrigger value="libraries">Library Comparison</TabsTrigger>
+      <Tabs defaultValue="analysis" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="analysis">Analysis</TabsTrigger>
           <TabsTrigger value="estimators">Estimators</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
 
-        {/* Hierarchical CATE Tab */}
-        <TabsContent value="hierarchical" className="space-y-6">
-          {/* Analysis Configuration */}
+        {/* Analysis Tab */}
+        <TabsContent value="analysis" className="space-y-6">
+          {/* Configuration */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Settings className="h-5 w-5" />
                 Analysis Configuration
               </CardTitle>
-              <CardDescription>Configure hierarchical CATE analysis parameters</CardDescription>
+              <CardDescription>
+                Pick a treatment and outcome; the agent builds the DAG and selects the estimator.
+                Segmentation and method are decided by the engine, not set by hand.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid md:grid-cols-4 gap-4">
+              <div className="grid md:grid-cols-3 gap-4">
                 <div>
                   <label className="text-sm font-medium mb-2 block">Treatment Variable</label>
-                  <Input
-                    value={treatmentVar}
-                    onChange={(e) => setTreatmentVar(e.target.value)}
-                    placeholder="e.g., rep_visits"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Outcome Variable</label>
-                  <Input
-                    value={outcomeVar}
-                    onChange={(e) => setOutcomeVar(e.target.value)}
-                    placeholder="e.g., trx_count"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Number of Segments</label>
-                  <Select value={String(nSegments)} onValueChange={(v) => setNSegments(Number(v))}>
-                    <SelectTrigger>
+                  <Select value={treatmentVar} onValueChange={setTreatmentVar}>
+                    <SelectTrigger aria-label="Treatment variable">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {[2, 3, 4, 5, 6].map((n) => (
-                        <SelectItem key={n} value={String(n)}>
-                          {n} segments
+                      {treatmentCandidates.map((c) => (
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Outcome Variable</label>
+                  <Select value={outcomeVar} onValueChange={setOutcomeVar}>
+                    <SelectTrigger aria-label="Outcome variable">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {outcomeCandidates.map((c) => (
+                        <SelectItem key={c} value={c}>
+                          {c}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -396,73 +384,110 @@ export default function CausalAnalysis() {
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-2 block">Estimator</label>
-                  <Select defaultValue="causal_forest">
-                    <SelectTrigger>
+                  <Select value={estimator} onValueChange={setEstimator}>
+                    <SelectTrigger aria-label="Estimator">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="causal_forest">Causal Forest</SelectItem>
-                      <SelectItem value="linear_dml">Linear DML</SelectItem>
-                      <SelectItem value="dr_learner">DR Learner</SelectItem>
-                      <SelectItem value="x_learner">X-Learner</SelectItem>
+                      {ESTIMATOR_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
               </div>
+              {confounders.length > 0 && (
+                <p className="text-xs text-muted-foreground mt-4">
+                  Controlling for (confounders, data-driven):{' '}
+                  <span className="font-medium">{confounders.join(', ')}</span>
+                </p>
+              )}
             </CardContent>
           </Card>
 
-          {/* Analysis Results — empty state when no analysis run yet (F-002) */}
-          {!hierarchicalResult ? (
+          {/* Results / empty state */}
+          {!result ? (
             <EmptyState
-              title="No hierarchical CATE analysis available"
-              description="Configure parameters above and click Run Analysis to estimate segment-level treatment effects."
+              title="No analysis run yet"
+              description="Choose a treatment and outcome, then click Run Analysis. The agent will build the causal DAG, estimate the effect, and run robustness checks."
             />
           ) : (
             <>
-              {/* Analysis Results Summary */}
+              {/* Status / warnings */}
+              {result.status !== 'completed' && (
+                <Alert variant={result.status === 'failed' ? 'destructive' : 'default'}>
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>
+                    {result.status === 'failed'
+                      ? 'Analysis did not produce a validated effect'
+                      : 'Estimate needs expert review'}
+                  </AlertTitle>
+                  <AlertDescription>
+                    {result.warnings.length > 0
+                      ? result.warnings.join(' ')
+                      : 'The estimate did not fully pass the robustness gate.'}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Effect summary */}
               <div className="grid md:grid-cols-3 gap-6">
                 <Card>
                   <CardHeader>
-                    <CardTitle>Overall ATE</CardTitle>
+                    <CardTitle>
+                      {result.treatment_var} &rarr; {result.outcome_var}
+                    </CardTitle>
                     <CardDescription>Average Treatment Effect</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="text-center">
                       <div className="text-4xl font-bold text-primary">
-                        {formatEffect(hierarchicalResult.overall_ate)}
+                        {formatEffect(result.ate)}
                       </div>
                       <div className="text-sm text-muted-foreground mt-2">
-                        CI: {formatCI(hierarchicalResult.overall_ci_lower, hierarchicalResult.overall_ci_upper)}
+                        95% CI: {formatCI(result.ate_ci_lower, result.ate_ci_upper)}
                       </div>
-                      <div className="mt-4">
-                        {getStatusBadge(hierarchicalResult.status)}
+                      <div className="mt-4 flex items-center justify-center gap-2">
+                        {statusBadge(result.status)}
+                        {result.statistical_significance ? (
+                          <Badge variant="default">Significant</Badge>
+                        ) : (
+                          <Badge variant="secondary">Not significant</Badge>
+                        )}
                       </div>
+                      {result.p_value !== null && result.p_value !== undefined && (
+                        <div className="text-xs text-muted-foreground mt-2">
+                          p = {result.p_value.toFixed(4)}
+                        </div>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Heterogeneity (I²)</CardTitle>
-                    <CardDescription>Between-segment variance</CardDescription>
+                    <CardTitle>Estimator</CardTitle>
+                    <CardDescription>
+                      {estimator === AUTO_ESTIMATOR ? 'Selected data-drivenly' : 'Forced by you'}
+                    </CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="text-center">
-                      <div className={`text-4xl font-bold ${
-                        (hierarchicalResult.segment_heterogeneity ?? 0) > 50
-                          ? 'text-yellow-600'
-                          : 'text-green-600'
-                      }`}>
-                        {hierarchicalResult.segment_heterogeneity?.toFixed(1)}%
+                      <div className="text-2xl font-bold capitalize">
+                        {result.selected_estimator
+                          ? result.selected_estimator.replace(/_/g, ' ')
+                          : 'N/A'}
                       </div>
-                      <div className="text-sm text-muted-foreground mt-2">
-                        {(hierarchicalResult.segment_heterogeneity ?? 0) > 50
-                          ? 'Substantial heterogeneity'
-                          : 'Moderate heterogeneity'}
-                      </div>
-                      <div className="mt-4 text-xs text-muted-foreground">
-                        τ² = {hierarchicalResult.nested_ci?.tau_squared?.toFixed(4)}
+                      {result.confidence !== null && result.confidence !== undefined && (
+                        <div className="text-sm text-muted-foreground mt-2">
+                          Confidence: {(result.confidence * 100).toFixed(0)}%
+                        </div>
+                      )}
+                      <div className="text-xs text-muted-foreground mt-3">
+                        Ran on {result.n_rows.toLocaleString()} rows ({result.data_source}) in{' '}
+                        {(result.latency_ms / 1000).toFixed(1)}s
                       </div>
                     </div>
                   </CardContent>
@@ -470,239 +495,93 @@ export default function CausalAnalysis() {
 
                 <Card>
                   <CardHeader>
-                    <CardTitle>Analysis Details</CardTitle>
-                    <CardDescription>Configuration used</CardDescription>
+                    <CardTitle>Robustness</CardTitle>
+                    <CardDescription>Refutation &amp; sensitivity</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Segments:</span>
-                        <span className="font-medium">{hierarchicalResult.n_segments_analyzed}</span>
+                      <div className="flex justify-between items-center">
+                        <span className="text-muted-foreground">Gate:</span>
+                        {gateBadge(result.refutation.gate_decision)}
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Method:</span>
-                        <span className="font-medium capitalize">{hierarchicalResult.segmentation_method}</span>
+                        <span className="text-muted-foreground">Tests passed:</span>
+                        <span className="font-medium">
+                          {result.refutation.tests_passed ?? '—'}
+                          {result.refutation.tests_total !== null &&
+                          result.refutation.tests_total !== undefined
+                            ? ` / ${result.refutation.tests_total}`
+                            : ''}
+                        </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Estimator:</span>
-                        <span className="font-medium capitalize">{hierarchicalResult.estimator_type.replace('_', ' ')}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Total Samples:</span>
-                        <span className="font-medium">{hierarchicalResult.nested_ci?.total_sample_size.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Latency:</span>
-                        <span className="font-medium">{(hierarchicalResult.latency_ms / 1000).toFixed(1)}s</span>
+                        <span className="text-muted-foreground">Sensitivity E-value:</span>
+                        <span className="font-medium">
+                          {result.refutation.sensitivity_e_value !== null &&
+                          result.refutation.sensitivity_e_value !== undefined
+                            ? result.refutation.sensitivity_e_value.toFixed(2)
+                            : '—'}
+                        </span>
                       </div>
                     </div>
                   </CardContent>
                 </Card>
               </div>
 
-              {/* Segment-Level Results */}
+              {/* Causal DAG */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Segment-Level CATE Estimates</CardTitle>
+                  <CardTitle className="flex items-center gap-2">
+                    <Network className="h-5 w-5" />
+                    Causal DAG
+                  </CardTitle>
                   <CardDescription>
-                    Conditional Average Treatment Effects by uplift segment with 95% confidence intervals
+                    The structure the agent built and adjusted for. The treatment&rarr;outcome edge
+                    carries the estimated effect.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={350}>
-                    <BarChart data={segmentChartData} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" domain={[-0.1, 0.6]} />
-                      <YAxis dataKey="name" type="category" width={120} />
-                      <Tooltip
-                        formatter={(value) => typeof value === 'number' ? value.toFixed(3) : value}
-                        content={({ active, payload }) => {
-                          if (active && payload && payload.length) {
-                            const data = payload[0].payload;
-                            return (
-                              <div className="bg-background border rounded-lg p-3 shadow-lg">
-                                <p className="font-semibold">{data.name}</p>
-                                <p>CATE: {data.cate.toFixed(3)}</p>
-                                <p>CI: [{data.ci_lower.toFixed(3)}, {data.ci_upper.toFixed(3)}]</p>
-                                <p>Samples: {data.samples.toLocaleString()}</p>
-                              </div>
-                            );
-                          }
-                          return null;
-                        }}
-                      />
-                      <Legend />
-                      <Bar dataKey="cate" fill={COLORS.primary} name="CATE">
-                        {segmentChartData.map((entry, index) => (
-                          <Cell
-                            key={`cell-${index}`}
-                            fill={entry.cate > 0.2 ? COLORS.success : entry.cate > 0.1 ? COLORS.primary : COLORS.warning}
-                          />
-                        ))}
-                        <ErrorBar dataKey="errorY" width={4} strokeWidth={2} stroke="#333" />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  {vizNodes.length > 0 ? (
+                    <CausalDiscoveryViz nodes={vizNodes} edges={vizEdges} showEffectsTable={false} />
+                  ) : (
+                    <EmptyState
+                      title="No DAG produced"
+                      description="The agent did not return a causal graph for this run."
+                    />
+                  )}
                 </CardContent>
               </Card>
 
-              {/* Segment Details Table */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Segment Details</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b">
-                          <th className="text-left py-2 px-4">Segment</th>
-                          <th className="text-left py-2 px-4">Samples</th>
-                          <th className="text-left py-2 px-4">Uplift Range</th>
-                          <th className="text-left py-2 px-4">CATE</th>
-                          <th className="text-left py-2 px-4">CI</th>
-                          <th className="text-left py-2 px-4">Contribution</th>
-                          <th className="text-left py-2 px-4">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {hierarchicalResult.segment_results.map((seg) => (
-                          <tr key={seg.segment_id} className="border-b hover:bg-muted/50">
-                            <td className="py-2 px-4 font-medium">{seg.segment_name}</td>
-                            <td className="py-2 px-4">{seg.n_samples.toLocaleString()}</td>
-                            <td className="py-2 px-4 font-mono text-xs">
-                              [{seg.uplift_range[0].toFixed(2)}, {seg.uplift_range[1].toFixed(2)}]
-                            </td>
-                            <td className="py-2 px-4 font-semibold">{formatEffect(seg.cate_mean)}</td>
-                            <td className="py-2 px-4 font-mono text-xs">
-                              {formatCI(seg.cate_ci_lower ?? null, seg.cate_ci_upper ?? null)}
-                            </td>
-                            <td className="py-2 px-4">
-                              {((hierarchicalResult.nested_ci?.segment_contributions[String(seg.segment_id)] ?? 0) * 100).toFixed(0)}%
-                            </td>
-                            <td className="py-2 px-4">
-                              {seg.success ? (
-                                <CheckCircle className="h-4 w-4 text-green-500" />
-                              ) : (
-                                <AlertTriangle className="h-4 w-4 text-red-500" />
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
+              {/* Interpretation */}
+              {(result.narrative || result.executive_summary || result.recommendations.length > 0) && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Interpretation</CardTitle>
+                    <CardDescription>Natural-language reading of the estimate</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4 text-sm">
+                    {result.executive_summary && (
+                      <p className="font-medium">{result.executive_summary}</p>
+                    )}
+                    {result.narrative && (
+                      <p className="text-muted-foreground whitespace-pre-line">
+                        {result.narrative}
+                      </p>
+                    )}
+                    {result.recommendations.length > 0 && (
+                      <div>
+                        <p className="font-medium mb-1">Recommendations</p>
+                        <ul className="list-disc pl-5 text-muted-foreground space-y-1">
+                          {result.recommendations.map((rec, i) => (
+                            <li key={i}>{rec}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </>
-          )}
-        </TabsContent>
-
-        {/* Library Comparison Tab */}
-        <TabsContent value="libraries" className="space-y-6">
-          {libraryComparison.length === 0 ? (
-            <EmptyState
-              title="No library comparison available"
-              description="Run a causal analysis to compare effect estimates across DoWhy, EconML, and CausalML."
-            />
-          ) : (
-          <>
-          <div className="grid md:grid-cols-2 gap-6">
-            {/* Effect Comparison Chart */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Effect Estimates by Library</CardTitle>
-                <CardDescription>Comparing causal effect estimates across libraries</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={libraryComparison.filter((d) => d.effect !== null)}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="library" />
-                    <YAxis domain={[0, 0.4]} />
-                    <Tooltip formatter={(value) => typeof value === 'number' ? value.toFixed(3) : value} />
-                    <Legend />
-                    <Bar dataKey="effect" name="Effect Estimate">
-                      {libraryComparison.filter((d) => d.effect !== null).map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={LIBRARY_COLORS[entry.library.toLowerCase()] || COLORS.primary} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            {/* Latency Comparison */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Execution Latency</CardTitle>
-                <CardDescription>Analysis time by library (ms)</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={libraryComparison} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis type="number" />
-                    <YAxis dataKey="library" type="category" width={80} />
-                    <Tooltip />
-                    <Bar dataKey="latency" fill={COLORS.secondary} name="Latency (ms)" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Library Details */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Library Comparison Details</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-2 px-4">Library</th>
-                      <th className="text-left py-2 px-4">Effect Estimate</th>
-                      <th className="text-left py-2 px-4">CI</th>
-                      <th className="text-left py-2 px-4">Latency</th>
-                      <th className="text-left py-2 px-4">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {libraryComparison.map((lib) => (
-                      <tr key={lib.library} className="border-b hover:bg-muted/50">
-                        <td className="py-2 px-4">
-                          <div className="flex items-center gap-2">
-                            <div
-                              className="w-3 h-3 rounded-full"
-                              style={{ backgroundColor: LIBRARY_COLORS[lib.library.toLowerCase()] }}
-                            />
-                            <span className="font-medium">{lib.library}</span>
-                          </div>
-                        </td>
-                        <td className="py-2 px-4 font-mono">
-                          {lib.effect !== null ? lib.effect.toFixed(3) : 'N/A'}
-                        </td>
-                        <td className="py-2 px-4 font-mono text-xs">
-                          {formatCI(lib.ci_lower, lib.ci_upper)}
-                        </td>
-                        <td className="py-2 px-4">{lib.latency}ms</td>
-                        <td className="py-2 px-4">
-                          {lib.effect !== null ? (
-                            <Badge variant="default">Success</Badge>
-                          ) : (
-                            <Badge variant="secondary">{lib.note || 'No estimate'}</Badge>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-          </>
           )}
         </TabsContent>
 
@@ -742,27 +621,27 @@ export default function CausalAnalysis() {
             />
           ) : (
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {visibleEstimators.map((estimator) => (
-                <Card key={estimator.name} className="hover:shadow-md transition-shadow">
+              {visibleEstimators.map((est) => (
+                <Card key={est.name} className="hover:shadow-md transition-shadow">
                   <CardHeader className="pb-2">
                     <div className="flex justify-between items-start">
                       <CardTitle className="text-base capitalize">
-                        {estimator.name.replace(/_/g, ' ')}
+                        {est.name.replace(/_/g, ' ')}
                       </CardTitle>
                       <Badge
-                        style={{ backgroundColor: LIBRARY_COLORS[estimator.library] }}
+                        style={{ backgroundColor: LIBRARY_COLORS[est.library] }}
                         className="text-white"
                       >
-                        {estimator.library}
+                        {est.library}
                       </Badge>
                     </div>
-                    <CardDescription>{estimator.estimator_type}</CardDescription>
+                    <CardDescription>{est.estimator_type}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-2">
-                    <p className="text-sm text-muted-foreground">{estimator.description}</p>
+                    <p className="text-sm text-muted-foreground">{est.description}</p>
                     <div className="flex gap-4 text-sm">
                       <div className="flex items-center gap-1">
-                        {estimator.supports_confidence_intervals ? (
+                        {est.supports_confidence_intervals ? (
                           <CheckCircle className="h-4 w-4 text-green-500" />
                         ) : (
                           <AlertTriangle className="h-4 w-4 text-gray-400" />
@@ -770,7 +649,7 @@ export default function CausalAnalysis() {
                         <span>CI</span>
                       </div>
                       <div className="flex items-center gap-1">
-                        {estimator.supports_heterogeneous_effects ? (
+                        {est.supports_heterogeneous_effects ? (
                           <CheckCircle className="h-4 w-4 text-green-500" />
                         ) : (
                           <AlertTriangle className="h-4 w-4 text-gray-400" />
@@ -796,8 +675,6 @@ export default function CausalAnalysis() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {/* #931: real recent causal_analysis_completed events from the
-                  episodic store (was an unwired empty state). */}
               {historyLoading ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
                   Loading analysis history…

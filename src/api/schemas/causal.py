@@ -12,7 +12,7 @@ Phase B10: Causal API endpoints for:
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -404,6 +404,111 @@ class EstimationDataResponse(BaseModel):
     estimation_data_records: List[Dict[str, Any]] = Field(
         default_factory=list, description="Row records for the pipeline DataFrame"
     )
+
+
+# =============================================================================
+# AGENT ANALYSIS SCHEMAS (causal_impact LangGraph agent, end-to-end)
+# =============================================================================
+# The forceable estimator overrides MUST stay in sync with
+# ``_VALID_EXPLICIT_METHODS`` in src/agents/causal_impact/nodes/estimation.py.
+# Leaving ``estimator`` unset runs the agent's data-driven energy-score routing
+# across the full registry (the recommended path); setting it forces one method.
+AGENT_FORCEABLE_ESTIMATORS = (
+    "CausalForestDML",
+    "LinearDML",
+    "drlearner",
+    "ols",
+    "propensity_score_weighting",
+)
+
+
+class AgentCausalAnalysisRequest(BaseModel):
+    """Run the causal_impact agent end-to-end on a gold-standard dataset.
+
+    The agent builds the causal DAG, selects an estimator data-drivenly (or the
+    forced one), estimates the treatment->outcome effect, and runs refutation /
+    sensitivity. The treatment / outcome / covariate columns are validated
+    server-side against the dataset's curated allowlist.
+    """
+
+    treatment_var: str = Field(..., description="Treatment column (cause)")
+    outcome_var: str = Field(..., description="Outcome column (effect)")
+    dataset: str = Field("patient_journeys", description="Gold-standard dataset")
+    covariates: Optional[List[str]] = Field(
+        default=None,
+        description="Confounder columns; omit to use the dataset's curated covariates.",
+    )
+    estimator: Optional[str] = Field(
+        default=None,
+        description=(
+            "Force a specific estimator (one of AGENT_FORCEABLE_ESTIMATORS); omit "
+            "for Auto (the agent's energy-score routing over the full registry)."
+        ),
+    )
+    brand: Optional[str] = Field(default=None, description="Optional brand context")
+    limit: int = Field(4000, ge=100, le=20000, description="Max rows to load")
+
+
+class CausalDAGModel(BaseModel):
+    """The causal DAG the agent's graph_builder constructed for this analysis."""
+
+    nodes: List[str] = Field(default_factory=list, description="Variable names")
+    edges: List[Tuple[str, str]] = Field(
+        default_factory=list, description="Directed (from, to) edges"
+    )
+    treatment_nodes: List[str] = Field(default_factory=list)
+    outcome_nodes: List[str] = Field(default_factory=list)
+    adjustment_sets: List[List[str]] = Field(
+        default_factory=list, description="Valid backdoor adjustment sets"
+    )
+    dag_dot: Optional[str] = Field(default=None, description="Graphviz DOT for rendering")
+
+
+class RefutationSummary(BaseModel):
+    """Robustness gate + refutation/sensitivity summary from the agent."""
+
+    gate_decision: Optional[str] = Field(default=None, description="proceed / review / block")
+    passed: bool = Field(default=False, description="True only on a PROCEED gate")
+    needs_review: bool = Field(default=False)
+    tests_passed: Optional[int] = Field(default=None)
+    tests_total: Optional[int] = Field(default=None)
+    sensitivity_e_value: Optional[float] = Field(default=None)
+
+
+class AgentCausalAnalysisResponse(BaseModel):
+    """Result of an end-to-end causal_impact agent run.
+
+    Carries the constructed DAG, the treatment->outcome effect, which estimator
+    the agent used (data-driven or forced), and the refutation/interpretation —
+    everything the page renders. Fail-closed: a run with no estimate surfaces
+    status ``failed`` with the reason in ``warnings`` (never a fabricated ATE).
+    """
+
+    analysis_id: str
+    status: str = Field(..., description="completed / needs_review / failed")
+    treatment_var: str
+    outcome_var: str
+    dataset: str
+    n_rows: int = Field(..., description="Usable estimation rows the agent ran on")
+    data_source: str = Field(..., description="database / synthetic")
+    dag: CausalDAGModel
+    ate: Optional[float] = Field(default=None, description="Average treatment effect")
+    ate_ci_lower: Optional[float] = Field(default=None)
+    ate_ci_upper: Optional[float] = Field(default=None)
+    standard_error: Optional[float] = Field(default=None)
+    p_value: Optional[float] = Field(default=None)
+    statistical_significance: bool = Field(default=False)
+    selected_estimator: Optional[str] = Field(
+        default=None, description="Estimator the agent actually used"
+    )
+    confidence: Optional[float] = Field(default=None, description="Overall confidence (0-1)")
+    refutation: RefutationSummary = Field(default_factory=RefutationSummary)
+    narrative: Optional[str] = Field(default=None, description="Natural-language interpretation")
+    executive_summary: Optional[str] = Field(default=None)
+    recommendations: List[str] = Field(default_factory=list)
+    key_insights: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    latency_ms: int = Field(..., description="Total wall-clock latency")
 
 
 # =============================================================================
