@@ -8,6 +8,7 @@
  * @module hooks/api/use-causal
  */
 
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryOptions, UseMutationOptions } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-client';
@@ -18,6 +19,8 @@ import {
   getHierarchicalAnalysis,
   getCausalVariables,
   proposeCausalQuestions,
+  discoverCausalEffects,
+  getDiscoverCausalEffects,
   routeQuery,
   runSequentialPipeline,
   runParallelPipeline,
@@ -38,6 +41,7 @@ import type {
   CausalLibrary,
   CausalVariablesResponse,
   ProposeQuestionsResponse,
+  DiscoverEffectsResponse,
   CrossValidationRequest,
   CrossValidationResponse,
   EstimatorListResponse,
@@ -130,6 +134,38 @@ export function useProposeQuestions(
     staleTime: 5 * 60 * 1000,
     ...options,
   });
+}
+
+/**
+ * Discover-effects leaderboard: submit a job, then poll it (every 3s) until the
+ * agent has validated every candidate question. The ranked effects fill in
+ * progressively. ``start()`` submits; ``job`` is the latest (submit or poll)
+ * state.
+ */
+export function useDiscoverEffects(dataset: string = 'patient_journeys') {
+  const [jobId, setJobId] = useState<string | null>(null);
+
+  const submit = useMutation<DiscoverEffectsResponse, ApiError>({
+    mutationFn: () => discoverCausalEffects(dataset),
+    onSuccess: (r) => setJobId(r.job_id),
+  });
+
+  const poll = useQuery<DiscoverEffectsResponse, ApiError>({
+    queryKey: ['causal', 'discover-effects', jobId],
+    queryFn: () => getDiscoverCausalEffects(jobId as string),
+    enabled: !!jobId,
+    // Poll until the job completes; then stop.
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.status === 'completed' ? false : 3000,
+  });
+
+  return {
+    start: submit.mutate,
+    isStarting: submit.isPending,
+    startError: submit.error,
+    job: poll.data ?? submit.data ?? null,
+    isPolling: poll.isFetching,
+  };
 }
 
 /**

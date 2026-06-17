@@ -5,12 +5,11 @@ import { TIMEOUTS } from '../fixtures/test-data'
 import { assertNotLoading, assertNoErrors } from '../utils/assertions'
 
 /**
- * Causal Discovery is now an agent-driven one-click flow: pick the causal
- * question, the agent learns the DAG from data + estimates + refutes. These
- * specs assert the page's HONEST states — header, agent-driven badge, the
- * question form, and the empty state before a run. The rendered result (learned
- * DAG, effect, gate) is covered by the component unit tests (jsdom); the e2e
- * here locks the page loads and presents the agent-driven entry point.
+ * Causal Discovery is a validated-effects leaderboard: click "Discover causal
+ * effects" and the agent validates + ranks each candidate question. These specs
+ * assert the page's HONEST states — header, agent-driven badge, the run control,
+ * and the empty state before a run. The full agent run (minutes) and the ranked
+ * leaderboard rendering are covered by the component unit tests.
  */
 test.describe('Causal Discovery Page', () => {
   let causalPage: CausalDiscoveryPage
@@ -42,7 +41,7 @@ test.describe('Causal Discovery Page', () => {
       await expect(causalPage.pageHeader).toBeVisible()
     })
 
-    test('should display the agent-driven page description', async () => {
+    test('should display the confidence/impact ranking description', async () => {
       await expect(causalPage.pageDescription).toBeVisible()
     })
 
@@ -51,17 +50,9 @@ test.describe('Causal Discovery Page', () => {
     })
   })
 
-  test.describe('Question form (the only user input)', () => {
-    test('should display the treatment selector', async () => {
-      await expect(causalPage.treatmentSelect).toBeVisible()
-    })
-
-    test('should display the outcome selector', async () => {
-      await expect(causalPage.outcomeSelect).toBeVisible()
-    })
-
-    test('should display the Discover & Analyze button', async () => {
-      await expect(causalPage.analyzeButton).toBeVisible()
+  test.describe('Run control', () => {
+    test('should display the Discover causal effects button', async () => {
+      await expect(causalPage.discoverButton).toBeVisible()
     })
   })
 

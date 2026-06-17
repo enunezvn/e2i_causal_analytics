@@ -566,6 +566,55 @@ class ProposeQuestionsResponse(BaseModel):
     )
 
 
+class DiscoveredEffect(BaseModel):
+    """One agent-VALIDATED causal effect in the discovery leaderboard.
+
+    Unlike the screening signal in :class:`ProposedQuestion`, this is the real
+    causal_impact agent output (discovered DAG + data-driven estimator +
+    refutation gate) for a treatment->outcome question.
+    """
+
+    treatment: str
+    outcome: str
+    status: str = Field(
+        ...,
+        description="pending / running / completed / needs_review / blocked / failed",
+    )
+    ate: Optional[float] = None
+    ate_ci_lower: Optional[float] = None
+    ate_ci_upper: Optional[float] = None
+    p_value: Optional[float] = None
+    statistical_significance: bool = False
+    selected_estimator: Optional[str] = None
+    gate_decision: Optional[str] = Field(default=None, description="proceed / review / block")
+    confidence_score: float = Field(
+        default=0.0, description="0-1 ranking signal: robustness gate + statistical significance"
+    )
+    impact: Optional[float] = Field(default=None, description="Effect magnitude |ate| (ranking)")
+    n_rows: int = 0
+    analysis_id: Optional[str] = Field(
+        default=None, description="GET /causal/agent-analyze/{id} for the full DAG + refutation"
+    )
+
+
+class DiscoverEffectsResponse(BaseModel):
+    """Async job: the agent's validated causal effects across candidate questions,
+    ranked by confidence (robustness gate + significance) then impact."""
+
+    job_id: str
+    status: str = Field(..., description="pending / running / completed")
+    dataset: str
+    total: int = Field(..., description="Candidate questions the agent is validating")
+    completed: int = Field(..., description="Questions validated so far")
+    effects: List[DiscoveredEffect] = Field(default_factory=list)
+    note: str = Field(
+        default=(
+            "Validated causal effects from the causal_impact agent (discovered DAG + "
+            "data-driven estimator + refutation gate), ranked by confidence then impact."
+        )
+    )
+
+
 # =============================================================================
 # PIPELINE SCHEMAS
 # =============================================================================

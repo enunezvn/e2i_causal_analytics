@@ -58,6 +58,8 @@ from src.api.schemas.causal import (
     CausalVariablesResponse,
     CrossValidationRequest,
     CrossValidationResponse,
+    DiscoveredEffect,
+    DiscoverEffectsResponse,
     EstimationDataResponse,
     EstimatorInfo,
     EstimatorListResponse,
@@ -947,6 +949,208 @@ async def propose_causal_questions(
         reverse=True,
     )
     return ProposeQuestionsResponse(dataset=dataset, candidates=candidates)
+
+
+# =============================================================================
+# DISCOVER EFFECTS — validated-effects leaderboard (async submit -> poll)
+# =============================================================================
+
+# In-memory job cache (mirrors _agent_analysis_cache). Each job runs the agent
+# for a set of candidate questions and ranks the VALIDATED effects.
+_discover_effects_cache: Dict[str, "DiscoverEffectsResponse"] = {}
+
+# Complementary outcomes are 1 - each other (persistent_180d vs discontinued_180d);
+# running both is redundant, so one is skipped to dedupe the leaderboard.
+_COMPLEMENT_OUTCOMES_SKIP = {"discontinued_180d"}
+
+
+def _discover_candidate_pairs(spec: Dict[str, Any]) -> List[tuple]:
+    """Deduped (treatment, outcome) questions for the leaderboard: no self-pairs,
+    and complementary outcomes collapsed to one representative."""
+    pairs: List[tuple] = []
+    for t in spec["treatment"]:
+        for o in spec["outcome"]:
+            if t == o or o in _COMPLEMENT_OUTCOMES_SKIP:
+                continue
+            pairs.append((t, o))
+    return pairs
+
+
+def _effect_confidence_score(gate_decision: Optional[str], significant: bool) -> float:
+    """Map the robustness gate + significance to a 0-1 ranking signal."""
+    base = {"proceed": 0.6, "review": 0.35}.get(gate_decision or "", 0.1)
+    return min(1.0, base + (0.3 if significant else 0.0))
+
+
+def _effect_status_from_gate(ate: Optional[float], gate: Optional[str], resp_status: str) -> str:
+    """Honest leaderboard status. A run that produced an estimate is reported by
+    its robustness verdict (completed/needs_review/blocked) — only a run that
+    produced NO estimate is 'failed'. This separates 'the gate blocked it'
+    (computed, worth inspecting) from 'it could not run'."""
+    if ate is None:
+        return "failed" if resp_status not in {"pending", "running"} else resp_status
+    if gate == "proceed":
+        return "completed"
+    if gate == "review":
+        return "needs_review"
+    if gate == "block":
+        return "blocked"
+    return resp_status
+
+
+def _effect_from_agent_response(
+    treatment: str, outcome: str, resp: "AgentCausalAnalysisResponse", analysis_id: str
+) -> DiscoveredEffect:
+    gate = resp.refutation.gate_decision if resp.refutation else None
+    return DiscoveredEffect(
+        treatment=treatment,
+        outcome=outcome,
+        status=_effect_status_from_gate(resp.ate, gate, resp.status),
+        ate=resp.ate,
+        ate_ci_lower=resp.ate_ci_lower,
+        ate_ci_upper=resp.ate_ci_upper,
+        p_value=resp.p_value,
+        statistical_significance=bool(resp.statistical_significance),
+        selected_estimator=resp.selected_estimator,
+        gate_decision=gate,
+        confidence_score=_effect_confidence_score(gate, bool(resp.statistical_significance)),
+        impact=abs(resp.ate) if resp.ate is not None else None,
+        n_rows=resp.n_rows,
+        analysis_id=analysis_id,
+    )
+
+
+def _rank_effects(effects: List[DiscoveredEffect]) -> List[DiscoveredEffect]:
+    """Rank by confidence (gate + significance) then impact (|ate|). Not-yet-run
+    questions (score 0) sort last."""
+    return sorted(
+        effects,
+        key=lambda e: (e.confidence_score, e.impact if e.impact is not None else -1.0),
+        reverse=True,
+    )
+
+
+async def _run_discover_effects_task(
+    job_id: str, dataset: str, pairs: List[tuple], data_source: str
+) -> None:
+    """Background: validate each candidate question with the causal_impact agent
+    (serial — each acquires the heavy-compute slot), updating the cached job after
+    each so the FE leaderboard fills in progressively, ranked by confidence+impact."""
+    spec = _CAUSAL_DATASET_SPECS[dataset]
+    covariates_all = list(spec["covariate"])
+    # Keyed pending effects we mutate in place across the run.
+    effects: Dict[tuple, DiscoveredEffect] = {
+        (t, o): DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs
+    }
+
+    def _publish(status: str, completed: int) -> None:
+        _discover_effects_cache[job_id] = DiscoverEffectsResponse(
+            job_id=job_id,
+            status=status,
+            dataset=dataset,
+            total=len(pairs),
+            completed=completed,
+            effects=_rank_effects(list(effects.values())),
+        )
+
+    completed = 0
+    for t, o in pairs:
+        effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="running")
+        _publish("running", completed)
+        try:
+            cov = [c for c in covariates_all if c not in (t, o)]
+            df, _select = await _load_agent_estimation_frame(
+                dataset=dataset,
+                treatment_var=t,
+                outcome_var=o,
+                covariates=cov,
+                limit=1500,
+            )
+            aid = str(uuid.uuid4())
+            req = AgentCausalAnalysisRequest(
+                treatment_var=t, outcome_var=o, dataset=dataset, limit=1500
+            )
+            _agent_analysis_cache[aid] = AgentCausalAnalysisResponse(
+                analysis_id=aid,
+                status="pending",
+                treatment_var=t,
+                outcome_var=o,
+                dataset=dataset,
+                n_rows=int(df.shape[0]),
+                data_source=data_source,
+                dag=CausalDAGModel(),
+                statistical_significance=False,
+                refutation=RefutationSummary(),
+                latency_ms=0,
+            )
+            await _run_agent_analysis_task(aid, req, df, cov, data_source)
+            resp = _agent_analysis_cache[aid]
+            effects[(t, o)] = _effect_from_agent_response(t, o, resp, aid)
+        except HTTPException as e:
+            # Fail-closed: a question with no usable data is marked failed, not faked.
+            logger.warning(f"discover-effects: {t}->{o} failed-closed: {e.detail}")
+            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
+            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+        completed += 1
+        _publish("running" if completed < len(pairs) else "completed", completed)
+
+
+@router.post(
+    "/discover-effects",
+    response_model=DiscoverEffectsResponse,
+    summary="Discover & rank the agent's VALIDATED causal effects (async submit -> poll)",
+    operation_id="discover_causal_effects",
+)
+async def discover_causal_effects(
+    background_tasks: BackgroundTasks,
+    dataset: str = Query(_DEFAULT_CAUSAL_DATASET, description="Gold-standard dataset"),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> DiscoverEffectsResponse:
+    """Run the causal_impact agent across the dataset's candidate questions and
+    rank the VALIDATED effects (discovered DAG + estimator + refutation gate) by
+    confidence then impact. Heavy (minutes per effect) -> async: returns a pending
+    job; poll ``GET /causal/discover-effects/{job_id}``. Fail-closed per question.
+    """
+    spec = _CAUSAL_DATASET_SPECS.get(dataset)
+    if spec is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+    pairs = _discover_candidate_pairs(spec)
+    job_id = str(uuid.uuid4())
+    data_source = "synthetic" if deployment_includes_synthetic() else "database"
+    _discover_effects_cache[job_id] = DiscoverEffectsResponse(
+        job_id=job_id,
+        status="pending",
+        dataset=dataset,
+        total=len(pairs),
+        completed=0,
+        effects=[DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs],
+    )
+    background_tasks.add_task(_run_discover_effects_task, job_id, dataset, pairs, data_source)
+    return _discover_effects_cache[job_id]
+
+
+@router.get(
+    "/discover-effects/{job_id}",
+    response_model=DiscoverEffectsResponse,
+    summary="Poll a discover-effects job",
+    operation_id="get_discover_causal_effects",
+)
+async def get_discover_causal_effects(
+    job_id: str,
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> DiscoverEffectsResponse:
+    job = _discover_effects_cache.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
+    return job
 
 
 @router.get(

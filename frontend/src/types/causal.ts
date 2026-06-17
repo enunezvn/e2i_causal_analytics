@@ -245,6 +245,41 @@ export interface ProposeQuestionsResponse {
   note: string;
 }
 
+/** One agent-VALIDATED causal effect in the discovery leaderboard. */
+export interface DiscoveredEffect {
+  treatment: string;
+  outcome: string;
+  /** pending / running / completed / needs_review / failed */
+  status: string;
+  ate?: number | null;
+  ate_ci_lower?: number | null;
+  ate_ci_upper?: number | null;
+  p_value?: number | null;
+  statistical_significance: boolean;
+  selected_estimator?: string | null;
+  /** proceed / review / block */
+  gate_decision?: string | null;
+  /** 0-1 ranking signal (robustness gate + significance) */
+  confidence_score: number;
+  /** |ate| effect magnitude */
+  impact?: number | null;
+  n_rows: number;
+  /** GET /causal/agent-analyze/{id} for the full DAG + refutation */
+  analysis_id?: string | null;
+}
+
+/** Async discover-effects job: the agent's validated effects, ranked. */
+export interface DiscoverEffectsResponse {
+  job_id: string;
+  /** pending / running / completed */
+  status: string;
+  dataset: string;
+  total: number;
+  completed: number;
+  effects: DiscoveredEffect[];
+  note: string;
+}
+
 // =============================================================================
 // HIERARCHICAL ANALYSIS TYPES
 // =============================================================================

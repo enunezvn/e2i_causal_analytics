@@ -1,26 +1,31 @@
 /**
- * CausalDiscovery Page
- * ====================
+ * CausalDiscovery Page — validated-effects leaderboard
+ * ====================================================
  *
- * Agent-driven causal discovery. The analyst picks ONLY the causal question
- * (treatment -> outcome); the `causal_impact` agent does everything else:
+ * The page SURFACES the causal effects the causal_impact agent can validate from
+ * the data and RANKS them by confidence (robustness gate + significance) and
+ * impact (effect size). The analyst clicks "Discover causal effects"; the agent
+ * runs its full pipeline (guided DAG discovery + data-driven estimator +
+ * refutation gate) for each candidate question, and the ranked leaderboard fills
+ * in progressively. Click any validated row to drill into its DAG + refutation.
  *
- * 1. LEARNS the causal structure FROM THE DATA via guided structure discovery
- *    (PC with background-knowledge tiers anchoring treatment as cause / outcome
- *    as effect) — the data selects which covariates are confounders.
- * 2. Estimates the treatment -> outcome effect with a data-driven estimator
- *    (energy-score routing across the registry).
- * 3. Runs refutation + sensitivity (the robustness gate).
- *
- * This replaced the previous manual workbench (library routing + parallel
- * pipeline + KG-chain buttons) — those exposed agent-internal method choices as
- * user decisions. The dedicated agent now makes them.
+ * No question-picking, no method knobs — the agent decides; the analyst reads the
+ * ranked, validated results.
  *
  * @module pages/CausalDiscovery
  */
 
 import { useMemo, useState } from 'react';
-import { GitBranch, Network, Play, Loader2, AlertTriangle, Sparkles } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  GitBranch,
+  Network,
+  Play,
+  Loader2,
+  AlertTriangle,
+  Sparkles,
+  ChevronRight,
+} from 'lucide-react';
 
 import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
 import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
@@ -35,23 +40,12 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/EmptyState';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 
-import {
-  useCausalVariables,
-  useProposeQuestions,
-  useRunCausalAgentAnalysis,
-} from '@/hooks/api';
+import { useDiscoverEffects } from '@/hooks/api';
+import { getCausalAgentAnalysis } from '@/api/causal';
+import type { DiscoveredEffect } from '@/types/causal';
 
 const DATASET = 'patient_journeys';
-const DEFAULT_TREATMENT = 'treatment_arm';
-const DEFAULT_OUTCOME = 'persistent_180d';
 
 function formatEffect(ate: number | null | undefined): string {
   if (ate === null || ate === undefined || Number.isNaN(ate)) return 'N/A';
@@ -70,35 +64,46 @@ function gateBadge(decision?: string | null) {
   return <Badge variant="outline">—</Badge>;
 }
 
-/** Honest label for how the DAG was built. */
-function dagSourceLabel(source?: string): { label: string; learned: boolean } {
-  switch (source) {
-    case 'discovered':
-      return { label: 'Learned from data', learned: true };
-    case 'augmented':
-      return { label: 'Domain model + data-discovered edges', learned: true };
+// One column conveys both the run state and the robustness verdict. A computed
+// effect is shown by its gate (Proceed/Review/Blocked); a run that produced no
+// estimate is Failed; in-flight rows are Queued/Running.
+function verdictBadge(e: DiscoveredEffect) {
+  switch (e.status) {
+    case 'completed':
+      return <Badge variant="default">Proceed</Badge>;
+    case 'needs_review':
+      return <Badge variant="secondary">Review</Badge>;
+    case 'blocked':
+      return <Badge variant="destructive">Blocked</Badge>;
+    case 'running':
+      return (
+        <Badge variant="outline" className="gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" /> Running
+        </Badge>
+      );
+    case 'pending':
+      return <Badge variant="outline">Queued</Badge>;
     default:
-      return { label: 'Domain-knowledge model', learned: false };
+      return <Badge variant="destructive">Failed</Badge>;
   }
 }
 
 export default function CausalDiscovery() {
-  const [treatmentVar, setTreatmentVar] = useState(DEFAULT_TREATMENT);
-  const [outcomeVar, setOutcomeVar] = useState(DEFAULT_OUTCOME);
+  const { start, isStarting, startError, job } = useDiscoverEffects(DATASET);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const { data: variables } = useCausalVariables(DATASET);
-  const { data: proposals } = useProposeQuestions(DATASET);
-  const runAgent = useRunCausalAgentAnalysis();
-  const result = runAgent.data;
+  // Drill-down: the full validated analysis for the selected leaderboard row.
+  const detail = useQuery({
+    queryKey: ['causal', 'agent-analyze', selectedId],
+    queryFn: () => getCausalAgentAnalysis(selectedId as string),
+    enabled: !!selectedId,
+  });
+  const result = detail.data;
 
-  // Agent-proposed, data-ranked candidate questions (screening signal). The
-  // analyst picks one to confirm — they don't guess from blind dropdowns.
-  const suggestions = proposals?.candidates ?? [];
+  const effects: DiscoveredEffect[] = useMemo(() => job?.effects ?? [], [job]);
+  const running = !!job && job.status !== 'completed';
 
-  const treatmentCandidates = variables?.treatment_candidates ?? [DEFAULT_TREATMENT];
-  const outcomeCandidates = variables?.outcome_candidates ?? [DEFAULT_OUTCOME];
-
-  // Map the agent's learned DAG onto the shared causal-graph visualization.
+  // Map the selected analysis's DAG onto the shared causal-graph visualization.
   const { vizNodes, vizEdges } = useMemo((): {
     vizNodes: CausalNode[];
     vizEdges: CausalEdge[];
@@ -134,23 +139,6 @@ export default function CausalDiscovery() {
     return { vizNodes: nodes, vizEdges: edges };
   }, [result]);
 
-  const handleAnalyze = async () => {
-    try {
-      await runAgent.mutateAsync({
-        treatment_var: treatmentVar,
-        outcome_var: outcomeVar,
-        dataset: DATASET,
-        // Learn the DAG from data (default), and let the agent pick the
-        // estimator (Auto). The analyst supplies only the question.
-      });
-    } catch (error) {
-      // Surfaced via runAgent.isError below; nothing fabricated.
-      console.error('Causal discovery failed:', error);
-    }
-  };
-
-  const source = dagSourceLabel(result?.dag_source);
-
   return (
     <div className="container mx-auto px-4 py-8 space-y-6">
       {/* Header */}
@@ -161,8 +149,8 @@ export default function CausalDiscovery() {
             Causal Discovery
           </h1>
           <p className="text-muted-foreground">
-            The agent learns the causal structure from the data, then estimates and validates the
-            treatment&rarr;outcome effect — you choose only the question.
+            The agent surfaces the causal effects it can validate from the data and ranks them by
+            confidence and impact. No questions to pick — the agent decides.
           </p>
         </div>
         <Badge variant="outline" className="flex items-center gap-1 self-start">
@@ -171,290 +159,224 @@ export default function CausalDiscovery() {
         </Badge>
       </div>
 
-      {/* Question form */}
+      {/* Run control */}
       <Card>
         <CardHeader>
-          <CardTitle>Causal question</CardTitle>
+          <CardTitle>Discovered causal effects</CardTitle>
           <CardDescription>
-            Pick a treatment and an outcome. The agent discovers the confounders, builds the DAG,
-            selects the estimator, and runs robustness checks — no method knobs to set.
+            For each candidate question the agent builds the DAG, selects the estimator
+            data-drivenly, and runs the refutation gate — then ranks the validated effects. This
+            takes a few minutes; results fill in as each completes.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {suggestions.length > 0 && (
-            <div className="mb-5">
-              <p className="text-sm font-medium mb-2">
-                Suggested questions{' '}
-                <span className="font-normal text-muted-foreground">
-                  (ranked by the agent from the data — pick one to confirm)
-                </span>
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {suggestions.slice(0, 5).map((s, i) => {
-                  const active = s.treatment === treatmentVar && s.outcome === outcomeVar;
-                  return (
-                    <Button
-                      key={`${s.treatment}->${s.outcome}`}
-                      type="button"
-                      size="sm"
-                      variant={active ? 'default' : 'outline'}
-                      onClick={() => {
-                        setTreatmentVar(s.treatment);
-                        setOutcomeVar(s.outcome);
-                      }}
-                    >
-                      {i === 0 && <Sparkles className="mr-1 h-3 w-3" />}
-                      {s.treatment} &rarr; {s.outcome}
-                      <span className="ml-2 text-xs opacity-70">
-                        {s.association_strength.toFixed(2)}
-                      </span>
-                    </Button>
-                  );
-                })}
-              </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                Strength = adjusted association (a screening signal, not the validated effect).
-              </p>
-            </div>
-          )}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-            <div className="space-y-2">
-              <label className="text-sm font-medium block" htmlFor="treatment-var">
-                Treatment (cause)
-              </label>
-              <Select value={treatmentVar} onValueChange={setTreatmentVar}>
-                <SelectTrigger id="treatment-var" aria-label="Treatment variable">
-                  <SelectValue placeholder="Select treatment" />
-                </SelectTrigger>
-                <SelectContent>
-                  {treatmentCandidates.map((candidate) => (
-                    <SelectItem key={candidate} value={candidate}>
-                      {candidate}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium block" htmlFor="outcome-var">
-                Outcome (effect)
-              </label>
-              <Select value={outcomeVar} onValueChange={setOutcomeVar}>
-                <SelectTrigger id="outcome-var" aria-label="Outcome variable">
-                  <SelectValue placeholder="Select outcome" />
-                </SelectTrigger>
-                <SelectContent>
-                  {outcomeCandidates.map((candidate) => (
-                    <SelectItem key={candidate} value={candidate}>
-                      {candidate}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button onClick={handleAnalyze} disabled={runAgent.isPending}>
-              {runAgent.isPending ? (
+          <div className="flex items-center gap-4">
+            <Button onClick={() => start()} disabled={isStarting || running}>
+              {isStarting || running ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Discovering &amp; analyzing…
+                  {running && job
+                    ? `Validating… (${job.completed}/${job.total})`
+                    : 'Starting…'}
                 </>
               ) : (
                 <>
                   <Play className="mr-2 h-4 w-4" />
-                  Discover &amp; Analyze
+                  {job ? 'Re-run discovery' : 'Discover causal effects'}
                 </>
               )}
             </Button>
+            {job && (
+              <span className="text-sm text-muted-foreground">
+                {job.completed}/{job.total} questions validated
+              </span>
+            )}
           </div>
-          {runAgent.isPending && (
-            <p className="text-sm text-muted-foreground mt-4">
-              The agent is learning the DAG from the data, estimating the effect, and running
-              refutation. This can take a minute or two.
-            </p>
-          )}
-          {runAgent.isError && (
+          {startError && (
             <Alert variant="destructive" className="mt-4">
               <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Discovery could not run</AlertTitle>
-              <AlertDescription>
-                The causal agent did not return a result. Please try again.
-              </AlertDescription>
+              <AlertTitle>Discovery could not start</AlertTitle>
+              <AlertDescription>Please try again.</AlertDescription>
             </Alert>
           )}
         </CardContent>
       </Card>
 
-      {/* Results / empty state */}
-      {!result ? (
+      {/* Leaderboard */}
+      {!job ? (
         <EmptyState
           title="No discovery run yet"
-          description="Choose a treatment and outcome, then click Discover & Analyze. The agent learns the causal graph from the data, estimates the effect, and runs robustness checks."
+          description="Click Discover causal effects. The agent validates each candidate question and ranks the effects by confidence (robustness gate + significance) and impact (effect size)."
         />
       ) : (
-        <>
-          {result.status !== 'completed' && (
-            <Alert variant={result.status === 'failed' ? 'destructive' : 'default'}>
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>
-                {result.status === 'failed'
-                  ? 'No validated effect was produced'
-                  : 'Estimate needs expert review'}
-              </AlertTitle>
-              <AlertDescription>
-                {result.warnings.length > 0
-                  ? result.warnings.join(' ')
-                  : 'The estimate did not fully pass the robustness gate.'}
-              </AlertDescription>
-            </Alert>
-          )}
+        <Card>
+          <CardHeader>
+            <CardTitle>Ranked causal effects</CardTitle>
+            <CardDescription>
+              Validated by the agent (discovered DAG + estimator + refutation gate), ranked by
+              confidence then impact. Click a validated row for its DAG and robustness detail.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/40 text-left text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="p-3 font-medium">#</th>
+                    <th className="p-3 font-medium">Causal question</th>
+                    <th className="p-3 font-medium">Confidence</th>
+                    <th className="p-3 font-medium">Impact (ATE)</th>
+                    <th className="p-3 font-medium">95% CI</th>
+                    <th className="p-3 font-medium">Estimator</th>
+                    <th className="p-3" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {effects.map((e, i) => {
+                    const clickable =
+                      e.status === 'completed' ||
+                      e.status === 'needs_review' ||
+                      e.status === 'blocked';
+                    const isSelected = !!e.analysis_id && e.analysis_id === selectedId;
+                    return (
+                      <tr
+                        key={`${e.treatment}->${e.outcome}`}
+                        className={`border-b last:border-0 ${
+                          clickable ? 'cursor-pointer hover:bg-muted/40' : 'opacity-80'
+                        } ${isSelected ? 'bg-muted/60' : ''}`}
+                        onClick={() => {
+                          if (clickable && e.analysis_id) setSelectedId(e.analysis_id);
+                        }}
+                      >
+                        <td className="p-3 text-muted-foreground">{i + 1}</td>
+                        <td className="p-3 font-medium">
+                          <span>{e.treatment}</span>{' '}
+                          <span className="text-muted-foreground">&rarr;</span>{' '}
+                          <span>{e.outcome}</span>
+                        </td>
+                        <td className="p-3">{verdictBadge(e)}</td>
+                        <td className="p-3 font-medium">{formatEffect(e.ate)}</td>
+                        <td className="p-3 text-muted-foreground">
+                          {formatCI(e.ate_ci_lower, e.ate_ci_upper)}
+                        </td>
+                        <td className="p-3 capitalize">
+                          {e.selected_estimator ? e.selected_estimator.replace(/_/g, ' ') : '—'}
+                        </td>
+                        <td className="p-3 text-right">
+                          {clickable && (
+                            <ChevronRight className="inline h-4 w-4 text-muted-foreground" />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
-          {/* Learned causal graph — the heart of the discovery page. */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Network className="h-5 w-5" />
-                Causal structure
-              </CardTitle>
-              <CardDescription className="flex flex-wrap items-center gap-2">
-                <Badge variant={source.learned ? 'default' : 'outline'}>{source.label}</Badge>
-                {result.discovered_confounders && result.discovered_confounders.length > 0 && (
-                  <span className="text-xs">
-                    Confounders the data identified:{' '}
-                    <span className="font-medium">
-                      {result.discovered_confounders.join(', ')}
-                    </span>
-                  </span>
-                )}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {vizNodes.length > 0 ? (
-                <CausalDiscoveryViz nodes={vizNodes} edges={vizEdges} showEffectsTable={false} />
-              ) : (
-                <EmptyState
-                  title="No graph produced"
-                  description="The agent did not return a causal graph for this run."
-                />
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Effect + estimator + robustness */}
-          <div className="grid md:grid-cols-3 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>
+      {/* Drill-down detail for the selected effect */}
+      {selectedId && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Network className="h-5 w-5" />
+              {result ? (
+                <>
                   {result.treatment_var} &rarr; {result.outcome_var}
-                </CardTitle>
-                <CardDescription>Average Treatment Effect</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center">
-                  <div className="text-4xl font-bold text-primary">{formatEffect(result.ate)}</div>
-                  <div className="text-sm text-muted-foreground mt-2">
-                    95% CI: {formatCI(result.ate_ci_lower, result.ate_ci_upper)}
-                  </div>
-                  <div className="mt-4 flex items-center justify-center gap-2">
-                    {result.statistical_significance ? (
-                      <Badge variant="default">Significant</Badge>
-                    ) : (
-                      <Badge variant="secondary">Not significant</Badge>
+                </>
+              ) : (
+                'Loading effect…'
+              )}
+            </CardTitle>
+            <CardDescription>
+              The agent&apos;s validated causal model: discovered DAG, estimated effect, and
+              robustness gate.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {detail.isLoading || !result ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading the validated analysis…
+              </div>
+            ) : (
+              <>
+                <div className="grid md:grid-cols-3 gap-6">
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-primary">{formatEffect(result.ate)}</div>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      ATE · 95% CI {formatCI(result.ate_ci_lower, result.ate_ci_upper)}
+                    </div>
+                    {result.p_value !== null && result.p_value !== undefined && (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        p = {result.p_value.toFixed(4)}
+                      </div>
                     )}
                   </div>
-                  {result.p_value !== null && result.p_value !== undefined && (
-                    <div className="text-xs text-muted-foreground mt-2">
-                      p = {result.p_value.toFixed(4)}
+                  <div className="text-center">
+                    <div className="text-lg font-semibold capitalize">
+                      {result.selected_estimator
+                        ? result.selected_estimator.replace(/_/g, ' ')
+                        : 'N/A'}
                     </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Estimator</CardTitle>
-                <CardDescription>Selected data-drivenly (energy-score)</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-center">
-                  <div className="text-2xl font-bold capitalize">
-                    {result.selected_estimator
-                      ? result.selected_estimator.replace(/_/g, ' ')
-                      : 'N/A'}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Estimator (data-driven) · {result.n_rows.toLocaleString()} rows
+                    </div>
                   </div>
-                  <div className="text-xs text-muted-foreground mt-3">
-                    Ran on {result.n_rows.toLocaleString()} rows ({result.data_source}) in{' '}
-                    {(result.latency_ms / 1000).toFixed(1)}s
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Robustness</CardTitle>
-                <CardDescription>Refutation &amp; sensitivity gate</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Gate:</span>
-                    {gateBadge(result.refutation.gate_decision)}
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Tests passed:</span>
-                    <span className="font-medium">
-                      {result.refutation.tests_passed ?? '—'}
+                  <div className="text-center">
+                    <div className="flex items-center justify-center gap-2">
+                      {gateBadge(result.refutation.gate_decision)}
+                      {result.statistical_significance ? (
+                        <Badge variant="default">Significant</Badge>
+                      ) : (
+                        <Badge variant="secondary">Not significant</Badge>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-2">
+                      Refutation: {result.refutation.tests_passed ?? '—'}
                       {result.refutation.tests_total !== null &&
                       result.refutation.tests_total !== undefined
                         ? ` / ${result.refutation.tests_total}`
-                        : ''}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Sensitivity E-value:</span>
-                    <span className="font-medium">
-                      {result.refutation.sensitivity_e_value !== null &&
-                      result.refutation.sensitivity_e_value !== undefined
-                        ? result.refutation.sensitivity_e_value.toFixed(2)
-                        : '—'}
-                    </span>
+                        : ''}{' '}
+                      passed
+                    </div>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-          </div>
 
-          {/* Interpretation */}
-          {(result.narrative ||
-            result.executive_summary ||
-            result.recommendations.length > 0) && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Interpretation</CardTitle>
-                <CardDescription>Natural-language reading of the result</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 text-sm">
-                {result.executive_summary && (
-                  <p className="font-medium">{result.executive_summary}</p>
+                {result.discovered_confounders && result.discovered_confounders.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Confounders the data identified:{' '}
+                    <span className="font-medium">{result.discovered_confounders.join(', ')}</span>
+                  </p>
                 )}
-                {result.narrative && (
-                  <p className="text-muted-foreground whitespace-pre-line">{result.narrative}</p>
+
+                {vizNodes.length > 0 ? (
+                  <CausalDiscoveryViz nodes={vizNodes} edges={vizEdges} showEffectsTable={false} />
+                ) : (
+                  <EmptyState
+                    title="No DAG produced"
+                    description="The agent did not return a causal graph for this run."
+                  />
                 )}
-                {result.recommendations.length > 0 && (
-                  <div>
-                    <p className="font-medium mb-1">Recommendations</p>
-                    <ul className="list-disc pl-5 text-muted-foreground space-y-1">
-                      {result.recommendations.map((rec, i) => (
-                        <li key={i}>{rec}</li>
-                      ))}
-                    </ul>
+
+                {(result.executive_summary || result.narrative) && (
+                  <div className="space-y-2 text-sm">
+                    {result.executive_summary && (
+                      <p className="font-medium">{result.executive_summary}</p>
+                    )}
+                    {result.narrative && (
+                      <p className="text-muted-foreground whitespace-pre-line">
+                        {result.narrative}
+                      </p>
+                    )}
                   </div>
                 )}
-              </CardContent>
-            </Card>
-          )}
-        </>
+              </>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

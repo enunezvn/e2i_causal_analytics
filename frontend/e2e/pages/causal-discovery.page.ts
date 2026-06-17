@@ -5,17 +5,16 @@ import { ROUTES } from '../fixtures/test-data'
 /**
  * Page Object Model for the Causal Discovery page (`/causal-discovery`).
  *
- * The page is now AGENT-DRIVEN: the analyst picks only the causal question
- * (treatment -> outcome); the causal_impact agent learns the DAG from data
- * (guided structure discovery), estimates the effect data-drivenly, and runs
- * refutation. Honest states this POM exposes:
+ * The page is a VALIDATED-EFFECTS LEADERBOARD: the analyst clicks "Discover
+ * causal effects" and the causal_impact agent validates each candidate question
+ * (guided DAG discovery + data-driven estimator + refutation gate), then ranks
+ * the effects by confidence and impact. Honest states this POM exposes:
  *  - header + "Agent-driven" badge
- *  - the question form (treatment / outcome selects + Discover & Analyze)
+ *  - the "Discover causal effects" run control
  *  - empty: EmptyState "No discovery run yet" before a run
  *
- * The previous manual workbench (library-routing form, parallel-pipeline / KG
- * buttons, always-rendered DAG-viz chrome) was removed, so the old badge / viz
- * locators no longer apply.
+ * The previous manual workbench (library routing / parallel pipeline / KG
+ * buttons) and the one-click question form were removed.
  */
 export class CausalDiscoveryPage extends BasePage {
   readonly url = ROUTES.CAUSAL_DISCOVERY
@@ -30,25 +29,16 @@ export class CausalDiscoveryPage extends BasePage {
   }
 
   get pageDescription(): Locator {
-    return this.page.getByText(/learns the causal structure from the data/i)
+    return this.page.getByText(/ranks them by confidence and impact/i)
   }
 
-  // The single technology badge on the agent-driven page.
   get agentDrivenBadge(): Locator {
     return this.page.getByText('Agent-driven', { exact: false }).first()
   }
 
-  // Question form — the only inputs (the genuine user decision).
-  get treatmentSelect(): Locator {
-    return this.page.getByRole('combobox', { name: 'Treatment variable' })
-  }
-
-  get outcomeSelect(): Locator {
-    return this.page.getByRole('combobox', { name: 'Outcome variable' })
-  }
-
-  get analyzeButton(): Locator {
-    return this.page.getByRole('button', { name: /Discover.*Analyze/i }).first()
+  // The single run control: kicks off the validated-effects discovery job.
+  get discoverButton(): Locator {
+    return this.page.getByRole('button', { name: /Discover causal effects/i }).first()
   }
 
   // Honest empty state before any run.
