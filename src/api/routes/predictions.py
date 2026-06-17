@@ -874,13 +874,9 @@ def build_curated_input_fields(model_name: str) -> Optional[List[Dict[str, Any]]
     fields: List[Dict[str, Any]] = []
     for cov in covariates:
         if cov == "specialty" and specialty_choices:
-            fields.append(
-                {"name": cov, "type": "category", "choices": specialty_choices}
-            )
+            fields.append({"name": cov, "type": "category", "choices": specialty_choices})
         elif cov == "geographic_region":
-            fields.append(
-                {"name": cov, "type": "category", "choices": list(_REGION_CHOICES)}
-            )
+            fields.append({"name": cov, "type": "category", "choices": list(_REGION_CHOICES)})
         else:
             fields.append({"name": cov, "type": "number"})
     return fields

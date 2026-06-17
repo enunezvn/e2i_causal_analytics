@@ -79,6 +79,4 @@ def test_patient_cohort_features_have_no_specialty():
 
 def test_unknown_model_returns_none():
     assert build_curated_input_fields("totally_unknown_model") is None
-    assert (
-        build_curated_input_fields("hcp_adoption_notabrand_goldstd_lr_v1") is None
-    )
+    assert build_curated_input_fields("hcp_adoption_notabrand_goldstd_lr_v1") is None
