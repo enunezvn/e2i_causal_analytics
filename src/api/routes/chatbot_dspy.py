@@ -62,8 +62,12 @@ def _ensure_dspy_configured():
             _dspy_lm_configured = True
             return
 
-        # Configure DSPy with Anthropic Claude
-        lm = dspy.LM("anthropic/claude-sonnet-4-20250514")
+        # Configure DSPy with the env-resolved provider model. The old hardcoded
+        # anthropic/claude-sonnet-4-20250514 is retired and 404s (the same bug that
+        # broke the Executive AI Brief); resolve provider-aware instead.
+        from src.optimization.dspy_lm import get_default_dspy_model
+
+        lm = dspy.LM(get_default_dspy_model())
         dspy.configure(lm=lm)
         _dspy_lm_configured = True
         logger.info("Configured DSPy LLM for chatbot intent classification")

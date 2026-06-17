@@ -1340,7 +1340,7 @@ def create_production_cognitive_workflow(
     embedding_model: Optional[Any] = None,
     agent_registry: Optional[Dict[str, Any]] = None,
     domain_vocabulary: Optional[str] = None,
-    lm_model: str = "anthropic/claude-sonnet-4-20250514",
+    lm_model: Optional[str] = None,
     configure_dspy: bool = True,
 ) -> Any:
     """
@@ -1396,9 +1396,13 @@ def create_production_cognitive_workflow(
         SignalCollectorAdapter,
     )
 
-    # Configure DSPy if requested
+    # Configure DSPy if requested. Resolve the model from env (provider-aware)
+    # when not explicitly given, so we never reconfigure onto a retired model
+    # the deployed key cannot serve.
     if configure_dspy:
-        lm = dspy.LM(lm_model)
+        from src.optimization.dspy_lm import get_default_dspy_model
+
+        lm = dspy.LM(lm_model or get_default_dspy_model())
         dspy.configure(lm=lm)
 
     # Create adapters that wrap real backends
@@ -1448,8 +1452,10 @@ def _default_domain_vocabulary() -> str:
 async def main():
     """Example usage of DSPy-enhanced cognitive RAG."""
 
-    # Configure DSPy
-    lm = dspy.LM("anthropic/claude-sonnet-4-20250514")
+    # Configure DSPy (provider-aware default; honors LLM_PROVIDER / DSPY_LM_MODEL)
+    from src.optimization.dspy_lm import get_default_dspy_model
+
+    lm = dspy.LM(get_default_dspy_model())
     dspy.configure(lm=lm)
 
     # Mock backends (for demo - use create_production_cognitive_workflow for production)

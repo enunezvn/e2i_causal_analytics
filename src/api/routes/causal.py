@@ -35,6 +35,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_analyst, require_viewer
 from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
+from src.api.errors import user_safe_503_detail
 from src.api.models.graph import (
     CausalChainResponse,
     EntityType,
@@ -1067,14 +1068,18 @@ async def _run_sequential_pipeline_task(
         ).model_dump()
 
 
-_NO_REAL_DATA_BACKEND_DETAIL = (
+# These are curated, exception-free explanations meant for end users, so they opt
+# in to the global 503 handler surfacing them verbatim (the FE Heterogeneous
+# Treatment Effects card matches "no real data backend" to render an honest
+# "data isn't wired yet" state). Keep the wording in sync with that FE gate.
+_NO_REAL_DATA_BACKEND_DETAIL = user_safe_503_detail(
     "Causal pipeline endpoints have no real data backend wired. "
     "There is no production data source returning treatment/outcome columns by name. "
     "Pass demo_mode=true to get a clearly-labeled pinned-zero placeholder for UI demos, "
     "or wire real data and re-issue the request."
 )
 
-_NO_RESOLVABLE_DATA_DETAIL = (
+_NO_RESOLVABLE_DATA_DETAIL = user_safe_503_detail(
     "Sequential/parallel pipeline executed but no library produced a result: "
     "no DataFrame was resolvable from the request filters and there is no "
     "production data backend wired for arbitrary data_source identifiers. "
