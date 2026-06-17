@@ -116,9 +116,7 @@ class TestLatencyBudget:
         # costs is the pure runtime overhead the hung run also pays.
         agent._memory_hooks = _HooksStub(history=[])
         t0 = time.monotonic()
-        baseline_result = await agent.run(
-            {"query": _PATTERN_QUERY, "session_id": "883c-baseline"}
-        )
+        baseline_result = await agent.run({"query": _PATTERN_QUERY, "session_id": "883c-baseline"})
         baseline = time.monotonic() - t0
         assert baseline_result["status"] in ("completed", "partial_success")
 
