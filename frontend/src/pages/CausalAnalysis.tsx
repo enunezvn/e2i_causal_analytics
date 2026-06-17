@@ -48,6 +48,7 @@ import {
   useCausalHealth,
   useCausalAnalysisHistory,
   useRunHierarchicalAnalysis,
+  useEstimators,
 } from '@/hooks/api';
 import {
   CausalAnalysisStatus,
@@ -74,17 +75,10 @@ import {
 // =============================================================================
 // F-002 fix: this page no longer ships fabricated SAMPLE_* analysis results.
 // API hook results are surfaced when available; otherwise the page renders
-// explicit empty states. The list of supported estimators below is a
-// configuration constant (display-only metadata), NOT analysis output.
-
-const SUPPORTED_ESTIMATORS = [
-  { name: 'Causal Forest', library: 'econml', type: 'CATE', supports_ci: true, supports_hte: true },
-  { name: 'Linear DML', library: 'econml', type: 'CATE', supports_ci: true, supports_hte: true },
-  { name: 'X-Learner', library: 'econml', type: 'Meta-learner', supports_ci: true, supports_hte: true },
-  { name: 'Uplift Random Forest', library: 'causalml', type: 'Uplift', supports_ci: true, supports_hte: true },
-  { name: 'Propensity Score Matching', library: 'dowhy', type: 'Identification', supports_ci: true, supports_hte: false },
-  { name: 'Instrumental Variable', library: 'dowhy', type: 'Identification', supports_ci: true, supports_hte: false },
-];
+// explicit empty states. The Estimators tab is now driven by the live
+// GET /causal/estimators registry (useEstimators) — NOT a hardcoded list — so
+// it can never drift from the backend (which exposes 12 estimators across
+// EconML/CausalML/DoWhy).
 
 const DEFAULT_HEALTH = {
   status: 'unknown',
@@ -167,9 +161,19 @@ export default function CausalAnalysis() {
     isError: historyError,
   } = useCausalAnalysisHistory();
   const runAnalysisMutation = useRunHierarchicalAnalysis();
+  // Estimators tab is driven by the live registry (GET /causal/estimators).
+  const {
+    data: estimatorsData,
+    isLoading: estimatorsLoading,
+    isError: estimatorsError,
+  } = useEstimators();
 
   // Use API data or fall back to neutral defaults (no fabricated SAMPLE_).
   const health = healthData ?? DEFAULT_HEALTH;
+  const estimators = estimatorsData?.estimators ?? [];
+  const visibleEstimators = estimators.filter(
+    (e) => selectedLibrary === 'all' || e.library === selectedLibrary
+  );
   // Hierarchical result + library comparison come ONLY from API. When the
   // mutation has not run (or has not yet returned), these are `undefined`
   // and the render path below surfaces explicit empty states.
@@ -190,13 +194,15 @@ export default function CausalAnalysis() {
 
     return {
       librariesAvailable: `${availableLibraries}/${totalLibraries}`,
-      estimatorsLoaded: health.estimators_loaded,
+      // Prefer the live registry total (matches the Estimators tab); fall back
+      // to the health figure if the registry fetch hasn't resolved.
+      estimatorsLoaded: estimatorsData?.total ?? health.estimators_loaded,
       analysisCount: health.analysis_count_24h,
       avgLatency: health.average_latency_ms ? `${(health.average_latency_ms / 1000).toFixed(1)}s` : 'N/A',
       pipelineReady: health.pipeline_orchestrator_ready,
       hierarchicalReady: health.hierarchical_analyzer_ready,
     };
-  }, [health]);
+  }, [health, estimatorsData]);
 
   // Segment chart data — empty when no analysis has been run yet
   const segmentChartData = useMemo(() => {
@@ -275,6 +281,26 @@ export default function CausalAnalysis() {
           <AlertTitle>Service Issue</AlertTitle>
           <AlertDescription>
             Some causal libraries may be unavailable. Check service health for details.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Run Analysis failure — surfaced honestly (was silently swallowed).
+          The hierarchical endpoint is fail-closed: it requires a real estimation
+          dataset and will not fabricate inputs. This page does not yet wire a
+          data source, so a run currently returns an error rather than results. */}
+      {runAnalysisMutation.isError && (
+        <Alert variant="destructive" className="mb-6">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Analysis could not run</AlertTitle>
+          <AlertDescription>
+            {runAnalysisMutation.error?.message
+              ? `${runAnalysisMutation.error.message} `
+              : ''}
+            The causal engine is fail-closed and requires a real estimation
+            dataset (it will not fabricate inputs). This page does not yet supply
+            one, so Hierarchical CATE and Library Comparison remain empty until a
+            data source is wired.
           </AlertDescription>
         </Alert>
       )}
@@ -696,46 +722,67 @@ export default function CausalAnalysis() {
             </Select>
           </div>
 
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {SUPPORTED_ESTIMATORS.filter(
-              (e) => selectedLibrary === 'all' || e.library === selectedLibrary
-            ).map((estimator) => (
-              <Card key={estimator.name} className="hover:shadow-md transition-shadow">
-                <CardHeader className="pb-2">
-                  <div className="flex justify-between items-start">
-                    <CardTitle className="text-base">{estimator.name}</CardTitle>
-                    <Badge
-                      style={{ backgroundColor: LIBRARY_COLORS[estimator.library] }}
-                      className="text-white"
-                    >
-                      {estimator.library}
-                    </Badge>
-                  </div>
-                  <CardDescription>{estimator.type}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex gap-4 text-sm">
-                    <div className="flex items-center gap-1">
-                      {estimator.supports_ci ? (
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <AlertTriangle className="h-4 w-4 text-gray-400" />
-                      )}
-                      <span>CI</span>
+          {estimatorsError ? (
+            <EmptyState
+              icon={<AlertTriangle className="h-8 w-8" aria-hidden="true" />}
+              title="Estimator registry unavailable"
+              description="Could not load the estimator registry from /causal/estimators. Try refreshing."
+            />
+          ) : estimatorsLoading ? (
+            <EmptyState
+              icon={<Activity className="h-8 w-8" aria-hidden="true" />}
+              title="Loading estimators…"
+              description="Fetching the supported estimator registry."
+            />
+          ) : visibleEstimators.length === 0 ? (
+            <EmptyState
+              icon={<GitBranch className="h-8 w-8" aria-hidden="true" />}
+              title="No estimators for this library"
+              description="No registered estimators match the selected library filter."
+            />
+          ) : (
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {visibleEstimators.map((estimator) => (
+                <Card key={estimator.name} className="hover:shadow-md transition-shadow">
+                  <CardHeader className="pb-2">
+                    <div className="flex justify-between items-start">
+                      <CardTitle className="text-base capitalize">
+                        {estimator.name.replace(/_/g, ' ')}
+                      </CardTitle>
+                      <Badge
+                        style={{ backgroundColor: LIBRARY_COLORS[estimator.library] }}
+                        className="text-white"
+                      >
+                        {estimator.library}
+                      </Badge>
                     </div>
-                    <div className="flex items-center gap-1">
-                      {estimator.supports_hte ? (
-                        <CheckCircle className="h-4 w-4 text-green-500" />
-                      ) : (
-                        <AlertTriangle className="h-4 w-4 text-gray-400" />
-                      )}
-                      <span>HTE</span>
+                    <CardDescription>{estimator.estimator_type}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <p className="text-sm text-muted-foreground">{estimator.description}</p>
+                    <div className="flex gap-4 text-sm">
+                      <div className="flex items-center gap-1">
+                        {estimator.supports_confidence_intervals ? (
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <AlertTriangle className="h-4 w-4 text-gray-400" />
+                        )}
+                        <span>CI</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {estimator.supports_heterogeneous_effects ? (
+                          <CheckCircle className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <AlertTriangle className="h-4 w-4 text-gray-400" />
+                        )}
+                        <span>HTE</span>
+                      </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </TabsContent>
 
         {/* History Tab */}
