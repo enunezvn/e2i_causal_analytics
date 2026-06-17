@@ -604,6 +604,28 @@ class TestGetCausalChains:
         assert "kpi_name" in call_args.kwargs["params"]
 
     @pytest.mark.asyncio
+    async def test_get_causal_chains_matches_terminal_by_name_not_kpi_label(
+        self, graphiti_service, mock_graph
+    ):
+        """Regression: causal chains terminate at :Variable nodes
+        (var:treatment_initiated), not :KPI nodes. The hardcoded
+        `(kpi:KPI {name: $kpi_name})` terminal matched nothing on the real
+        graph, so every selectable outcome returned 0 chains. Match the
+        terminal by name OR id regardless of label."""
+        graphiti_service._initialized = True
+        mock_graph.query.return_value.result_set = []
+
+        await graphiti_service.get_causal_chains(kpi_name="treatment_initiated", max_depth=4)
+
+        cypher = mock_graph.query.call_args[0][0]
+        params = mock_graph.query.call_args.kwargs["params"]
+        assert ":KPI" not in cypher
+        assert params.get("kpi_name") == "treatment_initiated"
+        assert "$kpi_name" in cypher
+        assert ".name = $kpi_name" in cypher
+        assert ".id = $kpi_name" in cypher
+
+    @pytest.mark.asyncio
     async def test_get_causal_chains_by_entity(self, graphiti_service, mock_graph):
         """Test getting causal chains from a starting entity."""
         graphiti_service._initialized = True

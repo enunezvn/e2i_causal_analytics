@@ -174,8 +174,11 @@ export async function routeQuery(
 export async function getCausalVariables(
   dataset: string = 'patient_journeys'
 ): Promise<CausalVariablesResponse> {
+  // `get(endpoint, params)` takes a FLAT params object and wraps it for axios
+  // itself. Passing `{ params: {...} }` here double-wraps it into
+  // `params[dataset]=...`, which the backend ignores (dataset has a default).
   return get<CausalVariablesResponse>(`${CAUSAL_BASE}/variables`, {
-    params: { dataset },
+    dataset,
   });
 }
 
@@ -205,14 +208,16 @@ export async function getCausalEstimationData(args: {
   covariates?: string[];
   limit?: number;
 }): Promise<EstimationDataResponse> {
+  // Flat params: `get()` wraps them for axios. The previous `{ params: {...} }`
+  // double-wrap serialized `params[treatment_var]=...`, so the backend's
+  // REQUIRED treatment_var/outcome_var arrived missing → 422 (the live bug that
+  // made "Run parallel pipeline" fail with "Could not load estimation data").
   return get<EstimationDataResponse>(`${CAUSAL_BASE}/estimation-data`, {
-    params: {
-      dataset: args.dataset ?? 'patient_journeys',
-      treatment_var: args.treatment_var,
-      outcome_var: args.outcome_var,
-      covariates: (args.covariates ?? []).join(','),
-      limit: args.limit ?? 4000,
-    },
+    dataset: args.dataset ?? 'patient_journeys',
+    treatment_var: args.treatment_var,
+    outcome_var: args.outcome_var,
+    covariates: (args.covariates ?? []).join(','),
+    limit: args.limit ?? 4000,
   });
 }
 

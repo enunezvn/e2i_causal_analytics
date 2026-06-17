@@ -21,6 +21,22 @@ _BRANDS = ["Remibrutinib", "Kisqali", "Fabhalta"]
 _REGIONS = ["northeast", "south", "midwest", "west"]
 _MEDIATORS = ["adherence", "engagement_score", "prior_therapy", "disease_severity"]
 
+# Gold-standard patient cohorts (src/mlops/gold_standard_eval/cohort_spec.py):
+# treatment_arm -> <label>, each a VALIDATED causal relationship
+# (scripts/validate_synthetic_causal.py). The KG previously carried ONLY the
+# initiation chain, so "Discover chains in KG" returned nothing for the
+# persistent_180d default outcome (and discontinued_180d). Emit all three so the
+# FalkorDB sync seeds (:Variable treatment_arm)-[:CAUSES]->(:Variable <label>)
+# for every cohort. Confounders mirror the specs: initiation stays byte-identical
+# to the original Shard-09 substrate; persistence/discontinuation use the
+# gold-standard base confounders (disease_severity, academic_hcp, geographic_region).
+_COHORT_OUTCOMES = ("treatment_initiated", "persistent_180d", "discontinued_180d")
+_COHORT_CONFOUNDERS = {
+    "treatment_initiated": ["disease_severity", "age_at_diagnosis"],
+    "persistent_180d": ["disease_severity", "academic_hcp", "geographic_region"],
+    "discontinued_180d": ["disease_severity", "academic_hcp", "geographic_region"],
+}
+
 
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
     @property
@@ -32,6 +48,11 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
         rows = []
         for i in range(self.config.n_records):
             brand = _BRANDS[i % 3]
+            # Round-robin the gold-standard cohort outcome so every cohort is
+            # represented (treatment_arm -> treatment_initiated / persistent_180d
+            # / discontinued_180d). Mediators never include treatment_arm or an
+            # outcome, so chain nodes stay distinct (no _clean_causal_chains drop).
+            outcome = _COHORT_OUTCOMES[i % len(_COHORT_OUTCOMES)]
             effect = round(float(self._rng.uniform(0.10, 0.55)), 4)  # recoverable band
             direct = round(effect * float(self._rng.uniform(0.4, 0.8)), 4)
             indirect = round(effect - direct, 4)
@@ -44,15 +65,15 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                     # overflows (22001). Use a short collision-safe synthetic id.
                     "path_id": f"scp_{uuid.uuid4().hex[:13]}",
                     "discovery_date": disc.isoformat(),
-                    "causal_chain": {"nodes": ["treatment_arm", *mediators, "treatment_initiated"]},
+                    "causal_chain": {"nodes": ["treatment_arm", *mediators, outcome]},
                     "start_node": "treatment_arm",
-                    "end_node": "treatment_initiated",
+                    "end_node": outcome,
                     "intermediate_nodes": mediators,
                     "path_length": n_med + 1,
                     "causal_effect_size": effect,
                     "confidence_level": round(float(self._rng.uniform(0.80, 0.95)), 3),
                     "method_used": "backdoor.linear_regression",
-                    "confounders_controlled": ["disease_severity", "age_at_diagnosis"],
+                    "confounders_controlled": list(_COHORT_CONFOUNDERS[outcome]),
                     "mediators_identified": mediators,
                     "time_lag_days": int(self._rng.integers(7, 60)),
                     "validation_status": "validated",

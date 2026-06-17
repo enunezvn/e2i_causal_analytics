@@ -261,7 +261,17 @@ function CausalDiscovery() {
   // received NO data props and fell back to a fabricated SAMPLE_ analysis).
   // ---------------------------------------------------------------------
 
-  /** DAG nodes/edges derived from the real KG chain-discovery results. */
+  /**
+   * DAG nodes/edges for the visualization. Two real sources, unioned:
+   *
+   * 1. KG chain-discovery results (when the outcome has chains in the graph).
+   * 2. The parallel-pipeline run: the backdoor-adjustment model that was
+   *    actually estimated — treatment + outcome + covariate confounders, with
+   *    the treatment→outcome edge carrying the REAL consensus effect. This is
+   *    the user-specified causal structure (not fabricated data), so the DAG is
+   *    no longer empty after a run even when the KG has no chains for the
+   *    chosen outcome (e.g. persistent_180d).
+   */
   const { vizNodes, vizEdges } = useMemo((): {
     vizNodes: CausalNode[];
     vizEdges: CausalEdge[];
@@ -271,28 +281,74 @@ function CausalDiscovery() {
     const seenNodes = new Set<string>();
     const seenEdges = new Set<string>();
 
+    const addNode = (
+      id: string | undefined,
+      label: string,
+      type: CausalNode['type']
+    ) => {
+      if (!id || seenNodes.has(id)) return;
+      seenNodes.add(id);
+      nodes.push({ id, label, type });
+    };
+    const addEdge = (
+      id: string,
+      source: string,
+      target: string,
+      type: CausalEdge['type'],
+      extra: Partial<CausalEdge> = {}
+    ) => {
+      if (!source || !target || seenEdges.has(id)) return;
+      seenEdges.add(id);
+      edges.push({ id, source, target, type, ...extra });
+    };
+
+    // (1) KG chains.
     for (const chain of chains) {
       for (const node of chain.nodes) {
-        const id = node.id ?? node.name;
-        if (!id || seenNodes.has(id)) continue;
-        seenNodes.add(id);
-        nodes.push({ id, label: node.name ?? id, type: 'variable' });
+        addNode(node.id ?? node.name, node.name ?? node.id ?? '', 'variable');
       }
       for (const rel of chain.relationships ?? []) {
-        const edgeId = `${rel.source_id}->${rel.target_id}`;
-        if (seenEdges.has(edgeId)) continue;
-        seenEdges.add(edgeId);
-        edges.push({
-          id: edgeId,
-          source: rel.source_id,
-          target: rel.target_id,
-          type: 'causal',
-          confidence: rel.confidence,
-        });
+        addEdge(
+          `${rel.source_id}->${rel.target_id}`,
+          rel.source_id,
+          rel.target_id,
+          'causal',
+          { confidence: rel.confidence }
+        );
       }
     }
+
+    // (2) Pipeline-derived backdoor-adjustment DAG. Only drawn once a run has
+    // produced a real effect estimate (consensus, else the first library that
+    // reported one). Confounder edges are the structural backdoor assumptions
+    // (no fabricated weights); the treatment→outcome edge carries the estimate.
+    let pipelineEffect: number | undefined;
+    if (typeof pipelineData?.consensus_effect === 'number') {
+      pipelineEffect = pipelineData.consensus_effect;
+    } else {
+      for (const raw of Object.values(pipelineData?.library_results ?? {})) {
+        const e = (raw as { effect_estimate?: number })?.effect_estimate;
+        if (typeof e === 'number') {
+          pipelineEffect = e;
+          break;
+        }
+      }
+    }
+    if (pipelineData && typeof pipelineEffect === 'number' && treatmentVar && outcomeVar) {
+      addNode(treatmentVar, treatmentVar, 'treatment');
+      addNode(outcomeVar, outcomeVar, 'outcome');
+      for (const cov of covariatesSelected) {
+        addNode(cov, cov, 'confounder');
+        addEdge(`${cov}->${treatmentVar}`, cov, treatmentVar, 'confounding');
+        addEdge(`${cov}->${outcomeVar}`, cov, outcomeVar, 'confounding');
+      }
+      addEdge(`${treatmentVar}->${outcomeVar}`, treatmentVar, outcomeVar, 'causal', {
+        effect: pipelineEffect,
+      });
+    }
+
     return { vizNodes: nodes, vizEdges: edges };
-  }, [chains]);
+  }, [chains, pipelineData, treatmentVar, outcomeVar, covariatesSelected]);
 
   /**
    * Effect estimates derived from the real parallel-pipeline run:
@@ -743,7 +799,12 @@ function CausalDiscovery() {
             <div data-testid="kg-chains-panel" className="space-y-3">
               {chains.length === 0 && (
                 <p className="text-sm text-muted-foreground italic">
-                  No chains discovered for this outcome.
+                  No causal chains were discovered in the knowledge graph for{' '}
+                  <span className="font-medium">
+                    {outcomeVar || 'this outcome'}
+                  </span>
+                  . Try another outcome, or run the parallel pipeline above to
+                  estimate the effect directly.
                 </p>
               )}
               {chains.map((chain, idx) => {
@@ -795,6 +856,21 @@ function CausalDiscovery() {
           <span className="font-medium text-amber-600">Robustness caveat:</span>{' '}
           {robustnessWarning}
         </div>
+      )}
+      {/* The parallel pipeline estimates effects but does NOT run refutation /
+          sensitivity tests, so the Refutation Test Results panel below is empty
+          by design after a run. Make that explicit rather than letting it read
+          as broken. */}
+      {pipelineData && (
+        <p
+          data-testid="refutation-note"
+          className="text-xs text-muted-foreground"
+        >
+          The parallel pipeline estimates effects but does not run refutation /
+          sensitivity tests, so the Refutation Test Results panel below stays
+          empty by design. Treat the estimate as unvalidated for robustness; run
+          a hierarchical analysis for refutation-tested estimates.
+        </p>
       )}
       <CausalDiscoveryViz
         showControls
