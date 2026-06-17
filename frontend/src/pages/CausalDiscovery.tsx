@@ -799,13 +799,12 @@ function CausalDiscovery() {
             <div data-testid="kg-chains-panel" className="space-y-3">
               {chains.length === 0 && (
                 <p className="text-sm text-muted-foreground italic">
-                  No causal chains in the knowledge graph terminate at{' '}
+                  No causal chains were discovered in the knowledge graph for{' '}
                   <span className="font-medium">
                     {outcomeVar || 'this outcome'}
                   </span>
-                  . The graph only covers some outcomes — try another outcome,
-                  or run the parallel pipeline above to estimate the effect
-                  directly.
+                  . Try another outcome, or run the parallel pipeline above to
+                  estimate the effect directly.
                 </p>
               )}
               {chains.map((chain, idx) => {

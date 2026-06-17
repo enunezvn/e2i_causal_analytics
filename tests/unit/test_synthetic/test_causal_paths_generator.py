@@ -18,3 +18,25 @@ def test_causal_paths_nonnull_effect_and_mediators_and_tagged():
     # NOT-NULL columns on the faithful DB must be present + populated
     for col in ("path_id", "discovery_date", "causal_chain", "created_at", "confirmation_count"):
         assert df[col].notna().all()
+
+
+def test_causal_paths_cover_all_three_gold_standard_cohort_outcomes():
+    """The KG must carry persistence + discontinuation chains, not just
+    initiation. The gold standard validates treatment_arm -> persistent_180d and
+    -> discontinued_180d (src/mlops/gold_standard_eval/cohort_spec.py;
+    scripts/validate_synthetic_causal.py), but causal_paths only ever emitted
+    treatment_initiated, so "Discover chains in KG" returned nothing for the
+    persistent_180d default outcome."""
+    df = CausalPathsGenerator(GeneratorConfig(seed=3, n_records=30)).generate()
+    end_nodes = set(df["end_node"])
+    assert {"treatment_initiated", "persistent_180d", "discontinued_180d"} <= end_nodes
+    # Every chain starts at the treatment arm and terminates at its end_node,
+    # and causal_chain.nodes agrees with start/end (so the FalkorDB sync builds a
+    # correct (:Variable treatment_arm)-[:CAUSES]->(:Variable <outcome>) path).
+    assert (df["start_node"] == "treatment_arm").all()
+    for _, row in df.iterrows():
+        nodes = row["causal_chain"]["nodes"]
+        assert nodes[0] == "treatment_arm"
+        assert nodes[-1] == row["end_node"]
+        # No repeated nodes (would be dropped by _clean_causal_chains).
+        assert len(nodes) == len(set(nodes))
