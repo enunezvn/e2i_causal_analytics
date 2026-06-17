@@ -695,6 +695,51 @@ async def traverse_graph(request: TraverseRequest) -> TraverseResponse:
 # =============================================================================
 
 
+def _is_simple_chain(path: GraphPath) -> bool:
+    """Whether a chain is a simple directed path (no revisited node).
+
+    The underlying graph walk can emit non-simple paths that revisit a node
+    (e.g. ``A -> B -> A``); these render as nonsensical loops in the Active
+    Causal Chains viz. Also reject empty / single-node paths that carry no
+    causal information.
+    """
+    node_ids = [n.id for n in path.nodes]
+    if len(node_ids) < 2 or not path.relationships:
+        return False
+    return len(set(node_ids)) == len(node_ids)
+
+
+def _clean_causal_chains(chains: List[GraphPath]) -> List[GraphPath]:
+    """Drop degenerate chains and de-duplicate by node sequence.
+
+    A causal chain shown to users must be a simple directed path. The walk can
+    emit cyclic paths and several near-identical paths differing only in a
+    confidence value; keep the highest-confidence representative per distinct
+    node sequence so the viz shows sensible, distinct causal stories rather than
+    loops and repeats. First-seen order is preserved for stable rendering.
+    """
+    best: Dict[str, GraphPath] = {}
+    order: List[str] = []
+    for chain in chains:
+        if not _is_simple_chain(chain):
+            continue
+        # Key on the node sequence AND the relationship types, so two genuinely
+        # distinct chains over the same nodes via different edge types (e.g.
+        # A —CAUSES→ B vs A —IMPACTS→ B) both survive; only true near-duplicates
+        # (same nodes AND same edges, differing in confidence) collapse.
+        key = "\x1f".join(
+            [n.id for n in chain.nodes]
+            + [getattr(r.type, "value", str(r.type)) for r in chain.relationships]
+        )
+        existing = best.get(key)
+        if existing is None:
+            order.append(key)
+            best[key] = chain
+        elif (chain.total_confidence or 0.0) > (existing.total_confidence or 0.0):
+            best[key] = chain
+    return [best[k] for k in order]
+
+
 @router.post(
     "/causal-chains",
     response_model=CausalChainResponse,
@@ -737,6 +782,10 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
                     )
                 )
 
+            # Drop cyclic / repeated-node paths and de-duplicate so the viz shows
+            # sensible, distinct chains rather than loops and near-duplicates.
+            chains = _clean_causal_chains(chains)
+
             strongest = None
             if chains:
                 strongest = max(chains, key=lambda c: c.total_confidence or 0)
@@ -776,6 +825,10 @@ async def query_causal_chains(request: CausalChainRequest) -> CausalChainRespons
                     path_length=len(rels),
                 )
             )
+
+        # Drop cyclic / repeated-node paths and de-duplicate so the viz shows
+        # sensible, distinct chains rather than loops and near-duplicates.
+        chains = _clean_causal_chains(chains)
 
         strongest = None
         if chains:

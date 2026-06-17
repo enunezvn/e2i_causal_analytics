@@ -163,7 +163,9 @@ export function useRecentWorkflows(
 export interface WorkflowDetailsData {
   entries: AuditEntryResponse[];
   summary: WorkflowSummaryResponse;
-  verification: ChainVerificationResponse;
+  // Best-effort: null when the chain-verify call failed (so a verify outage
+  // can't blank the rest of the drill-down). UI shows "verification unavailable".
+  verification: ChainVerificationResponse | null;
 }
 
 /**

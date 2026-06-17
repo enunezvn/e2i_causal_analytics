@@ -6,7 +6,6 @@ Supports both traditional hybrid retrieval and DSPy-enhanced cognitive workflows
 """
 
 import logging
-import os
 import time
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, cast
@@ -208,12 +207,24 @@ class CausalRAG:
                 create_dspy_cognitive_workflow,
             )
 
-            # Configure DSPy LM if not already configured
+            # Configure DSPy LM if not already configured. Provider-aware: use
+            # the same model the rest of the app uses (resolved from LLM_PROVIDER /
+            # ANTHROPIC_MODEL / DSPY_LM_MODEL) rather than a hardcoded Anthropic
+            # model the deployed key may not serve — a bare retired model raises
+            # litellm.NotFoundError (404), which previously broke the brief.
             if not hasattr(dspy.settings, "lm") or dspy.settings.lm is None:
-                api_key = os.environ.get("ANTHROPIC_API_KEY")
-                if not api_key:
-                    raise ValueError("ANTHROPIC_API_KEY required for cognitive search")
-                lm = dspy.LM("anthropic/claude-sonnet-4-20250514")
+                from src.optimization.dspy_lm import (
+                    dspy_provider_api_key_present,
+                    get_default_dspy_model,
+                )
+
+                if not dspy_provider_api_key_present():
+                    raise ValueError(
+                        "No API key for the configured LLM provider "
+                        "(set OPENAI_API_KEY or ANTHROPIC_API_KEY per LLM_PROVIDER) "
+                        "required for cognitive search"
+                    )
+                lm = dspy.LM(get_default_dspy_model())
                 dspy.configure(lm=lm)
                 logger.info("Configured DSPy LM for cognitive workflow")
 

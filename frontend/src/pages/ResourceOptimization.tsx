@@ -38,9 +38,10 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { KPICard } from '@/components/visualizations';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { WarningBanner } from '@/components/ui/WarningBanner';
 import {
   useResourceHealth,
-  useRunOptimization,
+  useRunOptimizationAndWait,
   useScenarios,
 } from '@/hooks/api';
 import type {
@@ -285,12 +286,22 @@ export default function ResourceOptimization() {
   // API hooks
   const { data: healthData, isLoading: healthLoading } = useResourceHealth();
   const { data: scenariosData } = useScenarios({ limit: 10 });
-  const runOptimization = useRunOptimization();
+  // Run-and-WAIT: the optimize endpoint is async (returns a PENDING id and
+  // computes in a background task); this hook polls GET /resources/{id} until
+  // the result is COMPLETED. The fire-and-forget useRunOptimization never
+  // retrieved the result, so "Run Optimization" appeared to do nothing.
+  const runOptimization = useRunOptimizationAndWait();
+  const runError = runOptimization.error;
 
   // Live optimization output (undefined until the user runs one). The
   // Scenarios tab additionally consumes the standalone scenarios feed.
   const optimizationResult = runOptimization.data;
   const scenarios = optimizationResult?.scenarios ?? scenariosData?.scenarios ?? [];
+
+  // Provenance: the backend seeds a clearly-labelled SYNTHETIC allocation
+  // problem when no targets are supplied (no real budget substrate exists), and
+  // tags the response with a "SYNTHETIC DATA:" warning. Surface it honestly.
+  const resultWarnings = optimizationResult?.warnings ?? [];
 
   // Health status
   const isHealthy = healthData?.agent_available && healthData?.scipy_available;
@@ -305,18 +316,18 @@ export default function ResourceOptimization() {
       request: {
         query: `Optimize ${selectedResourceType} allocation to ${selectedObjective.replace('_', ' ')}`,
         resource_type: selectedResourceType as never,
-        allocation_targets: (optimizationResult?.optimal_allocations ?? []).map((a) => ({
-          entity_id: a.entity_id,
-          entity_type: a.entity_type,
-          current_allocation: a.current_allocation,
-          min_allocation: a.current_allocation * 0.5,
-          max_allocation: a.current_allocation * 1.5,
-          expected_response: a.expected_impact,
-        })),
+        // Send NO targets: the backend seeds a clearly-labelled synthetic
+        // allocation problem from real-shaped territory data. (Re-sending the
+        // previous result's allocations here was a chicken-and-egg bug — empty
+        // on the first run, and chain-optimizing an already-optimized state
+        // thereafter.)
+        allocation_targets: [],
         objective: selectedObjective as never,
         run_scenarios: true,
         scenario_count: 3,
       },
+      pollIntervalMs: 3000,
+      maxWaitMs: 120000,
     });
   };
 
@@ -342,6 +353,13 @@ export default function ResourceOptimization() {
           {healthData?.optimizations_24h !== undefined && (
             <Badge variant="outline">{healthData.optimizations_24h} optimizations today</Badge>
           )}
+          <Badge
+            variant="outline"
+            className="border-amber-400 text-amber-700 dark:text-amber-300"
+            title="No real per-entity budget source is wired yet. Runs use a clearly-labelled synthetic allocation problem seeded from territory data — the optimization math is real, the dollar values are illustrative."
+          >
+            Illustrative · synthetic data
+          </Badge>
         </div>
       </div>
 
@@ -394,6 +412,28 @@ export default function ResourceOptimization() {
         </CardContent>
       </Card>
 
+      {/* Running indicator while the async optimization computes + is polled */}
+      {runOptimization.isPending && (
+        <Card>
+          <CardContent className="flex items-center gap-3 py-4">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <p className="text-sm text-muted-foreground">
+              Running optimization for {selectedResourceType} (
+              {selectedObjective.replace('_', ' ')})… solving and analyzing scenarios.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Honest failure surface — the mutation previously swallowed errors,
+          so a failed/empty run looked like "nothing happened". */}
+      {runError && (
+        <WarningBanner
+          title="Optimization failed"
+          messages={[runError instanceof Error ? runError.message : String(runError)]}
+        />
+      )}
+
       {!optimizationResult ? (
         <EmptyState
           title="Run an optimization to see results"
@@ -404,12 +444,26 @@ export default function ResourceOptimization() {
         />
       ) : (
         <>
+          {/* Provenance: synthetic-data + any solver caveats, surfaced up front */}
+          {resultWarnings.length > 0 && (
+            <WarningBanner
+              title="Illustrative result — synthetic data"
+              messages={resultWarnings}
+            />
+          )}
+
           {/* KPI Summary */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <KPICard
-              title="Projected ROI"
-              value={`${optimizationResult.projected_roi?.toFixed(2)}x`}
-              description="vs current allocation"
+              title="Projected Outcome Lift"
+              value={
+                optimizationResult.projected_roi != null
+                  ? `${optimizationResult.projected_roi >= 0 ? '+' : ''}${(
+                      optimizationResult.projected_roi * 100
+                    ).toFixed(1)}%`
+                  : '—'
+              }
+              description="optimal reallocation gain vs current"
             />
             <KPICard
               title="Projected Outcome"

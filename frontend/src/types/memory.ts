@@ -226,6 +226,16 @@ export interface SemanticPathResponse extends QueryLatency, TimestampedResponse 
  * Memory system statistics
  */
 export interface MemoryStatsResponse {
+  /** Working memory stats (Redis). Optional: present once the backend
+   * /memory/stats reports it; absent on older payloads. */
+  working?: {
+    /** Active (non-expired) working-memory sessions */
+    active_sessions: number;
+    /** Session TTL in hours */
+    ttl_hours?: number;
+    /** Live reachability: 'healthy' when Redis responded, else 'unavailable' */
+    status?: string;
+  };
   /** Episodic memory stats */
   episodic: {
     /** Total memories */

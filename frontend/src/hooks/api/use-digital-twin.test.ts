@@ -91,7 +91,7 @@ function createWrapper() {
 const mockSimulationResponse: SimulationResponse = {
   simulation_id: 'sim_abc123',
   model_id: 'model_v1',
-  intervention_type: InterventionType.HCP_ENGAGEMENT,
+  intervention_type: InterventionType.EMAIL_CAMPAIGN,
   brand: 'Remibrutinib',
   twin_type: 'hcp',
   twin_count: 1000,
@@ -133,7 +133,7 @@ const mockSimulationHistoryResponse: SimulationHistoryResponse = {
     {
       simulation_id: 'sim_abc123',
       created_at: '2024-01-15T10:00:00Z',
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
+      intervention_type: InterventionType.EMAIL_CAMPAIGN,
       brand: 'Remibrutinib',
       ate_estimate: 0.15,
       recommendation_type: RecommendationType.DEPLOY,
@@ -158,7 +158,7 @@ const mockScenarioComparisonResult: ScenarioComparisonResult = {
     {
       ...mockSimulationResponse,
       simulation_id: 'sim_alt1',
-      intervention_type: InterventionType.DIGITAL_MARKETING,
+      intervention_type: InterventionType.DIGITAL_ENGAGEMENT,
     },
   ],
   comparison: {
@@ -173,7 +173,7 @@ const mockScenarioComparisonResult: ScenarioComparisonResult = {
 
 const mockSimulateRequest: SimulateRequest = {
   intervention: {
-    intervention_type: InterventionType.HCP_ENGAGEMENT,
+    intervention_type: InterventionType.EMAIL_CAMPAIGN,
     channel: 'email',
     duration_weeks: 8,
   },
@@ -364,7 +364,7 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation(), { wrapper });
 
     result.current.mutate({
-      intervention: { intervention_type: InterventionType.HCP_ENGAGEMENT },
+      intervention: { intervention_type: InterventionType.EMAIL_CAMPAIGN },
       brand: 'Unknown',
       twin_count: 100,
     });
@@ -395,7 +395,7 @@ describe('useRunSimulation', () => {
     const { result } = renderHook(() => useRunSimulation({ onError }), { wrapper });
 
     result.current.mutate({
-      intervention: { intervention_type: InterventionType.HCP_ENGAGEMENT },
+      intervention: { intervention_type: InterventionType.EMAIL_CAMPAIGN },
       brand: 'Unknown',
       twin_count: 100,
     });
@@ -420,13 +420,13 @@ describe('useCompareScenarios', () => {
 
     const request = {
       base_scenario: {
-        intervention_type: InterventionType.HCP_ENGAGEMENT,
+        intervention_type: InterventionType.EMAIL_CAMPAIGN,
         brand: 'Remibrutinib',
         sample_size: 1000,
         duration_days: 90,
       },
       alternative_scenarios: [
-        { intervention_type: InterventionType.DIGITAL_MARKETING, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
+        { intervention_type: InterventionType.DIGITAL_ENGAGEMENT, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
       ],
     };
 
@@ -449,7 +449,7 @@ describe('useCompareScenarios', () => {
     const { result } = renderHook(() => useCompareScenarios(), { wrapper });
 
     result.current.mutate({
-      base_scenario: { intervention_type: InterventionType.HCP_ENGAGEMENT, brand: 'Unknown', sample_size: 100, duration_days: 30 },
+      base_scenario: { intervention_type: InterventionType.EMAIL_CAMPAIGN, brand: 'Unknown', sample_size: 100, duration_days: 30 },
       alternative_scenarios: [],
     });
 
@@ -464,7 +464,7 @@ describe('useCompareScenarios', () => {
     const { result } = renderHook(() => useCompareScenarios({ onSuccess }), { wrapper });
 
     result.current.mutate({
-      base_scenario: { intervention_type: InterventionType.HCP_ENGAGEMENT, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
+      base_scenario: { intervention_type: InterventionType.EMAIL_CAMPAIGN, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
       alternative_scenarios: [],
     });
 
@@ -481,8 +481,8 @@ describe('useCompareScenarios', () => {
     const { result } = renderHook(() => useCompareScenarios(), { wrapper });
 
     result.current.mutate({
-      base_scenario: { intervention_type: InterventionType.HCP_ENGAGEMENT, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
-      alternative_scenarios: [{ intervention_type: InterventionType.DIGITAL_MARKETING, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 }],
+      base_scenario: { intervention_type: InterventionType.EMAIL_CAMPAIGN, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 },
+      alternative_scenarios: [{ intervention_type: InterventionType.DIGITAL_ENGAGEMENT, brand: 'Remibrutinib', sample_size: 1000, duration_days: 90 }],
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

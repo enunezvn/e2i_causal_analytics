@@ -150,6 +150,32 @@ class AgentPerformanceTrend(BaseModel):
     period: str  # e.g., "7d", "30d"
 
 
+class TierMetricsItem(BaseModel):
+    """Per-tier performance, aggregated from audit_chain_entries."""
+
+    tier: int = Field(..., ge=0, le=5, description="Agent tier (0-5)")
+    tasks_completed: int = Field(0, description="Non-poller agent actions in window")
+    # ``None`` == UNMEASURED (no timed non-poller row in this tier), DISTINCT from
+    # a measured 0ms — the same honest-null convention as QueryMetricsSummary.
+    avg_response_time_ms: Optional[float] = Field(
+        None, description="Mean duration over timed rows; None if none timed"
+    )
+    # Intentionally ``None``: validation_passed is recorded for too few rows to
+    # compute a representative per-tier success rate, so the UI shows "—" rather
+    # than a misleading number off a tiny explicit-validation sample.
+    success_rate: Optional[float] = Field(
+        None, description="Always None: per-tier success is not reliably recorded"
+    )
+
+
+class TierMetricsResponse(BaseModel):
+    """Per-tier performance metrics for all six tiers (0-5)."""
+
+    tiers: List[TierMetricsItem]
+    window_hours: int = Field(..., description="Look-back window in hours")
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
@@ -490,6 +516,55 @@ def _build_volume_series(
     ]
 
 
+# ``health_score_quick`` is the automated background health poller: it emits the
+# overwhelming majority of audit rows (workflow_start / component / compose
+# scaffolding). It is REAL activity, but including it would dominate per-tier
+# task counts and dilute tier-3 latency toward the poller's value, so it is
+# excluded from the per-tier rollup — consistent with how the Activity Feed
+# treats it. Defined locally (not imported from the agents router) so this
+# module stays independent.
+_TIER_METRICS_POLLER_AGENTS = {"health_score_quick"}
+
+
+def _aggregate_tier_metrics(entries: List[Dict[str, Any]]) -> List[TierMetricsItem]:
+    """Roll audit entries up into per-tier metrics for all six tiers (0-5).
+
+    - ``tasks_completed``: number of non-poller agent actions in the tier.
+    - ``avg_response_time_ms``: mean duration over timed (>0) rows; ``None`` when
+      no timed row exists (UNMEASURED, never a fabricated 0ms).
+    - ``success_rate``: always ``None`` — validation_passed is too sparse to
+      compute a representative per-tier rate honestly.
+    """
+    buckets: Dict[int, Dict[str, Any]] = {t: {"tasks": 0, "latencies": []} for t in range(6)}
+
+    for entry in entries:
+        if entry.get("agent_name") in _TIER_METRICS_POLLER_AGENTS:
+            continue
+        tier = int(entry.get("agent_tier") or 0)
+        if tier < 0 or tier > 5:
+            continue
+        bucket = buckets[tier]
+        bucket["tasks"] += 1
+        duration = entry.get("duration_ms")
+        if duration is not None and duration > 0:
+            bucket["latencies"].append(float(duration))
+
+    items: List[TierMetricsItem] = []
+    for tier in range(6):
+        latencies = buckets[tier]["latencies"]
+        items.append(
+            TierMetricsItem(
+                tier=tier,
+                tasks_completed=buckets[tier]["tasks"],
+                avg_response_time_ms=(
+                    round(sum(latencies) / len(latencies), 2) if latencies else None
+                ),
+                success_rate=None,
+            )
+        )
+    return items
+
+
 # =============================================================================
 # ENDPOINTS
 # =============================================================================
@@ -807,3 +882,48 @@ async def get_metrics_summary(
     except Exception as e:
         logger.error(f"Failed to get metrics summary: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch summary: {str(e)}")
+
+
+@router.get(
+    "/tier-metrics",
+    response_model=TierMetricsResponse,
+    summary="Get per-tier agent performance metrics",
+    operation_id="get_tier_metrics",
+    description="Per-tier task counts and average response time from the audit chain.",
+)
+async def get_tier_metrics(
+    hours: int = Query(default=24, ge=1, le=168, description="Look-back window (hours)"),
+    brand: Optional[str] = Query(default=None, description="Filter by brand"),
+    user: Optional[Dict[str, Any]] = Depends(get_current_user),
+) -> TierMetricsResponse:
+    """Per-tier performance, aggregated from ``audit_chain_entries``.
+
+    Backs the Agent Orchestration "Tier Metrics" tab (Avg Response / Tasks). The
+    automated health poller is excluded so "Tasks" reflects meaningful agent
+    work; per-tier success rate is reported as unmeasured (``None`` -> "—") since
+    validation is too sparse to compute honestly. Public like
+    ``/analytics/dashboard`` (aggregate-only, no query text); on a fetch failure
+    it surfaces 503 rather than presenting fabricated zeroed tiers as real.
+    """
+    db = _get_supabase_client()
+    if db is None:
+        raise HTTPException(status_code=503, detail="Analytics service unavailable.")
+
+    now = datetime.now(timezone.utc)
+    start_date = now - timedelta(hours=hours)
+    result = await _fetch_audit_metrics(db, start_date, now, brand)
+
+    if not result["success"]:
+        logger.warning(f"Failed to fetch tier metrics: {result.get('error')}")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Tier metrics are temporarily unavailable; no data is shown "
+                "rather than presenting fabricated zeros."
+            ),
+        )
+
+    return TierMetricsResponse(
+        tiers=_aggregate_tier_metrics(result["data"]),
+        window_hours=hours,
+    )

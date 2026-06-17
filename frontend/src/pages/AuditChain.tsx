@@ -451,7 +451,32 @@ function AuditChain() {
 
         {/* Verification Tab */}
         <TabsContent value="verification" className="space-y-6">
-          {selectedWorkflow && workflowDetails && (
+          {selectedWorkflow && workflowDetails && !workflowDetails.verification && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <LinkIcon className="h-5 w-5" />
+                  Chain Verification
+                </CardTitle>
+                <CardDescription>Cryptographic integrity check results</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {/* Honest degradation: the verify call failed, so we show
+                    "unavailable" rather than a misleading "Chain Invalid". */}
+                <div className="flex items-center gap-4 p-6 rounded-lg border-2 border-amber-300 bg-amber-50 dark:bg-amber-950/20">
+                  <AlertTriangle className="h-12 w-12 text-amber-500" />
+                  <div>
+                    <h3 className="text-xl font-bold">Verification unavailable</h3>
+                    <p className="text-[var(--color-muted-foreground)]">
+                      The chain-verification check could not be completed for this
+                      workflow. Entries and summary above are still accurate.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          {selectedWorkflow && workflowDetails && workflowDetails.verification && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

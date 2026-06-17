@@ -5,7 +5,7 @@ Mocks all external dependencies to ensure unit test isolation.
 """
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import BackgroundTasks
@@ -1315,3 +1315,180 @@ class TestDurableOptimizationsStore:
         store = _DurableOptimizationsStore(redis_factory=_factory)
         # Factory returns a client, but the durability probe command fails.
         assert await store.is_durable() is False
+
+
+# =============================================================================
+# SYNTHETIC-GOLD ALLOCATION SEEDING — _build_synthetic_allocation_inputs
+# =============================================================================
+#
+# No real per-entity budget substrate exists (territory_metrics
+# market_potential / resource_allocation_score are 100% NULL). When a caller
+# supplies no allocation_targets, the route seeds a CLEARLY-LABELLED synthetic
+# problem from real-shaped territory activity. These tests lock in the mapping,
+# the provenance warning, the fail-soft behavior, and the route injection
+# (which must never overwrite caller-supplied targets).
+
+
+def _mock_async_supabase_with_rows(rows):
+    """Build an async-supabase client mock whose query chain returns ``rows``."""
+    resp = MagicMock(data=rows)
+    table = MagicMock()
+    table.select.return_value = table
+    table.order.return_value = table
+    table.limit.return_value = table
+    table.execute = AsyncMock(return_value=resp)
+    client = MagicMock()
+    client.table.return_value = table
+    return client
+
+
+@pytest.mark.asyncio
+async def test_build_synthetic_allocation_inputs_maps_territories():
+    """current_allocation = HCP * notional rate; expected_response = TRx/HCP;
+    budget = sum(current); response is real-shaped and the warning is tagged."""
+    from src.api.routes.resource_optimizer import (
+        NOTIONAL_BUDGET_PER_HCP,
+        SYNTHETIC_PROVENANCE_PREFIX,
+        _build_synthetic_allocation_inputs,
+    )
+
+    rows = [
+        {
+            "territory_id": "south-T02",
+            "total_trx": 535,
+            "active_hcp_count": 200,
+            "covered_lives": 24000,
+            "metric_date": "2026-06-10",
+        },
+        {
+            "territory_id": "midwest-T00",
+            "total_trx": 238,
+            "active_hcp_count": 99,
+            "covered_lives": 23391,
+            "metric_date": "2026-06-10",
+        },
+        # Unusable rows (zero/None) must be skipped, not crash.
+        {
+            "territory_id": "bad-0",
+            "total_trx": 0,
+            "active_hcp_count": 50,
+            "metric_date": "2026-06-10",
+        },
+        {
+            "territory_id": None,
+            "total_trx": 10,
+            "active_hcp_count": 10,
+            "metric_date": "2026-06-10",
+        },
+    ]
+    client = _mock_async_supabase_with_rows(rows)
+
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        AsyncMock(return_value=client),
+    ):
+        targets, budget, warnings = await _build_synthetic_allocation_inputs(ResourceType.BUDGET)
+
+    assert [t.entity_id for t in targets] == ["south-T02", "midwest-T00"]
+    t0 = targets[0]
+    assert t0.entity_type == "territory"
+    assert t0.current_allocation == round(200 * NOTIONAL_BUDGET_PER_HCP, 2)
+    assert t0.min_allocation == round(t0.current_allocation * 0.5, 2)
+    assert t0.max_allocation == round(t0.current_allocation * 1.5, 2)
+    assert t0.expected_response == round(535 / 200, 4)  # TRx per HCP
+    assert budget is not None
+    assert budget.constraint_type == ConstraintType.BUDGET
+    assert budget.value == round(sum(t.current_allocation for t in targets), 2)
+    # Budget strictly between sum(min) and sum(max) -> a real reallocation problem.
+    assert (
+        sum(t.min_allocation for t in targets)
+        < budget.value
+        < sum(t.max_allocation for t in targets)
+    )
+    assert warnings and warnings[0].startswith(SYNTHETIC_PROVENANCE_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_build_synthetic_allocation_inputs_fail_soft_no_client():
+    """No DB client -> empty problem + honest provenance warning, never raises."""
+    from src.api.routes.resource_optimizer import (
+        SYNTHETIC_PROVENANCE_PREFIX,
+        _build_synthetic_allocation_inputs,
+    )
+
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        AsyncMock(return_value=None),
+    ):
+        targets, budget, warnings = await _build_synthetic_allocation_inputs(ResourceType.BUDGET)
+
+    assert targets == []
+    assert budget is None
+    assert warnings and warnings[0].startswith(SYNTHETIC_PROVENANCE_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_run_optimization_seeds_synthetic_when_no_targets():
+    """An empty-targets request gets synthetic targets + a budget constraint
+    injected, and the provenance warning reaches the response."""
+    from src.api.routes import resource_optimizer as ro
+
+    req = RunOptimizationRequest(
+        query="Optimize budget allocation to maximize roi",
+        resource_type=ResourceType.BUDGET,
+        allocation_targets=[],
+        objective=OptimizationObjective.MAXIMIZE_ROI,
+        run_scenarios=True,
+    )
+    seeded_targets = [
+        AllocationTarget(
+            entity_id="south-T02",
+            entity_type="territory",
+            current_allocation=300000.0,
+            min_allocation=150000.0,
+            max_allocation=450000.0,
+            expected_response=2.675,
+        )
+    ]
+    seeded_budget = Constraint(
+        constraint_type=ConstraintType.BUDGET,
+        value=300000.0,
+        scope=ConstraintScope.GLOBAL,
+    )
+    warn = [f"{ro.SYNTHETIC_PROVENANCE_PREFIX} seeded"]
+
+    with (
+        patch.object(
+            ro,
+            "_build_synthetic_allocation_inputs",
+            AsyncMock(return_value=(seeded_targets, seeded_budget, warn)),
+        ),
+        patch.object(ro, "_optimizations_store") as store,
+    ):
+        store.set = AsyncMock()
+        bg = BackgroundTasks()
+        resp = await ro.run_optimization(req, bg, async_mode=True)
+
+    # Request mutated in place with the synthetic problem.
+    assert req.allocation_targets == seeded_targets
+    assert any(c.constraint_type == ConstraintType.BUDGET for c in req.constraints)
+    # Provenance surfaced on the (pending) response.
+    assert resp.warnings == warn
+
+
+@pytest.mark.asyncio
+async def test_run_optimization_respects_supplied_targets(sample_request):
+    """When the caller supplies targets, synthetic seeding is skipped entirely."""
+    from src.api.routes import resource_optimizer as ro
+
+    seeder = AsyncMock(return_value=([], None, ["should not be called"]))
+    with (
+        patch.object(ro, "_build_synthetic_allocation_inputs", seeder),
+        patch.object(ro, "_optimizations_store") as store,
+    ):
+        store.set = AsyncMock()
+        bg = BackgroundTasks()
+        resp = await ro.run_optimization(sample_request, bg, async_mode=True)
+
+    seeder.assert_not_called()
+    assert resp.warnings == []

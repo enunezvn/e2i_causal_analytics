@@ -1124,6 +1124,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.api.dependencies.compute import HeavyComputeSaturated
 from src.api.errors import (
+    SAFE_503_DETAIL_PREFIX,
     AuthenticationError,
     AuthorizationError,
     DependencyError,
@@ -1295,10 +1296,21 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
             window_seconds=60,
         )
     elif exc.status_code == 503:
+        raw = str(exc.detail) if exc.detail else None
         e2i_error = DependencyError(
             dependency="service",
-            original_error=Exception(str(exc.detail)) if exc.detail else None,
+            original_error=Exception(raw) if raw else None,
         )
+        # MASK 503 details by default: many 503 sites interpolate raw caught
+        # exceptions (detail=f"... {e}") whose text must not reach clients. Only
+        # surface a detail that an endpoint EXPLICITLY marked user-safe via
+        # errors.user_safe_503_detail() — e.g. the causal pipeline's honest
+        # "no real data backend wired … pass demo_mode=true". The marker is
+        # stripped before display; raw/unmarked details stay behind the generic
+        # "Dependency 'service' is unavailable" message (only debug surfaces them
+        # via original_error).
+        if raw and raw.startswith(SAFE_503_DETAIL_PREFIX):
+            e2i_error.message = raw[len(SAFE_503_DETAIL_PREFIX) :]
     elif exc.status_code == 504:
         e2i_error = E2ITimeoutError(
             operation="request",

@@ -12,6 +12,7 @@ Date: December 2025
 
 import hashlib
 import json
+import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from uuid import UUID, uuid4
 from supabase import Client
 
 from src.utils.type_helpers import parse_supabase_row, parse_supabase_rows
+
+logger = logging.getLogger(__name__)
 
 
 class AgentTier(Enum):
@@ -222,6 +225,16 @@ class AuditChainService:
 
         IMPORTANT: This must match the PostgreSQL compute_entry_hash function
         exactly to ensure verification works correctly.
+
+        The canonical hash intentionally covers this FIXED field set (identity,
+        sequence, agent/action, timestamp, input/output hashes, previous hash)
+        and is shared verbatim with the DB-side ``compute_entry_hash``. This is
+        what ``verify_workflow_local`` recomputes, so local verification is
+        authoritative for the link chain. Broadening it to cover more persisted
+        columns (agent_tier, validation_passed, confidence_score, ...) would
+        change every existing ``entry_hash`` and desync from the DB function —
+        it requires a VERSIONED hash + matching DB migration, out of scope for
+        chain-link verification.
         """
         components = [
             str(entry.entry_id),
@@ -505,28 +518,49 @@ class AuditChainService:
         Returns:
             ChainVerificationResult with validity status
         """
-        result = self.db.rpc(
-            "verify_chain_integrity", {"p_workflow_id": str(workflow_id)}
-        ).execute()
+        try:
+            result = self.db.rpc(
+                "verify_chain_integrity", {"p_workflow_id": str(workflow_id)}
+            ).execute()
 
-        verification_data: dict[str, Any] = {}
-        data = result.data
-        if isinstance(data, list) and data:
-            verification_data = parse_supabase_row(data[0])
+            verification_data: dict[str, Any] = {}
+            data = result.data
+            if isinstance(data, list) and data:
+                verification_data = parse_supabase_row(data[0])
 
-        verification = ChainVerificationResult(
-            is_valid=verification_data.get("is_valid", False),
-            entries_checked=verification_data.get("entries_checked", 0),
-            first_invalid_entry=(
-                UUID(verification_data["first_invalid_entry"])
-                if verification_data.get("first_invalid_entry")
-                else None
-            ),
-            error_message=verification_data.get("error_message"),
-        )
+            verification = ChainVerificationResult(
+                is_valid=verification_data.get("is_valid", False),
+                entries_checked=verification_data.get("entries_checked", 0),
+                first_invalid_entry=(
+                    UUID(verification_data["first_invalid_entry"])
+                    if verification_data.get("first_invalid_entry")
+                    else None
+                ),
+                error_message=verification_data.get("error_message"),
+            )
+        except Exception as exc:
+            # The DB-side ``verify_chain_integrity`` RPC depends on pgcrypto
+            # ``digest()``; on a database where that function is not resolvable
+            # it raises 42883 (``function digest(text, unknown) does not exist``).
+            # Fall back to the self-contained Python ``verify_workflow_local``,
+            # which recomputes hashes with the SAME ``_compute_entry_hash`` used
+            # at append time — so it is the authoritative check, not a degraded
+            # one. Without this the ``/verify`` endpoint 500s and the audit-chain
+            # page's whole workflow drill-down loses its verification data.
+            logger.warning(
+                "verify_chain_integrity RPC failed (%s); "
+                "falling back to local Python chain verification",
+                exc,
+            )
+            verification = self.verify_workflow_local(workflow_id)
 
         if log_verification:
-            self._log_verification(workflow_id, verification)
+            # Best-effort audit log: a failure persisting the verification row
+            # must never break the verification result the caller asked for.
+            try:
+                self._log_verification(workflow_id, verification)
+            except Exception as log_exc:
+                logger.warning("Failed to persist verification log (non-fatal): %s", log_exc)
 
         return verification
 

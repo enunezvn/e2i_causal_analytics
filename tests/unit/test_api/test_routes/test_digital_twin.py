@@ -409,6 +409,98 @@ async def test_get_simulation_history_repo_error_is_generic(mock_twin_repository
 
 
 # =============================================================================
+# TESTS - Intervention Types (contract: GET /intervention-types)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_list_intervention_types_is_canonical_source_of_truth(
+    mock_twin_repository, monkeypatch
+):
+    """The endpoint must serve exactly the backend SUPPORTED_INTERVENTIONS — the
+    single source of truth the FE dropdown mirrors (so they can never drift)."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        TwinTypeEnum,
+        list_intervention_types,
+    )
+    from src.digital_twin.effect.provider import SUPPORTED_INTERVENTIONS
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+    # No cohort -> every type stays on the uniform synthetic basis.
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.brand_has_cohort",
+        AsyncMock(return_value=False),
+    )
+
+    result = await list_intervention_types(
+        brand=BrandEnum.REMIBRUTINIB, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+
+    assert {i.value for i in result.interventions} == SUPPORTED_INTERVENTIONS
+    assert len(result.interventions) == 6
+    assert all(i.effect_basis == "synthetic" for i in result.interventions)
+    # A trained twin model exists for the brand -> every type is available.
+    assert all(i.available for i in result.interventions)
+    assert result.brand == "Remibrutinib"
+
+
+@pytest.mark.asyncio
+async def test_list_intervention_types_cohort_estimable_flip_when_cohort_present(
+    mock_twin_repository, monkeypatch
+):
+    """Phase 2: when the brand has a usable synthetic-gold cohort, the
+    cohort-estimable interventions report effect_basis 'cohort_estimated' while
+    the rest stay 'synthetic'. (Verified against the live DB: only
+    digital_engagement + call_frequency_increase have a cohort treatment column.)"""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        TwinTypeEnum,
+        list_intervention_types,
+    )
+    from src.digital_twin.effect.provider import COHORT_ESTIMABLE_INTERVENTIONS
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.brand_has_cohort",
+        AsyncMock(return_value=True),
+    )
+
+    result = await list_intervention_types(
+        brand=BrandEnum.REMIBRUTINIB, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+
+    by_basis = {i.value: i.effect_basis for i in result.interventions}
+    cohort_types = {v for v, b in by_basis.items() if b == "cohort_estimated"}
+    assert cohort_types == set(COHORT_ESTIMABLE_INTERVENTIONS)
+    assert {"digital_engagement", "call_frequency_increase"} == cohort_types
+    # Everything else stays on the uniform synthetic basis.
+    assert all(
+        b == "synthetic" for v, b in by_basis.items() if v not in COHORT_ESTIMABLE_INTERVENTIONS
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_intervention_types_unavailable_without_trained_model(mock_twin_repository):
+    """Brand-aware availability: no trained twin model for the brand -> the types
+    are reported unavailable (honest — /simulate would 503), never fabricated."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        TwinTypeEnum,
+        list_intervention_types,
+    )
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[])
+
+    result = await list_intervention_types(
+        brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+
+    assert len(result.interventions) == 6
+    assert all(not i.available for i in result.interventions)
+
+
+# =============================================================================
 # TESTS - Scenario Comparison (contract: POST /simulations/compare)
 # =============================================================================
 

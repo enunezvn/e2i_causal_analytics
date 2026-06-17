@@ -5,7 +5,7 @@
  * `/experiments` was a routed data page with NO e2e coverage. It is the A/B
  * testing & experiment-monitoring dashboard. Experiments are derived from live
  * monitor data ONLY — no sample fallback. These specs assert HONEST states:
- *   - on load (no monitoring run) -> EmptyState "No experiments to display"
+ *   - on load (no monitoring run) -> EmptyState "No experiments loaded yet"
  *   - after "Run Monitoring" -> experiment cards from the REAL monitor response
  *     (`POST /api/experiments/monitor`)
  *
@@ -83,7 +83,7 @@ test.describe('Experiments Page', () => {
   })
 
   test.describe('Honest empty state', () => {
-    test('shows "No experiments to display" before a monitoring run', async () => {
+    test('shows "No experiments loaded yet" before a monitoring run', async () => {
       // Experiments derive from live monitor data only; with no run yet the
       // page renders an explicit empty state instead of fabricated experiments.
       await expect(expPage.emptyState).toBeVisible()

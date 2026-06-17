@@ -186,6 +186,7 @@ function FeedbackLearning() {
   // Fetch feedback health
   const {
     data: healthData,
+    isLoading: isHealthLoading,
     refetch: refetchHealth,
   } = useFeedbackHealth({ refetchInterval: 30000 });
 
@@ -228,10 +229,23 @@ function FeedbackLearning() {
       totalUpdates: updates.length,
       pendingUpdates: proposedCount,
       appliedUpdates: appliedCount,
-      cycles24h: healthData?.cycles_24h ?? 12,
-      agentAvailable: healthData?.agent_available ?? true,
+      // Honesty: default to 0 / not-available rather than fabricated plausible
+      // values (was `?? 12` / `?? true`). Those hardcoded fallbacks rendered a
+      // fake "12 cycles" + "Online" while the health query was loading or if it
+      // failed. The card uses `healthPending` (below) to show "Checking…" / "—"
+      // during the initial load so neither a fabricated nor a premature value
+      // is shown; once health resolves these reflect the real response.
+      cycles24h: healthData?.cycles_24h ?? 0,
+      agentAvailable: healthData?.agent_available ?? false,
     };
   }, [patterns, updates, healthData]);
+
+  // True only on the first health load (no response yet). Used to render an
+  // honest "Checking…" / "—" placeholder instead of a fabricated value. A
+  // resolved-but-failed health check (isHealthLoading=false, no data) falls
+  // through to the conservative real defaults above (Offline / 0), never a
+  // fabricated "Online" / "12".
+  const healthPending = !healthData && isHealthLoading;
 
   // Prepare chart data
   const severityChartData = useMemo(() => {
@@ -346,8 +360,10 @@ function FeedbackLearning() {
           <CardHeader className="pb-2">
             <CardDescription>Service Status</CardDescription>
             <CardTitle className="text-2xl flex items-center gap-2">
-              {stats.agentAvailable ? 'Online' : 'Offline'}
-              {stats.agentAvailable ? (
+              {healthPending ? 'Checking…' : stats.agentAvailable ? 'Online' : 'Offline'}
+              {healthPending ? (
+                <RefreshCw className="h-5 w-5 animate-spin text-[var(--color-muted-foreground)]" />
+              ) : stats.agentAvailable ? (
                 <CheckCircle2 className="h-5 w-5 text-emerald-500" />
               ) : (
                 <XCircle className="h-5 w-5 text-rose-500" />
@@ -365,7 +381,7 @@ function FeedbackLearning() {
           <CardHeader className="pb-2">
             <CardDescription>Learning Cycles</CardDescription>
             <CardTitle className="text-2xl flex items-center gap-2">
-              {stats.cycles24h}
+              {healthPending ? '—' : stats.cycles24h}
               <Sparkles className="h-5 w-5 text-violet-500" />
             </CardTitle>
           </CardHeader>

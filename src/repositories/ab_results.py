@@ -503,15 +503,21 @@ class ABResultsRepository(BaseRepository):
     async def get_fidelity_comparisons(
         self,
         experiment_id: UUID,
+        limit: int = 10,
     ) -> List[FidelityComparisonRecord]:
         """
         Get fidelity comparisons for an experiment.
 
         Args:
             experiment_id: Experiment UUID
+            limit: Maximum number of (most-recent) comparisons to return.
+                The ``/experiments/{id}/fidelity`` route forwards its own
+                ``limit`` query param here; before this parameter existed the
+                route call (``limit=limit``) raised ``TypeError`` → HTTP 500,
+                so the Digital Twin tab errored on every experiment selection.
 
         Returns:
-            List of fidelity comparison records
+            List of fidelity comparison records (newest first)
         """
         if not self.client:
             return []
@@ -521,6 +527,7 @@ class ABResultsRepository(BaseRepository):
             .select("*")
             .eq("experiment_id", str(experiment_id))
             .order("comparison_timestamp", desc=True)
+            .limit(limit)
             .execute()
         )
 

@@ -11,7 +11,6 @@
  * @module pages/MemoryArchitecture
  */
 
-import { useState } from 'react';
 import { Brain, Database, Network, Cog, Clock, Activity, RefreshCw, AlertCircle } from 'lucide-react';
 import { useMemoryStats, useEpisodicMemories } from '@/hooks/api/use-memory';
 import { QueryProcessingFlow } from '@/components/visualizations/QueryProcessingFlow';
@@ -196,16 +195,26 @@ function EpisodicMemoryList({ memories }: { memories: EpisodicMemoryResponse[] }
 // =============================================================================
 
 export default function MemoryArchitecture() {
-  const [_refreshKey, setRefreshKey] = useState(0);
-
-  const { data: statsData, isLoading: statsLoading, error: statsError } = useMemoryStats();
-  const { data: episodicData, isLoading: episodicLoading } = useEpisodicMemories({ limit: 5 });
+  const {
+    data: statsData,
+    isLoading: statsLoading,
+    error: statsError,
+    refetch: refetchStats,
+  } = useMemoryStats();
+  const {
+    data: episodicData,
+    isLoading: episodicLoading,
+    refetch: refetchEpisodic,
+  } = useEpisodicMemories({ limit: 5 });
 
   const stats = statsData;
   const episodicMemories = episodicData || [];
 
+  // Refetch both live queries. (Previously this bumped an unused state key and
+  // never refetched — a dead control.)
   const handleRefresh = () => {
-    setRefreshKey((prev) => prev + 1);
+    refetchStats();
+    refetchEpisodic();
   };
 
   // Determine overall system status
@@ -271,7 +280,7 @@ export default function MemoryArchitecture() {
         <MemoryCard
           title="Working Memory"
           icon={<Clock className="h-5 w-5" />}
-          status={getMemoryStatus(true)}
+          status={getMemoryStatus(stats?.working?.status === 'healthy')}
         >
           <div className="space-y-4">
             <StatItem
@@ -280,13 +289,13 @@ export default function MemoryArchitecture() {
               subtext="In-memory cache"
             />
             <StatItem
-              label="Target Latency"
-              value="<50ms"
-              subtext="P95 response time"
+              label="Active Sessions"
+              value={statsLoading ? '...' : (stats?.working?.active_sessions ?? 0).toLocaleString()}
+              subtext="Live working-memory sessions"
             />
             <StatItem
               label="TTL"
-              value="24h"
+              value={stats?.working?.ttl_hours ? `${stats.working.ttl_hours}h` : '24h'}
               subtext="Session context expiry"
             />
             <div className="pt-2 border-t border-[var(--color-border)]">

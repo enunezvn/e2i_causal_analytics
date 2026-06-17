@@ -882,6 +882,12 @@ class TwinRepository:
             mlflow_client: MLflow client for model registry
             redis_client: Redis client for caching
         """
+        # The Supabase client the facade was constructed with. Sub-repos store
+        # it as ``self.client`` (BaseRepository); expose it here too so callers
+        # that hold the facade (e.g. the /simulate cohort-effect loader) can
+        # reach the raw client without reaching through a sub-repo. None when no
+        # client was provided (degraded/offline), matching the sub-repos.
+        self.client = supabase_client
         self.models = TwinModelRepository(
             supabase_client=supabase_client,
             mlflow_client=mlflow_client,

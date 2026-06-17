@@ -809,7 +809,25 @@ async def get_memory_stats(
             total_entities = 0
             total_relationships = 0
 
+        # Get working memory stats from Redis (live active-session count +
+        # reachability). Wrapped so a Redis hiccup degrades only this block —
+        # status "unavailable" is honest, never a fabricated "healthy".
+        try:
+            from src.memory.working_memory import get_working_memory
+
+            wm = get_working_memory()
+            active_sessions = await wm.count_active_sessions()
+            working = {
+                "active_sessions": active_sessions,
+                "ttl_hours": round(wm.ttl_seconds / 3600, 1),
+                "status": "healthy",
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get working memory stats: {e}")
+            working = {"active_sessions": 0, "status": "unavailable"}
+
         return {
+            "working": working,
             "episodic": {
                 "total_memories": total_episodic,
                 "recent_24h": recent_episodic,

@@ -20,7 +20,11 @@ import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { TierOverview, type AgentTier } from '@/components/visualizations/agents/AgentTierBadge';
 import { AgentStatusPanel } from '@/components/chat/AgentStatusPanel';
 import { getValidated } from '@/lib/api-client';
-import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import {
+  AgentStatusResponseSchema,
+  TierMetricsResponseSchema,
+  AgentActivityResponseSchema,
+} from '@/lib/api-schemas';
 import { useMetricsSummary } from '@/hooks/api/use-analytics';
 import {
   Activity,
@@ -81,12 +85,12 @@ interface OrchestrationStats {
 // =============================================================================
 // DEFAULTS
 // =============================================================================
-// F-002 fix: SAMPLE_ACTIVITIES formerly inlined here has been DELETED.
-// Activities source from a future API endpoint; in the meantime the page
-// renders an explicit empty state. No fabricated values reachable from
-// production rendering paths.
-
-const ACTIVITIES: AgentActivity[] = [];
+// F-002 fix: SAMPLE_ACTIVITIES formerly inlined here was DELETED. The Activity
+// Feed is now wired to GET /agents/activity (real rows from
+// audit_chain_entries; the automated health poller is excluded server-side) —
+// see the `activities` query in the component below. No fabricated values are
+// reachable from production rendering paths; an empty feed is an honest
+// "no recent activity".
 
 // Tier display names. Counts are derived from the live /agents/status
 // payload; per-tier perf metrics (success rate, response time, tasks) are a
@@ -233,9 +237,17 @@ function TierMetricsCard({ metrics }: { metrics: TierMetrics }) {
             <p className="font-medium">{fmt(metrics.tasksCompleted)}</p>
           </div>
         </div>
-        {metrics.avgResponseTime === null && (
+        {metrics.tasksCompleted === null ? (
           <p className="text-xs text-muted-foreground">
-            Per-tier performance metrics are not yet served by the agent-status endpoint.
+            Per-tier performance is temporarily unavailable.
+          </p>
+        ) : metrics.tasksCompleted === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No agent activity recorded for this tier in the last 24h.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Success rate is not recorded per tier (validation is sparse).
           </p>
         )}
       </CardContent>
@@ -267,26 +279,77 @@ export default function AgentOrchestration() {
   // success rate). When unavailable the stat cards render an em dash.
   const { data: summary, refetch: refetchSummary } = useMetricsSummary('24h');
 
+  // Real per-tier performance from GET /analytics/tier-metrics (audit_chain_entries,
+  // automated health poller excluded). Avg Response / Tasks are real; per-tier
+  // success rate is honestly null ("—") — validation is too sparse to compute.
+  const { data: tierData, refetch: refetchTiers } = useQuery({
+    queryKey: ['tier-metrics'],
+    queryFn: () => getValidated(TierMetricsResponseSchema, '/analytics/tier-metrics?hours=24'),
+    refetchInterval: 30000,
+    retry: false,
+  });
+
+  // Real agent activity from GET /agents/activity (audit_chain_entries, newest
+  // first; the automated health poller is excluded server-side). An empty list
+  // is an honest "no recent activity", never fabricated.
+  const { data: activityData, refetch: refetchActivity } = useQuery({
+    queryKey: ['agent-activity'],
+    queryFn: () =>
+      getValidated(AgentActivityResponseSchema, '/agents/activity?hours=24&limit=50'),
+    refetchInterval: 30000,
+    retry: false,
+  });
+
+  // Map tier -> served perf (avg response, tasks). Absent => null ("—").
+  const tierPerfByTier = React.useMemo(() => {
+    const m = new Map<number, { avg: number | null; tasks: number | null }>();
+    (tierData?.tiers ?? []).forEach((t) =>
+      m.set(t.tier, {
+        avg: t.avg_response_time_ms ?? null,
+        tasks: t.tasks_completed ?? null,
+      }),
+    );
+    return m;
+  }, [tierData]);
+
+  const activities: AgentActivity[] = React.useMemo(
+    () =>
+      (activityData?.activities ?? []).map((a) => ({
+        id: a.entry_id,
+        agentId: a.agent_id,
+        agentName: a.agent_name,
+        tier: a.tier as 0 | 1 | 2 | 3 | 4 | 5,
+        action: a.action,
+        timestamp: a.timestamp,
+        duration: a.duration_ms ?? undefined,
+        status: a.status,
+        details: a.details ?? undefined,
+      })),
+    [activityData],
+  );
+
   // Use context agents if API not available
   const displayAgents = agentStatus?.agents ?? agents;
 
-  // Derive per-tier active/total counts from the live agent roster. Perf
-  // metrics are null until a metrics endpoint exists (rendered as "—").
+  // Derive per-tier active/total counts from the live agent roster; merge in
+  // real Avg-Response / Tasks from /analytics/tier-metrics. Success rate stays
+  // null ("—") — not reliably recorded per tier.
   const tierMetrics = React.useMemo((): TierMetrics[] => {
     return ([0, 1, 2, 3, 4, 5] as const).map((tier) => {
       const inTier = displayAgents.filter((a: { tier: number }) => a.tier === tier);
       const active = inTier.filter((a: { status: string }) => a.status === 'active').length;
+      const perf = tierPerfByTier.get(tier);
       return {
         tier,
         name: TIER_NAMES[tier],
         activeAgents: active,
         totalAgents: inTier.length,
-        avgResponseTime: null,
+        avgResponseTime: perf?.avg ?? null,
         successRate: null,
-        tasksCompleted: null,
+        tasksCompleted: perf?.tasks ?? null,
       };
     });
-  }, [displayAgents]);
+  }, [displayAgents, tierPerfByTier]);
 
   // Filter agents by selected tier
   const filteredAgents = selectedTier !== null
@@ -323,7 +386,9 @@ export default function AgentOrchestration() {
   const handleRefresh = React.useCallback(() => {
     refetchAgents();
     refetchSummary();
-  }, [refetchAgents, refetchSummary]);
+    refetchTiers();
+    refetchActivity();
+  }, [refetchAgents, refetchSummary, refetchTiers, refetchActivity]);
 
   return (
     <div className="space-y-6">
@@ -425,14 +490,14 @@ export default function AgentOrchestration() {
               <CardDescription>Latest agent actions and events</CardDescription>
             </CardHeader>
             <CardContent>
-              {ACTIVITIES.length === 0 ? (
+              {activities.length === 0 ? (
                 <EmptyState
                   title="No recent activity"
-                  description="Agent activity feed will appear here once the activity endpoint is wired."
+                  description="No agent activity recorded in the last 24 hours."
                 />
               ) : (
                 <div className="space-y-1">
-                  {ACTIVITIES.slice(0, 3).map((activity) => (
+                  {activities.slice(0, 3).map((activity) => (
                     <ActivityItem key={activity.id} activity={activity} />
                   ))}
                 </div>
@@ -452,14 +517,14 @@ export default function AgentOrchestration() {
               <CardDescription>Complete log of agent actions</CardDescription>
             </CardHeader>
             <CardContent>
-              {ACTIVITIES.length === 0 ? (
+              {activities.length === 0 ? (
                 <EmptyState
                   title="No activity to display"
-                  description="Once the activity feed endpoint is wired, agent actions will stream here in real time."
+                  description="No agent activity in the last 24 hours. Actions appear here as agents run."
                 />
               ) : (
                 <div className="space-y-1">
-                  {ACTIVITIES.map((activity) => (
+                  {activities.map((activity) => (
                     <ActivityItem key={activity.id} activity={activity} />
                   ))}
                 </div>

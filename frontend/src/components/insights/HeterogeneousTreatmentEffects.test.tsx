@@ -1,115 +1,91 @@
 /**
- * HeterogeneousTreatmentEffects Tests
- * ===================================
+ * HeterogeneousTreatmentEffects Tests — real segment CATE wiring.
  *
- * Red-first guard for the fake-CATE finding: the widget formerly booted
- * `useState(SAMPLE_SEGMENTS)` (fabricated segments: "High-Volume
- * Specialists" CATE +23%, p=0.001 ...) with a no-op transform effect, so
- * every render showed fake treatment effects regardless of API state.
- *
- * Desired behavior (three honest states only):
- * - no analysis yet  -> explicit empty state with a "Run CATE analysis" action
- * - analysis success -> real segment_results from /causal/hierarchical/analyze
- * - analysis failure / demo placeholder -> labeled error / empty, never fake
+ * The card runs POST /api/segments/analyze (Heterogeneous Optimizer / EconML
+ * CausalForestDML over the live synthetic cohort) and renders real per-segment
+ * CATE from `cate_by_segment`. Honest states only: empty -> run action,
+ * completed -> real numbers, failed -> labeled error. No fabricated segments,
+ * no invented p-values.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HeterogeneousTreatmentEffects } from './HeterogeneousTreatmentEffects';
-import * as useCausal from '@/hooks/api/use-causal';
-import * as useExplain from '@/hooks/api/use-explain';
-import type { HierarchicalAnalysisResponse } from '@/types/causal';
-import { CausalAnalysisStatus } from '@/types/causal';
+import * as useSegments from '@/hooks/api/use-segments';
 
-vi.mock('@/hooks/api/use-causal');
-vi.mock('@/hooks/api/use-explain');
+vi.mock('@/hooks/api/use-segments');
 
-type HierMutation = ReturnType<typeof useCausal.useRunHierarchicalAnalysisAndWait>;
+type Mutation = ReturnType<typeof useSegments.useRunSegmentAnalysisAndWait>;
 
-function mockHierarchical(overrides: Partial<HierMutation> = {}) {
-  vi.mocked(useCausal.useRunHierarchicalAnalysisAndWait).mockReturnValue({
+function mockSegments(overrides: Partial<Mutation> = {}) {
+  vi.mocked(useSegments.useRunSegmentAnalysisAndWait).mockReturnValue({
     mutate: vi.fn(),
     data: undefined,
     error: null,
     isPending: false,
     ...overrides,
-  } as unknown as HierMutation);
+  } as unknown as Mutation);
 }
 
-const COMPLETED_RESPONSE: HierarchicalAnalysisResponse = {
-  analysis_id: 'ha_test_1',
-  status: CausalAnalysisStatus.COMPLETED,
-  segment_results: [
-    {
-      segment_id: 0,
-      segment_name: 'high_uplift',
-      n_samples: 412,
-      uplift_range: [0.4, 0.9],
-      cate_mean: 0.31,
-      cate_std: 0.05,
-      cate_ci_lower: 0.21,
-      cate_ci_upper: 0.41,
-      success: true,
-    },
-    {
-      segment_id: 1,
-      segment_name: 'low_uplift',
-      n_samples: 1024,
-      uplift_range: [0.0, 0.4],
-      cate_mean: 0.02,
-      cate_std: 0.04,
-      cate_ci_lower: -0.06,
-      cate_ci_upper: 0.1,
-      success: true,
-    },
-  ],
-  overall_ate: 0.11,
-  overall_ci_lower: 0.04,
-  overall_ci_upper: 0.18,
-  segment_heterogeneity: 0.62,
-  n_segments_analyzed: 2,
-  segmentation_method: 'quantile',
-  estimator_type: 'causal_forest',
-  latency_ms: 1234,
-  created_at: '2026-06-12T00:00:00Z',
+// Faithful to a real /api/segments/analyze completed response (the values match
+// the in-container verification: per-region CATE with tight CIs).
+const COMPLETED = {
+  analysis_id: 'seg_test_1',
+  status: 'completed',
+  cate_by_segment: {
+    region: [
+      {
+        segment_name: 'region',
+        segment_value: 'northeast',
+        cate_estimate: 0.287,
+        cate_ci_lower: 0.286,
+        cate_ci_upper: 0.288,
+        sample_size: 4023,
+        statistical_significance: true,
+      },
+      {
+        segment_name: 'region',
+        segment_value: 'midwest',
+        cate_estimate: 0.244,
+        cate_ci_lower: 0.242,
+        cate_ci_upper: 0.245,
+        sample_size: 3975,
+        statistical_significance: true,
+      },
+    ],
+  },
+  overall_ate: 0.268,
+  heterogeneity_score: 0.067,
+  high_responders: [],
+  low_responders: [],
+  policy_recommendations: [],
+  key_insights: [],
+  estimation_latency_ms: 1,
+  analysis_latency_ms: 1,
+  total_latency_ms: 2,
+  timestamp: '2026-06-16T00:00:00Z',
   warnings: [],
-  errors: [],
+  confidence: 0.9,
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockHierarchical();
-  // Legacy hook the widget formerly mis-used; harmless default if imported.
-  if (useExplain.useBatchExplain) {
-    vi.mocked(useExplain.useBatchExplain).mockReturnValue({
-      mutate: vi.fn(),
-      data: undefined,
-      isPending: false,
-    } as unknown as ReturnType<typeof useExplain.useBatchExplain>);
-  }
+  mockSegments();
 });
 
-describe('HeterogeneousTreatmentEffects — no fabricated segments', () => {
-  it('renders an honest empty state (not SAMPLE_SEGMENTS) before any analysis has run', () => {
+describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
+  it('shows an honest empty state with a run action before any analysis', () => {
     render(<HeterogeneousTreatmentEffects />);
-
-    // Fabricated SAMPLE_SEGMENTS values must never render.
-    expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
-    expect(screen.queryByText('Academic Medical Centers')).not.toBeInTheDocument();
-    expect(screen.queryByText('Early Adopters')).not.toBeInTheDocument();
-    expect(screen.queryByText(/p-value: 0\.001/)).not.toBeInTheDocument();
-
-    // Honest empty state with an explicit run action instead.
     expect(screen.getByTestId('empty-state')).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: /run cate analysis/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /run cate analysis/i })).toBeInTheDocument();
+    // No fabricated segment names from the old fake-data widget.
+    expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
   });
 
-  it('fires the hierarchical CATE analysis when the user clicks run', async () => {
+  it('fires segment analysis over the cohort when run is clicked', async () => {
     const mutate = vi.fn();
-    mockHierarchical({ mutate } as unknown as Partial<HierMutation>);
+    mockSegments({ mutate } as unknown as Partial<Mutation>);
     const user = userEvent.setup();
     render(<HeterogeneousTreatmentEffects />);
 
@@ -119,44 +95,41 @@ describe('HeterogeneousTreatmentEffects — no fabricated segments', () => {
     const arg = mutate.mock.calls[0][0];
     expect(arg.request.treatment_var).toBeTruthy();
     expect(arg.request.outcome_var).toBeTruthy();
+    expect(arg.request.segment_vars.length).toBeGreaterThan(0);
+    expect(arg.request.data_source).toBe('business_metrics');
   });
 
-  it('renders real segment results from a completed analysis', () => {
-    mockHierarchical({ data: COMPLETED_RESPONSE } as unknown as Partial<HierMutation>);
+  it('renders real per-segment CATE from cate_by_segment', () => {
+    mockSegments({ data: COMPLETED } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
 
-    expect(screen.getByText('high_uplift')).toBeInTheDocument();
-    expect(screen.getByText('low_uplift')).toBeInTheDocument();
-    // Real CATE from the API (+31.0%), not the fabricated +23%.
-    expect(screen.getByText(/\+31\.0%/)).toBeInTheDocument();
+    expect(screen.getByText('northeast')).toBeInTheDocument();
+    expect(screen.getByText('midwest')).toBeInTheDocument();
+    expect(screen.getByText(/\+28\.7%/)).toBeInTheDocument(); // northeast CATE
+    expect(screen.getByText(/\+24\.4%/)).toBeInTheDocument(); // midwest CATE
+    expect(screen.getByText('2/2 significant')).toBeInTheDocument();
     expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
   });
 
   it('shows a loading state while the analysis is pending', () => {
-    mockHierarchical({ isPending: true } as unknown as Partial<HierMutation>);
+    mockSegments({ isPending: true } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
     expect(screen.getByText(/analyzing segment effects/i)).toBeInTheDocument();
-    expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
   });
 
-  it('shows a labeled error state when the analysis fails (no silent fallback)', () => {
-    mockHierarchical({
-      error: new Error('CATE estimation failed'),
-    } as unknown as Partial<HierMutation>);
+  it('shows a labeled error when the analysis throws (no silent fallback)', () => {
+    mockSegments({ error: new Error('CATE estimation failed') } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
-
-    expect(screen.getByText(/cate estimation failed/i)).toBeInTheDocument();
-    expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
+    expect(screen.getByText(/cate analysis failed/i)).toBeInTheDocument();
+    expect(screen.queryByText('northeast')).not.toBeInTheDocument();
   });
 
-  it('treats a demo-mode placeholder response as not-real (no fake numbers)', () => {
-    mockHierarchical({
-      data: { ...COMPLETED_RESPONSE, is_demo: true } as HierarchicalAnalysisResponse,
-    } as unknown as Partial<HierMutation>);
+  it('treats a failed-status response as an error, never as real numbers', () => {
+    mockSegments({
+      data: { ...COMPLETED, status: 'failed', cate_by_segment: {}, warnings: ['internal error'] },
+    } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
-
-    // Pinned-zero demo placeholders must not masquerade as real analysis.
-    expect(screen.queryByText(/\+31\.0%/)).not.toBeInTheDocument();
-    expect(screen.getByText('Demo-mode placeholder response')).toBeInTheDocument();
+    expect(screen.getByText(/cate analysis failed/i)).toBeInTheDocument();
+    expect(screen.queryByText('northeast')).not.toBeInTheDocument();
   });
 });

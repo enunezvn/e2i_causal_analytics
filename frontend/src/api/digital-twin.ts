@@ -26,6 +26,7 @@ import type {
   FidelityHistoryResponse,
   FidelityRecordResponse,
   FidelityReportResponse,
+  InterventionTypesResponse,
   ModelListResponse,
   ScenarioComparisonRequest,
   ScenarioComparisonResult,
@@ -45,6 +46,37 @@ import type {
 // =============================================================================
 
 const DIGITAL_TWIN_BASE = '/digital-twin';
+
+// =============================================================================
+// INTERVENTION TAXONOMY ENDPOINT (single source of truth for the dropdown)
+// =============================================================================
+
+/**
+ * List the canonical intervention types with brand-aware availability.
+ *
+ * The simulation dropdown reads this so FE and backend can never drift. An
+ * intervention is `available` only when a trained twin model exists for the
+ * brand/twin_type (otherwise `/simulate` 503s "no trained model"), so the
+ * frontend exposes only available types.
+ *
+ * @param params - Optional brand + twin_type to resolve availability for
+ * @returns Canonical intervention types with `available` + `effect_basis`
+ *
+ * @example
+ * ```typescript
+ * const { interventions } = await listInterventionTypes({ brand: 'Remibrutinib' });
+ * const selectable = interventions.filter((i) => i.available);
+ * ```
+ */
+export async function listInterventionTypes(params?: {
+  brand?: Brand | string;
+  twin_type?: TwinType | string;
+}): Promise<InterventionTypesResponse> {
+  return get<InterventionTypesResponse>(
+    `${DIGITAL_TWIN_BASE}/intervention-types`,
+    params
+  );
+}
 
 // =============================================================================
 // SIMULATION ENDPOINTS

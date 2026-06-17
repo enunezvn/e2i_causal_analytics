@@ -248,6 +248,17 @@ export default function Experiments() {
     ].filter((d) => d.value > 0);
   }, [overviewMetrics]);
 
+  // Provenance honesty (#894). `synthetic_data_forced` means the deployment is a
+  // synthetic-gold SHOWCASE instance (E2I_INCLUDE_SYNTHETIC) — its entire A/B
+  // substrate is synthetic-gold, so the checkbox is inert. We drive the context
+  // banner off forced-OR-included rather than the per-row is_synthetic flag,
+  // because the goldstd experiments are deliberately tagged is_synthetic=False
+  // (kept servable in real-mode) — so is_synthetic alone under-reports the
+  // synthetic substrate. The deployment flag is the reliable signal.
+  const syntheticForced = monitorData?.synthetic_data_forced ?? false;
+  const syntheticIncluded = monitorData?.synthetic_data_included ?? false;
+  const syntheticSubstrate = syntheticForced || syntheticIncluded;
+
   const handleRunMonitoring = () => {
     triggerMonitor({ include_synthetic: includeSynthetic });
   };
@@ -268,15 +279,21 @@ export default function Experiments() {
         <div className="flex flex-wrap items-center gap-2">
           {/* Provenance opt-in (#894): all A/B substrate in this deployment is
               synthetic-gold, so a reviewer must opt in to see it. Default OFF
-              matches the backend real-mode default-exclude. */}
+              matches the backend real-mode default-exclude. When the deployment
+              FORCES synthetic inclusion (E2I_INCLUDE_SYNTHETIC) the flag is inert,
+              so we disable the checkbox and say so rather than implying a control
+              the page does not actually have here. */}
           <div className="flex items-center gap-2 mr-2">
             <Checkbox
               id="include-synthetic"
-              checked={includeSynthetic}
+              checked={syntheticForced ? true : includeSynthetic}
+              disabled={syntheticForced}
               onCheckedChange={(checked) => setIncludeSynthetic(checked === true)}
             />
             <Label htmlFor="include-synthetic" className="text-sm cursor-pointer">
-              Include synthetic data
+              {syntheticForced
+                ? 'Synthetic data (always included in this deployment)'
+                : 'Include synthetic data'}
             </Label>
           </div>
           <Button onClick={handleRunMonitoring} disabled={isLoadingMonitor}>
@@ -292,6 +309,24 @@ export default function Experiments() {
           </Button>
         </div>
       </div>
+
+      {/* Synthetic-substrate context banner (honesty). The alerts below are
+          REAL computations, but this deployment runs on static synthetic-gold
+          A/B data with no live feed, so "data staleness" and zero-enrollment
+          alerts reflect the seeded dataset, not a broken pipeline. Surfacing
+          this prevents the alarms from being mistaken for a live incident. */}
+      {syntheticSubstrate && (
+        <Alert className="mb-6">
+          <Beaker className="h-4 w-4" />
+          <AlertTitle>Static synthetic-gold substrate</AlertTitle>
+          <AlertDescription>
+            These experiments use seeded synthetic-gold data with no live feed.
+            Freshness ("data staleness") and enrollment alerts below reflect the
+            static dataset growing older, not a broken data pipeline or failing
+            experiments.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Critical Alerts Banner */}
       {overviewMetrics.criticalAlerts > 0 && (
@@ -372,8 +407,21 @@ export default function Experiments() {
 
           {filteredExperiments.length === 0 && (
             <EmptyState
-              title="No experiments to display"
-              description='Run "Run Monitoring" to load live experiment health from the monitoring service.'
+              icon={<Beaker className="h-8 w-8" aria-hidden="true" />}
+              title="No experiments loaded yet"
+              description={
+                searchQuery
+                  ? 'No experiments match your search. Clear the search or run monitoring to load the live roster.'
+                  : 'This page loads on demand. Click below to run a live monitoring sweep and load experiment health, enrollment, and alerts.'
+              }
+              action={
+                !searchQuery ? (
+                  <Button onClick={handleRunMonitoring} disabled={isLoadingMonitor}>
+                    <Play className="mr-2 h-4 w-4" />
+                    {isLoadingMonitor ? 'Running monitoring…' : 'Run Monitoring'}
+                  </Button>
+                ) : undefined
+              }
             />
           )}
 
@@ -472,6 +520,13 @@ export default function Experiments() {
 
         {/* Alerts Tab */}
         <TabsContent value="alerts" className="space-y-4">
+          {syntheticSubstrate && alerts.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              These alerts are computed on static synthetic-gold data (no live
+              feed); freshness and enrollment alerts reflect the seeded dataset,
+              not a live data pipeline.
+            </p>
+          )}
           {alerts.length === 0 ? (
             <Card>
               <CardContent className="py-12 text-center">

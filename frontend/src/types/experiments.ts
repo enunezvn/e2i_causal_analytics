@@ -540,6 +540,9 @@ export interface ExperimentHealthSummary {
   active_alerts: number;
   /** Last health check timestamp */
   last_checked: string;
+  /** Provenance (#894): whether this experiment row is synthetic-gold. The UI
+   *  badges synthetic experiments so they are not mistaken for live ones. */
+  is_synthetic?: boolean;
 }
 
 /**
@@ -564,6 +567,15 @@ export interface MonitorResponse {
    *  the result may be incomplete rather than a genuine empty dataset, so the UI
    *  can show an error state instead of "no experiments". */
   errors?: string[];
+  /** Provenance honesty (#894): true when any returned experiment is
+   *  synthetic-gold. The substrate here is seeded synthetic data with no live
+   *  feed, so freshness/enrollment alerts reflect the static dataset, not a
+   *  broken pipeline — the UI surfaces a context banner. */
+  synthetic_data_included?: boolean;
+  /** True when the deployment FORCES synthetic inclusion (E2I_INCLUDE_SYNTHETIC),
+   *  making the request's include_synthetic flag inert. The UI disables the
+   *  "Include synthetic data" checkbox and explains it is always on here. */
+  synthetic_data_forced?: boolean;
   /** Recommended actions */
   recommended_actions: string[];
   /** Check latency in milliseconds */

@@ -3,12 +3,29 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('@/hooks/api', () => ({ useOpportunities: vi.fn() }));
 
+// Spy useNavigate (also provides the Router context the component now needs).
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+
 import { useOpportunities } from '@/hooks/api';
 import { PriorityActionsROI } from './PriorityActionsROI';
+
+const SAMPLE_OPP = {
+  rank: 1,
+  gap: { gap_id: 'g1', metric: 'trx', segment: 'region', segment_value: 'NE', current_value: 1, target_value: 2, gap_size: 1, gap_percentage: 50, gap_type: 'vs_target' },
+  roi_estimate: { gap_id: 'g1', estimated_revenue_impact: 2_400_000, estimated_cost_to_close: 100000, expected_roi: 3.1, risk_adjusted_roi: 2.8, payback_period_months: 4, attribution_level: 'territory', attribution_rate: 0.6, confidence: 0.9 },
+  recommended_action: 'Add one rep call/month in NE',
+  implementation_difficulty: 'low',
+  time_to_impact: '4-6 weeks',
+};
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -76,5 +93,18 @@ describe('PriorityActionsROI (H3)', () => {
     });
     render(<PriorityActionsROI />, { wrapper: createWrapper() });
     expect(screen.getByText(/Could not load opportunities/i)).toBeInTheDocument();
+  });
+
+  it('navigates to /gap-analysis when "View All Recommendations" is clicked', async () => {
+    (useOpportunities as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...idle,
+      data: { total_count: 1, quick_wins_count: 1, strategic_bets_count: 0, total_addressable_value: 2_400_000, opportunities: [SAMPLE_OPP] },
+    });
+    const user = userEvent.setup();
+    render(<PriorityActionsROI />, { wrapper: createWrapper() });
+
+    const viewAll = screen.getByRole('button', { name: /view all recommendations/i });
+    await user.click(viewAll);
+    expect(mockNavigate).toHaveBeenCalledWith('/gap-analysis');
   });
 });

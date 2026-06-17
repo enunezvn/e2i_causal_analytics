@@ -31,6 +31,7 @@ vi.mock('@/hooks/api/use-digital-twin', () => ({
   useSimulationHistory: vi.fn(),
   useRunSimulation: vi.fn(),
   useSimulation: vi.fn(),
+  useInterventionTypes: vi.fn(),
 }));
 
 import {
@@ -38,6 +39,7 @@ import {
   useSimulationHistory,
   useRunSimulation,
   useSimulation,
+  useInterventionTypes,
 } from '@/hooks/api/use-digital-twin';
 
 // Create wrapper with QueryClientProvider
@@ -73,7 +75,7 @@ const mockHistory = {
     {
       simulation_id: 'real-sim-001',
       created_at: '2026-06-04T10:00:00Z',
-      intervention_type: InterventionType.HCP_ENGAGEMENT,
+      intervention_type: InterventionType.EMAIL_CAMPAIGN,
       brand: 'Remibrutinib',
       ate_estimate: 0.085,
       recommendation_type: RecommendationType.DEPLOY,
@@ -81,7 +83,7 @@ const mockHistory = {
     {
       simulation_id: 'real-sim-002',
       created_at: '2026-06-03T14:30:00Z',
-      intervention_type: InterventionType.DIGITAL_MARKETING,
+      intervention_type: InterventionType.DIGITAL_ENGAGEMENT,
       brand: 'Fabhalta',
       ate_estimate: 0.012,
       recommendation_type: RecommendationType.REFINE,
@@ -140,6 +142,42 @@ const mockDetail: SimulationDetailResponse = {
   completed_at: '2026-06-04T10:05:00Z',
 };
 
+// Canonical intervention catalog (mirrors backend INTERVENTION_CATALOG) for
+// building brand-aware /intervention-types responses in tests.
+const INTERVENTION_CATALOG: ReadonlyArray<[string, string]> = [
+  ['email_campaign', 'Email Campaign'],
+  ['call_frequency_increase', 'Increased Call Frequency'],
+  ['speaker_program_invitation', 'Speaker Program Invitation'],
+  ['sample_distribution', 'Sample Distribution'],
+  ['peer_influence_activation', 'Peer Influence Activation'],
+  ['digital_engagement', 'Digital Engagement'],
+];
+const ALL_INTERVENTION_VALUES = INTERVENTION_CATALOG.map(([v]) => v);
+
+// Build a useInterventionTypes() hook return where only `availableValues` are
+// flagged available (the component exposes only available types) and
+// `cohortEstimated` values report effect_basis 'cohort_estimated' (Phase 2).
+function interventionTypesResult(
+  availableValues: string[],
+  cohortEstimated: string[] = []
+) {
+  return {
+    data: {
+      interventions: INTERVENTION_CATALOG.map(([value, label]) => ({
+        value,
+        label,
+        effect_basis: cohortEstimated.includes(value) ? 'cohort_estimated' : 'synthetic',
+        available: availableValues.includes(value),
+      })),
+      brand: 'Remibrutinib',
+      twin_type: 'hcp',
+      timestamp: '2026-06-16T00:00:00Z',
+    },
+    isLoading: false,
+    isError: false,
+  };
+}
+
 // Markers that ONLY appear in the old fabricated shape — must never render.
 const FABRICATED_MARKERS = [
   'TRx Lift',
@@ -182,6 +220,10 @@ describe('DigitalTwin', () => {
         isLoading: false,
         isError: false,
       })
+    );
+    // Default: all interventions available for the (Remibrutinib) brand.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(ALL_INTERVENTION_VALUES)
     );
   });
 
@@ -234,12 +276,71 @@ describe('DigitalTwin', () => {
     });
     expect(mockMutate).toHaveBeenCalledWith({
       intervention: {
-        intervention_type: InterventionType.HCP_ENGAGEMENT,
+        intervention_type: InterventionType.EMAIL_CAMPAIGN,
         duration_weeks: 13, // Math.ceil(90 / 7)
       },
       brand: 'Remibrutinib',
       twin_count: 1000,
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 1b — the intervention dropdown is driven by /intervention-types
+  // (brand-aware availability), not a hardcoded list.
+  // -------------------------------------------------------------------------
+
+  it('lists ONLY backend-available interventions in the dropdown', () => {
+    // Only two interventions available for this brand.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(['email_campaign', 'digital_engagement'])
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    // The two available types are present as <option>s …
+    expect(screen.getByRole('option', { name: 'Email Campaign' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Digital Engagement' })).toBeInTheDocument();
+    // … and the unavailable ones are NOT rendered (would 503 on /simulate).
+    expect(screen.queryByRole('option', { name: 'Sample Distribution' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Speaker Program Invitation' })).not.toBeInTheDocument();
+  });
+
+  it('disables Run and explains when no twin model exists for the brand', () => {
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult([]) // no trained model → nothing available
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(
+      screen.getByText(/No trained twin model for Remibrutinib yet/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
+  });
+
+  // Phase 2 — the dropdown surfaces HOW the selected intervention's effect is
+  // computed: cohort-estimated (brand-specific) vs uniform synthetic.
+  it('shows the brand cohort–estimated basis note for a cohort-estimated intervention', async () => {
+    // Only the cohort-estimable types are available → selection resets to the
+    // first available one (digital_engagement, cohort-estimated).
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(
+        ['digital_engagement', 'call_frequency_increase'],
+        ['digital_engagement', 'call_frequency_increase']
+      )
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText(/brand cohort/i)).toBeInTheDocument();
+    expect(screen.queryByText(/uniform synthetic uplift/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the uniform synthetic basis note for a non-cohort intervention', () => {
+    // Default selection is email_campaign (synthetic, not cohort-estimable).
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue(
+      interventionTypesResult(ALL_INTERVENTION_VALUES, ['digital_engagement'])
+    );
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/uniform synthetic uplift/i)).toBeInTheDocument();
   });
 
   it('shows loading state when simulation is running', () => {
@@ -392,8 +493,8 @@ describe('DigitalTwin', () => {
     await act(async () => {
       await user.click(historyTab);
     });
-    // /Hcp Engagement/i also matches the form's <option>; pick the history row <p>.
-    const matches = await screen.findAllByText(/Hcp Engagement/i);
+    // /Email Campaign/i also matches the form's <option>; pick the history row <p>.
+    const matches = await screen.findAllByText(/Email Campaign/i);
     const row = matches.find((el) => el.tagName === 'P') ?? matches[matches.length - 1];
     await act(async () => {
       await user.click(row);
@@ -442,7 +543,7 @@ describe('DigitalTwin', () => {
     await act(async () => {
       await user.click(screen.getByRole('button', { name: /History/i }));
     });
-    const matches = await screen.findAllByText(/Hcp Engagement/i);
+    const matches = await screen.findAllByText(/Email Campaign/i);
     const row = matches.find((el) => el.tagName === 'P') ?? matches[matches.length - 1];
     await act(async () => {
       await user.click(row);

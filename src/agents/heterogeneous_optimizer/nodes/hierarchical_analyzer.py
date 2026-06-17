@@ -287,22 +287,28 @@ class HierarchicalAnalyzerNode:
                 filters=state.get("filters"),
             )
 
-        # Priority 3 (F-013 / codex iter-1 H3): synthetic data is gated by
-        # the same policy as cate_estimator's MockDataConnector — missing
-        # data must NOT silently fabricate. Import the shared decision
-        # function lazily to avoid a hard dependency cycle.
+        # Priority 2b (#30 self-heal): the graph factory's shared-connector
+        # resolution is env-gated and can hand this node None even when the CATE
+        # estimator upstream self-healed its OWN real connector on the identical
+        # substrate — which crashed every real-data analysis AFTER the CATE step
+        # completed. When a real connector is required (mock forbidden), resolve
+        # the default connector HERE the same way the CATE estimator does
+        # (cate_estimator.__init__: ``data_connector or _get_default_data_connector()``),
+        # so the run completes on the live cohort instead of failing closed at
+        # this node. Resolution stays in _get_data (not the constructor) to keep
+        # construction side-effect-free; with no usable Supabase creds,
+        # _get_default_data_connector raises the same honest fail-closed error.
         from src.agents.heterogeneous_optimizer.nodes.cate_estimator import (
+            _get_default_data_connector,
             _mock_connector_allowed,
         )
 
         if not _mock_connector_allowed():
-            raise RuntimeError(
-                "HierarchicalAnalyzerNode has no tier0_data and no "
-                "data_connector, and synthetic-data fallback is disabled "
-                "(E2I_ALLOW_MOCK_CONNECTOR=1 or ENVIRONMENT in "
-                "{development,dev,test,testing,local} required for mock). "
-                "Provide a real data_connector or set the env-gate "
-                "explicitly for offline development."
+            self.data_connector = _get_default_data_connector()
+            return await self.data_connector.query(
+                source=state["data_source"],
+                columns=list(set(required_columns)),
+                filters=state.get("filters"),
             )
 
         logger.warning(

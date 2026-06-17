@@ -15,7 +15,10 @@ Reference: docs/roi_methodology.md, src/services/roi_calculation.py
 
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import yaml
 
 from src.services.roi_calculation import (
     AttributionLevel,
@@ -36,6 +39,72 @@ from ..state import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Fraction of a performance gap a commercial initiative can realistically CLOSE.
+# A gap of N TRx does NOT translate to N incremental TRx of value — no single
+# initiative captures the entire gap. This "capture rate" is the system's own
+# documented assumption: the opportunity-sizing skill the gap_analyzer loads
+# (.claude/skills/gap-analysis/opportunity-sizing.md) defines
+#   "Addressable Value = Opportunity Size x Revenue/Unit x Capture Probability x Discount"
+#   "Capture Probability: 20-40% for most interventions" (worked example: 0.30).
+# That factor was guidance for the LLM but was never wired into the deterministic
+# ROI math, so value was computed at an implicit 100% capture — inflating ROI
+# without bound as the gap grew. 0.30 is the skill's midpoint default; it is
+# overridable via config (gap_analyzer.yaml economic_assumptions.capture_rate).
+# Distinct from attribution_rate: capture = fraction of the gap CLOSED (execution
+# reality); attribution = fraction of the realized closure causally OWNED by the
+# initiative (confounding adjustment). They are orthogonal and both apply.
+DEFAULT_CAPTURE_RATE = 0.30
+
+
+def _coerce_capture_rate(rate: object) -> float:
+    """Coerce ``rate`` to a valid capture fraction in (0, 1], else the default.
+
+    Shared guard so BOTH config-loaded and constructor-injected rates are
+    validated by the same rule. A caller passing 0.0, a negative, >1, or a
+    non-numeric must never silently corrupt value (0.0 would zero out all ROI);
+    such inputs fall back to :data:`DEFAULT_CAPTURE_RATE` with a warning.
+    """
+    try:
+        value = float(rate)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        logger.warning("capture_rate %r not numeric; using default %s", rate, DEFAULT_CAPTURE_RATE)
+        return DEFAULT_CAPTURE_RATE
+    # A capture rate is a fraction in (0, 1].
+    if not (0.0 < value <= 1.0):
+        logger.warning(
+            "capture_rate %s out of (0, 1]; using default %s", value, DEFAULT_CAPTURE_RATE
+        )
+        return DEFAULT_CAPTURE_RATE
+    return value
+
+
+def _load_capture_rate(config_path: Optional[str] = None) -> float:
+    """Load the gap-closure capture rate from gap_analyzer.yaml, default 0.30.
+
+    Reads ``gap_analyzer.economic_assumptions.capture_rate``. Any read/parse
+    failure falls back to :data:`DEFAULT_CAPTURE_RATE` (fail-soft — a missing
+    config must never zero out value or crash the ROI node).
+    """
+    if config_path is None:
+        config_path = "config/agents/gap_analyzer.yaml"
+    try:
+        path = Path(config_path)
+        if not path.exists():
+            return DEFAULT_CAPTURE_RATE
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+        rate = (
+            cfg.get("gap_analyzer", {})
+            .get("economic_assumptions", {})
+            .get("capture_rate", DEFAULT_CAPTURE_RATE)
+        )
+        return _coerce_capture_rate(rate)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(
+            "Failed to load capture_rate (%s); using default %s", e, DEFAULT_CAPTURE_RATE
+        )
+        return DEFAULT_CAPTURE_RATE
 
 
 class ROICalculatorNode:
@@ -77,6 +146,7 @@ class ROICalculatorNode:
         roi_service: Optional[ROICalculationService] = None,
         use_bootstrap: bool = True,
         n_simulations: int = 1000,
+        capture_rate: Optional[float] = None,
     ):
         """Initialize ROI calculator with service.
 
@@ -84,9 +154,15 @@ class ROICalculatorNode:
             roi_service: Injected ROICalculationService (or created if None)
             use_bootstrap: Whether to compute bootstrap confidence intervals
             n_simulations: Number of Monte Carlo simulations for bootstrap
+            capture_rate: Fraction of a gap an initiative realistically closes
+                (see :data:`DEFAULT_CAPTURE_RATE`). When None, loaded from
+                gap_analyzer.yaml (default 0.30).
         """
         self.roi_service = roi_service or ROICalculationService(n_simulations=n_simulations)
         self.use_bootstrap = use_bootstrap
+        self.capture_rate = (
+            _coerce_capture_rate(capture_rate) if capture_rate is not None else _load_capture_rate()
+        )
 
     async def execute(self, state: GapAnalyzerState) -> Dict[str, Any]:
         """Execute ROI calculation workflow.
@@ -214,25 +290,35 @@ class ROICalculatorNode:
             ROI estimate with confidence interval, attribution, risk adjustment
         """
         metric = gap["metric"]
+        # Raw gap magnitude drives the COST and RISK of the initiative (closing a
+        # gap means tackling its full size). The VALUE is only the fraction we
+        # realistically close -> captured_units = gap_size * capture_rate. This
+        # asymmetry is conservative by design: full initiative scope/cost, partial
+        # expected realized value. (Previously value used the full gap_size, an
+        # implicit 100% capture that inflated ROI without bound as gaps grew.)
         gap_size = abs(gap["gap_size"])
+        captured_units = gap_size * self.capture_rate
         gap_type = gap["gap_type"]
 
         # Map metric to value driver
         driver_type = self._get_value_driver(metric)
 
-        # Create value driver input
-        value_driver = self._create_value_driver_input(driver_type, gap_size, gap)
+        # Create value driver input (value sized on the CAPTURED fraction).
+        # Pass BOTH the captured improvement and the raw gap: capture applies to
+        # the value-bearing improvement, NOT to base/population fields (else the
+        # haircut compounds for non-linear drivers — see _create_value_driver_input).
+        value_driver = self._create_value_driver_input(driver_type, captured_units, gap_size, gap)
 
         # Build list of value drivers (may include uplift)
         value_drivers = [value_driver]
 
         # Add uplift targeting value driver if context available
         if uplift_context:
-            uplift_driver = self._create_uplift_value_driver(gap, uplift_context)
+            uplift_driver = self._create_uplift_value_driver(gap, uplift_context, captured_units)
             if uplift_driver:
                 value_drivers.append(uplift_driver)
 
-        # Estimate costs for closing the gap
+        # Estimate costs for closing the gap (full gap scope, NOT capture-adjusted)
         cost_input = self._estimate_intervention_costs(metric, gap_size)
 
         # Determine attribution level from gap type
@@ -306,44 +392,65 @@ class ROICalculatorNode:
     def _create_value_driver_input(
         self,
         driver_type: ValueDriverType,
-        gap_size: float,
+        captured_units: float,
+        raw_gap_size: float,
         gap: PerformanceGap,
     ) -> ValueDriverInput:
         """Create value driver input for ROI calculation.
 
-        Maps gap size to appropriate driver quantity based on type.
+        Maps gap size to the appropriate driver quantity based on type.
+
+        Capture-rate discipline: the haircut (``captured_units = raw_gap_size *
+        capture_rate``) must be applied to each driver's value EXACTLY ONCE — on
+        the value-bearing IMPROVEMENT magnitude, never on a base/population
+        field. Several drivers are non-linear: ACTION_RATE multiplies the pp
+        improvement (``quantity``) by ``trigger_count``, and INTENT_TO_PRESCRIBE
+        multiplies the pp improvement by ``hcp_count``. Those count fields are
+        the EXISTING market base (trigger volume / HCP panel), not part of the
+        gap being closed — so they derive from the RAW gap, NOT the captured
+        value. Feeding ``captured_units`` into both factors would square the
+        haircut (0.30 -> 0.09) and over-suppress those drivers. Conversely,
+        DATA_QUALITY (value flows through fp/fn, ``quantity`` ignored) and
+        DRIFT_PREVENTION (value flows through ``baseline_model_value``) carry the
+        capture on those derived fields so each still gets exactly one haircut.
 
         Args:
             driver_type: Type of value driver
-            gap_size: Absolute gap size
+            captured_units: Realized improvement = raw_gap_size * capture_rate
+            raw_gap_size: Absolute gap size BEFORE the capture haircut, used for
+                base/population fields that must not be capture-discounted
             gap: Full gap details for context
 
         Returns:
             ValueDriverInput for ROI service
         """
-        # Convert gap size to driver-appropriate quantity
-        # For TRx: gap_size is TRx count
-        # For Patient ID: gap_size might need conversion
-        # For Action Rate: gap_size is trigger count
-        # etc.
-
         return ValueDriverInput(
             driver_type=driver_type,
-            quantity=gap_size,
-            # Optional fields based on driver type
+            # Value-bearing IMPROVEMENT (carries the single capture haircut).
+            # TRX_LIFT / PATIENT_IDENTIFICATION / ACTION_RATE / INTENT_TO_PRESCRIBE
+            # read value off `quantity` (the latter two as the pp improvement).
+            quantity=captured_units,
+            # Base/population fields = existing market size, NOT the gap we close
+            # -> derive from the RAW gap so capture is not applied a second time.
             hcp_count=(
-                int(gap_size / 10) if driver_type == ValueDriverType.INTENT_TO_PRESCRIBE else None
+                int(raw_gap_size / 10)
+                if driver_type == ValueDriverType.INTENT_TO_PRESCRIBE
+                else None
             ),
-            trigger_count=int(gap_size) if driver_type == ValueDriverType.ACTION_RATE else None,
+            trigger_count=int(raw_gap_size) if driver_type == ValueDriverType.ACTION_RATE else None,
+            # DATA_QUALITY value flows through fp/fn (quantity ignored) -> these
+            # carry the capture haircut so the driver still gets exactly one.
             fp_reduction=(
-                int(gap_size * 0.3) if driver_type == ValueDriverType.DATA_QUALITY else None
+                int(captured_units * 0.3) if driver_type == ValueDriverType.DATA_QUALITY else None
             ),
             fn_reduction=(
-                int(gap_size * 0.7) if driver_type == ValueDriverType.DATA_QUALITY else None
+                int(captured_units * 0.7) if driver_type == ValueDriverType.DATA_QUALITY else None
             ),
             auc_drop_prevented=0.02 if driver_type == ValueDriverType.DRIFT_PREVENTION else None,
+            # DRIFT_PREVENTION value flows through baseline_model_value (quantity
+            # ignored) -> capture applied here for the single haircut.
             baseline_model_value=(
-                gap_size * 850 if driver_type == ValueDriverType.DRIFT_PREVENTION else None
+                captured_units * 850 if driver_type == ValueDriverType.DRIFT_PREVENTION else None
             ),
         )
 
@@ -351,6 +458,7 @@ class ROICalculatorNode:
         self,
         gap: PerformanceGap,
         uplift_context: Dict[str, Any],
+        captured_units: float,
     ) -> Optional[ValueDriverInput]:
         """Create uplift targeting value driver from uplift context.
 
@@ -360,6 +468,9 @@ class ROICalculatorNode:
         Args:
             gap: Performance gap being analyzed
             uplift_context: Uplift context with AUUC, Qini, efficiency
+            captured_units: Capture-adjusted gap units (gap_size * capture_rate);
+                value is sized on the fraction realistically closed, consistent
+                with the base value driver.
 
         Returns:
             ValueDriverInput for uplift targeting, or None if not applicable
@@ -378,7 +489,8 @@ class ROICalculatorNode:
         if gap["metric"] not in targeting_metrics:
             return None
 
-        gap_size = abs(gap["gap_size"])
+        # Size uplift value on the captured fraction, not the full gap.
+        gap_size = captured_units
 
         # Get segment-specific uplift if available
         if uplift_context.get("uplift_by_segment"):
@@ -429,8 +541,13 @@ class ROICalculatorNode:
         data_source_costs: Dict[str, float] = {}
         incremental_data_cost = 0.0
         if metric in ["patient_identification", "patient_count", "data_quality"]:
-            incremental_data_cost = gap_size * 100  # ~$100 per patient identified
-            data_source_costs["IQVIA APLD"] = incremental_data_cost
+            # ~$100 per patient identified, attributed to the IQVIA APLD source.
+            # Record it ONCE on the named source. Previously the same value was
+            # ALSO assigned to `incremental_data_cost`, and
+            # CostCalculator.calculate_total_cost sums BOTH incremental_data_cost
+            # and every data_source_costs entry -> the data cost was double-counted
+            # for patient/data-quality metrics. `incremental_data_cost` stays 0.
+            data_source_costs["IQVIA APLD"] = gap_size * 100
 
         # Change management (for org-level changes)
         change_management_cost = 0.0
@@ -486,9 +603,15 @@ class ROICalculatorNode:
     def _determine_attribution(self, gap_type: str) -> AttributionLevel:
         """Determine attribution level from gap type.
 
-        Attribution reflects how much of the improvement can be attributed
-        to the initiative:
-        - vs_target: Full (100%) - direct target setting
+        Attribution reflects how much of the gap closure can be CAUSALLY
+        attributed to the initiative (per docs/roi_methodology.md attribution
+        framework):
+        - vs_target: Partial (65%) - a vs-target gap is an OBSERVATION (current
+          below a stored target) with no causal validation. The methodology
+          reserves FULL (100%) for "RCT validates effect, no confounding"; a bare
+          target comparison does not meet that bar, so it maps to PARTIAL
+          ("observational causal inference"). FULL would only be justified with a
+          validated causal signal (CATE/uplift) attached to the gap.
         - vs_benchmark: Partial (65%) - peer comparison has some noise
         - vs_potential: Shared (35%) - multiple factors for top decile
         - temporal: Minimal (10%) - many confounders over time
@@ -500,7 +623,10 @@ class ROICalculatorNode:
             Attribution level
         """
         attribution_mapping = {
-            "vs_target": AttributionLevel.FULL,
+            # vs_target downgraded FULL -> PARTIAL: an unvalidated target gap is
+            # not RCT-grade evidence (see docstring). Together with the missing
+            # capture rate, FULL attribution was a primary driver of inflated ROI.
+            "vs_target": AttributionLevel.PARTIAL,
             "vs_benchmark": AttributionLevel.PARTIAL,
             "vs_potential": AttributionLevel.SHARED,
             "temporal": AttributionLevel.MINIMAL,

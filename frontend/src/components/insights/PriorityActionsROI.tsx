@@ -9,6 +9,7 @@
  */
 
 import { ArrowUpRight, DollarSign, Target, Users, Clock, TrendingUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -162,6 +163,7 @@ export function PriorityActionsROI({ className, brand }: PriorityActionsROIProps
   const { data, isLoading, isError, error } = useOpportunities({ brand, limit: 4 });
   const actions = (data?.opportunities ?? []).map(toPriorityAction);
   const totalROI = data?.total_addressable_value ?? 0;
+  const navigate = useNavigate();
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -204,7 +206,11 @@ export function PriorityActionsROI({ className, brand }: PriorityActionsROIProps
             {actions.map((action, idx) => (
               <ActionCard key={action.id} action={action} rank={idx + 1} />
             ))}
-            <Button variant="outline" className="w-full mt-2">
+            <Button
+              variant="outline"
+              className="w-full mt-2"
+              onClick={() => navigate('/gap-analysis')}
+            >
               <span>View All Recommendations</span>
               <ArrowUpRight className="h-4 w-4 ml-2" />
             </Button>

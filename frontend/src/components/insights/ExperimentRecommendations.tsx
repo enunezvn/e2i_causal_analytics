@@ -2,8 +2,10 @@
  * Experiment Recommendations Component
  * =====================================
  *
- * Displays A/B test suggestions with Digital Twin pre-screening results.
- * Shows recommended experiments based on causal analysis and gap detection.
+ * Surfaces the live health of currently running experiments from the monitoring
+ * sweep (enrollment, information fraction, SRM, open alerts). Digital-twin
+ * pre-screening of proposed experiments is not yet wired, so no twin score or
+ * lift estimate is fabricated here.
  *
  * @module components/insights/ExperimentRecommendations
  */
@@ -31,13 +33,15 @@ interface Experiment {
   id: string;
   title: string;
   hypothesis: string;
-  primaryMetric: string;
-  expectedLift: number;
-  confidence: number;
-  sampleSize: number;
-  duration: string;
+  /** Total enrolled to date (real). */
+  enrolled: number;
+  /** Current information fraction 0..1 from the sequential test (real). */
+  infoFraction: number;
+  /** Open monitoring alerts (real). */
+  openAlerts: number;
+  /** Whether a sample-ratio mismatch was detected (real). */
+  hasSrm: boolean;
   status: 'recommended' | 'simulated' | 'approved' | 'running';
-  digitalTwinScore: number;
   riskLevel: 'low' | 'medium' | 'high';
 }
 
@@ -82,9 +86,10 @@ function getRiskConfig(risk: Experiment['riskLevel']) {
 
 /**
  * Map a live experiment health summary into the card's Experiment shape.
- * The live summary has no Digital-Twin prescreen score or expected-lift, so we
- * surface real health/enrollment/info-fraction and label risk by health_status
- * rather than fabricate twin scores.
+ * The live monitor returns experiment HEALTH (enrollment, information fraction,
+ * SRM, open alerts) — it has no Digital-Twin prescreen score or expected-lift —
+ * so we surface those real fields and label risk by health_status. We never
+ * fabricate a twin score or a lift estimate that the backend does not produce.
  */
 function toExperimentCard(summary: ExperimentHealthSummary): Experiment {
   const risk: Experiment['riskLevel'] =
@@ -96,14 +101,12 @@ function toExperimentCard(summary: ExperimentHealthSummary): Experiment {
   return {
     id: summary.experiment_id,
     title: summary.experiment_name,
-    hypothesis: `Monitoring active — ${summary.active_alerts} open alert(s).`,
-    primaryMetric: 'Enrollment',
-    expectedLift: 0,
-    confidence: summary.current_information_fraction,
-    sampleSize: summary.total_enrolled,
-    duration: `${(summary.current_information_fraction * 100).toFixed(0)}% info`,
+    hypothesis: `Live monitoring — ${summary.active_alerts} open alert(s).`,
+    enrolled: summary.total_enrolled,
+    infoFraction: summary.current_information_fraction,
+    openAlerts: summary.active_alerts,
+    hasSrm: summary.has_srm,
     status: 'running',
-    digitalTwinScore: summary.current_information_fraction,
     riskLevel: risk,
   };
 }
@@ -140,32 +143,32 @@ function ExperimentCard({ experiment }: { experiment: Experiment }) {
         {experiment.hypothesis}
       </p>
 
-      {/* Metrics Grid */}
+      {/* Metrics Grid — real experiment-health fields (no Digital-Twin prescreen wired) */}
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
-          <div className="text-xs text-[var(--color-muted-foreground)]">Expected Lift</div>
-          <div className={cn(
-            'text-lg font-bold',
-            experiment.expectedLift >= 0 ? 'text-emerald-600' : 'text-rose-600'
-          )}>
-            {experiment.expectedLift >= 0 ? '+' : ''}{experiment.expectedLift.toFixed(1)}%
+          <div className="text-xs text-[var(--color-muted-foreground)]">Enrolled</div>
+          <div className="text-lg font-bold text-[var(--color-foreground)]">
+            {experiment.enrolled.toLocaleString()}
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
-          <div className="text-xs text-[var(--color-muted-foreground)]">Digital Twin Score</div>
-          <div className="text-lg font-bold text-purple-600">
-            {(experiment.digitalTwinScore * 100).toFixed(0)}%
+          <div className="text-xs text-[var(--color-muted-foreground)]">Open Alerts</div>
+          <div className={cn(
+            'text-lg font-bold',
+            experiment.openAlerts > 0 ? 'text-amber-600' : 'text-emerald-600'
+          )}>
+            {experiment.openAlerts}
           </div>
         </div>
       </div>
 
-      {/* Confidence Bar */}
+      {/* Information fraction — real sequential-test progress toward a decision */}
       <div className="mb-3">
         <div className="flex items-center justify-between text-xs mb-1">
-          <span className="text-[var(--color-muted-foreground)]">Confidence</span>
-          <span className="font-medium">{(experiment.confidence * 100).toFixed(0)}%</span>
+          <span className="text-[var(--color-muted-foreground)]">Information fraction</span>
+          <span className="font-medium">{(experiment.infoFraction * 100).toFixed(0)}%</span>
         </div>
-        <Progress value={experiment.confidence * 100} className="h-1.5" />
+        <Progress value={experiment.infoFraction * 100} className="h-1.5" />
       </div>
 
       {/* Footer */}
@@ -173,12 +176,11 @@ function ExperimentCard({ experiment }: { experiment: Experiment }) {
         <div className="flex items-center gap-3 text-xs text-[var(--color-muted-foreground)]">
           <div className="flex items-center gap-1">
             <Users className="h-3 w-3" />
-            <span>n={experiment.sampleSize}</span>
+            <span>n={experiment.enrolled.toLocaleString()}</span>
           </div>
-          <div className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            <span>{experiment.duration}</span>
-          </div>
+          {experiment.hasSrm && (
+            <span className="text-rose-600 font-medium">SRM detected</span>
+          )}
           <span className={riskConfig.className}>{riskConfig.label}</span>
         </div>
         {experiment.status === 'recommended' && (
@@ -227,7 +229,7 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
             <div>
               <CardTitle className="text-base font-semibold">Experiment Recommendations</CardTitle>
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                A/B tests with Digital Twin pre-screening
+                Live health of running experiments
               </p>
             </div>
           </div>
@@ -261,9 +263,9 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
             <div className="flex items-start gap-2 p-3 rounded-lg bg-purple-500/5 border border-purple-500/20">
               <AlertCircle className="h-4 w-4 text-purple-500 mt-0.5" />
               <div className="text-xs text-[var(--color-muted-foreground)]">
-                <span className="font-medium text-purple-600">Digital Twin Pre-Screening:</span> All
-                experiments are simulated using our Digital Twin environment before live deployment to
-                estimate outcomes and minimize risk.
+                <span className="font-medium text-purple-600">Live experiment monitoring:</span> these
+                are health summaries of currently running experiments (enrollment, information fraction,
+                SRM and open alerts). Digital-twin pre-screening of proposed experiments is not yet wired.
               </div>
             </div>
           </>
