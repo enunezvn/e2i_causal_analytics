@@ -29,6 +29,10 @@ import {
 
 import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
 import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
+import type {
+  RefutationResult,
+  RefutationMethod,
+} from '@/components/visualizations/causal/RefutationTests';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -40,10 +44,17 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
-import { useDiscoverEffects } from '@/hooks/api';
+import { useDiscoverEffects, useCausalBrands } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
-import type { DiscoveredEffect } from '@/types/causal';
+import type { DiscoveredEffect, RefutationTestDetail } from '@/types/causal';
 
 const DATASET = 'patient_journeys';
 
@@ -88,8 +99,40 @@ function verdictBadge(e: DiscoveredEffect) {
   }
 }
 
+// "All brands" sentinel — the Select needs a non-empty value; null is sent to the API.
+const ALL_BRANDS = '__all__';
+
+// Backend refutation test_name -> the viz's RefutationMethod union (the only
+// remap is the sensitivity test, which the backend calls unobserved_common_cause).
+const REFUTATION_METHOD_MAP: Record<string, RefutationMethod> = {
+  placebo_treatment: 'placebo_treatment',
+  random_common_cause: 'random_common_cause',
+  data_subset: 'data_subset',
+  bootstrap: 'bootstrap',
+  unobserved_common_cause: 'add_unobserved_common_cause',
+  add_unobserved_common_cause: 'add_unobserved_common_cause',
+};
+
+// Map the agent's per-test refutation results onto the table's row shape. These
+// are REAL refuter outputs surfaced from the response — never fabricated.
+function toRefutationResults(tests: RefutationTestDetail[] | undefined | null): RefutationResult[] {
+  if (!tests) return [];
+  return tests.map((t, i) => ({
+    id: `${t.test_name}-${i}`,
+    method: REFUTATION_METHOD_MAP[t.test_name] ?? 'random_common_cause',
+    originalEstimate: t.original_effect ?? 0,
+    refutedEstimate: t.new_effect ?? 0,
+    pValue: t.p_value ?? 0,
+    passed: t.passed,
+    description: t.details ?? undefined,
+  }));
+}
+
 export default function CausalDiscovery() {
-  const { start, isStarting, startError, job } = useDiscoverEffects(DATASET);
+  const [selectedBrand, setSelectedBrand] = useState<string>(ALL_BRANDS);
+  const brandArg = selectedBrand === ALL_BRANDS ? null : selectedBrand;
+  const brandsQuery = useCausalBrands(DATASET);
+  const { start, isStarting, startError, job } = useDiscoverEffects(DATASET, brandArg);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Drill-down: the full validated analysis for the selected leaderboard row.
@@ -139,6 +182,13 @@ export default function CausalDiscovery() {
     return { vizNodes: nodes, vizEdges: edges };
   }, [result]);
 
+  // Per-test refutation results for the drill-down table (placebo / random common
+  // cause / data subset / bootstrap). Empty when refutation did not run.
+  const refutationResults = useMemo(
+    () => toRefutationResults(result?.refutation?.tests),
+    [result]
+  );
+
   return (
     <div className="container mx-auto px-4 py-8 space-y-6">
       {/* Header */}
@@ -170,7 +220,32 @@ export default function CausalDiscovery() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="brand-select"
+                className="text-sm font-medium text-muted-foreground"
+              >
+                Brand
+              </label>
+              <Select
+                value={selectedBrand}
+                onValueChange={setSelectedBrand}
+                disabled={isStarting || running}
+              >
+                <SelectTrigger id="brand-select" className="w-48" aria-label="Brand">
+                  <SelectValue placeholder="All brands" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_BRANDS}>All brands</SelectItem>
+                  {(brandsQuery.data?.brands ?? []).map((b) => (
+                    <SelectItem key={b} value={b}>
+                      {b}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <Button onClick={() => start()} disabled={isStarting || running}>
               {isStarting || running ? (
                 <>
@@ -353,7 +428,12 @@ export default function CausalDiscovery() {
                 )}
 
                 {vizNodes.length > 0 ? (
-                  <CausalDiscoveryViz nodes={vizNodes} edges={vizEdges} showEffectsTable={false} />
+                  <CausalDiscoveryViz
+                    nodes={vizNodes}
+                    edges={vizEdges}
+                    refutationResults={refutationResults}
+                    showEffectsTable={false}
+                  />
                 ) : (
                   <EmptyState
                     title="No DAG produced"

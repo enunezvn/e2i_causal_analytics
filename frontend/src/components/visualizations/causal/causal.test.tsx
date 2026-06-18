@@ -695,8 +695,10 @@ describe('RefutationTests', () => {
   describe('Empty State', () => {
     it('renders empty state when no results', () => {
       render(<RefutationTests results={[]} />);
-      expect(screen.getByText('No refutation tests available')).toBeInTheDocument();
-      expect(screen.getByText(/Run causal analysis with refutation tests/)).toBeInTheDocument();
+      expect(screen.getByText('No refutation tests for this run')).toBeInTheDocument();
+      expect(
+        screen.getByText(/produced no refutation test results/)
+      ).toBeInTheDocument();
     });
   });
 

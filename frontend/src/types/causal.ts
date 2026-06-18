@@ -181,6 +181,17 @@ export interface CausalDAGModel {
   dag_dot?: string | null;
 }
 
+/** One refutation test's result, for the drill-down per-test table. */
+export interface RefutationTestDetail {
+  /** placebo_treatment / random_common_cause / data_subset / unobserved_common_cause / bootstrap */
+  test_name: string;
+  passed: boolean;
+  original_effect?: number | null;
+  new_effect?: number | null;
+  p_value?: number | null;
+  details?: string | null;
+}
+
 /** Robustness gate + refutation/sensitivity summary. */
 export interface RefutationSummary {
   /** proceed / review / block */
@@ -190,6 +201,8 @@ export interface RefutationSummary {
   tests_passed?: number | null;
   tests_total?: number | null;
   sensitivity_e_value?: number | null;
+  /** Per-test refutation results (empty if refutation did not run). */
+  tests?: RefutationTestDetail[];
 }
 
 /** Full result of an end-to-end causal_impact agent run. */
@@ -274,10 +287,18 @@ export interface DiscoverEffectsResponse {
   /** pending / running / completed */
   status: string;
   dataset: string;
+  /** Brand the cohort was scoped to (null = all brands). */
+  brand?: string | null;
   total: number;
   completed: number;
   effects: DiscoveredEffect[];
   note: string;
+}
+
+/** Brands present in a gold-standard dataset's cohort (drives the brand dropdown). */
+export interface CausalBrandsResponse {
+  dataset: string;
+  brands: string[];
 }
 
 // =============================================================================

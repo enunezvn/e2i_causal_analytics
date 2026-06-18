@@ -26,6 +26,7 @@ import type {
   AgentCausalAnalysisRequest,
   AgentCausalAnalysisResponse,
   CausalAnalysisHistoryResponse,
+  CausalBrandsResponse,
   CausalLibrary,
   CausalVariablesResponse,
   DiscoverEffectsResponse,
@@ -271,14 +272,29 @@ export async function proposeCausalQuestions(
  * Submit a discover-effects job: the agent validates each candidate question
  * (DAG + estimator + refutation gate) and ranks the effects. Heavy/async →
  * returns a pending job; poll {@link getDiscoverEffects}.
+ *
+ * @param brand - optional brand to scope the cohort to (a row subset). Omit /
+ *   null = all brands.
  */
 export async function discoverCausalEffects(
-  dataset: string = 'patient_journeys'
+  dataset: string = 'patient_journeys',
+  brand?: string | null
 ): Promise<DiscoverEffectsResponse> {
-  // `dataset` is a query param (no request body); pass it in the URL.
+  // `dataset` (and optional `brand`) are query params (no request body).
+  const params = new URLSearchParams({ dataset });
+  if (brand) params.set('brand', brand);
   return post<DiscoverEffectsResponse, Record<string, never>>(
-    `${CAUSAL_BASE}/discover-effects?dataset=${encodeURIComponent(dataset)}`,
+    `${CAUSAL_BASE}/discover-effects?${params.toString()}`,
     {}
+  );
+}
+
+/** List the brands present in a dataset's cohort (drives the brand dropdown). */
+export async function getCausalBrands(
+  dataset: string = 'patient_journeys'
+): Promise<CausalBrandsResponse> {
+  return get<CausalBrandsResponse>(
+    `${CAUSAL_BASE}/brands?dataset=${encodeURIComponent(dataset)}`
   );
 }
 

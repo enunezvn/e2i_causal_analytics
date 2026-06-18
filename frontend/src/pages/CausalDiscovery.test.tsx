@@ -13,22 +13,36 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalDiscovery from './CausalDiscovery';
 
-// Stub the heavy DAG viz — assert the page feeds it the agent's graph.
+// Stub the heavy DAG viz — assert the page feeds it the agent's graph + refutation.
 vi.mock('@/components/visualizations/CausalDiscovery', () => ({
-  CausalDiscovery: ({ nodes, edges }: { nodes: unknown[]; edges: unknown[] }) => (
-    <div data-testid="causal-dag" data-nodes={nodes.length} data-edges={edges.length} />
+  CausalDiscovery: ({
+    nodes,
+    edges,
+    refutationResults,
+  }: {
+    nodes: unknown[];
+    edges: unknown[];
+    refutationResults?: unknown[];
+  }) => (
+    <div
+      data-testid="causal-dag"
+      data-nodes={nodes.length}
+      data-edges={edges.length}
+      data-refutations={refutationResults?.length ?? 0}
+    />
   ),
 }));
 
 vi.mock('@/hooks/api', () => ({
   useDiscoverEffects: vi.fn(),
+  useCausalBrands: vi.fn(),
 }));
 
 vi.mock('@/api/causal', () => ({
   getCausalAgentAnalysis: vi.fn(),
 }));
 
-import { useDiscoverEffects } from '@/hooks/api';
+import { useDiscoverEffects, useCausalBrands } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 
 const EFFECTS = [
@@ -112,7 +126,19 @@ const DETAIL = {
   p_value: 0,
   statistical_significance: true,
   selected_estimator: 'LinearDML',
-  refutation: { gate_decision: 'proceed', passed: true, needs_review: false, tests_passed: 1, tests_total: 3, sensitivity_e_value: 1.6 },
+  refutation: {
+    gate_decision: 'proceed',
+    passed: true,
+    needs_review: false,
+    tests_passed: 2,
+    tests_total: 3,
+    sensitivity_e_value: 1.6,
+    tests: [
+      { test_name: 'placebo_treatment', passed: true, original_effect: 0.0875, new_effect: 0.001, p_value: 0.6 },
+      { test_name: 'random_common_cause', passed: true, original_effect: 0.0875, new_effect: 0.086, p_value: 0.9 },
+      { test_name: 'data_subset', passed: false, original_effect: 0.0875, new_effect: 0.03, p_value: 0.02 },
+    ],
+  },
   narrative: 'Treatment raises persistence.',
   executive_summary: 'Positive, robust effect.',
   recommendations: [],
@@ -140,10 +166,19 @@ function mockHook(overrides: Record<string, unknown> = {}) {
   });
 }
 
+function mockBrands(brands: string[] = ['Remibrutinib', 'Kisqali', 'Fabhalta']) {
+  (useCausalBrands as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: { dataset: 'patient_journeys', brands },
+    isLoading: false,
+    error: null,
+  });
+}
+
 describe('CausalDiscovery — validated-effects leaderboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHook();
+    mockBrands();
     (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(DETAIL);
   });
 
@@ -190,5 +225,23 @@ describe('CausalDiscovery — validated-effects leaderboard', () => {
     expect(dag).toHaveAttribute('data-edges', '2');
     expect(screen.getByText(/Treatment raises persistence/)).toBeInTheDocument();
     expect(getCausalAgentAnalysis).toHaveBeenCalledWith('a1');
+  }, 20000);
+
+  it('offers a brand dropdown and scopes discovery to all brands by default', () => {
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    // The brand control renders, defaulting to "All brands".
+    expect(screen.getByLabelText('Brand')).toBeInTheDocument();
+    expect(screen.getByText('All brands')).toBeInTheDocument();
+    // Default scope passes null (all brands) to the discovery hook.
+    expect(useDiscoverEffects).toHaveBeenCalledWith('patient_journeys', null);
+  }, 20000);
+
+  it('feeds the per-test refutation results into the drill-down viz', async () => {
+    mockHook({ job: COMPLETED_JOB });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('persistent_180d'));
+    const dag = await screen.findByTestId('causal-dag');
+    // Regression: the 3 refutation tests must reach the viz (was 0 -> empty-state).
+    expect(dag).toHaveAttribute('data-refutations', '3');
   }, 20000);
 });

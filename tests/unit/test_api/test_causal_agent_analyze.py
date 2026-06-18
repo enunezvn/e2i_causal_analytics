@@ -194,3 +194,111 @@ def test_dag_source_domain_knowledge_when_discovery_absent():
     )
     assert resp.dag_source == "domain_knowledge"
     assert resp.discovered_confounders == []
+
+
+# ---------------------------------------------------------------------------
+# Per-test refutation details (the drill-down table needs more than pass/total)
+# ---------------------------------------------------------------------------
+
+_INDIVIDUAL_TESTS = {
+    "placebo_treatment": {
+        "test_name": "placebo_treatment",
+        "passed": True,
+        "original_effect": 0.12,
+        "new_effect": 0.001,
+        "p_value": 0.61,
+        "details": "placebo effect ~0",
+    },
+    "random_common_cause": {
+        "test_name": "random_common_cause",
+        "passed": True,
+        "original_effect": 0.12,
+        "new_effect": 0.118,
+        "p_value": 0.88,
+        "details": "stable to a random common cause",
+    },
+    "data_subset": {
+        "test_name": "data_subset",
+        "passed": False,
+        "original_effect": 0.12,
+        "new_effect": 0.04,
+        "p_value": 0.02,
+        "details": "subset estimate drifted",
+    },
+}
+
+
+@pytest.mark.unit
+def test_refutation_individual_tests_surfaced_in_response():
+    """The agent computes per-test refutation results; the response must carry
+    them (regression: they were previously dropped, so the drill-down table
+    showed the misleading 'enable refutation tests' empty-state)."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state(
+        refutation_results={
+            "gate_decision": "proceed",
+            "tests_passed": 2,
+            "total_tests": 3,
+            "individual_tests": _INDIVIDUAL_TESTS,
+        }
+    )
+    resp = _agent_state_to_response(
+        analysis_id="r1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=5,
+    )
+    tests = resp.refutation.tests
+    assert {t.test_name for t in tests} == {
+        "placebo_treatment",
+        "random_common_cause",
+        "data_subset",
+    }
+    by_name = {t.test_name: t for t in tests}
+    assert by_name["placebo_treatment"].passed is True
+    assert by_name["placebo_treatment"].original_effect == 0.12
+    assert by_name["placebo_treatment"].new_effect == 0.001
+    assert by_name["placebo_treatment"].p_value == 0.61
+    assert by_name["data_subset"].passed is False
+
+
+@pytest.mark.unit
+def test_refutation_tests_empty_when_refutation_did_not_run():
+    """No individual_tests -> empty list (the FE then shows the honest 'did not
+    run' state, never a fabricated row)."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    resp = _agent_state_to_response(
+        analysis_id="r2",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=_base_state(refutation_results={}),
+        latency_ms=5,
+    )
+    assert resp.refutation.tests == []
+
+
+@pytest.mark.unit
+def test_refutation_tests_helper_skips_malformed_and_coerces_floats():
+    from src.api.routes.causal import _refutation_tests_from_state
+
+    out = _refutation_tests_from_state(
+        {
+            "individual_tests": {
+                # name falls back to the dict key when test_name is absent
+                "bootstrap": {"passed": True, "p_value": "0.30", "original_effect": "0.1"},
+                # non-dict entries are skipped, not crashed on
+                "garbage": "not-a-dict",
+            }
+        }
+    )
+    assert len(out) == 1
+    assert out[0].test_name == "bootstrap"
+    assert out[0].p_value == 0.30  # coerced from str
+    assert out[0].original_effect == 0.1
+    # absent numeric -> None, not 0
+    assert out[0].new_effect is None

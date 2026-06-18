@@ -389,6 +389,22 @@ class CausalVariablesResponse(BaseModel):
     )
 
 
+class CausalBrandsResponse(BaseModel):
+    """Brands present in a gold-standard dataset's cohort.
+
+    Drives the causal-discovery page's brand dropdown. ``brands`` are the
+    distinct, non-null brand values actually found in the live table (provenance
+    filtered) — so the dropdown never offers a brand with no data. Selecting one
+    scopes the discovery run's cohort to that brand (a row subset; brand is a
+    filter, not a causal variable).
+    """
+
+    dataset: str = Field(..., description="Gold-standard dataset the brands come from")
+    brands: List[str] = Field(
+        default_factory=list, description="Distinct brand values present in the dataset"
+    )
+
+
 class EstimationDataResponse(BaseModel):
     """Real estimation records loaded server-side from a gold-standard dataset.
 
@@ -473,6 +489,34 @@ class CausalDAGModel(BaseModel):
     dag_dot: Optional[str] = Field(default=None, description="Graphviz DOT for rendering")
 
 
+class RefutationTestDetail(BaseModel):
+    """One refutation test's result, surfaced so the drill-down can render the
+    per-test table (not just the pass/total summary).
+
+    Mirrors one entry of the agent's ``refutation_results['individual_tests']``
+    (DoWhy placebo / random-common-cause / data-subset / bootstrap, plus the
+    sensitivity e-value mapped to ``unobserved_common_cause``). Every field is a
+    real refuter output — empty list means refutation did not run.
+    """
+
+    test_name: str = Field(
+        ...,
+        description=(
+            "placebo_treatment / random_common_cause / data_subset / "
+            "unobserved_common_cause / bootstrap"
+        ),
+    )
+    passed: bool = Field(default=False, description="Did the estimate survive this refuter?")
+    original_effect: Optional[float] = Field(
+        default=None, description="The estimated effect before the refutation perturbation"
+    )
+    new_effect: Optional[float] = Field(
+        default=None, description="The effect estimate after the refutation perturbation"
+    )
+    p_value: Optional[float] = Field(default=None, description="Refuter p-value")
+    details: Optional[str] = Field(default=None, description="Human-readable refuter message")
+
+
 class RefutationSummary(BaseModel):
     """Robustness gate + refutation/sensitivity summary from the agent."""
 
@@ -482,6 +526,13 @@ class RefutationSummary(BaseModel):
     tests_passed: Optional[int] = Field(default=None)
     tests_total: Optional[int] = Field(default=None)
     sensitivity_e_value: Optional[float] = Field(default=None)
+    tests: List[RefutationTestDetail] = Field(
+        default_factory=list,
+        description=(
+            "Per-test refutation results (placebo, random common cause, data subset, "
+            "bootstrap, unobserved common cause). Empty when refutation did not run."
+        ),
+    )
 
 
 class AgentCausalAnalysisResponse(BaseModel):
@@ -604,6 +655,10 @@ class DiscoverEffectsResponse(BaseModel):
     job_id: str
     status: str = Field(..., description="pending / running / completed")
     dataset: str
+    brand: Optional[str] = Field(
+        default=None,
+        description="Brand the cohort was scoped to (None = all brands).",
+    )
     total: int = Field(..., description="Candidate questions the agent is validating")
     completed: int = Field(..., description="Questions validated so far")
     effects: List[DiscoveredEffect] = Field(default_factory=list)
