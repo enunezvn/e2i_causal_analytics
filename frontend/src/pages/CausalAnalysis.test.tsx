@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
@@ -29,6 +29,7 @@ vi.mock('@/hooks/api', () => ({
   useCausalHealth: vi.fn(),
   useCausalAnalysisHistory: vi.fn(),
   useCausalVariables: vi.fn(),
+  useCausalBrands: vi.fn(),
   useRunCausalAgentAnalysis: vi.fn(),
   useEstimators: vi.fn(),
 }));
@@ -37,6 +38,7 @@ import {
   useCausalHealth,
   useCausalAnalysisHistory,
   useCausalVariables,
+  useCausalBrands,
   useRunCausalAgentAnalysis,
   useEstimators,
 } from '@/hooks/api';
@@ -111,6 +113,11 @@ describe('CausalAnalysis — agent-driven', () => {
       isError: false,
     });
     (useCausalVariables as ReturnType<typeof vi.fn>).mockReturnValue({ data: VARIABLES });
+    (useCausalBrands as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { dataset: 'patient_journeys', brands: ['Remibrutinib', 'Kisqali', 'Fabhalta'] },
+      isLoading: false,
+      error: null,
+    });
     (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -135,6 +142,30 @@ describe('CausalAnalysis — agent-driven', () => {
     // The confounders the agent controls for come from /causal/variables —
     // proving the config is data-driven, not hardcoded rep_visits/trx_count.
     expect(screen.getByText(/disease_severity, engagement_score/)).toBeInTheDocument();
+  }, 20000);
+
+  it('offers a brand scope dropdown (defaults to all brands) and runs with it', () => {
+    const mutateAsync = vi.fn().mockResolvedValue(RESULT);
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // The brand-scope control renders, defaulting to "All brands".
+    expect(screen.getByLabelText('Brand')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Run Analysis/i }));
+    // Default scope = all brands -> brand omitted (undefined) from the payload.
+    expect(mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        treatment_var: 'treatment_arm',
+        outcome_var: 'persistent_180d',
+        dataset: 'patient_journeys',
+        brand: undefined,
+      })
+    );
   }, 20000);
 
   it('renders the agent result: effect, estimator used, robustness gate, DAG', () => {

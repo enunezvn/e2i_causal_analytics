@@ -39,6 +39,7 @@ import {
   useCausalHealth,
   useCausalAnalysisHistory,
   useCausalVariables,
+  useCausalBrands,
   useRunCausalAgentAnalysis,
   useEstimators,
 } from '@/hooks/api';
@@ -69,6 +70,8 @@ import {
 const DATASET = 'patient_journeys';
 const DEFAULT_TREATMENT = 'treatment_arm';
 const DEFAULT_OUTCOME = 'persistent_180d';
+// "All brands" sentinel — the Select needs a non-empty value; null is sent to the API.
+const ALL_BRANDS = '__all__';
 
 // Estimator selection. "auto" = the agent's data-driven energy-score routing
 // across the registry — the DEFAULT, so the engine decides (not the analyst).
@@ -147,6 +150,8 @@ export default function CausalAnalysis() {
   const [treatmentVar, setTreatmentVar] = useState(DEFAULT_TREATMENT);
   const [outcomeVar, setOutcomeVar] = useState(DEFAULT_OUTCOME);
   const [estimator, setEstimator] = useState(DEFAULT_ESTIMATOR);
+  const [selectedBrand, setSelectedBrand] = useState<string>(ALL_BRANDS);
+  const brandArg = selectedBrand === ALL_BRANDS ? null : selectedBrand;
   const [selectedLibrary, setSelectedLibrary] = useState<string>('all');
 
   // API hooks
@@ -159,6 +164,8 @@ export default function CausalAnalysis() {
   // Real treatment / outcome / covariate candidates for the dropdowns (curated
   // causally-meaningful columns intersected with the live schema).
   const { data: variables } = useCausalVariables(DATASET);
+  // Brands present in the cohort (data-driven) for the brand-scope dropdown.
+  const { data: brandsData } = useCausalBrands(DATASET);
   // The 12-estimator registry powers the Estimators tab AND tells the analyst
   // what Auto routes across.
   const {
@@ -245,6 +252,8 @@ export default function CausalAnalysis() {
         dataset: DATASET,
         // Omit covariates -> the backend uses the dataset's curated confounders.
         estimator: estimator === AUTO_ESTIMATOR ? undefined : estimator,
+        // null brand -> all brands; otherwise scope the cohort to one brand.
+        brand: brandArg ?? undefined,
       });
     } catch (error) {
       // Error surfaced via runAgent.isError below; nothing to fabricate.
@@ -369,7 +378,23 @@ export default function CausalAnalysis() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid md:grid-cols-3 gap-4">
+              <div className="grid md:grid-cols-4 gap-4">
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Brand</label>
+                  <Select value={selectedBrand} onValueChange={setSelectedBrand}>
+                    <SelectTrigger aria-label="Brand">
+                      <SelectValue placeholder="All brands" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ALL_BRANDS}>All brands</SelectItem>
+                      {(brandsData?.brands ?? []).map((b) => (
+                        <SelectItem key={b} value={b}>
+                          {b}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div>
                   <label className="text-sm font-medium mb-2 block">Treatment Variable</label>
                   <Select value={treatmentVar} onValueChange={setTreatmentVar}>
