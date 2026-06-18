@@ -200,6 +200,12 @@ class CausalImpactState(TypedDict):
     parameters: NotRequired[Dict[str, Any]]  # Agent-specific parameters
     time_period: NotRequired[Dict[str, str]]  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     brand: NotRequired[str]  # Brand context
+    # Cooperative compute deadline (absolute ``time.monotonic()`` seconds). When
+    # set, the refutation node stops launching refuters that would not finish
+    # before it, so a timed-out run returns cleanly instead of orphaning the
+    # to_thread compute past the route's hard wall-clock cap. Set by the API
+    # background task (see causal.py ``_REFUTATION_COMPUTE_BUDGET_S``).
+    compute_deadline: NotRequired[float]
 
     # Contract: Orchestrator pass-through fields (BaseAgentState)
     session_id: NotRequired[str]  # Contract: Session identifier from working memory

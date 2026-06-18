@@ -644,6 +644,20 @@ class RefutationNode:
                 List[str],
                 state.get("confounders") or estimation_result.get("covariates_adjusted") or [],
             )
+            # Cooperative compute deadline (orphan-fix): the offloaded refutation
+            # suite runs in a worker thread that the API task's asyncio.wait_for
+            # CANNOT cancel (Python can't force-kill a thread), so a timed-out run
+            # would otherwise keep grinding refits and orphan a CPU core. When a
+            # deadline is set we (a) refuse to even start reconstruction if it has
+            # already passed, and (b) hand it to run_all_tests so the suite skips
+            # refuters that would run past it and fails-closed cleanly.
+            deadline = cast(Optional[float], state.get("compute_deadline"))
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RefutationError(
+                    "Compute budget exhausted before refutation could start; failing closed "
+                    "rather than orphaning refutation compute past the worker's wall-clock cap.",
+                    details={"reason": "time_budget_exceeded_pre_refutation"},
+                )
             # Offload the CPU-bound DoWhy model reconstruction + refutation suite
             # (placebo / random_common_cause / data_subset / bootstrap each
             # re-estimate the effect many times) to threads so the gunicorn worker's
@@ -652,6 +666,12 @@ class RefutationNode:
             # async job. These calls are pure compute (no async clients — the
             # supabase client is used elsewhere on the main loop), so threading is
             # loop-safe.
+            # Time the reconstruction — it fits the SAME estimator once, so its
+            # wall-time is a good a-priori per-refit cost. We hand it to
+            # run_all_tests as ``per_refit_hint`` so even the FIRST refuter is
+            # gated against the deadline (otherwise a single slow first refuter
+            # could run unconditionally and orphan past the hard cap).
+            _recon_t0 = time.monotonic()
             causal_model, identified_estimand, estimate = await asyncio.to_thread(
                 _reconstruct_dowhy_artifacts,
                 data=estimation_data,
@@ -660,6 +680,7 @@ class RefutationNode:
                 common_causes=common_causes,
                 estimation_result=cast(Dict[str, Any], estimation_result),
             )
+            per_refit_hint = time.monotonic() - _recon_t0
 
             # Run all refutation tests
             suite: RefutationSuite = await asyncio.to_thread(
@@ -675,6 +696,8 @@ class RefutationNode:
                 causal_model=causal_model,
                 identified_estimand=identified_estimand,
                 estimate=estimate,
+                deadline=deadline,
+                per_refit_hint=per_refit_hint,
             )
 
             # Convert to legacy format for backward compatibility
