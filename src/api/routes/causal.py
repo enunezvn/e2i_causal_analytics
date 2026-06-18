@@ -35,6 +35,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from src.api.dependencies.auth import require_analyst, require_viewer
 from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
+from src.api.dependencies.durable_job_store import DurableJobStore
 from src.api.errors import user_safe_503_detail
 from src.api.models.graph import (
     CausalChainResponse,
@@ -201,7 +202,12 @@ _validation_cache: Dict[str, CrossValidationResponse] = {}
 # causal_impact agent runs (POST /causal/agent-analyze submit -> GET poll). The
 # agent's energy-score selection + refutation is too slow for a synchronous
 # request (~minutes), so it runs as a background task and the FE polls.
-_agent_analysis_cache: Dict[str, "AgentCausalAnalysisResponse"] = {}
+# Cross-worker job store (Redis-backed; in-memory fallback). The API runs
+# multiple gunicorn workers, so a module-level dict would 404 on poll when the
+# GET lands on a different worker than the POST. See DurableJobStore.
+_agent_analysis_store: DurableJobStore["AgentCausalAnalysisResponse"] = DurableJobStore(
+    "causal:agent_analyze", AgentCausalAnalysisResponse
+)
 
 
 # =============================================================================
@@ -955,9 +961,11 @@ async def propose_causal_questions(
 # DISCOVER EFFECTS — validated-effects leaderboard (async submit -> poll)
 # =============================================================================
 
-# In-memory job cache (mirrors _agent_analysis_cache). Each job runs the agent
-# for a set of candidate questions and ranks the VALIDATED effects.
-_discover_effects_cache: Dict[str, "DiscoverEffectsResponse"] = {}
+# Cross-worker job store (Redis-backed; mirrors _agent_analysis_store). Each job
+# runs the agent for a set of candidate questions and ranks the VALIDATED effects.
+_discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJobStore(
+    "causal:discover_effects", DiscoverEffectsResponse
+)
 
 # Complementary outcomes are 1 - each other (persistent_180d vs discontinued_180d);
 # running both is redundant, so one is skipped to dedupe the leaderboard.
@@ -1043,20 +1051,23 @@ async def _run_discover_effects_task(
         (t, o): DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs
     }
 
-    def _publish(status: str, completed: int) -> None:
-        _discover_effects_cache[job_id] = DiscoverEffectsResponse(
-            job_id=job_id,
-            status=status,
-            dataset=dataset,
-            total=len(pairs),
-            completed=completed,
-            effects=_rank_effects(list(effects.values())),
+    async def _publish(status: str, completed: int) -> None:
+        await _discover_effects_store.set(
+            job_id,
+            DiscoverEffectsResponse(
+                job_id=job_id,
+                status=status,
+                dataset=dataset,
+                total=len(pairs),
+                completed=completed,
+                effects=_rank_effects(list(effects.values())),
+            ),
         )
 
     completed = 0
     for t, o in pairs:
         effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="running")
-        _publish("running", completed)
+        await _publish("running", completed)
         try:
             cov = [c for c in covariates_all if c not in (t, o)]
             df, _select = await _load_agent_estimation_frame(
@@ -1070,21 +1081,26 @@ async def _run_discover_effects_task(
             req = AgentCausalAnalysisRequest(
                 treatment_var=t, outcome_var=o, dataset=dataset, limit=1500, auto_discover=True
             )
-            _agent_analysis_cache[aid] = AgentCausalAnalysisResponse(
-                analysis_id=aid,
-                status="pending",
-                treatment_var=t,
-                outcome_var=o,
-                dataset=dataset,
-                n_rows=int(df.shape[0]),
-                data_source=data_source,
-                dag=CausalDAGModel(),
-                statistical_significance=False,
-                refutation=RefutationSummary(),
-                latency_ms=0,
+            await _agent_analysis_store.set(
+                aid,
+                AgentCausalAnalysisResponse(
+                    analysis_id=aid,
+                    status="pending",
+                    treatment_var=t,
+                    outcome_var=o,
+                    dataset=dataset,
+                    n_rows=int(df.shape[0]),
+                    data_source=data_source,
+                    dag=CausalDAGModel(),
+                    statistical_significance=False,
+                    refutation=RefutationSummary(),
+                    latency_ms=0,
+                ),
             )
             await _run_agent_analysis_task(aid, req, df, cov, data_source)
-            resp = _agent_analysis_cache[aid]
+            resp = await _agent_analysis_store.get(aid)
+            if resp is None:
+                raise RuntimeError(f"agent analysis {aid} produced no cached result")
             effects[(t, o)] = _effect_from_agent_response(t, o, resp, aid)
         except HTTPException as e:
             # Fail-closed: a question with no usable data is marked failed, not faked.
@@ -1094,7 +1110,7 @@ async def _run_discover_effects_task(
             logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
             effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
         completed += 1
-        _publish("running" if completed < len(pairs) else "completed", completed)
+        await _publish("running" if completed < len(pairs) else "completed", completed)
 
 
 @router.post(
@@ -1125,7 +1141,7 @@ async def discover_causal_effects(
     pairs = _discover_candidate_pairs(spec)
     job_id = str(uuid.uuid4())
     data_source = "synthetic" if deployment_includes_synthetic() else "database"
-    _discover_effects_cache[job_id] = DiscoverEffectsResponse(
+    initial = DiscoverEffectsResponse(
         job_id=job_id,
         status="pending",
         dataset=dataset,
@@ -1133,8 +1149,9 @@ async def discover_causal_effects(
         completed=0,
         effects=[DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs],
     )
+    await _discover_effects_store.set(job_id, initial)
     background_tasks.add_task(_run_discover_effects_task, job_id, dataset, pairs, data_source)
-    return _discover_effects_cache[job_id]
+    return initial
 
 
 @router.get(
@@ -1147,7 +1164,7 @@ async def get_discover_causal_effects(
     job_id: str,
     user: Dict[str, Any] = Depends(require_viewer),
 ) -> DiscoverEffectsResponse:
-    job = _discover_effects_cache.get(job_id)
+    job = await _discover_effects_store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
     return job
@@ -1424,7 +1441,7 @@ async def run_causal_agent_analysis(
         warnings=["Analysis submitted; poll GET /causal/agent-analyze/{id} for the result."],
         latency_ms=0,
     )
-    _agent_analysis_cache[analysis_id] = pending
+    await _agent_analysis_store.set(analysis_id, pending)
     background_tasks.add_task(
         _run_agent_analysis_task, analysis_id, request, df, covariates, data_source
     )
@@ -1440,9 +1457,10 @@ async def run_causal_agent_analysis(
 async def get_causal_agent_analysis(analysis_id: str) -> AgentCausalAnalysisResponse:
     """Poll a submitted agent run. 404 until the submit registered it; then
     pending -> running -> completed / needs_review / failed."""
-    if analysis_id not in _agent_analysis_cache:
+    job = await _agent_analysis_store.get(analysis_id)
+    if job is None:
         raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found")
-    return _agent_analysis_cache[analysis_id]
+    return job
 
 
 async def _run_agent_analysis_task(
@@ -1463,9 +1481,9 @@ async def _run_agent_analysis_task(
     """
     import time as _time
 
-    prev = _agent_analysis_cache.get(analysis_id)
+    prev = await _agent_analysis_store.get(analysis_id)
     if prev is not None:
-        _agent_analysis_cache[analysis_id] = prev.model_copy(update={"status": "running"})
+        await _agent_analysis_store.set(analysis_id, prev.model_copy(update={"status": "running"}))
 
     parameters: Dict[str, Any] = {}
     if request.estimator:
@@ -1512,29 +1530,35 @@ async def _run_agent_analysis_task(
         # mirroring the hierarchical / parallel endpoints.
         async with heavy_compute_slot():
             final_state = await asyncio.wait_for(graph.ainvoke(initial_state), timeout=900.0)
-        _agent_analysis_cache[analysis_id] = _agent_state_to_response(
-            analysis_id=analysis_id,
-            request=request,
-            data_source=data_source,
-            n_rows=int(df.shape[0]),
-            final_state=final_state,
-            latency_ms=int((_time.time() - start) * 1000),
+        await _agent_analysis_store.set(
+            analysis_id,
+            _agent_state_to_response(
+                analysis_id=analysis_id,
+                request=request,
+                data_source=data_source,
+                n_rows=int(df.shape[0]),
+                final_state=final_state,
+                latency_ms=int((_time.time() - start) * 1000),
+            ),
         )
     except Exception as e:  # noqa: BLE001 — cache a generic FAILED record
         logger.error(f"Background causal agent analysis failed: {e}", exc_info=True)
-        _agent_analysis_cache[analysis_id] = AgentCausalAnalysisResponse(
-            analysis_id=analysis_id,
-            status="failed",
-            treatment_var=request.treatment_var,
-            outcome_var=request.outcome_var,
-            dataset=request.dataset,
-            n_rows=int(df.shape[0]),
-            data_source=data_source,
-            dag=CausalDAGModel(),
-            statistical_significance=False,
-            refutation=RefutationSummary(),
-            warnings=["Analysis failed due to an internal error."],
-            latency_ms=int((_time.time() - start) * 1000),
+        await _agent_analysis_store.set(
+            analysis_id,
+            AgentCausalAnalysisResponse(
+                analysis_id=analysis_id,
+                status="failed",
+                treatment_var=request.treatment_var,
+                outcome_var=request.outcome_var,
+                dataset=request.dataset,
+                n_rows=int(df.shape[0]),
+                data_source=data_source,
+                dag=CausalDAGModel(),
+                statistical_significance=False,
+                refutation=RefutationSummary(),
+                warnings=["Analysis failed due to an internal error."],
+                latency_ms=int((_time.time() - start) * 1000),
+            ),
         )
 
 
