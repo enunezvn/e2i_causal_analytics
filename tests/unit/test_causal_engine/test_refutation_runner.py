@@ -1159,6 +1159,40 @@ class TestRunAllTests:
         assert ei.value.details.get("reason") == "time_budget_exceeded"
         assert "random_common_cause" in ei.value.details.get("skipped", [])
 
+    def test_run_all_tests_per_refit_hint_gates_first_refuter(self):
+        """With a ``per_refit_hint`` (e.g. the reconstruction-fit cost) and a
+        tight deadline, even the FIRST refuter is gated: if hint x its sim count
+        will not fit before the deadline it is skipped and we fail-closed. This
+        closes the 'first refuter runs unconditionally and can orphan' gap — the
+        first refuter no longer runs uncalibrated when a hint is available.
+        """
+        import time as _t
+
+        config = {
+            "placebo_treatment": {"enabled": True, "num_simulations": 30},
+            "random_common_cause": {"enabled": False},
+            "data_subset": {"enabled": False},
+            "bootstrap": {"enabled": False},
+            "sensitivity_e_value": {"enabled": False},
+        }
+        runner = RefutationRunner(config=config)
+
+        # 30 sims x 40s/refit hint = 1200s >> 10s budget -> first refuter skipped
+        # BEFORE it ever starts (no unconditional first-refuter pass).
+        with pytest.raises(RefutationError) as ei:
+            runner.run_all_tests(
+                original_effect=0.15,
+                original_ci=(0.10, 0.20),
+                causal_model=_full_stub_causal_model(),
+                identified_estimand=object(),
+                estimate=object(),
+                deadline=_t.monotonic() + 10.0,
+                per_refit_hint=40.0,
+            )
+        assert ei.value.details.get("reason") == "time_budget_exceeded"
+        assert "placebo_treatment" in ei.value.details.get("skipped", [])
+        assert ei.value.details.get("ran") == []
+
 
 # ============================================================================
 # CONVENIENCE FUNCTION TESTS

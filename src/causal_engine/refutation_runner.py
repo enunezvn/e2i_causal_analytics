@@ -487,6 +487,7 @@ class RefutationRunner:
         estimate_id: Optional[str] = None,
         trace_id: Optional[str] = None,
         deadline: Optional[float] = None,
+        per_refit_hint: Optional[float] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -511,6 +512,15 @@ class RefutationRunner:
                 lets a timed-out run return cleanly instead of orphaning compute
                 past the caller's hard wall-clock cap. ``None`` (default) =
                 unbounded (no behavior change for existing callers).
+            per_refit_hint: Optional a-priori per-refit cost (seconds), e.g. the
+                wall-time of the single estimator reconstruction fit the caller
+                already did (≈ one refit). Used to GATE the FIRST refuter too —
+                without it the first refuter would have no cost estimate and run
+                unconditionally, so a single pathologically-slow first refuter
+                (e.g. a non-converging propensity at ~40s/refit x 30 sims) could
+                still straddle the hard cap and orphan one thread. Only used
+                when no refuter has run yet; ignored once a real per-refit time
+                is observed.
 
         Returns:
             RefutationSuite with all test results and gate decision
@@ -539,11 +549,19 @@ class RefutationRunner:
             now = time.monotonic()
             if now >= deadline:
                 return False
-            if _budget["sims"] <= 0:
-                # No per-refit estimate yet, but we are still before the
-                # deadline — allow the first refuter to run (and calibrate).
+            if _budget["sims"] > 0:
+                # Use the per-refit cost observed from refuters already run.
+                per_refit = _budget["sim_time"] / _budget["sims"]
+            elif per_refit_hint is not None and per_refit_hint > 0:
+                # No refuter has run yet, but the caller measured the single
+                # estimator reconstruction fit (≈ one refit) — gate even the
+                # FIRST refuter with it so a slow first fit cannot run
+                # unconditionally and orphan past the hard cap.
+                per_refit = per_refit_hint
+            else:
+                # No observation and no hint (non-agent callers that pass a bare
+                # deadline) — allow the first refuter to run and calibrate.
                 return True
-            per_refit = _budget["sim_time"] / _budget["sims"]
             return now + per_refit * max(1, n_sims) <= deadline
 
         def _record(n_sims: int, elapsed: float) -> None:

@@ -666,6 +666,12 @@ class RefutationNode:
             # async job. These calls are pure compute (no async clients — the
             # supabase client is used elsewhere on the main loop), so threading is
             # loop-safe.
+            # Time the reconstruction — it fits the SAME estimator once, so its
+            # wall-time is a good a-priori per-refit cost. We hand it to
+            # run_all_tests as ``per_refit_hint`` so even the FIRST refuter is
+            # gated against the deadline (otherwise a single slow first refuter
+            # could run unconditionally and orphan past the hard cap).
+            _recon_t0 = time.monotonic()
             causal_model, identified_estimand, estimate = await asyncio.to_thread(
                 _reconstruct_dowhy_artifacts,
                 data=estimation_data,
@@ -674,6 +680,7 @@ class RefutationNode:
                 common_causes=common_causes,
                 estimation_result=cast(Dict[str, Any], estimation_result),
             )
+            per_refit_hint = time.monotonic() - _recon_t0
 
             # Run all refutation tests
             suite: RefutationSuite = await asyncio.to_thread(
@@ -690,6 +697,7 @@ class RefutationNode:
                 identified_estimand=identified_estimand,
                 estimate=estimate,
                 deadline=deadline,
+                per_refit_hint=per_refit_hint,
             )
 
             # Convert to legacy format for backward compatibility
