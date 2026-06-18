@@ -775,15 +775,33 @@ def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
 # gold-standard models use, with a known TRUE_ATE. (business_metrics is sparse:
 # its causal columns are mostly NULL, so it is not offered here.)
 #
-# Covariate candidates are intentionally restricted to NUMERIC confounders that
-# the executors consume directly. Categorical confounders (geographic_region,
-# brand) are excluded for now — they would need server-side encoding before the
-# DoWhy/EconML executors could use them, which is out of scope for this pass.
+# Covariate candidates are NUMERIC confounders the executors consume directly.
+# Categorical confounders (geographic_region, brand) are still excluded — they
+# would need server-side encoding the DoWhy/EconML executors don't do here (brand
+# is offered instead as a cohort FILTER via the brand dropdown, not a covariate).
+# The covariate list was expanded (#1027) with the additional numeric clinical
+# markers that are 100%-populated WITH variance in the gold-standard cohort
+# (verified against the live table: academic_hcp, egfr, proteinuria_g_day,
+# ldh_ratio, urticaria_severity_uas7, ecog_performance_status) so the analyst has
+# a richer adjustment set. Columns that LOOK like confounders but are 100% NULL
+# (risk_score, adherence_rate, refill_count, gap_days) are deliberately NOT
+# offered — they would fail-close every run. treatment/outcome stay the curated
+# causal columns (the synthetic gold-standard only wires those relationships).
 _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     "patient_journeys": {
         "treatment": ["treatment_arm", "treatment_initiated"],
         "outcome": ["persistent_180d", "discontinued_180d", "treatment_initiated"],
-        "covariate": ["disease_severity", "engagement_score", "age_at_diagnosis"],
+        "covariate": [
+            "disease_severity",
+            "engagement_score",
+            "age_at_diagnosis",
+            "academic_hcp",
+            "egfr",
+            "proteinuria_g_day",
+            "ldh_ratio",
+            "urticaria_severity_uas7",
+            "ecog_performance_status",
+        ],
     },
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
@@ -800,6 +818,12 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "disease_severity",
         "engagement_score",
         "age_at_diagnosis",
+        "academic_hcp",
+        "egfr",
+        "proteinuria_g_day",
+        "ldh_ratio",
+        "urticaria_severity_uas7",
+        "ecog_performance_status",
     },
 }
 
@@ -1517,13 +1541,16 @@ async def run_causal_agent_analysis(
     ]
 
     # Load synchronously -> fail-closed early (400 bad column / 404 dataset /
-    # 503 no data) before scheduling the heavy run.
+    # 503 no data) before scheduling the heavy run. ``brand`` (optional) scopes
+    # the cohort to one brand (a row subset; brand stays out of the estimation
+    # columns) so the analyst can analyze a single brand's patients.
     df, _select_cols = await _load_agent_estimation_frame(
         dataset=request.dataset,
         treatment_var=request.treatment_var,
         outcome_var=request.outcome_var,
         covariates=covariates,
         limit=request.limit,
+        brand=request.brand,
     )
 
     analysis_id = str(uuid.uuid4())
