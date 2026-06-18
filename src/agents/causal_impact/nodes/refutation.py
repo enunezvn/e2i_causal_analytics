@@ -17,6 +17,7 @@ Anti-Mocking (F-014 fix, #416):
   reconstruction fails. NEVER dispatches to the deleted ``_mock_*`` paths.
 """
 
+import asyncio
 import logging
 import math
 import time
@@ -643,7 +644,16 @@ class RefutationNode:
                 List[str],
                 state.get("confounders") or estimation_result.get("covariates_adjusted") or [],
             )
-            causal_model, identified_estimand, estimate = _reconstruct_dowhy_artifacts(
+            # Offload the CPU-bound DoWhy model reconstruction + refutation suite
+            # (placebo / random_common_cause / data_subset / bootstrap each
+            # re-estimate the effect many times) to threads so the gunicorn worker's
+            # event loop stays responsive. A blocking multi-minute suite trips
+            # gunicorn's --timeout and the worker is KILLED mid-run, orphaning the
+            # async job. These calls are pure compute (no async clients — the
+            # supabase client is used elsewhere on the main loop), so threading is
+            # loop-safe.
+            causal_model, identified_estimand, estimate = await asyncio.to_thread(
+                _reconstruct_dowhy_artifacts,
                 data=estimation_data,
                 treatment=treatment,
                 outcome=outcome,
@@ -652,7 +662,8 @@ class RefutationNode:
             )
 
             # Run all refutation tests
-            suite: RefutationSuite = self.runner.run_all_tests(
+            suite: RefutationSuite = await asyncio.to_thread(
+                self.runner.run_all_tests,
                 original_effect=original_ate,
                 original_ci=original_ci,
                 treatment=treatment,

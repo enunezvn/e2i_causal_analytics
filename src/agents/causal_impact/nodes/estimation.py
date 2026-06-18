@@ -22,6 +22,7 @@ F-006 brief; we kept it in-place because rewiring data loading is outside
 the F-006/F-014 scope.
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Literal, Optional, cast
@@ -570,15 +571,20 @@ class EstimationNode:
                 selection_strategy,
             )
             try:
-                result, selection_dict, energy_latency_ms = (
-                    self._select_estimator_with_energy_score(
-                        data,
-                        treatment,
-                        outcome,
-                        adjustment_set,
-                        selection_strategy,
-                        explicit_method=explicit_method,
-                    )
+                # Offload the CPU-bound energy-score selection (fits the whole
+                # econml estimator registry) to a thread so the gunicorn worker's
+                # event loop stays responsive — otherwise a multi-minute fit blocks
+                # the loop past gunicorn's --timeout and the worker is KILLED
+                # mid-run (orphaning the async job). numpy/sklearn release the GIL
+                # during the heavy ops, so the loop genuinely keeps serving.
+                result, selection_dict, energy_latency_ms = await asyncio.to_thread(
+                    self._select_estimator_with_energy_score,
+                    data,
+                    treatment,
+                    outcome,
+                    adjustment_set,
+                    selection_strategy,
+                    explicit_method=explicit_method,
                 )
             except Exception as e:
                 # F-006 fail-closed: re-raise as EstimationError so the caller

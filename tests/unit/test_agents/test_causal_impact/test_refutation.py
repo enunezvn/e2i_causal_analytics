@@ -642,3 +642,59 @@ class TestStandaloneFunction:
 
         assert "refutation_results" in result
         mock_repo.save_suite.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_refutation_suite_offloaded_to_thread(monkeypatch):
+    """The CPU-bound DoWhy reconstruction + refutation suite (each refuter
+    re-estimates many times) must run OFF the event loop (asyncio.to_thread) so
+    they cannot block the gunicorn worker past --timeout and get it KILLED
+    mid-run (orphaning async jobs at status='running'). The module's autouse
+    fast-sim fixture keeps the real refuters quick."""
+    import asyncio as _aio
+
+    from src.agents.causal_impact.nodes import refutation as _ref_mod
+
+    node = RefutationNode()
+    offloaded: list = []
+    real_to_thread = _aio.to_thread
+
+    async def _spy(func, *args, **kwargs):
+        offloaded.append(getattr(func, "__name__", str(func)))
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(_ref_mod.asyncio, "to_thread", _spy)
+
+    ate = 0.5
+    state: CausalImpactState = {
+        "query": "offload test",
+        "query_id": "offload-ref-1",
+        "treatment_var": "hcp_engagement_level",
+        "outcome_var": "patient_conversion_rate",
+        "confounders": ["geographic_region"],
+        "data_source": "synthetic",
+        "estimation_result": {
+            "method": "CausalForestDML",
+            "ate": ate,
+            "ate_ci_lower": ate - 0.1,
+            "ate_ci_upper": ate + 0.1,
+            "effect_size": "medium",
+            "statistical_significance": True,
+            "p_value": 0.01,
+            "sample_size": 1000,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": False,
+        },
+        "estimation_data": _make_estimation_data(true_ate=ate),
+        "status": "pending",
+        "errors": [],
+        "warnings": [],
+    }
+
+    result = await node.execute(state)
+
+    # Both heavy DoWhy steps ran in worker threads (offloaded)...
+    assert "_reconstruct_dowhy_artifacts" in offloaded
+    assert "run_all_tests" in offloaded
+    # ...and the suite still ran to a real gate decision (offload is transparent).
+    assert "refutation_results" in result or "gate_decision" in result
