@@ -899,6 +899,77 @@ class TestListRelationshipsInjectionHardening:
         assert "-[r:CAUSES|IMPACTS]->" in query
 
 
+class TestCuratedOnlyFilter:
+    """``curated_only`` excludes agent-written runtime nodes/edges from a view.
+
+    The causal_impact agent's ``store_causal_path`` persists its discovered
+    treatment/outcome Variables + the CAUSES edge into the SAME ``e2i_causal``
+    graph the Knowledge Graph page renders, each tagged with an ``agent``
+    property (seed/sync gold-standard data carries none). The curated gold-
+    standard view must be able to exclude those runtime writes by predicate, so
+    the page shows only seed/sync data — independent of how much an agent runs.
+    Default stays OFF so RAG / prior-analyses / leaderboard readers are unaffected.
+    """
+
+    def test_list_nodes_curated_only_excludes_agent_written(self, semantic_memory, mock_graph):
+        """curated_only=True adds an `n.agent IS NULL` predicate."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.list_nodes(entity_types=["Variable"], curated_only=True)
+
+        query = mock_graph.query.call_args[0][0]
+        assert "n.agent IS NULL" in query
+
+    def test_list_nodes_curated_only_default_off(self, semantic_memory, mock_graph):
+        """Default (curated_only omitted) must NOT filter — backward compatible."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.list_nodes(entity_types=["Variable"])
+
+        query = mock_graph.query.call_args[0][0]
+        assert "n.agent IS NULL" not in query
+
+    def test_count_nodes_curated_only_excludes_agent_written(self, semantic_memory, mock_graph):
+        """count_nodes mirrors list_nodes so pagination totals match the view."""
+        mock_graph.query.return_value.result_set = [[0]]
+
+        semantic_memory.count_nodes(entity_types=["Variable"], curated_only=True)
+
+        query = mock_graph.query.call_args[0][0]
+        assert "n.agent IS NULL" in query
+
+    def test_list_relationships_curated_only_excludes_agent_written(
+        self, semantic_memory, mock_graph
+    ):
+        """curated_only=True adds an `r.agent IS NULL` predicate on edges."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.list_relationships(relationship_types=["CAUSES"], curated_only=True)
+
+        query = mock_graph.query.call_args[0][0]
+        assert "r.agent IS NULL" in query
+
+    def test_list_relationships_curated_only_default_off(self, semantic_memory, mock_graph):
+        """Default must NOT filter edges — backward compatible."""
+        mock_graph.query.return_value.result_set = []
+
+        semantic_memory.list_relationships(relationship_types=["CAUSES"])
+
+        query = mock_graph.query.call_args[0][0]
+        assert "r.agent IS NULL" not in query
+
+    def test_count_relationships_curated_only_excludes_agent_written(
+        self, semantic_memory, mock_graph
+    ):
+        """count_relationships mirrors list_relationships."""
+        mock_graph.query.return_value.result_set = [[0]]
+
+        semantic_memory.count_relationships(relationship_types=["CAUSES"], curated_only=True)
+
+        query = mock_graph.query.call_args[0][0]
+        assert "r.agent IS NULL" in query
+
+
 # ============================================================================
 # NEW GRAPH-API METHODS (Finding 1) — methods the routes call
 # ============================================================================

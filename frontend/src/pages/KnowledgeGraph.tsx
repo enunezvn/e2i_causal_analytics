@@ -113,6 +113,13 @@ function KnowledgeGraphPage() {
   // Fetch the causal layer's nodes (Variable + KPI + CausalPath + Region +
   // Treatment) in one full window so the whole gold-standard causal graph is
   // available and the brand filter is derived client-side.
+  //
+  // ``curated_only`` excludes agent-written runtime nodes: the causal_impact
+  // agent persists its analysis treatment/outcome Variables (tagged with an
+  // ``agent`` property) into the SAME graph, which otherwise rendered as stray
+  // disconnected pairs alongside the gold standard. Seed/sync gold-standard
+  // nodes carry no ``agent`` tag, so the curated view shows only them — and it
+  // stays clean no matter how many analyses the agent runs.
   const {
     data: nodesData,
     isLoading: isLoadingNodes,
@@ -121,6 +128,7 @@ function KnowledgeGraphPage() {
   } = useNodes({
     entity_types: CAUSAL_NODE_TYPES,
     limit: NODE_FETCH_LIMIT,
+    curated_only: true,
   });
 
   // Fetch the brand-tagged CAUSES edges (the synthetic gold-standard causal
@@ -130,7 +138,11 @@ function KnowledgeGraphPage() {
     isLoading: isLoadingRelationships,
     error: relationshipsError,
     refetch: refetchRelationships,
-  } = useRelationships({ relationship_types: CAUSAL_REL_TYPES, limit: REL_FETCH_LIMIT });
+  } = useRelationships({
+    relationship_types: CAUSAL_REL_TYPES,
+    limit: REL_FETCH_LIMIT,
+    curated_only: true,
+  });
 
   // Combined loading state
   const isLoading = isLoadingNodes || isLoadingRelationships;

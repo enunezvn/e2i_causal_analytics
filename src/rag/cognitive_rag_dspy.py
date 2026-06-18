@@ -814,7 +814,15 @@ class ReflectorModule(dspy.Module):
             or fact.get("rel_type")
             or "RELATED_TO"
         )
-        properties = fact.get("properties") if isinstance(fact.get("properties"), dict) else {}
+        raw_props = fact.get("properties")
+        properties: Dict[str, Any] = raw_props if isinstance(raw_props, dict) else {}
+        # Stamp runtime provenance so this LLM-derived reflection edge is
+        # recognisable as NON-curated. The Knowledge Graph's curated view filters
+        # on ``r.agent IS NULL`` (only seed/sync gold-standard carries no agent
+        # tag); without this, a reflection-written CAUSES/IMPACTS edge would leak
+        # into the gold-standard view. RAG retrieval ignores this key, so it has
+        # no effect on read paths. See semantic_memory.list_relationships(curated_only).
+        properties = {"agent": "rag_reflection", **properties}
         return str(source), str(target), rel_type, properties
 
     def _collect_training_signals(
