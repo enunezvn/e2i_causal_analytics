@@ -457,10 +457,10 @@ const RefutationTests = React.forwardRef<HTMLDivElement, RefutationTestsProps>(
               <Info className="h-6 w-6 text-[var(--color-muted-foreground)]" />
             </div>
             <div className="text-[var(--color-muted-foreground)] mb-2">
-              No refutation tests available
+              No refutation tests for this run
             </div>
             <p className="text-sm text-[var(--color-muted-foreground)]/60">
-              Run causal analysis with refutation tests enabled
+              This analysis produced no refutation test results to display.
             </p>
           </div>
         </div>

@@ -21,6 +21,7 @@ import {
   proposeCausalQuestions,
   discoverCausalEffects,
   getDiscoverCausalEffects,
+  getCausalBrands,
   routeQuery,
   runSequentialPipeline,
   runParallelPipeline,
@@ -38,6 +39,7 @@ import type {
   AgentCausalAnalysisRequest,
   AgentCausalAnalysisResponse,
   CausalAnalysisHistoryResponse,
+  CausalBrandsResponse,
   CausalLibrary,
   CausalVariablesResponse,
   ProposeQuestionsResponse,
@@ -141,12 +143,18 @@ export function useProposeQuestions(
  * agent has validated every candidate question. The ranked effects fill in
  * progressively. ``start()`` submits; ``job`` is the latest (submit or poll)
  * state.
+ *
+ * @param brand - optional brand to scope the cohort to (a row subset). Omit /
+ *   null = all brands.
  */
-export function useDiscoverEffects(dataset: string = 'patient_journeys') {
+export function useDiscoverEffects(
+  dataset: string = 'patient_journeys',
+  brand?: string | null
+) {
   const [jobId, setJobId] = useState<string | null>(null);
 
   const submit = useMutation<DiscoverEffectsResponse, ApiError>({
-    mutationFn: () => discoverCausalEffects(dataset),
+    mutationFn: () => discoverCausalEffects(dataset, brand),
     onSuccess: (r) => setJobId(r.job_id),
   });
 
@@ -166,6 +174,22 @@ export function useDiscoverEffects(dataset: string = 'patient_journeys') {
     job: poll.data ?? submit.data ?? null,
     isPolling: poll.isFetching,
   };
+}
+
+/**
+ * List the brands present in a dataset's cohort — drives the discovery page's
+ * brand dropdown (data-driven: only brands with real rows are offered).
+ */
+export function useCausalBrands(
+  dataset: string = 'patient_journeys',
+  options?: Omit<UseQueryOptions<CausalBrandsResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<CausalBrandsResponse, ApiError>({
+    queryKey: ['causal', 'brands', dataset],
+    queryFn: () => getCausalBrands(dataset),
+    staleTime: 5 * 60 * 1000,
+    ...options,
+  });
 }
 
 /**

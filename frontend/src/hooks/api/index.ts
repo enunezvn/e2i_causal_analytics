@@ -57,6 +57,7 @@ export {
   useCausalVariables,
   useProposeQuestions,
   useDiscoverEffects,
+  useCausalBrands,
   useRunHierarchicalAnalysis,
   useRunHierarchicalAnalysisAndWait,
   useRunCausalAgentAnalysis,

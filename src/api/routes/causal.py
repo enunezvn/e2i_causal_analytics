@@ -26,6 +26,7 @@ Version: 4.2.0
 
 import asyncio
 import logging
+import math
 import time
 import uuid
 from datetime import datetime, timezone
@@ -53,6 +54,7 @@ from src.api.schemas.causal import (
     AnalysisStatus,
     CausalAnalysisHistoryItem,
     CausalAnalysisHistoryResponse,
+    CausalBrandsResponse,
     CausalDAGModel,
     CausalHealthResponse,
     CausalLibrary,
@@ -75,6 +77,7 @@ from src.api.schemas.causal import (
     ProposeQuestionsResponse,
     QuestionType,
     RefutationSummary,
+    RefutationTestDetail,
     RouteQueryRequest,
     RouteQueryResponse,
     SegmentationMethod,
@@ -801,6 +804,64 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
 }
 
 
+async def _list_dataset_brands(dataset: str) -> List[str]:
+    """Distinct, non-null brand values present in ``dataset``'s live table.
+
+    Data-driven (mirrors how /variables intersects with the live schema): the
+    dropdown only ever offers a brand that actually has rows. Returns [] if the
+    table has no ``brand`` column or the store is unavailable (the FE then shows
+    only 'All brands'). Bounded select — the cohort is small and a few thousand
+    rows reliably cover every brand.
+    """
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        return []
+    try:
+        query = client.table(dataset).select("brand")
+        query = apply_provenance_filter(query)
+        result = await query.limit(20000).execute()
+    except Exception as e:  # noqa: BLE001 — missing column / store hiccup => no brands
+        logger.warning(f"causal brands: could not enumerate brands for '{dataset}': {e}")
+        return []
+    seen = {
+        str(row["brand"])
+        for row in (result.data or [])
+        if isinstance(row, dict) and row.get("brand")
+    }
+    return sorted(seen)
+
+
+@router.get(
+    "/brands",
+    response_model=CausalBrandsResponse,
+    summary="List the brands present in a gold-standard dataset's cohort",
+    operation_id="list_causal_brands",
+)
+async def list_causal_brands(
+    dataset: str = Query(
+        _DEFAULT_CAUSAL_DATASET,
+        description="Gold-standard dataset to enumerate brands for (e.g. patient_journeys)",
+    ),
+    user: Dict[str, Any] = Depends(require_analyst),
+) -> CausalBrandsResponse:
+    """Return the distinct brands present in ``dataset`` for the discovery page's
+    brand dropdown. Data-driven: only brands with real rows are offered; selecting
+    one scopes the discovery run's cohort to that brand.
+    """
+    if dataset not in _CAUSAL_DATASET_SPECS:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Unknown causal dataset '{dataset}'. "
+                f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+    brands = await _list_dataset_brands(dataset)
+    return CausalBrandsResponse(dataset=dataset, brands=brands)
+
+
 @router.get(
     "/variables",
     response_model=CausalVariablesResponse,
@@ -1039,11 +1100,13 @@ def _rank_effects(effects: List[DiscoveredEffect]) -> List[DiscoveredEffect]:
 
 
 async def _run_discover_effects_task(
-    job_id: str, dataset: str, pairs: List[tuple], data_source: str
+    job_id: str, dataset: str, pairs: List[tuple], data_source: str, brand: Optional[str] = None
 ) -> None:
     """Background: validate each candidate question with the causal_impact agent
     (serial — each acquires the heavy-compute slot), updating the cached job after
-    each so the FE leaderboard fills in progressively, ranked by confidence+impact."""
+    each so the FE leaderboard fills in progressively, ranked by confidence+impact.
+
+    ``brand`` (optional) scopes every candidate's estimation frame to one brand."""
     spec = _CAUSAL_DATASET_SPECS[dataset]
     covariates_all = list(spec["covariate"])
     # Keyed pending effects we mutate in place across the run.
@@ -1058,6 +1121,7 @@ async def _run_discover_effects_task(
                 job_id=job_id,
                 status=status,
                 dataset=dataset,
+                brand=brand,
                 total=len(pairs),
                 completed=completed,
                 effects=_rank_effects(list(effects.values())),
@@ -1076,10 +1140,16 @@ async def _run_discover_effects_task(
                 outcome_var=o,
                 covariates=cov,
                 limit=1500,
+                brand=brand,
             )
             aid = str(uuid.uuid4())
             req = AgentCausalAnalysisRequest(
-                treatment_var=t, outcome_var=o, dataset=dataset, limit=1500, auto_discover=True
+                treatment_var=t,
+                outcome_var=o,
+                dataset=dataset,
+                limit=1500,
+                auto_discover=True,
+                brand=brand,
             )
             await _agent_analysis_store.set(
                 aid,
@@ -1122,12 +1192,23 @@ async def _run_discover_effects_task(
 async def discover_causal_effects(
     background_tasks: BackgroundTasks,
     dataset: str = Query(_DEFAULT_CAUSAL_DATASET, description="Gold-standard dataset"),
+    brand: Optional[str] = Query(
+        None,
+        description=(
+            "Optional brand to scope the cohort to (e.g. Kisqali). None = all "
+            "brands. The candidate questions are unchanged; only the rows the "
+            "agent estimates on are subset to this brand."
+        ),
+    ),
     user: Dict[str, Any] = Depends(require_analyst),
 ) -> DiscoverEffectsResponse:
     """Run the causal_impact agent across the dataset's candidate questions and
     rank the VALIDATED effects (discovered DAG + estimator + refutation gate) by
     confidence then impact. Heavy (minutes per effect) -> async: returns a pending
     job; poll ``GET /causal/discover-effects/{job_id}``. Fail-closed per question.
+
+    ``brand`` (optional) scopes the cohort to one brand — a plain row subset, so
+    each candidate is validated on that brand's patients only.
     """
     spec = _CAUSAL_DATASET_SPECS.get(dataset)
     if spec is None:
@@ -1138,6 +1219,14 @@ async def discover_causal_effects(
                 f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
             ),
         )
+    brand = brand or None
+    if brand is not None:
+        available = await _list_dataset_brands(dataset)
+        if available and brand not in available:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown brand '{brand}' for dataset '{dataset}'. Known: {available}",
+            )
     pairs = _discover_candidate_pairs(spec)
     job_id = str(uuid.uuid4())
     data_source = "synthetic" if deployment_includes_synthetic() else "database"
@@ -1145,12 +1234,15 @@ async def discover_causal_effects(
         job_id=job_id,
         status="pending",
         dataset=dataset,
+        brand=brand,
         total=len(pairs),
         completed=0,
         effects=[DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs],
     )
     await _discover_effects_store.set(job_id, initial)
-    background_tasks.add_task(_run_discover_effects_task, job_id, dataset, pairs, data_source)
+    background_tasks.add_task(
+        _run_discover_effects_task, job_id, dataset, pairs, data_source, brand
+    )
     return initial
 
 
@@ -1284,6 +1376,7 @@ async def _load_agent_estimation_frame(
     outcome_var: str,
     covariates: List[str],
     limit: int,
+    brand: Optional[str] = None,
 ) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
     """Load a REAL estimation DataFrame for the causal_impact agent.
 
@@ -1324,8 +1417,16 @@ async def _load_agent_estimation_frame(
     if client is None:
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
-    query = client.table(dataset).select(",".join(select_cols))
+    # ``brand`` is a categorical FILTER (row subset), NOT a causal variable — it
+    # scopes the cohort to one brand and stays out of the estimation columns
+    # (categorical confounders would need encoding the executors don't do here).
+    fetch_cols = list(select_cols)
+    if brand:
+        fetch_cols = list(dict.fromkeys([*select_cols, "brand"]))
+    query = client.table(dataset).select(",".join(fetch_cols))
     query = apply_provenance_filter(query)
+    if brand:
+        query = query.eq("brand", brand)
     result = await query.limit(limit).execute()
     rows = result.data or []
 
@@ -1562,6 +1663,56 @@ async def _run_agent_analysis_task(
         )
 
 
+def _opt_float(value: Any) -> Optional[float]:
+    """Coerce a refuter field to a float, or None if absent/non-numeric."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _refutation_tests_from_state(refutation: Dict[str, Any]) -> List[RefutationTestDetail]:
+    """Map the agent's ``refutation_results['individual_tests']`` dict onto the
+    per-test detail list the drill-down table renders.
+
+    ``individual_tests`` is keyed by the CONTRACT test name (placebo_treatment,
+    random_common_cause, data_subset, unobserved_common_cause, bootstrap); each
+    value carries ``passed``/``original_effect``/``new_effect``/``p_value``/
+    ``details``. Returns [] when refutation did not run (the FE then shows the
+    honest 'refutation did not run' state rather than a misleading prompt).
+
+    We surface the DICT KEY as ``test_name``, not the inner ``test_name`` field:
+    to_legacy_format keys the sensitivity test under ``unobserved_common_cause``
+    but sets its inner test_name to the raw enum ``sensitivity_e_value`` — using
+    the inner value would make the FE fall back to the wrong label ("Random
+    Common Cause") and duplicate that row. The key is the name the FE maps on.
+    """
+    individual = refutation.get("individual_tests")
+    if not isinstance(individual, dict):
+        return []
+    tests: List[RefutationTestDetail] = []
+    for key, t in individual.items():
+        if not isinstance(t, dict):
+            continue
+        # Canonical (contract) name = the dict key; fall back to the inner field
+        # only if the key is somehow empty.
+        name = str(key) if key else str(t.get("test_name") or "")
+        tests.append(
+            RefutationTestDetail(
+                test_name=name,
+                passed=bool(t.get("passed", False)),
+                original_effect=_opt_float(t.get("original_effect")),
+                new_effect=_opt_float(t.get("new_effect")),
+                p_value=_opt_float(t.get("p_value")),
+                details=(str(t["details"]) if t.get("details") else None),
+            )
+        )
+    return tests
+
+
 def _agent_state_to_response(
     *,
     analysis_id: str,
@@ -1634,6 +1785,11 @@ def _agent_state_to_response(
         tests_passed=refutation.get("tests_passed"),
         tests_total=refutation.get("total_tests"),
         sensitivity_e_value=sensitivity.get("e_value"),
+        # Surface the per-test refutation results so the drill-down renders the
+        # full table (placebo / random-common-cause / data-subset / bootstrap),
+        # not just the pass/total count. The agent always computes these in the
+        # leaderboard path; they were previously dropped here.
+        tests=_refutation_tests_from_state(refutation),
     )
 
     # Surface honest warnings when the run did not yield a usable, validated effect.
