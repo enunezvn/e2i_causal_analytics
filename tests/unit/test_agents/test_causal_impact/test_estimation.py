@@ -588,3 +588,57 @@ class TestEnergyScoreReviewGate:
         )
         assert result["requires_review"] is False
         assert result["energy_score_data"]["quality_tier"] == "excellent"
+
+
+@pytest.mark.asyncio
+async def test_energy_score_selection_offloaded_to_thread(monkeypatch):
+    """The CPU-bound energy-score estimator selection must run OFF the event
+    loop (via asyncio.to_thread) so a multi-minute fit cannot block the gunicorn
+    worker past --timeout and get it KILLED mid-run (which orphaned async jobs
+    at status='running'). Verifies the offload happens AND stays transparent."""
+    import asyncio as _aio
+
+    from src.agents.causal_impact.nodes import estimation as _est_mod
+
+    node = EstimationNode()
+    offloaded: list = []
+    real_to_thread = _aio.to_thread
+
+    async def _spy(func, *args, **kwargs):
+        offloaded.append(getattr(func, "__name__", str(func)))
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(_est_mod.asyncio, "to_thread", _spy)
+
+    state = {
+        "query": "offload test",
+        "query_id": "offload-est-1",
+        "treatment_var": "hcp_engagement_level",
+        "outcome_var": "patient_conversion_rate",
+        "confounders": ["geographic_region"],
+        "data_source": "synthetic",
+        "causal_graph": {
+            "nodes": ["hcp_engagement_level", "patient_conversion_rate", "geographic_region"],
+            "edges": [
+                ("geographic_region", "hcp_engagement_level"),
+                ("geographic_region", "patient_conversion_rate"),
+                ("hcp_engagement_level", "patient_conversion_rate"),
+            ],
+            "treatment_nodes": ["hcp_engagement_level"],
+            "outcome_nodes": ["patient_conversion_rate"],
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "digraph { ... }",
+            "confidence": 0.85,
+        },
+        "parameters": {"method": "CausalForestDML"},
+        "status": "pending",
+        "errors": [],
+        "warnings": [],
+    }
+
+    result = await node.execute(state)
+
+    # The heavy selection ran in a worker thread (offloaded)...
+    assert "_select_estimator_with_energy_score" in offloaded
+    # ...and the run still produced a real estimate (offload is transparent).
+    assert "ate" in result["estimation_result"]
