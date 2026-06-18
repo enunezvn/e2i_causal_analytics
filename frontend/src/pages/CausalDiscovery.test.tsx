@@ -137,6 +137,8 @@ const DETAIL = {
       { test_name: 'placebo_treatment', passed: true, original_effect: 0.0875, new_effect: 0.001, p_value: 0.6 },
       { test_name: 'random_common_cause', passed: true, original_effect: 0.0875, new_effect: 0.086, p_value: 0.9 },
       { test_name: 'data_subset', passed: false, original_effect: 0.0875, new_effect: 0.03, p_value: 0.02 },
+      // The sensitivity test arrives under its contract key (not the raw enum).
+      { test_name: 'unobserved_common_cause', passed: true, original_effect: 0.0875, new_effect: 0.0875, p_value: 0 },
     ],
   },
   narrative: 'Treatment raises persistence.',
@@ -241,7 +243,8 @@ describe('CausalDiscovery — validated-effects leaderboard', () => {
     render(<CausalDiscovery />, { wrapper: createWrapper() });
     fireEvent.click(screen.getByText('persistent_180d'));
     const dag = await screen.findByTestId('causal-dag');
-    // Regression: the 3 refutation tests must reach the viz (was 0 -> empty-state).
-    expect(dag).toHaveAttribute('data-refutations', '3');
+    // Regression: all 4 refutation tests must reach the viz (was 0 -> empty-state),
+    // including the sensitivity/unobserved-common-cause test.
+    expect(dag).toHaveAttribute('data-refutations', '4');
   }, 20000);
 });

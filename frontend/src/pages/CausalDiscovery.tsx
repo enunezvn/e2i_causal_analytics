@@ -102,8 +102,10 @@ function verdictBadge(e: DiscoveredEffect) {
 // "All brands" sentinel — the Select needs a non-empty value; null is sent to the API.
 const ALL_BRANDS = '__all__';
 
-// Backend refutation test_name -> the viz's RefutationMethod union (the only
-// remap is the sensitivity test, which the backend calls unobserved_common_cause).
+// Backend refutation test_name -> the viz's RefutationMethod union. The backend
+// surfaces the contract key, so the sensitivity test arrives as
+// `unobserved_common_cause`; `sensitivity_e_value` (the raw enum) is mapped too
+// as defense-in-depth so it can never fall through to "Random Common Cause".
 const REFUTATION_METHOD_MAP: Record<string, RefutationMethod> = {
   placebo_treatment: 'placebo_treatment',
   random_common_cause: 'random_common_cause',
@@ -111,6 +113,7 @@ const REFUTATION_METHOD_MAP: Record<string, RefutationMethod> = {
   bootstrap: 'bootstrap',
   unobserved_common_cause: 'add_unobserved_common_cause',
   add_unobserved_common_cause: 'add_unobserved_common_cause',
+  sensitivity_e_value: 'add_unobserved_common_cause',
 };
 
 // Map the agent's per-test refutation results onto the table's row shape. These

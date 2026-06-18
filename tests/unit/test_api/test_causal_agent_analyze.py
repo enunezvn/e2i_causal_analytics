@@ -302,3 +302,35 @@ def test_refutation_tests_helper_skips_malformed_and_coerces_floats():
     assert out[0].original_effect == 0.1
     # absent numeric -> None, not 0
     assert out[0].new_effect is None
+
+
+@pytest.mark.unit
+def test_refutation_sensitivity_test_surfaced_under_contract_key_not_raw_enum():
+    """Regression: to_legacy_format keys the sensitivity test under
+    'unobserved_common_cause' but sets its inner test_name to the raw enum
+    'sensitivity_e_value'. We must surface the CONTRACT KEY so the FE labels it
+    'Unobserved Common Cause' — using the inner value made the FE fall back to
+    'Random Common Cause' and duplicate that row."""
+    from src.api.routes.causal import _refutation_tests_from_state
+
+    out = _refutation_tests_from_state(
+        {
+            "individual_tests": {
+                "random_common_cause": {
+                    "test_name": "random_common_cause",
+                    "passed": True,
+                    "p_value": 0.9,
+                },
+                # The divergent one: key != inner test_name.
+                "unobserved_common_cause": {
+                    "test_name": "sensitivity_e_value",
+                    "passed": True,
+                    "p_value": 0.0,
+                },
+            }
+        }
+    )
+    names = {t.test_name for t in out}
+    assert names == {"random_common_cause", "unobserved_common_cause"}
+    # The sensitivity test is NOT surfaced under the raw enum name.
+    assert "sensitivity_e_value" not in names

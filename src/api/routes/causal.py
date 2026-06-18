@@ -1678,11 +1678,17 @@ def _refutation_tests_from_state(refutation: Dict[str, Any]) -> List[RefutationT
     """Map the agent's ``refutation_results['individual_tests']`` dict onto the
     per-test detail list the drill-down table renders.
 
-    ``individual_tests`` is keyed by test name (placebo_treatment,
+    ``individual_tests`` is keyed by the CONTRACT test name (placebo_treatment,
     random_common_cause, data_subset, unobserved_common_cause, bootstrap); each
     value carries ``passed``/``original_effect``/``new_effect``/``p_value``/
     ``details``. Returns [] when refutation did not run (the FE then shows the
     honest 'refutation did not run' state rather than a misleading prompt).
+
+    We surface the DICT KEY as ``test_name``, not the inner ``test_name`` field:
+    to_legacy_format keys the sensitivity test under ``unobserved_common_cause``
+    but sets its inner test_name to the raw enum ``sensitivity_e_value`` — using
+    the inner value would make the FE fall back to the wrong label ("Random
+    Common Cause") and duplicate that row. The key is the name the FE maps on.
     """
     individual = refutation.get("individual_tests")
     if not isinstance(individual, dict):
@@ -1691,9 +1697,12 @@ def _refutation_tests_from_state(refutation: Dict[str, Any]) -> List[RefutationT
     for key, t in individual.items():
         if not isinstance(t, dict):
             continue
+        # Canonical (contract) name = the dict key; fall back to the inner field
+        # only if the key is somehow empty.
+        name = str(key) if key else str(t.get("test_name") or "")
         tests.append(
             RefutationTestDetail(
-                test_name=str(t.get("test_name") or key),
+                test_name=name,
                 passed=bool(t.get("passed", False)),
                 original_effect=_opt_float(t.get("original_effect")),
                 new_effect=_opt_float(t.get("new_effect")),
