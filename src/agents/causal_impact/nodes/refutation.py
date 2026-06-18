@@ -122,15 +122,20 @@ def _scaled_nuisance_init_params(dowhy_method: str, *, discrete_treatment: bool)
     0.1891 -> 0.1895), so the reconstructed estimate still matches the reported
     ATE within ``_DOWHY_RECONSTRUCTION_*_TOL``.
 
-    Applied ONLY to the lbfgs-prone estimators:
-      * ``LinearDML`` -> scaled ``model_y`` (regressor) + ``model_t`` (classifier
-        when the treatment is discrete, else regressor)
-      * ``DRLearner`` -> scaled ``model_regression`` + ``model_propensity``
-        (always a classifier — DRLearner is inherently discrete-treatment)
-    Returns ``{}`` for methods with no convergence issue: ``CausalForestDML``
-    (scale-invariant forest nuisance) and plain ``linear_regression``. Keeping
-    those untouched means the reconstructed ATE stays consistent with the
-    forest-nuisance estimator the selector reported.
+    Applied ONLY to ``LinearDML`` -> scaled ``model_y`` (regressor) + ``model_t``
+    (classifier when the treatment is discrete, else regressor). This is the path
+    validated end-to-end on a real frame (reconstructed ATE 0.1891 -> 0.1895,
+    within the reconstructed-vs-reported tolerance), and the one the energy-score
+    router actually selects for the 9-covariate case.
+
+    Returns ``{}`` (leave econml defaults) for every other method:
+      * ``CausalForestDML`` — forest nuisance is scale-invariant (no lbfgs grind).
+      * ``DRLearner`` — its scaled-LINEAR reconstruction is NOT yet validated
+        against the selector's GradientBoosting nuisance (the reconstructed ATE
+        could diverge on nonlinear confounders), so we do NOT ship that
+        unvalidated numeric change here. A DRLearner-winner run that exceeds the
+        time budget still fails-closed cleanly (PR #1028), as it did before.
+      * plain ``linear_regression`` / IPW — no iterative nuisance to converge.
     """
     from sklearn.linear_model import LinearRegression, LogisticRegressionCV
     from sklearn.pipeline import make_pipeline
@@ -144,14 +149,11 @@ def _scaled_nuisance_init_params(dowhy_method: str, *, discrete_treatment: bool)
             StandardScaler(), LogisticRegressionCV(cv=3, max_iter=1000, random_state=42)
         )
 
-    if "DRLearner" in dowhy_method:
-        return {"model_regression": _regressor(), "model_propensity": _classifier()}
     if "LinearDML" in dowhy_method:
         return {
             "model_y": _regressor(),
             "model_t": _classifier() if discrete_treatment else _regressor(),
         }
-    # CausalForestDML (forest nuisance, scale-invariant) / linear_regression: no override.
     return {}
 
 

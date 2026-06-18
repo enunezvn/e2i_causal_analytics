@@ -33,11 +33,14 @@ class TestScaledNuisanceInitParams:
         p = _scaled_nuisance_init_params("backdoor.econml.dml.LinearDML", discrete_treatment=False)
         assert not is_classifier(p["model_t"])
 
-    def test_drlearner_scaled_propensity_and_regression(self):
-        p = _scaled_nuisance_init_params("backdoor.econml.dr.DRLearner", discrete_treatment=True)
-        assert set(p) == {"model_regression", "model_propensity"}
-        assert is_classifier(p["model_propensity"])  # DRLearner propensity is always a classifier
-        assert isinstance(p["model_propensity"].steps[0][1], StandardScaler)
+    def test_drlearner_left_at_defaults(self):
+        # DRLearner is intentionally NOT scaled here: its scaled-linear
+        # reconstruction is unvalidated against the selector's GradientBoosting
+        # nuisance, so we don't ship that numeric change. Left at econml defaults.
+        assert (
+            _scaled_nuisance_init_params("backdoor.econml.dr.DRLearner", discrete_treatment=True)
+            == {}
+        )
 
     def test_forest_and_linear_methods_get_no_override(self):
         # CausalForestDML uses scale-invariant forest nuisance -> no scaling needed.
