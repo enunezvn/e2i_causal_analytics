@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -485,6 +486,7 @@ class RefutationRunner:
         brand: Optional[str] = None,
         estimate_id: Optional[str] = None,
         trace_id: Optional[str] = None,
+        deadline: Optional[float] = None,
     ) -> RefutationSuite:
         """Run all enabled refutation tests with Opik tracing.
 
@@ -500,13 +502,53 @@ class RefutationRunner:
             brand: Brand context for logging
             estimate_id: UUID for database linking
             trace_id: Opik trace ID for correlation (optional)
+            deadline: Absolute ``time.monotonic()`` second by which the suite
+                must be done. Each refuter re-fits the estimator many times and
+                CANNOT be cancelled once started in a worker thread, so when a
+                deadline is given we skip any refuter whose ESTIMATED cost
+                (per-refit time observed so far x its simulation count) would
+                run past it, and fail-closed with a ``RefutationError``. This
+                lets a timed-out run return cleanly instead of orphaning compute
+                past the caller's hard wall-clock cap. ``None`` (default) =
+                unbounded (no behavior change for existing callers).
 
         Returns:
             RefutationSuite with all test results and gate decision
         """
-        import time
-
         start_time = time.time()
+
+        # --- Cooperative time budget (orphan-fix) ------------------------- #
+        # Track per-refit cost so we can estimate whether the NEXT refuter will
+        # fit before ``deadline``. ``skipped_for_budget`` records refuters we
+        # refused to start; a non-empty list at the end => fail-closed.
+        _budget = {"sim_time": 0.0, "sims": 0}
+        skipped_for_budget: List[str] = []
+
+        def _sims_for(name: str) -> int:
+            cfg = self.config.get(name, {})
+            val = cfg.get("num_simulations") or cfg.get("num_bootstraps") or cfg.get("num_subsets")
+            try:
+                return max(1, int(val)) if val is not None else 1
+            except (TypeError, ValueError):
+                return 1
+
+        def _budget_allows(n_sims: int) -> bool:
+            """True if this refuter may run under the deadline."""
+            if deadline is None:
+                return True
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+            if _budget["sims"] <= 0:
+                # No per-refit estimate yet, but we are still before the
+                # deadline — allow the first refuter to run (and calibrate).
+                return True
+            per_refit = _budget["sim_time"] / _budget["sims"]
+            return now + per_refit * max(1, n_sims) <= deadline
+
+        def _record(n_sims: int, elapsed: float) -> None:
+            _budget["sim_time"] += elapsed
+            _budget["sims"] += max(1, n_sims)
 
         tests: List[RefutationResult] = []
 
@@ -537,90 +579,143 @@ class RefutationRunner:
         # Get Opik connector for tracing
         opik = get_opik_connector()
 
-        # Run each enabled test with Opik tracing
+        # Run each enabled test with Opik tracing. Before each refuter we check
+        # the cooperative time budget: if its estimated cost would run past the
+        # deadline we SKIP it (recording the skip) rather than start work that
+        # cannot be cancelled and would orphan the worker thread past the cap.
         if self.config["placebo_treatment"]["enabled"]:
-            test_result = self._run_test_with_tracing(
-                test_name="placebo_treatment",
-                test_func=self._run_placebo_test,
-                opik=opik,
-                trace_id=trace_id,
-                estimate_id=estimate_id,
-                original_effect=original_effect,
-                causal_model=causal_model,
-                identified_estimand=identified_estimand,
-                estimate=estimate,
-                use_dowhy=use_dowhy,
-            )
-            tests.append(test_result)
+            _n = _sims_for("placebo_treatment")
+            if _budget_allows(_n):
+                _t0 = time.monotonic()
+                test_result = self._run_test_with_tracing(
+                    test_name="placebo_treatment",
+                    test_func=self._run_placebo_test,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                    original_effect=original_effect,
+                    causal_model=causal_model,
+                    identified_estimand=identified_estimand,
+                    estimate=estimate,
+                    use_dowhy=use_dowhy,
+                )
+                tests.append(test_result)
+                _record(_n, time.monotonic() - _t0)
+            else:
+                skipped_for_budget.append("placebo_treatment")
 
         if self.config["random_common_cause"]["enabled"]:
-            test_result = self._run_test_with_tracing(
-                test_name="random_common_cause",
-                test_func=self._run_random_common_cause_test,
-                opik=opik,
-                trace_id=trace_id,
-                estimate_id=estimate_id,
-                original_effect=original_effect,
-                causal_model=causal_model,
-                identified_estimand=identified_estimand,
-                estimate=estimate,
-                use_dowhy=use_dowhy,
-            )
-            tests.append(test_result)
+            _n = _sims_for("random_common_cause")
+            if _budget_allows(_n):
+                _t0 = time.monotonic()
+                test_result = self._run_test_with_tracing(
+                    test_name="random_common_cause",
+                    test_func=self._run_random_common_cause_test,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                    original_effect=original_effect,
+                    causal_model=causal_model,
+                    identified_estimand=identified_estimand,
+                    estimate=estimate,
+                    use_dowhy=use_dowhy,
+                )
+                tests.append(test_result)
+                _record(_n, time.monotonic() - _t0)
+            else:
+                skipped_for_budget.append("random_common_cause")
 
         if self.config["data_subset"]["enabled"]:
-            test_result = self._run_test_with_tracing(
-                test_name="data_subset",
-                test_func=self._run_data_subset_test,
-                opik=opik,
-                trace_id=trace_id,
-                estimate_id=estimate_id,
-                original_effect=original_effect,
-                original_ci=original_ci,
-                causal_model=causal_model,
-                identified_estimand=identified_estimand,
-                estimate=estimate,
-                use_dowhy=use_dowhy,
-            )
-            tests.append(test_result)
+            _n = _sims_for("data_subset")
+            if _budget_allows(_n):
+                _t0 = time.monotonic()
+                test_result = self._run_test_with_tracing(
+                    test_name="data_subset",
+                    test_func=self._run_data_subset_test,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                    original_effect=original_effect,
+                    original_ci=original_ci,
+                    causal_model=causal_model,
+                    identified_estimand=identified_estimand,
+                    estimate=estimate,
+                    use_dowhy=use_dowhy,
+                )
+                tests.append(test_result)
+                _record(_n, time.monotonic() - _t0)
+            else:
+                skipped_for_budget.append("data_subset")
 
         if self.config["bootstrap"]["enabled"]:
-            test_result = self._run_test_with_tracing(
-                test_name="bootstrap",
-                test_func=self._run_bootstrap_test,
-                opik=opik,
-                trace_id=trace_id,
-                estimate_id=estimate_id,
-                original_effect=original_effect,
-                original_ci=original_ci,
-                causal_model=causal_model,
-                identified_estimand=identified_estimand,
-                estimate=estimate,
-                use_dowhy=use_dowhy,
-            )
-            tests.append(test_result)
+            _n = _sims_for("bootstrap")
+            if _budget_allows(_n):
+                _t0 = time.monotonic()
+                test_result = self._run_test_with_tracing(
+                    test_name="bootstrap",
+                    test_func=self._run_bootstrap_test,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                    original_effect=original_effect,
+                    original_ci=original_ci,
+                    causal_model=causal_model,
+                    identified_estimand=identified_estimand,
+                    estimate=estimate,
+                    use_dowhy=use_dowhy,
+                )
+                tests.append(test_result)
+                _record(_n, time.monotonic() - _t0)
+            else:
+                skipped_for_budget.append("bootstrap")
 
         if self.config["sensitivity_e_value"]["enabled"]:
-            # H3: the E-value needs a STANDARDIZED effect, so compute the outcome
-            # SD from the passthrough data and hand it to the sensitivity test.
-            outcome_std: Optional[float] = None
-            if data is not None and outcome is not None:
-                try:
-                    if outcome in getattr(data, "columns", []):
-                        outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
-                except Exception:  # noqa: BLE001 - missing/non-numeric outcome → no standardization
-                    outcome_std = None
-            test_result = self._run_test_with_tracing(
-                test_name="sensitivity_e_value",
-                test_func=self._run_sensitivity_test,
-                opik=opik,
-                trace_id=trace_id,
-                estimate_id=estimate_id,
-                original_effect=original_effect,
-                original_ci=original_ci,
-                outcome_std=outcome_std,
+            _n = _sims_for("sensitivity_e_value")
+            if _budget_allows(_n):
+                # H3: the E-value needs a STANDARDIZED effect, so compute the
+                # outcome SD from the passthrough data and hand it to the test.
+                outcome_std: Optional[float] = None
+                if data is not None and outcome is not None:
+                    try:
+                        if outcome in getattr(data, "columns", []):
+                            outcome_std = float(np.std(data[outcome].to_numpy(dtype=float)))
+                    except Exception:  # noqa: BLE001 - missing/non-numeric outcome → no standardization
+                        outcome_std = None
+                _t0 = time.monotonic()
+                test_result = self._run_test_with_tracing(
+                    test_name="sensitivity_e_value",
+                    test_func=self._run_sensitivity_test,
+                    opik=opik,
+                    trace_id=trace_id,
+                    estimate_id=estimate_id,
+                    original_effect=original_effect,
+                    original_ci=original_ci,
+                    outcome_std=outcome_std,
+                )
+                tests.append(test_result)
+                _record(_n, time.monotonic() - _t0)
+            else:
+                skipped_for_budget.append("sensitivity_e_value")
+
+        # Fail-closed if the deadline forced us to skip any enabled refuter:
+        # an incomplete suite must not be presented as a validated result, and
+        # the caller (refutation node) maps RefutationError -> status=failed.
+        if skipped_for_budget:
+            ran = [
+                t.test_name.value if hasattr(t.test_name, "value") else str(t.test_name)
+                for t in tests
+            ]
+            raise RefutationError(
+                "Refutation exceeded its time budget: ran "
+                f"{len(tests)} test(s) {ran}, skipped {skipped_for_budget} to avoid "
+                "orphaning compute past the worker's wall-clock cap. Re-run with "
+                "fewer covariates or lower simulation counts.",
+                details={
+                    "reason": "time_budget_exceeded",
+                    "ran": ran,
+                    "skipped": skipped_for_budget,
+                },
             )
-            tests.append(test_result)
 
         total_time = (time.time() - start_time) * 1000
 

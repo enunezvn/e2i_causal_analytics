@@ -133,6 +133,20 @@ CAUSAL_COMPLETED_EVENT_TYPE = "causal_analysis_completed"
 _ACTIVITY_CACHE_TTL_SECONDS = 30.0
 _activity_cache: dict[str, Any] = {"expires_at": 0.0, "value": (0, None)}
 
+# Agent-run wall-clock budgets (orphan-fix). The async agent task wraps the
+# whole graph in ``asyncio.wait_for(..., _AGENT_HARD_TIMEOUT_S)`` — a HARD cap.
+# But the heavy refutation suite runs in a worker thread that wait_for CANNOT
+# cancel (Python can't force-kill a thread), so hitting the hard cap would
+# orphan a still-grinding refutation thread that keeps burning a CPU core and
+# accumulates across runs. To prevent that we pass the graph a COOPERATIVE
+# deadline (``_REFUTATION_COMPUTE_BUDGET_S`` from task start); the refutation
+# node skips refuters that would run past it and fails-closed cleanly, so the
+# thread returns and releases the heavy-compute slot BEFORE the hard cap fires.
+# The gap between them is headroom for one in-flight refuter's overshoot plus
+# the post-refutation sensitivity/interpretation nodes.
+_AGENT_HARD_TIMEOUT_S = 900.0
+_REFUTATION_COMPUTE_BUDGET_S = 720.0
+
 # Generic 5xx detail. Raw exception text MUST NOT be echoed to clients: it can
 # leak stack-internal paths, library/module names, table/column names, and other
 # information useful to an attacker. The full exception is logged server-side
@@ -1643,6 +1657,10 @@ async def _run_agent_analysis_task(
         "parameters": parameters,
         "interpretation_depth": "standard",
         "brand": request.brand,
+        # Cooperative compute deadline so the refutation suite self-terminates
+        # before the hard wait_for cap below (orphan-fix): timed-out runs return
+        # cleanly instead of orphaning an uncancellable to_thread refutation.
+        "compute_deadline": time.monotonic() + _REFUTATION_COMPUTE_BUDGET_S,
         "errors": [],
         "warnings": [],
         "fallback_used": False,
@@ -1657,7 +1675,9 @@ async def _run_agent_analysis_task(
         # Bound concurrency to ONE per-worker heavy-compute slot (OOM guard),
         # mirroring the hierarchical / parallel endpoints.
         async with heavy_compute_slot():
-            final_state = await asyncio.wait_for(graph.ainvoke(initial_state), timeout=900.0)
+            final_state = await asyncio.wait_for(
+                graph.ainvoke(initial_state), timeout=_AGENT_HARD_TIMEOUT_S
+            )
         await _agent_analysis_store.set(
             analysis_id,
             _agent_state_to_response(

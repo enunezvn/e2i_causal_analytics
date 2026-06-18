@@ -644,6 +644,20 @@ class RefutationNode:
                 List[str],
                 state.get("confounders") or estimation_result.get("covariates_adjusted") or [],
             )
+            # Cooperative compute deadline (orphan-fix): the offloaded refutation
+            # suite runs in a worker thread that the API task's asyncio.wait_for
+            # CANNOT cancel (Python can't force-kill a thread), so a timed-out run
+            # would otherwise keep grinding refits and orphan a CPU core. When a
+            # deadline is set we (a) refuse to even start reconstruction if it has
+            # already passed, and (b) hand it to run_all_tests so the suite skips
+            # refuters that would run past it and fails-closed cleanly.
+            deadline = cast(Optional[float], state.get("compute_deadline"))
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RefutationError(
+                    "Compute budget exhausted before refutation could start; failing closed "
+                    "rather than orphaning refutation compute past the worker's wall-clock cap.",
+                    details={"reason": "time_budget_exceeded_pre_refutation"},
+                )
             # Offload the CPU-bound DoWhy model reconstruction + refutation suite
             # (placebo / random_common_cause / data_subset / bootstrap each
             # re-estimate the effect many times) to threads so the gunicorn worker's
@@ -675,6 +689,7 @@ class RefutationNode:
                 causal_model=causal_model,
                 identified_estimand=identified_estimand,
                 estimate=estimate,
+                deadline=deadline,
             )
 
             # Convert to legacy format for backward compatibility

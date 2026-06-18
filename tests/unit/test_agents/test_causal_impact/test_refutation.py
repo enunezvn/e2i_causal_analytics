@@ -698,3 +698,61 @@ async def test_refutation_suite_offloaded_to_thread(monkeypatch):
     assert "run_all_tests" in offloaded
     # ...and the suite still ran to a real gate decision (offload is transparent).
     assert "refutation_results" in result or "gate_decision" in result
+
+
+@pytest.mark.asyncio
+async def test_refutation_forwards_compute_deadline(monkeypatch):
+    """Orphan-fix: the refutation node must forward ``state['compute_deadline']``
+    to ``RefutationRunner.run_all_tests`` so the suite can self-terminate before
+    the route's hard wall-clock cap, instead of orphaning to_thread compute.
+    Spy on run_all_tests to assert the deadline is threaded through (and the
+    node fails closed cleanly when the suite raises)."""
+    from src.causal_engine.errors import RefutationError
+
+    node = RefutationNode()
+    captured: dict = {}
+
+    def spy(**kwargs):
+        captured.update(kwargs)
+        # Stop after capturing — we only assert the deadline was forwarded.
+        raise RefutationError("stop after capture", details={"reason": "test"})
+
+    monkeypatch.setattr(node.runner, "run_all_tests", spy)
+
+    # Far-FUTURE deadline so the node's pre-refutation budget check passes and we
+    # actually reach run_all_tests (where the spy captures the forwarded value).
+    import time as _t
+
+    deadline_val = _t.monotonic() + 10_000.0
+    ate = 0.5
+    state: CausalImpactState = {
+        "query": "deadline plumbing",
+        "query_id": "deadline-ref-1",
+        "treatment_var": "hcp_engagement_level",
+        "outcome_var": "patient_conversion_rate",
+        "confounders": ["geographic_region"],
+        "data_source": "synthetic",
+        "estimation_result": {
+            "method": "CausalForestDML",
+            "ate": ate,
+            "ate_ci_lower": ate - 0.1,
+            "ate_ci_upper": ate + 0.1,
+            "effect_size": "medium",
+            "statistical_significance": True,
+            "p_value": 0.01,
+            "sample_size": 1000,
+            "covariates_adjusted": ["geographic_region"],
+            "heterogeneity_detected": False,
+        },
+        "estimation_data": _make_estimation_data(true_ate=ate),
+        "compute_deadline": deadline_val,
+        "status": "pending",
+        "errors": [],
+        "warnings": [],
+    }
+
+    result = await node.execute(state)
+
+    assert captured.get("deadline") == deadline_val
+    # The spy raised RefutationError -> node fails closed cleanly.
+    assert result.get("status") == "failed"
