@@ -492,6 +492,38 @@ class TestReflectorModule:
         # creates and calls DSPy predictors that require an LM to be configured.
         # To run this test, configure DSPy with a real LM and mark as integration.
 
+    def test_fact_to_relationship_stamps_runtime_provenance(self):
+        """A reflection-written edge must carry an ``agent`` provenance tag so the
+        Knowledge Graph's curated view (``r.agent IS NULL``) excludes it — without
+        the tag, an LLM-derived CAUSES/IMPACTS edge would leak into the gold
+        standard. RAG retrieval ignores the tag, so reads are unaffected."""
+        from src.rag.cognitive_rag_dspy import ReflectorModule
+
+        edge = ReflectorModule._fact_to_relationship(
+            {"source": "treatment:x", "target": "causal_path:y", "relationship": "CAUSES"}
+        )
+        assert edge is not None
+        _source, _target, rel_type, properties = edge
+        assert rel_type == "CAUSES"
+        assert properties.get("agent") == "rag_reflection"
+
+    def test_fact_to_relationship_preserves_existing_properties(self):
+        """Provenance tagging must not clobber a fact's own properties."""
+        from src.rag.cognitive_rag_dspy import ReflectorModule
+
+        edge = ReflectorModule._fact_to_relationship(
+            {
+                "source": "a",
+                "target": "b",
+                "relationship": "RELATED_TO",
+                "properties": {"confidence": 0.9},
+            }
+        )
+        assert edge is not None
+        _source, _target, _rel_type, properties = edge
+        assert properties.get("confidence") == 0.9
+        assert properties.get("agent") == "rag_reflection"
+
 
 # =============================================================================
 # WORKFLOW CREATION TESTS

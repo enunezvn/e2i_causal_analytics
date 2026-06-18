@@ -343,6 +343,15 @@ async def list_nodes(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     sort_by: NodeSortField = Query(NodeSortField.CREATED_AT, description="Sort field"),
     sort_order: SortOrder = Query(SortOrder.DESC, description="Sort order"),
+    curated_only: bool = Query(
+        False,
+        description=(
+            "When true, return only curated gold-standard nodes, excluding "
+            "agent-written runtime nodes (those carrying an `agent` property). "
+            "Used by the Knowledge Graph page so agent analyses do not pollute "
+            "the gold-standard view."
+        ),
+    ),
 ) -> ListNodesResponse:
     """
     List nodes in the knowledge graph with filtering and pagination.
@@ -373,14 +382,20 @@ async def list_nodes(
 
         # Build and execute query
         nodes_data = semantic.list_nodes(
-            entity_types=types_filter, search=search, limit=limit, offset=offset
+            entity_types=types_filter,
+            search=search,
+            limit=limit,
+            offset=offset,
+            curated_only=curated_only,
         )
 
         # Convert to GraphNode objects
         nodes = [_convert_to_graph_node(n) for n in nodes_data]
 
         # Get total count
-        total_count = semantic.count_nodes(entity_types=types_filter, search=search)
+        total_count = semantic.count_nodes(
+            entity_types=types_filter, search=search, curated_only=curated_only
+        )
 
         latency_ms = (time.time() - start_time) * 1000
 
@@ -542,6 +557,13 @@ async def list_relationships(
     # rendered stats client-side. Default stays small for ad-hoc callers.
     limit: int = Query(50, ge=1, le=2000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
+    curated_only: bool = Query(
+        False,
+        description=(
+            "When true, return only curated gold-standard edges, excluding "
+            "agent-written runtime edges (those carrying an `agent` property)."
+        ),
+    ),
 ) -> ListRelationshipsResponse:
     """
     List relationships in the knowledge graph with filtering.
@@ -578,11 +600,15 @@ async def list_relationships(
             min_confidence=min_confidence,
             limit=limit,
             offset=offset,
+            curated_only=curated_only,
         )
 
         relationships = [_convert_to_graph_relationship(r) for r in rels_data]
         total_count = semantic.count_relationships(
-            relationship_types=types_filter, source_id=source_id, target_id=target_id
+            relationship_types=types_filter,
+            source_id=source_id,
+            target_id=target_id,
+            curated_only=curated_only,
         )
 
         latency_ms = (time.time() - start_time) * 1000

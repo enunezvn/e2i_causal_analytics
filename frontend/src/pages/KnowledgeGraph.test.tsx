@@ -241,13 +241,16 @@ describe('KnowledgeGraphPage', () => {
       expect(screen.getByTestId('relationships-count')).toHaveTextContent('5');
     });
 
-    it('fetches the full causal node + relationship layer', () => {
+    it('fetches the full causal node + relationship layer, curated (no agent-written pollution)', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       const nodesCall = (useNodes as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(nodesCall.entity_types).toBe('Variable,KPI,CausalPath,Region,Treatment');
+      // curated_only excludes agent-written runtime nodes from the gold-standard view.
+      expect(nodesCall.curated_only).toBe(true);
       const relCall = (useRelationships as ReturnType<typeof vi.fn>).mock.calls[0][0];
       expect(relCall.relationship_types).toBe('CAUSES,EXPLAINS,INFLUENCES,AFFECTS');
+      expect(relCall.curated_only).toBe(true);
     });
 
     it('narrows to one brand when the dropdown changes (Fabhalta)', () => {

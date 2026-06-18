@@ -219,6 +219,32 @@ class TestListNodes:
                 status.HTTP_503_SERVICE_UNAVAILABLE,
             ]
 
+    def test_list_nodes_curated_only_passed_through(self, client, mock_semantic_memory):
+        """?curated_only=true must reach list_nodes AND count_nodes so the
+        gold-standard view excludes agent-written runtime nodes."""
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=mock_semantic_memory,
+        ):
+            response = client.get("/graph/nodes?entity_types=Variable&curated_only=true")
+
+            assert response.status_code == status.HTTP_200_OK
+            assert mock_semantic_memory.list_nodes.call_args.kwargs["curated_only"] is True
+            assert mock_semantic_memory.count_nodes.call_args.kwargs["curated_only"] is True
+
+    def test_list_nodes_curated_only_defaults_false(self, client, mock_semantic_memory):
+        """Omitting curated_only must default to False (unchanged behaviour)."""
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=mock_semantic_memory,
+        ):
+            response = client.get("/graph/nodes?entity_types=Variable")
+
+            assert response.status_code == status.HTTP_200_OK
+            assert mock_semantic_memory.list_nodes.call_args.kwargs["curated_only"] is False
+
 
 # =============================================================================
 # Get Node Tests
@@ -361,6 +387,33 @@ class TestListRelationships:
             response = client.get("/graph/relationships?limit=10&offset=0")
 
             assert response.status_code == status.HTTP_200_OK
+
+    def test_list_relationships_curated_only_passed_through(self, client, mock_semantic_memory):
+        """?curated_only=true must reach list_relationships so the gold-standard
+        view excludes agent-written runtime edges."""
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=mock_semantic_memory,
+        ):
+            response = client.get(
+                "/graph/relationships?relationship_types=CAUSES&curated_only=true"
+            )
+
+            assert response.status_code == status.HTTP_200_OK
+            assert mock_semantic_memory.list_relationships.call_args.kwargs["curated_only"] is True
+
+    def test_list_relationships_curated_only_defaults_false(self, client, mock_semantic_memory):
+        """Omitting curated_only must default to False (unchanged behaviour)."""
+        with patch(
+            "src.api.routes.graph._get_semantic_memory",
+            new_callable=AsyncMock,
+            return_value=mock_semantic_memory,
+        ):
+            response = client.get("/graph/relationships?relationship_types=CAUSES")
+
+            assert response.status_code == status.HTTP_200_OK
+            assert mock_semantic_memory.list_relationships.call_args.kwargs["curated_only"] is False
 
 
 # =============================================================================

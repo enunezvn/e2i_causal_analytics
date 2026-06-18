@@ -1167,6 +1167,7 @@ class FalkorDBSemanticMemory:
         search: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
+        curated_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         List nodes with filtering and pagination.
@@ -1176,6 +1177,10 @@ class FalkorDBSemanticMemory:
             search: Text search in node properties
             limit: Maximum results
             offset: Pagination offset
+            curated_only: When True, exclude agent-written runtime nodes (those
+                carrying an ``agent`` property) so a curated gold-standard view
+                shows only seed/sync data. Default False keeps existing
+                behaviour for every other caller (RAG / agent hooks).
 
         Returns:
             List of node dictionaries
@@ -1197,6 +1202,11 @@ class FalkorDBSemanticMemory:
         if search:
             where_parts.append("(n.name CONTAINS $search OR n.id CONTAINS $search)")
             params["search"] = search
+
+        if curated_only:
+            # Agent runtime writes (e.g. causal_impact.store_causal_path) stamp an
+            # ``agent`` property; curated seed/sync gold-standard nodes carry none.
+            where_parts.append("n.agent IS NULL")
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -1223,9 +1233,16 @@ class FalkorDBSemanticMemory:
         return nodes
 
     def count_nodes(
-        self, entity_types: Optional[List[str]] = None, search: Optional[str] = None
+        self,
+        entity_types: Optional[List[str]] = None,
+        search: Optional[str] = None,
+        curated_only: bool = False,
     ) -> int:
-        """Count nodes matching filters."""
+        """Count nodes matching filters.
+
+        ``curated_only`` mirrors :meth:`list_nodes` so a curated view's
+        pagination total matches the rows it renders.
+        """
         where_parts = []
         params: Dict[str, Any] = {}
 
@@ -1238,6 +1255,9 @@ class FalkorDBSemanticMemory:
         if search:
             where_parts.append("(n.name CONTAINS $search OR n.id CONTAINS $search)")
             params["search"] = search
+
+        if curated_only:
+            where_parts.append("n.agent IS NULL")
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -1258,6 +1278,7 @@ class FalkorDBSemanticMemory:
         min_confidence: Optional[float] = None,
         limit: int = 50,
         offset: int = 0,
+        curated_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         List relationships with filtering and pagination.
@@ -1269,6 +1290,9 @@ class FalkorDBSemanticMemory:
             min_confidence: Minimum confidence threshold
             limit: Maximum results
             offset: Pagination offset
+            curated_only: When True, exclude agent-written runtime edges (those
+                carrying an ``agent`` property) so a curated gold-standard view
+                shows only seed/sync causal structure. Default False.
 
         Returns:
             List of relationship dictionaries
@@ -1287,6 +1311,11 @@ class FalkorDBSemanticMemory:
         if min_confidence is not None:
             where_parts.append("r.confidence >= $min_confidence")
             params["min_confidence"] = min_confidence  # type: ignore[assignment]
+
+        if curated_only:
+            # Agent runtime writes stamp an ``agent`` property on the edge; the
+            # curated gold-standard view keeps only untagged seed/sync edges.
+            where_parts.append("r.agent IS NULL")
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -1341,8 +1370,12 @@ class FalkorDBSemanticMemory:
         relationship_types: Optional[List[str]] = None,
         source_id: Optional[str] = None,
         target_id: Optional[str] = None,
+        curated_only: bool = False,
     ) -> int:
-        """Count relationships matching filters."""
+        """Count relationships matching filters.
+
+        ``curated_only`` mirrors :meth:`list_relationships`.
+        """
         where_parts = []
         params = {}
 
@@ -1353,6 +1386,9 @@ class FalkorDBSemanticMemory:
         if target_id:
             where_parts.append("t.id = $target_id")
             params["target_id"] = target_id
+
+        if curated_only:
+            where_parts.append("r.agent IS NULL")
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 

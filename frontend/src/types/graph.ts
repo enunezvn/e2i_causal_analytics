@@ -156,6 +156,12 @@ export interface ListNodesParams {
   sort_by?: NodeSortField;
   /** Sort order */
   sort_order?: SortOrder;
+  /**
+   * When true, return only curated gold-standard nodes, excluding agent-written
+   * runtime nodes (those carrying an `agent` property). The Knowledge Graph page
+   * sets this so causal-agent analyses don't pollute the gold-standard view.
+   */
+  curated_only?: boolean;
 }
 
 /**
@@ -174,6 +180,11 @@ export interface ListRelationshipsParams {
   limit?: number;
   /** Pagination offset */
   offset?: number;
+  /**
+   * When true, return only curated gold-standard edges, excluding agent-written
+   * runtime edges (those carrying an `agent` property).
+   */
+  curated_only?: boolean;
 }
 
 /**
