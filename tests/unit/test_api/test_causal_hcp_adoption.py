@@ -21,3 +21,103 @@ def test_hcp_adoption_spec_registered():
     # Every loadable column is numeric-coerced (the gate covers treatment+outcome+cov).
     numeric = _CAUSAL_NUMERIC_COLUMNS["hcp_adoption"]
     assert {"peer_influence_score", "treatment_arm", "adopted", "centrality_z"} <= numeric
+
+
+import math
+from unittest.mock import AsyncMock, patch
+
+import pandas as pd
+from fastapi import HTTPException
+
+from src.api.routes import causal as causal_routes
+
+
+def _fake_join_rows():
+    # adoption rows (brand-filtered read) and profile rows (un-filtered read).
+    adoption = [
+        {"hcp_id": "h1", "treatment_arm": 1, "adopted": 1},
+        {"hcp_id": "h2", "treatment_arm": 0, "adopted": 0},
+        {"hcp_id": "h3", "treatment_arm": 1, "adopted": 1},
+    ]
+    profiles = [
+        {"hcp_id": "h1", "peer_influence_score": 3.0, "influence_network_size": 25},
+        {"hcp_id": "h2", "peer_influence_score": 1.0, "influence_network_size": 2},
+        {"hcp_id": "h3", "peer_influence_score": 2.5, "influence_network_size": 14},
+    ]
+    return adoption, profiles
+
+
+@pytest.mark.asyncio
+async def test_hcp_join_frame_builds_treatment_outcome_and_centrality_z():
+    adoption, profiles = _fake_join_rows()
+
+    async def fake_paged(client, table, columns, brand):
+        return adoption  # the brand-filtered adoption read
+
+    async def fake_profiles(client):
+        return profiles
+
+    with (
+        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_routes, "_te_paged_select", side_effect=fake_paged),
+        patch.object(causal_routes, "_load_hcp_profile_centrality", side_effect=fake_profiles),
+    ):
+        df, select_cols = await causal_routes._load_agent_estimation_frame(
+            dataset="hcp_adoption",
+            treatment_var="treatment_arm",
+            outcome_var="adopted",
+            covariates=["centrality_z"],
+            limit=1500,
+            brand="Kisqali",
+        )
+    assert set(select_cols) == {"treatment_arm", "adopted", "centrality_z"}
+    assert list(df.columns) == ["treatment_arm", "adopted", "centrality_z"]
+    assert len(df) == 3
+    # centrality_z = zscore(log1p(influence_network_size)) — h1 (size 25) is the highest.
+    raw = [math.log1p(25), math.log1p(2), math.log1p(14)]
+    mean = sum(raw) / 3
+    std = (sum((x - mean) ** 2 for x in raw) / 3) ** 0.5
+    assert df.loc[0, "centrality_z"] == pytest.approx((raw[0] - mean) / std, rel=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_hcp_join_empty_backdoor_question_loads_just_treatment_outcome():
+    adoption, profiles = _fake_join_rows()
+
+    async def fake_paged(client, table, columns, brand):
+        return adoption
+
+    async def fake_profiles(client):
+        return profiles
+
+    with (
+        patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())),
+        patch.object(causal_routes, "_te_paged_select", side_effect=fake_paged),
+        patch.object(causal_routes, "_load_hcp_profile_centrality", side_effect=fake_profiles),
+    ):
+        df, select_cols = await causal_routes._load_agent_estimation_frame(
+            dataset="hcp_adoption",
+            treatment_var="peer_influence_score",
+            outcome_var="adopted",
+            covariates=[],  # EXOGENOUS root: empty backdoor
+            limit=1500,
+            brand="Kisqali",
+        )
+    assert list(df.columns) == ["peer_influence_score", "adopted"]
+    assert len(df) == 3
+
+
+@pytest.mark.asyncio
+async def test_hcp_join_rejects_disallowed_column():
+    """The allowlist gate still applies on the JOIN path — an off-allowlist column 400s."""
+    with patch.object(causal_routes, "get_async_supabase_client", AsyncMock(return_value=object())):
+        with pytest.raises(HTTPException) as ei:
+            await causal_routes._load_agent_estimation_frame(
+                dataset="hcp_adoption",
+                treatment_var="treatment_arm",
+                outcome_var="adopted",
+                covariates=["specialty"],  # not in the hcp_adoption allowlist
+                limit=1500,
+                brand="Kisqali",
+            )
+    assert ei.value.status_code == 400
