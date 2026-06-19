@@ -129,3 +129,34 @@ class CausalPathRepository(BaseRepository):
             limit=limit,
             include_synthetic=include_synthetic,
         )
+
+    async def get_distinct_questions(
+        self,
+        *,
+        brand: Optional[str] = None,
+        limit: int = 2000,
+        include_synthetic: bool = True,
+    ) -> List[dict]:
+        """Distinct (treatment, outcome, brand) causal questions from the SSOT,
+        each carrying its modeled backdoor set (``confounders_controlled``).
+
+        Source of truth for the discovery leaderboard's questions (replaces the
+        hand-curated cross-product). ``include_synthetic`` defaults True because
+        the gold-standard substrate is synthetic.
+        """
+        filters = {"brand": brand} if brand else None
+        rows = await self.get_many(
+            filters=filters, limit=limit, include_synthetic=include_synthetic
+        )
+        seen: dict = {}
+        for r in rows:
+            key = (r.get("start_node"), r.get("end_node"), r.get("brand"))
+            if key[0] is None or key[1] is None or key in seen:
+                continue
+            seen[key] = {
+                "treatment": r["start_node"],
+                "outcome": r["end_node"],
+                "brand": r.get("brand"),
+                "confounders": list(r.get("confounders_controlled") or []),
+            }
+        return list(seen.values())
