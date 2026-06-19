@@ -161,6 +161,7 @@ class NaturalLanguageInterpretation(TypedDict, total=False):
     """Deep reasoning interpretation output."""
 
     narrative: str  # Main interpretation (200-800 words)
+    executive_summary: str  # 2-3 sentence headline (surfaced by the agent-analyze API path)
     key_findings: List[str]  # 3-5 bullet points
     effect_magnitude: str  # Qualitative description
     causal_confidence: str  # "low", "medium", "high"

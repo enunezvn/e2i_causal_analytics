@@ -535,6 +535,46 @@ class RefutationSummary(BaseModel):
     )
 
 
+class EstimatorCandidate(BaseModel):
+    """One estimator the energy-score selector fit and scored for this analysis."""
+
+    estimator: str = Field(..., description="Estimator type (e.g. causal_forest / linear_dml)")
+    success: bool = Field(default=False, description="Did this estimator fit successfully?")
+    energy_score: Optional[float] = Field(
+        default=None, description="Energy score (LOWER is better); None if the fit failed"
+    )
+    ate: Optional[float] = Field(default=None, description="This estimator's ATE estimate")
+    error: Optional[str] = Field(default=None, description="Failure reason, if it did not fit")
+    is_selected: bool = Field(default=False, description="True for the winning estimator")
+
+
+class EstimatorComparison(BaseModel):
+    """Why the agent chose this estimator: the full data-driven evaluation.
+
+    The Auto path fits and energy-scores several estimators (causal_forest,
+    linear_dml, drlearner, ols) and picks the lowest energy score with a
+    robust-over-fast tie-break. This surfaces that comparison so the analyst can
+    see WHAT was evaluated and WHY the winner won — not just the winner's name.
+    """
+
+    candidates: List[EstimatorCandidate] = Field(default_factory=list)
+    selection_reason: Optional[str] = Field(
+        default=None, description="Human-readable rationale for the winning estimator"
+    )
+    energy_score_gap: Optional[float] = Field(
+        default=None, description="Energy-score margin between the winner and runner-up"
+    )
+    n_evaluated: int = Field(default=0, description="How many estimators were fit")
+    n_succeeded: int = Field(default=0, description="How many fit successfully")
+    quality_tier: Optional[str] = Field(
+        default=None,
+        description="Winner's quality tier (excellent/good/acceptable/poor/unreliable)",
+    )
+    requires_review: bool = Field(
+        default=False, description="True if the winner breached the review gate"
+    )
+
+
 class AgentCausalAnalysisResponse(BaseModel):
     """Result of an end-to-end causal_impact agent run.
 
@@ -573,6 +613,14 @@ class AgentCausalAnalysisResponse(BaseModel):
     statistical_significance: bool = Field(default=False)
     selected_estimator: Optional[str] = Field(
         default=None, description="Estimator the agent actually used"
+    )
+    estimator_comparison: Optional[EstimatorComparison] = Field(
+        default=None,
+        description=(
+            "The data-driven estimator evaluation (candidates + energy scores + "
+            "selection rationale). None when only one estimator was evaluated "
+            "(an explicitly-forced method), since there is nothing to compare."
+        ),
     )
     confidence: Optional[float] = Field(default=None, description="Overall confidence (0-1)")
     refutation: RefutationSummary = Field(default_factory=RefutationSummary)
@@ -643,6 +691,13 @@ class DiscoveredEffect(BaseModel):
     )
     impact: Optional[float] = Field(default=None, description="Effect magnitude |ate| (ranking)")
     n_rows: int = 0
+    summary: Optional[str] = Field(
+        default=None,
+        description=(
+            "One-line plain-language reading of this effect (direction, magnitude, "
+            "robustness verdict, significance). None until the run produces an estimate."
+        ),
+    )
     analysis_id: Optional[str] = Field(
         default=None, description="GET /causal/agent-analyze/{id} for the full DAG + refutation"
     )
