@@ -30,9 +30,12 @@ import math
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, NamedTuple, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+
+if TYPE_CHECKING:
+    from src.repositories.causal_path import CausalPathRepository
 
 from src.api.dependencies.auth import require_analyst, require_viewer
 from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
@@ -1073,16 +1076,54 @@ _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJob
 _COMPLEMENT_OUTCOMES_SKIP = {"discontinued_180d"}
 
 
-def _discover_candidate_pairs(spec: Dict[str, Any]) -> List[tuple]:
-    """Deduped (treatment, outcome) questions for the leaderboard: no self-pairs,
-    and complementary outcomes collapsed to one representative."""
-    pairs: List[tuple] = []
-    for t in spec["treatment"]:
-        for o in spec["outcome"]:
-            if t == o or o in _COMPLEMENT_OUTCOMES_SKIP:
-                continue
-            pairs.append((t, o))
-    return pairs
+class _CandidateQuestion(NamedTuple):
+    treatment: str
+    outcome: str
+    brand: Optional[str]
+    adjustment_set: List[str]
+
+
+async def _get_causal_path_repo() -> "CausalPathRepository":
+    # ASYNC client is required: CausalPathRepository.get_many() awaits
+    # query.execute(), which only works on the async postgrest builder. Building
+    # the repo with the SYNC client raises "object APIResponse can't be used in
+    # 'await'" the moment a read runs (precedent: chatbot_tools._query_causal_chains).
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.causal_path import CausalPathRepository
+
+    return CausalPathRepository(supabase_client=await get_async_supabase_client())
+
+
+async def _discover_candidate_questions(
+    dataset: str, brand: Optional[str]
+) -> List[_CandidateQuestion]:
+    """SSOT-derived leaderboard questions (replaces the hand-curated cross-product).
+
+    Reads distinct (treatment, outcome, brand) from ``causal_paths`` and attaches
+    each row's modeled ``confounders_controlled``, intersected with the dataset's
+    numeric allowlist (geographic_region is non-numeric -> dropped here; restored
+    in P1b). The column-allowlist security gate in ``_load_agent_estimation_frame``
+    is unchanged — this replaces ENUMERATION only, not validation."""
+    spec = _CAUSAL_DATASET_SPECS[dataset]
+    numeric = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    allowed_cov = set(spec["covariate"]) & numeric
+    repo = await _get_causal_path_repo()
+    rows = await repo.get_distinct_questions(brand=brand, include_synthetic=True)
+    out: List[_CandidateQuestion] = []
+    for r in rows:
+        t, o = r["treatment"], r["outcome"]
+        if t == o or o in _COMPLEMENT_OUTCOMES_SKIP:
+            continue
+        # Grain-scope guard (shared with later phases): causal_paths has no `grain`
+        # column and other grains will share the table, so restrict to questions
+        # whose treatment AND outcome are in THIS dataset's spec. No-op for patient.
+        if t not in spec["treatment"] or o not in spec["outcome"]:
+            continue
+        adj = [c for c in r.get("confounders", []) if c in allowed_cov and c not in (t, o)]
+        out.append(
+            _CandidateQuestion(treatment=t, outcome=o, brand=r.get("brand"), adjustment_set=adj)
+        )
+    return out
 
 
 def _effect_confidence_score(gate_decision: Optional[str], significant: bool) -> float:
@@ -1127,12 +1168,18 @@ def _effect_summary(
 
 
 def _effect_from_agent_response(
-    treatment: str, outcome: str, resp: "AgentCausalAnalysisResponse", analysis_id: str
+    treatment: str,
+    outcome: str,
+    resp: "AgentCausalAnalysisResponse",
+    analysis_id: str,
+    question: Optional[_CandidateQuestion] = None,
 ) -> DiscoveredEffect:
     gate = resp.refutation.gate_decision if resp.refutation else None
     return DiscoveredEffect(
         treatment=treatment,
         outcome=outcome,
+        brand=question.brand if question is not None else None,
+        adjustment_set=list(question.adjustment_set) if question is not None else [],
         status=_effect_status_from_gate(resp.ate, gate, resp.status),
         ate=resp.ate,
         ate_ci_lower=resp.ate_ci_lower,
@@ -1161,19 +1208,37 @@ def _rank_effects(effects: List[DiscoveredEffect]) -> List[DiscoveredEffect]:
     )
 
 
+def _pending_effect(q: _CandidateQuestion, status: str) -> DiscoveredEffect:
+    """A not-yet-validated leaderboard cell (pending/running/failed) carrying the
+    SSOT brand + modeled adjustment set but no estimate yet."""
+    return DiscoveredEffect(
+        treatment=q.treatment,
+        outcome=q.outcome,
+        brand=q.brand,
+        adjustment_set=list(q.adjustment_set),
+        status=status,
+    )
+
+
 async def _run_discover_effects_task(
-    job_id: str, dataset: str, pairs: List[tuple], data_source: str, brand: Optional[str] = None
+    job_id: str,
+    dataset: str,
+    questions: List[_CandidateQuestion],
+    data_source: str,
+    brand: Optional[str] = None,
 ) -> None:
     """Background: validate each candidate question with the causal_impact agent
     (serial — each acquires the heavy-compute slot), updating the cached job after
     each so the FE leaderboard fills in progressively, ranked by confidence+impact.
 
-    ``brand`` (optional) scopes every candidate's estimation frame to one brand."""
-    spec = _CAUSAL_DATASET_SPECS[dataset]
-    covariates_all = list(spec["covariate"])
-    # Keyed pending effects we mutate in place across the run.
+    Questions are SSOT-derived (see ``_discover_candidate_questions``): each carries
+    its own brand and modeled adjustment set. ``brand`` (the request-level filter)
+    is a fallback when a question's row has no brand."""
+    # Keyed pending effects we mutate in place across the run. The (treatment,
+    # outcome, brand) triple keys the dict because the SSOT can carry the same
+    # (treatment, outcome) for several brands.
     effects: Dict[tuple, DiscoveredEffect] = {
-        (t, o): DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs
+        (q.treatment, q.outcome, q.brand): _pending_effect(q, "pending") for q in questions
     }
 
     async def _publish(status: str, completed: int) -> None:
@@ -1184,25 +1249,34 @@ async def _run_discover_effects_task(
                 status=status,
                 dataset=dataset,
                 brand=brand,
-                total=len(pairs),
+                total=len(questions),
                 completed=completed,
                 effects=_rank_effects(list(effects.values())),
             ),
         )
 
     completed = 0
-    for t, o in pairs:
-        effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="running")
+    for q in questions:
+        t, o = q.treatment, q.outcome
+        key = (t, o, q.brand)
+        # Fallback to the request-level brand filter when the SSOT row has no
+        # brand. NOTE: this fallback scopes the DATA LOAD only; the effect's
+        # ``brand`` label stays q.brand (None here). Harmless for patient grain —
+        # the reseed populates brand per causal_paths row — but later grains that
+        # share this table must revisit whether the fallback brand should be the
+        # displayed label.
+        q_brand = q.brand or brand
+        effects[key] = _pending_effect(q, "running")
         await _publish("running", completed)
         try:
-            cov = [c for c in covariates_all if c not in (t, o)]
+            cov = q.adjustment_set
             df, _select = await _load_agent_estimation_frame(
                 dataset=dataset,
                 treatment_var=t,
                 outcome_var=o,
                 covariates=cov,
                 limit=1500,
-                brand=brand,
+                brand=q_brand,
             )
             aid = str(uuid.uuid4())
             req = AgentCausalAnalysisRequest(
@@ -1211,7 +1285,7 @@ async def _run_discover_effects_task(
                 dataset=dataset,
                 limit=1500,
                 auto_discover=True,
-                brand=brand,
+                brand=q_brand,
             )
             await _agent_analysis_store.set(
                 aid,
@@ -1233,16 +1307,16 @@ async def _run_discover_effects_task(
             resp = await _agent_analysis_store.get(aid)
             if resp is None:
                 raise RuntimeError(f"agent analysis {aid} produced no cached result")
-            effects[(t, o)] = _effect_from_agent_response(t, o, resp, aid)
+            effects[key] = _effect_from_agent_response(t, o, resp, aid, question=q)
         except HTTPException as e:
             # Fail-closed: a question with no usable data is marked failed, not faked.
             logger.warning(f"discover-effects: {t}->{o} failed-closed: {e.detail}")
-            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+            effects[key] = _pending_effect(q, "failed")
         except Exception as e:  # noqa: BLE001
             logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
-            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+            effects[key] = _pending_effect(q, "failed")
         completed += 1
-        await _publish("running" if completed < len(pairs) else "completed", completed)
+        await _publish("running" if completed < len(questions) else "completed", completed)
 
 
 @router.post(
@@ -1289,7 +1363,7 @@ async def discover_causal_effects(
                 status_code=400,
                 detail=f"Unknown brand '{brand}' for dataset '{dataset}'. Known: {available}",
             )
-    pairs = _discover_candidate_pairs(spec)
+    questions = await _discover_candidate_questions(dataset, brand)
     job_id = str(uuid.uuid4())
     data_source = "synthetic" if deployment_includes_synthetic() else "database"
     initial = DiscoverEffectsResponse(
@@ -1297,13 +1371,22 @@ async def discover_causal_effects(
         status="pending",
         dataset=dataset,
         brand=brand,
-        total=len(pairs),
+        total=len(questions),
         completed=0,
-        effects=[DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs],
+        effects=[
+            DiscoveredEffect(
+                treatment=q.treatment,
+                outcome=q.outcome,
+                brand=q.brand,
+                adjustment_set=list(q.adjustment_set),
+                status="pending",
+            )
+            for q in questions
+        ],
     )
     await _discover_effects_store.set(job_id, initial)
     background_tasks.add_task(
-        _run_discover_effects_task, job_id, dataset, pairs, data_source, brand
+        _run_discover_effects_task, job_id, dataset, questions, data_source, brand
     )
     return initial
 

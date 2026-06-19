@@ -675,6 +675,12 @@ class DiscoveredEffect(BaseModel):
 
     treatment: str
     outcome: str
+    brand: Optional[str] = Field(
+        None, description="Brand this question is scoped to (SSOT-derived)"
+    )
+    adjustment_set: List[str] = Field(
+        default_factory=list, description="Modeled backdoor set used for this estimate"
+    )
     status: str = Field(
         ...,
         description="pending / running / completed / needs_review / blocked / failed",
