@@ -16,9 +16,12 @@
 
 import * as React from 'react';
 import { CopilotPopup } from '@copilotkit/react-ui';
+import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MessageSquare, X, Bot, Keyboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getValidated } from '@/lib/api-client';
+import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 import { Button } from '@/components/ui/button';
 import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
 
@@ -55,6 +58,18 @@ export function E2IChatPopup({
   const copilotEnabled = useCopilotEnabled();
   const { chatOpen, setChatOpen, filters, agents } = useE2ICopilot();
 
+  // Live agent status from the same real /agents/status source the sidebar and
+  // the Agent Orchestration page use (ACTIVE = action in the last ~15 min). The
+  // provider's static registry is the fallback. Replaces the previously-dead
+  // count derived from the never-populated `activeAgents` map.
+  const { data: agentStatus } = useQuery({
+    queryKey: ['agent-status'],
+    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
+    refetchInterval: 30000,
+    retry: false,
+    enabled: copilotEnabled,
+  });
+
   // Keyboard shortcut: Cmd/Ctrl + /
   React.useEffect(() => {
     if (!copilotEnabled) return;
@@ -85,7 +100,7 @@ export function E2IChatPopup({
     'top-left': 'top-6 left-6',
   };
 
-  const activeAgentCount = agents.filter(
+  const activeAgentCount = (agentStatus?.agents ?? agents).filter(
     (a) => a.status === 'active' || a.status === 'processing'
   ).length;
 
@@ -166,7 +181,7 @@ export function E2IChatPopup({
                   <div>
                     <h3 className="font-semibold text-sm">E2I Quick Chat</h3>
                     <p className="text-[10px] text-muted-foreground">
-                      {filters.brand} | {activeAgentCount} active
+                      {activeAgentCount} active
                     </p>
                   </div>
                 </div>

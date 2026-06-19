@@ -92,7 +92,13 @@ jobs:
 
       - name: Run type check
         working-directory: frontend
-        run: npx tsc --noEmit
+        # `tsc -b` (build mode) follows the project references in tsconfig.json
+        # (app + node), so it actually type-checks the source. Plain
+        # `tsc --noEmit` resolves to the references-only root config
+        # (`"files": []`) and silently checks nothing. `--noEmit` keeps this a
+        # pure type-check (no JS; the configs are already noEmit). See the
+        # `build` script, which uses the same `tsc -b`.
+        run: npm run typecheck
 
   unit-tests:
     runs-on: ubuntu-latest

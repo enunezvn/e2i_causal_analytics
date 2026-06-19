@@ -440,8 +440,8 @@ describe('CopilotHooksConnector', () => {
       </CopilotKitWrapper>
     );
 
-    // Should register 6 actions
-    expect(mockUseCopilotAction).toHaveBeenCalledTimes(6);
+    // Should register 7 actions
+    expect(mockUseCopilotAction).toHaveBeenCalledTimes(7);
 
     // Check action names
     const actionNames = mockUseCopilotAction.mock.calls.map((call) => call[0]?.name);
@@ -451,6 +451,7 @@ describe('CopilotHooksConnector', () => {
     expect(actionNames).toContain('highlightCausalPaths');
     expect(actionNames).toContain('setDetailLevel');
     expect(actionNames).toContain('toggleChat');
+    expect(actionNames).toContain('renderKpiTrend');
   });
 
   it('does not register hooks when CopilotKit is disabled', () => {
