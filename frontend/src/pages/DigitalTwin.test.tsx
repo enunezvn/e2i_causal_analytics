@@ -168,6 +168,7 @@ function interventionTypesResult(
         label,
         effect_basis: cohortEstimated.includes(value) ? 'cohort_estimated' : 'synthetic',
         available: availableValues.includes(value),
+        available_for_effect: availableValues.includes(value),
       })),
       brand: 'Remibrutinib',
       twin_type: 'hcp',

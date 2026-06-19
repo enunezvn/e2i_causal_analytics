@@ -272,7 +272,9 @@ class CohortEffectDataProvider:
         # handoff. region is the heterogeneity axis (effect_modifier); the present subset
         # of COHORT_CONFOUNDERS is the pre-treatment control set; ground_truth_ate is None
         # because the effect is ESTIMATED from the data, not injected.
-        confounders = [c for c in COHORT_CONFOUNDERS if c in self._cohort.columns]
+        # Pass the FULL required confounder set; the estimator fails closed if the cohort
+        # is missing any (refusing an under-adjusted estimate) rather than silently dropping.
+        confounders = list(COHORT_CONFOUNDERS)
         return TrainingFrame(
             df=self._cohort,
             treatment_var=treatment_col,

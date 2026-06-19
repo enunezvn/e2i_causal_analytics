@@ -789,7 +789,6 @@ async def run_simulation(
     """
     from src.api.dependencies.compute import (
         HeavyComputeSaturated,
-        await_celery_result,
         heavy_compute_slot,
         heavy_offload_enabled,
         run_in_bounded_executor,
@@ -869,50 +868,19 @@ async def run_simulation(
             )
 
         if heavy_offload_enabled():
-            # P2 offload path (DARK by default): enqueue the heavy compute on
-            # worker_heavy and await the result WITHOUT blocking the event loop,
-            # preserving the synchronous HTTP contract. The task runs the SAME
-            # compute as the inline path (shared src.digital_twin.simulation_runner)
-            # and returns a JSON dict we rebuild into the SAME SimulationResult so
-            # the response extraction below is byte-identical across both paths.
-            # simulation_result_from_dict is a light helper (its heavy imports
-            # are function-local), safe to import on the API process.
-            from src.digital_twin.simulation_runner import simulation_result_from_dict
-
-            # Enqueue by registered task NAME via the existing send_task idiom
-            # (src/workers/celery_app.py) so importing the heavy task package —
-            # which pulls sklearn/ML libs into the API process via
-            # src/tasks/__init__ — is avoided on the offload path.
-            from src.workers.celery_app import celery_app
-
-            payload = {
-                "twin_type_value": request.twin_type.value,
-                "brand_value": request.brand.value,
-                "twin_count": request.twin_count,
-                "intervention_dict": intervention.model_dump(mode="json"),
-                "population_filter_dict": (
-                    pop_filter.model_dump(mode="json") if pop_filter is not None else None
+            # Direction 2: the offload worker (src.tasks.simulate_population) reconstructs
+            # the engine WITHOUT the cohort provider built above, so it would fabricate a
+            # synthetic effect for identified interventions. Fail HONESTLY until the worker
+            # runs the same cohort-causal path, rather than offload a fabricated estimate.
+            # (Offload is DARK by default; the inline path below is the real estimator.
+            # Follow-up: thread the cohort frame into the worker to restore offload.)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Cohort-causal effect estimation runs inline only; the heavy-offload "
+                    "path is not yet wired for it (set HEAVY_OFFLOAD_ENABLED=false)."
                 ),
-                "calculate_heterogeneity": request.calculate_heterogeneity,
-                "model_id_value": str(model_id),
-                # The worker rebuilds a fresh generator, so it must hydrate the
-                # SAME persisted model before generating (#705 H4).
-                "model_uri": model_row.get("mlflow_model_uri"),
-                "model_run_id": model_row.get("mlflow_run_id"),
-            }
-            async_result = celery_app.send_task(
-                "src.tasks.simulate_population", args=[payload], queue="twins"
             )
-            try:
-                result_dict = await await_celery_result(
-                    async_result, timeout=_OFFLOAD_TIMEOUT_SECONDS
-                )
-            except TimeoutError:
-                raise HTTPException(
-                    status_code=408,
-                    detail="Twin simulation timed out; retry shortly.",
-                )
-            result = simulation_result_from_dict(result_dict)
         else:
             # P1 inline path (default + fallback). Twin generation + simulation
             # are the heavy, blocking, ~1.3 GiB part of this request. Bound
@@ -1188,6 +1156,8 @@ async def compare_scenarios(
         heavy_compute_slot,
         run_in_bounded_executor,
     )
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.effect.cohort_loader import build_cohort_provider_or_none
     from src.digital_twin.models.simulation_models import InterventionConfig
     from src.digital_twin.models.twin_models import Brand, TwinType
     from src.digital_twin.simulation_engine import SimulationEngine
@@ -1210,13 +1180,32 @@ async def compare_scenarios(
             brand=brand,
             model_id=getattr(scenario, "model_id", None),
         )
+        # Direction 2 identification gate (same as /simulate): estimate a real causal
+        # effect only for interventions identified in the cohort. A scenario whose
+        # intervention is not identified fails the comparison closed (422) — never a
+        # fabricated synthetic effect.
+        cohort_provider = await build_cohort_provider_or_none(
+            repo.client, scenario.intervention_type, scenario.brand
+        )
+        if cohort_provider is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"No effect data available for scenario intervention "
+                    f"'{scenario.intervention_type}' / '{scenario.brand}': not identified "
+                    "in the connected cohort (no fabricated effect is returned)."
+                ),
+            )
         generator = await _load_trained_generator(
             twin_type=twin_type, brand=brand, model_row=model_row
         )
-        return generator, model_row
+        return generator, model_row, cohort_provider
 
     def _run_scenario(
-        scenario: ScenarioSimulateRequest, generator: Any, model_row: Dict[str, Any]
+        scenario: ScenarioSimulateRequest,
+        generator: Any,
+        model_row: Dict[str, Any],
+        cohort_provider: Any,
     ) -> SimulationResponse:
         intervention = InterventionConfig(
             intervention_type=scenario.intervention_type,
@@ -1233,7 +1222,12 @@ async def compare_scenarios(
         # Use the resolved DB model_id — never a UUID(int=0) sentinel (#705 H4).
         model_id = UUID(str(model_row["model_id"]))
         population = generator.generate(n=scenario.twin_count)
-        engine = SimulationEngine(population=population)
+        # Direction 2: real DML cohort estimate per scenario (no fabricated synthetic effect).
+        engine = SimulationEngine(
+            population=population,
+            effect_provider=cohort_provider,
+            effect_estimator=CohortCausalEstimator(),
+        )
         engine.model_id = model_id
         result = engine.simulate(intervention_config=intervention)
         # A failed scenario carries ate=0.0 / REFINE — fail the comparison closed
@@ -1278,7 +1272,7 @@ async def compare_scenarios(
 
     try:
         repo = await _get_twin_repo()
-        base_gen, base_row = await _load_for(request.base_scenario)
+        base_gen, base_row, base_provider = await _load_for(request.base_scenario)
         alt_loaded = [await _load_for(s) for s in request.alternative_scenarios]
 
         # Twin generation is the heavy, blocking, ~1.3 GiB work. Run every scenario
@@ -1287,11 +1281,13 @@ async def compare_scenarios(
         # or bypass the OOM budget the slot enforces.
         async with heavy_compute_slot():
             base_result = await run_in_bounded_executor(
-                _run_scenario, request.base_scenario, base_gen, base_row
+                _run_scenario, request.base_scenario, base_gen, base_row, base_provider
             )
             alternative_results = [
-                await run_in_bounded_executor(_run_scenario, s, gen, row)
-                for s, (gen, row) in zip(request.alternative_scenarios, alt_loaded, strict=True)
+                await run_in_bounded_executor(_run_scenario, s, gen, row, prov)
+                for s, (gen, row, prov) in zip(
+                    request.alternative_scenarios, alt_loaded, strict=True
+                )
             ]
 
         all_results = [base_result, *alternative_results]

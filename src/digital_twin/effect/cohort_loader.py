@@ -17,6 +17,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from src.digital_twin.effect.provider import (
+    COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
     COHORT_MIN_ROWS,
     INTERVENTION_TREATMENT_MAP,
@@ -53,7 +54,7 @@ async def load_cohort_frame(client: Any, brand: str) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    for col in ("engagement_score", "call_frequency", "conversion_rate"):
+    for col in ("engagement_score", "conversion_rate", "market_share", "total_rx_count"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
@@ -64,25 +65,32 @@ async def build_cohort_provider_or_none(
     intervention_type: str,
     brand: str,
 ) -> Optional[CohortEffectDataProvider]:
-    """Return a :class:`CohortEffectDataProvider` if the intervention is
-    cohort-estimable AND the brand has enough usable cohort rows; else ``None``
-    (the caller falls back to the synthetic provider). Never raises — a DB/shape
-    problem degrades to ``None`` (synthetic), never a fabricated effect.
+    """Return a :class:`CohortEffectDataProvider` if the intervention is identified in
+    the cohort AND the brand has enough usable rows (treatment + outcome + region + the
+    required pre-treatment confounders all non-null); else ``None``. When ``None``, the
+    caller surfaces an honest "no effect data" (422) — it does NOT fall back to a
+    fabricated synthetic effect. Never raises — a DB/shape problem degrades to ``None``.
     """
     if intervention_type not in COHORT_ESTIMABLE_INTERVENTIONS:
         return None
     treatment_col = INTERVENTION_TREATMENT_MAP[intervention_type]
     try:
         df = await load_cohort_frame(client, brand)
-    except Exception as e:  # DB unreachable / query error → synthetic fallback
+    except Exception as e:  # DB unreachable / query error → honest unavailable
         logger.warning("cohort load failed for %s/%s: %s", brand, intervention_type, e)
         return None
     if df.empty or treatment_col not in df.columns:
         return None
-    usable = df.dropna(subset=[treatment_col, "conversion_rate", "region"])
+    # Usable rows must have the treatment, outcome, region AND the required confounders
+    # non-null — aligned with what the direct estimator needs (it fails closed otherwise),
+    # so we never build a provider that /simulate would then reject.
+    if any(c not in df.columns for c in COHORT_CONFOUNDERS):
+        return None
+    required = [treatment_col, "conversion_rate", "region", *COHORT_CONFOUNDERS]
+    usable = df.dropna(subset=required)
     if len(usable) < COHORT_MIN_ROWS:
         logger.info(
-            "cohort for %s/%s has %d usable rows (< %d) — using synthetic",
+            "cohort for %s/%s has %d usable rows (< %d) — unavailable",
             brand,
             intervention_type,
             len(usable),
@@ -93,20 +101,25 @@ async def build_cohort_provider_or_none(
 
 
 async def brand_has_cohort(client: Any, brand: str) -> bool:
-    """Cheap check for ``/intervention-types`` ``effect_basis``: does the brand
-    have a usable cohort (non-null engagement) of at least ``COHORT_MIN_ROWS``?
+    """Does the brand have a cohort USABLE by the direct causal estimator — at least
+    ``COHORT_MIN_ROWS`` rows with the treatment, outcome, region AND the required
+    pre-treatment confounders all non-null? Drives ``available_for_effect``, so it must
+    match what ``/simulate`` will accept (else it would 422 a selectable intervention).
     Degrades to ``False`` on any error (advisory only).
     """
     try:
-        result = await (
+        query = (
             client.table(COHORT_TABLE)
             .select("metric_id", count="exact")
             .eq("metric_type", COHORT_METRIC_TYPE)
             .eq("brand", brand)
             .not_.is_("engagement_score", "null")
-            .limit(1)
-            .execute()
+            .not_.is_("conversion_rate", "null")
+            .not_.is_("region", "null")
         )
+        for col in COHORT_CONFOUNDERS:
+            query = query.not_.is_(col, "null")
+        result = await query.limit(1).execute()
     except Exception as e:
         logger.warning("brand_has_cohort check failed for %s: %s", brand, e)
         return False

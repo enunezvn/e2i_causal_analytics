@@ -85,7 +85,17 @@ def estimate_cohort_effect(
             f"cohort missing required column(s): need '{outcome_col}' and '{region_col}'."
         )
 
-    present_confounders = [c for c in confounders if c in cohort.columns]
+    # Require every REQUESTED confounder to be present — refuse to silently drop a known
+    # confounder and emit an under-adjusted (confounded) estimate that LOOKS adjusted.
+    # (An explicit empty `confounders` is allowed: it is the deliberate naive/unadjusted
+    # contrast used for de-confounding validation.)
+    missing = [c for c in confounders if c not in cohort.columns]
+    if missing:
+        raise EffectDataUnavailable(
+            f"cohort missing required confounder column(s) {missing}; refusing to "
+            "produce an under-adjusted estimate."
+        )
+    present_confounders = list(confounders)
 
     # Coerce + drop rows null in any model input (fail-honest, no NaN-as-0 fabrication).
     work = pd.DataFrame(

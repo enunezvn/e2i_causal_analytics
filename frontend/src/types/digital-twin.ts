@@ -119,10 +119,15 @@ export interface InterventionTypeItem {
   value: string;
   /** Human-readable label. */
   label: string;
-  /** 'synthetic' (v1, intervention-agnostic uplift) or 'modeled' (Phase 2: real per-brand CATE). */
+  /** 'cohort_causal' (effect identified + estimated by direct DML on the cohort) or
+   * 'unavailable' (not identified in the data — no fabricated effect). */
   effect_basis: string;
   /** True when a trained twin model exists for the requested brand/twin_type (else `/simulate` 503s). */
   available: boolean;
+  /** True only when the intervention's effect is IDENTIFIED in the cohort (a real causal
+   * estimate is possible). Non-identified types are hidden from the menu; `/simulate`
+   * returns 422 for them. */
+  available_for_effect: boolean;
 }
 
 /** Brand-aware list of canonical intervention types for the dropdown. */
