@@ -822,6 +822,17 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "ecog_performance_status",
         ],
     },
+    # HCP grain: hcp_brand_adoption (treatment_arm, adopted, brand) JOIN
+    # hcp_profiles (peer_influence_score, influence_network_size) on hcp_id. The
+    # JOIN loader derives centrality_z = zscore(log1p(influence_network_size)) as
+    # the modeled backdoor for the rep-engagement arm. peer_influence_score is the
+    # EXOGENOUS-centrality treatment (empty backdoor); treatment_arm is the rep
+    # engagement arm (adjust centrality_z). adopted is the binary outcome.
+    "hcp_adoption": {
+        "treatment": ["peer_influence_score", "treatment_arm"],
+        "outcome": ["adopted"],
+        "covariate": ["centrality_z"],
+    },
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
 
@@ -843,6 +854,12 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "ldh_ratio",
         "urticaria_severity_uas7",
         "ecog_performance_status",
+    },
+    "hcp_adoption": {
+        "peer_influence_score",
+        "treatment_arm",
+        "adopted",
+        "centrality_z",
     },
 }
 
