@@ -1,25 +1,59 @@
 /**
- * Causal Analysis Page
- * ====================
+ * Causal Analysis Page — unified, agent-led
+ * =========================================
  *
- * Agent-driven causal inference. The page leverages the causal_impact agent:
- * the analyst picks a treatment + outcome (data-driven dropdowns from the
- * gold-standard frame) and optionally forces an estimator; the agent then
- * BUILDS the causal DAG, selects an estimator data-drivenly (energy-score
- * routing across the registry) unless one is forced, estimates the
- * treatment->outcome effect, and runs refutation + sensitivity. There are no
- * manual segment / estimator knobs — the engine decides.
+ * ONE page (the former /causal-discovery + /causal-analysis collapsed). The
+ * LANDING is the validated-effects leaderboard: the causal_impact agent
+ * proposes the causal questions from the gold-standard SSOT (no empty form),
+ * validates each (guided DAG discovery + data-driven estimator + refutation
+ * gate), and ranks them by confidence then impact. Facets: grain (Patient /
+ * HCP / Trigger) + brand. Each row surfaces its brand + plain-language summary
+ * and drills into the deep view (DAG + per-test refutation + estimator
+ * comparison + interpretation).
+ *
+ * A secondary "Pose your own question" panel keeps the manual treatment /
+ * outcome / brand / estimator path (sourced from GET /causal/variables) for
+ * power users; its result renders through the SAME deep view.
  *
  * @module pages/CausalAnalysis
  */
 
 import { useMemo, useState } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useQuery } from '@tanstack/react-query';
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle,
+  ChevronRight,
+  GitBranch,
+  Layers,
+  Loader2,
+  Network,
+  Play,
+  Settings,
+  Sparkles,
+  TrendingUp,
+} from 'lucide-react';
+
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Table,
   TableBody,
@@ -28,60 +62,46 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { KPICard } from '@/components/visualizations';
+import { CausalAnalysisDetail } from '@/components/causal/CausalAnalysisDetail';
 import {
   useCausalHealth,
   useCausalAnalysisHistory,
   useCausalVariables,
   useCausalBrands,
+  useDiscoverEffects,
   useRunCausalAgentAnalysis,
   useEstimators,
 } from '@/hooks/api';
-import { CausalDiscovery as CausalDiscoveryViz } from '@/components/visualizations/CausalDiscovery';
-import type { CausalNode, CausalEdge } from '@/components/visualizations/causal/CausalDAG';
-import { KPICard } from '@/components/visualizations';
-import {
-  Play,
-  CheckCircle,
-  AlertTriangle,
-  Activity,
-  GitBranch,
-  Layers,
-  Network,
-  TrendingUp,
-  Settings,
-} from 'lucide-react';
+import { getCausalAgentAnalysis } from '@/api/causal';
+import type { DiscoveredEffect } from '@/types/causal';
 
 // =============================================================================
 // CONSTANTS
 // =============================================================================
 
-// The gold-standard causal frame the agent estimates over. Treatment / outcome
-// / covariate dropdowns are populated from GET /causal/variables for THIS
-// dataset (real columns intersected with the live table). Defaults are real
-// columns (treatment_arm -> persistent_180d), NOT the old fictional
-// rep_visits / trx_count.
-const DATASET = 'patient_journeys';
-const DEFAULT_TREATMENT = 'treatment_arm';
-const DEFAULT_OUTCOME = 'persistent_180d';
+// Each grain is a `dataset` the agent estimates over. Patient (patient_journeys)
+// is live; HCP (hcp_adoption) + Trigger (nba_triggers) datasets land in P2/P3,
+// so their facet options are present but disabled until then (honest, not faked).
+interface GrainOption {
+  value: string;
+  dataset: string;
+  label: string;
+  ready: boolean;
+}
+const GRAINS: GrainOption[] = [
+  { value: 'patient', dataset: 'patient_journeys', label: 'Patient', ready: true },
+  { value: 'hcp', dataset: 'hcp_adoption', label: 'HCP', ready: false },
+  { value: 'trigger', dataset: 'nba_triggers', label: 'Trigger', ready: false },
+];
+
 // "All brands" sentinel — the Select needs a non-empty value; null is sent to the API.
 const ALL_BRANDS = '__all__';
 
-// Estimator selection. "auto" = the agent's data-driven energy-score routing
-// across the registry — the DEFAULT, so the engine decides (not the analyst).
-// The override is an expert escape hatch; values MUST be members of the
-// backend's AGENT_FORCEABLE_ESTIMATORS allowlist (schemas/causal.py).
-// (Auto now robustly selects a confounding-adjusting estimator: the energy-score
-// tiebreak no longer hands a fit-tie to naive OLS, so on the gold-standard frame
-// Auto -> linear_dml survives refutation, gate=proceed.)
+// Estimator selection for the manual panel. "auto" = the agent's data-driven
+// energy-score routing — the DEFAULT. The override is an expert escape hatch;
+// values MUST be members of the backend's AGENT_FORCEABLE_ESTIMATORS allowlist.
 const AUTO_ESTIMATOR = 'auto';
-const DEFAULT_ESTIMATOR = AUTO_ESTIMATOR;
 const ESTIMATOR_OPTIONS: Array<{ value: string; label: string }> = [
   { value: AUTO_ESTIMATOR, label: 'Auto — agent decides (recommended)' },
   { value: 'CausalForestDML', label: 'Causal Forest — EconML' },
@@ -100,12 +120,7 @@ const LIBRARY_COLORS: Record<string, string> = {
 
 const DEFAULT_HEALTH = {
   status: 'unknown',
-  libraries_available: {
-    dowhy: false,
-    econml: false,
-    causalml: false,
-    networkx: false,
-  },
+  libraries_available: { dowhy: false, econml: false, causalml: false, networkx: false },
   estimators_loaded: 0,
   pipeline_orchestrator_ready: false,
   hierarchical_analyzer_ready: false,
@@ -114,32 +129,41 @@ const DEFAULT_HEALTH = {
 };
 
 // =============================================================================
-// HELPER FUNCTIONS
+// HELPERS
 // =============================================================================
 
-function formatEffect(effect: number | null | undefined, decimals = 3): string {
-  if (effect === null || effect === undefined) return 'N/A';
-  return effect.toFixed(decimals);
+function formatEffect(ate: number | null | undefined): string {
+  if (ate === null || ate === undefined || Number.isNaN(ate)) return 'N/A';
+  return ate.toFixed(4);
 }
 
-function formatCI(lower: number | null | undefined, upper: number | null | undefined): string {
-  if (lower === null || lower === undefined || upper === null || upper === undefined) return 'N/A';
+function formatCI(lower?: number | null, upper?: number | null): string {
+  if (lower === null || lower === undefined || upper === null || upper === undefined) return '—';
   return `[${lower.toFixed(3)}, ${upper.toFixed(3)}]`;
 }
 
-/** Badge for the agent run status (completed / needs_review / failed). */
-function statusBadge(status: string | undefined) {
-  if (status === 'completed') return <Badge variant="default">Completed</Badge>;
-  if (status === 'needs_review') return <Badge variant="secondary">Needs review</Badge>;
-  return <Badge variant="destructive">Failed</Badge>;
-}
-
-/** Badge for the refutation robustness gate. */
-function gateBadge(gate: string | null | undefined) {
-  if (gate === 'proceed') return <Badge variant="default">Proceed</Badge>;
-  if (gate === 'review') return <Badge variant="secondary">Review</Badge>;
-  if (gate === 'block') return <Badge variant="destructive">Blocked</Badge>;
-  return <Badge variant="secondary">Not run</Badge>;
+// One column conveys both the run state and the robustness verdict. A computed
+// effect is shown by its gate (Proceed/Review/Blocked); a run that produced no
+// estimate is Failed; in-flight rows are Queued/Running.
+function verdictBadge(e: DiscoveredEffect) {
+  switch (e.status) {
+    case 'completed':
+      return <Badge variant="default">Proceed</Badge>;
+    case 'needs_review':
+      return <Badge variant="secondary">Review</Badge>;
+    case 'blocked':
+      return <Badge variant="destructive">Blocked</Badge>;
+    case 'running':
+      return (
+        <Badge variant="outline" className="gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" /> Running
+        </Badge>
+      );
+    case 'pending':
+      return <Badge variant="outline">Queued</Badge>;
+    default:
+      return <Badge variant="destructive">Failed</Badge>;
+  }
 }
 
 // =============================================================================
@@ -147,45 +171,34 @@ function gateBadge(gate: string | null | undefined) {
 // =============================================================================
 
 export default function CausalAnalysis() {
-  const [treatmentVar, setTreatmentVar] = useState(DEFAULT_TREATMENT);
-  const [outcomeVar, setOutcomeVar] = useState(DEFAULT_OUTCOME);
-  const [estimator, setEstimator] = useState(DEFAULT_ESTIMATOR);
+  // ── Facets ────────────────────────────────────────────────────────────────
+  const [grain, setGrain] = useState<string>('patient');
+  const activeGrain = GRAINS.find((g) => g.value === grain) ?? GRAINS[0];
+  const dataset = activeGrain.dataset;
   const [selectedBrand, setSelectedBrand] = useState<string>(ALL_BRANDS);
   const brandArg = selectedBrand === ALL_BRANDS ? null : selectedBrand;
-  const [selectedLibrary, setSelectedLibrary] = useState<string>('all');
 
-  // API hooks
-  const { data: healthData } = useCausalHealth();
-  const {
-    data: historyData,
-    isLoading: historyLoading,
-    isError: historyError,
-  } = useCausalAnalysisHistory();
-  // Real treatment / outcome / covariate candidates for the dropdowns (curated
-  // causally-meaningful columns intersected with the live schema).
-  const { data: variables } = useCausalVariables(DATASET);
-  // Brands present in the cohort (data-driven) for the brand-scope dropdown.
-  const { data: brandsData } = useCausalBrands(DATASET);
-  // The 12-estimator registry powers the Estimators tab AND tells the analyst
-  // what Auto routes across.
-  const {
-    data: estimatorsData,
-    isLoading: estimatorsLoading,
-    isError: estimatorsError,
-  } = useEstimators();
-  const runAgent = useRunCausalAgentAnalysis();
-  const result = runAgent.data;
+  // ── Leaderboard (landing): the agent's validated, ranked effects ───────────
+  const brandsQuery = useCausalBrands(dataset);
+  const { start, isStarting, startError, job } = useDiscoverEffects(dataset, brandArg);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const detail = useQuery({
+    queryKey: ['causal', 'agent-analyze', selectedId],
+    queryFn: () => getCausalAgentAnalysis(selectedId as string),
+    enabled: !!selectedId,
+  });
+  const detailResult = detail.data;
+  const effects: DiscoveredEffect[] = useMemo(() => job?.effects ?? [], [job]);
+  const running = !!job && job.status !== 'completed';
 
-  const health = healthData ?? DEFAULT_HEALTH;
-  const estimators = estimatorsData?.estimators ?? [];
-  const visibleEstimators = estimators.filter(
-    (e) => selectedLibrary === 'all' || e.library === selectedLibrary
-  );
-
-  const treatmentCandidates = variables?.treatment_candidates ?? [DEFAULT_TREATMENT];
-  const outcomeCandidates = variables?.outcome_candidates ?? [DEFAULT_OUTCOME];
-  // The agent controls for these confounders (data-driven from the dataset's
-  // curated covariates); a variable can never control for itself.
+  // ── Manual "Pose your own question" panel ──────────────────────────────────
+  const [manualOpen, setManualOpen] = useState(false);
+  const { data: variables } = useCausalVariables(dataset);
+  const treatmentCandidates = variables?.treatment_candidates ?? ['treatment_arm'];
+  const outcomeCandidates = variables?.outcome_candidates ?? ['persistent_180d'];
+  const [treatmentVar, setTreatmentVar] = useState('treatment_arm');
+  const [outcomeVar, setOutcomeVar] = useState('persistent_180d');
+  const [estimator, setEstimator] = useState(AUTO_ESTIMATOR);
   const confounders = useMemo(
     () =>
       (variables?.covariate_candidates ?? []).filter(
@@ -193,7 +206,41 @@ export default function CausalAnalysis() {
       ),
     [variables, treatmentVar, outcomeVar]
   );
+  const runAgent = useRunCausalAgentAnalysis();
+  const manualResult = runAgent.data;
 
+  const handleRunManual = async () => {
+    try {
+      await runAgent.mutateAsync({
+        treatment_var: treatmentVar,
+        outcome_var: outcomeVar,
+        dataset,
+        estimator: estimator === AUTO_ESTIMATOR ? undefined : estimator,
+        brand: brandArg ?? undefined,
+      });
+    } catch (error) {
+      console.error('Causal agent analysis failed:', error);
+    }
+  };
+
+  // ── Estimators + History tabs ──────────────────────────────────────────────
+  const { data: healthData } = useCausalHealth();
+  const {
+    data: historyData,
+    isLoading: historyLoading,
+    isError: historyError,
+  } = useCausalAnalysisHistory();
+  const {
+    data: estimatorsData,
+    isLoading: estimatorsLoading,
+    isError: estimatorsError,
+  } = useEstimators();
+  const [selectedLibrary, setSelectedLibrary] = useState<string>('all');
+  const health = healthData ?? DEFAULT_HEALTH;
+  const estimators = estimatorsData?.estimators ?? [];
+  const visibleEstimators = estimators.filter(
+    (e) => selectedLibrary === 'all' || e.library === selectedLibrary
+  );
   const overviewMetrics = useMemo(() => {
     const availableLibraries = Object.values(health.libraries_available).filter(Boolean).length;
     const totalLibraries = Object.keys(health.libraries_available).length;
@@ -207,85 +254,30 @@ export default function CausalAnalysis() {
     };
   }, [health, estimatorsData]);
 
-  // Map the agent's DAG onto the shared causal-graph visualization. The
-  // treatment->outcome edge carries the estimated effect.
-  const { vizNodes, vizEdges } = useMemo((): {
-    vizNodes: CausalNode[];
-    vizEdges: CausalEdge[];
-  } => {
-    if (!result) return { vizNodes: [], vizEdges: [] };
-    const dag = result.dag;
-    const treatmentSet = new Set(dag.treatment_nodes);
-    const outcomeSet = new Set(dag.outcome_nodes);
-    const confounderSet = new Set(dag.adjustment_sets.flat());
-    const nodes: CausalNode[] = dag.nodes.map((name) => ({
-      id: name,
-      label: name,
-      type: treatmentSet.has(name)
-        ? 'treatment'
-        : outcomeSet.has(name)
-          ? 'outcome'
-          : confounderSet.has(name)
-            ? 'confounder'
-            : 'variable',
-    }));
-    const edges: CausalEdge[] = dag.edges.map(([source, target]) => {
-      const isEffectEdge = treatmentSet.has(source) && outcomeSet.has(target);
-      return {
-        id: `${source}->${target}`,
-        source,
-        target,
-        type: 'causal',
-        ...(isEffectEdge && result.ate !== null && result.ate !== undefined
-          ? { effect: result.ate }
-          : {}),
-      };
-    });
-    return { vizNodes: nodes, vizEdges: edges };
-  }, [result]);
-
-  const handleRunAnalysis = async () => {
-    try {
-      await runAgent.mutateAsync({
-        treatment_var: treatmentVar,
-        outcome_var: outcomeVar,
-        dataset: DATASET,
-        // Omit covariates -> the backend uses the dataset's curated confounders.
-        estimator: estimator === AUTO_ESTIMATOR ? undefined : estimator,
-        // null brand -> all brands; otherwise scope the cohort to one brand.
-        brand: brandArg ?? undefined,
-      });
-    } catch (error) {
-      // Error surfaced via runAgent.isError below; nothing to fabricate.
-      console.error('Causal agent analysis failed:', error);
-    }
-  };
-
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="container mx-auto px-4 py-8 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-foreground flex items-center gap-2">
+          <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
             <GitBranch className="h-8 w-8" />
             Causal Analysis
           </h1>
-          <p className="text-muted-foreground mt-1">
-            Agent-driven causal inference — builds the DAG and estimates the treatment&rarr;outcome
-            effect
+          <p className="text-muted-foreground">
+            The agent proposes the causal questions from the gold-standard data, validates each
+            (DAG + estimator + refutation gate), and ranks them by confidence and impact. No empty
+            form — the agent decides; you read the ranked, validated results.
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={handleRunAnalysis} disabled={runAgent.isPending}>
-            <Play className="mr-2 h-4 w-4" />
-            {runAgent.isPending ? 'Running…' : 'Run Analysis'}
-          </Button>
-        </div>
+        <Badge variant="outline" className="flex items-center gap-1 self-start">
+          <Sparkles className="h-3 w-3" />
+          Agent-driven
+        </Badge>
       </div>
 
       {/* Service Health Banner */}
       {health.status === 'healthy' ? (
-        <Alert className="mb-6 border-green-200 bg-green-50">
+        <Alert className="border-green-200 bg-green-50">
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertTitle className="text-green-800">Causal Engine Healthy</AlertTitle>
           <AlertDescription className="text-green-700">
@@ -294,7 +286,7 @@ export default function CausalAnalysis() {
           </AlertDescription>
         </Alert>
       ) : (
-        <Alert variant="destructive" className="mb-6">
+        <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Service Issue</AlertTitle>
           <AlertDescription>
@@ -303,36 +295,8 @@ export default function CausalAnalysis() {
         </Alert>
       )}
 
-      {/* Run failure — surfaced honestly. The agent is fail-closed: it estimates
-          on real data and never fabricates an effect. */}
-      {runAgent.isError && (
-        <Alert variant="destructive" className="mb-6">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Analysis could not run</AlertTitle>
-          <AlertDescription>
-            {runAgent.error?.message ? `${runAgent.error.message} ` : ''}
-            The causal agent is fail-closed: it estimates on real gold-standard data and will not
-            fabricate an effect. Try a different treatment / outcome pairing, or check the engine
-            health above.
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* Running — the agent's energy-score selection + refutation runs server-side
-          (submit -> poll), which takes a minute or two. */}
-      {runAgent.isPending && (
-        <Alert className="mb-6 border-blue-200 bg-blue-50">
-          <Activity className="h-4 w-4 text-blue-600 animate-pulse" />
-          <AlertTitle className="text-blue-800">Analyzing…</AlertTitle>
-          <AlertDescription className="text-blue-700">
-            The agent is building the causal DAG, selecting an estimator across the registry, and
-            running robustness checks. This can take a minute or two.
-          </AlertDescription>
-        </Alert>
-      )}
-
       {/* Overview Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <KPICard
           title="Libraries"
           value={overviewMetrics.librariesAvailable}
@@ -355,39 +319,60 @@ export default function CausalAnalysis() {
         />
       </div>
 
-      {/* Main Content Tabs */}
-      <Tabs defaultValue="analysis" className="space-y-6">
+      <Tabs defaultValue="leaderboard" className="space-y-6">
         <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="analysis">Analysis</TabsTrigger>
+          <TabsTrigger value="leaderboard">Validated effects</TabsTrigger>
           <TabsTrigger value="estimators">Estimators</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
 
-        {/* Analysis Tab */}
-        <TabsContent value="analysis" className="space-y-6">
-          {/* Configuration */}
+        {/* Leaderboard Tab (landing) */}
+        <TabsContent value="leaderboard" className="space-y-6">
+          {/* Facets + run control */}
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Settings className="h-5 w-5" />
-                Analysis Configuration
-              </CardTitle>
+              <CardTitle>Discovered causal effects</CardTitle>
               <CardDescription>
-                Pick a treatment and outcome; the agent builds the DAG and selects the estimator.
-                Segmentation and method are decided by the engine, not set by hand.
+                For each candidate question the agent builds the DAG, selects the estimator
+                data-drivenly, and runs the refutation gate — then ranks the validated effects. This
+                takes a few minutes; results fill in as each completes.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid md:grid-cols-4 gap-4">
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Brand</label>
-                  <Select value={selectedBrand} onValueChange={setSelectedBrand}>
-                    <SelectTrigger aria-label="Brand">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <label htmlFor="grain-select" className="text-sm font-medium text-muted-foreground">
+                    Grain
+                  </label>
+                  <Select value={grain} onValueChange={setGrain} disabled={isStarting || running}>
+                    <SelectTrigger id="grain-select" className="w-44" aria-label="Grain">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {GRAINS.map((g) => (
+                        <SelectItem key={g.value} value={g.value} disabled={!g.ready}>
+                          {g.label}
+                          {g.ready ? '' : ' (coming soon)'}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label htmlFor="brand-select" className="text-sm font-medium text-muted-foreground">
+                    Brand
+                  </label>
+                  <Select
+                    value={selectedBrand}
+                    onValueChange={setSelectedBrand}
+                    disabled={isStarting || running}
+                  >
+                    <SelectTrigger id="brand-select" className="w-48" aria-label="Brand">
                       <SelectValue placeholder="All brands" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={ALL_BRANDS}>All brands</SelectItem>
-                      {(brandsData?.brands ?? []).map((b) => (
+                      {(brandsQuery.data?.brands ?? []).map((b) => (
                         <SelectItem key={b} value={b}>
                           {b}
                         </SelectItem>
@@ -395,254 +380,281 @@ export default function CausalAnalysis() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Treatment Variable</label>
-                  <Select value={treatmentVar} onValueChange={setTreatmentVar}>
-                    <SelectTrigger aria-label="Treatment variable">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {treatmentCandidates.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-2 block">Outcome Variable</label>
-                  <Select value={outcomeVar} onValueChange={setOutcomeVar}>
-                    <SelectTrigger aria-label="Outcome variable">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {outcomeCandidates.map((c) => (
-                        <SelectItem key={c} value={c}>
-                          {c}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-2 block">
-                    Estimator <span className="text-muted-foreground">(optional override)</span>
-                  </label>
-                  <Select value={estimator} onValueChange={setEstimator}>
-                    <SelectTrigger aria-label="Estimator">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {ESTIMATOR_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <Button onClick={() => start()} disabled={isStarting || running}>
+                  {isStarting || running ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {running && job
+                        ? `Validating… (${job.completed}/${job.total})`
+                        : 'Starting…'}
+                    </>
+                  ) : (
+                    <>
+                      <Play className="mr-2 h-4 w-4" />
+                      {job ? 'Re-run discovery' : 'Discover causal effects'}
+                    </>
+                  )}
+                </Button>
+                {job && (
+                  <span className="text-sm text-muted-foreground">
+                    {job.completed}/{job.total} questions validated
+                  </span>
+                )}
               </div>
-              {confounders.length > 0 && (
-                <p className="text-xs text-muted-foreground mt-4">
-                  Controlling for (confounders, data-driven):{' '}
-                  <span className="font-medium">{confounders.join(', ')}</span>
+              {!activeGrain.ready && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  The {activeGrain.label} grain&rsquo;s gold-standard loader is not wired yet — it
+                  arrives in a later phase. The Patient grain is live now.
                 </p>
+              )}
+              {startError && (
+                <Alert variant="destructive" className="mt-4">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Discovery could not start</AlertTitle>
+                  <AlertDescription>Please try again.</AlertDescription>
+                </Alert>
               )}
             </CardContent>
           </Card>
 
-          {/* Results / empty state */}
-          {!result ? (
+          {/* Leaderboard */}
+          {!job ? (
             <EmptyState
-              title="No analysis run yet"
-              description="Choose a treatment and outcome, then click Run Analysis. The agent will build the causal DAG, estimate the effect, and run robustness checks."
+              title="No discovery run yet"
+              description="Click Discover causal effects. The agent validates each candidate question and ranks the effects by confidence (robustness gate + significance) and impact (effect size)."
             />
           ) : (
-            <>
-              {/* Status / warnings */}
-              {result.status !== 'completed' && (
-                <Alert variant={result.status === 'failed' ? 'destructive' : 'default'}>
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle>
-                    {result.status === 'failed'
-                      ? 'Analysis did not produce a validated effect'
-                      : 'Estimate needs expert review'}
-                  </AlertTitle>
-                  <AlertDescription>
-                    {result.warnings.length > 0
-                      ? result.warnings.join(' ')
-                      : 'The estimate did not fully pass the robustness gate.'}
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {/* Effect summary */}
-              <div className="grid md:grid-cols-3 gap-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>
-                      {result.treatment_var} &rarr; {result.outcome_var}
-                    </CardTitle>
-                    <CardDescription>Average Treatment Effect</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-center">
-                      <div className="text-4xl font-bold text-primary">
-                        {formatEffect(result.ate)}
-                      </div>
-                      <div className="text-sm text-muted-foreground mt-2">
-                        95% CI: {formatCI(result.ate_ci_lower, result.ate_ci_upper)}
-                      </div>
-                      <div className="mt-4 flex items-center justify-center gap-2">
-                        {statusBadge(result.status)}
-                        {result.statistical_significance ? (
-                          <Badge variant="default">Significant</Badge>
-                        ) : (
-                          <Badge variant="secondary">Not significant</Badge>
-                        )}
-                      </div>
-                      {result.p_value !== null && result.p_value !== undefined && (
-                        <div className="text-xs text-muted-foreground mt-2">
-                          p = {result.p_value.toFixed(4)}
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Estimator</CardTitle>
-                    <CardDescription>
-                      {estimator === AUTO_ESTIMATOR
-                        ? 'Selected data-drivenly (energy-score)'
-                        : 'Estimator used for this run'}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-center">
-                      <div className="text-2xl font-bold capitalize">
-                        {result.selected_estimator
-                          ? result.selected_estimator.replace(/_/g, ' ')
-                          : 'N/A'}
-                      </div>
-                      {result.confidence !== null && result.confidence !== undefined && (
-                        <div className="text-sm text-muted-foreground mt-2">
-                          Confidence: {(result.confidence * 100).toFixed(0)}%
-                        </div>
-                      )}
-                      <div className="text-xs text-muted-foreground mt-3">
-                        Ran on {result.n_rows.toLocaleString()} rows ({result.data_source}) in{' '}
-                        {(result.latency_ms / 1000).toFixed(1)}s
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Robustness</CardTitle>
-                    <CardDescription>Refutation &amp; sensitivity</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between items-center">
-                        <span className="text-muted-foreground">Gate:</span>
-                        {gateBadge(result.refutation.gate_decision)}
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Tests passed:</span>
-                        <span className="font-medium">
-                          {result.refutation.tests_passed ?? '—'}
-                          {result.refutation.tests_total !== null &&
-                          result.refutation.tests_total !== undefined
-                            ? ` / ${result.refutation.tests_total}`
-                            : ''}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Sensitivity E-value:</span>
-                        <span className="font-medium">
-                          {result.refutation.sensitivity_e_value !== null &&
-                          result.refutation.sensitivity_e_value !== undefined
-                            ? result.refutation.sensitivity_e_value.toFixed(2)
-                            : '—'}
-                        </span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Causal DAG */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Network className="h-5 w-5" />
-                    Causal DAG
-                  </CardTitle>
-                  <CardDescription>
-                    The structure the agent built and adjusted for. The treatment&rarr;outcome edge
-                    carries the estimated effect.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {vizNodes.length > 0 ? (
-                    <CausalDiscoveryViz nodes={vizNodes} edges={vizEdges} showEffectsTable={false} />
-                  ) : (
-                    <EmptyState
-                      title="No DAG produced"
-                      description="The agent did not return a causal graph for this run."
-                    />
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Interpretation */}
-              {(result.narrative ||
-                result.executive_summary ||
-                result.key_insights.length > 0 ||
-                result.recommendations.length > 0) && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Interpretation</CardTitle>
-                    <CardDescription>Natural-language reading of the estimate</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4 text-sm">
-                    {result.executive_summary && (
-                      <p className="font-medium">{result.executive_summary}</p>
-                    )}
-                    {result.narrative && (
-                      <p className="text-muted-foreground whitespace-pre-line">
-                        {result.narrative}
-                      </p>
-                    )}
-                    {result.key_insights.length > 0 && (
-                      <div>
-                        <p className="font-medium mb-1">Key insights</p>
-                        <ul className="list-disc pl-5 text-muted-foreground space-y-1">
-                          {result.key_insights.map((k, i) => (
-                            <li key={i}>{k}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {result.recommendations.length > 0 && (
-                      <div>
-                        <p className="font-medium mb-1">Recommended actions</p>
-                        <ul className="list-disc pl-5 text-muted-foreground space-y-1">
-                          {result.recommendations.map((rec, i) => (
-                            <li key={i}>{rec}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-            </>
+            <Card>
+              <CardHeader>
+                <CardTitle>Ranked causal effects</CardTitle>
+                <CardDescription>
+                  Validated by the agent (discovered DAG + estimator + refutation gate), ranked by
+                  confidence then impact. Click a validated row for its DAG and robustness detail.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b bg-muted/40 text-left text-xs uppercase text-muted-foreground">
+                      <tr>
+                        <th className="p-3 font-medium">#</th>
+                        <th className="p-3 font-medium">Causal question</th>
+                        <th className="p-3 font-medium">Brand</th>
+                        <th className="p-3 font-medium">Confidence</th>
+                        <th className="p-3 font-medium">Impact (ATE)</th>
+                        <th className="p-3 font-medium">95% CI</th>
+                        <th className="p-3 font-medium">Estimator</th>
+                        <th className="p-3" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {effects.map((e, i) => {
+                        const clickable =
+                          e.status === 'completed' ||
+                          e.status === 'needs_review' ||
+                          e.status === 'blocked';
+                        const isSelected = !!e.analysis_id && e.analysis_id === selectedId;
+                        return (
+                          <tr
+                            key={`${e.treatment}->${e.outcome}->${e.brand ?? 'all'}`}
+                            className={`border-b last:border-0 ${
+                              clickable ? 'cursor-pointer hover:bg-muted/40' : 'opacity-80'
+                            } ${isSelected ? 'bg-muted/60' : ''}`}
+                            onClick={() => {
+                              if (clickable && e.analysis_id) setSelectedId(e.analysis_id);
+                            }}
+                          >
+                            <td className="p-3 text-muted-foreground">{i + 1}</td>
+                            <td className="p-3 font-medium">
+                              <span>{e.treatment}</span>{' '}
+                              <span className="text-muted-foreground">&rarr;</span>{' '}
+                              <span>{e.outcome}</span>
+                              {e.summary && (
+                                <div className="mt-1 max-w-md text-xs font-normal text-muted-foreground">
+                                  {e.summary}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3 text-muted-foreground">{e.brand ?? 'All'}</td>
+                            <td className="p-3">{verdictBadge(e)}</td>
+                            <td className="p-3 font-medium">{formatEffect(e.ate)}</td>
+                            <td className="p-3 text-muted-foreground">
+                              {formatCI(e.ate_ci_lower, e.ate_ci_upper)}
+                            </td>
+                            <td className="p-3 capitalize">
+                              {e.selected_estimator ? e.selected_estimator.replace(/_/g, ' ') : '—'}
+                            </td>
+                            <td className="p-3 text-right">
+                              {clickable && (
+                                <ChevronRight className="inline h-4 w-4 text-muted-foreground" />
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="border-t px-3 py-3 text-xs text-muted-foreground">
+                  Why these {effects.length} question{effects.length === 1 ? '' : 's'}? The agent
+                  only proposes the treatment&rarr;outcome relationships this grain&rsquo;s
+                  gold-standard causal spec defines, scoped per brand, and collapses complementary
+                  outcomes (e.g. &ldquo;discontinued&rdquo; is the inverse of
+                  &ldquo;persistent&rdquo;) and self-pairs. Clinical markers (eGFR, LDH, …) are
+                  designated adjustment covariates, not treatments or outcomes, so they enter the
+                  model as confounders rather than as questions.
+                </p>
+              </CardContent>
+            </Card>
           )}
+
+          {/* Drill-down detail for the selected effect */}
+          {selectedId && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Network className="h-5 w-5" />
+                  {detailResult ? (
+                    <>
+                      {detailResult.treatment_var} &rarr; {detailResult.outcome_var}
+                    </>
+                  ) : (
+                    'Loading effect…'
+                  )}
+                </CardTitle>
+                <CardDescription>
+                  The agent&apos;s validated causal model: discovered DAG, estimated effect, and
+                  robustness gate.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {detail.isLoading || !detailResult ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading the validated analysis…
+                  </div>
+                ) : (
+                  <CausalAnalysisDetail result={detailResult} />
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Secondary: Pose your own question (manual path) */}
+          <Card>
+            <CardHeader>
+              <button
+                type="button"
+                onClick={() => setManualOpen((o) => !o)}
+                className="flex w-full items-center justify-between text-left"
+                aria-expanded={manualOpen}
+              >
+                <div>
+                  <CardTitle>Pose your own question</CardTitle>
+                  <CardDescription>
+                    Power users: pick a treatment + outcome from the gold-standard frame and run the
+                    agent on that single hypothesis. Segmentation and method are decided by the
+                    engine, not set by hand.
+                  </CardDescription>
+                </div>
+                <ChevronRight
+                  className={`h-5 w-5 shrink-0 text-muted-foreground transition-transform ${manualOpen ? 'rotate-90' : ''}`}
+                />
+              </button>
+            </CardHeader>
+            {manualOpen && (
+              <CardContent className="space-y-4">
+                <div className="grid md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Treatment variable</label>
+                    <Select value={treatmentVar} onValueChange={setTreatmentVar}>
+                      <SelectTrigger aria-label="Treatment variable">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {treatmentCandidates.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">Outcome variable</label>
+                    <Select value={outcomeVar} onValueChange={setOutcomeVar}>
+                      <SelectTrigger aria-label="Outcome variable">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {outcomeCandidates.map((c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">
+                      Estimator <span className="text-muted-foreground">(optional override)</span>
+                    </label>
+                    <Select value={estimator} onValueChange={setEstimator}>
+                      <SelectTrigger aria-label="Estimator">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ESTIMATOR_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {confounders.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Controlling for (confounders, data-driven):{' '}
+                    <span className="font-medium">{confounders.join(', ')}</span>
+                  </p>
+                )}
+                <div className="flex items-center gap-3">
+                  <Button onClick={handleRunManual} disabled={runAgent.isPending}>
+                    <Play className="mr-2 h-4 w-4" />
+                    {runAgent.isPending ? 'Running…' : 'Run analysis'}
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Scoped to: {brandArg ?? 'All brands'} · {activeGrain.label} grain
+                  </span>
+                </div>
+
+                {runAgent.isError && (
+                  <Alert variant="destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Analysis could not run</AlertTitle>
+                    <AlertDescription>
+                      {runAgent.error?.message ? `${runAgent.error.message} ` : ''}
+                      The causal agent is fail-closed: it estimates on real gold-standard data and
+                      will not fabricate an effect. Try a different treatment / outcome pairing.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {runAgent.isPending && (
+                  <Alert className="border-blue-200 bg-blue-50">
+                    <Activity className="h-4 w-4 text-blue-600 animate-pulse" />
+                    <AlertTitle className="text-blue-800">Analyzing…</AlertTitle>
+                    <AlertDescription className="text-blue-700">
+                      The agent is building the causal DAG, selecting an estimator across the
+                      registry, and running robustness checks. This can take a minute or two.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {manualResult && <CausalAnalysisDetail result={manualResult} />}
+              </CardContent>
+            )}
+          </Card>
         </TabsContent>
 
         {/* Estimators Tab */}

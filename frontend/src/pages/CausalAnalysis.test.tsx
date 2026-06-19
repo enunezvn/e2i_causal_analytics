@@ -1,27 +1,27 @@
+// frontend/src/pages/CausalAnalysis.test.tsx
 /**
- * CausalAnalysis Page — agent-driven coverage
- * ===========================================
+ * CausalAnalysis Page — unified agent-led page
+ * ============================================
  *
- * The page leverages the causal_impact agent: pick treatment/outcome (real
- * dropdowns from /causal/variables), Run -> the agent builds the DAG, estimates
- * the treatment->outcome effect data-drivenly, and refutes. These tests lock:
- * the honest empty/error states, the data-driven config (confounders from the
- * live variables endpoint), and the rendered result (effect, estimator used,
- * robustness gate, DAG). Radix <Select> is not interacted with (not reliably
- * testable in jsdom); assertions use plain text / the result / Tabs.
+ * The page LANDS on the validated-effects leaderboard (discover-effects job),
+ * faceted by grain + brand, each row surfacing its brand + plain-language
+ * summary and drilling into the deep view (DAG + refutation + estimator
+ * comparison). A secondary "Pose your own question" panel keeps the manual
+ * treatment/outcome path sourced from /causal/variables. These tests lock the
+ * honest empty/running states, the ranked leaderboard (brand + summary), the
+ * facets, the drill-down, and the manual run.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
 
-// Stub the heavy DAG viz — we assert the page feeds it the agent's graph, not
-// its internal SVG rendering.
-vi.mock('@/components/visualizations/CausalDiscovery', () => ({
-  CausalDiscovery: ({ nodes, edges }: { nodes: unknown[]; edges: unknown[] }) => (
-    <div data-testid="causal-dag" data-nodes={nodes.length} data-edges={edges.length} />
+// Stub the shared deep view — assert the page mounts it for the selected row /
+// manual result (its internals are covered by CausalAnalysisDetail.test.tsx).
+vi.mock('@/components/causal/CausalAnalysisDetail', () => ({
+  CausalAnalysisDetail: ({ result }: { result: { analysis_id: string } }) => (
+    <div data-testid="causal-detail" data-analysis-id={result.analysis_id} />
   ),
 }));
 
@@ -30,8 +30,13 @@ vi.mock('@/hooks/api', () => ({
   useCausalAnalysisHistory: vi.fn(),
   useCausalVariables: vi.fn(),
   useCausalBrands: vi.fn(),
+  useDiscoverEffects: vi.fn(),
   useRunCausalAgentAnalysis: vi.fn(),
   useEstimators: vi.fn(),
+}));
+
+vi.mock('@/api/causal', () => ({
+  getCausalAgentAnalysis: vi.fn(),
 }));
 
 import {
@@ -39,9 +44,11 @@ import {
   useCausalAnalysisHistory,
   useCausalVariables,
   useCausalBrands,
+  useDiscoverEffects,
   useRunCausalAgentAnalysis,
   useEstimators,
 } from '@/hooks/api';
+import { getCausalAgentAnalysis } from '@/api/causal';
 
 const VARIABLES = {
   dataset: 'patient_journeys',
@@ -51,48 +58,53 @@ const VARIABLES = {
   columns: [],
 };
 
-const RESULT = {
-  analysis_id: 'r1',
-  status: 'completed',
-  treatment_var: 'treatment_arm',
-  outcome_var: 'persistent_180d',
-  dataset: 'patient_journeys',
-  n_rows: 1200,
-  data_source: 'synthetic',
-  dag: {
-    nodes: ['treatment_arm', 'persistent_180d', 'disease_severity'],
-    edges: [
-      ['treatment_arm', 'persistent_180d'],
-      ['disease_severity', 'persistent_180d'],
-    ],
-    treatment_nodes: ['treatment_arm'],
-    outcome_nodes: ['persistent_180d'],
-    adjustment_sets: [['disease_severity']],
-    dag_dot: null,
-  },
-  ate: 0.12,
-  ate_ci_lower: 0.05,
-  ate_ci_upper: 0.19,
-  standard_error: 0.03,
-  p_value: 0.001,
-  statistical_significance: true,
-  selected_estimator: 'CausalForestDML',
-  confidence: 0.81,
-  refutation: {
+const EFFECTS = [
+  {
+    treatment: 'treatment_arm',
+    outcome: 'persistent_180d',
+    status: 'completed',
+    ate: 0.0875,
+    ate_ci_lower: 0.0867,
+    ate_ci_upper: 0.0884,
+    p_value: 0,
+    statistical_significance: true,
+    selected_estimator: 'LinearDML',
     gate_decision: 'proceed',
-    passed: true,
-    needs_review: false,
-    tests_passed: 3,
-    tests_total: 3,
-    sensitivity_e_value: 1.8,
+    confidence_score: 0.9,
+    impact: 0.0875,
+    n_rows: 1500,
+    brand: 'Kisqali',
+    summary: 'treatment_arm raises persistent_180d by +0.088 — survived all robustness checks.',
+    analysis_id: 'a1',
   },
-  narrative: 'Treatment raises persistence.',
-  executive_summary: 'Positive, robust effect.',
-  recommendations: ['Prioritize adherence support'],
-  key_insights: [],
-  warnings: [],
-  latency_ms: 4200,
+  {
+    treatment: 'treatment_arm',
+    outcome: 'treatment_initiated',
+    status: 'blocked',
+    ate: -0.006,
+    statistical_significance: true,
+    selected_estimator: 'LinearDML',
+    gate_decision: 'block',
+    confidence_score: 0.4,
+    impact: 0.006,
+    n_rows: 1500,
+    brand: 'Fabhalta',
+    analysis_id: 'a3',
+  },
+];
+
+const COMPLETED_JOB = {
+  job_id: 'j1',
+  status: 'completed',
+  dataset: 'patient_journeys',
+  brand: null,
+  total: 2,
+  completed: 2,
+  effects: EFFECTS,
+  note: 'ranked',
 };
+
+const DETAIL = { analysis_id: 'a1', status: 'completed' };
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -103,7 +115,17 @@ function createWrapper() {
   );
 }
 
-describe('CausalAnalysis — agent-driven', () => {
+function mockDiscover(overrides: Record<string, unknown> = {}) {
+  (useDiscoverEffects as ReturnType<typeof vi.fn>).mockReturnValue({
+    start: vi.fn(),
+    isStarting: false,
+    startError: null,
+    job: null,
+    ...overrides,
+  });
+}
+
+describe('CausalAnalysis — unified agent-led page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (useCausalHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
@@ -130,22 +152,55 @@ describe('CausalAnalysis — agent-driven', () => {
       isError: false,
       error: null,
     });
+    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(DETAIL);
+    mockDiscover();
   });
 
-  it('renders an honest empty state before any run', () => {
+  it('lands on the leaderboard with an honest empty state before any run', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    expect(screen.getByText(/No analysis run yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No discovery run yet/i)).toBeInTheDocument();
   }, 20000);
 
-  it('shows data-driven confounders from the live variables endpoint', () => {
+  it('offers grain + brand facets; brand defaults to all (null) for the patient grain', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    // The confounders the agent controls for come from /causal/variables —
-    // proving the config is data-driven, not hardcoded rep_visits/trx_count.
-    expect(screen.getByText(/disease_severity, engagement_score/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Grain')).toBeInTheDocument();
+    expect(screen.getByLabelText('Brand')).toBeInTheDocument();
+    // Patient grain (patient_journeys) is the default; brand null = all brands.
+    expect(useDiscoverEffects).toHaveBeenCalledWith('patient_journeys', null);
   }, 20000);
 
-  it('offers a brand scope dropdown (defaults to all brands) and runs with it', () => {
-    const mutateAsync = vi.fn().mockResolvedValue(RESULT);
+  it('renders the ranked leaderboard with the brand column and per-row summary', () => {
+    mockDiscover({ job: COMPLETED_JOB });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    expect(screen.getByText('persistent_180d')).toBeInTheDocument();
+    expect(screen.getByText('treatment_initiated')).toBeInTheDocument();
+    // Brand surfaced per row (SSOT-derived scope).
+    expect(screen.getByText('Kisqali')).toBeInTheDocument();
+    expect(screen.getByText('Fabhalta')).toBeInTheDocument();
+    // Plain-language summary surfaced.
+    expect(screen.getByText(/raises persistent_180d by \+0\.088/)).toBeInTheDocument();
+    // Honest verdicts.
+    expect(screen.getByText('Proceed')).toBeInTheDocument();
+    expect(screen.getByText('Blocked')).toBeInTheDocument();
+  }, 20000);
+
+  it('shows progress while the agent is validating', () => {
+    mockDiscover({ job: { ...COMPLETED_JOB, status: 'running', completed: 1 } });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Validating… \(1\/2\)/)).toBeInTheDocument();
+  }, 20000);
+
+  it('drills a validated row into the shared deep view', async () => {
+    mockDiscover({ job: COMPLETED_JOB });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('persistent_180d'));
+    const detail = await screen.findByTestId('causal-detail');
+    expect(detail).toHaveAttribute('data-analysis-id', 'a1');
+    expect(getCausalAgentAnalysis).toHaveBeenCalledWith('a1');
+  }, 20000);
+
+  it('keeps a "Pose your own question" panel and runs the manual agent path with it', () => {
+    const mutateAsync = vi.fn().mockResolvedValue({ analysis_id: 'm1', status: 'completed' });
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync,
@@ -154,10 +209,12 @@ describe('CausalAnalysis — agent-driven', () => {
       error: null,
     });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    // The brand-scope control renders, defaulting to "All brands".
-    expect(screen.getByLabelText('Brand')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Run Analysis/i }));
-    // Default scope = all brands -> brand omitted (undefined) from the payload.
+    // The secondary manual panel is present (its trigger), defaulting collapsed.
+    expect(screen.getByRole('button', { name: /Pose your own question/i })).toBeInTheDocument();
+    // Expand it, then run the manual analysis with the data-driven defaults.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    expect(screen.getByLabelText('Treatment variable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
     expect(mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({
         treatment_var: 'treatment_arm',
@@ -168,42 +225,13 @@ describe('CausalAnalysis — agent-driven', () => {
     );
   }, 20000);
 
-  it('renders the agent result: effect, estimator used, robustness gate, DAG', () => {
-    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: RESULT,
-      mutateAsync: vi.fn(),
-      isPending: false,
-      isError: false,
-      error: null,
-    });
+  it('explains why the candidate-question set is the size it is', () => {
+    mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    // Treatment->outcome effect.
-    expect(screen.getByText('0.120')).toBeInTheDocument();
-    // The estimator the agent actually used (data-driven selection surfaced).
-    expect(screen.getByText('CausalForestDML')).toBeInTheDocument();
-    // Robustness gate from the real refutation.
-    expect(screen.getByText('Proceed')).toBeInTheDocument();
-    // DAG fed to the viz (2 edges from the fixture).
-    const dag = screen.getByTestId('causal-dag');
-    expect(dag).toHaveAttribute('data-edges', '2');
-    // Interpretation surfaced.
-    expect(screen.getByText('Treatment raises persistence.')).toBeInTheDocument();
+    expect(screen.getByText(/Why these 2 questions\?/)).toBeInTheDocument();
   }, 20000);
 
-  it('surfaces a run failure honestly (fail-closed, no fabricated effect)', () => {
-    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: undefined,
-      mutateAsync: vi.fn(),
-      isPending: false,
-      isError: true,
-      error: { message: 'No usable estimation rows.' },
-    });
-    render(<CausalAnalysis />, { wrapper: createWrapper() });
-    expect(screen.getByText(/Analysis could not run/i)).toBeInTheDocument();
-    expect(screen.getByText(/fail-closed/i)).toBeInTheDocument();
-  }, 20000);
-
-  it('shows the live estimator-registry total on the overview card', () => {
+  it('renders the live estimator-registry total on the overview card', () => {
     (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { estimators: [], total: 12, by_library: {} },
       isLoading: false,
@@ -211,32 +239,5 @@ describe('CausalAnalysis — agent-driven', () => {
     });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     expect(screen.getByText('12')).toBeInTheDocument();
-  }, 20000);
-
-  it('renders estimators from the live registry (Estimators tab)', async () => {
-    const user = userEvent.setup();
-    (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: {
-        estimators: [
-          {
-            name: 'ortho_forest',
-            library: 'econml',
-            estimator_type: 'CATE',
-            description: 'Orthogonal Random Forest for CATE',
-            best_for: [],
-            parameters: [],
-            supports_confidence_intervals: true,
-            supports_heterogeneous_effects: true,
-          },
-        ],
-        total: 12,
-        by_library: { econml: ['ortho_forest'] },
-      },
-      isLoading: false,
-      isError: false,
-    });
-    render(<CausalAnalysis />, { wrapper: createWrapper() });
-    await user.click(screen.getByRole('tab', { name: /estimators/i }));
-    expect(await screen.findByText(/ortho forest/i)).toBeInTheDocument();
   }, 20000);
 });
