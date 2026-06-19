@@ -22,6 +22,7 @@ import {
   discoverCausalEffects,
   getDiscoverCausalEffects,
   getCausalBrands,
+  getClinicalContext,
   routeQuery,
   runSequentialPipeline,
   runParallelPipeline,
@@ -42,6 +43,7 @@ import type {
   CausalBrandsResponse,
   CausalLibrary,
   CausalVariablesResponse,
+  ClinicalContext,
   ProposeQuestionsResponse,
   DiscoverEffectsResponse,
   CrossValidationRequest,
@@ -189,6 +191,28 @@ export function useCausalBrands(
     queryFn: () => getCausalBrands(dataset),
     staleTime: 5 * 60 * 1000,
     ...options,
+  });
+}
+
+/**
+ * Fetch the clinical context (drug + MoA, real pivotal endpoints, RWE citation)
+ * for a discovered effect's brand + outcome. Additive narrative — does not touch
+ * the causal estimate. Disabled until both `brand` and `outcome` are present.
+ */
+export function useClinicalContext(
+  brand: string | null | undefined,
+  outcome: string | null | undefined,
+  options?: Omit<UseQueryOptions<ClinicalContext, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<ClinicalContext, ApiError>({
+    queryKey: ['causal', 'clinical-context', brand, outcome],
+    queryFn: () => getClinicalContext(brand as string, outcome as string),
+    // Real biomedical facts change slowly; cache aggressively, no auto-refetch.
+    staleTime: 30 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    retry: false,
+    ...options,
+    enabled: Boolean(brand) && Boolean(outcome) && (options?.enabled ?? true),
   });
 }
 
