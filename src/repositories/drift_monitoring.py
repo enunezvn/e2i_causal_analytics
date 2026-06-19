@@ -1057,7 +1057,17 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
             .order("measured_at", desc=True)
         )
         result = await query.execute()
-        return [self._to_model(row) for row in (result.data or [])]
+        # A trend is a time series. The point-in-time 'holdout' snapshot (the
+        # headline champion eval, recorded once) is NOT a trend point — including
+        # it made current=holdout vs baseline=mean(walk-forward), a cross-source
+        # comparison that fabricated recall/F1 degradation on the
+        # model-performance alert and grafted a mislabeled point onto the Time
+        # Series chart. Exclude it so current/baseline + the chart are a
+        # consistent walk-forward series. Other sources (backtest_wf / mlflow /
+        # legacy null) are retained; the headline holdout metric is read
+        # separately via get_latest_curve / the holdout path.
+        rows = [r for r in (result.data or []) if (r.get("source") or "") != "holdout"]
+        return [self._to_model(row) for row in rows]
 
     async def record_curve(
         self,

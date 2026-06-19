@@ -336,3 +336,76 @@ def test_get_latest_curve_none_when_empty(monkeypatch):
     repo = _make_read_repo([])
     rec = asyncio.run(repo.get_latest_curve("mv", "confusion_matrix"))
     assert rec is None
+
+
+# ---------------------------------------------------------------------------
+# get_metric_trend() — a TREND is a walk-forward time series. The point-in-time
+# 'holdout' snapshot (the headline eval, recorded once) is NOT a trend point;
+# mixing it in made current=holdout vs baseline=mean(walk-forward) — a
+# cross-source comparison that fabricated recall/F1 degradation on the
+# model-performance alert AND grafted a mislabeled point onto the Time Series
+# chart. It must be excluded from the trend read.
+# ---------------------------------------------------------------------------
+
+
+def _make_trend_repo(rows):
+    """Repo whose trend chain (select/eq/gte/order/limit/execute) resolves to rows."""
+    client = MagicMock()
+    chain = MagicMock()
+    for m in ("select", "eq", "gte", "order", "limit"):
+        setattr(chain, m, MagicMock(return_value=chain))
+    chain.execute = AsyncMock(return_value=MagicMock(data=rows))
+    client.table = MagicMock(return_value=chain)
+    return PerformanceMetricRepository(client)
+
+
+def _acc_row(value, measured_at, source):
+    return {
+        "model_id": "mid",
+        "metric_name": "accuracy",
+        "metric_value": value,
+        "measured_at": measured_at,
+        "source": source,
+    }
+
+
+def test_get_metric_trend_excludes_holdout_snapshot(monkeypatch):
+    """The point-in-time 'holdout' row must NOT appear in the trend series."""
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+
+    rows = [
+        _acc_row(0.7050, "2026-06-10T00:00:00+00:00", "holdout"),  # snapshot (latest)
+        _acc_row(0.6929, "2026-06-01T00:00:00+00:00", "backtest_wf"),
+        _acc_row(0.7065, "2026-05-01T00:00:00+00:00", "backtest_wf"),
+    ]
+    repo = _make_trend_repo(rows)
+    recs = asyncio.run(repo.get_metric_trend("mv", "accuracy", days=365))
+
+    assert len(recs) == 2, "holdout snapshot must be dropped from the trend"
+    assert all(r.source != "holdout" for r in recs)
+    # The holdout value (0.7050) must not be present as a trend point.
+    assert all(abs(r.metric_value - 0.7050) > 1e-9 for r in recs)
+
+
+def test_get_metric_trend_keeps_non_holdout_sources(monkeypatch):
+    """backtest_wf / mlflow / null-source rows are all retained (only holdout drops)."""
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+
+    rows = [
+        _acc_row(0.70, "2026-06-01T00:00:00+00:00", "backtest_wf"),
+        _acc_row(0.72, "2026-05-01T00:00:00+00:00", "mlflow"),
+        _acc_row(0.71, "2026-04-01T00:00:00+00:00", None),
+    ]
+    repo = _make_trend_repo(rows)
+    recs = asyncio.run(repo.get_metric_trend("mv", "accuracy"))
+    assert len(recs) == 3, "only the holdout snapshot is excluded; other sources stay"
