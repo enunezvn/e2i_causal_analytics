@@ -29,6 +29,7 @@ from src.services.clinical_context.providers import (
     MechanismFragment,
     PubMedRWEProvider,
 )
+from src.services.clinical_context.service import ClinicalContextService, reset_caches
 
 __all__ = [
     "BRAND_CLINICAL_MAP",
@@ -36,10 +37,12 @@ __all__ = [
     "ChEMBLMechanismProvider",
     "CitationFragment",
     "ClinicalContextProvider",
+    "ClinicalContextService",
     "ClinicalTrialsEndpointProvider",
     "EndpointsFragment",
     "MechanismFragment",
     "PubMedRWEProvider",
     "endpoint_mapping_for_outcome",
+    "reset_caches",
     "resolve_brand_profile",
 ]
