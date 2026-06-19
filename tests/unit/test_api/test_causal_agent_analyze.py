@@ -441,8 +441,9 @@ def test_refutation_sensitivity_test_surfaced_under_contract_key_not_raw_enum():
 async def test_agent_analyze_passes_expanded_geo_dummies_as_covariates():
     """run_causal_agent_analysis must hand _run_agent_analysis_task the EXPANDED
     covariate names (geo dummies), not the raw categorical 'geographic_region'."""
-    import pandas as pd
     from unittest.mock import AsyncMock, patch
+
+    import pandas as pd
 
     from src.api.routes import causal as causal_routes
 

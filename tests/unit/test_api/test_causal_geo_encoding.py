@@ -1,9 +1,11 @@
 """Coverage for geographic_region one-hot encoding in the causal loader."""
+
+from unittest.mock import AsyncMock, patch
+
 import pandas as pd
 import pytest
-from unittest.mock import AsyncMock, patch
-from src.api.routes import causal as causal_routes
 
+from src.api.routes import causal as causal_routes
 from src.api.routes.causal import (
     _CAUSAL_CATEGORICAL_COLUMNS,
     _CAUSAL_DATASET_SPECS,
@@ -17,29 +19,62 @@ _CLIENT_FACTORY = "src.memory.services.factories.get_async_supabase_client"
 
 
 class _FakeQuery:
-    def __init__(self, rows): self._rows = rows
-    def select(self, *_a, **_k): return self
-    def eq(self, *_a, **_k): return self
-    def limit(self, *_a, **_k): return self
-    async def execute(self): return type("R", (), {"data": self._rows})()
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+    async def execute(self):
+        return type("R", (), {"data": self._rows})()
 
 
 class _FakeClient:
-    def __init__(self, rows): self._rows = rows
-    def table(self, *_a, **_k): return _FakeQuery(self._rows)
+    def __init__(self, rows):
+        self._rows = rows
+
+    def table(self, *_a, **_k):
+        return _FakeQuery(self._rows)
 
 
 @pytest.mark.asyncio
 async def test_loader_expands_geographic_region_into_dummies():
     rows = [
-        {"treatment_arm": 1, "persistent_180d": 1, "disease_severity": 2, "academic_hcp": 1, "geographic_region": "south"},
-        {"treatment_arm": 0, "persistent_180d": 0, "disease_severity": 1, "academic_hcp": 0, "geographic_region": "west"},
-        {"treatment_arm": 1, "persistent_180d": 1, "disease_severity": 3, "academic_hcp": 1, "geographic_region": "midwest"},
+        {
+            "treatment_arm": 1,
+            "persistent_180d": 1,
+            "disease_severity": 2,
+            "academic_hcp": 1,
+            "geographic_region": "south",
+        },
+        {
+            "treatment_arm": 0,
+            "persistent_180d": 0,
+            "disease_severity": 1,
+            "academic_hcp": 0,
+            "geographic_region": "west",
+        },
+        {
+            "treatment_arm": 1,
+            "persistent_180d": 1,
+            "disease_severity": 3,
+            "academic_hcp": 1,
+            "geographic_region": "midwest",
+        },
     ]
     with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(rows))):
         df, select_cols = await causal_routes._load_agent_estimation_frame(
-            dataset="patient_journeys", treatment_var="treatment_arm", outcome_var="persistent_180d",
-            covariates=["disease_severity", "academic_hcp", "geographic_region"], limit=1500,
+            dataset="patient_journeys",
+            treatment_var="treatment_arm",
+            outcome_var="persistent_180d",
+            covariates=["disease_severity", "academic_hcp", "geographic_region"],
+            limit=1500,
         )
     assert "geographic_region" not in df.columns
     assert "geographic_region=south" in df.columns
@@ -56,8 +91,11 @@ async def test_loader_rejects_unallowed_column_still_400():
     with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient([]))):
         with pytest.raises(causal_routes.HTTPException) as ei:
             await causal_routes._load_agent_estimation_frame(
-                dataset="patient_journeys", treatment_var="treatment_arm", outcome_var="persistent_180d",
-                covariates=["totally_made_up_col"], limit=10,
+                dataset="patient_journeys",
+                treatment_var="treatment_arm",
+                outcome_var="persistent_180d",
+                covariates=["totally_made_up_col"],
+                limit=10,
             )
     assert ei.value.status_code == 400
 
@@ -70,14 +108,20 @@ def test_geographic_region_registered_as_categorical_covariate():
 
 
 def test_one_hot_expands_into_stable_drop_first_float_dummies():
-    df = pd.DataFrame({
-        "treatment_arm": [1.0, 0.0, 1.0, 0.0],
-        "persistent_180d": [1.0, 0.0, 1.0, 1.0],
-        "disease_severity": [2.0, 1.0, 3.0, 2.0],
-        "geographic_region": ["south", "west", "midwest", "northeast"],
-    })
+    df = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0, 0.0],
+            "persistent_180d": [1.0, 0.0, 1.0, 1.0],
+            "disease_severity": [2.0, 1.0, 3.0, 2.0],
+            "geographic_region": ["south", "west", "midwest", "northeast"],
+        }
+    )
     out, dummy_names = _one_hot_categoricals(df, ["geographic_region"])
-    assert dummy_names == ["geographic_region=northeast", "geographic_region=south", "geographic_region=west"]
+    assert dummy_names == [
+        "geographic_region=northeast",
+        "geographic_region=south",
+        "geographic_region=west",
+    ]
     assert "geographic_region" not in out.columns
     for name in dummy_names:
         assert name in out.columns
