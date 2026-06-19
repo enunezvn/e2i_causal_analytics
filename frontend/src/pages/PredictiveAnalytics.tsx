@@ -546,7 +546,7 @@ function PredictiveAnalytics() {
                   out-of-sample entities.
                 </p>
               )}
-              {cohortStatus === 'completed' && (
+              {cohortStatus === 'completed' && cohort && (
                 <div className="space-y-4">
                   {/* Provenance banner */}
                   <div className="rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
