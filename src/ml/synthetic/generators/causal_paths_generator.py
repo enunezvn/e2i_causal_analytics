@@ -61,7 +61,7 @@ _HCP_QUESTIONS: Tuple[Tuple[str, str, List[str], str], ...] = (
 # (conversion_flag is the DB STORED-GENERATED column outcome_value>0, set only for
 # accepted triggers) with priority as an EFFECT MODIFIER (not a confounder), so its
 # modeled backdoor set is also empty. Both are direct edges (no mediator injected).
-_TRIGGER_EDGES = (
+_TRIGGER_EDGES: Tuple[Tuple[str, str, List[str]], ...] = (
     # (start_node, end_node, confounders_controlled)
     ("control_group_flag", "action_taken", []),
     ("acceptance_status", "conversion_flag", []),
