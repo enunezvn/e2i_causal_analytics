@@ -56,3 +56,68 @@ def test_nba_triggers_physical_table_is_triggers():
     from src.api.routes.causal import _CAUSAL_PHYSICAL_TABLE
 
     assert _CAUSAL_PHYSICAL_TABLE["nba_triggers"] == "triggers"
+
+
+# ---------------------------------------------------------------------------
+# _coerce_estimation_row — trigger semantics locked via the SSOT maps
+# ---------------------------------------------------------------------------
+
+from src.api.routes.causal import (  # noqa: E402 — after registration tests
+    _coerce_estimation_row,
+)
+
+
+def _trig_kw() -> dict:
+    """Keyword args for _coerce_estimation_row that express the trigger grain."""
+    return dict(
+        numeric_cols=_CAUSAL_NUMERIC_COLUMNS["nba_triggers"],
+        derivations=_CAUSAL_NUMERIC_DERIVATIONS["nba_triggers"],
+        fill_zero=frozenset(_CAUSAL_FILL_ZERO_OUTCOMES["nba_triggers"]),
+    )
+
+
+@pytest.mark.unit
+def test_coerce_row_derives_bool_text_and_fills_designed_null_zero():
+    # RCT row: control arm (control_group_flag True), no action taken (NULL).
+    rec = _coerce_estimation_row(
+        {"control_group_flag": True, "action_taken": None},
+        select_cols=["control_group_flag", "action_taken"],
+        treatment_var="control_group_flag",
+        outcome_var="action_taken",
+        **_trig_kw(),
+    )
+    assert rec == {"control_group_flag": 1.0, "action_taken": 0.0}  # NULL outcome -> 0, NOT dropped
+
+
+@pytest.mark.unit
+def test_coerce_row_modifier_question_accepted_and_converted():
+    rec = _coerce_estimation_row(
+        {"acceptance_status": "accepted", "conversion_flag": True},
+        select_cols=["acceptance_status", "conversion_flag"],
+        treatment_var="acceptance_status",
+        outcome_var="conversion_flag",
+        **_trig_kw(),
+    )
+    assert rec == {"acceptance_status": 1.0, "conversion_flag": 1.0}
+    rec2 = _coerce_estimation_row(
+        {"acceptance_status": "rejected", "conversion_flag": None},
+        select_cols=["acceptance_status", "conversion_flag"],
+        treatment_var="acceptance_status",
+        outcome_var="conversion_flag",
+        **_trig_kw(),
+    )
+    assert rec2 == {"acceptance_status": 0.0, "conversion_flag": 0.0}
+
+
+@pytest.mark.unit
+def test_coerce_row_patient_outcome_null_still_drops():
+    # patient_journeys is NOT in _CAUSAL_FILL_ZERO_OUTCOMES: a NULL outcome still
+    # drops the row (returns None) -> the existing gate is unchanged.
+    rec = _coerce_estimation_row(
+        {"treatment_arm": 1, "persistent_180d": None},
+        select_cols=["treatment_arm", "persistent_180d"],
+        treatment_var="treatment_arm",
+        outcome_var="persistent_180d",
+        numeric_cols=_CAUSAL_NUMERIC_COLUMNS["patient_journeys"],
+    )
+    assert rec is None
