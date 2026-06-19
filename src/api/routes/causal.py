@@ -837,6 +837,12 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
 
+# Datasets that are NOT a single physical table — built by a JOIN-aware loader
+# (e.g. hcp_adoption = hcp_brand_adoption ⋈ hcp_profiles, centrality_z derived).
+# Endpoints that issue a single-table client.table(dataset) read MUST special-case
+# these (P3 adds its grain here if it is also non-single-table).
+_JOIN_DATASETS: frozenset = frozenset({"hcp_adoption"})
+
 # Columns coerced to float before handing the frame to the executors. Every
 # curated candidate above is numeric, so all are coerced; a value that cannot
 # be coerced becomes None and (for treatment/outcome) drops the row.
@@ -953,6 +959,19 @@ async def list_causal_variables(
                 f"Unknown causal dataset '{dataset}'. "
                 f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
             ),
+        )
+
+    # JOIN datasets have no single physical table to probe; their curated spec
+    # lists ARE the candidate variables (derived columns like centrality_z live
+    # on no table). Return them directly instead of 500-ing on a missing relation.
+    if dataset in _JOIN_DATASETS:
+        all_cols = sorted(set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"]))
+        return CausalVariablesResponse(
+            dataset=dataset,
+            treatment_candidates=list(spec["treatment"]),
+            outcome_candidates=list(spec["outcome"]),
+            covariate_candidates=list(spec["covariate"]),
+            columns=all_cols,
         )
 
     from src.memory.services.factories import get_async_supabase_client
@@ -1488,6 +1507,16 @@ async def get_causal_estimation_data(
             detail=(
                 f"Unknown causal dataset '{dataset}'. "
                 f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
+            ),
+        )
+
+    if dataset in _JOIN_DATASETS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Dataset '{dataset}' is a JOIN grain not served by this raw "
+                "estimation-data endpoint; use POST /causal/discover-effects or "
+                "POST /causal/agent-analyze."
             ),
         )
 

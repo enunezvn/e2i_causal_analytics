@@ -161,3 +161,96 @@ async def test_patient_dataset_still_excludes_hcp_questions():
         qs = await causal_routes._discover_candidate_questions("patient_journeys", brand=None)
     assert {q.outcome for q in qs} == {"treatment_initiated"}
     assert all(q.treatment != "peer_influence_score" for q in qs)
+
+
+# ---------------------------------------------------------------------------
+# P2 adversarial-review defect: JOIN datasets must not 500 on single-table reads
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_causal_variables_hcp_adoption_returns_curated_spec_no_db():
+    """list_causal_variables for a JOIN dataset must NOT probe client.table(dataset)
+    (which would PostgREST-404 on the non-physical 'hcp_adoption' name and raise
+    APIError → HTTP 500). Instead it must return the curated spec lists directly
+    with a 200, and the DB client must not be called at all.
+
+    RED before the JOIN short-circuit is added to list_causal_variables.
+    """
+    from src.api.dependencies.auth import TEST_USER
+    from src.api.routes.causal import list_causal_variables
+
+    # A client whose .table() raises immediately — any call == test failure.
+    class _NeverCallClient:
+        def table(self, name: str):
+            raise AssertionError(
+                f"list_causal_variables should NOT call client.table('{name}') "
+                "for a JOIN dataset — it would 500 in production."
+            )
+
+    import src.memory.services.factories as factories
+
+    async def _fake_factory():
+        return _NeverCallClient()
+
+    original = factories.get_async_supabase_client
+    factories.get_async_supabase_client = _fake_factory
+    try:
+        response = await list_causal_variables(dataset="hcp_adoption", user=TEST_USER)
+    finally:
+        factories.get_async_supabase_client = original
+
+    # Must return the curated spec lists — no DB probe, no 500.
+    assert set(response.treatment_candidates) == {"peer_influence_score", "treatment_arm"}
+    assert response.outcome_candidates == ["adopted"]
+    assert response.covariate_candidates == ["centrality_z"]
+    # columns is the sorted union of all candidate lists for JOIN datasets
+    # (no physical table to read column names from).
+    assert set(response.columns) == {
+        "peer_influence_score", "treatment_arm", "adopted", "centrality_z"
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_causal_estimation_data_hcp_adoption_returns_400_not_500():
+    """get_causal_estimation_data for a JOIN dataset must fail-closed with an
+    honest 400 (it cannot serve hcp_adoption via a single client.table() read),
+    NOT a 500 from a PostgREST APIError on the non-existent table.
+
+    RED before the JOIN guard is added to get_causal_estimation_data.
+    """
+    from src.api.dependencies.auth import TEST_USER
+    from src.api.routes.causal import get_causal_estimation_data
+
+    # A client whose .table() raises to simulate the production 500 path.
+    class _NeverCallClient:
+        def table(self, name: str):
+            raise AssertionError(
+                f"get_causal_estimation_data must NOT reach client.table('{name}') "
+                "for a JOIN dataset — the JOIN guard must raise 400 before this."
+            )
+
+    import src.memory.services.factories as factories
+
+    async def _fake_factory():
+        return _NeverCallClient()
+
+    original = factories.get_async_supabase_client
+    factories.get_async_supabase_client = _fake_factory
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await get_causal_estimation_data(
+                treatment_var="treatment_arm",
+                outcome_var="adopted",
+                dataset="hcp_adoption",
+                covariates="centrality_z",
+                limit=4000,
+                user=TEST_USER,
+            )
+    finally:
+        factories.get_async_supabase_client = original
+
+    # Must be 400 (honest "use the agent path"), never 500.
+    assert exc_info.value.status_code == 400
+    assert "hcp_adoption" in exc_info.value.detail
+    assert "JOIN" in exc_info.value.detail
