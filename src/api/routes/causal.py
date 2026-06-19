@@ -1541,6 +1541,43 @@ async def get_causal_estimation_data(
 # =============================================================================
 
 
+def _coerce_estimation_row(
+    row: Dict[str, Any],
+    *,
+    select_cols: List[str],
+    treatment_var: str,
+    outcome_var: str,
+    numeric_cols: set,
+    categorical_cols: "frozenset[str]" = frozenset(),
+    derivations: Optional[Dict[str, Any]] = None,
+    fill_zero: "frozenset[str]" = frozenset(),
+) -> Optional[Dict[str, Any]]:
+    """Coerce one raw DB row into an estimation record, or None if unusable
+    (a treatment/outcome value is missing). Shared by every grain loader:
+      - numeric_cols: float-coerced (non-coercible -> None), UNLESS also in categorical_cols
+      - categorical_cols: passed through unchanged (P1b geo one-hot)
+      - derivations: per-column callable applied before coercion (P3 text->0/1)
+      - fill_zero: a None in these columns becomes 0.0 (P3 generated/nullable outcomes)
+    For P1 only numeric_cols is passed, so behavior is identical to the prior inline loop."""
+    derivations = derivations or {}
+    record: Dict[str, Any] = {}
+    for col in select_cols:
+        value = row.get(col)
+        if value is not None and col in derivations:
+            value = derivations[col](value)
+        if col in numeric_cols and col not in categorical_cols and value is not None:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                value = None
+        if value is None and col in fill_zero:
+            value = 0.0
+        if col in (treatment_var, outcome_var) and value is None:
+            return None
+        record[col] = value
+    return record
+
+
 async def _load_agent_estimation_frame(
     *,
     dataset: str,
@@ -1605,21 +1642,15 @@ async def _load_agent_estimation_frame(
     numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []
     for row in rows:
-        record: Dict[str, Any] = {}
-        usable = True
-        for col in select_cols:
-            value = row.get(col)
-            if col in numeric_cols and value is not None:
-                try:
-                    value = float(value)
-                except (TypeError, ValueError):
-                    value = None
-            if col in (treatment_var, outcome_var) and value is None:
-                usable = False
-                break
-            record[col] = value
-        if usable:
-            records.append(record)
+        rec = _coerce_estimation_row(
+            row,
+            select_cols=select_cols,
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            numeric_cols=numeric_cols,
+        )
+        if rec is not None:
+            records.append(rec)
 
     if not records:
         raise HTTPException(
