@@ -992,6 +992,32 @@ def _adjusted_partial_corr(
     return float(np.corrcoef(rt, ro)[0, 1])
 
 
+async def _prerank_signal(dataset: str, q: "_CandidateQuestion") -> float:
+    """Cheap FWL screen for one question; 0.0 when undefined / unloadable."""
+    try:
+        df, _ = await _load_agent_estimation_frame(
+            dataset=dataset,
+            treatment_var=q.treatment,
+            outcome_var=q.outcome,
+            covariates=q.adjustment_set,
+            limit=1500,
+            brand=q.brand,
+        )
+    except HTTPException:
+        return 0.0
+    pc = _adjusted_partial_corr(df, q.treatment, q.outcome, q.adjustment_set)
+    return abs(pc) if pc is not None else 0.0
+
+
+async def _prerank_questions(
+    dataset: str, questions: List["_CandidateQuestion"]
+) -> List["_CandidateQuestion"]:
+    """Order candidates by descending data-driven association so strong effects
+    validate first (the leaderboard fills progressively)."""
+    scored = await asyncio.gather(*[_prerank_signal(dataset, q) for q in questions])
+    return [q for _, q in sorted(zip(scored, questions), key=lambda p: p[0], reverse=True)]
+
+
 @router.get(
     "/propose-questions",
     response_model=ProposeQuestionsResponse,
@@ -1255,6 +1281,7 @@ async def _run_discover_effects_task(
             ),
         )
 
+    questions = await _prerank_questions(dataset, questions)
     completed = 0
     for q in questions:
         t, o = q.treatment, q.outcome

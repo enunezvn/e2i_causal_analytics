@@ -202,6 +202,22 @@ def test_effect_from_agent_response_maps_gate_and_impact():
     assert "not statistically significant" not in eff.summary
 
 
+@pytest.mark.asyncio
+async def test_questions_are_fwl_preranked(monkeypatch):
+    qs = [
+        causal_routes._CandidateQuestion("treatment_arm", "treatment_initiated", "Kisqali", ["disease_severity"]),
+        causal_routes._CandidateQuestion("treatment_arm", "persistent_180d", "Kisqali", ["disease_severity"]),
+    ]
+    strengths = {"treatment_initiated": 0.05, "persistent_180d": 0.60}
+
+    async def fake_signal(dataset, q):
+        return strengths[q.outcome]
+
+    monkeypatch.setattr(causal_routes, "_prerank_signal", fake_signal)
+    ordered = await causal_routes._prerank_questions("patient_journeys", qs)
+    assert [q.outcome for q in ordered] == ["persistent_180d", "treatment_initiated"]
+
+
 @pytest.mark.unit
 def test_effect_summary_none_until_estimated():
     """A pending/failed effect (no ATE) has no summary — never a fabricated one."""
