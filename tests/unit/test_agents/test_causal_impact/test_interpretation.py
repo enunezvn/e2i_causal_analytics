@@ -150,6 +150,29 @@ class TestInterpretationNode:
         assert result["interpretation"].get("executive_summary")
 
     @pytest.mark.asyncio
+    async def test_executive_summary_is_cautious_when_significant_but_not_robust(self):
+        """The executive summary is the BOLD headline above the narrative.
+        A statistically-significant-but-not-robust result (failed/REVIEW gate)
+        must NOT read as an endorsement ('a significant result that passed N/M') —
+        it must flag that it did not clear the robustness gate."""
+        node = InterpretationNode()
+        state = self._create_full_state()
+        state["interpretation_depth"] = "standard"
+        # Significant effect, but the refutation gate is NOT robust (1/4 passed).
+        state["estimation_result"]["statistical_significance"] = True
+        state["refutation_results"]["overall_robust"] = False
+        state["refutation_results"]["tests_passed"] = 1
+        state["refutation_results"]["total_tests"] = 4
+
+        result = await node.execute(state)
+        summary = result["interpretation"]["executive_summary"]
+
+        assert "did NOT clear the robustness gate" in summary
+        assert "preliminary" in summary
+        # Must NOT use the endorsing "result that passed N/M" framing.
+        assert "result that passed" not in summary
+
+    @pytest.mark.asyncio
     async def test_sensitivity_failure_narrative_does_not_cite_defaulted_evalue(self):
         """M-fo3: when the sensitivity (E-value) analysis fails, the narrative must NOT
         present the defaulted E-value of 1.00 as a real (weak) result — it must say

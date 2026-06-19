@@ -424,11 +424,12 @@ export default function CausalDiscovery() {
             </div>
             <p className="border-t px-3 py-3 text-xs text-muted-foreground">
               Why these {effects.length} question{effects.length === 1 ? '' : 's'}? The agent only
-              proposes the treatment&rarr;outcome relationships this dataset actually wires — the
-              curated treatment and outcome variables — and collapses complementary outcomes (e.g.
-              &ldquo;discontinued&rdquo; is the inverse of &ldquo;persistent&rdquo;) and self-pairs.
-              Clinical markers (eGFR, LDH, …) enter as confounders to adjust for, not as questions,
-              because the data shows no causal link between them and the outcomes.
+              proposes the treatment&rarr;outcome relationships this dataset&rsquo;s curated causal
+              spec defines — its designated treatment and outcome variables — and collapses
+              complementary outcomes (e.g. &ldquo;discontinued&rdquo; is the inverse of
+              &ldquo;persistent&rdquo;) and self-pairs. Clinical markers (eGFR, LDH, …) are
+              designated adjustment covariates, not treatments or outcomes, so they enter the model
+              as confounders rather than as questions.
             </p>
           </CardContent>
         </Card>

@@ -68,18 +68,6 @@ class GraphBuilderNode:
         ("therapeutic_area_expertise", "prescription_volume"),  # Confounder
     }
 
-    # Common confounders in pharma data
-    COMMON_CONFOUNDERS = {
-        "geographic_region",
-        "therapeutic_area_expertise",
-        "hcp_specialty",
-        "practice_size",
-        "patient_demographics",
-        "market_size",
-        "seasonality",
-        "time_period",
-    }
-
     def __init__(self):
         """Initialize graph builder with discovery components."""
         self._discovery_runner: Optional[DiscoveryRunner] = None
@@ -302,13 +290,22 @@ class GraphBuilderNode:
         yields a non-empty backdoor adjustment set that is CONSISTENT with the
         covariates the estimator actually conditions on.
 
-        Previously these edges were gated on a hardcoded ``COMMON_CONFOUNDERS``
-        allowlist (generic-pharma names like ``hcp_specialty`` /
-        ``geographic_region``) with zero overlap with real dataset covariates
-        (``disease_severity``, ``egfr`` …). The result was a DAG with a single
-        ``treatment -> outcome`` edge and every covariate rendered as a
-        disconnected node, plus an empty adjustment set — a graph that
-        MISREPRESENTED the (correctly all-covariate-adjusted) estimate.
+        Previously these edges were gated on a hardcoded allowlist of
+        generic-pharma confounder names (``hcp_specialty`` / ``geographic_region``
+        …) with zero overlap with real dataset covariates (``disease_severity`` /
+        ``egfr`` …). The result was a DAG with a single ``treatment -> outcome``
+        edge and every covariate rendered as a disconnected node, plus an empty
+        adjustment set — a graph that MISREPRESENTED the (correctly
+        all-covariate-adjusted) estimate.
+
+        Numeric note: when ``confounders`` equals the loaded covariate columns
+        (the API frame is exactly treatment+outcome+covariates), the resulting
+        non-empty backdoor adjustment set is the SAME column set the estimator
+        used under the prior empty-adjustment-set fallback, so the ATE is
+        unchanged. For a caller passing extra columns OR a confounder name that
+        the old allowlist happened to match, the now-complete adjustment is a
+        correctness improvement (the old code silently under-adjusted), not a
+        regression toward wrong values.
 
         Args:
             treatment: Treatment variable

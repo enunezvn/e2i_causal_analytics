@@ -329,12 +329,22 @@ class InterpretationNode:
         # runs the agent's _build_output, which is the only OTHER place an
         # executive summary is generated — so produce it HERE so both paths carry
         # a non-null headline. (When _build_output does run, it overwrites this.)
-        if significance:
-            _direction = "increases" if ate > 0 else "decreases"
+        # This is the BOLD headline rendered ABOVE the narrative, so significance
+        # alone must NOT read as an endorsement: a significant-but-not-robust
+        # result (failed/REVIEW gate) is framed cautiously, never "passed N/M".
+        _direction = "increases" if ate > 0 else "decreases"
+        if significance and overall_robust:
             executive_summary = (
                 f"The treatment {_direction} the outcome by an estimated {ate:.3f} "
                 f"({effect_size} effect), a statistically significant result that passed "
                 f"{tests_passed}/{total_tests} robustness checks. Overall confidence: {confidence}."
+            )
+        elif significance:
+            executive_summary = (
+                f"The treatment {_direction} the outcome by an estimated {ate:.3f} "
+                f"({effect_size} effect). The effect is statistically significant but did NOT clear "
+                f"the robustness gate ({tests_passed}/{total_tests} checks passed) — treat as "
+                f"preliminary. Overall confidence: {confidence}."
             )
         else:
             executive_summary = (

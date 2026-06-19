@@ -700,14 +700,34 @@ class TestConstructDagConnectsCuratedConfounders:
         assert nx.number_of_isolates(dag) == 0
         assert nx.is_directed_acyclic_graph(dag)
 
-    def test_adjustment_set_is_non_empty_and_honest(self):
+    def test_adjustment_set_equals_full_covariate_set_numeric_neutrality(self):
+        """Pins the load-bearing NUMERIC-NEUTRALITY invariant: the fallback DAG's
+        backdoor adjustment set must equal the FULL covariate set. estimation.py
+        conditions on ``adjustment_set`` when non-empty, else on all-columns-minus-
+        T/O. Since the loaded frame is exactly treatment+outcome+covariates, the
+        adjustment set being the full covariate set guarantees BOTH branches pick
+        the SAME columns -> identical ATE (the connected-DAG fix cannot move any
+        number). If a future change made _find_adjustment_sets return a proper
+        SUBSET here, the empty-vs-full branches would diverge and the ATE would
+        shift — this test would catch it."""
         node = GraphBuilderNode()
         dag = node._construct_dag("treatment_arm", "persistent_180d", self.REAL_COVS)
         adjustment_sets = node._find_adjustment_sets(dag, "treatment_arm", "persistent_180d")
 
-        # With N independent confounders the admissible set is all of them (no
-        # proper subset blocks every backdoor path) — the key point: NOT [[]].
         assert adjustment_sets and adjustment_sets[0], (
             "adjustment set is empty (confounded display)"
         )
-        assert "disease_severity" in adjustment_sets[0]
+        # With N independent confounders no proper subset blocks every backdoor
+        # path, so the admissible set is ALL of them — identical to the columns
+        # estimation used under the prior empty-set fallback.
+        assert set(adjustment_sets[0]) == set(self.REAL_COVS)
+
+    def test_few_confounders_also_yield_full_adjustment_set(self):
+        """Neutrality must hold for small n too: with <=3 confounders the size
+        loop finds the full set as a combination; the adjustment set is still the
+        complete covariate list (never a strict subset that would shift the ATE)."""
+        node = GraphBuilderNode()
+        covs = ["disease_severity", "academic_hcp"]
+        dag = node._construct_dag("treatment_arm", "persistent_180d", covs)
+        adjustment_sets = node._find_adjustment_sets(dag, "treatment_arm", "persistent_180d")
+        assert set(adjustment_sets[0]) == set(covs)
