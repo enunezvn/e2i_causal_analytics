@@ -20,10 +20,26 @@ from src.services.clinical_context.brand_map import (
     endpoint_mapping_for_outcome,
     resolve_brand_profile,
 )
+from src.services.clinical_context.providers import (
+    ChEMBLMechanismProvider,
+    CitationFragment,
+    ClinicalContextProvider,
+    ClinicalTrialsEndpointProvider,
+    EndpointsFragment,
+    MechanismFragment,
+    PubMedRWEProvider,
+)
 
 __all__ = [
     "BRAND_CLINICAL_MAP",
     "BrandClinicalProfile",
+    "ChEMBLMechanismProvider",
+    "CitationFragment",
+    "ClinicalContextProvider",
+    "ClinicalTrialsEndpointProvider",
+    "EndpointsFragment",
+    "MechanismFragment",
+    "PubMedRWEProvider",
     "endpoint_mapping_for_outcome",
     "resolve_brand_profile",
 ]
