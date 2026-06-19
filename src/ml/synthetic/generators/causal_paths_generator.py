@@ -53,6 +53,20 @@ _HCP_QUESTIONS: Tuple[Tuple[str, str, List[str], str], ...] = (
     ("treatment_arm", "adopted", ["centrality_z"], "rep_engagement_path"),
 )
 
+# Trigger-grain edges (the NBA RCT). The triggers table carries the only TRUE
+# randomized experiment in the gold standard: control_group_flag is a randomized
+# holdout, so control_group_flag -> action_taken has an EMPTY backdoor set (no
+# confounder to adjust for — randomization breaks every back-door path). The
+# second edge, acceptance_status -> conversion_flag, is the designed effect
+# (conversion_flag is the DB STORED-GENERATED column outcome_value>0, set only for
+# accepted triggers) with priority as an EFFECT MODIFIER (not a confounder), so its
+# modeled backdoor set is also empty. Both are direct edges (no mediator injected).
+_TRIGGER_EDGES = (
+    # (start_node, end_node, confounders_controlled)
+    ("control_group_flag", "action_taken", []),
+    ("acceptance_status", "conversion_flag", []),
+)
+
 
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
     @property
@@ -143,6 +157,45 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                         "created_at": now.isoformat(),
                         "is_synthetic": True,
                         "grain": "hcp",
+                    }
+                )
+        # Trigger grain: emit each RCT/effect-modifier edge for every brand so a
+        # brand-scoped leaderboard surfaces the trigger questions too. Empty
+        # confounders_controlled (randomized / effect-modifier — no backdoor set);
+        # direct two-node causal_chain; no mediators (mediators_identified=[] so the
+        # FalkorDB sync builds a clean direct (:Variable start)-[:CAUSES]->(:Variable end)).
+        for brand in _BRANDS:
+            for start_node, end_node, confounders in _TRIGGER_EDGES:
+                effect = round(float(self._rng.uniform(0.05, 0.25)), 4)
+                disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
+                rows.append(
+                    {
+                        "path_id": f"scp_{uuid.uuid4().hex[:13]}",
+                        "discovery_date": disc.isoformat(),
+                        "causal_chain": {"nodes": [start_node, end_node]},
+                        "start_node": start_node,
+                        "end_node": end_node,
+                        "intermediate_nodes": [],
+                        "path_length": 1,
+                        "causal_effect_size": effect,
+                        "confidence_level": round(float(self._rng.uniform(0.80, 0.95)), 3),
+                        "method_used": "backdoor.linear_regression",
+                        "confounders_controlled": list(confounders),
+                        "mediators_identified": [],
+                        "time_lag_days": int(self._rng.integers(7, 60)),
+                        "validation_status": "validated",
+                        "business_impact_estimate": round(
+                            effect * float(self._rng.uniform(1e5, 5e5)), 2
+                        ),
+                        "data_split": "unassigned",
+                        "direct_effect": effect,
+                        "indirect_effect": 0.0,
+                        "brand": brand,
+                        "region": str(self._rng.choice(_REGIONS)),
+                        "confirmation_count": int(self._rng.integers(1, 5)),
+                        "created_at": now.isoformat(),
+                        "is_synthetic": True,
+                        "grain": "trigger",
                     }
                 )
         return pd.DataFrame(rows)
