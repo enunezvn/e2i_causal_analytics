@@ -28,6 +28,8 @@ import type {
   EstimatorComparison,
   RefutationTestDetail,
 } from '@/types/causal';
+import { useClinicalContext } from '@/hooks/api';
+import { ClinicalContextPanel } from './ClinicalContextPanel';
 
 function formatEffect(ate: number | null | undefined): string {
   if (ate === null || ate === undefined || Number.isNaN(ate)) return 'N/A';
@@ -136,7 +138,13 @@ function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorCompari
 }
 
 /** The shared deep view for one validated causal effect (agent-analyze result). */
-export function CausalAnalysisDetail({ result }: { result: AgentCausalAnalysisResponse }) {
+export function CausalAnalysisDetail({
+  result,
+  brand,
+}: {
+  result: AgentCausalAnalysisResponse;
+  brand?: string | null;
+}) {
   // Map the analysis's DAG onto the shared causal-graph visualization. The
   // treatment->outcome edge carries the estimated effect.
   const { vizNodes, vizEdges } = useMemo((): {
@@ -177,6 +185,10 @@ export function CausalAnalysisDetail({ result }: { result: AgentCausalAnalysisRe
     () => toRefutationResults(result.refutation?.tests),
     [result]
   );
+
+  // Additive clinical narrative for this effect (brand + outcome). Disabled until
+  // both are present; never touches the estimate above.
+  const clinicalContext = useClinicalContext(brand, result.outcome_var);
 
   return (
     <div className="space-y-6">
@@ -247,6 +259,8 @@ export function CausalAnalysisDetail({ result }: { result: AgentCausalAnalysisRe
       {result.estimator_comparison && (
         <EstimatorComparisonPanel comparison={result.estimator_comparison} />
       )}
+
+      {clinicalContext.data && <ClinicalContextPanel context={clinicalContext.data} />}
 
       {(result.executive_summary ||
         result.narrative ||

@@ -1,6 +1,6 @@
 // frontend/src/components/causal/CausalAnalysisDetail.test.tsx
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { renderWithProviders, screen } from '@/test/utils';
 import { CausalAnalysisDetail } from './CausalAnalysisDetail';
 import type { AgentCausalAnalysisResponse } from '@/types/causal';
 
@@ -85,7 +85,7 @@ const RESULT: AgentCausalAnalysisResponse = {
 
 describe('CausalAnalysisDetail', () => {
   it('renders the effect, estimator, gate, and discovered confounders', () => {
-    render(<CausalAnalysisDetail result={RESULT} />);
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
     // ATE renders in the headline AND the selected-estimator comparison row (same value by design) → getAllByText.
     expect(screen.getAllByText('0.0875').length).toBeGreaterThan(0);
     expect(screen.getByText(/Linear dml/i)).toBeInTheDocument();
@@ -94,21 +94,21 @@ describe('CausalAnalysisDetail', () => {
   });
 
   it('feeds the DAG (nodes + edges) and per-test refutation into the viz', () => {
-    render(<CausalAnalysisDetail result={RESULT} />);
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
     const dag = screen.getByTestId('causal-dag');
     expect(dag).toHaveAttribute('data-edges', '2');
     expect(dag).toHaveAttribute('data-refutations', '3');
   });
 
   it('renders the estimator-comparison panel (the #1030 data-driven evaluation)', () => {
-    render(<CausalAnalysisDetail result={RESULT} />);
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
     expect(screen.getByText('Estimator selection (data-driven)')).toBeInTheDocument();
     expect(screen.getByText(/2\/2 estimators fit/)).toBeInTheDocument();
     expect(screen.getByText(/confounding-robust preferred over OLS/)).toBeInTheDocument();
   });
 
   it('renders interpretation: key insights + recommendations', () => {
-    render(<CausalAnalysisDetail result={RESULT} />);
+    renderWithProviders(<CausalAnalysisDetail result={RESULT} />);
     expect(screen.getByText('Positive, robust effect.')).toBeInTheDocument();
     expect(screen.getByText('Key insights')).toBeInTheDocument();
     expect(screen.getByText('Recommended actions')).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe('CausalAnalysisDetail', () => {
   });
 
   it('shows an honest empty-state when no DAG was produced', () => {
-    render(<CausalAnalysisDetail result={{ ...RESULT, dag: { ...RESULT.dag, nodes: [], edges: [] } }} />);
+    renderWithProviders(<CausalAnalysisDetail result={{ ...RESULT, dag: { ...RESULT.dag, nodes: [], edges: [] } }} />);
     expect(screen.getByText('No DAG produced')).toBeInTheDocument();
   });
 });

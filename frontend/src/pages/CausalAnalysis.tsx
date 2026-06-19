@@ -72,6 +72,7 @@ import {
   useDiscoverEffects,
   useRunCausalAgentAnalysis,
   useEstimators,
+  useClinicalContext,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 import type { DiscoveredEffect } from '@/types/causal';
@@ -208,6 +209,12 @@ export default function CausalAnalysis() {
   );
   const runAgent = useRunCausalAgentAnalysis();
   const manualResult = runAgent.data;
+
+  // The brand of the effect currently drilled into (each effect is brand-scoped,
+  // even when the run filter is "All brands"); falls back to the filter.
+  const selectedEffect = effects.find((e) => e.analysis_id === selectedId);
+  // Brand-level clinical context for the leaderboard MoA chip (single brand only).
+  const leaderboardContext = useClinicalContext(brandArg, outcomeVar);
 
   const handleRunManual = async () => {
     try {
@@ -504,6 +511,17 @@ export default function CausalAnalysis() {
                   designated adjustment covariates, not treatments or outcomes, so they enter the
                   model as confounders rather than as questions.
                 </p>
+                {brandArg && leaderboardContext.data && (
+                  <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+                    <span className="font-medium">{leaderboardContext.data.drug_name}</span> (
+                    {brandArg}) —{' '}
+                    <span className="font-medium">
+                      {leaderboardContext.data.mechanism.mechanism_of_action}
+                    </span>
+                    . Estimates run on a synthetic cohort; clinical context is real and cited (open a
+                    row for sources).
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
@@ -542,7 +560,7 @@ export default function CausalAnalysis() {
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading the validated analysis…
                   </div>
                 ) : (
-                  <CausalAnalysisDetail result={detailResult} />
+                  <CausalAnalysisDetail result={detailResult} brand={selectedEffect?.brand ?? brandArg} />
                 )}
               </CardContent>
             </Card>
@@ -660,7 +678,7 @@ export default function CausalAnalysis() {
                   </Alert>
                 )}
 
-                {manualResult && <CausalAnalysisDetail result={manualResult} />}
+                {manualResult && <CausalAnalysisDetail result={manualResult} brand={brandArg} />}
               </CardContent>
             )}
           </Card>
