@@ -199,3 +199,53 @@ export interface ModelInfoResponse {
   /** Additional metadata */
   metadata?: Record<string, unknown>;
 }
+
+// =============================================================================
+// COHORT SCORING (data-driven population view)
+// =============================================================================
+
+/** One scored entity from a model's holdout cohort. */
+export interface CohortScoredRow {
+  /** Real entity id (patient_id / hcp_id) from the holdout split */
+  entity_id: string;
+  /** Predicted positive-class probability */
+  probability: number;
+  /** The RAW covariates scored for this entity (feed the drill-down what-if) */
+  covariates: Record<string, unknown>;
+}
+
+/** Probability distribution over ALL scored rows (fixed [0,1] bins). */
+export interface CohortScoreDistribution {
+  n: number;
+  mean: number;
+  /** Histogram bin edges (length = bin_counts.length + 1) */
+  bin_edges: number[];
+  /** Row count per probability bin */
+  bin_counts: number[];
+}
+
+/**
+ * Async cohort-scoring job (submit -> poll): the data-driven population view.
+ * Replaces hand-typed input features — score the model's OWN out-of-sample
+ * holdout cohort and rank targets.
+ */
+export interface CohortScoreResponse {
+  job_id: string;
+  /** pending | running | completed | failed */
+  status: string;
+  model_name: string;
+  cohort?: string | null;
+  brand?: string | null;
+  /** Data split scored (out-of-sample) */
+  split: string;
+  out_of_sample: boolean;
+  /** Provenance, e.g. 'holdout_synthetic' */
+  feature_source: string;
+  n_scored: number;
+  top_n: number;
+  /** Highest-probability entities, ranked desc, capped at top_n */
+  top_rows: CohortScoredRow[];
+  distribution?: CohortScoreDistribution | null;
+  error?: string | null;
+  latency_ms: number;
+}

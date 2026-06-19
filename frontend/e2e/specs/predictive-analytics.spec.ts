@@ -76,8 +76,8 @@ async function mockPredictionRoutes(page: Page): Promise<void> {
     })
   })
 
-  // POST /api/models/predict/{name} — only used by Run Prediction; harmless if
-  // never triggered by the basic suite.
+  // POST /api/models/predict/{name} — only used by the drill-down / what-if;
+  // harmless if never triggered by the basic suite.
   await page.route('**/api/models/predict/**', async (route: Route) => {
     await route.fulfill({
       status: 200,
@@ -163,25 +163,25 @@ test.describe('Predictive Analytics Page', () => {
     })
   })
 
-  test.describe('Input Features Form', () => {
-    test('should display Input Features card', async () => {
-      const ok = await predictivePage.verifyInputFeaturesCard()
+  test.describe('Cohort Scoring', () => {
+    test('should display Ranked Targets card', async () => {
+      const ok = await predictivePage.verifyRankedTargetsCard()
       expect(ok).toBeTruthy()
     })
 
-    test('should display Run Prediction button', async () => {
-      await expect(predictivePage.runPredictionButton).toBeVisible()
+    test('should display Score holdout cohort button', async () => {
+      await expect(predictivePage.scoreCohortButton).toBeVisible()
     })
   })
 
-  test.describe('Prediction Result', () => {
-    test('should display Prediction Result card', async () => {
-      const ok = await predictivePage.verifyPredictionResultCard()
+  test.describe('Prediction Detail', () => {
+    test('should display Prediction Detail card', async () => {
+      const ok = await predictivePage.verifyPredictionDetailCard()
       expect(ok).toBeTruthy()
     })
 
-    test('should show placeholder before any prediction', async () => {
-      await expect(predictivePage.predictionResultPlaceholder).toBeVisible()
+    test('should show placeholder before any drill-down', async () => {
+      await expect(predictivePage.predictionDetailPlaceholder).toBeVisible()
     })
   })
 

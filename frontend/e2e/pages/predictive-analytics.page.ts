@@ -5,15 +5,15 @@ import { ROUTES } from '../fixtures/test-data'
 /**
  * Page Object Model for Predictive Analytics page.
  *
- * Wave PR #319 (issue #300) rewired this page from a synthetic
- * risk-score / uplift / KPI dashboard to a live-data form backed by
- * /api/models/predict/{model_name}. The current UI is a model selector
- * + Input Features form + Prediction Result card — there are no longer
- * tabs, KPI cards, or refresh button.
+ * The page is DATA-DRIVEN: a model selector + a "Score holdout cohort" action
+ * that produces a Ranked Targets card (provenance + distribution + ranked
+ * entities) and a Prediction Detail card (drill-down SHAP + Advanced what-if).
+ * There are no tabs, KPI cards, or refresh button, and the old always-on
+ * "Input Features" form is now behind an Advanced what-if toggle.
  *
  * Selectors below target the new UI shape. Tests mock
  * /api/models/status (drives the selector) and /api/models/{name}/info
- * (drives the feature inputs) inline; see specs/predictive-analytics.spec.ts.
+ * (drives the what-if form) inline; see specs/predictive-analytics.spec.ts.
  */
 export class PredictiveAnalyticsPage extends BasePage {
   readonly url = ROUTES.PREDICTIVE_ANALYTICS
@@ -32,7 +32,7 @@ export class PredictiveAnalyticsPage extends BasePage {
 
   get pageDescription(): Locator {
     return this.page
-      .getByText(/Run live predictions|deployed models|feature contributions/i)
+      .getByText(/rank the top targets|holdout cohort|feature contributions/i)
       .first()
   }
 
@@ -54,28 +54,28 @@ export class PredictiveAnalyticsPage extends BasePage {
   }
 
   // ============================================================================
-  // Input Features card
+  // Ranked Targets card (primary cohort-scoring surface)
   //
   // CardTitle in shadcn renders as a plain <div>, so getByRole('heading')
-  // does NOT match. We anchor on the exact text content.
+  // does NOT match. We anchor on the text content.
   // ============================================================================
-  get inputFeaturesHeading(): Locator {
-    return this.page.getByText('Input Features', { exact: true }).first()
+  get rankedTargetsHeading(): Locator {
+    return this.page.getByText(/Ranked Targets/i).first()
   }
 
-  get runPredictionButton(): Locator {
-    return this.page.getByRole('button', { name: /Run Prediction|Running/i }).first()
+  get scoreCohortButton(): Locator {
+    return this.page.getByRole('button', { name: /Score holdout cohort|Scoring/i }).first()
   }
 
   // ============================================================================
-  // Prediction Result card
+  // Prediction Detail card (drill-down + Advanced what-if)
   // ============================================================================
-  get predictionResultHeading(): Locator {
-    return this.page.getByText('Prediction Result', { exact: true }).first()
+  get predictionDetailHeading(): Locator {
+    return this.page.getByText(/Prediction Detail/i).first()
   }
 
-  get predictionResultPlaceholder(): Locator {
-    return this.page.getByText(/Submit features above to run a prediction/i).first()
+  get predictionDetailPlaceholder(): Locator {
+    return this.page.getByText(/Click a ranked entity/i).first()
   }
 
   // ============================================================================
@@ -127,15 +127,15 @@ export class PredictiveAnalyticsPage extends BasePage {
       .catch(() => false)
   }
 
-  async verifyInputFeaturesCard(): Promise<boolean> {
-    return this.inputFeaturesHeading
+  async verifyRankedTargetsCard(): Promise<boolean> {
+    return this.rankedTargetsHeading
       .waitFor({ state: 'visible', timeout: 5000 })
       .then(() => true)
       .catch(() => false)
   }
 
-  async verifyPredictionResultCard(): Promise<boolean> {
-    return this.predictionResultHeading
+  async verifyPredictionDetailCard(): Promise<boolean> {
+    return this.predictionDetailHeading
       .waitFor({ state: 'visible', timeout: 5000 })
       .then(() => true)
       .catch(() => false)

@@ -191,10 +191,38 @@ class PredictionOutput(BaseModel):
 
 
 class BatchPredictionInput(BaseModel):
-    """Input for batch predictions."""
+    """Input for batch predictions.
+
+    Two paths (mirroring ``PredictionInput``):
+      1. Legacy numeric: ``features`` is a PRE-ENCODED matrix (samples x features).
+      2. RAW covariates (#cohort-scoring): ``raw_features`` is a list of
+         ``{name: value}`` dicts; the service encodes each via the bundled
+         FeatureBuilder and returns PER-ROW probabilities. ``model_name`` routes
+         to a specific gold-standard bundle (#39). This lets the API score a whole
+         holdout cohort in ONE chunked call instead of N single-predict round-trips.
+    """
 
     batch_id: str = Field(..., description="Unique batch identifier")
-    features: List[List[float]] = Field(..., description="Feature matrix")
+    features: List[List[float]] = Field(
+        default_factory=list,
+        description=(
+            "Pre-encoded feature matrix (samples x features). Optional when "
+            "``raw_features`` is supplied."
+        ),
+    )
+    raw_features: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "RAW covariate rows as {name: value} dicts (e.g. {'disease_severity': "
+            "5.6, 'academic_hcp': 0, 'geographic_region': 'northeast'}). Encoded "
+            "server-side via the bundled FeatureBuilder. Takes precedence over "
+            "``features`` when present."
+        ),
+    )
+    model_name: Optional[str] = Field(
+        default=None,
+        description="Optional serving model name to ROUTE this batch to (#39 multi-model).",
+    )
 
 
 class BatchPredictionOutput(BaseModel):
@@ -203,8 +231,22 @@ class BatchPredictionOutput(BaseModel):
     batch_id: str
     total_samples: int
     predictions: List[float]
+    probabilities: List[float] = Field(
+        default_factory=list,
+        description=(
+            "Per-row positive-class probabilities (classification; populated on the "
+            "raw-covariate path). Empty on the legacy numeric path."
+        ),
+    )
     processing_time_ms: float
     is_mock: bool = False
+    error: Optional[str] = Field(
+        default=None,
+        description=(
+            "Set when the batch failed closed (e.g. unknown model_name); "
+            "predictions/probabilities are empty in that case."
+        ),
+    )
 
 
 class ModelInfoInput(BaseModel):
@@ -1325,6 +1367,41 @@ class E2IModelService:
             Batch predictions
         """
         start = time.time()
+
+        # RAW covariate batch path (#cohort-scoring): route by model_name, encode each
+        # row via the bundled FeatureBuilder, and return PER-ROW probabilities. Mirrors
+        # the single-predict raw dispatch (see ``predict``) and reuses the already-
+        # vectorized ``_run_raw_prediction`` (ONE transform + ONE predict over the batch),
+        # so a holdout cohort is scored in one chunked call. Fails closed on an unknown
+        # model_name (no fabricated/wrong-model scoring).
+        if input_data.raw_features:
+            model, preprocessor, feature_columns, model_tag, err = self._resolve_active(
+                input_data.model_name
+            )
+            if err is not None:
+                return BatchPredictionOutput(
+                    batch_id=input_data.batch_id,
+                    total_samples=len(input_data.raw_features),
+                    predictions=[],
+                    probabilities=[],
+                    processing_time_ms=0.0,
+                    error=err,
+                )
+            out = self._run_raw_prediction(
+                input_data.raw_features,
+                model=model,
+                preprocessor=preprocessor,
+                feature_columns=feature_columns,
+                model_tag=model_tag,
+            )
+            elapsed_ms = (time.time() - start) * 1000
+            return BatchPredictionOutput(
+                batch_id=input_data.batch_id,
+                total_samples=len(input_data.raw_features),
+                predictions=out.predictions,
+                probabilities=out.probabilities,
+                processing_time_ms=elapsed_ms,
+            )
 
         if self._model is None:
             return BatchPredictionOutput(

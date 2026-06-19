@@ -21,6 +21,7 @@ import {
 import type {
   BatchPredictionRequest,
   BatchPredictionResponse,
+  CohortScoreResponse,
   ModelEndpointHealth,
   ModelInfoResponse,
   ModelsStatusResponse,
@@ -93,6 +94,44 @@ export async function predictBatch(
   return post<BatchPredictionResponse, BatchPredictionRequest>(
     `${MODELS_BASE}/predict/${encodeURIComponent(modelName)}/batch`,
     request
+  );
+}
+
+// =============================================================================
+// COHORT SCORING ENDPOINTS (data-driven population view)
+// =============================================================================
+
+/**
+ * Submit a cohort-scoring job: score the model's OWN out-of-sample holdout
+ * cohort and rank targets. Async — returns a pending job; poll with
+ * {@link getCohortScore}. Replaces hand-typed input features.
+ *
+ * @param modelName - Gold-standard cohort model (e.g. initiation_kisqali_goldstd_lr_v1)
+ * @param topN - Number of top-ranked entities to return (1..1000)
+ */
+export async function scoreCohort(
+  modelName: string,
+  topN = 100
+): Promise<CohortScoreResponse> {
+  return post<CohortScoreResponse>(
+    `${MODELS_BASE}/predict/${encodeURIComponent(modelName)}/cohort`,
+    undefined,
+    { params: { top_n: topN } }
+  );
+}
+
+/**
+ * Poll a cohort-scoring job by id.
+ *
+ * @param modelName - The model the job was submitted for
+ * @param jobId - The job id returned by {@link scoreCohort}
+ */
+export async function getCohortScore(
+  modelName: string,
+  jobId: string
+): Promise<CohortScoreResponse> {
+  return get<CohortScoreResponse>(
+    `${MODELS_BASE}/predict/${encodeURIComponent(modelName)}/cohort/${encodeURIComponent(jobId)}`
   );
 }
 
