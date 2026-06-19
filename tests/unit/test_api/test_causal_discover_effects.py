@@ -31,8 +31,10 @@ async def test_candidate_questions_come_from_ssot_with_modeled_adjustment_set():
             "treatment": "treatment_arm",
             "outcome": "persistent_180d",
             "brand": "Kisqali",
-            # geographic_region is non-numeric (dropped); treatment_arm is a
-            # treatment-collision (dropped by the `c not in (t, o)` guard, I2).
+            # P1b/D5: geographic_region (categorical) is now ADMITTED into the
+            # adjustment set (the loader one-hot expands it downstream); only
+            # treatment_arm is dropped as a treatment-collision (the
+            # `c not in (t, o)` guard, I2).
             "confounders": [
                 "disease_severity",
                 "academic_hcp",
@@ -53,8 +55,13 @@ async def test_candidate_questions_come_from_ssot_with_modeled_adjustment_set():
         mk.return_value.get_distinct_questions = AsyncMock(return_value=fake_questions)
         qs = await causal_routes._discover_candidate_questions("patient_journeys", brand=None)
     by_outcome = {q.outcome: q for q in qs}
-    # retention: geographic_region dropped (non-numeric), numeric confounders kept
-    assert by_outcome["persistent_180d"].adjustment_set == ["disease_severity", "academic_hcp"]
+    # retention: numeric confounders kept AND geographic_region (categorical)
+    # admitted (P1b/D5 — the loader one-hot expands it downstream).
+    assert by_outcome["persistent_180d"].adjustment_set == [
+        "disease_severity",
+        "academic_hcp",
+        "geographic_region",
+    ]
     # I2: a treatment-collision confounder is never adjusted on (would be invalid).
     assert "treatment_arm" not in by_outcome["persistent_180d"].adjustment_set
     assert by_outcome["persistent_180d"].brand == "Kisqali"
@@ -241,3 +248,55 @@ def test_effect_summary_none_until_estimated():
     )
     eff = _effect_from_agent_response("treatment_arm", "persistent_180d", resp, "x2")
     assert eff.summary is None
+
+
+@pytest.mark.asyncio
+async def test_retention_question_includes_geographic_region_in_adjustment_set():
+    """After P1b, geographic_region (categorical) is admitted into the leaderboard
+    retention question's adjustment set (the loader expands it downstream)."""
+    fake = [
+        {
+            "treatment": "treatment_arm",
+            "outcome": "persistent_180d",
+            "brand": "Kisqali",
+            "confounders": ["disease_severity", "academic_hcp", "geographic_region"],
+        }
+    ]
+    with patch.object(causal_routes, "_get_causal_path_repo", new_callable=AsyncMock) as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(return_value=fake)
+        qs = await causal_routes._discover_candidate_questions("patient_journeys", brand=None)
+    adj = qs[0].adjustment_set
+    assert "geographic_region" in adj
+    assert "disease_severity" in adj and "academic_hcp" in adj
+
+
+@pytest.mark.asyncio
+async def test_prerank_signal_handles_categorical_adjustment_without_keyerror(monkeypatch):
+    """_prerank_signal must use the loader's EXPANDED columns (geo dummies), not the
+    raw categorical, so the FWL screen doesn't KeyError."""
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0, 0.0],
+            "persistent_180d": [1.0, 0.0, 1.0, 1.0],
+            "disease_severity": [2.0, 1.0, 3.0, 2.0],
+            "geographic_region=south": [1.0, 0.0, 0.0, 1.0],
+            "geographic_region=west": [0.0, 1.0, 0.0, 0.0],
+        }
+    )
+    expanded = [
+        "treatment_arm",
+        "persistent_180d",
+        "disease_severity",
+        "geographic_region=south",
+        "geographic_region=west",
+    ]
+    monkeypatch.setattr(
+        causal_routes, "_load_agent_estimation_frame", AsyncMock(return_value=(frame, expanded))
+    )
+    q = causal_routes._CandidateQuestion(
+        "treatment_arm", "persistent_180d", "Kisqali", ["disease_severity", "geographic_region"]
+    )
+    val = await causal_routes._prerank_signal("patient_journeys", q)
+    assert isinstance(val, float) and val >= 0.0

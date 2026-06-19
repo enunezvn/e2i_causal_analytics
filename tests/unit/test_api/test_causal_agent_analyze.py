@@ -435,3 +435,74 @@ def test_refutation_sensitivity_test_surfaced_under_contract_key_not_raw_enum():
     assert names == {"random_common_cause", "unobserved_common_cause"}
     # The sensitivity test is NOT surfaced under the raw enum name.
     assert "sensitivity_e_value" not in names
+
+
+@pytest.mark.asyncio
+async def test_agent_analyze_passes_expanded_geo_dummies_as_covariates():
+    """run_causal_agent_analysis must hand _run_agent_analysis_task the EXPANDED
+    covariate names (geo dummies), not the raw categorical 'geographic_region'."""
+    import pandas as pd
+    from unittest.mock import AsyncMock, patch
+
+    from src.api.routes import causal as causal_routes
+
+    frame = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0],
+            "persistent_180d": [1.0, 0.0],
+            "disease_severity": [2.0, 1.0],
+            "academic_hcp": [1.0, 0.0],
+            "geographic_region=south": [1.0, 0.0],
+            "geographic_region=west": [0.0, 1.0],
+        }
+    )
+    expanded_cols = [
+        "treatment_arm",
+        "persistent_180d",
+        "disease_severity",
+        "academic_hcp",
+        "geographic_region=south",
+        "geographic_region=west",
+    ]
+
+    captured: dict = {}
+
+    async def _fake_task(analysis_id, request, df, covariates, data_source):
+        captured["covariates"] = covariates
+
+    req = AgentCausalAnalysisRequest(
+        treatment_var="treatment_arm",
+        outcome_var="persistent_180d",
+        dataset="patient_journeys",
+        covariates=["disease_severity", "academic_hcp", "geographic_region"],
+        limit=1500,
+    )
+
+    # Capture the background task and run it explicitly (robust to event-loop
+    # scheduling): BackgroundTasks.add_task(fn, *args) stores the call.
+    scheduled: list = []
+
+    class _BG:
+        def add_task(self, fn, *args):
+            scheduled.append((fn, args))
+
+    with (
+        patch.object(
+            causal_routes,
+            "_load_agent_estimation_frame",
+            AsyncMock(return_value=(frame, expanded_cols)),
+        ),
+        patch.object(causal_routes, "_run_agent_analysis_task", _fake_task),
+        patch.object(causal_routes._agent_analysis_store, "set", AsyncMock()),
+    ):
+        await causal_routes.run_causal_agent_analysis(req, _BG(), user={"sub": "t"})
+        # Execute the scheduled background task to capture the covariates argument.
+        for fn, args in scheduled:
+            await fn(*args)
+
+    assert "geographic_region" not in captured["covariates"]
+    assert "geographic_region=south" in captured["covariates"]
+    assert "geographic_region=west" in captured["covariates"]
+    # Treatment/outcome are never covariates.
+    assert "treatment_arm" not in captured["covariates"]
+    assert "persistent_180d" not in captured["covariates"]
