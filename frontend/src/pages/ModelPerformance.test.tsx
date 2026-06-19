@@ -233,6 +233,37 @@ describe('ModelPerformance', () => {
     expect(enabledCall?.[2]).toBe('accuracy');
   });
 
+  it('renders the comparison verdict with the better-model handle + significance note', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    // A non-significant comparison so the disclosure note also renders.
+    (useModelComparison as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { ...mockComparison, is_significant: false },
+      isLoading: false,
+      isError: false,
+      error: null,
+      isRefetching: false,
+      refetch: vi.fn(),
+    });
+
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    const compareTab = screen.getByRole('tab', { name: /Comparison/i });
+    await user.click(compareTab);
+
+    // Pick the 2nd model so the comparison cards render.
+    const compareSelects = screen.getAllByRole('combobox');
+    await user.click(compareSelects[compareSelects.length - 1]);
+    const churnOption = await screen.findByRole('option', { name: /churn_v1\.5\.2/ });
+    await user.click(churnOption);
+
+    // The verdict is its own card (label "Better model"), the winning handle is
+    // carried in a `title` attr (so a long name truncates instead of spilling a
+    // KPI value), and a non-significant difference is disclosed.
+    expect(await screen.findByText('Better model')).toBeInTheDocument();
+    expect(screen.getByTitle('propensity_v2.1.0')).toBeInTheDocument();
+    expect(screen.getByText(/not significant/i)).toBeInTheDocument();
+  });
+
   it('issue-298: stale compareModelId after models-list shrink -> otherId=="" + enabled=false', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 

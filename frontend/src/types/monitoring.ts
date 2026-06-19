@@ -399,6 +399,8 @@ export interface ModelComparisonResponse {
   difference: number;
   difference_percent: number;
   better_model: string;
+  /** Whether the difference is statistically meaningful (|relative diff| > 5%). */
+  is_significant?: boolean;
 }
 
 // =============================================================================
