@@ -99,7 +99,9 @@ class TestRefuteBuildsRepoBackedGate:
             "treatment_var": "email_frequency",
             "outcome_var": "trx",
             "brand": "Remibrutinib",
-            "dag_hash": "deadbeefcafebabe",
+            # The graph builder writes `dag_version_hash` (graph_builder.py); the old
+            # `dag_hash` key was never populated, so the gate must key on the real one.
+            "dag_version_hash": "deadbeefcafebabe",
             "query_id": "causal_impact_agent",
         }
         fields = await node._consult_review_gate(state, _review_suite())
@@ -107,7 +109,9 @@ class TestRefuteBuildsRepoBackedGate:
         assert repo.create_kwargs is not None, "create_review was not called"
         assert repo.create_kwargs["review_type"] == "dag_approval"
         assert repo.create_kwargs["dag_version_hash"] == "deadbeefcafebabe"
-        assert fields["needs_review"] is True
+        # needs_review is set by the caller (execute) from suite.needs_review, NOT by
+        # _consult_review_gate (now shared by REVIEW + BLOCK bands).
+        assert "needs_review" not in fields
         assert fields["expert_review_decision"] == "pending_review"
 
     @pytest.mark.asyncio
@@ -157,7 +161,13 @@ class TestRefuteBuildsRepoBackedGate:
 
     @pytest.mark.asyncio
     async def test_supabase_absent_still_flags_needs_review(self, monkeypatch):
-        """With the gate degraded to None, a REVIEW band still flags needs_review."""
+        """With the gate degraded to None, a REVIEW band still flags needs_review.
+
+        needs_review is now owned by the caller (execute) and sourced from
+        ``suite.needs_review`` — True for a REVIEW band REGARDLESS of whether the
+        gate is present. So ``_consult_review_gate`` degrades gracefully (no
+        ``needs_review`` key, no crash) and the REVIEW suite still drives the flag.
+        """
 
         async def _build_none():
             return None
@@ -166,7 +176,10 @@ class TestRefuteBuildsRepoBackedGate:
 
         node = RefutationNode(expert_review_gate=None)
         fields = await node._consult_review_gate(
-            {"treatment_var": "t", "outcome_var": "y", "dag_hash": "x"},
+            {"treatment_var": "t", "outcome_var": "y", "dag_version_hash": "x"},
             _review_suite(),
         )
-        assert fields["needs_review"] is True
+        # The helper no longer owns needs_review; it degrades gracefully.
+        assert "needs_review" not in fields
+        # The REVIEW band is the (gate-independent) source of needs_review.
+        assert _review_suite().needs_review is True
