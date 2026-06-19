@@ -364,6 +364,9 @@ class CausalImpactState(TypedDict):
     refutation_passed: NotRequired[bool]
     needs_review: NotRequired[bool]  # REVIEW-band gate: borderline-robust, not "passed"
     gate_decision: NotRequired[str]  # refutation gate: "proceed" | "review" | "block"
+    review_caveat: NotRequired[str]  # band-specific caveat surfaced for REVIEW/BLOCK
+    expert_review_decision: NotRequired[str | None]  # ExpertReviewGate decision value
+    expert_review_id: NotRequired[str | None]  # expert_reviews row id (REVIEW/BLOCK)
     # NOTE: refutation_error is already declared earlier in this TypedDict
     # (set when refutation fails-closed, H1) — do not re-declare it here.
 
