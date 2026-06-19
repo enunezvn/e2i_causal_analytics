@@ -380,6 +380,28 @@ async def test_get_simulation_history_returns_rows(mock_twin_repository):
 
 
 @pytest.mark.asyncio
+async def test_get_simulation_history_brand_filter_passed_to_repo(mock_twin_repository):
+    """An admin's brand filter is threaded into the repository read."""
+    from src.api.routes.digital_twin import BrandEnum, get_simulation_history
+
+    await get_simulation_history(brand=BrandEnum.KISQALI, limit=10, offset=0, user=_ADMIN_USER)
+
+    _args, kwargs = mock_twin_repository.simulations.list_simulations.call_args
+    assert kwargs.get("brand") == "Kisqali"
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_history_all_brands_passes_no_brand(mock_twin_repository):
+    """Omitting brand ('All brands') reads every brand the admin may see (brand=None)."""
+    from src.api.routes.digital_twin import get_simulation_history
+
+    await get_simulation_history(limit=10, offset=0, user=_ADMIN_USER)
+
+    _args, kwargs = mock_twin_repository.simulations.list_simulations.call_args
+    assert kwargs.get("brand") is None
+
+
+@pytest.mark.asyncio
 async def test_get_simulation_history_not_shadowed_by_dynamic_route():
     """The literal /simulations/history route MUST be registered BEFORE the
     dynamic /simulations/{simulation_id} route, otherwise 'history' is parsed

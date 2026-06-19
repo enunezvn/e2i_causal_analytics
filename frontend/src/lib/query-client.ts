@@ -406,10 +406,11 @@ export const queryKeys = {
     // NOTE: the base ['…', 'history'] prefix (no params) is used for
     // partial-match invalidation; the parameterised form folds in
     // limit/offset so paginated reads do not collide in the cache.
-    history: (params?: { limit?: number; offset?: number }) =>
+    history: (params?: { brand?: string; limit?: number; offset?: number }) =>
       [
         ...queryKeys.digitalTwin.all(),
         'history',
+        params?.brand ?? 'all',
         params?.limit ?? 20,
         params?.offset ?? 0,
       ] as const,
