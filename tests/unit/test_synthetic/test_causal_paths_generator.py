@@ -40,3 +40,27 @@ def test_causal_paths_cover_all_three_gold_standard_cohort_outcomes():
         assert nodes[-1] == row["end_node"]
         # No repeated nodes (would be dropped by _clean_causal_chains).
         assert len(nodes) == len(set(nodes))
+
+
+def test_all_brand_outcome_cells_emitted():
+    """Every (brand x outcome) cell must appear — not just the i%3 diagonal."""
+    df = CausalPathsGenerator(GeneratorConfig(seed=5, n_records=27)).generate()
+    cells = set(zip(df["brand"], df["end_node"]))
+    brands = {"Remibrutinib", "Kisqali", "Fabhalta"}
+    outcomes = {"treatment_initiated", "persistent_180d", "discontinued_180d"}
+    assert cells == {(b, o) for b in brands for o in outcomes}
+
+
+def test_confounders_match_modeled_set_per_outcome():
+    df = CausalPathsGenerator(GeneratorConfig(seed=5, n_records=27)).generate()
+    row = df[(df.brand == "Kisqali") & (df.end_node == "persistent_180d")].iloc[0]
+    assert set(row["confounders_controlled"]) == {"disease_severity", "academic_hcp", "geographic_region"}
+    row2 = df[df.end_node == "treatment_initiated"].iloc[0]
+    assert set(row2["confounders_controlled"]) == {"disease_severity", "age_at_diagnosis"}
+
+
+def test_all_rows_tagged_patient_grain():
+    """Patient rows carry grain='patient' (shared convention; HCP/trigger phases add their own).
+    The column is stripped by batch_loader before DB insert (not in causal_paths TABLE_COLUMNS)."""
+    df = CausalPathsGenerator(GeneratorConfig(seed=5, n_records=27)).generate()
+    assert set(df["grain"]) == {"patient"}
