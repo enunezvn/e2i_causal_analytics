@@ -145,6 +145,12 @@ async def test_simulate_inline_path_does_not_enqueue_when_flag_off(monkeypatch):
             "src.memory.services.factories.get_async_supabase_client",
             new=AsyncMock(return_value=MagicMock()),
         ),
+        # Direction-2 identification gate must PASS so the inline path runs (the engine
+        # is mocked; the real estimate is exercised in the effect/ unit tests).
+        patch(
+            "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
     ):
         gen_instance = MagicMock()
         gen_instance.model_id = uuid4()
@@ -168,91 +174,26 @@ async def test_simulate_inline_path_does_not_enqueue_when_flag_off(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_simulate_offload_path_enqueues_and_builds_same_response(
-    monkeypatch, _no_eager_celery
-):
-    """Flag on: /simulate enqueues the task and rebuilds the SAME response model
-    from the stubbed AsyncResult result dict -- no inline generate/simulate."""
+async def test_simulate_offload_path_returns_503_not_supported(monkeypatch):
+    """Flag on: /simulate's offload path is NOT wired for cohort-causal estimation, so it
+    fails closed (503) rather than enqueuing a worker that would fabricate a synthetic
+    effect. The Direction-2 identification gate passes here (provider mocked non-None);
+    the offload guard then rejects without enqueuing."""
     monkeypatch.setenv("HEAVY_OFFLOAD_ENABLED", "true")
     from src.api.routes.digital_twin import run_simulation
-    from src.digital_twin.simulation_runner import simulation_result_to_dict
-
-    result_dict = simulation_result_to_dict(_real_simulation_result())
-
-    fake_async = MagicMock()
-    fake_async.ready.return_value = True
-    fake_async.successful.return_value = True
-    fake_async.result = result_dict
 
     with (
-        patch("src.digital_twin.twin_generator.TwinGenerator") as mock_gen,
-        patch("src.digital_twin.simulation_engine.SimulationEngine") as mock_engine,
         patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo,
-        patch(
-            "src.workers.celery_app.celery_app.send_task",
-            return_value=fake_async,
-        ) as mock_apply,
+        patch("src.workers.celery_app.celery_app.send_task") as mock_apply,
         patch(
             "src.memory.services.factories.get_async_supabase_client",
             new=AsyncMock(return_value=MagicMock()),
         ),
-    ):
-        gen_instance = MagicMock()
-        gen_instance.model_id = uuid4()
-        mock_gen.return_value = gen_instance
-        engine_instance = MagicMock()
-        mock_engine.return_value = engine_instance
-        repo_instance = AsyncMock()
-        repo_instance.list_active_models.return_value = [_active_model_row()]
-        mock_repo.return_value = repo_instance
-
-        result = await run_simulation(_twin_request(), {"role": "operator"})
-
-    mock_apply.assert_called_once()
-    # FIX 2: enqueued by registered task NAME via send_task (NOT a task-object
-    # import, which would pull sklearn into the API process via src.tasks.__init__)
-    assert mock_apply.call_args.args[0] == "src.tasks.simulate_population"
-    # routed to the twins queue
-    assert mock_apply.call_args.kwargs.get("queue") == "twins"
-    # inline heavy compute must NOT have run on the offload path
-    engine_instance.simulate.assert_not_called()
-    gen_instance.generate.assert_not_called()
-    # SAME response shape as the inline path
-    assert result.simulated_ate == 0.075
-    assert result.recommendation.value == "deploy"
-    assert result.is_significant is True
-    assert result.effect_direction == "positive"
-    # result still persisted (save happens after compute on both paths)
-    repo_instance.save_simulation.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_simulate_offload_timeout_returns_408(monkeypatch, _no_eager_celery):
-    """Flag on: a task that never readies maps to HTTP 408 (synchronous contract)."""
-    monkeypatch.setenv("HEAVY_OFFLOAD_ENABLED", "true")
-    import src.api.routes.digital_twin as dt_mod
-    from src.api.routes.digital_twin import run_simulation
-
-    fake_async = MagicMock()
-    fake_async.ready.return_value = False  # never completes
-
-    with (
-        patch("src.digital_twin.twin_generator.TwinGenerator") as mock_gen,
-        patch("src.digital_twin.simulation_engine.SimulationEngine"),
-        patch("src.digital_twin.twin_repository.TwinRepository") as mock_repo,
         patch(
-            "src.workers.celery_app.celery_app.send_task",
-            return_value=fake_async,
-        ),
-        patch(
-            "src.memory.services.factories.get_async_supabase_client",
+            "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
             new=AsyncMock(return_value=MagicMock()),
         ),
-        patch.object(dt_mod, "_OFFLOAD_TIMEOUT_SECONDS", 0.05),
     ):
-        gen_instance = MagicMock()
-        gen_instance.model_id = uuid4()
-        mock_gen.return_value = gen_instance
         repo_instance = AsyncMock()
         repo_instance.list_active_models.return_value = [_active_model_row()]
         mock_repo.return_value = repo_instance
@@ -260,7 +201,8 @@ async def test_simulate_offload_timeout_returns_408(monkeypatch, _no_eager_celer
         with pytest.raises(HTTPException) as exc:
             await run_simulation(_twin_request(), {"role": "operator"})
 
-    assert exc.value.status_code == 408
+    assert exc.value.status_code == 503
+    mock_apply.assert_not_called()  # fails closed — never enqueues a fabricating worker
 
 
 # =============================================================================
@@ -413,10 +355,13 @@ def test_digital_twin_route_does_not_import_heavy_task_package():
 
     text = open(digital_twin.__file__).read()
     assert "from src.tasks.heavy_offload_tasks import" not in text, (
-        "twin route must enqueue via celery_app.send_task, not import the heavy task package"
+        "twin route must not import the heavy task package into the API process"
     )
-    assert "send_task(" in text and "src.tasks.simulate_population" in text, (
-        "twin route must enqueue the population task by registered name via send_task"
+    # Direction 2: the offload path is NOT wired for cohort-causal estimation — the route
+    # fails closed (503) instead of enqueuing a worker. So it must make NO send_task call
+    # (robust to comments that may mention the task name).
+    assert "send_task(" not in text, (
+        "twin /simulate must not enqueue a worker on the cohort-causal path (fails closed)"
     )
 
 

@@ -61,6 +61,33 @@ def _trained_generator():
     return gen
 
 
+def _cohort_provider():
+    """A synthetic-gold cohort with a real (confounded) region-heterogeneous engagement
+    effect, wrapped in the real CohortEffectDataProvider so the direct DML estimator
+    produces a real, finite cohort-causal estimate."""
+    from src.digital_twin.effect.provider import CohortEffectDataProvider
+
+    rng = np.random.default_rng(7)
+    n = 800
+    regions = rng.choice(["northeast", "south", "midwest", "west"], size=n)
+    tau_map = {"northeast": 0.45, "west": 0.30, "south": 0.18, "midwest": 0.08}
+    market = rng.uniform(0.0, 1.0, n)
+    eng = 10.0 / (1.0 + np.exp(-(1.5 * (market - 0.5) + rng.normal(0.0, 0.5, n))))
+    t_bin = (eng > np.median(eng)).astype(float)
+    tau = np.array([tau_map[r] for r in regions])
+    conv = np.clip(0.5 + 0.8 * market + tau * t_bin + rng.normal(0.0, 0.25, n), 0.0, None)
+    cohort = pd.DataFrame(
+        {
+            "region": regions,
+            "engagement_score": eng,
+            "conversion_rate": conv,
+            "market_share": market,
+            "total_rx_count": rng.poisson(80, n).astype(float),
+        }
+    )
+    return CohortEffectDataProvider(cohort)
+
+
 class _FakeInsert:
     def __init__(self, store, row):
         self._store = store
@@ -98,7 +125,9 @@ def _request(twin_count: int):
     )
 
     return SimulateRequest(
-        intervention=InterventionConfigRequest(intervention_type="email_campaign"),
+        # digital_engagement is the IDENTIFIED intervention (real cohort-causal estimate);
+        # email_campaign is now honestly unavailable (422) and cannot persist a result.
+        intervention=InterventionConfigRequest(intervention_type="digital_engagement"),
         brand=BrandEnum.REMIBRUTINIB,
         twin_type=TwinTypeEnum.HCP,
         twin_count=twin_count,
@@ -123,14 +152,18 @@ async def test_simulate_persists_one_real_completed_result():
         patch.object(dt, "_get_twin_repo", AsyncMock(return_value=repo)),
         patch.object(dt, "_resolve_active_model_row", AsyncMock(return_value=model_row)),
         patch.object(dt, "_load_trained_generator", AsyncMock(return_value=generator)),
+        patch(
+            "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
+            AsyncMock(return_value=_cohort_provider()),
+        ),
     ):
         resp = await run_simulation(_request(twin_count=200), user=_OPERATOR)
 
-    # Real engine produced a real, finite, non-zero ATE labelled synthetic-uplift.
+    # Real engine produced a real, finite, non-zero cohort-causal ATE.
     assert resp.status.value == "completed"
     assert resp.simulated_ate != 0.0
     assert math.isfinite(resp.simulated_ate)
-    assert resp.data_provenance == "synthetic_uplift_v1"
+    assert resp.data_provenance == "cohort_estimated_synthetic_gold_v1"
     # Exactly ONE real twin_simulations row persisted, with completed status.
     # (Persisting data_provenance on the row is H5b/R4b — surfaced on the response
     # here via R1; the row-column round-trip is asserted in R4b's tests.)
@@ -170,6 +203,10 @@ async def test_simulate_failed_result_is_422_and_not_persisted():
         patch.object(dt, "_get_twin_repo", AsyncMock(return_value=repo)),
         patch.object(dt, "_resolve_active_model_row", AsyncMock(return_value=model_row)),
         patch.object(dt, "_load_trained_generator", AsyncMock(return_value=small_gen)),
+        patch(
+            "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
+            AsyncMock(return_value=_cohort_provider()),
+        ),
     ):
         with pytest.raises(HTTPException) as ei:
             await run_simulation(_request(twin_count=200), user=_OPERATOR)

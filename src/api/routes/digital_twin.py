@@ -868,10 +868,10 @@ async def run_simulation(
             )
 
         if heavy_offload_enabled():
-            # Direction 2: the offload worker (src.tasks.simulate_population) reconstructs
-            # the engine WITHOUT the cohort provider built above, so it would fabricate a
-            # synthetic effect for identified interventions. Fail HONESTLY until the worker
-            # runs the same cohort-causal path, rather than offload a fabricated estimate.
+            # Direction 2: the offload worker reconstructs the engine WITHOUT the cohort
+            # provider built above, so it would fabricate a synthetic effect for identified
+            # interventions. Fail HONESTLY until the worker runs the same cohort-causal
+            # path, rather than offload a fabricated estimate.
             # (Offload is DARK by default; the inline path below is the real estimator.
             # Follow-up: thread the cohort frame into the worker to restore offload.)
             raise HTTPException(
