@@ -947,6 +947,80 @@ class TestCompareModelPerformance:
         assert data["difference"] == 0.03
 
 
+class TestConfusionAndRocEndpoints:
+    """GET /monitoring/performance/{model_id}/confusion and /roc."""
+
+    def test_confusion_available(self, client):
+        result = {
+            "tn": 2946,
+            "fp": 346,
+            "fn": 1277,
+            "tp": 506,
+            "threshold": 0.5,
+            "sample_size": 5075,
+            "measured_at": None,
+        }
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_confusion_matrix.return_value = result
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/initiation_goldstd/confusion")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is True
+        assert data["tp"] == 506 and data["tn"] == 2946
+        assert data["model_id"] == "initiation_goldstd"
+
+    def test_confusion_unavailable_is_honest_empty(self, client):
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_confusion_matrix.return_value = None
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/m1/confusion")
+
+        assert response.status_code == 200
+        data = response.json()
+        # available=false so the FE keeps its placeholder rather than showing 0s.
+        assert data["available"] is False
+        assert data["tp"] == 0
+
+    def test_roc_available(self, client):
+        result = {
+            "points": [
+                {"fpr": 0.0, "tpr": 0.0, "threshold": 1.0},
+                {"fpr": 1.0, "tpr": 1.0, "threshold": 0.0},
+            ],
+            "auc": 0.671,
+            "sample_size": 5075,
+            "measured_at": None,
+        }
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_roc_curve.return_value = result
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/m1/roc")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is True
+        assert data["auc"] == pytest.approx(0.671)
+        assert len(data["points"]) == 2
+        assert data["points"][0]["fpr"] == 0.0
+
+    def test_roc_unavailable_is_honest_empty(self, client):
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_roc_curve.return_value = None
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/m1/roc")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is False
+        assert data["points"] == []
+
+
 # =============================================================================
 # PRODUCTION SWEEP ENDPOINT TESTS
 # =============================================================================

@@ -1253,6 +1253,91 @@ async def compare_model_performance(
         raise _log_and_500("Failed to compare model performance", e)
 
 
+class ConfusionMatrixResponse(BaseModel):
+    """Latest holdout confusion matrix for a model (eval-persisted).
+
+    ``available=false`` is an HONEST empty state (the eval has not recorded a
+    matrix for this model yet) — the page keeps its placeholder rather than
+    rendering all-zero counts as if real.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str
+    available: bool
+    tn: int = 0
+    fp: int = 0
+    fn: int = 0
+    tp: int = 0
+    threshold: float = 0.5
+    sample_size: Optional[int] = None
+    measured_at: Optional[datetime] = None
+
+
+class RocCurvePoint(BaseModel):
+    """A single ROC operating point."""
+
+    fpr: float
+    tpr: float
+    threshold: float
+
+
+class RocCurveResponse(BaseModel):
+    """Latest holdout ROC curve for a model (eval-persisted). ``available=false``
+    is an honest empty state, not an error."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str
+    available: bool
+    points: List[RocCurvePoint] = []
+    auc: float = 0.0
+    sample_size: Optional[int] = None
+    measured_at: Optional[datetime] = None
+
+
+@router.get(
+    "/performance/{model_id}/confusion",
+    response_model=ConfusionMatrixResponse,
+    summary="Latest holdout confusion matrix",
+    operation_id="get_confusion_matrix",
+)
+async def get_confusion_matrix(model_id: str) -> ConfusionMatrixResponse:
+    """Return the latest holdout confusion matrix, or ``available=false`` if none
+    has been recorded yet (honest empty state, NOT an error)."""
+    from src.services.performance_tracking import get_performance_tracker
+
+    try:
+        tracker = get_performance_tracker()
+        result = await tracker.get_confusion_matrix(model_id)
+        if result is None:
+            return ConfusionMatrixResponse(model_id=model_id, available=False)
+        return ConfusionMatrixResponse(model_id=model_id, available=True, **result)
+    except Exception as e:
+        raise _log_and_500("Failed to load confusion matrix", e)
+
+
+@router.get(
+    "/performance/{model_id}/roc",
+    response_model=RocCurveResponse,
+    summary="Latest holdout ROC curve",
+    operation_id="get_roc_curve",
+)
+async def get_roc_curve(model_id: str) -> RocCurveResponse:
+    """Return the latest holdout ROC curve, or ``available=false`` if none has
+    been recorded yet (honest empty state, NOT an error)."""
+    from src.services.performance_tracking import get_performance_tracker
+
+    try:
+        tracker = get_performance_tracker()
+        result = await tracker.get_roc_curve(model_id)
+        if result is None:
+            return RocCurveResponse(model_id=model_id, available=False)
+        return RocCurveResponse(model_id=model_id, available=True, **result)
+    except Exception as e:
+        raise _log_and_500("Failed to load ROC curve", e)
+
+
 # =============================================================================
 # PRODUCTION MODEL SWEEP
 # =============================================================================
