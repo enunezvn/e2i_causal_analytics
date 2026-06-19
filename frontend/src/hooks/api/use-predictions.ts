@@ -22,11 +22,14 @@ import {
   getModelHealth,
   getModelInfo,
   getModelsStatus,
+  scoreCohort,
+  getCohortScore,
 } from '@/api/predictions';
 import { queryKeys, queryClient as globalQueryClient } from '@/lib/query-client';
 import type {
   BatchPredictionRequest,
   BatchPredictionResponse,
+  CohortScoreResponse,
   ModelEndpointHealth,
   ModelInfoResponse,
   ModelsStatusResponse,
@@ -226,6 +229,55 @@ export function useBatchPredict(
   return useMutation({
     mutationFn: ({ modelName, request }: BatchPredictMutationVariables) =>
       predictBatch(modelName, request),
+    ...options,
+  });
+}
+
+// =============================================================================
+// COHORT SCORING HOOKS (data-driven population view)
+// =============================================================================
+
+/**
+ * Submit a cohort-scoring job (score the model's holdout cohort, rank targets).
+ * Returns a mutation whose data carries the pending job (with `job_id`); poll it
+ * with {@link usePollCohortScore}.
+ */
+export function useScoreCohort(
+  options?: Omit<
+    UseMutationOptions<CohortScoreResponse, Error, { modelName: string; topN?: number }>,
+    'mutationFn'
+  >
+) {
+  return useMutation({
+    mutationFn: ({ modelName, topN }: { modelName: string; topN?: number }) =>
+      scoreCohort(modelName, topN),
+    ...options,
+  });
+}
+
+/**
+ * Poll a cohort-scoring job until it reaches a terminal status. Polling stops
+ * automatically once status is `completed` or `failed`.
+ *
+ * @param modelName - The model the job was submitted for
+ * @param jobId - The job id (null disables the query until a job exists)
+ */
+export function usePollCohortScore(
+  modelName: string,
+  jobId: string | null,
+  options?: Omit<UseQueryOptions<CohortScoreResponse, Error>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery({
+    queryKey: ['predictions', 'cohortScore', modelName, jobId],
+    queryFn: () => getCohortScore(modelName, jobId as string),
+    enabled: !!modelName && !!jobId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === 'completed' || status === 'failed') {
+        return false;
+      }
+      return 2000;
+    },
     ...options,
   });
 }
