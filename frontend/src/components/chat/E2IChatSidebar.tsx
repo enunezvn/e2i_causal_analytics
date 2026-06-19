@@ -16,6 +16,7 @@
 
 import * as React from 'react';
 import { CopilotChat } from '@copilotkit/react-ui';
+import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   MessageSquare,
@@ -27,8 +28,10 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { logger } from '@/lib/logger';
+import { getValidated } from '@/lib/api-client';
+import { AgentStatusResponseSchema } from '@/lib/api-schemas';
 import { Button } from '@/components/ui/button';
-import { useE2ICopilot, useCopilotEnabled } from '@/providers/E2ICopilotProvider';
+import { useE2ICopilot, useCopilotEnabled, type AgentInfo } from '@/providers/E2ICopilotProvider';
 import { AgentStatusPanel } from './AgentStatusPanel';
 import { AgentProgressRenderer } from './AgentProgressRenderer';
 import { useChatFeedback, FeedbackRating } from '@/hooks/use-chat-feedback';
@@ -75,6 +78,32 @@ export function E2IChatSidebar({
   const [showAgents, setShowAgents] = React.useState(false);
   const [traceIdCopied, setTraceIdCopied] = React.useState(false);
   const { submitFeedback } = useChatFeedback();
+
+  // Live agent status from the SAME real source the Agent Orchestration page
+  // uses: GET /agents/status derives status from audit_chain_entries (an agent
+  // is ACTIVE only if it recorded an action within the last ~15 min). This
+  // replaces the provider's static registry, whose `activeAgents` map was never
+  // populated — so the panel/badge previously read a permanent "0 active". The
+  // registry is the graceful fallback while the query is loading/unavailable.
+  const { data: agentStatus } = useQuery({
+    queryKey: ['agent-status'],
+    queryFn: () => getValidated(AgentStatusResponseSchema, '/agents/status'),
+    refetchInterval: 30000,
+    retry: false,
+    enabled: copilotEnabled,
+  });
+
+  const liveAgents: AgentInfo[] = React.useMemo(
+    () =>
+      (agentStatus?.agents ?? agents).map((a) => ({
+        id: a.id,
+        name: a.name,
+        tier: a.tier,
+        status: a.status,
+        capabilities: a.capabilities ?? [],
+      })),
+    [agentStatus, agents]
+  );
 
   // Generate a stable session ID for feedback tracking and support tickets
   const sessionIdRef = React.useRef<string>(
@@ -188,8 +217,8 @@ export function E2IChatSidebar({
     return null;
   }
 
-  // Count active agents
-  const activeAgentCount = agents.filter((a) => a.status === 'active' || a.status === 'processing').length;
+  // Count active agents from the live roster
+  const activeAgentCount = liveAgents.filter((a) => a.status === 'active' || a.status === 'processing').length;
 
   return (
     <>
@@ -245,7 +274,7 @@ export function E2IChatSidebar({
                 <div>
                   <h2 className="font-semibold">E2I Assistant</h2>
                   <p className="text-xs text-muted-foreground">
-                    Strategic analytics · {filters.brand}
+                    Strategic analytics
                   </p>
                 </div>
               </div>
@@ -280,7 +309,7 @@ export function E2IChatSidebar({
                   exit={{ height: 0, opacity: 0 }}
                   className="overflow-hidden border-b"
                 >
-                  <AgentStatusPanel agents={agents} compact />
+                  <AgentStatusPanel agents={liveAgents} compact />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -302,7 +331,7 @@ Current context:
 ${filters.territory ? `- Territory: ${filters.territory}` : ''}
 ${filters.hcpSegment ? `- HCP Segment: ${filters.hcpSegment}` : ''}
 
-Active agents: ${agents.filter(a => a.status === 'active').map(a => a.name).join(', ')}
+Active agents: ${liveAgents.filter(a => a.status === 'active').map(a => a.name).join(', ')}
 
 Available actions:
 - navigateTo: Navigate to any page
