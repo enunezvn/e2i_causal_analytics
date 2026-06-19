@@ -1015,7 +1015,9 @@ async def _prerank_questions(
     """Order candidates by descending data-driven association so strong effects
     validate first (the leaderboard fills progressively)."""
     scored = await asyncio.gather(*[_prerank_signal(dataset, q) for q in questions])
-    return [q for _, q in sorted(zip(scored, questions), key=lambda p: p[0], reverse=True)]
+    return [
+        q for _, q in sorted(zip(scored, questions, strict=True), key=lambda p: p[0], reverse=True)
+    ]
 
 
 @router.get(

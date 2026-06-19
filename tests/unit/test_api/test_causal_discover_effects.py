@@ -205,8 +205,12 @@ def test_effect_from_agent_response_maps_gate_and_impact():
 @pytest.mark.asyncio
 async def test_questions_are_fwl_preranked(monkeypatch):
     qs = [
-        causal_routes._CandidateQuestion("treatment_arm", "treatment_initiated", "Kisqali", ["disease_severity"]),
-        causal_routes._CandidateQuestion("treatment_arm", "persistent_180d", "Kisqali", ["disease_severity"]),
+        causal_routes._CandidateQuestion(
+            "treatment_arm", "treatment_initiated", "Kisqali", ["disease_severity"]
+        ),
+        causal_routes._CandidateQuestion(
+            "treatment_arm", "persistent_180d", "Kisqali", ["disease_severity"]
+        ),
     ]
     strengths = {"treatment_initiated": 0.05, "persistent_180d": 0.60}
 

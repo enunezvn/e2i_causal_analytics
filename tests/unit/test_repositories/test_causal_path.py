@@ -324,14 +324,36 @@ class TestGetDistinctQuestions:
     @pytest.mark.asyncio
     async def test_get_distinct_questions_dedups_and_carries_confounders(self):
         repo = CausalPathRepository(supabase_client=AsyncMock())
-        repo.get_many = AsyncMock(return_value=[
-            {"start_node": "treatment_arm", "end_node": "persistent_180d", "brand": "Kisqali",
-             "confounders_controlled": ["disease_severity", "academic_hcp", "geographic_region"]},
-            {"start_node": "treatment_arm", "end_node": "persistent_180d", "brand": "Kisqali",
-             "confounders_controlled": ["disease_severity", "academic_hcp", "geographic_region"]},
-            {"start_node": "treatment_arm", "end_node": "treatment_initiated", "brand": "Fabhalta",
-             "confounders_controlled": ["disease_severity", "age_at_diagnosis"]},
-        ])
+        repo.get_many = AsyncMock(
+            return_value=[
+                {
+                    "start_node": "treatment_arm",
+                    "end_node": "persistent_180d",
+                    "brand": "Kisqali",
+                    "confounders_controlled": [
+                        "disease_severity",
+                        "academic_hcp",
+                        "geographic_region",
+                    ],
+                },
+                {
+                    "start_node": "treatment_arm",
+                    "end_node": "persistent_180d",
+                    "brand": "Kisqali",
+                    "confounders_controlled": [
+                        "disease_severity",
+                        "academic_hcp",
+                        "geographic_region",
+                    ],
+                },
+                {
+                    "start_node": "treatment_arm",
+                    "end_node": "treatment_initiated",
+                    "brand": "Fabhalta",
+                    "confounders_controlled": ["disease_severity", "age_at_diagnosis"],
+                },
+            ]
+        )
         qs = await repo.get_distinct_questions(include_synthetic=True)
         assert len(qs) == 2  # the duplicate Kisqali/persistent collapses
         kis = next(q for q in qs if q["brand"] == "Kisqali")
