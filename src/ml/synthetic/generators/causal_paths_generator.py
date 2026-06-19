@@ -12,6 +12,7 @@ is enum-exact (data_split_type: train/validation/test/holdout/unassigned).
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import List, Tuple
 
 import pandas as pd
 
@@ -47,7 +48,7 @@ _COHORT_CONFOUNDERS = {
 # derives it from hcp_profiles. A single non-treatment/non-outcome mediator keeps
 # every chain a clean 2-hop path AND non-empty (the generator's mediator
 # invariant). HCP edges are brand-replicated for all three gold-standard brands.
-_HCP_QUESTIONS = (
+_HCP_QUESTIONS: Tuple[Tuple[str, str, List[str], str], ...] = (
     ("peer_influence_score", "adopted", [], "centrality_diffusion"),
     ("treatment_arm", "adopted", ["centrality_z"], "rep_engagement_path"),
 )
