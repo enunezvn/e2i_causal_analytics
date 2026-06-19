@@ -43,6 +43,22 @@ class FakeRepo:
         self.calls.append(("record", measured_at, tuple(sorted(metrics.items())), source))
         return []
 
+    async def record_curve(
+        self,
+        model_version: str,
+        kind: str,
+        value: float,
+        payload: dict,
+        sample_size: int,
+        window_start: dt.datetime,
+        window_end: dt.datetime,
+        *,
+        measured_at: dt.datetime | None = None,
+        source: str | None = None,
+    ):
+        self.calls.append(("curve", kind, value, dict(payload), source, measured_at))
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -160,3 +176,66 @@ async def test_record_run_split_version_not_none_raises(monkeypatch):
             source="backtest_wf",
             split_version="x",
         )
+
+
+@pytest.mark.asyncio
+async def test_record_curves_deletes_disjoint_source_then_inserts(monkeypatch):
+    """record_curves delete-then-inserts under 'holdout_curve' (NOT 'holdout').
+
+    The disjoint source keeps it from clobbering the scalar holdout rows that
+    record_run writes under source='holdout'.
+    """
+    import src.mlops.gold_standard_eval.recorder as R
+
+    monkeypatch.setattr(R, "_resolve_model_id", _async_mid)
+
+    repo = FakeRepo()
+    rec = MetricRecorder(repo)
+    ts = dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc)
+
+    await rec.record_curves(
+        "mv",
+        [
+            ("confusion_matrix", 0.68, {"tn": 1, "fp": 2, "fn": 3, "tp": 4}),
+            ("roc_curve", 0.67, {"points": [{"fpr": 0.0, "tpr": 0.0, "threshold": 1.0}]}),
+        ],
+        measured_at=ts,
+        sample_size=500,
+    )
+
+    kinds = [c[0] for c in repo.calls]
+    assert kinds == ["delete", "curve", "curve"], f"got {kinds}"
+    # Disjoint source so the scalar holdout rows are not deleted.
+    assert repo.calls[0] == ("delete", "mid", "holdout_curve", None)
+    # First curve: confusion payload + source + measured_at carried through.
+    assert repo.calls[1][1] == "confusion_matrix"
+    assert repo.calls[1][3] == {"tn": 1, "fp": 2, "fn": 3, "tp": 4}
+    assert repo.calls[1][4] == "holdout_curve"
+    assert repo.calls[1][5] == ts
+    # Second curve: roc.
+    assert repo.calls[2][1] == "roc_curve"
+    assert repo.calls[2][3]["points"][0]["tpr"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_record_curves_unresolved_model_raises(monkeypatch):
+    """An unresolved handle must fail closed (no NULL-model_id rows)."""
+    import src.mlops.gold_standard_eval.recorder as R
+
+    async def _none(client, model_version):
+        return None
+
+    monkeypatch.setattr(R, "_resolve_model_id", _none)
+
+    repo = FakeRepo()
+    rec = MetricRecorder(repo)
+
+    with pytest.raises(ValueError, match="did not"):
+        await rec.record_curves(
+            "mv",
+            [("confusion_matrix", 0.5, {})],
+            measured_at=dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc),
+            sample_size=10,
+        )
+    # Fail-closed BEFORE any delete/insert.
+    assert repo.calls == []

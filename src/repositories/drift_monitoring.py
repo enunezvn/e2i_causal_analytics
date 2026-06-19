@@ -1059,6 +1059,68 @@ class PerformanceMetricRepository(BaseRepository[PerformanceMetricRecord]):
         result = await query.execute()
         return [self._to_model(row) for row in (result.data or [])]
 
+    async def record_curve(
+        self,
+        model_version: str,
+        kind: str,
+        value: float,
+        payload: Dict[str, Any],
+        sample_size: int,
+        window_start: datetime,
+        window_end: datetime,
+        *,
+        measured_at: Optional[datetime] = None,
+        source: Optional[str] = None,
+    ) -> Optional[PerformanceMetricRecord]:
+        """Persist a structured eval artifact (confusion matrix / ROC curve).
+
+        Stored as ONE ``ml_performance_metrics`` row whose ``metric_name`` is the
+        curve ``kind`` ('confusion_matrix' | 'roc_curve'), ``metric_value`` a
+        representative scalar (accuracy / auc), and ``metadata`` the full
+        ``payload``. These metric names are NOT in
+        ``PerformanceTrackingConfig.tracked_metrics``, so the alert/trend reads
+        never surface them — they are read back only via ``get_latest_curve``.
+        """
+        if not self.client:
+            return None
+        model_id = await _resolve_model_id(self.client, model_version)
+        kwargs: Dict[str, Any] = {
+            "model_id": model_id,
+            "model_version": model_version,
+            "metric_name": kind,
+            "metric_value": value,
+            "sample_size": sample_size,
+            "measurement_window_start": window_start,
+            "measurement_window_end": window_end,
+            "source": source,
+            "metadata": dict(payload),
+        }
+        if measured_at is not None:
+            kwargs["measured_at"] = measured_at
+        rec = PerformanceMetricRecord(**kwargs)
+        await self.client.table(self.table_name).insert(rec.to_db_row()).execute()
+        return rec
+
+    async def get_latest_curve(
+        self,
+        model_version: str,
+        kind: str,
+    ) -> Optional[PerformanceMetricRecord]:
+        """Return the most-recent confusion-matrix / ROC-curve artifact, or None.
+
+        Filtered by ``metric_name == kind`` and ordered by ``measured_at`` desc.
+        The structured payload lives in the returned record's ``.metadata``.
+        """
+        if not self.client:
+            return None
+        model_id = await _resolve_model_id(self.client, model_version)
+        query = self.client.table(self.table_name).select("*")
+        query = _apply_model_filter(query, model_id, model_version, "metadata")
+        query = query.eq("metric_name", kind).order("measured_at", desc=True).limit(1)
+        result = await query.execute()
+        rows = result.data or []
+        return self._to_model(rows[0]) if rows else None
+
 
 class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
     """Repository for model retraining history."""

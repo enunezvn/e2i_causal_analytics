@@ -45,13 +45,30 @@ import {
 } from '@/components/visualizations';
 import { KPICard } from '@/components/visualizations/dashboard';
 import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  ReferenceLine,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+} from 'recharts';
+import {
   usePerformanceTrend,
   usePerformanceAlerts,
   useModelComparison,
+  useConfusionMatrix,
+  useRocCurve,
 } from '@/hooks/api/use-monitoring';
 import { useModelsStatus } from '@/hooks/api/use-predictions';
 import type { ModelEndpointHealth } from '@/types/predictions';
-import type { PerformanceAlertItem, PerformanceMetricItem } from '@/types/monitoring';
+import type {
+  ConfusionMatrixResponse,
+  PerformanceAlertItem,
+  PerformanceMetricItem,
+  RocCurveResponse,
+} from '@/types/monitoring';
 
 // =============================================================================
 // HELPERS
@@ -102,6 +119,90 @@ function toMetricDataPoints(history: PerformanceMetricItem[] | undefined): Metri
     timestamp: item.recorded_at,
     value: item.metric_value,
   }));
+}
+
+/**
+ * Confusion matrix (2x2) for the latest holdout evaluation. Counts are EXACT —
+ * computed in the gold-standard eval, not derived from rounded scalar metrics.
+ */
+function ConfusionMatrixView({ data }: { data: ConfusionMatrixResponse }) {
+  const cells = [
+    { label: 'True Negative', value: data.tn, good: true },
+    { label: 'False Positive', value: data.fp, good: false },
+    { label: 'False Negative', value: data.fn, good: false },
+    { label: 'True Positive', value: data.tp, good: true },
+  ];
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 max-w-md">
+        {cells.map((c) => (
+          <div
+            key={c.label}
+            className={`rounded-md border p-4 text-center ${
+              c.good ? 'bg-emerald-50 dark:bg-emerald-900/20' : 'bg-rose-50 dark:bg-rose-900/20'
+            }`}
+          >
+            <div className="text-2xl font-bold">{c.value.toLocaleString()}</div>
+            <div className="text-xs text-muted-foreground mt-1">{c.label}</div>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Holdout @ threshold {data.threshold.toFixed(2)}
+        {data.sample_size ? ` · n=${data.sample_size.toLocaleString()}` : ''} · rows = actual,
+        columns = predicted
+      </p>
+    </div>
+  );
+}
+
+/** ROC curve (TPR vs FPR) for the latest holdout evaluation, with the chance diagonal. */
+function RocCurveView({ data }: { data: RocCurveResponse }) {
+  return (
+    <div className="space-y-2">
+      <ResponsiveContainer width="100%" height={320}>
+        <LineChart data={data.points} margin={{ top: 8, right: 16, bottom: 24, left: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis
+            type="number"
+            dataKey="fpr"
+            domain={[0, 1]}
+            tickFormatter={(v: number) => v.toFixed(1)}
+            label={{ value: 'False Positive Rate', position: 'insideBottom', offset: -12 }}
+          />
+          <YAxis
+            type="number"
+            domain={[0, 1]}
+            tickFormatter={(v: number) => v.toFixed(1)}
+            label={{ value: 'True Positive Rate', angle: -90, position: 'insideLeft' }}
+          />
+          <RechartsTooltip
+            formatter={(value) => (typeof value === 'number' ? value.toFixed(3) : value)}
+          />
+          <ReferenceLine
+            segment={[
+              { x: 0, y: 0 },
+              { x: 1, y: 1 },
+            ]}
+            stroke="#94a3b8"
+            strokeDasharray="4 4"
+          />
+          <Line
+            dataKey="tpr"
+            stroke="#2563eb"
+            strokeWidth={2}
+            dot={false}
+            type="monotone"
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+      <p className="text-xs text-muted-foreground">
+        AUC = {data.auc.toFixed(3)}
+        {data.sample_size ? ` · n=${data.sample_size.toLocaleString()}` : ''} · holdout
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -203,6 +304,12 @@ function ModelPerformance() {
     'accuracy',
     { enabled: !!effectiveModelId && !!effectiveCompareModelId }
   );
+
+  // Holdout confusion matrix + ROC curve (eval-persisted; honest empty until populated).
+  const confusionQuery = useConfusionMatrix(effectiveModelId, {
+    enabled: !!effectiveModelId,
+  });
+  const rocQuery = useRocCurve(effectiveModelId, { enabled: !!effectiveModelId });
 
   const accuracyHistory = useMemo(
     () => toMetricDataPoints(trendQuery.data?.history),
@@ -625,14 +732,20 @@ function ModelPerformance() {
             <CardHeader>
               <CardTitle>Confusion Matrix</CardTitle>
               <CardDescription>
-                Confusion matrix is not yet exposed by the monitoring API.
+                Holdout confusion matrix at the 0.5 decision threshold.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                Confusion matrix data will appear here once the monitoring API exposes
-                per-class breakdowns.
-              </div>
+              {confusionQuery.isLoading ? (
+                <LoadingPulse className="h-40 w-full" />
+              ) : confusionQuery.data?.available ? (
+                <ConfusionMatrixView data={confusionQuery.data} />
+              ) : (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No confusion matrix recorded for this model yet. It is computed and
+                  stored by the gold-standard evaluation run.
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -640,15 +753,23 @@ function ModelPerformance() {
         <TabsContent value="roc">
           <Card>
             <CardHeader>
-              <CardTitle>ROC Curve Comparison</CardTitle>
+              <CardTitle>ROC Curve</CardTitle>
               <CardDescription>
-                ROC curve data is not yet exposed by the monitoring API.
+                Holdout ROC curve (true-positive vs false-positive rate) with the chance
+                diagonal.
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                ROC curve points will appear here once the monitoring API exposes them.
-              </div>
+              {rocQuery.isLoading ? (
+                <LoadingPulse className="h-[320px] w-full" />
+              ) : rocQuery.data?.available && rocQuery.data.points.length > 0 ? (
+                <RocCurveView data={rocQuery.data} />
+              ) : (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  No ROC curve recorded for this model yet. It is computed and stored by
+                  the gold-standard evaluation run.
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
