@@ -1045,6 +1045,32 @@ class PerformanceAlertsResponse(BaseModel):
     alerts: List[PerformanceAlertItem]
 
 
+class ModelComparisonResponse(BaseModel):
+    """Flat A/B comparison contract consumed by the Model Performance page.
+
+    ``PerformanceTracker.compare_model_versions`` returns a NESTED structure
+    (``model_a``/``model_b`` objects, plus ``metric`` and
+    ``relative_difference_percent`` keys). The compare route flattens it into
+    this shape, which the frontend's ``ModelComparisonResponse`` type reads
+    field-for-field. Returning the nested dict raw (the prior behaviour, with no
+    ``response_model``) rendered "undefined undefined NaN%" on the page because
+    none of the flat keys existed. ``protected_namespaces=()`` permits the
+    ``model_*`` field names Pydantic v2 otherwise reserves.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_id: str
+    other_model_id: str
+    metric_name: str
+    model_value: float
+    other_model_value: float
+    difference: float
+    difference_percent: float
+    better_model: str
+    is_significant: bool
+
+
 @router.post(
     "/performance/record",
     response_model=PerformanceRecordResponse,
@@ -1224,12 +1250,13 @@ async def get_performance_alerts(model_id: str) -> PerformanceAlertsResponse:
     "/performance/{model_id}/compare/{other_model_id}",
     summary="Compare model performance",
     operation_id="compare_model_performance",
+    response_model=ModelComparisonResponse,
 )
 async def compare_model_performance(
     model_id: str,
     other_model_id: str,
     metric_name: str = Query(default="accuracy", description="Metric to compare"),
-) -> Dict[str, Any]:
+) -> ModelComparisonResponse:
     """
     Compare performance between two model versions.
 
@@ -1247,7 +1274,20 @@ async def compare_model_performance(
         tracker = get_performance_tracker()
         result = await tracker.compare_model_versions(model_id, other_model_id, metric_name)
 
-        return result
+        # The tracker returns a NESTED shape (model_a/model_b objects, `metric`,
+        # `relative_difference_percent`). Flatten it to the contract the page
+        # reads — a raw passthrough rendered "undefined undefined NaN%".
+        return ModelComparisonResponse(
+            model_id=result["model_a"]["version"],
+            other_model_id=result["model_b"]["version"],
+            metric_name=result["metric"],
+            model_value=result["model_a"]["value"],
+            other_model_value=result["model_b"]["value"],
+            difference=result["difference"],
+            difference_percent=result["relative_difference_percent"],
+            better_model=result["better_model"],
+            is_significant=result["is_significant"],
+        )
 
     except Exception as e:
         raise _log_and_500("Failed to compare model performance", e)

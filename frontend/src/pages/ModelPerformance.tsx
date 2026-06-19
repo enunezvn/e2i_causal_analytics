@@ -37,6 +37,7 @@ import {
   Download,
   Clock,
   AlertTriangle,
+  Trophy,
 } from 'lucide-react';
 import {
   MetricTrend,
@@ -696,11 +697,30 @@ function ModelPerformance() {
                     unit="%"
                     status="healthy"
                   />
-                  <KPICard
-                    title="Better"
-                    value={comparisonQuery.data.better_model}
-                    status="healthy"
-                  />
+                  {/*
+                    "Better model" is a model HANDLE (a long string like
+                    `initiation_remibrutinib_goldstd_lr_v1`), not a numeric KPI.
+                    Rendering it as a KPICard value (text-2xl, no wrap) overflowed
+                    the card, so it gets its own card whose name wraps + truncates
+                    with a hover title.
+                  */}
+                  <div className="rounded-lg border border-l-4 border-l-emerald-500 bg-[var(--color-card)] p-4">
+                    <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground mb-1">
+                      <Trophy className="h-4 w-4" />
+                      Better model
+                    </div>
+                    <div
+                      className="font-semibold break-words"
+                      title={comparisonQuery.data.better_model}
+                    >
+                      {comparisonQuery.data.better_model}
+                    </div>
+                    {comparisonQuery.data.is_significant === false && (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        difference not significant
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : null}
             </CardContent>
