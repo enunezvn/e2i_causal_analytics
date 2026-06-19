@@ -27,6 +27,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Disjoint source tag for structured eval artifacts (confusion matrix / ROC
+# curve). Kept separate from the scalar 'holdout' rows so each idempotent delete
+# scope stays disjoint, and added to the eval runners' re-run cleanup loops so
+# the registry-row replace (FK RESTRICT) is not blocked by stale curve rows.
+HOLDOUT_CURVE_SOURCE = "holdout_curve"
+
 
 class MetricRecorder:
     """Idempotent recorder: delete prior rows for a run, then bulk-insert.
@@ -122,7 +128,7 @@ class MetricRecorder:
         *,
         measured_at: datetime,
         sample_size: int,
-        source: str = "holdout_curve",
+        source: str = HOLDOUT_CURVE_SOURCE,
     ) -> None:
         """Idempotently persist structured eval artifacts (confusion / ROC).
 

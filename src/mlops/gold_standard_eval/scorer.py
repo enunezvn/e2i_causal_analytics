@@ -128,3 +128,36 @@ def roc_points(
         for f, t, th in zip(fpr, tpr, thresholds, strict=False)
     ]
     return {"points": points, "auc": auc}
+
+
+def holdout_curve_records(
+    y_true: "np.ndarray",
+    y_score: "np.ndarray",
+    threshold: float = 0.5,
+) -> list:
+    """Package confusion + ROC artifacts as ``(kind, scalar, payload)`` tuples.
+
+    Shape matches ``MetricRecorder.record_curves`` / ``record_curve``: each tuple
+    is ``(metric_name, representative_scalar, payload_dict)``. The confusion
+    matrix is always emitted (it is defined even for a single predicted class);
+    the ROC curve is emitted only when it is defined (skipped for single-class
+    ``y_true``, where ``roc_points`` returns no points) so the eval records what
+    it can rather than crashing.
+
+    Args:
+        y_true:    Ground-truth binary labels (0/1).
+        y_score:   Predicted probability scores for the positive class.
+        threshold: Decision boundary for the confusion matrix (default 0.5).
+
+    Returns:
+        List of ``(kind, scalar, payload)`` tuples ready for ``record_curves``.
+    """
+    cm = confusion(y_true, y_score, threshold)
+    n = cm["tp"] + cm["tn"] + cm["fp"] + cm["fn"]
+    accuracy = (cm["tp"] + cm["tn"]) / n if n else 0.0
+    records: list = [("confusion_matrix", float(accuracy), cm)]
+
+    roc = roc_points(y_true, y_score)
+    if roc["points"]:
+        records.append(("roc_curve", float(roc["auc"]), roc))
+    return records

@@ -1,6 +1,12 @@
 import numpy as np
 
-from src.mlops.gold_standard_eval.scorer import METRIC_NAMES, confusion, roc_points, score
+from src.mlops.gold_standard_eval.scorer import (
+    METRIC_NAMES,
+    confusion,
+    holdout_curve_records,
+    roc_points,
+    score,
+)
 
 
 def test_score_emits_page_aligned_names_and_real_values():
@@ -79,3 +85,29 @@ def test_roc_points_single_class_returns_empty_not_crash():
     out = roc_points(y, s)
     assert out["points"] == []
     assert out["auc"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# holdout_curve_records() — packages confusion + ROC for the recorder
+# ---------------------------------------------------------------------------
+
+
+def test_holdout_curve_records_packages_confusion_and_roc():
+    y = np.array([0, 0, 1, 1])
+    s = np.array([0.1, 0.4, 0.6, 0.9])
+    recs = holdout_curve_records(y, s)
+    assert [r[0] for r in recs] == ["confusion_matrix", "roc_curve"]
+    _, acc, cm = recs[0]
+    assert acc == 1.0  # perfectly separable
+    assert cm["tp"] == 2 and cm["tn"] == 2
+    _, auc, roc = recs[1]
+    assert abs(auc - 1.0) < 1e-9
+    assert roc["points"][0]["fpr"] == 0.0
+
+
+def test_holdout_curve_records_single_class_confusion_only():
+    # ROC is undefined for a single-class holdout -> confusion matrix only.
+    y = np.array([1, 1, 1])
+    s = np.array([0.2, 0.6, 0.9])
+    recs = holdout_curve_records(y, s)
+    assert [r[0] for r in recs] == ["confusion_matrix"]
