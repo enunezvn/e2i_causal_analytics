@@ -205,6 +205,28 @@ export interface RefutationSummary {
   tests?: RefutationTestDetail[];
 }
 
+/** One estimator the energy-score selector fit and scored for this analysis. */
+export interface EstimatorCandidate {
+  estimator: string;
+  success: boolean;
+  /** Energy score — LOWER is better; null if the fit failed. */
+  energy_score?: number | null;
+  ate?: number | null;
+  error?: string | null;
+  is_selected: boolean;
+}
+
+/** The data-driven estimator evaluation behind the chosen estimator. */
+export interface EstimatorComparison {
+  candidates: EstimatorCandidate[];
+  selection_reason?: string | null;
+  energy_score_gap?: number | null;
+  n_evaluated: number;
+  n_succeeded: number;
+  quality_tier?: string | null;
+  requires_review: boolean;
+}
+
 /** Full result of an end-to-end causal_impact agent run. */
 export interface AgentCausalAnalysisResponse {
   analysis_id: string;
@@ -229,6 +251,8 @@ export interface AgentCausalAnalysisResponse {
   statistical_significance: boolean;
   /** Estimator the agent actually used (data-driven or forced) */
   selected_estimator?: string | null;
+  /** The data-driven estimator evaluation (null when only one was evaluated). */
+  estimator_comparison?: EstimatorComparison | null;
   confidence?: number | null;
   refutation: RefutationSummary;
   narrative?: string | null;
@@ -277,6 +301,8 @@ export interface DiscoveredEffect {
   /** |ate| effect magnitude */
   impact?: number | null;
   n_rows: number;
+  /** One-line plain-language reading of this effect (null until estimated). */
+  summary?: string | null;
   /** GET /causal/agent-analyze/{id} for the full DAG + refutation */
   analysis_id?: string | null;
 }

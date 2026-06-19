@@ -600,7 +600,10 @@ export default function CausalAnalysis() {
               </Card>
 
               {/* Interpretation */}
-              {(result.narrative || result.executive_summary || result.recommendations.length > 0) && (
+              {(result.narrative ||
+                result.executive_summary ||
+                result.key_insights.length > 0 ||
+                result.recommendations.length > 0) && (
                 <Card>
                   <CardHeader>
                     <CardTitle>Interpretation</CardTitle>
@@ -615,9 +618,19 @@ export default function CausalAnalysis() {
                         {result.narrative}
                       </p>
                     )}
+                    {result.key_insights.length > 0 && (
+                      <div>
+                        <p className="font-medium mb-1">Key insights</p>
+                        <ul className="list-disc pl-5 text-muted-foreground space-y-1">
+                          {result.key_insights.map((k, i) => (
+                            <li key={i}>{k}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     {result.recommendations.length > 0 && (
                       <div>
-                        <p className="font-medium mb-1">Recommendations</p>
+                        <p className="font-medium mb-1">Recommended actions</p>
                         <ul className="list-disc pl-5 text-muted-foreground space-y-1">
                           {result.recommendations.map((rec, i) => (
                             <li key={i}>{rec}</li>

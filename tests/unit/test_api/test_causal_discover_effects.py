@@ -93,3 +93,30 @@ def test_effect_from_agent_response_maps_gate_and_impact():
     assert eff.confidence_score == pytest.approx(0.9)
     assert eff.analysis_id == "x1"
     assert eff.status == "completed"
+    # Plain-language one-liner so the leaderboard reads as more than numbers:
+    # direction (negative ATE -> "lowers"), robustness verdict, significance.
+    assert eff.summary
+    assert "lowers" in eff.summary
+    assert "survived all robustness checks" in eff.summary
+    assert "not statistically significant" not in eff.summary
+
+
+@pytest.mark.unit
+def test_effect_summary_none_until_estimated():
+    """A pending/failed effect (no ATE) has no summary — never a fabricated one."""
+    resp = AgentCausalAnalysisResponse(
+        analysis_id="x2",
+        status="failed",
+        treatment_var="treatment_arm",
+        outcome_var="persistent_180d",
+        dataset="patient_journeys",
+        n_rows=1500,
+        data_source="synthetic",
+        dag=CausalDAGModel(),
+        ate=None,
+        statistical_significance=False,
+        refutation=RefutationSummary(),
+        latency_ms=10,
+    )
+    eff = _effect_from_agent_response("treatment_arm", "persistent_180d", resp, "x2")
+    assert eff.summary is None

@@ -54,7 +54,11 @@ import {
 
 import { useDiscoverEffects, useCausalBrands } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
-import type { DiscoveredEffect, RefutationTestDetail } from '@/types/causal';
+import type {
+  DiscoveredEffect,
+  EstimatorComparison,
+  RefutationTestDetail,
+} from '@/types/causal';
 
 const DATASET = 'patient_journeys';
 
@@ -129,6 +133,68 @@ function toRefutationResults(tests: RefutationTestDetail[] | undefined | null): 
     passed: t.passed,
     description: t.details ?? undefined,
   }));
+}
+
+// The agent fits and energy-scores several estimators and picks the lowest score
+// with a robust-over-fast tie-break. Surface that evaluation so the analyst sees
+// WHAT was compared and WHY the winner won — not just the winner's name.
+function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorComparison }) {
+  const ranked = [...comparison.candidates].sort((a, b) => {
+    if (a.energy_score == null) return 1;
+    if (b.energy_score == null) return -1;
+    return a.energy_score - b.energy_score;
+  });
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-medium">Estimator selection (data-driven)</p>
+        <p className="text-xs text-muted-foreground">
+          {comparison.n_succeeded}/{comparison.n_evaluated} estimators fit · lower energy score is
+          better
+        </p>
+      </div>
+      <div className="overflow-x-auto rounded-md border">
+        <table className="w-full text-sm">
+          <thead className="border-b bg-muted/40 text-left text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="p-2 font-medium">Estimator</th>
+              <th className="p-2 font-medium">Energy score</th>
+              <th className="p-2 font-medium">ATE</th>
+              <th className="p-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ranked.map((c) => (
+              <tr
+                key={c.estimator}
+                className={`border-b last:border-0 ${c.is_selected ? 'bg-muted/50 font-medium' : ''}`}
+              >
+                <td className="p-2 capitalize">
+                  {c.estimator.replace(/_/g, ' ')}
+                  {c.is_selected && (
+                    <Badge variant="default" className="ml-2 align-middle">
+                      Selected
+                    </Badge>
+                  )}
+                </td>
+                <td className="p-2">{c.energy_score != null ? c.energy_score.toFixed(4) : '—'}</td>
+                <td className="p-2">{c.ate != null ? c.ate.toFixed(4) : '—'}</td>
+                <td className="p-2 text-xs text-muted-foreground">
+                  {c.success ? 'fit' : `failed${c.error ? `: ${c.error}` : ''}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {comparison.selection_reason && (
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium">Why this estimator:</span> {comparison.selection_reason}
+          {comparison.quality_tier ? ` (quality: ${comparison.quality_tier})` : ''}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export default function CausalDiscovery() {
@@ -331,6 +397,11 @@ export default function CausalDiscovery() {
                           <span>{e.treatment}</span>{' '}
                           <span className="text-muted-foreground">&rarr;</span>{' '}
                           <span>{e.outcome}</span>
+                          {e.summary && (
+                            <div className="mt-1 max-w-md text-xs font-normal text-muted-foreground">
+                              {e.summary}
+                            </div>
+                          )}
                         </td>
                         <td className="p-3">{verdictBadge(e)}</td>
                         <td className="p-3 font-medium">{formatEffect(e.ate)}</td>
@@ -351,6 +422,15 @@ export default function CausalDiscovery() {
                 </tbody>
               </table>
             </div>
+            <p className="border-t px-3 py-3 text-xs text-muted-foreground">
+              Why these {effects.length} question{effects.length === 1 ? '' : 's'}? The agent only
+              proposes the treatment&rarr;outcome relationships this dataset&rsquo;s curated causal
+              spec defines — its designated treatment and outcome variables — and collapses
+              complementary outcomes (e.g. &ldquo;discontinued&rdquo; is the inverse of
+              &ldquo;persistent&rdquo;) and self-pairs. Clinical markers (eGFR, LDH, …) are
+              designated adjustment covariates, not treatments or outcomes, so they enter the model
+              as confounders rather than as questions.
+            </p>
           </CardContent>
         </Card>
       )}
@@ -425,18 +505,25 @@ export default function CausalDiscovery() {
 
                 {result.discovered_confounders && result.discovered_confounders.length > 0 && (
                   <p className="text-xs text-muted-foreground">
-                    Confounders the data identified:{' '}
+                    Confounders the data identified (adjusted for in the estimate):{' '}
                     <span className="font-medium">{result.discovered_confounders.join(', ')}</span>
                   </p>
                 )}
 
                 {vizNodes.length > 0 ? (
-                  <CausalDiscoveryViz
-                    nodes={vizNodes}
-                    edges={vizEdges}
-                    refutationResults={refutationResults}
-                    showEffectsTable={false}
-                  />
+                  <div className="space-y-2">
+                    <CausalDiscoveryViz
+                      nodes={vizNodes}
+                      edges={vizEdges}
+                      refutationResults={refutationResults}
+                      showEffectsTable={false}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Confounders point into both treatment and outcome (the backdoor paths the
+                      estimate adjusts for). A node drawn without edges has no detected causal link
+                      to this question.
+                    </p>
+                  </div>
                 ) : (
                   <EmptyState
                     title="No DAG produced"
@@ -444,8 +531,15 @@ export default function CausalDiscovery() {
                   />
                 )}
 
-                {(result.executive_summary || result.narrative) && (
-                  <div className="space-y-2 text-sm">
+                {result.estimator_comparison && (
+                  <EstimatorComparisonPanel comparison={result.estimator_comparison} />
+                )}
+
+                {(result.executive_summary ||
+                  result.narrative ||
+                  result.key_insights.length > 0 ||
+                  result.recommendations.length > 0) && (
+                  <div className="space-y-4 text-sm">
                     {result.executive_summary && (
                       <p className="font-medium">{result.executive_summary}</p>
                     )}
@@ -453,6 +547,26 @@ export default function CausalDiscovery() {
                       <p className="text-muted-foreground whitespace-pre-line">
                         {result.narrative}
                       </p>
+                    )}
+                    {result.key_insights.length > 0 && (
+                      <div>
+                        <p className="mb-1 font-medium">Key insights</p>
+                        <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                          {result.key_insights.map((k, i) => (
+                            <li key={i}>{k}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {result.recommendations.length > 0 && (
+                      <div>
+                        <p className="mb-1 font-medium">Recommended actions</p>
+                        <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+                          {result.recommendations.map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))}
+                        </ul>
+                      </div>
                     )}
                   </div>
                 )}

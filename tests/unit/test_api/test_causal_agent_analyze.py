@@ -86,6 +86,107 @@ def test_completed_run_maps_dag_effect_and_estimator():
 
 
 @pytest.mark.unit
+def test_estimator_comparison_surfaced_when_multiple_evaluated():
+    """The Auto path fits + energy-scores several estimators; that comparison
+    lived in state but was dropped at the API boundary. Surface it so the UI can
+    explain WHY the winner won — not just show its name."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    estimation = {
+        "ate": 0.12,
+        "statistical_significance": True,
+        "method": "LinearDML",
+        "selected_estimator": "LinearDML",
+        "selection_reason": "confounding-robust preferred over OLS at comparable energy",
+        "energy_score_gap": 0.04,
+        "n_estimators_evaluated": 4,
+        "n_estimators_succeeded": 3,
+        "requires_review": False,
+        "energy_score_data": {"quality_tier": "good"},
+        "all_estimators_evaluated": [
+            {
+                "estimator": "CausalForestDML",
+                "success": True,
+                "energy_score": 0.51,
+                "ate": 0.10,
+                "error": None,
+            },
+            {
+                "estimator": "LinearDML",
+                "success": True,
+                "energy_score": 0.48,
+                "ate": 0.12,
+                "error": None,
+            },
+            {
+                "estimator": "DRLearner",
+                "success": True,
+                "energy_score": 0.55,
+                "ate": 0.09,
+                "error": None,
+            },
+            {
+                "estimator": "OLS",
+                "success": False,
+                "energy_score": None,
+                "ate": None,
+                "error": "singular",
+            },
+        ],
+    }
+    resp = _agent_state_to_response(
+        analysis_id="a1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=_base_state(estimation_result=estimation),
+        latency_ms=10,
+    )
+    cmp = resp.estimator_comparison
+    assert cmp is not None
+    assert cmp.n_evaluated == 4 and cmp.n_succeeded == 3
+    assert len(cmp.candidates) == 4
+    assert cmp.selection_reason and "robust" in cmp.selection_reason
+    assert cmp.quality_tier == "good"
+    # Exactly the winner is flagged.
+    selected = [c for c in cmp.candidates if c.is_selected]
+    assert len(selected) == 1 and selected[0].estimator == "LinearDML"
+
+
+@pytest.mark.unit
+def test_estimator_comparison_none_for_single_forced_estimator():
+    """A forced/explicit method evaluates exactly one estimator — a 1-row
+    'comparison' conveys nothing, so it collapses to None (verifier guard)."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    estimation = {
+        "ate": 0.12,
+        "statistical_significance": True,
+        "method": "LinearDML",
+        "selected_estimator": "LinearDML",
+        "n_estimators_evaluated": 1,
+        "all_estimators_evaluated": [
+            {
+                "estimator": "LinearDML",
+                "success": True,
+                "energy_score": 0.48,
+                "ate": 0.12,
+                "error": None,
+            },
+        ],
+    }
+    resp = _agent_state_to_response(
+        analysis_id="a1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=_base_state(estimation_result=estimation),
+        latency_ms=10,
+    )
+    assert resp.estimator_comparison is None
+
+
+@pytest.mark.unit
 def test_review_band_is_needs_review_not_passed():
     from src.api.routes.causal import _agent_state_to_response
 

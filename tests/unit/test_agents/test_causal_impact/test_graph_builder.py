@@ -660,3 +660,74 @@ class TestDiscoveredDagIncludesEstimandEdge:
         # Discovered confounder edges preserved and the graph stays acyclic.
         assert dag.has_edge("disease_severity", "treatment_arm")
         assert nx.is_directed_acyclic_graph(dag)
+
+
+class TestConstructDagConnectsCuratedConfounders:
+    """Regression for the disconnected-DAG bug: the fallback DAG (_construct_dag,
+    used on AUGMENT/REVIEW/REJECT gate paths) must draw confounder->treatment AND
+    confounder->outcome edges for EVERY curated covariate, so the graph is
+    connected and the backdoor adjustment set is non-empty + honest — instead of
+    1 edge + N orphan covariate nodes + adjustment_sets=[[]].
+    """
+
+    # The real patient_journeys covariates (none overlap the stale COMMON_CONFOUNDERS).
+    REAL_COVS = [
+        "disease_severity",
+        "engagement_score",
+        "age_at_diagnosis",
+        "academic_hcp",
+        "egfr",
+        "proteinuria_g_day",
+        "ldh_ratio",
+        "urticaria_severity_uas7",
+        "ecog_performance_status",
+    ]
+
+    def test_every_confounder_links_to_treatment_and_outcome(self):
+        import networkx as nx
+
+        node = GraphBuilderNode()
+        dag = node._construct_dag("treatment_arm", "persistent_180d", self.REAL_COVS)
+
+        # estimand edge present
+        assert dag.has_edge("treatment_arm", "persistent_180d")
+        # NO orphan covariate nodes — each is a common cause of both T and O
+        for cov in self.REAL_COVS:
+            assert dag.has_edge(cov, "treatment_arm"), f"{cov} not linked to treatment"
+            assert dag.has_edge(cov, "persistent_180d"), f"{cov} not linked to outcome"
+        # connected & acyclic; far more than the old single edge
+        assert dag.number_of_edges() > 1
+        assert nx.number_of_isolates(dag) == 0
+        assert nx.is_directed_acyclic_graph(dag)
+
+    def test_adjustment_set_equals_full_covariate_set_numeric_neutrality(self):
+        """Pins the load-bearing NUMERIC-NEUTRALITY invariant: the fallback DAG's
+        backdoor adjustment set must equal the FULL covariate set. estimation.py
+        conditions on ``adjustment_set`` when non-empty, else on all-columns-minus-
+        T/O. Since the loaded frame is exactly treatment+outcome+covariates, the
+        adjustment set being the full covariate set guarantees BOTH branches pick
+        the SAME columns -> identical ATE (the connected-DAG fix cannot move any
+        number). If a future change made _find_adjustment_sets return a proper
+        SUBSET here, the empty-vs-full branches would diverge and the ATE would
+        shift — this test would catch it."""
+        node = GraphBuilderNode()
+        dag = node._construct_dag("treatment_arm", "persistent_180d", self.REAL_COVS)
+        adjustment_sets = node._find_adjustment_sets(dag, "treatment_arm", "persistent_180d")
+
+        assert adjustment_sets and adjustment_sets[0], (
+            "adjustment set is empty (confounded display)"
+        )
+        # With N independent confounders no proper subset blocks every backdoor
+        # path, so the admissible set is ALL of them — identical to the columns
+        # estimation used under the prior empty-set fallback.
+        assert set(adjustment_sets[0]) == set(self.REAL_COVS)
+
+    def test_few_confounders_also_yield_full_adjustment_set(self):
+        """Neutrality must hold for small n too: with <=3 confounders the size
+        loop finds the full set as a combination; the adjustment set is still the
+        complete covariate list (never a strict subset that would shift the ATE)."""
+        node = GraphBuilderNode()
+        covs = ["disease_severity", "academic_hcp"]
+        dag = node._construct_dag("treatment_arm", "persistent_180d", covs)
+        adjustment_sets = node._find_adjustment_sets(dag, "treatment_arm", "persistent_180d")
+        assert set(adjustment_sets[0]) == set(covs)

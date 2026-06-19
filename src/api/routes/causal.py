@@ -64,6 +64,8 @@ from src.api.schemas.causal import (
     DiscoveredEffect,
     DiscoverEffectsResponse,
     EstimationDataResponse,
+    EstimatorCandidate,
+    EstimatorComparison,
     EstimatorInfo,
     EstimatorListResponse,
     HierarchicalAnalysisRequest,
@@ -1105,6 +1107,25 @@ def _effect_status_from_gate(ate: Optional[float], gate: Optional[str], resp_sta
     return resp_status
 
 
+_GATE_VERDICT_PHRASE = {
+    "proceed": "survived all robustness checks",
+    "review": "needs review (mixed robustness)",
+    "block": "failed robustness checks",
+}
+
+
+def _effect_summary(
+    treatment: str, outcome: str, ate: Optional[float], gate: Optional[str], significant: bool
+) -> Optional[str]:
+    """One-line plain-language reading of a validated effect. None until estimated."""
+    if ate is None:
+        return None
+    direction = "raises" if ate > 0 else "lowers" if ate < 0 else "does not change"
+    verdict = _GATE_VERDICT_PHRASE.get(gate or "", "robustness unknown")
+    sig = "statistically significant" if significant else "not statistically significant"
+    return f"{treatment} {direction} {outcome} by {ate:+.3f} — {verdict}, {sig}."
+
+
 def _effect_from_agent_response(
     treatment: str, outcome: str, resp: "AgentCausalAnalysisResponse", analysis_id: str
 ) -> DiscoveredEffect:
@@ -1123,6 +1144,9 @@ def _effect_from_agent_response(
         confidence_score=_effect_confidence_score(gate, bool(resp.statistical_significance)),
         impact=abs(resp.ate) if resp.ate is not None else None,
         n_rows=resp.n_rows,
+        summary=_effect_summary(
+            treatment, outcome, resp.ate, gate, bool(resp.statistical_significance)
+        ),
         analysis_id=analysis_id,
     )
 
@@ -1760,6 +1784,47 @@ def _refutation_tests_from_state(refutation: Dict[str, Any]) -> List[RefutationT
     return tests
 
 
+def _estimator_comparison_from_estimation(
+    estimation: Dict[str, Any],
+) -> Optional["EstimatorComparison"]:
+    """Surface the energy-score selector's full evaluation (candidates + scores +
+    rationale) so the UI can explain WHY the chosen estimator won.
+
+    Returns None when only one estimator was evaluated (e.g. an explicitly-forced
+    method) — a single-row "comparison" conveys nothing, so it is collapsed.
+    """
+    evaluated = estimation.get("all_estimators_evaluated") or []
+    n_evaluated = int(estimation.get("n_estimators_evaluated") or len(evaluated))
+    if n_evaluated <= 1 or not evaluated:
+        return None
+
+    selected = estimation.get("selected_estimator") or estimation.get("method")
+    candidates = [
+        EstimatorCandidate(
+            estimator=str(e.get("estimator")),
+            success=bool(e.get("success")),
+            energy_score=e.get("energy_score"),
+            ate=e.get("ate"),
+            error=e.get("error"),
+            is_selected=(e.get("estimator") == selected),
+        )
+        for e in evaluated
+    ]
+    _energy_block = estimation.get("energy_score_data") or {}
+    return EstimatorComparison(
+        candidates=candidates,
+        selection_reason=estimation.get("selection_reason"),
+        energy_score_gap=estimation.get("energy_score_gap"),
+        n_evaluated=n_evaluated,
+        n_succeeded=int(
+            estimation.get("n_estimators_succeeded")
+            or sum(1 for e in evaluated if e.get("success"))
+        ),
+        quality_tier=_energy_block.get("quality_tier"),
+        requires_review=bool(estimation.get("requires_review", False)),
+    )
+
+
 def _agent_state_to_response(
     *,
     analysis_id: str,
@@ -1868,6 +1933,7 @@ def _agent_state_to_response(
         p_value=estimation.get("p_value"),
         statistical_significance=bool(estimation.get("statistical_significance", False)),
         selected_estimator=estimation.get("method") or estimation.get("selected_estimator"),
+        estimator_comparison=_estimator_comparison_from_estimation(estimation),
         confidence=final_state.get("overall_confidence"),
         refutation=refutation_summary,
         narrative=interpretation.get("narrative"),
