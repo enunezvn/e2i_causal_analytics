@@ -19,6 +19,9 @@ import {
 } from '@copilotkit/react-core';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAccessToken } from '@/stores/auth-store';
+import { getKPIHistory } from '@/api/kpi';
+import { KpiTrendChart } from '@/components/chat/KpiTrendChart';
+import type { KPIHistoryResponse } from '@/types/kpi';
 
 // -----------------------------------------------------------------------------
 // Internal Types (not exported - used within provider)
@@ -820,6 +823,63 @@ const CopilotHooksInner: React.FC = () => {
         return open ? 'Chat opened' : 'Chat closed';
       }
       return 'Chat toggled';
+    },
+  });
+
+  // 7. Render an inline KPI trend chart (generative UI)
+  // The handler fetches REAL history (getKPIHistory) — it never fabricates
+  // points — and the render returns a chart inline in the assistant's reply
+  // (surfaced via message.generativeUI() in CustomAssistantMessage).
+  useCopilotAction({
+    name: 'renderKpiTrend',
+    description:
+      'Render an inline line chart of a KPI\'s monthly historical trend. Use when the user asks to ' +
+      'visualize, plot, chart, or graph a KPI over time (e.g. "chart TRx", "show the market share trend"). ' +
+      'kpiId should be a KPI identifier such as trx, nrx, or market_share.',
+    parameters: [
+      {
+        name: 'kpiId',
+        type: 'string',
+        description: 'KPI identifier to chart (e.g., trx, nrx, market_share)',
+        required: true,
+      },
+      {
+        name: 'title',
+        type: 'string',
+        description: 'Optional chart title',
+        required: false,
+      },
+    ],
+    handler: async ({ kpiId }: { kpiId: string; title?: string }) => {
+      // Fetch REAL history. Returns { points: [] } when no series exists; the
+      // chart renders an honest empty state rather than fabricating data.
+      return await getKPIHistory(kpiId);
+    },
+    render: ({ status, args, result }) => {
+      // 'inProgress' = the LLM is still streaming the arguments, so kpiId may be
+      // partial/empty — render nothing rather than a "Loading  trend…" with a
+      // blank name. 'executing' = handler fetching (show loading). 'complete' =
+      // result ready.
+      if (status === 'inProgress') return <></>;
+      // CopilotKit types `result` loosely (any). Only treat a well-formed
+      // KPIHistoryResponse as data; otherwise leave it undefined so the chart
+      // shows an explicit "couldn't load" state instead of masquerading a
+      // handler error as an empty series.
+      const history =
+        status === 'complete' &&
+        result != null &&
+        typeof result === 'object' &&
+        'points' in result
+          ? (result as KPIHistoryResponse)
+          : undefined;
+      return (
+        <KpiTrendChart
+          kpiId={args?.kpiId ?? ''}
+          title={args?.title}
+          data={history}
+          loading={status === 'executing'}
+        />
+      );
     },
   });
 
