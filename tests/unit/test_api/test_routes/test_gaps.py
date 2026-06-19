@@ -7,6 +7,7 @@ Tests cover:
 - Mock all external dependencies (GapAnalyzerAgent, in-memory storage)
 """
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -513,3 +514,179 @@ class TestEdgeCases:
         )
 
         assert response is not None
+
+
+# =============================================================================
+# Latest-run-per-brand dedup + curated counts (accumulation / staleness fix)
+# =============================================================================
+
+
+def _make_opp(
+    gap_id: str,
+    difficulty: ImplementationDifficulty,
+    roi: float,
+    cost: float = 75000.0,
+):
+    """Build a PrioritizedOpportunity for list_opportunities tests."""
+    from src.api.routes.gaps import (
+        PerformanceGap,
+        PrioritizedOpportunity,
+        ROIEstimate,
+    )
+
+    return PrioritizedOpportunity(
+        rank=1,
+        gap=PerformanceGap(
+            gap_id=gap_id,
+            metric="trx",
+            segment="region",
+            segment_value=gap_id,
+            current_value=85.0,
+            target_value=100.0,
+            gap_size=15.0,
+            gap_percentage=15.0,
+            gap_type="vs_target",
+        ),
+        roi_estimate=ROIEstimate(
+            gap_id=gap_id,
+            estimated_revenue_impact=roi * cost,
+            estimated_cost_to_close=cost,
+            expected_roi=roi,
+            risk_adjusted_roi=roi * 0.5,
+            payback_period_months=6,
+            attribution_level="partial",
+            attribution_rate=0.65,
+            confidence=0.8,
+        ),
+        recommended_action=f"Close {gap_id}",
+        implementation_difficulty=difficulty,
+        time_to_impact="3-6 months",
+    )
+
+
+def _make_analysis(
+    analysis_id: str,
+    brand: str,
+    timestamp: datetime,
+    prioritized,
+    quick_wins=None,
+    strategic_bets=None,
+):
+    """Build a COMPLETED GapAnalysisResponse with an explicit timestamp."""
+    from src.api.routes.gaps import GapAnalysisResponse
+
+    return GapAnalysisResponse(
+        analysis_id=analysis_id,
+        status=AnalysisStatus.COMPLETED,
+        brand=brand,
+        metrics_analyzed=["trx"],
+        segments_analyzed=4,
+        prioritized_opportunities=prioritized,
+        quick_wins=quick_wins or [],
+        strategic_bets=strategic_bets or [],
+        total_addressable_value=sum(o.roi_estimate.estimated_revenue_impact for o in prioritized),
+        timestamp=timestamp,
+    )
+
+
+class TestListOpportunitiesLatestRunDedup:
+    """The endpoint must surface the LATEST completed analysis per brand, not the
+    sum of every historical run (which re-counted recurring gaps and resurfaced
+    stale pre-fix runs)."""
+
+    @pytest.fixture(autouse=True)
+    def _force_inmemory(self):
+        """Pin the in-memory store path so these tests never depend on whether the
+        test environment happens to have Supabase credentials configured."""
+        with patch("src.api.routes.gaps._use_inmemory_fallback", return_value=True):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_only_latest_run_per_brand_is_counted(self):
+        """Two stored runs for one brand -> only the newest contributes."""
+        t0 = datetime(2026, 6, 14, 0, 16, tzinfo=timezone.utc)
+        t1 = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        opps = [
+            _make_opp("region_north_trx", ImplementationDifficulty.HIGH, 5.0),
+            _make_opp("region_south_trx", ImplementationDifficulty.HIGH, 4.0),
+        ]
+        _analyses_store["old"] = _make_analysis("old", "Kisqali", t0, opps, strategic_bets=opps)
+        _analyses_store["new"] = _make_analysis("new", "Kisqali", t1, opps, strategic_bets=opps)
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        # Summing both runs would give 4; the latest run alone has 2.
+        assert resp.total_count == 2
+        assert len(resp.opportunities) == 2
+        assert resp.strategic_bets_count == 2
+
+    @pytest.mark.asyncio
+    async def test_casing_variants_collapse_to_one_latest_snapshot(self):
+        """Historical lowercase + canonical capitalized rows are one brand."""
+        t0 = datetime(2026, 6, 8, 11, 10, tzinfo=timezone.utc)
+        t1 = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        old = [_make_opp("g_old", ImplementationDifficulty.HIGH, 9.0)]
+        new = [_make_opp("g_new", ImplementationDifficulty.HIGH, 3.0)]
+        _analyses_store["lc"] = _make_analysis("lc", "kisqali", t0, old, strategic_bets=old)
+        _analyses_store["cap"] = _make_analysis("cap", "Kisqali", t1, new, strategic_bets=new)
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        assert resp.total_count == 1
+        assert resp.opportunities[0].gap.gap_id == "g_new"
+
+    @pytest.mark.asyncio
+    async def test_strategic_bets_count_uses_curated_list_not_raw_difficulty(self):
+        """strategic_bets_count must reflect the prioritizer's curated bets, not a
+        re-count of every high-difficulty opportunity."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        # 3 high-difficulty opps, but only 1 is a curated strategic bet.
+        prioritized = [
+            _make_opp("g1", ImplementationDifficulty.HIGH, 12.0),
+            _make_opp("g2", ImplementationDifficulty.HIGH, 1.5),
+            _make_opp("g3", ImplementationDifficulty.HIGH, 1.2),
+        ]
+        curated = [prioritized[0]]
+        _analyses_store["a"] = _make_analysis(
+            "a", "Kisqali", t, prioritized, strategic_bets=curated
+        )
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        assert resp.strategic_bets_count == 1, "must use curated strategic_bets, not raw high count"
+        assert resp.total_count == 3, "the opportunity LIST is still all matching opps"
+
+    @pytest.mark.asyncio
+    async def test_all_brands_uses_latest_per_brand(self):
+        """brand=None aggregates the latest run of EACH brand."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        k = [_make_opp("k_north", ImplementationDifficulty.HIGH, 5.0)]
+        f = [_make_opp("f_west", ImplementationDifficulty.LOW, 2.0)]
+        _analyses_store["k"] = _make_analysis("k", "Kisqali", t, k, quick_wins=[], strategic_bets=k)
+        _analyses_store["f"] = _make_analysis(
+            "f", "Fabhalta", t, f, quick_wins=f, strategic_bets=[]
+        )
+
+        resp = await list_opportunities(brand=None, min_roi=None, difficulty=None, limit=50)
+
+        assert resp.total_count == 2
+        assert resp.strategic_bets_count == 1
+        assert resp.quick_wins_count == 1
+
+    @pytest.mark.asyncio
+    async def test_handles_naive_timestamp_from_old_db_row(self):
+        """A payload timestamp stored without a tz offset round-trips as a NAIVE
+        datetime; the latest-run comparison must not TypeError on a mixed
+        naive/aware history (it normalizes both to UTC)."""
+        t_naive = datetime(2026, 6, 14, 0, 16)  # no tzinfo (legacy row)
+        t_aware = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        old = [_make_opp("g_old", ImplementationDifficulty.HIGH, 9.0)]
+        new = [_make_opp("g_new", ImplementationDifficulty.HIGH, 3.0)]
+        _analyses_store["old"] = _make_analysis("old", "Kisqali", t_naive, old, strategic_bets=old)
+        _analyses_store["new"] = _make_analysis("new", "Kisqali", t_aware, new, strategic_bets=new)
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        # Aware 06-16 is newer than naive-treated-as-UTC 06-14 → latest is g_new.
+        assert resp.total_count == 1
+        assert resp.opportunities[0].gap.gap_id == "g_new"

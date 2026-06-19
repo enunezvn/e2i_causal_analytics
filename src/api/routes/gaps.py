@@ -266,9 +266,25 @@ class GapAnalysisResponse(BaseModel):
 class OpportunityListResponse(BaseModel):
     """Response for listing opportunities."""
 
-    total_count: int = Field(..., description="Total opportunities")
-    quick_wins_count: int = Field(..., description="Number of quick wins")
-    strategic_bets_count: int = Field(..., description="Number of strategic bets")
+    total_count: int = Field(
+        ..., description="Opportunities returned (after min_roi/difficulty filters and limit)"
+    )
+    quick_wins_count: int = Field(
+        ...,
+        description=(
+            "Curated quick wins from the latest run per brand (prioritizer's "
+            "definition: low difficulty, ROI>1). Independent of the min_roi/"
+            "difficulty list filters."
+        ),
+    )
+    strategic_bets_count: int = Field(
+        ...,
+        description=(
+            "Curated strategic bets from the latest run per brand (prioritizer's "
+            "definition: high difficulty AND ROI>2 AND cost>$50k, top 5). "
+            "Independent of the min_roi/difficulty list filters."
+        ),
+    )
     opportunities: List[PrioritizedOpportunity] = Field(..., description="List of opportunities")
     total_addressable_value: float = Field(..., description="Total potential value")
 
@@ -353,6 +369,48 @@ async def _all_analyses() -> List[GapAnalysisResponse]:
     if repo is None:
         return list(_analyses_store.values())
     return await repo.list_all()
+
+
+def _to_utc(ts: datetime) -> datetime:
+    """Coerce a timestamp to UTC-aware so comparisons never raise.
+
+    Rows are normally persisted with a tz-aware timestamp (the model default is
+    ``datetime.now(timezone.utc)``), but a payload whose ``timestamp`` was stored
+    without an offset round-trips through pydantic as a NAIVE datetime. Comparing
+    a naive and an aware datetime raises ``TypeError`` — which would 500 the
+    opportunities endpoint — so treat a naive timestamp as UTC.
+    """
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+
+
+def _latest_completed_per_brand(
+    analyses: List[GapAnalysisResponse],
+) -> List[GapAnalysisResponse]:
+    """Return the most recent COMPLETED analysis per (case-normalized) brand.
+
+    A gap analysis is a point-in-time SNAPSHOT. ``list_opportunities`` previously
+    SUMMED every stored run for a brand, which (a) re-counted the same recurring
+    gaps — gap_ids are deterministic (``region_<value>_<metric>_<gap_type>``) so
+    each "Run Analysis" re-contributed the same opportunities — and (b) resurfaced
+    stale runs produced by older code (e.g. pre-fix over-performance "gaps" with
+    implausible ROI). Both inflated the headline counts and duplicated cards.
+
+    Collapsing to the latest run per brand fixes both. Brands are grouped
+    case-insensitively so historical lowercase rows ("kisqali") and the canonical
+    capitalized rows ("Kisqali") resolve to ONE snapshot. Ties (identical
+    timestamps — e.g. a gunicorn 2-worker double-write) break by analysis_id for
+    deterministic selection.
+    """
+    latest: Dict[str, GapAnalysisResponse] = {}
+    for analysis in analyses:
+        key = analysis.brand.lower()
+        current = latest.get(key)
+        if current is None or (_to_utc(analysis.timestamp), analysis.analysis_id) > (
+            _to_utc(current.timestamp),
+            current.analysis_id,
+        ):
+            latest[key] = analysis
+    return list(latest.values())
 
 
 # =============================================================================
@@ -462,26 +520,43 @@ async def list_opportunities(
     Returns:
         List of prioritized opportunities
     """
-    all_opportunities: List[PrioritizedOpportunity] = []
-    quick_wins: List[PrioritizedOpportunity] = []
-    strategic_bets: List[PrioritizedOpportunity] = []
-    total_value = 0.0
-
     analyses = await _completed_analyses(brand=brand)
-    for analysis in analyses:
-        if analysis.status != AnalysisStatus.COMPLETED:
-            continue
 
-        # Case-insensitive brand match, matching GapsRepository.list_completed's
-        # ``.ilike`` filter. Brand casing is canonically capitalized ("Kisqali")
-        # but stored values (and the in-memory fallback path that skips the repo
-        # filter) may carry other casing; comparing case-insensitively keeps the
-        # grounded analyses from being silently filtered out here.
-        if brand and analysis.brand.lower() != brand.lower():
-            continue
+    # Keep COMPLETED analyses matching the brand filter case-insensitively. The
+    # repo applies an ``.ilike`` brand filter, but the in-memory fallback path does
+    # not, so re-filter here for parity. Brand casing is canonically capitalized
+    # ("Kisqali"); historical rows may be lowercase — compare case-insensitively so
+    # grounded analyses are never silently dropped.
+    completed = [
+        a
+        for a in analyses
+        if a.status == AnalysisStatus.COMPLETED and (not brand or a.brand.lower() == brand.lower())
+    ]
+
+    # ACCUMULATION/STALENESS FIX: surface only the LATEST run per brand, not the
+    # sum of every historical run (see _latest_completed_per_brand). brand=None
+    # ("All Brands") therefore aggregates the latest run of EACH brand.
+    latest_analyses = _latest_completed_per_brand(completed)
+
+    all_opportunities: List[PrioritizedOpportunity] = []
+    total_value = 0.0
+    quick_wins_count = 0
+    strategic_bets_count = 0
+
+    for analysis in latest_analyses:
+        # Headline counts come from the prioritizer's OWN curated lists — its
+        # authoritative definitions (quick win = low difficulty, ROI>1; strategic
+        # bet = high difficulty AND ROI>2 AND cost>$50k, capped at top 5). The page
+        # previously re-derived "strategic bets" as *every* high-difficulty
+        # opportunity, which both diverged from this definition and inflated the
+        # number. These counts are brand-scoped (only this brand's latest run is
+        # kept) and intentionally independent of the list-view min_roi/difficulty
+        # filters below, which narrow the displayed cards, not the KPI totals.
+        quick_wins_count += len(analysis.quick_wins)
+        strategic_bets_count += len(analysis.strategic_bets)
 
         for opp in analysis.prioritized_opportunities:
-            # Apply filters
+            # List-view filters (narrow the displayed opportunities only).
             if min_roi and opp.roi_estimate.expected_roi < min_roi:
                 continue
             if difficulty and opp.implementation_difficulty != difficulty:
@@ -490,19 +565,14 @@ async def list_opportunities(
             all_opportunities.append(opp)
             total_value += opp.roi_estimate.estimated_revenue_impact
 
-            if opp.implementation_difficulty == ImplementationDifficulty.LOW:
-                quick_wins.append(opp)
-            elif opp.implementation_difficulty == ImplementationDifficulty.HIGH:
-                strategic_bets.append(opp)
-
     # Sort by ROI and limit
     all_opportunities.sort(key=lambda x: x.roi_estimate.expected_roi, reverse=True)
     all_opportunities = all_opportunities[:limit]
 
     return OpportunityListResponse(
         total_count=len(all_opportunities),
-        quick_wins_count=len(quick_wins),
-        strategic_bets_count=len(strategic_bets),
+        quick_wins_count=quick_wins_count,
+        strategic_bets_count=strategic_bets_count,
         opportunities=all_opportunities,
         total_addressable_value=total_value,
     )

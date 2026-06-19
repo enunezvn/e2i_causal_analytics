@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import GapAnalysis from './GapAnalysis';
@@ -143,6 +143,38 @@ describe('GapAnalysis — Run Analysis wiring (poll-to-completion)', () => {
 
     expect(screen.queryByText(/Running gap analysis/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Gap analysis failed/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('GapAnalysis — brand selection wiring (All Brands)', () => {
+  it('passes the selected brand to useOpportunities by default (Kisqali)', () => {
+    mockRun();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    expect(useOpportunities).toHaveBeenCalledWith(
+      expect.objectContaining({ brand: 'Kisqali', limit: 50 }),
+    );
+  });
+
+  it('maps "All Brands" to no brand filter (undefined) and disables Run Analysis', async () => {
+    const user = userEvent.setup();
+    mockRun();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    // Empty state renders only the brand Select (the difficulty Select lives in
+    // the Tabs, which are hidden when there are no opportunities).
+    await user.click(screen.getByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: /all brands/i }));
+
+    // 'all' must reach the API as an ABSENT brand filter, not the literal string
+    // "all" (which would match no brand and empty the page).
+    await waitFor(() => {
+      expect(useOpportunities).toHaveBeenLastCalledWith(
+        expect.objectContaining({ brand: undefined, limit: 50 }),
+      );
+    });
+    // Run Analysis needs a concrete brand → disabled for the cross-brand view.
+    expect(screen.getByRole('button', { name: /run analysis/i })).toBeDisabled();
   });
 });
 
