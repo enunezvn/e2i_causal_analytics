@@ -325,8 +325,27 @@ class InterpretationNode:
         else:
             confidence = "low"
 
+        # Executive summary (2-3 sentences). The graph (agent-analyze) path never
+        # runs the agent's _build_output, which is the only OTHER place an
+        # executive summary is generated — so produce it HERE so both paths carry
+        # a non-null headline. (When _build_output does run, it overwrites this.)
+        if significance:
+            _direction = "increases" if ate > 0 else "decreases"
+            executive_summary = (
+                f"The treatment {_direction} the outcome by an estimated {ate:.3f} "
+                f"({effect_size} effect), a statistically significant result that passed "
+                f"{tests_passed}/{total_tests} robustness checks. Overall confidence: {confidence}."
+            )
+        else:
+            executive_summary = (
+                f"The estimated effect is {ate:.3f} ({effect_size}), but it is not "
+                f"statistically significant ({tests_passed}/{total_tests} robustness checks passed). "
+                f"Treat this as preliminary; overall confidence: {confidence}."
+            )
+
         interpretation: NaturalLanguageInterpretation = {
             "narrative": narrative,
+            "executive_summary": executive_summary,
             "key_findings": key_findings,
             "effect_magnitude": effect_size,
             "causal_confidence": confidence,
@@ -401,6 +420,7 @@ class InterpretationNode:
 
         interpretation: NaturalLanguageInterpretation = {
             "narrative": enhanced_narrative,
+            "executive_summary": standard.get("executive_summary", ""),
             "key_findings": standard["key_findings"]
             + [
                 f"Causal graph: {len(causal_graph.get('nodes', []))} nodes, {len(causal_graph.get('edges', []))} edges",

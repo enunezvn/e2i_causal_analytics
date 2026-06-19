@@ -133,6 +133,21 @@ class TestInterpretationNode:
         assert len(interp["key_findings"]) >= 3
         assert len(interp["recommendations"]) > 0
         assert result["status"] == "completed"
+        # The agent-analyze API path reads interpretation["executive_summary"]; it
+        # was previously absent here (only _build_output produced it) -> the page
+        # always showed a null exec summary. It must now be a non-empty headline.
+        assert interp.get("executive_summary")
+        assert len(interp["executive_summary"]) > 20
+
+    @pytest.mark.asyncio
+    async def test_deep_interpretation_carries_executive_summary(self):
+        """The deep (expert) path rebuilds the dict from `standard`; it must
+        carry the executive summary through, not drop it."""
+        node = InterpretationNode()
+        state = self._create_full_state()
+        state["interpretation_depth"] = "deep"
+        result = await node.execute(state)
+        assert result["interpretation"].get("executive_summary")
 
     @pytest.mark.asyncio
     async def test_sensitivity_failure_narrative_does_not_cite_defaulted_evalue(self):

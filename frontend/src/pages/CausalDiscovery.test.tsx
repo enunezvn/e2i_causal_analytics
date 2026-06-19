@@ -247,4 +247,58 @@ describe('CausalDiscovery — validated-effects leaderboard', () => {
     // including the sensitivity/unobserved-common-cause test.
     expect(dag).toHaveAttribute('data-refutations', '4');
   }, 20000);
+
+  it('renders the per-row plain-language summary in the leaderboard', () => {
+    const job = {
+      ...COMPLETED_JOB,
+      effects: [
+        { ...EFFECTS[0], summary: 'treatment_arm raises persistent_180d by +0.088 — survived all robustness checks, statistically significant.' },
+        ...EFFECTS.slice(1),
+      ],
+    };
+    mockHook({ job });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    expect(screen.getByText(/raises persistent_180d by \+0\.088/)).toBeInTheDocument();
+    expect(screen.getByText(/survived all robustness checks/)).toBeInTheDocument();
+  });
+
+  it('explains why the candidate-question set is the size it is', () => {
+    mockHook({ job: COMPLETED_JOB });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Why these 3 questions\?/)).toBeInTheDocument();
+  });
+
+  it('surfaces the estimator comparison, key insights, and recommendations in the drill-down', async () => {
+    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...DETAIL,
+      key_insights: ['Estimated causal effect: 0.09 (small)', 'Robustness tests: 3/3 passed'],
+      recommendations: ['Implement targeted interventions', 'Monitor outcomes closely'],
+      estimator_comparison: {
+        candidates: [
+          { estimator: 'causal_forest', success: true, energy_score: 0.51, ate: 0.10, error: null, is_selected: false },
+          { estimator: 'linear_dml', success: true, energy_score: 0.48, ate: 0.0875, error: null, is_selected: true },
+          { estimator: 'ols', success: false, energy_score: null, ate: null, error: 'singular', is_selected: false },
+        ],
+        selection_reason: 'confounding-robust preferred over OLS',
+        energy_score_gap: 0.03,
+        n_evaluated: 3,
+        n_succeeded: 2,
+        quality_tier: 'good',
+        requires_review: false,
+      },
+    });
+    mockHook({ job: COMPLETED_JOB });
+    render(<CausalDiscovery />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('persistent_180d'));
+
+    // Estimator comparison: the evaluated estimators + the "why" rationale.
+    expect(await screen.findByText('Estimator selection (data-driven)')).toBeInTheDocument();
+    expect(screen.getByText(/2\/3 estimators fit/)).toBeInTheDocument();
+    expect(screen.getByText(/confounding-robust preferred over OLS/)).toBeInTheDocument();
+    expect(screen.getByText(/2 estimators fit|causal forest/i)).toBeTruthy();
+    // Actionability previously dropped by the page is now rendered.
+    expect(screen.getByText('Key insights')).toBeInTheDocument();
+    expect(screen.getByText('Recommended actions')).toBeInTheDocument();
+    expect(screen.getByText('Monitor outcomes closely')).toBeInTheDocument();
+  }, 20000);
 });

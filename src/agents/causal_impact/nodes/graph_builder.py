@@ -291,7 +291,24 @@ class GraphBuilderNode:
         return treatment, outcome
 
     def _construct_dag(self, treatment: str, outcome: str, confounders: List[str]) -> nx.DiGraph:
-        """Construct causal DAG from variables.
+        """Construct the curated/fallback causal DAG from the supplied variables.
+
+        The ``confounders`` are the caller's curated adjustment covariates — they
+        were selected precisely because domain knowledge treats them as common
+        causes of BOTH treatment and outcome. So this manual DAG (used on the
+        AUGMENT / REVIEW / REJECT discovery-gate paths) draws a
+        ``confounder -> treatment`` AND ``confounder -> outcome`` edge for EACH of
+        them. That makes the graph CONNECTED (no orphan covariate nodes) and
+        yields a non-empty backdoor adjustment set that is CONSISTENT with the
+        covariates the estimator actually conditions on.
+
+        Previously these edges were gated on a hardcoded ``COMMON_CONFOUNDERS``
+        allowlist (generic-pharma names like ``hcp_specialty`` /
+        ``geographic_region``) with zero overlap with real dataset covariates
+        (``disease_severity``, ``egfr`` …). The result was a DAG with a single
+        ``treatment -> outcome`` edge and every covariate rendered as a
+        disconnected node, plus an empty adjustment set — a graph that
+        MISREPRESENTED the (correctly all-covariate-adjusted) estimate.
 
         Args:
             treatment: Treatment variable
@@ -311,29 +328,27 @@ class GraphBuilderNode:
         for conf in confounders:
             dag.add_node(conf)
 
-        # Add known causal edges
+        # Domain-known structural edges. No-op unless variable names match the
+        # curated pharma-commercial schema; harmless for arbitrary datasets.
         for source, target in self.KNOWN_CAUSAL_RELATIONSHIPS:
             if source in dag.nodes() and target in dag.nodes():
                 dag.add_edge(source, target)
 
-        # Add direct treatment → outcome edge if no path exists
+        # The estimand edge: treatment -> outcome (the question under test).
         if not nx.has_path(dag, treatment, outcome):
             dag.add_edge(treatment, outcome)
 
-        # Add common confounders
-        confounders_to_add = [
-            c for c in self.COMMON_CONFOUNDERS if c in confounders or c in dag.nodes()
-        ]
-
-        for confounder in confounders_to_add[:3]:  # Limit to top 3 confounders
-            if confounder not in dag.nodes():
-                dag.add_node(confounder)
-
-            # Confounders affect both treatment and outcome
-            if not dag.has_edge(confounder, treatment):
-                dag.add_edge(confounder, treatment)
-            if not dag.has_edge(confounder, outcome):
-                dag.add_edge(confounder, outcome)
+        # Every curated confounder is a common cause of BOTH treatment and
+        # outcome — draw both edges (acyclicity-guarded) so the graph is
+        # connected and the backdoor adjustment set is non-empty and honest.
+        for conf in confounders:
+            if conf in (treatment, outcome):
+                continue
+            for target in (treatment, outcome):
+                if not dag.has_edge(conf, target):
+                    dag.add_edge(conf, target)
+                    if not nx.is_directed_acyclic_graph(dag):
+                        dag.remove_edge(conf, target)
 
         return dag
 

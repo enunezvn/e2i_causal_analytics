@@ -660,3 +660,54 @@ class TestDiscoveredDagIncludesEstimandEdge:
         # Discovered confounder edges preserved and the graph stays acyclic.
         assert dag.has_edge("disease_severity", "treatment_arm")
         assert nx.is_directed_acyclic_graph(dag)
+
+
+class TestConstructDagConnectsCuratedConfounders:
+    """Regression for the disconnected-DAG bug: the fallback DAG (_construct_dag,
+    used on AUGMENT/REVIEW/REJECT gate paths) must draw confounder->treatment AND
+    confounder->outcome edges for EVERY curated covariate, so the graph is
+    connected and the backdoor adjustment set is non-empty + honest — instead of
+    1 edge + N orphan covariate nodes + adjustment_sets=[[]].
+    """
+
+    # The real patient_journeys covariates (none overlap the stale COMMON_CONFOUNDERS).
+    REAL_COVS = [
+        "disease_severity",
+        "engagement_score",
+        "age_at_diagnosis",
+        "academic_hcp",
+        "egfr",
+        "proteinuria_g_day",
+        "ldh_ratio",
+        "urticaria_severity_uas7",
+        "ecog_performance_status",
+    ]
+
+    def test_every_confounder_links_to_treatment_and_outcome(self):
+        import networkx as nx
+
+        node = GraphBuilderNode()
+        dag = node._construct_dag("treatment_arm", "persistent_180d", self.REAL_COVS)
+
+        # estimand edge present
+        assert dag.has_edge("treatment_arm", "persistent_180d")
+        # NO orphan covariate nodes — each is a common cause of both T and O
+        for cov in self.REAL_COVS:
+            assert dag.has_edge(cov, "treatment_arm"), f"{cov} not linked to treatment"
+            assert dag.has_edge(cov, "persistent_180d"), f"{cov} not linked to outcome"
+        # connected & acyclic; far more than the old single edge
+        assert dag.number_of_edges() > 1
+        assert nx.number_of_isolates(dag) == 0
+        assert nx.is_directed_acyclic_graph(dag)
+
+    def test_adjustment_set_is_non_empty_and_honest(self):
+        node = GraphBuilderNode()
+        dag = node._construct_dag("treatment_arm", "persistent_180d", self.REAL_COVS)
+        adjustment_sets = node._find_adjustment_sets(dag, "treatment_arm", "persistent_180d")
+
+        # With N independent confounders the admissible set is all of them (no
+        # proper subset blocks every backdoor path) — the key point: NOT [[]].
+        assert adjustment_sets and adjustment_sets[0], (
+            "adjustment set is empty (confounded display)"
+        )
+        assert "disease_severity" in adjustment_sets[0]
