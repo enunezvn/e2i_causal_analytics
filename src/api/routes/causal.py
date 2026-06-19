@@ -1709,9 +1709,7 @@ async def _load_hcp_adoption_join_frame(
     ins = pd.to_numeric(merged["influence_network_size"], errors="coerce")
     centrality = ins.map(lambda v: math.log1p(v) if pd.notna(v) else None).astype(float)
     std = centrality.std(ddof=0)
-    merged["centrality_z"] = (
-        (centrality - centrality.mean()) / std if std and std > 0 else 0.0
-    )
+    merged["centrality_z"] = (centrality - centrality.mean()) / std if std and std > 0 else 0.0
     merged["peer_influence_score"] = pd.to_numeric(
         merged.get("peer_influence_score"), errors="coerce"
     )
