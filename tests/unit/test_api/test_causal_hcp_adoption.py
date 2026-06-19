@@ -121,3 +121,43 @@ async def test_hcp_join_rejects_disallowed_column():
                 brand="Kisqali",
             )
     assert ei.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_hcp_dataset_enumerates_only_hcp_questions():
+    """The HCP dataset must NOT surface patient questions (treatment_arm ->
+    persistent_180d) even though they share the causal_paths SSOT."""
+    ssot = [
+        {"treatment": "peer_influence_score", "outcome": "adopted", "brand": "Kisqali", "confounders": []},
+        {"treatment": "treatment_arm", "outcome": "adopted", "brand": "Kisqali", "confounders": ["centrality_z"]},
+        {"treatment": "treatment_arm", "outcome": "persistent_180d", "brand": "Kisqali",
+         "confounders": ["disease_severity", "academic_hcp", "geographic_region"]},
+    ]
+    with patch.object(causal_routes, "_get_causal_path_repo") as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(return_value=ssot)
+        qs = await causal_routes._discover_candidate_questions("hcp_adoption", brand="Kisqali")
+    outcomes = {q.outcome for q in qs}
+    assert outcomes == {"adopted"}
+    treatments = {q.treatment for q in qs}
+    assert treatments == {"peer_influence_score", "treatment_arm"}
+    # The exogenous-root question keeps an EMPTY adjustment set.
+    exo = next(q for q in qs if q.treatment == "peer_influence_score")
+    assert exo.adjustment_set == []
+    # The rep-engagement question keeps centrality_z (numeric, in the HCP allowlist).
+    rep = next(q for q in qs if q.treatment == "treatment_arm")
+    assert rep.adjustment_set == ["centrality_z"]
+
+
+@pytest.mark.asyncio
+async def test_patient_dataset_still_excludes_hcp_questions():
+    """Symmetry: the patient dataset must NOT surface the adopted-outcome HCP rows."""
+    ssot = [
+        {"treatment": "treatment_arm", "outcome": "treatment_initiated", "brand": "Fabhalta",
+         "confounders": ["disease_severity", "age_at_diagnosis"]},
+        {"treatment": "peer_influence_score", "outcome": "adopted", "brand": "Fabhalta", "confounders": []},
+    ]
+    with patch.object(causal_routes, "_get_causal_path_repo") as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(return_value=ssot)
+        qs = await causal_routes._discover_candidate_questions("patient_journeys", brand=None)
+    assert {q.outcome for q in qs} == {"treatment_initiated"}
+    assert all(q.treatment != "peer_influence_score" for q in qs)
