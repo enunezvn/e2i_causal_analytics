@@ -658,15 +658,25 @@ class InterventionTypeItem(BaseModel):
     effect_basis: str = Field(
         ...,
         description=(
-            "'synthetic' (v1: SyntheticEffectDataProvider, intervention-agnostic uplift) "
-            "or 'modeled' (Phase 2: real per-brand CATE)"
+            "'cohort_causal' (effect is IDENTIFIED in the connected cohort and estimated "
+            "by direct DML causal estimation) or 'unavailable' (not identified in the "
+            "data — no fabricated effect is produced)"
         ),
     )
     available: bool = Field(
         ...,
         description=(
             "True if a trained twin model exists for the requested brand/twin_type "
-            "(else /simulate would 503). The frontend exposes only available types."
+            "(else /simulate would 503)."
+        ),
+    )
+    available_for_effect: bool = Field(
+        ...,
+        description=(
+            "True only if the intervention's effect is IDENTIFIED in the connected cohort "
+            "(a causal estimate is possible). The frontend should expose only "
+            "effect-available interventions; the rest are an honest 'no effect data' "
+            "state rather than a fabricated uplift (and /simulate returns 422 for them)."
         ),
     )
 
@@ -695,12 +705,13 @@ async def list_intervention_types(
     Return the canonical intervention taxonomy — the single source of truth the
     frontend dropdown reads, so FE and backend can never drift.
 
-    Availability is **brand-aware**: an intervention is ``available`` only when a
-    trained twin model exists for the brand/twin_type (otherwise ``/simulate``
-    would 503 "no trained model"). The frontend exposes only available types, so
-    the menu reflects what can actually be simulated. ``effect_basis`` is
-    ``"synthetic"`` in v1 (the DGP is intervention-agnostic) and becomes
-    ``"modeled"`` per type as Phase 2 wires real per-brand CATE.
+    Availability is **brand-aware**. ``available`` is True only when a trained twin
+    model exists for the brand/twin_type (otherwise ``/simulate`` would 503).
+    ``available_for_effect`` is True only when the intervention's effect is IDENTIFIED
+    in the connected cohort — i.e. a real causal estimate is possible; the frontend
+    should expose only effect-available interventions. ``effect_basis`` is
+    ``"cohort_causal"`` for identified interventions (direct DML estimate on the cohort)
+    and ``"unavailable"`` otherwise (no fabricated effect; ``/simulate`` returns 422).
     """
     from src.digital_twin.effect.cohort_loader import brand_has_cohort
     from src.digital_twin.effect.provider import (
@@ -732,11 +743,12 @@ async def list_intervention_types(
             value=value,
             label=label,
             effect_basis=(
-                "cohort_estimated"
+                "cohort_causal"
                 if (has_cohort and value in COHORT_ESTIMABLE_INTERVENTIONS)
-                else "synthetic"
+                else "unavailable"
             ),
             available=available,
+            available_for_effect=bool(has_cohort and value in COHORT_ESTIMABLE_INTERVENTIONS),
         )
         for value, label in INTERVENTION_CATALOG
     ]
@@ -835,6 +847,27 @@ async def run_simulation(
         )
         model_id = UUID(str(model_row["model_id"]))
 
+        # Identification gate (Direction 2): a real causal effect is estimated ONLY for
+        # interventions IDENTIFIED in the connected cohort. Build the cohort provider up
+        # front; if the intervention is not identified (not a cause in the data, or no
+        # usable cohort) the effect is honestly UNAVAILABLE — we never fabricate a
+        # synthetic uplift. Gating before the offload/inline split covers both paths.
+        from src.digital_twin.effect.cohort_loader import build_cohort_provider_or_none
+
+        cohort_provider = await build_cohort_provider_or_none(
+            repo.client, intervention.intervention_type, brand.value
+        )
+        if cohort_provider is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"No effect data available for intervention "
+                    f"'{intervention.intervention_type}' and brand '{brand.value}': this "
+                    "intervention is not identified in the connected cohort, so a causal "
+                    "effect cannot be estimated (no fabricated effect is returned)."
+                ),
+            )
+
         if heavy_offload_enabled():
             # P2 offload path (DARK by default): enqueue the heavy compute on
             # worker_heavy and await the result WITHOUT blocking the event loop,
@@ -892,19 +925,13 @@ async def run_simulation(
                 twin_type=twin_type, brand=brand, model_row=model_row
             )
 
-            # Phase 2: for the cohort-estimable interventions, prefer a
-            # cohort-ESTIMATED effect (region-standardized ATE from the brand's
-            # synthetic-gold cohort) over the flat synthetic uplift — when the
-            # brand has a usable cohort. Loaded async here and injected into the
-            # (sync, off-event-loop) engine; None → synthetic fallback (never a
-            # fabricated effect). The dark offload path stays synthetic in v1.
-            from src.digital_twin.effect import PROVENANCE_COHORT, TwinEffectEstimator
-            from src.digital_twin.effect.cohort_loader import (
-                build_cohort_provider_or_none,
-            )
-
-            cohort_provider = await build_cohort_provider_or_none(
-                repo.client, intervention.intervention_type, brand.value
+            # Direction 2: estimate the effect DIRECTLY on the brand's cohort via a DML
+            # causal estimate (CohortCausalEstimator) over the raw cohort frame supplied
+            # by the cohort_provider built above the offload/inline split. No synthetic
+            # injected-effect handoff; honest DML inference CI. (Unidentified
+            # interventions were already rejected by the identification gate.)
+            from src.digital_twin.effect.cohort_causal_estimator import (
+                CohortCausalEstimator,
             )
 
             def _do_sim():
@@ -912,11 +939,7 @@ async def run_simulation(
                 engine = SimulationEngine(
                     population=population,
                     effect_provider=cohort_provider,
-                    effect_estimator=(
-                        TwinEffectEstimator(provenance=PROVENANCE_COHORT)
-                        if cohort_provider is not None
-                        else None
-                    ),
+                    effect_estimator=CohortCausalEstimator(),
                 )
                 # Pin the resolved DB model id so twin_simulations.model_id FK holds
                 # (engine derives self.model_id from population otherwise) (#705 H4).

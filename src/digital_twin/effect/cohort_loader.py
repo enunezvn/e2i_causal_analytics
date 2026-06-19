@@ -27,8 +27,9 @@ logger = logging.getLogger(__name__)
 
 COHORT_TABLE = "business_metrics"
 COHORT_METRIC_TYPE = "per_hcp_rollup"
-# region (confounder) + the two cohort treatment columns + the outcome.
-_COHORT_COLUMNS = "region,engagement_score,call_frequency,conversion_rate"
+# region (heterogeneity axis) + treatment + outcome + pre-treatment confounders
+# (market_share, total_rx_count) for the direct causal estimate.
+_COHORT_COLUMNS = "region,engagement_score,conversion_rate,market_share,total_rx_count"
 # Generous cap so we read the full per-brand cohort (~7k rows) past PostgREST's
 # default 1000-row page; the estimate only needs a representative sample.
 _FETCH_LIMIT = 20000

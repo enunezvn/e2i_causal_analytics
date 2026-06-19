@@ -26,6 +26,22 @@ _ADMIN_USER = {"app_metadata": {"role": "admin"}}
 # =============================================================================
 
 
+@pytest.fixture(autouse=True)
+def _default_identified_cohort(monkeypatch):
+    """Direction-2 identification gate: by default make it PASS (a cohort provider is
+    available) so the existing /simulate tests exercise their intended path (slot,
+    filters, model resolution, engine — all mocked) regardless of intervention_type.
+
+    The route honestly 422s when ``build_cohort_provider_or_none`` returns None
+    (intervention not identified in the cohort); the test of THAT path overrides this
+    fixture. Patching the source module covers the route's function-local import.
+    """
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
+        AsyncMock(return_value=MagicMock()),
+    )
+
+
 @pytest.fixture
 def mock_twin_generator():
     """Mock TwinGenerator."""
@@ -427,7 +443,7 @@ async def test_list_intervention_types_is_canonical_source_of_truth(
     from src.digital_twin.effect.provider import SUPPORTED_INTERVENTIONS
 
     mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
-    # No cohort -> every type stays on the uniform synthetic basis.
+    # No cohort -> no intervention's effect is identified (all unavailable).
     monkeypatch.setattr(
         "src.digital_twin.effect.cohort_loader.brand_has_cohort",
         AsyncMock(return_value=False),
@@ -439,20 +455,23 @@ async def test_list_intervention_types_is_canonical_source_of_truth(
 
     assert {i.value for i in result.interventions} == SUPPORTED_INTERVENTIONS
     assert len(result.interventions) == 6
-    assert all(i.effect_basis == "synthetic" for i in result.interventions)
-    # A trained twin model exists for the brand -> every type is available.
+    # No cohort -> nothing is effect-identified -> honest unavailable (never fabricated).
+    assert all(i.effect_basis == "unavailable" for i in result.interventions)
+    assert all(not i.available_for_effect for i in result.interventions)
+    # A trained twin model exists for the brand -> every type is model-available.
     assert all(i.available for i in result.interventions)
     assert result.brand == "Remibrutinib"
 
 
 @pytest.mark.asyncio
-async def test_list_intervention_types_cohort_estimable_flip_when_cohort_present(
+async def test_list_intervention_types_identified_flip_when_cohort_present(
     mock_twin_repository, monkeypatch
 ):
-    """Phase 2: when the brand has a usable synthetic-gold cohort, the
-    cohort-estimable interventions report effect_basis 'cohort_estimated' while
-    the rest stay 'synthetic'. (Verified against the live DB: only
-    digital_engagement + call_frequency_increase have a cohort treatment column.)"""
+    """When the brand has a usable cohort, the IDENTIFIED intervention reports
+    effect_basis 'cohort_causal' and available_for_effect=True; every other
+    intervention is honestly 'unavailable' (no fabricated effect). Only
+    digital_engagement is identified (engagement->conversion is causal in the DGP;
+    call_frequency is an explicit non-causal correlate)."""
     from src.api.routes.digital_twin import (
         BrandEnum,
         TwinTypeEnum,
@@ -471,12 +490,15 @@ async def test_list_intervention_types_cohort_estimable_flip_when_cohort_present
     )
 
     by_basis = {i.value: i.effect_basis for i in result.interventions}
-    cohort_types = {v for v, b in by_basis.items() if b == "cohort_estimated"}
+    by_effect = {i.value: i.available_for_effect for i in result.interventions}
+    cohort_types = {v for v, b in by_basis.items() if b == "cohort_causal"}
     assert cohort_types == set(COHORT_ESTIMABLE_INTERVENTIONS)
-    assert {"digital_engagement", "call_frequency_increase"} == cohort_types
-    # Everything else stays on the uniform synthetic basis.
+    assert cohort_types == {"digital_engagement"}
+    # available_for_effect is True exactly for the identified (cohort_causal) interventions.
+    assert {v for v, e in by_effect.items() if e} == cohort_types
+    # Everything else is honestly unavailable (no fabricated synthetic uplift).
     assert all(
-        b == "synthetic" for v, b in by_basis.items() if v not in COHORT_ESTIMABLE_INTERVENTIONS
+        b == "unavailable" for v, b in by_basis.items() if v not in COHORT_ESTIMABLE_INTERVENTIONS
     )
 
 
@@ -634,6 +656,44 @@ async def test_run_simulation_success(
     assert result.twin_count == 1000
     assert result.simulated_ate == 0.075
     assert result.recommendation.value == "deploy"
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_unidentified_intervention_returns_422(
+    mock_twin_repository, monkeypatch
+):
+    """Direction 2: an intervention NOT identified in the cohort returns an honest 422
+    'no effect data' BEFORE any compute — never a fabricated synthetic uplift. (Gate runs
+    after model resolution, before generator load / slot / engine.)"""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    # Override the autouse gate-pass: this intervention is not identified -> provider None.
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
+        AsyncMock(return_value=None),
+    )
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign", duration_weeks=8
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+    )
+    user = {"user_id": "test_user", "role": "operator"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await run_simulation(request, user)
+
+    assert exc_info.value.status_code == 422
+    assert "no effect data" in str(exc_info.value.detail).lower()
 
 
 @pytest.mark.asyncio
