@@ -15,14 +15,16 @@ Version: 1.0.0
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from src.api.dependencies.auth import require_auth
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
+from src.api.dependencies.durable_job_store import DurableJobStore
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.feature_store.feast_client import FeastClient, get_feast_client
 from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS as _MODEL_FEATURE_REFS
@@ -979,3 +981,314 @@ async def models_status(
         models=model_statuses,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+
+
+# =============================================================================
+# COHORT SCORING — data-driven population view (replaces hand-typed features)
+# =============================================================================
+#
+# Instead of asking the user to type one feature row, score the model's OWN real
+# holdout cohort (out-of-sample) and return a RANKED list of targets + the
+# probability distribution. The row source is the model's own
+# ``FeatureBuilder.load_frame(splits=["holdout"])`` (same training schema, both
+# grains, real entity ids); scoring goes through the BentoML raw-covariate BATCH
+# path in chunks (patient holdout ~5k rows/brand). Per-row SHAP is intentionally
+# NOT computed here — that is the single-predict drill-down's job (O(1) per row),
+# never O(cohort). Synthetic-for-now (include_real defaults False); labeled honestly.
+
+
+class CohortScoredRow(BaseModel):
+    """One scored entity from the holdout cohort."""
+
+    entity_id: str = Field(
+        ..., description="Real entity id (patient_id / hcp_id) from the holdout split"
+    )
+    probability: float = Field(..., description="Predicted positive-class probability")
+    covariates: Dict[str, Any] = Field(
+        default_factory=dict, description="The RAW covariates scored for this entity"
+    )
+
+
+class CohortScoreDistribution(BaseModel):
+    """Probability distribution over ALL scored rows (not just the top-N)."""
+
+    n: int = Field(..., description="Number of rows scored")
+    mean: float = Field(..., description="Mean predicted probability")
+    bin_edges: List[float] = Field(
+        default_factory=list, description="Histogram bin edges (len = bins + 1)"
+    )
+    bin_counts: List[int] = Field(
+        default_factory=list, description="Row count per [0,1] probability bin"
+    )
+
+
+class CohortScoreResponse(BaseModel):
+    """Async cohort-scoring job: submit -> poll. Ranked targets + distribution."""
+
+    job_id: str
+    status: str = Field(..., description="pending | running | completed | failed")
+    model_name: str
+    cohort: Optional[str] = Field(
+        default=None, description="Resolved cohort (e.g. initiation, hcp_adoption)"
+    )
+    brand: Optional[str] = Field(default=None, description="Resolved brand (e.g. Kisqali)")
+    split: str = Field(default="holdout", description="Data split scored (out-of-sample)")
+    out_of_sample: bool = Field(
+        default=True, description="True — the holdout split is held out of training"
+    )
+    feature_source: str = Field(
+        default="holdout_synthetic",
+        description="Provenance: synthetic holdout cohort (real rows when include_real flips). Honest labeling.",
+    )
+    n_scored: int = Field(default=0, description="Rows scored so far / total")
+    top_n: int = Field(default=0, description="Number of top-ranked rows returned")
+    top_rows: List[CohortScoredRow] = Field(
+        default_factory=list,
+        description="Highest-probability entities (ranked desc), capped at top_n",
+    )
+    distribution: Optional[CohortScoreDistribution] = Field(
+        default=None, description="Probability distribution over all scored rows"
+    )
+    error: Optional[str] = Field(default=None, description="Set when status == failed")
+    latency_ms: float = Field(default=0.0, description="Scoring wall-clock once completed")
+
+
+_COHORT_SCORE_BINS = 10
+
+
+def _cohort_ranking(
+    entity_ids: List[str],
+    covariate_rows: List[Dict[str, Any]],
+    probabilities: List[float],
+    top_n: int,
+):
+    """Pure: rank rows by probability desc (top-N) and summarize the distribution
+    over ALL rows into fixed [0,1] bins. No I/O — the unit-testable core."""
+    n = len(probabilities)
+    edges = [i / _COHORT_SCORE_BINS for i in range(_COHORT_SCORE_BINS + 1)]
+    counts = [0] * _COHORT_SCORE_BINS
+    for p in probabilities:
+        idx = int(p * _COHORT_SCORE_BINS)
+        if idx >= _COHORT_SCORE_BINS:  # 1.0 lands in the last bin (inclusive)
+            idx = _COHORT_SCORE_BINS - 1
+        elif idx < 0:
+            idx = 0
+        counts[idx] += 1
+    mean = (sum(probabilities) / n) if n else 0.0
+    dist = CohortScoreDistribution(n=n, mean=mean, bin_edges=edges, bin_counts=counts)
+    rows = [
+        CohortScoredRow(entity_id=str(eid), probability=float(p), covariates=cov)
+        for eid, cov, p in zip(entity_ids, covariate_rows, probabilities, strict=True)
+    ]
+    rows.sort(key=lambda r: r.probability, reverse=True)
+    return rows[: max(0, top_n)], dist
+
+
+async def _score_cohort_chunks(
+    client: Any, model_name: str, raw_features: List[Dict[str, Any]], chunk_size: int = 1000
+) -> List[float]:
+    """Score raw covariate rows through the BentoML raw-covariate BATCH path in
+    chunks of ``chunk_size``. Fails closed on a service error or a per-chunk
+    probability/row length mismatch (never zero-fills a missing score)."""
+    probabilities: List[float] = []
+    for start in range(0, len(raw_features), chunk_size):
+        chunk = raw_features[start : start + chunk_size]
+        result = await client.predict_batch(
+            model_name,
+            {"batch_id": str(uuid.uuid4()), "raw_features": chunk, "model_name": model_name},
+        )
+        err = result.get("error")
+        if err:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Cohort scoring failed for '{model_name}': {err}",
+            )
+        chunk_probs = result.get("probabilities") or []
+        if len(chunk_probs) != len(chunk):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    f"Model '{model_name}' returned {len(chunk_probs)} probabilities "
+                    f"for {len(chunk)} rows"
+                ),
+            )
+        probabilities.extend(float(p) for p in chunk_probs)
+    return probabilities
+
+
+def _resolve_cohort_spec(model_name: str):
+    """Resolve ``(cohort, brand_proper, spec, entity_col)`` from a gold-standard
+    model name, or raise ValueError when it is not a resolvable cohort model."""
+    cohort, brand = _parse_model_brand_cohort(model_name)
+    if not cohort or not brand:
+        raise ValueError(
+            f"'{model_name}' is not a resolvable gold-standard cohort model "
+            "(expected <cohort>_<brand>_goldstd_lr_v1)"
+        )
+    brand_proper = _CURATED_BRANDS[brand]
+    from src.mlops.gold_standard_eval.cohort_spec import make_hcp_spec, make_patient_spec
+
+    if cohort == _HCP_COHORT:
+        spec = make_hcp_spec(brand_proper)
+        entity_col = "hcp_id"
+    else:
+        spec = make_patient_spec(cohort, brand_proper)
+        entity_col = "patient_id"
+    return cohort, brand_proper, spec, entity_col
+
+
+def _native(value: Any) -> Any:
+    """Convert a numpy scalar to a native Python scalar so it is JSON-serializable
+    (the bentoml client posts ``json=``, which cannot encode numpy types)."""
+    return value.item() if hasattr(value, "item") else value
+
+
+_cohort_score_store: "DurableJobStore[CohortScoreResponse]" = DurableJobStore(
+    "predictions:cohort_score", CohortScoreResponse
+)
+
+
+async def _resolve_db_client() -> Any:
+    """Return the async Supabase client (lazy + test seam).
+
+    Imported lazily so merely importing this route module does NOT pull in the
+    heavy ``src.memory.services.factories`` graph (it runs service checks and
+    loads embedding/redis deps at import — a real memory cost). Mirrors
+    ``_resolve_feast_client``: tests monkeypatch ``predictions._resolve_db_client``
+    directly rather than the factory.
+    """
+    from src.memory.services.factories import get_async_supabase_client
+
+    return await get_async_supabase_client()
+
+
+async def _run_cohort_score_task(
+    job_id: str, model_name: str, top_n: int, client: BentoMLClient
+) -> None:
+    """Background: load the model's holdout cohort, score it in chunks via the raw
+    BATCH path, rank by probability, and publish the completed (or failed) job."""
+    import time as _time
+
+    started = _time.time()
+    try:
+        cohort, brand_proper, spec, entity_col = _resolve_cohort_spec(model_name)
+        from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
+
+        fb = FeatureBuilder(spec)
+        db = await _resolve_db_client()
+        frame = await fb.load_frame(db, splits=["holdout"])
+
+        keep = list(fb.keep_columns)
+        if entity_col not in frame.columns:
+            entity_col = next((c for c in frame.columns if c.endswith("_id")), entity_col)
+        records = frame.to_dict("records")
+        raw_features = [{k: _native(rec[k]) for k in keep} for rec in records]
+        entity_ids = [str(_native(rec.get(entity_col, i))) for i, rec in enumerate(records)]
+
+        await _cohort_score_store.set(
+            job_id,
+            CohortScoreResponse(
+                job_id=job_id,
+                status="running",
+                model_name=model_name,
+                cohort=cohort,
+                brand=brand_proper,
+                n_scored=0,
+                top_n=top_n,
+            ),
+        )
+
+        probabilities = await _score_cohort_chunks(client, model_name, raw_features)
+        top_rows, dist = _cohort_ranking(entity_ids, raw_features, probabilities, top_n)
+
+        await _cohort_score_store.set(
+            job_id,
+            CohortScoreResponse(
+                job_id=job_id,
+                status="completed",
+                model_name=model_name,
+                cohort=cohort,
+                brand=brand_proper,
+                n_scored=len(probabilities),
+                top_n=top_n,
+                top_rows=top_rows,
+                distribution=dist,
+                latency_ms=(_time.time() - started) * 1000,
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — fail the job, never fabricate scores
+        detail = e.detail if isinstance(e, HTTPException) else str(e)
+        logger.error(
+            "cohort-score %s failed: %s",
+            model_name,
+            detail,
+            exc_info=not isinstance(e, HTTPException),
+        )
+        await _cohort_score_store.set(
+            job_id,
+            CohortScoreResponse(
+                job_id=job_id,
+                status="failed",
+                model_name=model_name,
+                error=str(detail),
+                latency_ms=(_time.time() - started) * 1000,
+            ),
+        )
+
+
+@router.post(
+    "/predict/{model_name}/cohort",
+    response_model=CohortScoreResponse,
+    summary="Score a model's holdout cohort and rank targets (async submit -> poll)",
+    operation_id="score_model_cohort",
+    description=(
+        "Score the model's OWN out-of-sample holdout cohort (loaded via the model's "
+        "FeatureBuilder) through the raw-covariate batch path, ranked by predicted "
+        "probability. Heavy (thousands of rows) -> async: returns a pending job; poll "
+        "GET /predict/{model_name}/cohort/{job_id}. Replaces hand-typed input features."
+    ),
+)
+async def score_cohort(
+    model_name: str,
+    background_tasks: BackgroundTasks,
+    top_n: int = Query(100, ge=1, le=1000, description="Number of top-ranked entities to return"),
+    client: BentoMLClient = Depends(get_bentoml_client),
+    user: Dict[str, Any] = Depends(require_auth),
+) -> CohortScoreResponse:
+    try:
+        cohort, brand_proper, _spec, _entity_col = _resolve_cohort_spec(model_name)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    job_id = str(uuid.uuid4())
+    initial = CohortScoreResponse(
+        job_id=job_id,
+        status="pending",
+        model_name=model_name,
+        cohort=cohort,
+        brand=brand_proper,
+        top_n=top_n,
+    )
+    await _cohort_score_store.set(job_id, initial)
+    background_tasks.add_task(_run_cohort_score_task, job_id, model_name, top_n, client)
+    return initial
+
+
+@router.get(
+    "/predict/{model_name}/cohort/{job_id}",
+    response_model=CohortScoreResponse,
+    summary="Poll a cohort-scoring job",
+    operation_id="get_model_cohort_score",
+)
+async def get_cohort_score(
+    model_name: str,
+    job_id: str,
+    user: Dict[str, Any] = Depends(require_auth),
+) -> CohortScoreResponse:
+    job = await _cohort_score_store.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown cohort-score job '{job_id}'",
+        )
+    return job
