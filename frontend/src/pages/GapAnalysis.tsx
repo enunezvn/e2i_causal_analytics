@@ -67,7 +67,14 @@ import {
 // `brand_type` ENUM, the synthetic `Brand` enum, and the copilot provider's
 // `VALID_BRANDS`. The grounded `gap_analyses` rows are stored capitalized, so
 // sending lowercase here previously returned nothing and emptied the page.
+// `'all'` is a sentinel that maps to *no* brand filter on the API: the
+// /gaps/opportunities endpoint treats an absent brand as "every brand" and
+// returns the latest run per brand. It is NOT a real brand, so "Run Analysis"
+// (which needs a concrete brand) is disabled while it is selected.
+const ALL_BRANDS = 'all';
+
 const BRANDS = [
+  { value: ALL_BRANDS, label: 'All Brands' },
   { value: 'Kisqali', label: 'Kisqali' },
   { value: 'Fabhalta', label: 'Fabhalta' },
   { value: 'Remibrutinib', label: 'Remibrutinib' },
@@ -79,10 +86,16 @@ const DIFFICULTY_COLORS: Record<string, string> = {
   high: '#ef4444',
 };
 
+// Implementation-EFFORT labels. These describe the difficulty of an individual
+// opportunity — deliberately distinct from the curated "Quick Wins" /
+// "Strategic Bets" KPI counts (the prioritizer's authoritative categories). The
+// page previously badged every high-difficulty opportunity "Strategic Bet",
+// conflating effort with the curated category and making it look like there
+// were far more strategic bets than the KPI reported.
 const DIFFICULTY_LABELS: Record<string, string> = {
-  low: 'Quick Win',
-  medium: 'Moderate',
-  high: 'Strategic Bet',
+  low: 'Low Effort',
+  medium: 'Medium Effort',
+  high: 'High Effort',
 };
 
 // =============================================================================
@@ -122,9 +135,12 @@ function GapAnalysis() {
   const [difficultyFilter, setDifficultyFilter] = useState<string>('all');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  const isAllBrands = selectedBrand === ALL_BRANDS;
+
   // API hooks
   const { data: opportunitiesData, isLoading: opportunitiesLoading, refetch: refetchOpportunities } = useOpportunities({
-    brand: selectedBrand,
+    // 'all' → omit the brand filter so the endpoint returns the latest run per brand.
+    brand: isAllBrands ? undefined : selectedBrand,
     limit: 50,
   });
   const { data: healthData, isLoading: _healthLoading } = useGapHealth();
@@ -212,6 +228,9 @@ function GapAnalysis() {
   };
 
   const handleRunAnalysis = () => {
+    // "All Brands" is a cross-brand VIEW; the analyze endpoint needs one concrete
+    // brand. The button is disabled in this state — guard defensively too.
+    if (isAllBrands) return;
     // The backend runs the gap analysis as a background task (~8s on the live
     // cohort). The previous fire-and-forget call (async mode, no polling)
     // refetched opportunities *immediately* — racing ahead of the still-running
@@ -231,9 +250,12 @@ function GapAnalysis() {
   };
 
   const handleExport = () => {
+    // "all" is a cross-brand view, not a brand named "all" — label the export
+    // accordingly in both the body and the filename.
+    const exportBrandLabel = isAllBrands ? 'all-brands' : selectedBrand;
     const report = {
       generatedAt: new Date().toISOString(),
-      brand: selectedBrand,
+      brand: exportBrandLabel,
       totalOpportunities: opportunities.length,
       totalAddressableValue,
       opportunities,
@@ -242,7 +264,7 @@ function GapAnalysis() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `gap-analysis-${selectedBrand}-${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `gap-analysis-${exportBrandLabel}-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -258,6 +280,11 @@ function GapAnalysis() {
           </h1>
           <p className="text-muted-foreground">
             ROI opportunity detection and performance gap prioritization powered by the Tier 2 Gap Analyzer agent.
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {isAllBrands
+              ? 'Showing the most recent analysis for each brand.'
+              : `Showing the most recent analysis for ${selectedBrand}.`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -276,7 +303,8 @@ function GapAnalysis() {
           <Button
             variant="outline"
             onClick={handleRunAnalysis}
-            disabled={runGapAnalysisMutation.isPending}
+            disabled={runGapAnalysisMutation.isPending || isAllBrands}
+            title={isAllBrands ? 'Select a specific brand to run a new analysis' : undefined}
           >
             {runGapAnalysisMutation.isPending ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -444,9 +472,9 @@ function GapAnalysis() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Difficulties</SelectItem>
-                <SelectItem value="low">Quick Wins</SelectItem>
-                <SelectItem value="medium">Moderate</SelectItem>
-                <SelectItem value="high">Strategic Bets</SelectItem>
+                <SelectItem value="low">Low Effort</SelectItem>
+                <SelectItem value="medium">Medium Effort</SelectItem>
+                <SelectItem value="high">High Effort</SelectItem>
               </SelectContent>
             </Select>
           </div>
