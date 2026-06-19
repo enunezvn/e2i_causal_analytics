@@ -897,6 +897,7 @@ _CAUSAL_BRAND_COLUMN: Dict[str, str] = {
     "nba_triggers": "brand_id",
 }
 
+
 # Per-dataset value derivations applied BEFORE float-coercion, for columns whose
 # raw value is not directly float()-able into the modeled 0/1 (categorical /
 # text / bool). Only allowlisted columns are reachable (the allowlist gate runs
@@ -1053,7 +1054,12 @@ async def list_causal_variables(
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
     # Probe one row to learn the columns actually present in the live schema.
-    probe = await client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select("*").limit(1).execute()
+    probe = (
+        await client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset))
+        .select("*")
+        .limit(1)
+        .execute()
+    )
     rows = probe.data or []
     present = set(rows[0].keys()) if rows else set()
 
