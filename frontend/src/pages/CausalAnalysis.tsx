@@ -517,9 +517,12 @@ export default function CausalAnalysis() {
                     {brandArg}) —{' '}
                     <span className="font-medium">
                       {leaderboardContext.data.mechanism.mechanism_of_action}
-                    </span>
-                    . Estimates run on a synthetic cohort; clinical context is real and cited (open a
-                    row for sources).
+                    </span>{' '}
+                    {leaderboardContext.data.mechanism.source === 'chembl'
+                      ? '(mechanism from ChEMBL)'
+                      : '(mechanism from a curated clinical reference)'}
+                    . Estimates run on a synthetic cohort; open a row for the full sourced clinical
+                    context.
                   </p>
                 )}
               </CardContent>

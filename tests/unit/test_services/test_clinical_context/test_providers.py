@@ -123,3 +123,42 @@ def test_pubmed_provider_none_when_no_hit_and_no_seed():
     frag = PubMedRWEProvider(client=_FakePubMed(art=None, by_pmid=None)).enrich(profile)
     assert frag.citation is None
     assert frag.source == "unavailable"
+
+
+@pytest.mark.unit
+def test_ctgov_provider_drops_safety_endpoints_keeps_efficacy():
+    """CT.gov primary outcomes often mix safety/AE measures with efficacy ones; the
+    provider drops the safety measures and surfaces only the efficacy endpoints
+    under the (now-accurate) 'pivotal endpoints' framing."""
+    profile = resolve_brand_profile("Remibrutinib")
+    frag = ClinicalTrialsEndpointProvider(
+        client=_FakeCTGov(
+            [
+                "Number of Participants With Treatment-emergent Adverse Events (AEs)",
+                "Mean Change From Baseline in Weekly Urticaria Activity Score (UAS7) at Week 12",
+                "Safety and tolerability of remibrutinib",
+            ]
+        )
+    ).enrich(profile)
+    assert frag.source == "clinicaltrials.gov"
+    assert frag.endpoints == [
+        "Mean Change From Baseline in Weekly Urticaria Activity Score (UAS7) at Week 12"
+    ]
+
+
+@pytest.mark.unit
+def test_ctgov_provider_all_safety_falls_back_to_curated_efficacy():
+    """When CT.gov returns ONLY safety/PK measures, the provider prefers the curated
+    efficacy fallback (the documented 'only safety endpoints' path) rather than
+    surfacing safety measures as pivotal efficacy endpoints."""
+    profile = resolve_brand_profile("Remibrutinib")
+    frag = ClinicalTrialsEndpointProvider(
+        client=_FakeCTGov(
+            [
+                "Number of Participants With Adverse Events",
+                "Pharmacokinetics of remibrutinib",
+            ]
+        )
+    ).enrich(profile)
+    assert frag.endpoints == profile.pivotal_endpoints_fallback
+    assert frag.source == "static_fallback"

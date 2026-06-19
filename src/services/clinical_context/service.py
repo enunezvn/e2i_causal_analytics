@@ -9,6 +9,7 @@ default real REST clients; injectable for tests.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, Optional, Tuple
 
 from src.services.clinical_context.brand_map import (
@@ -38,12 +39,19 @@ HONESTY_LABEL = (
     "evidence) is REAL and cited from public biomedical sources."
 )
 
-# Per-(brand,disease) cache of the assembled live fragments. Keyed by a tuple so
-# two outcomes for one brand reuse the single fan-out. Bounded by the 3-brand
-# universe; a plain dict is sufficient (no eviction needed).
-_FRAGMENT_CACHE: Dict[
-    Tuple[str, str], Tuple[MechanismFragment, EndpointsFragment, CitationFragment]
-] = {}
+_FragmentTuple = Tuple[MechanismFragment, EndpointsFragment, CitationFragment]
+
+# A DEGRADED fan-out (any provider on a static_fallback / unavailable source, e.g.
+# from a transient PubMed 429 or CT.gov timeout) is reused only briefly so the
+# layer self-heals — the next request after this window re-attempts the live APIs
+# instead of caching a transient failure for the whole process lifetime. A
+# FULLY-LIVE result is cached indefinitely (biomedical facts change slowly).
+_FRAGMENT_TTL_DEGRADED_S = 600.0
+
+# Per-(brand,disease) cache of the assembled fragments + the monotonic time the
+# entry was stored + whether it is fully live. Keyed by a tuple so two outcomes
+# for one brand reuse the single fan-out. Bounded by the 3-brand universe.
+_FRAGMENT_CACHE: Dict[Tuple[str, str], Tuple[_FragmentTuple, float, bool]] = {}
 
 
 class ClinicalContextService:
@@ -64,20 +72,27 @@ class ClinicalContextService:
         )
         self._citation = citation_provider or PubMedRWEProvider(client=PubMedClient())
 
-    def _fan_out(
-        self, profile: BrandClinicalProfile
-    ) -> Tuple[MechanismFragment, EndpointsFragment, CitationFragment]:
+    def _fan_out(self, profile: BrandClinicalProfile) -> _FragmentTuple:
         key = (profile.brand, profile.disease)
         cached = _FRAGMENT_CACHE.get(key)
         if cached is not None:
-            return cached
+            frags, stored_at, fully_live = cached
+            # Reuse a fully-live result indefinitely; reuse a degraded result only
+            # within the self-heal window, else fall through and retry the live APIs.
+            if fully_live or (time.monotonic() - stored_at) < _FRAGMENT_TTL_DEGRADED_S:
+                return frags
         moa = self._mechanism.enrich(profile)
         eps = self._endpoints.enrich(profile)
         cite = self._citation.enrich(profile)
         assert isinstance(moa, MechanismFragment)
         assert isinstance(eps, EndpointsFragment)
         assert isinstance(cite, CitationFragment)
-        _FRAGMENT_CACHE[key] = (moa, eps, cite)
+        fully_live = (
+            moa.source == "chembl"
+            and eps.source == "clinicaltrials.gov"
+            and cite.source == "pubmed"
+        )
+        _FRAGMENT_CACHE[key] = ((moa, eps, cite), time.monotonic(), fully_live)
         return moa, eps, cite
 
     def get_context(self, brand: str, outcome: str) -> Dict[str, Any]:

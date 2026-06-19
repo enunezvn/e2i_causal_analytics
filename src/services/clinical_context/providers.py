@@ -102,10 +102,35 @@ class ChEMBLMechanismProvider(ClinicalContextProvider):
         return MechanismFragment(mechanism_of_action=profile.moa_fallback, source="static_fallback")
 
 
+# A registered CT.gov "primary outcome" is frequently a safety / tolerability /
+# PK measure, not the pivotal EFFICACY endpoint a clinician means by "pivotal
+# endpoint". Drop the obvious safety measures so they are not surfaced under the
+# "pivotal endpoints" framing; when nothing efficacy-like remains, the provider
+# prefers the curated efficacy fallback.
+_SAFETY_ENDPOINT_PATTERNS = (
+    "adverse event",
+    "treatment-emergent",
+    "treatment emergent",
+    "serious adverse",
+    "safety",
+    "tolerability",
+    "pharmacokinetic",
+    "pharmacodynamic",
+)
+
+
+def _is_safety_endpoint(measure: str) -> bool:
+    """True if a CT.gov outcome ``measure`` is an obvious safety / tolerability /
+    PK measure rather than an efficacy endpoint."""
+    m = measure.lower()
+    return any(pattern in m for pattern in _SAFETY_ENDPOINT_PATTERNS)
+
+
 class ClinicalTrialsEndpointProvider(ClinicalContextProvider):
     """Disease -> real pivotal endpoints via ClinicalTrials.gov, with the static
-    endpoint fallback (also used when the live API returns only safety endpoints
-    => the caller can prefer the curated efficacy fallback)."""
+    endpoint fallback. CT.gov primary outcomes often include safety / PK measures,
+    so this provider drops the obvious safety endpoints and prefers the curated
+    efficacy fallback when the live result has no efficacy endpoint left."""
 
     provider_name = "clinicaltrials_endpoints"
 
@@ -123,8 +148,11 @@ class ClinicalTrialsEndpointProvider(ClinicalContextProvider):
                 exc,
             )
             endpoints = []
-        if endpoints:
-            return EndpointsFragment(endpoints=endpoints, source="clinicaltrials.gov")
+        # Keep only efficacy endpoints; a live result that is all-safety degrades to
+        # the curated efficacy fallback (the documented "only safety endpoints" path).
+        efficacy = [e for e in endpoints if not _is_safety_endpoint(e)]
+        if efficacy:
+            return EndpointsFragment(endpoints=efficacy, source="clinicaltrials.gov")
         return EndpointsFragment(
             endpoints=list(profile.pivotal_endpoints_fallback), source="static_fallback"
         )

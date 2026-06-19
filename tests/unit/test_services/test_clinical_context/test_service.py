@@ -105,3 +105,57 @@ def test_unknown_brand_raises_keyerror():
     )
     with pytest.raises(KeyError):
         svc.get_context("NotABrand", "persistent_180d")
+
+
+def test_degraded_result_self_heals_not_cached_permanently(monkeypatch):
+    """A transient failure (degraded fan-out) must self-heal: after the degraded
+    window the next request re-attempts the live APIs instead of returning the
+    cached fallback for the whole process lifetime."""
+    import src.services.clinical_context.service as svc_mod
+
+    # Make a degraded entry immediately stale so we don't wait the real TTL.
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+
+    calls = {"n": 0}
+
+    class _HealingMechProvider:
+        provider_name = "healing"
+
+        def enrich(self, profile):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return MechanismFragment("BTK inhibitor", "static_fallback")  # transient failure
+            return MechanismFragment("Bruton tyrosine kinase inhibitor", "chembl")  # recovered
+
+    svc = ClinicalContextService(
+        mechanism_provider=_HealingMechProvider(),
+        endpoints_provider=_StubProvider(EndpointsFragment(["UAS7"], "clinicaltrials.gov")),
+        citation_provider=_StubProvider(CitationFragment(None, "unavailable")),
+    )
+    first = svc.get_context("Remibrutinib", "persistent_180d")
+    assert first["mechanism"]["source"] == "static_fallback"
+    second = svc.get_context("Remibrutinib", "persistent_180d")
+    # The degraded entry was not frozen -> the live API was retried and recovered.
+    assert second["mechanism"]["source"] == "chembl"
+    assert second["mechanism"]["mechanism_of_action"] == "Bruton tyrosine kinase inhibitor"
+
+
+def test_fully_live_result_is_cached_indefinitely(monkeypatch):
+    """A fully-live fan-out is cached and reused even with the degraded TTL at zero
+    (only degraded entries are re-attempted, not fully-live ones)."""
+    import src.services.clinical_context.service as svc_mod
+
+    monkeypatch.setattr(svc_mod, "_FRAGMENT_TTL_DEGRADED_S", 0.0)
+    counters = {"moa": {"n": 0}, "ep": {"n": 0}, "cite": {"n": 0}}
+    art = PubMedArticle(pmid="35642282", title="RWE", journal="J", doi="10.1/x")
+    svc = _service(
+        MechanismFragment("CDK4/6 inhibitor", "chembl"),
+        EndpointsFragment(["OS"], "clinicaltrials.gov"),
+        CitationFragment(art, "pubmed"),
+        counters,
+    )
+    svc.get_context("Kisqali", "persistent_180d")
+    svc.get_context("Kisqali", "persistent_180d")
+    assert counters["moa"]["n"] == 1
+    assert counters["ep"]["n"] == 1
+    assert counters["cite"]["n"] == 1

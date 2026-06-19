@@ -1478,7 +1478,10 @@ async def get_clinical_context(
             detail=f"Unknown brand '{brand}'. Known brands: {available}",
         )
     try:
-        payload = _clinical_context_service.get_context(brand, outcome)
+        # Offload the synchronous httpx fan-out (ChEMBL + CT.gov + PubMed) to a
+        # worker thread so a slow / timing-out / rate-limited upstream cannot block
+        # the event loop (the cold-cache call can take tens of seconds worst case).
+        payload = await asyncio.to_thread(_clinical_context_service.get_context, brand, outcome)
     except KeyError:
         # The brand_map has no profile for this brand (no enrichment facts).
         raise HTTPException(
