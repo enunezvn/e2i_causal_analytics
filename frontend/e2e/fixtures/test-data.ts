@@ -140,7 +140,6 @@ export const TEST_USERS = {
 export const UI_ELEMENTS = {
   SIDEBAR_LINKS: [
     'Home',
-    'Causal Discovery',
     'Knowledge Graph',
     'Model Performance',
     'Feature Importance',

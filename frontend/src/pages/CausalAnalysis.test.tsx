@@ -199,6 +199,15 @@ describe('CausalAnalysis — unified agent-led page', () => {
     expect(getCausalAgentAnalysis).toHaveBeenCalledWith('a1');
   }, 20000);
 
+  it('shows an honest error (not an infinite spinner) when the drill-down fetch fails', async () => {
+    (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('not found'));
+    mockDiscover({ job: COMPLETED_JOB });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('persistent_180d'));
+    expect(await screen.findByText(/Could not load this analysis/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
+  }, 20000);
+
   it('keeps a "Pose your own question" panel and runs the manual agent path with it', () => {
     const mutateAsync = vi.fn().mockResolvedValue({ analysis_id: 'm1', status: 'completed' });
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({

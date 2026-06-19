@@ -26,14 +26,14 @@ describe('Sidebar navigation (rendered IA)', () => {
     ]);
   });
 
-  it('renders all 25 nav links with causal pages ahead of system pages', () => {
+  it('renders all 24 nav links with causal pages ahead of system pages', () => {
     renderSidebar();
     const links = screen.getAllByRole('link').map((a) => a.textContent?.trim());
-    expect(links).toHaveLength(25);
-    expect(links).toContain('Causal Discovery');
+    expect(links).toHaveLength(24);
+    expect(links).toContain('Causal Analysis');
     expect(links).toContain('System Health');
     // a causal page must come before a system page (the old order had it reversed)
-    expect(links.indexOf('Causal Discovery')).toBeLessThan(links.indexOf('System Health'));
+    expect(links.indexOf('Causal Analysis')).toBeLessThan(links.indexOf('System Health'));
     // analytics pages that USED to be mislabeled "System" now lead the list
     expect(links.indexOf('Gap Analysis')).toBeLessThan(links.indexOf('Agent Orchestration'));
   });

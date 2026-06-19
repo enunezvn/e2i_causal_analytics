@@ -528,7 +528,16 @@ export default function CausalAnalysis() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {detail.isLoading || !detailResult ? (
+                {detail.isError ? (
+                  <Alert variant="destructive">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Could not load this analysis</AlertTitle>
+                    <AlertDescription>
+                      Its result may have expired (analyses are kept for about an hour). Re-run
+                      discovery to regenerate it.
+                    </AlertDescription>
+                  </Alert>
+                ) : detail.isLoading || !detailResult ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading the validated analysis…
                   </div>
