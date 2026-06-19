@@ -815,6 +815,7 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "engagement_score",
             "age_at_diagnosis",
             "academic_hcp",
+            "geographic_region",
             "egfr",
             "proteinuria_g_day",
             "ldh_ratio",
@@ -844,6 +845,16 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "urticaria_severity_uas7",
         "ecog_performance_status",
     },
+}
+
+# Categorical covariates ONE-HOT ENCODED before the frame reaches the executors
+# (DoWhy/EconML require numeric inputs). DELIBERATELY absent from
+# _CAUSAL_NUMERIC_COLUMNS so the loader does NOT float-coerce them to None;
+# _one_hot_categoricals expands each into stable <col>=<level> 0/1 float dummies
+# (drop_first reference level). geographic_region is the modeled RETENTION
+# confounder: an unordered 4-level region (midwest/south/northeast/west).
+_CAUSAL_CATEGORICAL_COLUMNS: Dict[str, set] = {
+    "patient_journeys": {"geographic_region"},
 }
 
 
@@ -1578,6 +1589,32 @@ def _coerce_estimation_row(
             return None
         record[col] = value
     return record
+
+
+def _one_hot_categoricals(
+    df: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    categorical_cols: List[str],
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """One-hot encode the categorical columns present in ``df`` into stable
+    ``<col>=<level>`` 0/1 float dummies, dropping the original column. drop_first
+    drops the first sorted level as the reference category (avoids the
+    dummy-variable trap). Level order is sorted for deterministic dummy names.
+    Columns absent from ``df`` are skipped. Returns ``(expanded_df, dummy_names)``."""
+    import pandas as pd
+
+    present = [c for c in categorical_cols if c in df.columns]
+    if not present:
+        return df, []
+    out = df.copy()
+    dummy_names: List[str] = []
+    for col in present:
+        levels = sorted(str(v) for v in out[col].dropna().unique())
+        for level in levels[1:]:  # drop_first: first sorted level = reference
+            name = f"{col}={level}"
+            out[name] = (out[col].astype(str) == level).astype(float)
+            dummy_names.append(name)
+        out = out.drop(columns=[col])
+    return out, dummy_names
 
 
 async def _load_agent_estimation_frame(
