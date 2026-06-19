@@ -1,5 +1,8 @@
 """Coverage for geographic_region one-hot encoding in the causal loader."""
 import pandas as pd
+import pytest
+from unittest.mock import AsyncMock, patch
+from src.api.routes import causal as causal_routes
 
 from src.api.routes.causal import (
     _CAUSAL_CATEGORICAL_COLUMNS,
@@ -7,6 +10,56 @@ from src.api.routes.causal import (
     _CAUSAL_NUMERIC_COLUMNS,
     _one_hot_categoricals,
 )
+
+# _load_agent_estimation_frame does a FUNCTION-LOCAL import of
+# get_async_supabase_client, so patch the SOURCE module.
+_CLIENT_FACTORY = "src.memory.services.factories.get_async_supabase_client"
+
+
+class _FakeQuery:
+    def __init__(self, rows): self._rows = rows
+    def select(self, *_a, **_k): return self
+    def eq(self, *_a, **_k): return self
+    def limit(self, *_a, **_k): return self
+    async def execute(self): return type("R", (), {"data": self._rows})()
+
+
+class _FakeClient:
+    def __init__(self, rows): self._rows = rows
+    def table(self, *_a, **_k): return _FakeQuery(self._rows)
+
+
+@pytest.mark.asyncio
+async def test_loader_expands_geographic_region_into_dummies():
+    rows = [
+        {"treatment_arm": 1, "persistent_180d": 1, "disease_severity": 2, "academic_hcp": 1, "geographic_region": "south"},
+        {"treatment_arm": 0, "persistent_180d": 0, "disease_severity": 1, "academic_hcp": 0, "geographic_region": "west"},
+        {"treatment_arm": 1, "persistent_180d": 1, "disease_severity": 3, "academic_hcp": 1, "geographic_region": "midwest"},
+    ]
+    with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(rows))):
+        df, select_cols = await causal_routes._load_agent_estimation_frame(
+            dataset="patient_journeys", treatment_var="treatment_arm", outcome_var="persistent_180d",
+            covariates=["disease_severity", "academic_hcp", "geographic_region"], limit=1500,
+        )
+    assert "geographic_region" not in df.columns
+    assert "geographic_region=south" in df.columns
+    assert "geographic_region=west" in df.columns
+    assert "geographic_region=midwest" not in df.columns  # reference level
+    assert "geographic_region" not in select_cols
+    assert "geographic_region=south" in select_cols and "geographic_region=west" in select_cols
+    assert df["disease_severity"].dtype == float
+    assert df["geographic_region=south"].dtype == float
+
+
+@pytest.mark.asyncio
+async def test_loader_rejects_unallowed_column_still_400():
+    with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient([]))):
+        with pytest.raises(causal_routes.HTTPException) as ei:
+            await causal_routes._load_agent_estimation_frame(
+                dataset="patient_journeys", treatment_var="treatment_arm", outcome_var="persistent_180d",
+                covariates=["totally_made_up_col"], limit=10,
+            )
+    assert ei.value.status_code == 400
 
 
 def test_geographic_region_registered_as_categorical_covariate():

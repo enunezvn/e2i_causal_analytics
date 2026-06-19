@@ -1679,6 +1679,7 @@ async def _load_agent_estimation_frame(
     rows = result.data or []
 
     numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    categorical_cols = _CAUSAL_CATEGORICAL_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []
     for row in rows:
         rec = _coerce_estimation_row(
@@ -1687,6 +1688,7 @@ async def _load_agent_estimation_frame(
             treatment_var=treatment_var,
             outcome_var=outcome_var,
             numeric_cols=numeric_cols,
+            categorical_cols=frozenset(categorical_cols),
         )
         if rec is not None:
             records.append(rec)
@@ -1702,7 +1704,11 @@ async def _load_agent_estimation_frame(
 
     import pandas as pd
 
-    return pd.DataFrame(records), select_cols
+    frame = pd.DataFrame(records)
+    requested_categoricals = [c for c in select_cols if c in categorical_cols]
+    frame, dummy_names = _one_hot_categoricals(frame, requested_categoricals)
+    expanded_cols = [c for c in select_cols if c not in categorical_cols] + dummy_names
+    return frame, expanded_cols
 
 
 @router.post(
