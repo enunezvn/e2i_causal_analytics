@@ -1873,6 +1873,9 @@ async def _run_agent_analysis_task(
         "treatment_var": request.treatment_var,
         "outcome_var": request.outcome_var,
         "confounders": covariates,
+        # Threaded so guided discovery seeds confounder->treatment/outcome priors
+        # from the question's modeled (resolved/expanded) adjustment set.
+        "modeled_confounders": covariates,
         "data_source": data_source,
         "data_cache": {"estimation_data": df},
         # Learn the DAG from data via GUIDED discovery (graph_builder anchors the
