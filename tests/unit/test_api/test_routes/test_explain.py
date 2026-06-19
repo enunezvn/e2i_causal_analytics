@@ -1328,6 +1328,69 @@ class TestListExplainableModelsEndpoint:
             assert by_type["next_best_action"] is None  # absent from registry
             assert by_type["risk_stratification"] is None
 
+    @pytest.mark.asyncio
+    async def test_list_models_includes_keep_columns_for_goldstd(self):
+        """Gold-standard families must surface ``keep_columns`` (raw covariate
+        names) so the FE can group encoded SHAP columns (one-hot /
+        ``__isna``) back to their parent covariate; legacy demo types stay None.
+
+        ``keep_columns`` is brand-invariant within a cohort family, so the route
+        resolves it once per family via the default brand's serving name. The
+        enrichment is best-effort (None on any BentoML failure).
+        """
+        keep = ["disease_severity", "academic_hcp", "geographic_region"]
+        bento = MagicMock()
+        bento.get_model_info = AsyncMock(return_value={"keep_columns": keep})
+
+        with (
+            patch("src.api.routes.explain.get_shap_service") as mock_get_service,
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            mock_service = MagicMock()
+            mock_service.shap_explainer.get_cache_stats.return_value = {}
+            mock_service._ensure_initialized = AsyncMock(return_value=None)
+            mock_service.bentoml_client = bento
+            mock_get_service.return_value = mock_service
+
+            response = await list_explainable_models()
+
+        # Field present on EVERY entry (FE type ExplainableModelInfo).
+        for entry in response["supported_models"]:
+            assert "keep_columns" in entry, f"missing keep_columns in {entry!r}"
+
+        by_type = {m["model_type"]: m.get("keep_columns") for m in response["supported_models"]}
+        # Gold-standard families carry the covariate list...
+        assert by_type["initiation"] == keep
+        assert by_type["persistence"] == keep
+        assert by_type["discontinuation"] == keep
+        assert by_type["hcp_adoption"] == keep
+        # ...legacy demo types stay None.
+        assert by_type["propensity"] is None
+        assert by_type["next_best_action"] is None
+
+    @pytest.mark.asyncio
+    async def test_list_models_keep_columns_degrades_to_none_when_bentoml_absent(self):
+        """No BentoML client -> keep_columns is None everywhere, no crash."""
+        with (
+            patch("src.api.routes.explain.get_shap_service") as mock_get_service,
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            mock_service = MagicMock()
+            mock_service.shap_explainer.get_cache_stats.return_value = {}
+            mock_service._ensure_initialized = AsyncMock(return_value=None)
+            mock_service.bentoml_client = None
+            mock_get_service.return_value = mock_service
+
+            response = await list_explainable_models()
+
+        assert all(m.get("keep_columns") is None for m in response["supported_models"])
+
 
 class TestHealthCheckEndpoint:
     """Tests for /explain/health endpoint."""
