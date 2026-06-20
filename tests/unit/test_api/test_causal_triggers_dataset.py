@@ -5,6 +5,7 @@ Locks the SSOT maps (brand column, numeric columns, derivation fns, fill-zero
 outcomes, physical-table mapping) that teach the loaders how to read the
 triggers grain without DB access.
 """
+
 import pytest
 
 from src.api.routes.causal import (
@@ -13,7 +14,6 @@ from src.api.routes.causal import (
     _CAUSAL_FILL_ZERO_OUTCOMES,
     _CAUSAL_NUMERIC_COLUMNS,
     _CAUSAL_NUMERIC_DERIVATIONS,
-    _CAUSAL_PHYSICAL_TABLE,
 )
 
 
@@ -69,11 +69,11 @@ from src.api.routes.causal import (  # noqa: E402 — after registration tests
 
 def _trig_kw() -> dict:
     """Keyword args for _coerce_estimation_row that express the trigger grain."""
-    return dict(
-        numeric_cols=_CAUSAL_NUMERIC_COLUMNS["nba_triggers"],
-        derivations=_CAUSAL_NUMERIC_DERIVATIONS["nba_triggers"],
-        fill_zero=frozenset(_CAUSAL_FILL_ZERO_OUTCOMES["nba_triggers"]),
-    )
+    return {
+        "numeric_cols": _CAUSAL_NUMERIC_COLUMNS["nba_triggers"],
+        "derivations": _CAUSAL_NUMERIC_DERIVATIONS["nba_triggers"],
+        "fill_zero": frozenset(_CAUSAL_FILL_ZERO_OUTCOMES["nba_triggers"]),
+    }
 
 
 @pytest.mark.unit

@@ -13,7 +13,9 @@ def test_causal_paths_nonnull_effect_and_mediators_and_tagged():
     # is n_records + 6 HCP + 6 trigger = n_records + 12 regardless of the n_records knob.
     assert len(df) == n + 12
     assert df["causal_effect_size"].notna().all()  # CM-003 non-NULL
-    assert df[df["grain"] != "trigger"]["mediators_identified"].apply(lambda m: len(m) >= 1).all()  # CM-005 (trigger RCT edges are direct, no mediator)
+    assert (
+        df[df["grain"] != "trigger"]["mediators_identified"].apply(lambda m: len(m) >= 1).all()
+    )  # CM-005 (trigger RCT edges are direct, no mediator)
     assert df["is_synthetic"].all()
     # data_split enum-exact (faithful: train/validation/test/holdout/unassigned)
     assert set(df["data_split"]).issubset({"holdout", "test", "train", "unassigned", "validation"})
@@ -86,7 +88,7 @@ def test_hcp_adoption_edges_emitted_per_brand():
       treatment_arm        -> adopted (adjust {centrality_z})."""
     df = CausalPathsGenerator(GeneratorConfig(seed=5, n_records=12)).generate()
     hcp = df[df["end_node"] == "adopted"]
-    cells = set(zip(hcp["start_node"], hcp["brand"]))
+    cells = set(zip(hcp["start_node"], hcp["brand"], strict=False))
     brands = {"Remibrutinib", "Kisqali", "Fabhalta"}
     assert cells == {(s, b) for s in ("peer_influence_score", "treatment_arm") for b in brands}
 
@@ -120,7 +122,7 @@ def test_trigger_grain_edges_emitted_with_empty_and_modeled_backdoor():
     question (acceptance_status -> conversion_flag, EMPTY backdoor; priority is an
     effect modifier, not a confounder). Both per brand."""
     df = CausalPathsGenerator(GeneratorConfig(seed=11, n_records=30)).generate()
-    edges = set(zip(df["start_node"], df["end_node"]))
+    edges = set(zip(df["start_node"], df["end_node"], strict=False))
     assert ("control_group_flag", "action_taken") in edges
     assert ("acceptance_status", "conversion_flag") in edges
 
@@ -150,5 +152,7 @@ def test_patient_edges_retain_treatment_arm_start_and_grain():
     patient = df[df["grain"] == "patient"]
     assert (patient["start_node"] == "treatment_arm").all()
     assert set(patient["end_node"]) <= {
-        "treatment_initiated", "persistent_180d", "discontinued_180d"
+        "treatment_initiated",
+        "persistent_180d",
+        "discontinued_180d",
     }

@@ -6,8 +6,8 @@ import pytest
 from src.services.clinical_context.brand_map import (
     BRAND_CLINICAL_MAP,
     BrandClinicalProfile,
-    resolve_brand_profile,
     endpoint_mapping_for_outcome,
+    resolve_brand_profile,
 )
 
 
