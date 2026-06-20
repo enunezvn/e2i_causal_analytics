@@ -123,6 +123,8 @@ class KPIMetadata(BaseModel):
     secondary_causal_library: CausalLibrary | None = None
     brand: str | None = None
     note: str | None = None
+    windowable: str = "not_applicable"  # "clean" | "needs_care" | "not_applicable"
+    window: dict[str, Any] | None = None  # {column, legs?, look_forward_days?} for windowable KPIs
 
 
 def _utc_now() -> datetime:

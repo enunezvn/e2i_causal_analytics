@@ -48,6 +48,12 @@ ws1_data_quality:
       critical: 0.50
     frequency: daily
     workstream: WS1
+    windowable: clean
+    window:
+      column: created_at
+      legs:
+        - covered
+        - universe
     
   source_coverage_hcps:
     id: "WS1-DQ-002"
@@ -69,6 +75,7 @@ ws1_data_quality:
       critical: 0.45
     frequency: daily
     workstream: WS1
+    windowable: not_applicable
     
   cross_source_match_rate:
     id: "WS1-DQ-003"
@@ -91,6 +98,7 @@ ws1_data_quality:
     frequency: daily
     workstream: WS1
     note: "V3: New data_source_tracking table"
+    windowable: not_applicable
     
   stacking_lift:
     id: "WS1-DQ-004"
@@ -113,6 +121,7 @@ ws1_data_quality:
     frequency: daily
     workstream: WS1
     note: "V3: New data_source_tracking table"
+    windowable: not_applicable
     
   completeness_pass_rate:
     id: "WS1-DQ-005"
@@ -132,6 +141,9 @@ ws1_data_quality:
       critical: 0.80
     frequency: daily
     workstream: WS1
+    windowable: clean
+    window:
+      column: created_at
     
   geographic_consistency:
     id: "WS1-DQ-006"
@@ -153,6 +165,7 @@ ws1_data_quality:
       critical: 0.20
     frequency: weekly
     workstream: WS1
+    windowable: not_applicable
     
   data_lag_median:
     id: "WS1-DQ-007"
@@ -175,6 +188,7 @@ ws1_data_quality:
     frequency: daily
     workstream: WS1
     note: "V3: New fields in patient_journeys"
+    windowable: not_applicable
     
   label_quality_iaa:
     id: "WS1-DQ-008"
@@ -197,6 +211,7 @@ ws1_data_quality:
     frequency: weekly
     workstream: WS1
     note: "V3: New ml_annotations table with IAA tracking"
+    windowable: not_applicable
     
   time_to_release:
     id: "WS1-DQ-009"
@@ -219,6 +234,7 @@ ws1_data_quality:
     frequency: daily
     workstream: WS1
     note: "V3: New etl_pipeline_metrics table"
+    windowable: not_applicable
 
 # ═══════════════════════════════════════════════════════════════════
 # WS1: MODEL PERFORMANCE (9 KPIs)
@@ -243,6 +259,7 @@ ws1_model_performance:
       critical: 0.60
     frequency: daily
     workstream: WS1
+    windowable: not_applicable
     
   pr_auc:
     id: "WS1-MP-002"
@@ -262,6 +279,7 @@ ws1_model_performance:
     frequency: daily
     workstream: WS1
     note: "V3: New model_pr_auc field"
+    windowable: not_applicable
     
   f1_score:
     id: "WS1-MP-003"
@@ -281,6 +299,7 @@ ws1_model_performance:
       critical: 0.45
     frequency: daily
     workstream: WS1
+    windowable: not_applicable
     
   recall_at_top_k:
     id: "WS1-MP-004"
@@ -300,6 +319,7 @@ ws1_model_performance:
     frequency: daily
     workstream: WS1
     note: "V3: New rank_metrics JSONB field"
+    windowable: not_applicable
     
   brier_score:
     id: "WS1-MP-005"
@@ -319,6 +339,7 @@ ws1_model_performance:
     frequency: daily
     workstream: WS1
     note: "V3: New brier_score field"
+    windowable: not_applicable
     
   calibration_slope:
     id: "WS1-MP-006"
@@ -337,6 +358,7 @@ ws1_model_performance:
       critical: 0.6
     frequency: weekly
     workstream: WS1
+    windowable: not_applicable
     
   shap_coverage:
     id: "WS1-MP-007"
@@ -355,6 +377,9 @@ ws1_model_performance:
       critical: 0.60
     frequency: daily
     workstream: WS1
+    windowable: clean
+    window:
+      column: created_at
     
   fairness_gap_recall:
     id: "WS1-MP-008"
@@ -373,6 +398,7 @@ ws1_model_performance:
       critical: 0.20
     frequency: weekly
     workstream: WS1
+    windowable: not_applicable
     
   feature_drift_psi:
     id: "WS1-MP-009"
@@ -392,6 +418,7 @@ ws1_model_performance:
       critical: 0.25
     frequency: daily
     workstream: WS1
+    windowable: not_applicable
 
 # ═══════════════════════════════════════════════════════════════════
 # WS2: TRIGGER PERFORMANCE (8 KPIs)
@@ -417,6 +444,9 @@ ws2_triggers:
       critical: 0.40
     frequency: daily
     workstream: WS2
+    windowable: clean
+    window:
+      column: trigger_timestamp
     
   trigger_recall:
     id: "WS2-TR-002"
@@ -437,6 +467,7 @@ ws2_triggers:
       critical: 0.30
     frequency: daily
     workstream: WS2
+    windowable: not_applicable
     
   action_rate_uplift:
     id: "WS2-TR-003"
@@ -456,6 +487,7 @@ ws2_triggers:
       critical: 0.05
     frequency: weekly
     workstream: WS2
+    windowable: not_applicable
     
   acceptance_rate:
     id: "WS2-TR-004"
@@ -474,6 +506,9 @@ ws2_triggers:
       critical: 0.30
     frequency: daily
     workstream: WS2
+    windowable: clean
+    window:
+      column: trigger_timestamp
     
   false_alert_rate:
     id: "WS2-TR-005"
@@ -492,6 +527,9 @@ ws2_triggers:
       critical: 0.30
     frequency: daily
     workstream: WS2
+    windowable: clean
+    window:
+      column: trigger_timestamp
     
   override_rate:
     id: "WS2-TR-006"
@@ -510,6 +548,9 @@ ws2_triggers:
       critical: 0.40
     frequency: daily
     workstream: WS2
+    windowable: clean
+    window:
+      column: trigger_timestamp
     
   lead_time_days:
     id: "WS2-TR-007"
@@ -529,6 +570,9 @@ ws2_triggers:
     unit: days
     frequency: weekly
     workstream: WS2
+    windowable: clean
+    window:
+      column: trigger_timestamp
     
   change_fail_rate:
     id: "WS2-TR-008"
@@ -551,6 +595,9 @@ ws2_triggers:
     frequency: weekly
     workstream: WS2
     note: "V3: New change tracking fields in triggers"
+    windowable: clean
+    window:
+      column: trigger_timestamp
 
 # ═══════════════════════════════════════════════════════════════════
 # WS3: BUSINESS IMPACT (10 KPIs)
@@ -577,6 +624,9 @@ ws3_business:
     frequency: daily
     workstream: WS3
     note: "V3: New user_sessions table"
+    windowable: clean
+    window:
+      column: session_start
     
   active_users_wau:
     id: "WS3-BI-002"
@@ -597,6 +647,9 @@ ws3_business:
     frequency: daily
     workstream: WS3
     note: "V3: New user_sessions table"
+    windowable: clean
+    window:
+      column: session_start
     
   patient_touch_rate:
     id: "WS3-BI-003"
@@ -617,6 +670,7 @@ ws3_business:
       critical: 0.20
     frequency: weekly
     workstream: WS3
+    windowable: not_applicable
     
   hcp_coverage:
     id: "WS3-BI-004"
@@ -635,6 +689,7 @@ ws3_business:
       critical: 0.45
     frequency: weekly
     workstream: WS3
+    windowable: not_applicable
     
   trx:
     id: "WS3-BI-005"
@@ -650,6 +705,9 @@ ws3_business:
     threshold: null  # Volume metric
     frequency: daily
     workstream: WS3
+    windowable: clean
+    window:
+      column: event_date
     
   nrx:
     id: "WS3-BI-006"
@@ -666,6 +724,9 @@ ws3_business:
     threshold: null  # Volume metric
     frequency: daily
     workstream: WS3
+    windowable: clean
+    window:
+      column: event_date
     
   nbrx:
     id: "WS3-BI-007"
@@ -682,6 +743,9 @@ ws3_business:
     threshold: null  # Volume metric
     frequency: daily
     workstream: WS3
+    windowable: clean
+    window:
+      column: event_date
     
   trx_share:
     id: "WS3-BI-008"
@@ -700,6 +764,12 @@ ws3_business:
       critical: 0.10
     frequency: weekly
     workstream: WS3
+    windowable: clean
+    window:
+      column: event_date
+      legs:
+        - brand_rx
+        - category
     
   conversion_rate:
     id: "WS3-BI-009"
@@ -720,6 +790,13 @@ ws3_business:
       critical: 0.02
     frequency: weekly
     workstream: WS3
+    windowable: clean
+    window:
+      column: trigger_timestamp
+      legs:
+        - triggered
+        - converted
+      look_forward_days: 30
     
   roi:
     id: "WS3-BI-010"
@@ -740,6 +817,9 @@ ws3_business:
       critical: 1.0
     frequency: monthly
     workstream: WS3
+    windowable: clean
+    window:
+      column: event_date
 
 # ═══════════════════════════════════════════════════════════════════
 # BRAND-SPECIFIC (5 KPIs)
@@ -766,6 +846,7 @@ brand_specific:
       warning: 0.50
       critical: 0.60
     frequency: weekly
+    windowable: not_applicable
     
   remi_intent_to_prescribe_delta:
     id: "BR-002"
@@ -788,6 +869,7 @@ brand_specific:
     unit: points (1-7 scale)
     frequency: monthly
     note: "V3: New hcp_intent_surveys table"
+    windowable: not_applicable
     
   fabhalta_pnh_tested_pct:
     id: "BR-003"
@@ -807,6 +889,7 @@ brand_specific:
       warning: 0.45
       critical: 0.30
     frequency: weekly
+    windowable: not_applicable
     
   kisqali_dx_adoption:
     id: "BR-004"
@@ -828,6 +911,7 @@ brand_specific:
       critical: 60
     unit: days
     frequency: weekly
+    windowable: not_applicable
     
   kisqali_oncologist_reach:
     id: "BR-005"
@@ -848,6 +932,9 @@ brand_specific:
       warning: 0.55
       critical: 0.40
     frequency: weekly
+    windowable: clean
+    window:
+      column: trigger_timestamp
 
 # ═══════════════════════════════════════════════════════════════════
 # CAUSAL METRICS (5 KPIs)
@@ -867,6 +954,7 @@ causal_metrics:
       - ml_predictions.treatment_effect_estimate
     view: null
     frequency: weekly
+    windowable: not_applicable
     
   treatment_effect_cate:
     id: "CM-002"
@@ -881,6 +969,7 @@ causal_metrics:
       - ml_predictions.segment_assignment
     view: null
     frequency: weekly
+    windowable: not_applicable
     
   causal_impact:
     id: "CM-003"
@@ -895,6 +984,7 @@ causal_metrics:
       - causal_paths.confidence_level
     view: null
     frequency: on_demand
+    windowable: not_applicable
     
   counterfactual_outcome:
     id: "CM-004"
@@ -908,6 +998,7 @@ causal_metrics:
       - ml_predictions.counterfactual_outcome
     view: null
     frequency: on_demand
+    windowable: not_applicable
     
   mediation_effect:
     id: "CM-005"
@@ -922,6 +1013,7 @@ causal_metrics:
       - causal_paths.pathway_details
     view: null
     frequency: on_demand
+    windowable: not_applicable
 
 # ═══════════════════════════════════════════════════════════════════
 # KPI HELPER VIEWS (V3)

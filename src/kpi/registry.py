@@ -133,6 +133,8 @@ class KPIRegistry:
             primary_causal_library=primary_causal,
             brand=data.get("brand"),
             note=data.get("note"),
+            windowable=data.get("windowable", "not_applicable"),
+            window=data.get("window"),
         )
 
     def _determine_causal_library(self, workstream: Workstream, data: dict) -> CausalLibrary:
