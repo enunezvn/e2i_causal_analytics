@@ -29,6 +29,8 @@ import {
   Settings2,
   Gauge,
   TrendingUp,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import {
   useDigitalTwinHealth,
@@ -47,6 +49,15 @@ import {
   type SimulationResponse,
   type SimulationDetailResponse,
 } from '@/types/digital-twin';
+import { groupSimulationsByInterventionBrand } from '@/lib/digital-twin-history';
+
+/** Title-case an intervention_type ("digital_engagement" → "Digital Engagement"). */
+function formatIntervention(interventionType: string): string {
+  return interventionType.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+}
+
+/** Brands offered by the history filter (mirrors the Brand enum). */
+const HISTORY_BRAND_OPTIONS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
 
 // =============================================================================
 // TYPES
@@ -353,6 +364,23 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
 
   return (
     <div className="space-y-6">
+      {/* Title — identifies WHAT this simulation is (intervention · brand), so an
+          opened result card is never anonymous. */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] pb-3">
+        <div>
+          <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">
+            {formatIntervention(simulation.intervention_type)} · {simulation.brand}
+          </h3>
+          <p className="text-xs text-[var(--color-text-tertiary)]">
+            {simulation.twin_type} twin · {simulation.twin_count.toLocaleString()} twins
+            {simulation.created_at ? ` · ${new Date(simulation.created_at).toLocaleString()}` : ''}
+          </p>
+        </div>
+        <span className="px-2 py-1 rounded-full text-xs font-medium bg-[var(--color-primary)]/10 text-[var(--color-primary)] capitalize">
+          {String(simulation.status)}
+        </span>
+      </div>
+
       {/* Recommendation + rationale */}
       <div className="flex items-start justify-between p-4 bg-[var(--color-background)] rounded-lg border border-[var(--color-border)]">
         <div>
@@ -468,6 +496,10 @@ export default function DigitalTwin() {
   const [activeTab, setActiveTab] = useState<'results' | 'history'>('results');
   // The simulation_id of a history item the user clicked to inspect (if any).
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // History brand filter ('all' = every brand the caller may see).
+  const [historyBrand, setHistoryBrand] = useState<string>('all');
+  // Expanded (brand, intervention) groups in the deduped history list.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const { data: healthData } = useDigitalTwinHealth();
   const {
@@ -475,7 +507,10 @@ export default function DigitalTwin() {
     refetch: refetchHistory,
     dataUpdatedAt: historyUpdatedAt,
     isFetching: isHistoryFetching,
-  } = useSimulationHistory({ limit: 10 });
+  } = useSimulationHistory({
+    brand: historyBrand === 'all' ? undefined : historyBrand,
+    limit: 25,
+  });
   const historyFreshness = useDataFreshness(historyUpdatedAt);
 
   const {
@@ -548,7 +583,25 @@ export default function DigitalTwin() {
     last_simulation_at: undefined,
   };
 
-  const historyItems = historyData?.simulations ?? [];
+  const historyItems = useMemo(() => historyData?.simulations ?? [], [historyData]);
+  // Collapse repeated runs of the same (brand, intervention) into one row each
+  // (latest + count + expandable run list) so near-identical re-runs no longer
+  // read as duplicates — without dropping any run.
+  const historyGroups = useMemo(
+    () => groupSimulationsByInterventionBrand(historyItems),
+    [historyItems],
+  );
+  const toggleGroup = (key: string) =>
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const openSimulation = (id: string) => {
+    setSelectedId(id);
+    setActiveTab('results');
+  };
   const deployCount = historyItems.filter(
     (s) => String(s.recommendation_type).toLowerCase() === 'deploy'
   ).length;
@@ -707,8 +760,31 @@ export default function DigitalTwin() {
           {/* History Tab */}
           {activeTab === 'history' && (
             <div className="space-y-3">
-              {/* Freshness indicator header */}
-              <div className="flex items-center justify-end mb-2">
+              {/* Header: brand filter + freshness. The filter lets you scope the
+                  history to one brand or view all. */}
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2">
+                  <label
+                    htmlFor="dt-history-brand"
+                    className="text-xs text-[var(--color-text-secondary)]"
+                  >
+                    Brand
+                  </label>
+                  <select
+                    id="dt-history-brand"
+                    aria-label="Filter history by brand"
+                    value={historyBrand}
+                    onChange={(e) => setHistoryBrand(e.target.value)}
+                    className="px-2 py-1 text-sm bg-[var(--color-background)] border border-[var(--color-border)] rounded-md text-[var(--color-text-primary)]"
+                  >
+                    <option value="all">All brands</option>
+                    {HISTORY_BRAND_OPTIONS.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <DataFreshnessIndicator
                   {...historyFreshness}
                   showRefreshButton
@@ -722,42 +798,87 @@ export default function DigitalTwin() {
                   <History className="h-12 w-12 text-[var(--color-text-tertiary)] mx-auto mb-4" />
                   <p className="text-[var(--color-text-secondary)]">No simulations yet</p>
                   <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
-                    Run a simulation to start building history.
+                    {historyBrand === 'all'
+                      ? 'Run a simulation to start building history.'
+                      : `No simulations for ${historyBrand} yet.`}
                   </p>
                 </div>
               ) : (
-                historyItems.map((sim) => (
-                  <div
-                    key={sim.simulation_id}
-                    onClick={() => {
-                      setSelectedId(sim.simulation_id);
-                      setActiveTab('results');
-                    }}
-                    className="flex items-center justify-between p-4 bg-[var(--color-background)] rounded-lg border border-[var(--color-border)] cursor-pointer hover:border-[var(--color-primary)] transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="p-2 rounded-lg bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
-                        <FlaskConical className="h-4 w-4" />
+                historyGroups.map((group) => {
+                  const sim = group.latest;
+                  const expanded = expandedGroups.has(group.key);
+                  return (
+                    <div key={group.key}>
+                      <div
+                        onClick={() => openSimulation(sim.simulation_id)}
+                        className="flex items-center justify-between p-4 bg-[var(--color-background)] rounded-lg border border-[var(--color-border)] cursor-pointer hover:border-[var(--color-primary)] transition-colors"
+                      >
+                        <div className="flex items-center gap-4">
+                          <div className="p-2 rounded-lg bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
+                            <FlaskConical className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-[var(--color-text-primary)] flex items-center gap-2">
+                              {formatIntervention(sim.intervention_type)}
+                              {group.count > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleGroup(group.key);
+                                  }}
+                                  aria-label={`${group.count} runs — show all`}
+                                  className="inline-flex items-center gap-1 rounded-full bg-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                                >
+                                  {group.count} runs
+                                  {expanded ? (
+                                    <ChevronDown className="h-3 w-3" />
+                                  ) : (
+                                    <ChevronRight className="h-3 w-3" />
+                                  )}
+                                </button>
+                              )}
+                            </p>
+                            <p className="text-xs text-[var(--color-text-tertiary)]">
+                              {sim.brand} - {new Date(sim.created_at).toLocaleString()}
+                              {group.count > 1 ? ' · latest' : ''}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <div className="text-right">
+                            <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                              ATE: {sim.ate_estimate.toFixed(2)}
+                            </p>
+                          </div>
+                          <RecommendationBadge recommendation={sim.recommendation_type} />
+                        </div>
                       </div>
-                      <div>
-                        <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                          {sim.intervention_type.replace('_', ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
-                        </p>
-                        <p className="text-xs text-[var(--color-text-tertiary)]">
-                          {sim.brand} - {new Date(sim.created_at).toLocaleString()}
-                        </p>
-                      </div>
+
+                      {group.count > 1 && expanded && (
+                        <div className="ml-6 mt-1 space-y-1 border-l-2 border-[var(--color-border)] pl-3">
+                          {group.runs.map((run) => (
+                            <div
+                              key={run.simulation_id}
+                              onClick={() => openSimulation(run.simulation_id)}
+                              className="flex items-center justify-between p-2 rounded-md hover:bg-[var(--color-background)] cursor-pointer"
+                            >
+                              <span className="text-xs text-[var(--color-text-tertiary)]">
+                                {new Date(run.created_at).toLocaleString()}
+                              </span>
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs font-medium text-[var(--color-text-primary)]">
+                                  ATE: {run.ate_estimate.toFixed(2)}
+                                </span>
+                                <RecommendationBadge recommendation={run.recommendation_type} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-4">
-                      <div className="text-right">
-                        <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                          ATE: {sim.ate_estimate.toFixed(2)}
-                        </p>
-                      </div>
-                      <RecommendationBadge recommendation={sim.recommendation_type} />
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}
