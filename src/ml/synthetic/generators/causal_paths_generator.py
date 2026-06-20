@@ -12,6 +12,7 @@ is enum-exact (data_split_type: train/validation/test/holdout/unassigned).
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import List, Tuple
 
 import pandas as pd
 
@@ -36,6 +37,21 @@ _COHORT_CONFOUNDERS = {
     "persistent_180d": ["disease_severity", "academic_hcp", "geographic_region"],
     "discontinued_180d": ["disease_severity", "academic_hcp", "geographic_region"],
 }
+
+# HCP-grain adoption edges (Shard 06.3 cohort: hcp_brand_adoption JOIN
+# hcp_profiles). TWO questions per brand, ADDITIVE to the patient cohort edges so
+# the leaderboard enumerates the HCP grain from the same causal_paths SSOT:
+#   peer_influence_score -> adopted : EXOGENOUS centrality, EMPTY backdoor.
+#   treatment_arm        -> adopted : rep engagement, confounded by centrality_z
+#                                     (= log1p(influence_network_size)).
+# centrality_z is the modeled backdoor for the rep-engagement arm; the loader
+# derives it from hcp_profiles. A single non-treatment/non-outcome mediator keeps
+# every chain a clean 2-hop path AND non-empty (the generator's mediator
+# invariant). HCP edges are brand-replicated for all three gold-standard brands.
+_HCP_QUESTIONS: Tuple[Tuple[str, str, List[str], str], ...] = (
+    ("peer_influence_score", "adopted", [], "centrality_diffusion"),
+    ("treatment_arm", "adopted", ["centrality_z"], "rep_engagement_path"),
+)
 
 
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
@@ -90,4 +106,43 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                     "grain": "patient",
                 }
             )
+        # HCP-grain adoption edges — ADDITIVE, fixed 6-row block (2 questions x 3
+        # brands), independent of n_records, so the SSOT always carries every HCP
+        # question for the hcp_adoption-dataset leaderboard.
+        for brand in _BRANDS:
+            for start_node, end_node, confounders, mediator in _HCP_QUESTIONS:
+                effect = round(float(self._rng.uniform(0.10, 0.55)), 4)
+                direct = round(effect * float(self._rng.uniform(0.4, 0.8)), 4)
+                indirect = round(effect - direct, 4)
+                disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
+                rows.append(
+                    {
+                        "path_id": f"scp_{uuid.uuid4().hex[:13]}",
+                        "discovery_date": disc.isoformat(),
+                        "causal_chain": {"nodes": [start_node, mediator, end_node]},
+                        "start_node": start_node,
+                        "end_node": end_node,
+                        "intermediate_nodes": [mediator],
+                        "path_length": 2,
+                        "causal_effect_size": effect,
+                        "confidence_level": round(float(self._rng.uniform(0.80, 0.95)), 3),
+                        "method_used": "backdoor.linear_regression",
+                        "confounders_controlled": list(confounders),
+                        "mediators_identified": [mediator],
+                        "time_lag_days": int(self._rng.integers(7, 60)),
+                        "validation_status": "validated",
+                        "business_impact_estimate": round(
+                            effect * float(self._rng.uniform(1e5, 5e5)), 2
+                        ),
+                        "data_split": "unassigned",
+                        "direct_effect": direct,
+                        "indirect_effect": indirect,
+                        "brand": brand,
+                        "region": str(self._rng.choice(_REGIONS)),
+                        "confirmation_count": int(self._rng.integers(1, 5)),
+                        "created_at": now.isoformat(),
+                        "is_synthetic": True,
+                        "grain": "hcp",
+                    }
+                )
         return pd.DataFrame(rows)

@@ -122,6 +122,7 @@ from src.causal_engine.pipeline.state import (
 # read functions are patchable in tests as ``causal.count_memories_by_type`` /
 # ``causal.get_recent_memories``.
 from src.memory.episodic_memory import count_memories_by_type, get_recent_memories
+from src.memory.services.factories import get_async_supabase_client
 from src.repositories.provenance import apply_provenance_filter, deployment_includes_synthetic
 
 logger = logging.getLogger(__name__)
@@ -824,8 +825,25 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "ecog_performance_status",
         ],
     },
+    # HCP grain: hcp_brand_adoption (treatment_arm, adopted, brand) JOIN
+    # hcp_profiles (peer_influence_score, influence_network_size) on hcp_id. The
+    # JOIN loader derives centrality_z = zscore(log1p(influence_network_size)) as
+    # the modeled backdoor for the rep-engagement arm. peer_influence_score is the
+    # EXOGENOUS-centrality treatment (empty backdoor); treatment_arm is the rep
+    # engagement arm (adjust centrality_z). adopted is the binary outcome.
+    "hcp_adoption": {
+        "treatment": ["peer_influence_score", "treatment_arm"],
+        "outcome": ["adopted"],
+        "covariate": ["centrality_z"],
+    },
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+# Datasets that are NOT a single physical table — built by a JOIN-aware loader
+# (e.g. hcp_adoption = hcp_brand_adoption ⋈ hcp_profiles, centrality_z derived).
+# Endpoints that issue a single-table client.table(dataset) read MUST special-case
+# these (P3 adds its grain here if it is also non-single-table).
+_JOIN_DATASETS: frozenset = frozenset({"hcp_adoption"})
 
 # Columns coerced to float before handing the frame to the executors. Every
 # curated candidate above is numeric, so all are coerced; a value that cannot
@@ -845,6 +863,12 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "ldh_ratio",
         "urticaria_severity_uas7",
         "ecog_performance_status",
+    },
+    "hcp_adoption": {
+        "peer_influence_score",
+        "treatment_arm",
+        "adopted",
+        "centrality_z",
     },
 }
 
@@ -874,7 +898,9 @@ async def _list_dataset_brands(dataset: str) -> List[str]:
     if client is None:
         return []
     try:
-        query = client.table(dataset).select("brand")
+        # hcp_adoption is a JOIN dataset; its brand column lives on hcp_brand_adoption.
+        brand_table = "hcp_brand_adoption" if dataset == "hcp_adoption" else dataset
+        query = client.table(brand_table).select("brand")
         query = apply_provenance_filter(query)
         result = await query.limit(20000).execute()
     except Exception as e:  # noqa: BLE001 — missing column / store hiccup => no brands
@@ -945,6 +971,19 @@ async def list_causal_variables(
                 f"Unknown causal dataset '{dataset}'. "
                 f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
             ),
+        )
+
+    # JOIN datasets have no single physical table to probe; their curated spec
+    # lists ARE the candidate variables (derived columns like centrality_z live
+    # on no table). Return them directly instead of 500-ing on a missing relation.
+    if dataset in _JOIN_DATASETS:
+        all_cols = sorted(set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"]))
+        return CausalVariablesResponse(
+            dataset=dataset,
+            treatment_candidates=list(spec["treatment"]),
+            outcome_candidates=list(spec["outcome"]),
+            covariate_candidates=list(spec["covariate"]),
+            columns=all_cols,
         )
 
     from src.memory.services.factories import get_async_supabase_client
@@ -1548,6 +1587,16 @@ async def get_causal_estimation_data(
             ),
         )
 
+    if dataset in _JOIN_DATASETS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Dataset '{dataset}' is a JOIN grain not served by this raw "
+                "estimation-data endpoint; use POST /causal/discover-effects or "
+                "POST /causal/agent-analyze."
+            ),
+        )
+
     allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
     covs = [c.strip() for c in (covariates or "").split(",") if c.strip()]
     requested = [treatment_var, outcome_var, *covs]
@@ -1657,6 +1706,153 @@ def _coerce_estimation_row(
     return record
 
 
+async def _load_hcp_profile_centrality(client: Any) -> List[Dict[str, Any]]:
+    """Paged read of hcp_profiles centrality covariates (hcp_id,
+    peer_influence_score, influence_network_size). hcp_profiles is NOT
+    brand-partitioned, so this reads across the whole (synthetic) table — mirrors
+    the proven treatment-effects HCP loader. Provenance-aware (synthetic-gold)."""
+    rows: List[Dict[str, Any]] = []
+    for page in range(_TE_MAX_PAGES):
+        offset = page * _TE_PAGE_SIZE
+        query = client.table("hcp_profiles").select(
+            "hcp_id,peer_influence_score,influence_network_size"
+        )
+        query = apply_provenance_filter(query)
+        query = query.range(offset, offset + _TE_PAGE_SIZE - 1)
+        result = await query.execute()
+        batch: List[Dict[str, Any]] = result.data or []
+        rows.extend(batch)
+        if len(batch) < _TE_PAGE_SIZE:
+            break
+    return rows
+
+
+async def _te_paged_select_all_brands(client: Any) -> List[Dict[str, Any]]:
+    """Brand-agnostic paged read of hcp_brand_adoption (all brands) for the
+    hcp_adoption frame when no brand filter is set."""
+    rows: List[Dict[str, Any]] = []
+    for page in range(_TE_MAX_PAGES):
+        offset = page * _TE_PAGE_SIZE
+        query = client.table("hcp_brand_adoption").select("hcp_id,treatment_arm,adopted")
+        query = apply_provenance_filter(query)
+        query = query.range(offset, offset + _TE_PAGE_SIZE - 1)
+        result = await query.execute()
+        batch: List[Dict[str, Any]] = result.data or []
+        rows.extend(batch)
+        if len(batch) < _TE_PAGE_SIZE:
+            break
+    return rows
+
+
+async def _load_hcp_adoption_join_frame(
+    *,
+    treatment_var: str,
+    outcome_var: str,
+    covariates: List[str],
+    limit: int,
+    brand: Optional[str],
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """Build the hcp_adoption estimation frame: hcp_brand_adoption (treatment_arm,
+    adopted, hcp_id) JOIN hcp_profiles (peer_influence_score,
+    influence_network_size) on hcp_id, deriving centrality_z =
+    zscore(log1p(influence_network_size)).
+
+    Reuses the proven two-reads-plus-pandas-merge HCP pattern (``_te_paged_select``
+    + a separate hcp_profiles read) rather than a single-table select, because
+    hcp_profiles is not brand-partitioned. Applies the SAME column-allowlist +
+    numeric-coercion + drop-missing-treatment/outcome security gate as
+    :func:`_load_agent_estimation_frame`. Fail-closed: 400 disallowed column, 503
+    no store / no usable rows. Never fabricates rows.
+    """
+    import pandas as pd
+
+    spec = _CAUSAL_DATASET_SPECS["hcp_adoption"]
+    allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
+    requested = [treatment_var, outcome_var, *covariates]
+    not_allowed = [c for c in requested if c not in allowed]
+    if not_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {not_allowed} are not permitted for dataset "
+                f"'hcp_adoption'. Allowed: {sorted(allowed)}"
+            ),
+        )
+    select_cols = list(dict.fromkeys(requested))
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Causal data store unavailable")
+
+    # brand scopes the adoption read (brand lives on hcp_brand_adoption); the
+    # centrality covariates are brand-agnostic on hcp_profiles.
+    if brand:
+        adoption_rows = await _te_paged_select(
+            client, "hcp_brand_adoption", "hcp_id,treatment_arm,adopted", brand
+        )
+    else:
+        adoption_rows = await _te_paged_select_all_brands(client)
+    if not adoption_rows:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No usable estimation rows for the requested variables "
+                f"({treatment_var} -> {outcome_var}) in dataset 'hcp_adoption'."
+            ),
+        )
+    profile_rows = await _load_hcp_profile_centrality(client)
+    if not profile_rows:
+        raise HTTPException(status_code=503, detail="hcp_profiles centrality unavailable")
+
+    adoption_df = pd.DataFrame(adoption_rows)
+    profile_df = pd.DataFrame(profile_rows).drop_duplicates(subset="hcp_id")
+    merged = adoption_df.merge(profile_df, on="hcp_id", how="inner")
+    if merged.empty:
+        raise HTTPException(status_code=503, detail="hcp_adoption JOIN produced no rows")
+
+    # Derive centrality_z = zscore(log1p(influence_network_size)) — matches the DGP
+    # (hcp_adoption_artifact.py) the rep-engagement arm is confounded on.
+    ins = pd.to_numeric(merged["influence_network_size"], errors="coerce")
+    centrality = ins.map(lambda v: math.log1p(v) if pd.notna(v) else None).astype(float)
+    std = centrality.std(ddof=0)
+    merged["centrality_z"] = (centrality - centrality.mean()) / std if std and std > 0 else 0.0
+    merged["peer_influence_score"] = pd.to_numeric(
+        merged.get("peer_influence_score"), errors="coerce"
+    )
+
+    # Same numeric-coercion + drop-missing-treatment/outcome gate as the patient loader.
+    numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get("hcp_adoption", set())
+    records: List[Dict[str, Any]] = []
+    for _, row in merged.iterrows():
+        record: Dict[str, Any] = {}
+        usable = True
+        for col in select_cols:
+            value = row.get(col)
+            if col in numeric_cols and value is not None:
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    value = None
+            if col in (treatment_var, outcome_var) and (value is None or pd.isna(value)):
+                usable = False
+                break
+            record[col] = None if (value is not None and pd.isna(value)) else value
+        if usable:
+            records.append(record)
+        if len(records) >= limit:
+            break
+
+    if not records:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No usable estimation rows for the requested variables "
+                f"({treatment_var} -> {outcome_var}) in dataset 'hcp_adoption'."
+            ),
+        )
+    return pd.DataFrame(records), select_cols
+
+
 def _one_hot_categoricals(
     df: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
     categorical_cols: List[str],
@@ -1699,6 +1895,17 @@ async def _load_agent_estimation_frame(
     unknown dataset, 400 disallowed column, 503 no data store / no usable rows) —
     never fabricates rows.
     """
+    # hcp_adoption is a JOIN dataset (hcp_brand_adoption JOIN hcp_profiles), not a
+    # single table — route it to the JOIN-aware loader (same allowlist/coercion gate).
+    if dataset == "hcp_adoption":
+        return await _load_hcp_adoption_join_frame(
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            covariates=covariates,
+            limit=limit,
+            brand=brand,
+        )
+
     spec = _CAUSAL_DATASET_SPECS.get(dataset)
     if spec is None:
         raise HTTPException(
