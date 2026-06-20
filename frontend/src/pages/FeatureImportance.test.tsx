@@ -721,6 +721,27 @@ describe('FeatureImportance — strategic insight + honest labels', () => {
     expect(screen.getByText(/leakage-safe|empirically/i)).toBeInTheDocument();
   });
 
+  it('keeps the summary count + Strategic Interpretation on the FULL cohort when the rankings list is searched', async () => {
+    // Regression for the codex HIGH: the search box filters the Feature Rankings
+    // LIST only — it must NOT recompute the cohort-level summary count or the
+    // dominant-driver interpretation against the filtered subset.
+    const user = userEvent.setup();
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    // baseline: 5 encoded features fold to 3 covariates
+    expect(screen.getByText(/3 covariates.*encoded/i)).toBeInTheDocument();
+
+    // filter the rankings list down to region only
+    await user.type(screen.getByPlaceholderText(/search features/i), 'region');
+
+    // summary count stays on the FULL cohort (3 covariates), not the filtered 1
+    await waitFor(() => {
+      expect(screen.getByText(/3 covariates.*encoded/i)).toBeInTheDocument();
+    });
+    // and the interpretation still names the TRUE dominant driver (disease
+    // severity), not the searched subset (geographic region)
+    expect(screen.getByText(/disease severity is the dominant driver/i)).toBeInTheDocument();
+  });
+
   it('keeps the Strategic Interpretation panel out of the DOM when there is no cohort data', () => {
     (useGlobalFeatureImportance as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,

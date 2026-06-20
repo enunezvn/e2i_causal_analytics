@@ -567,13 +567,24 @@ function FeatureImportance() {
   // Covariate-level features for the bar chart (consistent with the ranking).
   const barFeatures = useMemo(() => covariateGroups.map(groupToContribution), [covariateGroups]);
 
+  // UNFILTERED covariate grouping. The summary counts, Top Feature stat, and the
+  // Strategic Interpretation describe the WHOLE cohort, so they must NOT react to
+  // the Feature Rankings search box (which filters `covariateGroups`). Feeding
+  // the filtered groups there let a search fabricate a 100% "dominant" share and
+  // render inconsistent "1 covariate · 9 encoded" counts (codex HIGH).
+  const allCovariateGroups = useMemo(
+    () => groupByCovariate(features, keepColumns, featureGroupable),
+    [features, keepColumns]
+  );
+
   // Strategic interpretation of the cohort importance (rule-based, NO LLM).
   // Cohort mode only — the canonical "feature importance" view the review
   // targeted; null in individual mode / before data so the panel stays hidden.
+  // Uses the UNFILTERED groups so it always reflects the whole cohort.
   const insight = useMemo(
     () =>
       viewMode === 'cohort' && global
-        ? interpretGlobalImportance(covariateGroups, {
+        ? interpretGlobalImportance(allCovariateGroups, {
             modelLabel: selectedModelInfo
               ? formatModelLabel(selectedModelInfo)
               : effectiveModelType,
@@ -585,7 +596,7 @@ function FeatureImportance() {
     [
       viewMode,
       global,
-      covariateGroups,
+      allCovariateGroups,
       selectedModelInfo,
       effectiveModelType,
       selectedBrand,
@@ -826,8 +837,8 @@ function FeatureImportance() {
                         <span className="font-mono text-xs">{global.model_name}</span>
                         <span>•</span>
                         <span>
-                          {covariateGroups.length} covariate
-                          {covariateGroups.length === 1 ? '' : 's'} · {global.features.length}{' '}
+                          {allCovariateGroups.length} covariate
+                          {allCovariateGroups.length === 1 ? '' : 's'} · {global.features.length}{' '}
                           encoded
                         </span>
                         <span>•</span>
@@ -872,7 +883,7 @@ function FeatureImportance() {
                 <div className="text-center">
                   <div className="text-sm text-muted-foreground">Top Feature</div>
                   <div className="text-lg font-semibold">
-                    {covariateGroups[0]?.covariate?.replace(/_/g, ' ') ?? '—'}
+                    {allCovariateGroups[0]?.covariate?.replace(/_/g, ' ') ?? '—'}
                   </div>
                 </div>
               </div>
@@ -999,9 +1010,9 @@ function FeatureImportance() {
                   </CardTitle>
                   <CardDescription>
                     {viewMode === 'cohort'
-                      ? `Mean |SHAP| over ${global?.sample_size ?? COHORT_SAMPLE_SIZE} real ${
-                          isHcpCohort ? 'HCPs' : 'patients'
-                        }, grouped by covariate. Bar length = importance; color = net direction (green raises, red lowers the prediction).`
+                      ? `Mean |SHAP| over a ${global?.sample_size ?? COHORT_SAMPLE_SIZE}-${
+                          isHcpCohort ? 'HCP' : 'patient'
+                        } sample, grouped by covariate. Bar length = importance; color = net direction (green raises, red lowers the prediction).`
                       : `Signed SHAP contributions for this ${grainLabel.toLowerCase()}, grouped by covariate. Positive values push the prediction higher.`}
                   </CardDescription>
                 </CardHeader>

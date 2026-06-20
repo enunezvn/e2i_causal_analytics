@@ -145,14 +145,16 @@ export function interpretGlobalImportance(
   const statements: string[] = [];
 
   // Direction of the dominant driver — adds the "which way" the ranking's color
-  // hints at, in plain language.
+  // hints at, in plain language. Phrased as an ASSOCIATION (net signed effect
+  // across the sample) rather than "higher X", so it stays valid for a
+  // categorical covariate (e.g. geographic_region) that has no ordinal "higher".
   if (dominant.direction === 'positive') {
     statements.push(
-      `On average, higher ${dominant.label} raises the predicted likelihood of ${outcome}.`,
+      `On average, ${dominant.label} is associated with a higher predicted likelihood of ${outcome}.`,
     );
   } else if (dominant.direction === 'negative') {
     statements.push(
-      `On average, higher ${dominant.label} lowers the predicted likelihood of ${outcome}.`,
+      `On average, ${dominant.label} is associated with a lower predicted likelihood of ${outcome}.`,
     );
   }
 
