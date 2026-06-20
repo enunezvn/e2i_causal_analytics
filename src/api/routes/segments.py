@@ -157,10 +157,11 @@ class RunSegmentAnalysisRequest(BaseModel):
             "any value supplied here is overridden."
         ),
     )
-    brand: Optional[str] = Field(
-        default=None,
-        description="Brand — required to enable the label-gater (indicated-population guardrail)",
-    )
+    # NOTE: `brand` is defined once above (cohort FILTER). #1060 added a SECOND
+    # `brand` field here for the label-gater, which Pydantic silently collapsed and
+    # mypy flagged as [no-redef] — pushing main's mypy count 61 -> 62 (over the
+    # ceiling) and blocking ALL CI. The single `brand` above already supplies the
+    # gater's brand input, so the duplicate is removed.
     indication: Optional[str] = Field(
         default=None,
         description="Indication scope for the label lookup; resolved from the data when omitted",
