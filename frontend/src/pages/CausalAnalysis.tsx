@@ -492,9 +492,24 @@ export default function CausalAnalysis() {
                               {e.selected_estimator ? e.selected_estimator.replace(/_/g, ' ') : '—'}
                             </td>
                             <td className="p-3 text-right">
-                              {clickable && (
-                                <ChevronRight className="inline h-4 w-4 text-muted-foreground" />
-                              )}
+                              <div className="flex items-center justify-end gap-2">
+                                {e.clinical_context?.competitor_landscape &&
+                                  e.clinical_context.competitor_landscape.count > 0 && (
+                                    <Badge
+                                      variant="outline"
+                                      className="text-xs font-normal text-muted-foreground"
+                                      title={e.clinical_context.competitor_landscape.competitors.join(', ')}
+                                    >
+                                      {e.clinical_context.competitor_landscape.count}{' '}
+                                      {e.clinical_context.competitor_landscape.count === 1
+                                        ? 'rival'
+                                        : 'rivals'}
+                                    </Badge>
+                                  )}
+                                {clickable && (
+                                  <ChevronRight className="inline h-4 w-4 text-muted-foreground" />
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );

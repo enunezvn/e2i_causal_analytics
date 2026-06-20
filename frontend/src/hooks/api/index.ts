@@ -95,6 +95,7 @@ export {
   useSegmentAnalysis,
   usePolicies,
   useSegmentHealth,
+  useSegmentDatasets,
   useRunSegmentAnalysis,
   useRunSegmentAnalysisAndWait,
   useGetHighResponders,

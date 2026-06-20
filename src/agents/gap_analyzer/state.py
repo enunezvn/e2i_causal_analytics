@@ -66,6 +66,13 @@ class ROIEstimate(TypedDict):
     # Risk factors
     total_risk_adjustment: float  # Combined risk adjustment (0.0-1.0)
 
+    # Market landscape (INFORMATIONAL, surface-only — added 2026-06-20). Curated
+    # competitor density for the brand's indication; does NOT alter the ROI or the
+    # ranking (the prioritizer still sorts on the unchanged risk_adjusted_roi).
+    competitor_products_count: NotRequired[int]
+    competitor_density_label: NotRequired[str]  # limited / moderate / crowded / unknown
+    competitor_drug_names: NotRequired[List[str]]
+
     # Value breakdown by driver
     value_by_driver: Optional[Dict[str, float]]  # e.g., {"trx_lift": 850000}
 
@@ -84,6 +91,15 @@ class ROIEstimate(TypedDict):
     # additive to the V4.4 causal adjustment above (compounded — see prioritizer).
     instrument_adjustment_factor: NotRequired[float]
     instrument_adjustment_reason: NotRequired[Optional[str]]
+
+    # Label-gater: written by PrioritizerNode when label_segmentation is enabled and a
+    # brand indicated-population is resolvable. ``off_label`` is True ONLY for a
+    # label-evidenced violation; off-label opportunities are RANK-DEMOTED (sink below
+    # on-label), never deleted, and the ROI values above are NEVER altered (rank-only).
+    off_label: NotRequired[bool]
+    off_label_reason: NotRequired[str]
+    label_verdict: NotRequired[str]  # on_label | off_label | mixed | indeterminate
+    label_evidence_confirmed: NotRequired[bool]
 
 
 class InstrumentSpec(TypedDict):
@@ -153,6 +169,15 @@ class GapAnalyzerState(TypedDict):
     # input: gap_detector resolves a per-run connector pair honoring this flag.
     # Absent => the agent's constructor flag governs (backward compatible).
     include_synthetic: NotRequired[bool]
+
+    # Label-gater (opt-in): when ``label_segmentation`` is truthy AND ``brand`` is
+    # present, PrioritizerNode resolves the brand's FDA-indicated population and flags
+    # opportunities whose gap segment falls outside it as off_label (rank-demoted, ROI
+    # untouched). Absent/falsey => unchanged behaviour (no gating). ``indication``
+    # scopes the lookup; absent => the brand's primary indication (gap_analyzer loads
+    # business_metrics, not patient_journeys, so diagnosis-based resolution is N/A here).
+    indication: NotRequired[str]
+    label_segmentation: NotRequired[bool]
 
     # === UPLIFT CONTEXT (from heterogeneous_optimizer, optional) ===
     # When uplift analysis is available, it enhances ROI calculations

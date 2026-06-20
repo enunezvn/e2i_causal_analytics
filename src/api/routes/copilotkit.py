@@ -1860,7 +1860,32 @@ COPILOT_ACTIONS = [
 # LANGGRAPH AGENT FOR E2I CHAT
 # =============================================================================
 
+
 # System prompt for the CopilotKit chat agent
+def build_synthesis_prompt(
+    original_query: str, tool_calls: list[dict], tool_results: list[dict]
+) -> str:
+    """Frame the user's question + the tool calls (with args) + the tool results so the
+    synthesizer answers the ACTUAL question, names the brand/period it used, and is honest
+    about any window limitation. Fixes the 'asks for a brand it already used' bug."""
+    import json as _json
+
+    calls = _json.dumps(tool_calls, indent=2, default=str)
+    results = _json.dumps(tool_results, indent=2, default=str)
+    return (
+        "User question:\n" + (original_query or "(none)") + "\n\n"
+        "Tool calls the assistant made (note the brand/window/args already chosen):\n"
+        + calls
+        + "\n\n"
+        "Tool results:\n" + results + "\n\n"
+        "Write a concise, direct answer to the user's question. Use the specific data values. "
+        "State which brand and time period the figure covers (from the tool args/results). "
+        "If a result's window_status is 'not_applicable' or 'default' while the user asked for a "
+        "specific period, say plainly that the figure covers the engine's reporting window, not the "
+        "requested one. Do NOT ask the user to re-specify a brand or period they already provided."
+    )
+
+
 E2I_COPILOT_SYSTEM_PROMPT = """You are the E2I Analytics Assistant, an intelligent AI specialized in pharmaceutical commercial analytics for Novartis brands.
 
 ## Your Expertise
@@ -1885,11 +1910,13 @@ You help users with:
 3. **Commercial Focus**: This is pharmaceutical COMMERCIAL analytics - NOT clinical or medical advice
 4. **Causal Clarity**: When discussing causation, be clear about confidence levels
 5. **Actionable Insights**: Provide recommendations that can drive business decisions
+6. **Honest Windows**: If a requested time window isn't supported for a metric, say so plainly and report the window actually used — never imply a figure covers a different period, and never ask for a brand or period the user already gave.
 
 ## Tool Usage - CRITICAL
 
 You MUST use tools proactively when users ask about data:
 - Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses, triggers
+- Use kpi_calculate_tool to COMPUTE a KPI value for a brand/period (NRx, TRx, NBRx, market share, conversion rate, ROI). Pass the brand and any time window the user names, and state which brand and window your answer covers.
 - Use `causal_analysis_tool` for understanding metric drivers
 - Use `document_retrieval_tool` for searching the knowledge base
 - Use `agent_routing_tool` to get agent status and information
@@ -1904,7 +1931,7 @@ DO NOT just describe what tools can do - actually CALL them to get data!
 - Use bullet points for lists
 - Highlight key metrics with **bold**
 - Include actual data values from tool results
-- Suggest follow-up questions when appropriate
+- Offer at most one genuinely useful follow-up, only when it adds value.
 """
 
 
@@ -2442,6 +2469,26 @@ def create_e2i_chat_agent():
         if not tool_results:
             return {"messages": []}
 
+        # Collect the assistant's tool-CALL args (from the AIMessage(s) that
+        # requested the tools). The synthesizer needs the brand/window/args the
+        # assistant already chose so it answers the actual question instead of
+        # re-asking for a brand the user already gave.
+        tool_calls: list[dict] = []
+        for msg in messages:
+            tc = getattr(msg, "tool_calls", None)
+            if tc:
+                for c in tc:
+                    tool_calls.append(
+                        {
+                            "name": c.get("name")
+                            if isinstance(c, dict)
+                            else getattr(c, "name", None),
+                            "args": c.get("args")
+                            if isinstance(c, dict)
+                            else getattr(c, "args", None),
+                        }
+                    )
+
         # Extract original query for analytics classification
         original_query = ""
         for msg in messages:
@@ -2475,13 +2522,10 @@ def create_e2i_chat_agent():
             provider = "anthropic"
             logger.info(f"[CopilotKit] Using {provider} LLM for synthesis")
 
-            # Ask LLM to synthesize the results
-            synthesis_prompt = f"""Based on the tool results below, provide a clear, helpful response to the user.
-
-Tool Results:
-{json.dumps(tool_results, indent=2, default=str)}
-
-Synthesize these results into a natural, conversational response. Include specific data values and metrics. Be concise."""
+            # Ask LLM to synthesize the results — frame the user's question and
+            # the tool-call args (brand/window) so the synthesizer answers the
+            # actual question and never re-asks for a brand it already used.
+            synthesis_prompt = build_synthesis_prompt(original_query, tool_calls, tool_results)
 
             # STREAMING (v1.22.0): Stream synthesis response token-by-token
             full_content = ""
@@ -3262,7 +3306,7 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
             detail="Request user_id does not match the authenticated user.",
         )
 
-    return token_user_id
+    return str(token_user_id)
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:

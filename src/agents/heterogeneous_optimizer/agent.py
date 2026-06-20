@@ -329,6 +329,11 @@ class HeterogeneousOptimizerAgent:
                 "data_source": input_data["data_source"],
                 "filters": input_data.get("filters"),
                 "tier0_data": input_data.get("tier0_data"),  # Passthrough for tier0 testing
+                # Brand for the label-gater's indicated-population lookup (was dropped).
+                "brand": input_data.get("brand"),
+                # Label-gater opt-in + indication scope (default off => unchanged).
+                "indication": input_data.get("indication"),
+                "label_segmentation": input_data.get("label_segmentation", False),
                 # Phase 3 (#237) — confounder routing inputs (NotRequired on state).
                 # Forwarded from input_data so callers using agent.run() can route
                 # explicit confounders or role_attributions into the CATE estimator.

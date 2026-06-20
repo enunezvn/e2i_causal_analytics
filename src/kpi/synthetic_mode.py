@@ -39,14 +39,19 @@ _SYNTHETIC_SUFFIX = "_include_synthetic"
 #: ``src/api/routes/copilotkit.py``).
 _TRUTHY = ("1", "true", "yes")
 
-#: The 36 base ``kpi_query_registry`` ids that have an
-#: ``{id}_include_synthetic`` twin, sourced verbatim from
-#: ``database/migrations/066_kpi_query_synthetic_exclusion.sql``. The twins are
-#: the synthetic-taggable statements; everything else in the registry is not
-#: synthetic-gated. This literal is kept in lock-step with the migration by
-#: ``tests/unit/test_kpi/test_synthetic_mode.py`` (it parses 066 and asserts
-#: equality — drift fails CI), so a future twin added by a later migration is a
-#: one-line update guarded by a red test, never a silent miss.
+#: The 37 base ``kpi_query_registry`` ids that have an
+#: ``{id}_include_synthetic`` twin: 36 sourced verbatim from
+#: ``database/migrations/066_kpi_query_synthetic_exclusion.sql`` plus
+#: ``business_impact_patient_touch_rate`` from
+#: ``database/migrations/085_kpi_patient_touch_rate_include_synthetic.sql``
+#: (#1064 — the touch-rate KPI reads a VIEW that migration 067 made
+#: synthetic-excluding, so it was absent from 066's table-wrapping pass and
+#: needed a view-backed twin). The twins are the synthetic-taggable statements;
+#: everything else in the registry is not synthetic-gated. This literal is kept
+#: in lock-step with the migrations by ``tests/unit/test_kpi/test_synthetic_mode.py``
+#: (it parses 066 + 085 and asserts equality — drift fails CI), so a future twin
+#: added by a later migration is a one-line update guarded by a red test, never a
+#: silent miss.
 SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
     {
         "brand_specific_fabhalta_pnh_tested",
@@ -61,6 +66,7 @@ SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
         "business_impact_mau_fallback",
         "business_impact_nbrx",
         "business_impact_nrx",
+        "business_impact_patient_touch_rate",
         "business_impact_roi_agent_activities",
         "business_impact_roi_business_metrics",
         "business_impact_trx",
@@ -139,4 +145,19 @@ def region_query_id(base_query_id: str) -> str:
     is a safe no-op on the already-suffixed id.
     """
     qid = f"{base_query_id}_region"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
+def windowed_query_id(base_query_id: str, *, region: bool) -> str:
+    """Windowed variant id for a base KPI query (Phase 1, additive).
+
+    Canonical suffix order: ``{base}_windowed[_region][_include_synthetic]``.
+    Parallels :func:`region_query_id`: the ``_windowed*`` variants are ADDITIVE
+    and absent from :data:`SYNTHETIC_TWINNED_QUERY_IDS`, so we append the
+    ``_include_synthetic`` suffix HERE under the showcase flag. Passing the
+    result back through :func:`resolve_kpi_query_id` is a safe no-op.
+    """
+    qid = f"{base_query_id}_windowed"
+    if region:
+        qid = f"{qid}_region"
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid

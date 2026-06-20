@@ -12,18 +12,23 @@
  * @module components/causal/ClinicalContextPanel
  */
 
-import { FlaskConical, BookText, ExternalLink, Stethoscope } from 'lucide-react';
+import { AlertTriangle, BookText, Building2, ExternalLink, FlaskConical, Stethoscope } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import type { ClinicalContext } from '@/types/causal';
 
 function sourceChip(source: string) {
-  const live = source === 'chembl' || source === 'clinicaltrials.gov' || source === 'pubmed';
+  const live =
+    source === 'chembl' ||
+    source === 'clinicaltrials.gov' ||
+    source === 'pubmed' ||
+    source === 'openfda';
   const seed = source === 'pubmed_seed';
+  const curated = source === 'curated';
   if (live) {
     return (
       <Badge variant="outline" className="ml-2 align-middle text-xs">
-        {source}
+        {source === 'openfda' ? 'live FDA label' : source}
       </Badge>
     );
   }
@@ -31,6 +36,13 @@ function sourceChip(source: string) {
     return (
       <Badge variant="outline" className="ml-2 align-middle text-xs">
         pubmed (curated seed)
+      </Badge>
+    );
+  }
+  if (curated) {
+    return (
+      <Badge variant="secondary" className="ml-2 align-middle text-xs">
+        curated
       </Badge>
     );
   }
@@ -42,7 +54,7 @@ function sourceChip(source: string) {
 }
 
 export function ClinicalContextPanel({ context }: { context: ClinicalContext }) {
-  const { mechanism, pivotal_endpoints, real_world_evidence } = context;
+  const { mechanism, pivotal_endpoints, real_world_evidence, approved_indications, competitor_landscape } = context;
   return (
     <div className="space-y-4 rounded-md border p-4">
       <div className="flex items-center gap-2">
@@ -114,6 +126,56 @@ export function ClinicalContextPanel({ context }: { context: ClinicalContext }) 
         <p className="text-xs text-muted-foreground">
           No real-world-evidence citation found for this brand.
         </p>
+      )}
+
+      {/* Regulatory / Label — approved indications from the FDA drug label (openFDA) */}
+      {approved_indications && approved_indications.indications.length > 0 && (
+        <div className="text-sm">
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <Stethoscope className="h-3.5 w-3.5" />
+            Regulatory / Label
+            {sourceChip(approved_indications.source)}
+          </div>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {approved_indications.indications.map((ind) => (
+              <li key={ind}>{ind}</li>
+            ))}
+          </ul>
+          {approved_indications.limitations_of_use && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              <span className="font-medium">Limitations of use: </span>
+              {approved_indications.limitations_of_use}
+            </p>
+          )}
+          {approved_indications.boxed_warning && (
+            <div className="mt-2 flex items-start gap-1.5 rounded border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                <span className="font-semibold">BOXED WARNING: </span>
+                {approved_indications.boxed_warning}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Market landscape — competitor products (curated, not FDA-sourced) */}
+      {competitor_landscape && competitor_landscape.count > 0 && (
+        <div className="text-sm">
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <Building2 className="h-3.5 w-3.5" />
+            Market landscape ({competitor_landscape.count} rival
+            {competitor_landscape.count === 1 ? '' : 's'})
+            {sourceChip(competitor_landscape.source)}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {competitor_landscape.competitors.map((c) => (
+              <Badge key={c} variant="secondary" className="text-xs font-normal">
+                {c}
+              </Badge>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* The synthetic/real honesty boundary — always shown */}

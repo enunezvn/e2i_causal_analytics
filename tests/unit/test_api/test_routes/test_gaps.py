@@ -674,6 +674,42 @@ class TestListOpportunitiesLatestRunDedup:
         assert resp.quick_wins_count == 1
 
     @pytest.mark.asyncio
+    async def test_opportunities_tagged_with_curated_category(self):
+        """Each returned opportunity is tagged with its TRUE curated category by
+        membership in the latest run's quick_wins/strategic_bets lists -- NOT by
+        raw implementation_difficulty. opp A is in quick_wins -> 'quick_win';
+        opp B is in strategic_bets -> 'strategic_bet'; opp C is in neither ->
+        'other'. The count of returned strategic_bet/quick_win opportunities must
+        equal strategic_bets_count/quick_wins_count."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        # A: low difficulty curated quick win; B: high difficulty curated bet;
+        # C: high difficulty but NOT curated (so it must read as 'other', proving
+        # category is membership-driven, not difficulty-driven).
+        opp_a = _make_opp("g_a", ImplementationDifficulty.LOW, 5.0)
+        opp_b = _make_opp("g_b", ImplementationDifficulty.HIGH, 8.0)
+        opp_c = _make_opp("g_c", ImplementationDifficulty.HIGH, 3.0)
+        _analyses_store["a"] = _make_analysis(
+            "a",
+            "Kisqali",
+            t,
+            [opp_a, opp_b, opp_c],
+            quick_wins=[opp_a],
+            strategic_bets=[opp_b],
+        )
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        by_id = {o.gap.gap_id: o for o in resp.opportunities}
+        assert by_id["g_a"].category == "quick_win"
+        assert by_id["g_b"].category == "strategic_bet"
+        assert by_id["g_c"].category == "other"
+
+        sb = [o for o in resp.opportunities if o.category == "strategic_bet"]
+        qw = [o for o in resp.opportunities if o.category == "quick_win"]
+        assert len(sb) == resp.strategic_bets_count
+        assert len(qw) == resp.quick_wins_count
+
+    @pytest.mark.asyncio
     async def test_handles_naive_timestamp_from_old_db_row(self):
         """A payload timestamp stored without a tz offset round-trips as a NAIVE
         datetime; the latest-run comparison must not TypeError on a mixed

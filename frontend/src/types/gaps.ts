@@ -8,6 +8,8 @@
  * @module types/gaps
  */
 
+import type { LabelVerdict } from './segments';
+
 // =============================================================================
 // ENUMS
 // =============================================================================
@@ -154,6 +156,18 @@ export interface ROIEstimate {
   attribution_rate: number;
   /** Estimate confidence (0-1) */
   confidence: number;
+  /**
+   * Whether this opportunity targets an off-label use (outside the FDA label).
+   * Off-label bets are de-prioritized (sunk to the bottom of the ranking) by the
+   * backend. Populated only when label_segmentation was enabled.
+   */
+  off_label?: boolean;
+  /** Human-readable reason the opportunity was judged off-label. */
+  off_label_reason?: string;
+  /** Structured verdict: on_label | off_label | mixed | indeterminate. */
+  label_verdict?: LabelVerdict;
+  /** True when the verdict was confirmed against the FDA drug label. */
+  label_evidence_confirmed?: boolean;
 }
 
 /**
@@ -172,6 +186,8 @@ export interface PrioritizedOpportunity {
   implementation_difficulty: ImplementationDifficulty;
   /** Expected time to results */
   time_to_impact: string;
+  /** Curated list-view category (set by the list endpoint). */
+  category?: 'quick_win' | 'strategic_bet' | 'other';
 }
 
 /**

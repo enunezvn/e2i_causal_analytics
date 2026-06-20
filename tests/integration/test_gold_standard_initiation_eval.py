@@ -52,12 +52,12 @@ def _fresh_async_supabase_client():
 async def _rows_for_current_handle(repo, handle: str, source: str) -> list[dict]:
     """auc_roc rows for the CURRENT registry id of ``handle`` and ``source``.
 
-    The handle (model_name) is the stable identity; the registry ``id`` uuid is
-    NOT — ``register_model_row`` replaces the row (delete + re-insert with a new
-    ``gen_random_uuid()``) on every run, so the metric rows re-point at a fresh
-    ``model_id`` each run. Idempotency is therefore "the same COUNT of rows for
-    the model", which means resolving the *current* id each time rather than
-    freezing a uuid from an earlier run.
+    The handle (model_name) is the stable identity. ``register_model_row`` now
+    UPSERTS the registry row in place on re-run (preserving its ``id`` so the
+    RESTRICT FKs from ml_performance_metrics / ml_drift_history survive), so the
+    metric rows keep pointing at the same ``model_id``. Resolving the current id
+    by handle each run is still correct (and robust to any future id change), and
+    idempotency remains "the same COUNT of rows for the model".
     """
     from src.repositories.drift_monitoring import _resolve_model_id
 

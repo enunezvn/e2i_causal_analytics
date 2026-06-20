@@ -106,6 +106,17 @@ class RunGapAnalysisRequest(BaseModel):
         default="current_quarter",
         description="Analysis period (e.g., 'current_quarter', '2024-Q3')",
     )
+    indication: Optional[str] = Field(
+        default=None,
+        description="Indication scope for the label lookup (defaults to the brand's primary)",
+    )
+    label_segmentation: bool = Field(
+        default=False,
+        description=(
+            "Opt-in label-gater: flag/de-prioritize bets whose segment is outside the "
+            "FDA-indicated population. Default off = unchanged behaviour."
+        ),
+    )
     gap_type: GapType = Field(
         default=GapType.ALL,
         description="Type of gaps to detect",
@@ -187,6 +198,21 @@ class ROIEstimate(BaseModel):
     attribution_level: str = Field(..., description="Attribution level")
     attribution_rate: float = Field(..., description="Attribution rate (0-1)")
     confidence: float = Field(..., description="Estimate confidence (0-1)")
+    # Label-gater (codex#4 — carried end-to-end so the UI can surface it). Optional:
+    # only populated when label_segmentation is enabled.
+    off_label: Optional[bool] = Field(
+        default=None,
+        description="True if the bet's segment is outside the FDA-indicated population",
+    )
+    off_label_reason: Optional[str] = Field(
+        default=None, description="Why the bet is off-label (label-evidenced violation)"
+    )
+    label_verdict: Optional[str] = Field(
+        default=None, description="on_label | off_label | mixed | indeterminate"
+    )
+    label_evidence_confirmed: Optional[bool] = Field(
+        default=None, description="Whether the verdict is confirmed by the live FDA label"
+    )
 
 
 class PrioritizedOpportunity(BaseModel):
@@ -198,6 +224,13 @@ class PrioritizedOpportunity(BaseModel):
     recommended_action: str = Field(..., description="Specific action to close gap")
     implementation_difficulty: ImplementationDifficulty = Field(..., description="Difficulty level")
     time_to_impact: str = Field(..., description="Expected time to results")
+    # Curated category for the list view, assigned by membership in the latest
+    # run's prioritizer quick_wins/strategic_bets lists (see list_opportunities).
+    # NOT derived from implementation_difficulty — a high-difficulty opportunity
+    # is only a "strategic_bet" if it also clears the ROI/cost thresholds.
+    category: Optional[str] = Field(
+        default=None, description="quick_win | strategic_bet | other (list view only)"
+    )
 
 
 class GapAnalysisResponse(BaseModel):
@@ -546,7 +579,9 @@ async def list_opportunities(
     for analysis in latest_analyses:
         # Headline counts come from the prioritizer's OWN curated lists — its
         # authoritative definitions (quick win = low difficulty, ROI>1; strategic
-        # bet = high difficulty AND ROI>2 AND cost>$50k, capped at top 5). The page
+        # bet = high difficulty AND ROI>2 AND cost>$50k, capped at top 5; see
+        # src/agents/gap_analyzer/nodes/prioritizer.py:_identify_quick_wins /
+        # _identify_strategic_bets for the enforced thresholds). The page
         # previously re-derived "strategic bets" as *every* high-difficulty
         # opportunity, which both diverged from this definition and inflated the
         # number. These counts are brand-scoped (only this brand's latest run is
@@ -555,6 +590,14 @@ async def list_opportunities(
         quick_wins_count += len(analysis.quick_wins)
         strategic_bets_count += len(analysis.strategic_bets)
 
+        # Tag each opportunity with its TRUE curated category by membership in
+        # this run's curated quick_wins/strategic_bets lists (matched by gap_id) —
+        # NOT by raw implementation_difficulty. A high-difficulty opportunity is a
+        # "strategic_bet" only if it actually cleared the ROI/cost thresholds and
+        # so appears in the prioritizer's curated list.
+        qw_ids = {o.gap.gap_id for o in analysis.quick_wins}
+        sb_ids = {o.gap.gap_id for o in analysis.strategic_bets}
+
         for opp in analysis.prioritized_opportunities:
             # List-view filters (narrow the displayed opportunities only).
             if min_roi and opp.roi_estimate.expected_roi < min_roi:
@@ -562,12 +605,20 @@ async def list_opportunities(
             if difficulty and opp.implementation_difficulty != difficulty:
                 continue
 
-            all_opportunities.append(opp)
+            gid = opp.gap.gap_id
+            cat = "quick_win" if gid in qw_ids else "strategic_bet" if gid in sb_ids else "other"
+            all_opportunities.append(opp.model_copy(update={"category": cat}))
             total_value += opp.roi_estimate.estimated_revenue_impact
 
-    # Sort by ROI and limit
+    # Sort by ROI and limit. Never let `limit` drop a curated opportunity (a
+    # quick_win/strategic_bet that feeds the headline counts) in favour of an
+    # uncurated "other" — keep curated first, then fill with others, then re-sort.
     all_opportunities.sort(key=lambda x: x.roi_estimate.expected_roi, reverse=True)
-    all_opportunities = all_opportunities[:limit]
+    if len(all_opportunities) > limit:
+        curated = [o for o in all_opportunities if o.category != "other"]
+        others = [o for o in all_opportunities if o.category == "other"]
+        all_opportunities = (curated + others)[:limit]
+        all_opportunities.sort(key=lambda x: x.roi_estimate.expected_roi, reverse=True)
 
     return OpportunityListResponse(
         total_count=len(all_opportunities),
@@ -712,6 +763,8 @@ async def _execute_gap_analysis(
                 "metrics": request.metrics,
                 "segments": request.segments,
                 "brand": request.brand,
+                "indication": request.indication,
+                "label_segmentation": request.label_segmentation,
                 "time_period": request.time_period,
                 "gap_type": request.gap_type.value,
                 "min_gap_threshold": request.min_gap_threshold,
@@ -808,6 +861,10 @@ def _convert_opportunities(
                 attribution_level=roi_data.get("attribution_level", "partial"),
                 attribution_rate=roi_data.get("attribution_rate", 0.5),
                 confidence=roi_data.get("confidence", 0.7),
+                off_label=roi_data.get("off_label"),
+                off_label_reason=roi_data.get("off_label_reason"),
+                label_verdict=roi_data.get("label_verdict"),
+                label_evidence_confirmed=roi_data.get("label_evidence_confirmed"),
             )
 
             result.append(
