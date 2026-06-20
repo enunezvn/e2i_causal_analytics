@@ -126,7 +126,9 @@ def rich_graph_result() -> dict:
             }
         ],
         "n_segments_analyzed": 3,
-        "segmentation_method_used": "threshold",
+        # The hierarchical node emits the key 'segmentation_method' (NOT
+        # '..._used'); the route maps it onto response.segmentation_method_used.
+        "segmentation_method": "threshold",
         "uplift_by_segment": {"disease_severity_band": [{"segment": "high", "uplift": 0.5}]},
         "policy_recommendations": [],
         "key_insights": ["High severity drives the effect"],
@@ -336,3 +338,23 @@ async def test_execute_propagates_allowlist_400(rich_graph_result):
         with pytest.raises(HTTPException) as exc_info:
             await _execute_segment_analysis(bad_request)
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.unit
+def test_uplift_metrics_kept_when_auuc_is_zero():
+    """A real overall_auuc of 0.0 is a valid (if poor) uplift result and must be
+    surfaced — the prior `if not auuc` check dropped it as 'absent' (now wired,
+    so it matters). None / missing still drops the card honestly."""
+    from src.api.routes.segments import _convert_uplift_metrics
+
+    kept = _convert_uplift_metrics(
+        {
+            "overall_auuc": 0.0,
+            "overall_qini": 0.0,
+            "targeting_efficiency": 0.5,
+            "model_type_used": "random_forest",
+        }
+    )
+    assert kept is not None and kept.overall_auuc == 0.0
+    assert _convert_uplift_metrics({"overall_auuc": None}) is None
+    assert _convert_uplift_metrics({}) is None

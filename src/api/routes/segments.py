@@ -1381,8 +1381,13 @@ async def _load_segment_hte_frame(
         fetch_cols = list(dict.fromkeys([*select_cols, "brand"]))
 
     query = client.table(_SEGMENT_HTE_DATASET).select(",".join(fetch_cols))
-    # Provenance-aware: on this synthetic-showcase deployment this INCLUDES the
-    # is_synthetic=true gold-standard rows (do NOT add a local include flag).
+    # Provenance-aware, env-gated (mirrors causal.py's loader): apply_provenance_filter
+    # skips the is_synthetic=False predicate when deployment_includes_synthetic()
+    # (E2I_INCLUDE_SYNTHETIC) is set, so on this synthetic-gold showcase it LOADS the
+    # gold-standard rows. Deliberately NOT include_synthetic=True — hardcoding True
+    # would break the platform's env-reversibility (unset the env => the strict gate
+    # returns for EVERY reader). If the env is unset there is no gold-standard
+    # substrate and the fail-closed 503 below fires, same as every other causal page.
     query = apply_provenance_filter(query)
     if brand:
         query = query.eq("brand", brand)
@@ -1504,6 +1509,19 @@ async def _run_segment_analysis_task(
 
         logger.info(f"Segment analysis {analysis_id} completed successfully")
 
+    except HTTPException as e:
+        # Fail-closed reasons (the loader's 503 "no usable patient_journeys rows
+        # for <brand>" or the 400 disallowed-column) carry a SAFE, specific detail
+        # string — surface it so the FE tells the user WHY rather than a generic
+        # "internal error". (This task runs the load+graph async, so these
+        # HTTPExceptions land here rather than in the POST handler's response.)
+        logger.error(f"Segment analysis {analysis_id} failed: {e.detail}")
+        existing = await _analyses_store.get(analysis_id)
+        if existing is not None:
+            existing.status = AnalysisStatus.FAILED
+            detail = e.detail if isinstance(e.detail, str) else "Segment analysis failed."
+            existing.warnings.append(f"Segment analysis failed: {detail}")
+            await _analyses_store.set(analysis_id, existing)
     except Exception as e:
         logger.error(f"Segment analysis {analysis_id} failed: {e}")
         existing = await _analyses_store.get(analysis_id)
@@ -1633,7 +1651,10 @@ async def _execute_segment_analysis(
             # (NOT 'segment_heterogeneity_score', which is the TypedDict field).
             segment_heterogeneity=result.get("segment_heterogeneity"),
             n_segments_analyzed=result.get("n_segments_analyzed"),
-            segmentation_method_used=result.get("segmentation_method_used"),
+            # The hierarchical node emits the key 'segmentation_method' (the state
+            # field is named '..._used', but the node sets 'segmentation_method') —
+            # read the key actually emitted, else this is always None.
+            segmentation_method_used=result.get("segmentation_method"),
             overall_hierarchical_ate=result.get("overall_hierarchical_ate"),
             hierarchical_segment_results=result.get("hierarchical_segment_results"),
             uplift_by_segment=result.get("uplift_by_segment"),
@@ -1688,7 +1709,10 @@ def _convert_cate_results(
 
 def _convert_uplift_metrics(result: Dict[str, Any]) -> Optional[UpliftMetrics]:
     """Convert agent uplift output to API response format."""
-    if not result.get("overall_auuc"):
+    # is-None (NOT falsey): a real overall_auuc of 0.0 is a valid (if poor) uplift
+    # result and must be surfaced, not dropped. None means the uplift node produced
+    # no metrics (skipped / failed) -> honestly omit the card.
+    if result.get("overall_auuc") is None:
         return None
 
     return UpliftMetrics(
