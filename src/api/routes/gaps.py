@@ -553,7 +553,9 @@ async def list_opportunities(
     for analysis in latest_analyses:
         # Headline counts come from the prioritizer's OWN curated lists — its
         # authoritative definitions (quick win = low difficulty, ROI>1; strategic
-        # bet = high difficulty AND ROI>2 AND cost>$50k, capped at top 5). The page
+        # bet = high difficulty AND ROI>2 AND cost>$50k, capped at top 5; see
+        # src/agents/gap_analyzer/nodes/prioritizer.py:_identify_quick_wins /
+        # _identify_strategic_bets for the enforced thresholds). The page
         # previously re-derived "strategic bets" as *every* high-difficulty
         # opportunity, which both diverged from this definition and inflated the
         # number. These counts are brand-scoped (only this brand's latest run is
