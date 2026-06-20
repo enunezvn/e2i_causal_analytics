@@ -12,6 +12,7 @@ Categorization Criteria:
 V4.4: Added causal evidence filtering and confidence adjustments.
 """
 
+import logging
 import time
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
@@ -21,6 +22,8 @@ from ..state import (
     PrioritizedOpportunity,
     ROIEstimate,
 )
+
+logger = logging.getLogger(__name__)
 
 # V4.4: Causal evidence adjustment constants
 DIRECT_CAUSE_BOOST = 1.2  # Boost for direct causes
@@ -41,9 +44,16 @@ STRONG_INSTRUMENT_F_FLOOR = 10.0  # Staiger-Stock strong threshold; mirrors
 class PrioritizerNode:
     """Prioritize gaps by ROI and categorize into quick wins and strategic bets."""
 
-    def __init__(self):
-        """Initialize prioritizer."""
-        pass
+    def __init__(self, label_criteria_provider: Optional[object] = None):
+        """Initialize prioritizer.
+
+        Args:
+            label_criteria_provider: Injectable indicated-population provider for the
+                label-gater (tests pass a fixed one). Lazily defaulted to
+                ``LabelCriteriaProvider`` only when the gate is actually enabled — avoids
+                import cost / network at construction time when label_segmentation is off.
+        """
+        self._label_provider = label_criteria_provider
 
     async def execute(self, state: GapAnalyzerState) -> Dict[str, Any]:
         """Execute prioritization workflow.
@@ -134,17 +144,38 @@ class PrioritizerNode:
                 )
                 causal_evidence_warnings.extend(instrument_warnings)
 
-            # Sort by expected ROI (descending) - may have been adjusted by causal evidence
-            opportunities.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
+            # Label-gater (opt-in): resolve the indicated population once (fail-open) and
+            # annotate each opportunity's gap segment with its on/off-label verdict. None
+            # => gating is a no-op (existing behaviour). Annotation precedes the sort so
+            # off-label opportunities can be demoted below.
+            population = self._resolve_population(state)
+            if population is not None:
+                for opp in opportunities:
+                    self._apply_label_gate(opp["roi_estimate"], opp["gap"], population)
 
-            # Assign ranks
+            # Rank: on-label/indeterminate first, off-label opportunities demoted to the
+            # bottom (codex#7 — explicit partition-by-verdict; expected_roi order is
+            # PRESERVED within each partition, the ROI value itself is never tampered
+            # with). Ascending key (no reverse): off_label False sorts before True, and
+            # -expected_roi sorts higher ROI first. When the gate is off every off_label
+            # defaults False, so this reduces to the prior expected_roi-descending sort.
+            opportunities.sort(
+                key=lambda o: (
+                    o["roi_estimate"].get("off_label", False),
+                    -o["roi_estimate"]["expected_roi"],
+                )
+            )
+
+            # Assign ranks from the partitioned order.
             for rank, opp in enumerate(opportunities, start=1):
                 opp["rank"] = rank
 
             # Limit to max_opportunities
             prioritized_opportunities = opportunities[:max_opportunities]
 
-            # Categorize into quick wins and strategic bets
+            # Categorize into quick wins and strategic bets AFTER the partitioned sort so
+            # they respect the off-label demotion (the identify_* helpers re-sort by
+            # expected_roi within their already-filtered, already-demotion-aware subset).
             quick_wins = self._identify_quick_wins(opportunities)[:5]
             strategic_bets = self._identify_strategic_bets(opportunities)[:5]
 
@@ -177,6 +208,58 @@ class PrioritizerNode:
                 "prioritization_latency_ms": prioritization_latency_ms,
                 "status": "failed",
             }
+
+    def _resolve_population(self, state: GapAnalyzerState):
+        """Resolve the indicated population for the run, or None when the label-gater
+        is off / brand absent / lookup fails (fail-open — never breaks prioritization).
+
+        Indication: ``state["indication"]`` if present, else None (the provider falls
+        back to the brand's primary indication — gap_analyzer loads business_metrics, not
+        patient_journeys, so diagnosis-based indication resolution is not available here).
+        """
+        if not state.get("label_segmentation") or not state.get("brand"):
+            return None
+        provider = self._label_provider
+        if provider is None:
+            from src.services.clinical_context.label_criteria_provider import (
+                LabelCriteriaProvider,
+            )
+
+            provider = LabelCriteriaProvider()
+            self._label_provider = provider
+        try:
+            return provider.derive(state["brand"], state.get("indication"))  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "label-gater: indicated-population lookup failed; skipping gate",
+                extra={"node": "prioritizer", "brand": state.get("brand"), "error": str(exc)},
+            )
+            return None
+
+    def _apply_label_gate(self, roi_estimate: ROIEstimate, gap: PerformanceGap, population) -> None:
+        """Annotate an opportunity's ROI estimate with its label verdict (fail-open, in
+        place). ``off_label`` is set ONLY for a label-evidenced violation; the
+        opportunity is surfaced either way (rank demotion, not deletion; ROI untouched).
+        """
+        try:
+            from src.services.clinical_context.label_gate import (
+                descriptor_from_segment,
+                evaluate_segment,
+            )
+
+            descriptor = descriptor_from_segment(gap["segment"], gap["segment_value"])
+            verdict = evaluate_segment([descriptor], population)
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "label-gater: segment gate failed; leaving opportunity unflagged",
+                extra={"node": "prioritizer", "error": str(exc)},
+            )
+            return
+        roi_estimate["label_verdict"] = verdict.verdict
+        roi_estimate["off_label"] = verdict.verdict == "off_label"
+        roi_estimate["label_evidence_confirmed"] = verdict.confirmed_by_label
+        if verdict.reason:
+            roi_estimate["off_label_reason"] = verdict.reason
 
     def _assess_difficulty(
         self, gap: PerformanceGap, roi_estimate: ROIEstimate
@@ -343,8 +426,16 @@ class PrioritizerNode:
             and opp["roi_estimate"]["expected_roi"] > 1.0
         ]
 
-        # Sort by ROI
-        quick_wins.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
+        # Sort by ROI, but keep off-label opportunities demoted below on-label ones so
+        # the quick-wins list respects the same partition as prioritized_opportunities
+        # (off_label defaults False => identical to the prior ROI-descending sort when
+        # the label-gater is off).
+        quick_wins.sort(
+            key=lambda o: (
+                o["roi_estimate"].get("off_label", False),
+                -o["roi_estimate"]["expected_roi"],
+            )
+        )
 
         return quick_wins
 
@@ -372,8 +463,16 @@ class PrioritizerNode:
             and opp["roi_estimate"]["estimated_cost_to_close"] > 50000
         ]
 
-        # Sort by ROI
-        strategic_bets.sort(key=lambda o: o["roi_estimate"]["expected_roi"], reverse=True)
+        # Sort by ROI, but keep off-label opportunities demoted below on-label ones so
+        # the strategic-bets list respects the same partition as prioritized_opportunities
+        # (off_label defaults False => identical to the prior ROI-descending sort when
+        # the label-gater is off).
+        strategic_bets.sort(
+            key=lambda o: (
+                o["roi_estimate"].get("off_label", False),
+                -o["roi_estimate"]["expected_roi"],
+            )
+        )
 
         return strategic_bets
 

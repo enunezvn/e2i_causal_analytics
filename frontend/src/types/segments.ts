@@ -161,6 +161,12 @@ export interface SegmentProfile {
 /**
  * Treatment allocation recommendation
  */
+/**
+ * On-/off-label verdict for a recommendation, from the label-segmentation gater.
+ * Populated only when the request enabled `label_segmentation`; absent otherwise.
+ */
+export type LabelVerdict = 'on_label' | 'off_label' | 'mixed' | 'indeterminate';
+
 export interface PolicyRecommendation {
   /** Segment identifier */
   segment: string;
@@ -172,6 +178,18 @@ export interface PolicyRecommendation {
   expected_incremental_outcome: number;
   /** Recommendation confidence (0-1) */
   confidence: number;
+  /**
+   * Whether this segment is off-label (population/use outside the FDA label).
+   * Off-label items are de-prioritized (sunk to the bottom of the ranking) by
+   * the backend. Populated only when label_segmentation was enabled.
+   */
+  off_label?: boolean;
+  /** Human-readable reason the segment was judged off-label. */
+  off_label_reason?: string;
+  /** Structured verdict: on_label | off_label | mixed | indeterminate. */
+  label_verdict?: LabelVerdict;
+  /** True when the verdict was confirmed against the FDA drug label. */
+  label_evidence_confirmed?: boolean;
 }
 
 /**

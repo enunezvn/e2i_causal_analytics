@@ -106,6 +106,17 @@ class RunGapAnalysisRequest(BaseModel):
         default="current_quarter",
         description="Analysis period (e.g., 'current_quarter', '2024-Q3')",
     )
+    indication: Optional[str] = Field(
+        default=None,
+        description="Indication scope for the label lookup (defaults to the brand's primary)",
+    )
+    label_segmentation: bool = Field(
+        default=False,
+        description=(
+            "Opt-in label-gater: flag/de-prioritize bets whose segment is outside the "
+            "FDA-indicated population. Default off = unchanged behaviour."
+        ),
+    )
     gap_type: GapType = Field(
         default=GapType.ALL,
         description="Type of gaps to detect",
@@ -187,6 +198,21 @@ class ROIEstimate(BaseModel):
     attribution_level: str = Field(..., description="Attribution level")
     attribution_rate: float = Field(..., description="Attribution rate (0-1)")
     confidence: float = Field(..., description="Estimate confidence (0-1)")
+    # Label-gater (codex#4 — carried end-to-end so the UI can surface it). Optional:
+    # only populated when label_segmentation is enabled.
+    off_label: Optional[bool] = Field(
+        default=None,
+        description="True if the bet's segment is outside the FDA-indicated population",
+    )
+    off_label_reason: Optional[str] = Field(
+        default=None, description="Why the bet is off-label (label-evidenced violation)"
+    )
+    label_verdict: Optional[str] = Field(
+        default=None, description="on_label | off_label | mixed | indeterminate"
+    )
+    label_evidence_confirmed: Optional[bool] = Field(
+        default=None, description="Whether the verdict is confirmed by the live FDA label"
+    )
 
 
 class PrioritizedOpportunity(BaseModel):
@@ -712,6 +738,8 @@ async def _execute_gap_analysis(
                 "metrics": request.metrics,
                 "segments": request.segments,
                 "brand": request.brand,
+                "indication": request.indication,
+                "label_segmentation": request.label_segmentation,
                 "time_period": request.time_period,
                 "gap_type": request.gap_type.value,
                 "min_gap_threshold": request.min_gap_threshold,
@@ -808,6 +836,10 @@ def _convert_opportunities(
                 attribution_level=roi_data.get("attribution_level", "partial"),
                 attribution_rate=roi_data.get("attribution_rate", 0.5),
                 confidence=roi_data.get("confidence", 0.7),
+                off_label=roi_data.get("off_label"),
+                off_label_reason=roi_data.get("off_label_reason"),
+                label_verdict=roi_data.get("label_verdict"),
+                label_evidence_confirmed=roi_data.get("label_evidence_confirmed"),
             )
 
             result.append(

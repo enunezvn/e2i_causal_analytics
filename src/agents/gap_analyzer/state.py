@@ -92,6 +92,15 @@ class ROIEstimate(TypedDict):
     instrument_adjustment_factor: NotRequired[float]
     instrument_adjustment_reason: NotRequired[Optional[str]]
 
+    # Label-gater: written by PrioritizerNode when label_segmentation is enabled and a
+    # brand indicated-population is resolvable. ``off_label`` is True ONLY for a
+    # label-evidenced violation; off-label opportunities are RANK-DEMOTED (sink below
+    # on-label), never deleted, and the ROI values above are NEVER altered (rank-only).
+    off_label: NotRequired[bool]
+    off_label_reason: NotRequired[str]
+    label_verdict: NotRequired[str]  # on_label | off_label | mixed | indeterminate
+    label_evidence_confirmed: NotRequired[bool]
+
 
 class InstrumentSpec(TypedDict):
     """#357 P-2 producer input: per-feature instrument specification for the IV first stage.
@@ -160,6 +169,15 @@ class GapAnalyzerState(TypedDict):
     # input: gap_detector resolves a per-run connector pair honoring this flag.
     # Absent => the agent's constructor flag governs (backward compatible).
     include_synthetic: NotRequired[bool]
+
+    # Label-gater (opt-in): when ``label_segmentation`` is truthy AND ``brand`` is
+    # present, PrioritizerNode resolves the brand's FDA-indicated population and flags
+    # opportunities whose gap segment falls outside it as off_label (rank-demoted, ROI
+    # untouched). Absent/falsey => unchanged behaviour (no gating). ``indication``
+    # scopes the lookup; absent => the brand's primary indication (gap_analyzer loads
+    # business_metrics, not patient_journeys, so diagnosis-based resolution is N/A here).
+    indication: NotRequired[str]
+    label_segmentation: NotRequired[bool]
 
     # === UPLIFT CONTEXT (from heterogeneous_optimizer, optional) ===
     # When uplift analysis is available, it enhances ROI calculations

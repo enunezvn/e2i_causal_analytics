@@ -1,0 +1,53 @@
+{
+  "indications_and_usage": [
+    "1 INDICATIONS AND USAGE FABHALTA is a complement factor B inhibitor, indicated for: the treatment of adults with paroxysmal nocturnal hemoglobinuria (PNH). ( 1.1 ) the reduction of proteinuria in adults with primary immunoglobulin A nephropathy (IgAN) at risk of rapid disease progression, generally a urine protein-to-creatinine ratio (UPCR) ≥ 1.5 g/g. ( 1.2 ) This indication is approved under accelerated approval based on reduction of proteinuria. It has not been established whether FABHALTA slows kidney function decline in patients with IgAN. Continued approval for this indication may be contingent upon verification and description of clinical benefit in a confirmatory clinical trial. the treatment of adults with complement 3 glomerulopathy (C3G), to reduce proteinuria. ( 1.3 ) 1.1 Paroxysmal Nocturnal Hemoglobinuria FABHALTA is indicated for the treatment of adults with paroxysmal nocturnal hemoglobinuria (PNH). 1.2 Immunoglobulin A Nephropathy FABHALTA is indicated to reduce proteinuria in adults with primary immunoglobulin A nephropathy (IgAN) at risk of rapid disease progression, generally a urine protein-to-creatinine ratio (UPCR) ≥ 1.5 g/g. This indication is approved under accelerated approval based on reduction of proteinuria. It has not been established whether FABHALTA slows kidney function decline in patients with IgAN. Continued approval for this indication may be contingent upon verification and description of clinical benefit in a confirmatory clinical trial. 1.3 Complement 3 Glomerulopathy FABHALTA is indicated for the treatment of adults with complement 3 glomerulopathy (C3G), to reduce proteinuria."
+  ],
+  "boxed_warning": [
+    "WARNING: SERIOUS INFECTIONS CAUSED BY ENCAPSULATED BACTERIA FABHALTA, a complement inhibitor, increases the risk of serious infections, especially those caused by encapsulated bacteria, such as Streptococcus pneumoniae, Neisseria meningitidis, and Haemophilus influenzae type b [see Warnings and Precautions (5.1)] . Life-threatening and fatal infections with encapsulated bacteria have occurred in patients treated with complement inhibitors. These infections may become rapidly life-threatening or fatal if not recognized and treated early. Complete or update vaccination for encapsulated bacteria at least 2 weeks prior to the first dose of FABHALTA, unless the risks of delaying therapy with FABHALTA outweigh the risk of developing a serious infection. Comply with the most current Advisory Committee on Immunization Practices (ACIP) recommendations for vaccinations against encapsulated bacteria in patients receiving a complement inhibitor. See Warnings and Precautions (5.1) for additional guidance on the management of the risk of serious infections caused by encapsulated bacteria. Patients receiving FABHALTA are at increased risk for invasive disease caused by encapsulated bacteria, even if they develop antibodies following vaccination. Monitor patients for early signs and symptoms of serious infections and evaluate immediately if infection is suspected. Because of the risk of serious infections caused by encapsulated bacteria, FABHALTA is available only through a restricted program under a Risk Evaluation and Mitigation Strategy (REMS) called the FABHALTA REMS [see Warnings and Precautions (5.2)] . WARNING: SERIOUS INFECTIONS CAUSED BY ENCAPSULATED BACTERIA See full prescribing information for complete boxed warning. FABHALTA increases the risk of serious and life-threatening infections caused by encapsulated bacteria, including Streptococcus pneumoniae, Neisseria meningitidis, and Haemophilus influenzae type b. Complete or update vaccination for encapsulated bacteria at least 2 weeks prior to the first dose of FABHALTA, unless the risks of delaying FABHALTA outweigh the risk of developing a serious infection. Comply with the most current Advisory Committee on Immunization Practices (ACIP) recommendations for vaccinations against encapsulated bacteria in patients receiving a complement inhibitor. ( 5.1 ) Patients receiving FABHALTA are at increased risk for invasive disease caused by encapsulated bacteria, even if they develop antibodies following vaccination. Monitor patients for early signs and symptoms of serious infections and evaluate immediately if infection is suspected. ( 5.1 ) FABHALTA is available only through a restricted program under a Risk Evaluation and Mitigation Strategy (REMS) called FABHALTA REMS. ( 5.2 )"
+  ],
+  "openfda": {
+    "application_number": [
+      "NDA218276"
+    ],
+    "brand_name": [
+      "FABHALTA"
+    ],
+    "generic_name": [
+      "IPTACOPAN"
+    ],
+    "manufacturer_name": [
+      "Novartis Pharmaceuticals Corporation"
+    ],
+    "product_ndc": [
+      "0078-1189"
+    ],
+    "product_type": [
+      "HUMAN PRESCRIPTION DRUG"
+    ],
+    "route": [
+      "ORAL"
+    ],
+    "substance_name": [
+      "IPTACOPAN HYDROCHLORIDE"
+    ],
+    "rxcui": [
+      "2671074",
+      "2671080"
+    ],
+    "spl_id": [
+      "9428b7b3-bd27-4b4c-bfa9-01217f4d97ab"
+    ],
+    "spl_set_id": [
+      "a76b5845-6e21-4d3b-ad07-cd8df1b60bee"
+    ],
+    "package_ndc": [
+      "0078-1189-20"
+    ],
+    "is_original_packager": [
+      true
+    ],
+    "unii": [
+      "XW5CK7C6YH"
+    ]
+  }
+}

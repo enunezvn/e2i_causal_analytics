@@ -155,6 +155,26 @@ class CATEEstimatorNode:
             from econml.dml import CausalForestDML
             from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
+            # Label-gater (opt-in, fail-open): augment segment_vars with the brand's
+            # label-relevant categorical columns so on/off-label bands form (codex#3).
+            # Done BEFORE the load so the columns are fetched; _calculate_cate_by_segment
+            # guards any column missing from the frame.
+            if state.get("label_segmentation") and state.get("brand"):
+                try:
+                    from src.services.clinical_context.label_criteria_provider import (
+                        label_segment_columns,
+                    )
+
+                    extra = label_segment_columns(state["brand"], state.get("indication"))
+                    seg_vars = list(state.get("segment_vars") or [])
+                    for col in extra:
+                        if col not in seg_vars:
+                            seg_vars.append(col)
+                    if seg_vars != (state.get("segment_vars") or []):
+                        state = {**state, "segment_vars": seg_vars}
+                except Exception as exc:  # noqa: BLE001 — fail-open
+                    logger.warning("label-gater: segment_vars augmentation skipped: %s", exc)
+
             # Fetch data
             df = await self._fetch_data(state)
 
@@ -166,6 +186,25 @@ class CATEEstimatorNode:
                     ],
                     "status": "failed",
                 }
+
+            # Label-gater: resolve the indication from the frame's diagnosis distribution
+            # (codex#2 — no silent default) and carry it forward for the policy_learner gate.
+            if (
+                state.get("label_segmentation")
+                and state.get("brand")
+                and not state.get("indication")
+                and "diagnosis_code" in df.columns
+            ):
+                try:
+                    from src.services.clinical_context.label_criteria_provider import (
+                        resolve_indication,
+                    )
+
+                    resolved = resolve_indication(state["brand"], df["diagnosis_code"].tolist())
+                    if resolved:
+                        state = {**state, "indication": resolved}
+                except Exception as exc:  # noqa: BLE001 — fail-open
+                    logger.warning("label-gater: indication resolution skipped: %s", exc)
 
             # Prepare data
             #
@@ -705,6 +744,15 @@ class CATEEstimatorNode:
         X_all = self._encode_features(df[effect_modifiers])
 
         for segment_var in segment_vars:
+            # Guard: a label-augmented segment column may be absent from the frame
+            # (e.g. not loaded for this data_source); skip rather than KeyError.
+            if segment_var not in df.columns:
+                logger.warning(
+                    "Segment column %r absent from frame; skipping",
+                    segment_var,
+                    extra={"node": "cate_estimator"},
+                )
+                continue
             segment_results = []
 
             for segment_value in df[segment_var].unique():

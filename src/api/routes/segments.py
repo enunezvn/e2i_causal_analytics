@@ -157,6 +157,22 @@ class RunSegmentAnalysisRequest(BaseModel):
             "any value supplied here is overridden."
         ),
     )
+    brand: Optional[str] = Field(
+        default=None,
+        description="Brand — required to enable the label-gater (indicated-population guardrail)",
+    )
+    indication: Optional[str] = Field(
+        default=None,
+        description="Indication scope for the label lookup; resolved from the data when omitted",
+    )
+    label_segmentation: bool = Field(
+        default=False,
+        description=(
+            "Opt-in label-gater: augment segment_vars with the brand's label-relevant "
+            "columns and flag/de-prioritize segments outside the FDA-indicated population. "
+            "Requires brand. Default off = unchanged behaviour."
+        ),
+    )
     confounders: Optional[List[str]] = Field(
         default=None,
         description=(
@@ -266,6 +282,20 @@ class PolicyRecommendation(BaseModel):
         ..., description="Expected incremental outcome from change"
     )
     confidence: float = Field(..., description="Recommendation confidence (0-1)")
+    # Label-gater (codex#4 — carried end-to-end so the UI can surface it). Optional:
+    # only populated when label_segmentation is enabled.
+    off_label: Optional[bool] = Field(
+        default=None, description="True if the segment falls outside the FDA-indicated population"
+    )
+    off_label_reason: Optional[str] = Field(
+        default=None, description="Why the segment is off-label (label-evidenced violation)"
+    )
+    label_verdict: Optional[str] = Field(
+        default=None, description="on_label | off_label | mixed | indeterminate"
+    )
+    label_evidence_confirmed: Optional[bool] = Field(
+        default=None, description="Whether the verdict is confirmed by the live FDA label"
+    )
 
 
 class UpliftMetrics(BaseModel):
@@ -1598,6 +1628,11 @@ async def _execute_segment_analysis(
                 "min_samples_leaf": request.min_samples_leaf,
                 "significance_level": request.significance_level,
                 "top_segments_count": request.top_segments_count,
+                # Label-gater (opt-in): brand + indication + flag thread through to
+                # cate_estimator (segment augmentation) and policy_learner (the gate).
+                "brand": request.brand,
+                "indication": request.indication,
+                "label_segmentation": request.label_segmentation,
                 "status": "pending",
                 "errors": [],
                 "warnings": [],
@@ -1760,6 +1795,10 @@ def _convert_policies(
                     recommended_treatment_rate=policy.get("recommended_treatment_rate", 0.0),
                     expected_incremental_outcome=policy.get("expected_incremental_outcome", 0.0),
                     confidence=policy.get("confidence", 0.0),
+                    off_label=policy.get("off_label"),
+                    off_label_reason=policy.get("off_label_reason"),
+                    label_verdict=policy.get("label_verdict"),
+                    label_evidence_confirmed=policy.get("label_evidence_confirmed"),
                 )
             )
         except Exception as e:
