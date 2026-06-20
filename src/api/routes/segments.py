@@ -112,10 +112,12 @@ class RunSegmentAnalysisRequest(BaseModel):
         default=None, description="Variables that modify treatment effect"
     )
     brand: Optional[str] = Field(
-        default=None, description="Brand — required to enable the label-gater (indicated-population guardrail)"
+        default=None,
+        description="Brand — required to enable the label-gater (indicated-population guardrail)",
     )
     indication: Optional[str] = Field(
-        default=None, description="Indication scope for the label lookup; resolved from the data when omitted"
+        default=None,
+        description="Indication scope for the label lookup; resolved from the data when omitted",
     )
     label_segmentation: bool = Field(
         default=False,

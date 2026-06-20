@@ -91,7 +91,9 @@ def parse_segment_value(raw: object) -> object:
         return s
 
 
-def descriptor_from_segment(field: str, segment_value: object, source: str = "") -> "SegmentDescriptor":
+def descriptor_from_segment(
+    field: str, segment_value: object, source: str = ""
+) -> "SegmentDescriptor":
     """Build a scalar SegmentDescriptor from a (column, value) segment. (CATE/gap
     segments are single-value, not bands; banding callers construct SegmentDescriptor
     directly with low/high.)"""
@@ -256,4 +258,6 @@ def evaluate_segment(
         )
     if evidenced_satisfy:
         return GateVerdict("on_label", [], "all intersecting label criteria satisfied", True)
-    return GateVerdict("indeterminate", [], "segment bears on no indicated-population criterion", False)
+    return GateVerdict(
+        "indeterminate", [], "segment bears on no indicated-population criterion", False
+    )

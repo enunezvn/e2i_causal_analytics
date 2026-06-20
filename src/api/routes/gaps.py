@@ -107,7 +107,8 @@ class RunGapAnalysisRequest(BaseModel):
         description="Analysis period (e.g., 'current_quarter', '2024-Q3')",
     )
     indication: Optional[str] = Field(
-        default=None, description="Indication scope for the label lookup (defaults to the brand's primary)"
+        default=None,
+        description="Indication scope for the label lookup (defaults to the brand's primary)",
     )
     label_segmentation: bool = Field(
         default=False,
@@ -200,7 +201,8 @@ class ROIEstimate(BaseModel):
     # Label-gater (codex#4 — carried end-to-end so the UI can surface it). Optional:
     # only populated when label_segmentation is enabled.
     off_label: Optional[bool] = Field(
-        default=None, description="True if the bet's segment is outside the FDA-indicated population"
+        default=None,
+        description="True if the bet's segment is outside the FDA-indicated population",
     )
     off_label_reason: Optional[str] = Field(
         default=None, description="Why the bet is off-label (label-evidenced violation)"

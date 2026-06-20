@@ -748,7 +748,8 @@ class CATEEstimatorNode:
             # (e.g. not loaded for this data_source); skip rather than KeyError.
             if segment_var not in df.columns:
                 logger.warning(
-                    "Segment column %r absent from frame; skipping", segment_var,
+                    "Segment column %r absent from frame; skipping",
+                    segment_var,
                     extra={"node": "cate_estimator"},
                 )
                 continue

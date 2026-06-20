@@ -44,7 +44,10 @@ _FIELD_TOKENS: dict[str, List[str]] = {
         r"antihistamine.{0,40}(treatment|therapy)",
     ],
     "hr_status": [r"hr[- ]?positive", r"hormone receptor.{0,14}positive"],
-    "her2_status": [r"her2.{0,4}negative", r"human epidermal growth factor receptor 2.{0,8}negative"],
+    "her2_status": [
+        r"her2.{0,4}negative",
+        r"human epidermal growth factor receptor 2.{0,8}negative",
+    ],
     "disease_stage": [r"advanced", r"metastatic", r"stage ii", r"stage iii"],
     "ecog_performance_status": [r"\becog\b", r"performance status"],
     "urticaria_severity_uas7": [r"uas7", r"urticaria activity score", r"moderate.to.severe"],

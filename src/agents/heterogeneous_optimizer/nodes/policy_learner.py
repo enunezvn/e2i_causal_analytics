@@ -246,7 +246,9 @@ class PolicyLearnerNode:
             )
             return None
 
-    def _apply_label_gate(self, rec: PolicyRecommendation, result: Dict[str, Any], population) -> None:
+    def _apply_label_gate(
+        self, rec: PolicyRecommendation, result: Dict[str, Any], population
+    ) -> None:
         """Annotate a recommendation with its label verdict (fail-open, in place).
         off_label is set ONLY for a label-evidenced violation; the recommendation is
         surfaced either way (rank demotion, not deletion; outcome value untouched)."""

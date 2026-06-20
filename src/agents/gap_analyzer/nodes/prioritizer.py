@@ -160,7 +160,10 @@ class PrioritizerNode:
             # -expected_roi sorts higher ROI first. When the gate is off every off_label
             # defaults False, so this reduces to the prior expected_roi-descending sort.
             opportunities.sort(
-                key=lambda o: (o["roi_estimate"].get("off_label", False), -o["roi_estimate"]["expected_roi"])
+                key=lambda o: (
+                    o["roi_estimate"].get("off_label", False),
+                    -o["roi_estimate"]["expected_roi"],
+                )
             )
 
             # Assign ranks from the partitioned order.
@@ -233,9 +236,7 @@ class PrioritizerNode:
             )
             return None
 
-    def _apply_label_gate(
-        self, roi_estimate: ROIEstimate, gap: PerformanceGap, population
-    ) -> None:
+    def _apply_label_gate(self, roi_estimate: ROIEstimate, gap: PerformanceGap, population) -> None:
         """Annotate an opportunity's ROI estimate with its label verdict (fail-open, in
         place). ``off_label`` is set ONLY for a label-evidenced violation; the
         opportunity is surfaced either way (rank demotion, not deletion; ROI untouched).
@@ -430,7 +431,10 @@ class PrioritizerNode:
         # (off_label defaults False => identical to the prior ROI-descending sort when
         # the label-gater is off).
         quick_wins.sort(
-            key=lambda o: (o["roi_estimate"].get("off_label", False), -o["roi_estimate"]["expected_roi"])
+            key=lambda o: (
+                o["roi_estimate"].get("off_label", False),
+                -o["roi_estimate"]["expected_roi"],
+            )
         )
 
         return quick_wins
@@ -464,7 +468,10 @@ class PrioritizerNode:
         # (off_label defaults False => identical to the prior ROI-descending sort when
         # the label-gater is off).
         strategic_bets.sort(
-            key=lambda o: (o["roi_estimate"].get("off_label", False), -o["roi_estimate"]["expected_roi"])
+            key=lambda o: (
+                o["roi_estimate"].get("off_label", False),
+                -o["roi_estimate"]["expected_roi"],
+            )
         )
 
         return strategic_bets

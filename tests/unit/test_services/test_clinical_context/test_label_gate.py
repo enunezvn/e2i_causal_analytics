@@ -29,8 +29,13 @@ def _pop(*gate_criteria, brand="Remibrutinib", indication="csu", source="openfda
 
 def _gc(field, op, value, *, evidenced, ctype=CriterionType.INCLUSION):
     return GateCriterion(
-        criterion=Criterion(field=field, operator=op, value=value, criterion_type=ctype,
-                            clinical_rationale=f"{field} per label"),
+        criterion=Criterion(
+            field=field,
+            operator=op,
+            value=value,
+            criterion_type=ctype,
+            clinical_rationale=f"{field} per label",
+        ),
         label_evidenced=evidenced,
         label_evidence=("…label snippet…" if evidenced else None),
     )
@@ -68,8 +73,11 @@ def test_low_uas7_band_is_indeterminate_when_criterion_unconfirmed():
 @pytest.mark.unit
 def test_hr_negative_segment_is_off_label_for_kisqali():
     # Kisqali: "HR-positive" IS in the label -> hr_status==positive is evidenced.
-    pop = _pop(_gc("hr_status", Operator.EQUAL, "positive", evidenced=True),
-               brand="Kisqali", indication="hr_her2_bc")
+    pop = _pop(
+        _gc("hr_status", Operator.EQUAL, "positive", evidenced=True),
+        brand="Kisqali",
+        indication="hr_her2_bc",
+    )
     v = evaluate_segment([SegmentDescriptor(field="hr_status", value="negative")], pop)
     assert v.verdict == "off_label"
 
@@ -85,24 +93,39 @@ def test_region_segment_not_a_criterion_is_indeterminate():
 def test_band_straddling_evidenced_threshold_is_mixed():
     # An evidenced continuous threshold (proteinuria>=1.5, IgAN "UPCR >= 1.5 g/g")
     # with a band [1.0, 2.0] straddling 1.5 -> mixed.
-    pop = _pop(_gc("proteinuria_g_day", Operator.GREATER_EQUAL, 1.5, evidenced=True),
-               brand="Fabhalta", indication="igan")
+    pop = _pop(
+        _gc("proteinuria_g_day", Operator.GREATER_EQUAL, 1.5, evidenced=True),
+        brand="Fabhalta",
+        indication="igan",
+    )
     v = evaluate_segment([SegmentDescriptor(field="proteinuria_g_day", low=1.0, high=2.0)], pop)
     assert v.verdict == "mixed"
 
 
 @pytest.mark.unit
 def test_band_fully_below_evidenced_threshold_is_off_label():
-    pop = _pop(_gc("proteinuria_g_day", Operator.GREATER_EQUAL, 1.5, evidenced=True),
-               brand="Fabhalta", indication="igan")
+    pop = _pop(
+        _gc("proteinuria_g_day", Operator.GREATER_EQUAL, 1.5, evidenced=True),
+        brand="Fabhalta",
+        indication="igan",
+    )
     v = evaluate_segment([SegmentDescriptor(field="proteinuria_g_day", low=0.2, high=1.0)], pop)
     assert v.verdict == "off_label"
 
 
 @pytest.mark.unit
 def test_exclusion_criterion_match_is_off_label():
-    pop = _pop(_gc("active_serious_infection", Operator.EQUAL, True, evidenced=True,
-                   ctype=CriterionType.EXCLUSION), brand="Fabhalta", indication="pnh")
+    pop = _pop(
+        _gc(
+            "active_serious_infection",
+            Operator.EQUAL,
+            True,
+            evidenced=True,
+            ctype=CriterionType.EXCLUSION,
+        ),
+        brand="Fabhalta",
+        indication="pnh",
+    )
     v = evaluate_segment([SegmentDescriptor(field="active_serious_infection", value=True)], pop)
     assert v.verdict == "off_label"
 
@@ -116,8 +139,10 @@ def test_unavailable_population_is_indeterminate():
 
 @pytest.mark.unit
 def test_multi_field_segment_any_off_label_wins():
-    pop = _pop(_gc("prior_antihistamine_therapy", Operator.EQUAL, True, evidenced=True),
-               _gc("age_at_diagnosis", Operator.GREATER_EQUAL, 18, evidenced=True))
+    pop = _pop(
+        _gc("prior_antihistamine_therapy", Operator.EQUAL, True, evidenced=True),
+        _gc("age_at_diagnosis", Operator.GREATER_EQUAL, 18, evidenced=True),
+    )
     v = evaluate_segment(
         [
             SegmentDescriptor(field="age_at_diagnosis", value=40),  # on
