@@ -1,7 +1,9 @@
 # tests/unit/test_services/test_time_window.py
 from datetime import datetime, timezone
+
 import pytest
-from src.services.time_window import parse_window, Window, WindowParseError
+
+from src.services.time_window import WindowParseError, parse_window
 
 NOW = datetime(2026, 6, 20, tzinfo=timezone.utc)
 

@@ -1,5 +1,8 @@
 # tests/unit/test_kpi/test_synthetic_mode_windowed.py
-import importlib, src.kpi.synthetic_mode as sm
+import importlib
+
+import src.kpi.synthetic_mode as sm
+
 
 def _reload(monkeypatch, flag):
     monkeypatch.setenv("E2I_KPI_INCLUDE_SYNTHETIC", "1" if flag else "0")

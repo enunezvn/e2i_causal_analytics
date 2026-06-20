@@ -1,4 +1,5 @@
 import pytest
+
 from src.kpi.calculators.business_impact import BusinessImpactCalculator
 
 

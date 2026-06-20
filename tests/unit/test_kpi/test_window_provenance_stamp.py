@@ -12,7 +12,6 @@ We test the pure helper directly, then assert calculate() routes through it for
 both a clean and a not_applicable KPI.
 """
 
-from typing import Any
 
 import pytest
 
