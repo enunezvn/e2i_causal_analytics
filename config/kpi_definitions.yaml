@@ -221,7 +221,7 @@ ws1_data_quality:
     note: "V3: New etl_pipeline_metrics table"
 
 # ═══════════════════════════════════════════════════════════════════
-# WS1: MODEL PERFORMANCE (9 KPIs)
+# WS1: MODEL PERFORMANCE (8 KPIs)
 # ═══════════════════════════════════════════════════════════════════
 
 ws1_model_performance:
@@ -354,24 +354,6 @@ ws1_model_performance:
       warning: 0.80
       critical: 0.60
     frequency: daily
-    workstream: WS1
-    
-  fairness_gap_recall:
-    id: "WS1-MP-008"
-    name: "Fairness Gap (ΔRecall)"
-    definition: "Max difference in recall across protected groups"
-    formula: "max_group(recall) - min_group(recall)"
-    calculation_type: direct
-    tables:
-      - ml_predictions
-    columns:
-      - ml_predictions.fairness_metrics  # JSONB
-    view: null
-    threshold:
-      target: 0.05
-      warning: 0.10
-      critical: 0.20
-    frequency: weekly
     workstream: WS1
     
   feature_drift_psi:

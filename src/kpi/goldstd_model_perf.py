@@ -21,8 +21,9 @@ GOLDSTD_SUFFIX = "_goldstd_lr_v1"
 # Holdout scalar metrics emitted by the gold-standard eval scorer
 # (src/mlops/gold_standard_eval/scorer.py:score). accuracy/precision/recall/f1/
 # auc_roc are the originals; pr_auc/brier_score/calibration_slope were added so
-# WS1-MP-002/005/006 compute per-brand too. Fairness (ΔRecall) + recall@k remain
-# absent — fairness needs a designated protected attribute (separate work).
+# WS1-MP-002/005/006 compute per-brand too. Recall@k (WS1-MP-004) stays
+# MLflow-only; the Fairness Gap KPI (WS1-MP-008) was removed (it needed a
+# designated protected attribute the eval does not carry).
 GOLDSTD_METRICS = (
     "accuracy",
     "precision",

@@ -9,7 +9,6 @@ Implements calculators for model performance metrics:
 - Brier Score
 - Calibration Slope
 - SHAP Coverage
-- Fairness Gap
 - Feature Drift (PSI)
 
 Unavailability discipline (#439, F-007-PhaseB)
@@ -106,7 +105,6 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             "WS1-MP-005": self._calc_brier_score,
             "WS1-MP-006": self._calc_calibration_slope,
             "WS1-MP-007": self._calc_shap_coverage,
-            "WS1-MP-008": self._calc_fairness_gap,
             "WS1-MP-009": self._calc_feature_drift,
         }
 
@@ -120,7 +118,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         try:
             value, error = calc_func(context)
             # Determine if lower is better
-            lower_is_better = kpi.id in {"WS1-MP-005", "WS1-MP-008", "WS1-MP-009"}
+            lower_is_better = kpi.id in {"WS1-MP-005", "WS1-MP-009"}
             status = self._evaluate_status(kpi, value, lower_is_better)
             return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
@@ -254,11 +252,6 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             return gs, None
         model_name = context.get("model_name", "default_model")
         return self._get_metric_from_mlflow(model_name, "calibration_slope")
-
-    def _calc_fairness_gap(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
-        """Calculate WS1-MP-008: Fairness Gap (lower is better)."""
-        model_name = context.get("model_name", "default_model")
-        return self._get_metric_from_mlflow(model_name, "fairness_gap")
 
     # ------------------------------------------------------------------ SQL-backed / hybrid metrics
 

@@ -153,20 +153,6 @@ def shap_coverage_kpi():
 
 
 @pytest.fixture
-def fairness_gap_kpi():
-    """Lower-is-better metric."""
-    return KPIMetadata(
-        id="WS1-MP-008",
-        name="Fairness Gap",
-        definition="Max delta-recall across groups",
-        formula="custom",
-        calculation_type=CalculationType.DIRECT,
-        workstream=Workstream.WS1_MODEL_PERFORMANCE,
-        threshold=KPIThreshold(target=0.05, warning=0.10, critical=0.20),
-    )
-
-
-@pytest.fixture
 def feature_drift_kpi():
     """Lower-is-better metric (PSI)."""
     return KPIMetadata(
@@ -568,48 +554,6 @@ class TestShapCoverageUnavailability:
         assert result.status == KPIStatus.GOOD
 
 
-class TestFairnessGapUnavailability:
-    """WS1-MP-008 Fairness Gap (lower-is-better): 5 unavailability paths."""
-
-    def test_mlflow_client_unavailable(self, calculator_no_mlflow, fairness_gap_kpi, monkeypatch):
-        monkeypatch.setattr(
-            ModelPerformanceCalculator, "mlflow_client", property(lambda self: None)
-        )
-        result = calculator_no_mlflow.calculate(fairness_gap_kpi, {"model_name": "test"})
-        assert result.value is None
-        assert result.error == "mlflow_client_unavailable"
-        assert result.status == KPIStatus.UNKNOWN
-
-    def test_model_not_found(self, calculator_with_mlflow, fairness_gap_kpi):
-        _stub_mlflow_no_versions(calculator_with_mlflow)
-        result = calculator_with_mlflow.calculate(fairness_gap_kpi, {"model_name": "absent"})
-        assert result.value is None
-        assert result.error == "model_not_found:absent"
-        assert result.status == KPIStatus.UNKNOWN
-
-    def test_metric_not_found(self, calculator_with_mlflow, fairness_gap_kpi):
-        _stub_mlflow_run_missing_metric(calculator_with_mlflow)
-        result = calculator_with_mlflow.calculate(fairness_gap_kpi, {"model_name": "test"})
-        assert result.value is None
-        assert result.error == "metric_not_found:fairness_gap"
-        assert result.status == KPIStatus.UNKNOWN
-
-    def test_mlflow_exception(self, calculator_with_mlflow, fairness_gap_kpi):
-        _stub_mlflow_raises(calculator_with_mlflow, TimeoutError("timeout"))
-        result = calculator_with_mlflow.calculate(fairness_gap_kpi, {"model_name": "test"})
-        assert result.value is None
-        assert result.error is not None
-        assert result.error.startswith("mlflow_exception:TimeoutError")
-        assert result.status == KPIStatus.UNKNOWN
-
-    def test_real_value_returned(self, calculator_with_mlflow, fairness_gap_kpi):
-        _stub_mlflow_returns_metric(calculator_with_mlflow, "fairness_gap", 0.03)
-        result = calculator_with_mlflow.calculate(fairness_gap_kpi, {"model_name": "test"})
-        assert result.value == 0.03
-        assert result.error is None
-        assert result.status == KPIStatus.GOOD
-
-
 class TestFeatureDriftUnavailability:
     """WS1-MP-009 Feature Drift (PSI, lower-is-better): SQL primary +
     MLflow fallback chained-leg behavior."""
@@ -706,7 +650,6 @@ class TestNoPlausibleDefaultLeakage:
             "recall_at_k_kpi",
             "brier_score_kpi",
             "calibration_slope_kpi",
-            "fairness_gap_kpi",
         ],
     )
     def test_mlflow_unavailable_never_returns_plausible_default(
