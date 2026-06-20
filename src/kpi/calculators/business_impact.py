@@ -21,7 +21,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id
+from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id, windowed_query_id
 
 
 class BusinessImpactCalculator(KPICalculatorBase):
@@ -119,6 +119,30 @@ class BusinessImpactCalculator(KPICalculatorBase):
     # 077/078). Kept as a thin alias so the call sites below stay readable.
     _region_variant = staticmethod(region_query_id)
 
+    def _resolve_windowed_call(
+        self,
+        base_query_id: str,
+        *,
+        brand: str | None,
+        region: str | None,
+        window: dict[str, Any] | None,
+    ) -> tuple[str, list[Any]]:
+        """Compose (query_id, positional params) for a windowable KPI.
+
+        Param order respects the kpi_query 4-param cap:
+          no region:  [brand, start, end]
+          region:     [brand, region, start, end]
+        With no window, falls back to the existing base / _region behavior.
+        """
+        if window is None:
+            if region:
+                return region_query_id(base_query_id), [brand, region]
+            return base_query_id, [brand]
+        qid = windowed_query_id(base_query_id, region=bool(region))
+        if region:
+            return qid, [brand, region, window["start"], window["end"]]
+        return qid, [brand, window["start"], window["end"]]
+
     def _calc_mau(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-001: Monthly Active Users.
 
@@ -196,16 +220,16 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         Total prescription volume. No threshold (volume metric). When a region
         is supplied, routes to the region-scoped variant (migration 077); brand
-        stays an optional filter.
+        stays an optional filter. When a window is supplied, routes to the
+        `_windowed[_region]` variant with [brand(, region), start, end].
         """
-        brand = context.get("brand")
-        region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_trx"), [brand, region]
-            )
-        else:
-            result = self._execute_query("business_impact_trx", [brand])
+        query_id, params = self._resolve_windowed_call(
+            "business_impact_trx",
+            brand=context.get("brand"),
+            region=context.get("region"),
+            window=context.get("window"),
+        )
+        result = self._execute_query(query_id, params)
         if result and result[0].get("trx") is not None:
             return float(result[0]["trx"])
         raise RuntimeError("KPI WS3-BI-005 unavailable: no data for total prescriptions (TRx)")
@@ -215,16 +239,17 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         First-time prescriptions for a patient. No threshold (volume metric).
         When a region is supplied, routes to the region-scoped variant
-        (migration 077); brand stays an optional filter.
+        (migration 077); brand stays an optional filter. When a window is
+        supplied, routes to the `_windowed[_region]` variant with
+        [brand(, region), start, end].
         """
-        brand = context.get("brand")
-        region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_nrx"), [brand, region]
-            )
-        else:
-            result = self._execute_query("business_impact_nrx", [brand])
+        query_id, params = self._resolve_windowed_call(
+            "business_impact_nrx",
+            brand=context.get("brand"),
+            region=context.get("region"),
+            window=context.get("window"),
+        )
+        result = self._execute_query(query_id, params)
         if result and result[0].get("nrx") is not None:
             return float(result[0]["nrx"])
         raise RuntimeError("KPI WS3-BI-006 unavailable: no data for new prescriptions (NRx)")
@@ -243,13 +268,13 @@ class BusinessImpactCalculator(KPICalculatorBase):
                 "KPI WS3-BI-007 unavailable: no brand specified for new-to-brand prescriptions (NBRx)"
             )
 
-        region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_nbrx"), [brand, region]
-            )
-        else:
-            result = self._execute_query("business_impact_nbrx", [brand])
+        query_id, params = self._resolve_windowed_call(
+            "business_impact_nbrx",
+            brand=brand,
+            region=context.get("region"),
+            window=context.get("window"),
+        )
+        result = self._execute_query(query_id, params)
         if result and result[0].get("nbrx") is not None:
             return float(result[0]["nbrx"])
         raise RuntimeError(

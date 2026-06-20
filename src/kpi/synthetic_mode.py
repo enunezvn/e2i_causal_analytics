@@ -146,3 +146,18 @@ def region_query_id(base_query_id: str) -> str:
     """
     qid = f"{base_query_id}_region"
     return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid
+
+
+def windowed_query_id(base_query_id: str, *, region: bool) -> str:
+    """Windowed variant id for a base KPI query (Phase 1, additive).
+
+    Canonical suffix order: ``{base}_windowed[_region][_include_synthetic]``.
+    Parallels :func:`region_query_id`: the ``_windowed*`` variants are ADDITIVE
+    and absent from :data:`SYNTHETIC_TWINNED_QUERY_IDS`, so we append the
+    ``_include_synthetic`` suffix HERE under the showcase flag. Passing the
+    result back through :func:`resolve_kpi_query_id` is a safe no-op.
+    """
+    qid = f"{base_query_id}_windowed"
+    if region:
+        qid = f"{qid}_region"
+    return f"{qid}{_SYNTHETIC_SUFFIX}" if kpi_include_synthetic() else qid

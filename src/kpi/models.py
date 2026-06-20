@@ -123,6 +123,8 @@ class KPIMetadata(BaseModel):
     secondary_causal_library: CausalLibrary | None = None
     brand: str | None = None
     note: str | None = None
+    windowable: str = "not_applicable"  # "clean" | "needs_care" | "not_applicable"
+    window: dict[str, Any] | None = None  # {column, legs?, look_forward_days?} for windowable KPIs
 
 
 def _utc_now() -> datetime:
@@ -143,6 +145,14 @@ class KPIResult(BaseModel):
     cache_expires_at: datetime | None = None
     error: str | None = Field(None, description="Error message if calculation failed")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional context")
+
+    # Window provenance (spec 2026-06-20). window_status:
+    #   "default"        -> no window requested; engine's fixed window used
+    #   "applied"        -> requested window honored
+    #   "not_applicable" -> KPI has no claims time-dimension; window ignored honestly
+    window_requested: dict[str, Any] | None = None
+    window_applied: dict[str, Any] | None = None
+    window_status: str = Field(default="default", description="default | applied | not_applicable")
 
     # Causal analysis details (if applicable)
     causal_library_used: CausalLibrary | None = None
