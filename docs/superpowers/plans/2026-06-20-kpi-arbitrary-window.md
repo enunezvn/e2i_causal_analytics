@@ -14,6 +14,25 @@
 
 ---
 
+## Implementation status (2026-06-20)
+
+**Phase 1a — SHIPPED on this branch (`feat/kpi-arbitrary-window`):**
+- Window parser (`src/services/time_window.py`), `windowed_query_id` composition, `KPIResult` window provenance, `_resolve_windowed_call` routing helper, per-KPI `windowable`/`window` config + loader.
+- Engine windowing for the three clean event-date **volume** KPIs: **TRx (WS3-BI-005), NRx (WS3-BI-006), NBRx (WS3-BI-007)** — routed + migration `084_kpi_windowed_variants.sql` (12 additive rows = 3 KPIs × {`_windowed`, `_windowed_region`, `_windowed_include_synthetic`, `_windowed_region_include_synthetic`}; engine-generated query-ids verified to match the migration rows exactly).
+- Generic, **honest** provenance: only these 3 are `windowable: clean`; every other KPI is `not_applicable` and reports `window_status="not_applicable"` (value still computed, window never silently faked).
+- Chatbot: `kpi_calculate_tool` window arg + brand/region/window provenance echo; **`synthesize_node` fixed** to build its prompt from the user question + tool-call args + results (stops the "asks for a brand it already used" bug); system-prompt updates; region passed under the correct `region` context key.
+- Validation: M0 cheapest-disproof gate proved the NRx windowed SQL returns **3,394** (90-day Kisqali) via the live RPC; 57 unit tests green; final adversarial review clean after the region-key fix.
+- **Migration application:** ships via the normal deploy/migration runner (NOT applied out-of-band). Code + migration must deploy together (a windowed request before the migration applies would fail-loud).
+
+**Phase 1b — DEFERRED (mechanically identical follow-ups, NOT in this branch):**
+- ROI (WS3-BI-010): two-source probe with divergent timestamp columns + no brand on `agent_activities` — needs a bespoke windowed definition; engine routing was reverted to un-windowed.
+- Ratios: TRx Share (008), Conversion Rate (009, fixed look-forward must stay constant) — need dual-leg `$start/$end` binding.
+- View-backed: MAU (001), WAU (002) — absolute windows need view reparameterization (rolling-only otherwise).
+- Other calculator families: WS2-TR-001/004/005/006/007/008, WS1-DQ-001/005, WS1-MP-007, BR-005 — same routing pattern across `trigger_performance.py` / `data_quality.py` / `model_performance.py` / `brand_specific.py`.
+All deferred KPIs currently report `not_applicable` for a requested window (honest), until their windowed variants + routing land.
+
+---
+
 ## File Structure
 
 | File | Create/Modify | Responsibility |
