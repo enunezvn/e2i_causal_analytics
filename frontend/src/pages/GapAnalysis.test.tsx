@@ -331,6 +331,89 @@ describe('GapAnalysis — Quick Win/Strategic Bet framework (effort folded in)',
   });
 });
 
+/** One fully-formed opportunity; competitor density overridable per test. */
+function opportunity(roiOverrides: Record<string, unknown> = {}) {
+  return {
+    rank: 1,
+    gap: {
+      gap_id: 'region_Northeast_trx',
+      metric: 'trx',
+      segment: 'region',
+      segment_value: 'Northeast',
+      current_value: 85,
+      target_value: 100,
+      gap_size: 15,
+      gap_percentage: 15,
+      gap_type: 'vs_target',
+    },
+    roi_estimate: {
+      gap_id: 'region_Northeast_trx',
+      estimated_revenue_impact: 500000,
+      estimated_cost_to_close: 100000,
+      expected_roi: 5,
+      risk_adjusted_roi: 4,
+      payback_period_months: 6,
+      attribution_level: 'partial',
+      attribution_rate: 0.7,
+      confidence: 0.8,
+      ...roiOverrides,
+    },
+    recommended_action: 'Increase field coverage',
+    implementation_difficulty: 'low',
+    time_to_impact: '3-6 months',
+    category: 'quick_win',
+  };
+}
+
+function mockOpportunities(list: unknown[]) {
+  (useOpportunities as MockFn).mockReturnValue({
+    data: {
+      opportunities: list,
+      total_addressable_value: 500000,
+      quick_wins_count: list.length,
+      strategic_bets_count: 0,
+    },
+    isLoading: false,
+    refetch: vi.fn().mockResolvedValue({}),
+  });
+}
+
+describe('GapAnalysis — competitor density surfacing (#1056)', () => {
+  it('renders the market-landscape competitor density on a bet that carries it', () => {
+    mockRun();
+    mockOpportunities([
+      opportunity({
+        competitor_products_count: 3,
+        competitor_density_label: 'moderate',
+        competitor_drug_names: ['Verzenio', 'Ibrance', 'Kisqali'],
+      }),
+    ]);
+
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/Market landscape \(3 rivals\)/i)).toBeInTheDocument();
+    expect(screen.getByText('moderate')).toBeInTheDocument();
+    expect(screen.getByText('Verzenio')).toBeInTheDocument();
+  });
+
+  it('omits the badge when a bet has no competitor density (honest empty state)', () => {
+    mockRun();
+    mockOpportunities([
+      opportunity({
+        competitor_products_count: 0,
+        competitor_density_label: 'unknown',
+        competitor_drug_names: [],
+      }),
+    ]);
+
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    // The bet still renders, but no market-landscape badge appears.
+    expect(screen.getByText('Increase field coverage')).toBeInTheDocument();
+    expect(screen.queryByText(/Market landscape/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('GapAnalysis — warnings rendering (F-010-frontend)', () => {
   it('does not render WarningBanner before mutation runs', () => {
     mockRun();

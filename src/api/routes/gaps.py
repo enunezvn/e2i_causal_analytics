@@ -213,6 +213,19 @@ class ROIEstimate(BaseModel):
     label_evidence_confirmed: Optional[bool] = Field(
         default=None, description="Whether the verdict is confirmed by the live FDA label"
     )
+    # Market landscape (#1056) — surface-only competitor density the ROI node
+    # computes per bet. INFORMATIONAL: it never alters the ROI value or the
+    # prioritizer ranking; it was silently dropped before because this response
+    # model never declared the fields, so the FE could not display it.
+    competitor_products_count: Optional[int] = Field(
+        default=None, description="Curated count of competing products in the brand's indication"
+    )
+    competitor_density_label: Optional[str] = Field(
+        default=None, description="Market saturation: limited | moderate | crowded | unknown"
+    )
+    competitor_drug_names: Optional[List[str]] = Field(
+        default=None, description="Names of the competing products (curated, not FDA-sourced)"
+    )
 
 
 class PrioritizedOpportunity(BaseModel):
@@ -865,6 +878,9 @@ def _convert_opportunities(
                 off_label_reason=roi_data.get("off_label_reason"),
                 label_verdict=roi_data.get("label_verdict"),
                 label_evidence_confirmed=roi_data.get("label_evidence_confirmed"),
+                competitor_products_count=roi_data.get("competitor_products_count"),
+                competitor_density_label=roi_data.get("competitor_density_label"),
+                competitor_drug_names=roi_data.get("competitor_drug_names"),
             )
 
             result.append(

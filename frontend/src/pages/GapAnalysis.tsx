@@ -53,6 +53,7 @@ import { KPICard, StatusBadge } from '@/components/visualizations';
 import { WarningBanner } from '@/components/ui/WarningBanner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LabelGateBadge } from '@/components/insights/LabelGateBadge';
+import { CompetitorDensityBadge } from '@/components/insights/CompetitorDensityBadge';
 import {
   useOpportunities,
   useGapHealth,
@@ -561,6 +562,14 @@ function GapAnalysis() {
                             {opp.time_to_impact}
                           </span>
                         </div>
+                        {/* Market landscape — surface-only competitor density (#1056);
+                            never affects ROI or ranking. Honest empty when 0/unknown. */}
+                        <CompetitorDensityBadge
+                          competitor_products_count={opp.roi_estimate.competitor_products_count}
+                          competitor_density_label={opp.roi_estimate.competitor_density_label}
+                          competitor_drug_names={opp.roi_estimate.competitor_drug_names}
+                          className="mt-2"
+                        />
                       </div>
 
                       {/* ROI Metrics */}

@@ -95,3 +95,97 @@ def test_convert_opportunities_carries_off_label_fields():
     assert roi.off_label is True
     assert roi.label_verdict == "off_label"
     assert roi.off_label_reason
+
+
+@pytest.mark.unit
+def test_convert_opportunities_carries_competitor_density_fields():
+    """#1056: the surface-only competitor-density fields the ROI node writes onto
+    each estimate must serialize through the API ROIEstimate. They were silently
+    dropped because the Pydantic response model never declared them, so the FE
+    could never display them."""
+    from src.api.routes.gaps import _convert_opportunities
+
+    out = _convert_opportunities(
+        [
+            {
+                "rank": 1,
+                "gap": {
+                    "gap_id": "region_Northeast_trx",
+                    "metric": "trx",
+                    "segment": "region",
+                    "segment_value": "Northeast",
+                    "current_value": 85.0,
+                    "target_value": 100.0,
+                    "gap_size": 15.0,
+                    "gap_percentage": 15.0,
+                    "gap_type": "vs_target",
+                },
+                "roi_estimate": {
+                    "gap_id": "region_Northeast_trx",
+                    "estimated_revenue_impact": 500000.0,
+                    "estimated_cost_to_close": 100000.0,
+                    "expected_roi": 5.0,
+                    "risk_adjusted_roi": 4.0,
+                    "payback_period_months": 6,
+                    "attribution_level": "partial",
+                    "attribution_rate": 0.7,
+                    "confidence": 0.8,
+                    "competitor_products_count": 3,
+                    "competitor_density_label": "moderate",
+                    "competitor_drug_names": ["Verzenio", "Ibrance", "Kisqali"],
+                },
+                "recommended_action": "Increase coverage",
+                "implementation_difficulty": "low",
+                "time_to_impact": "3-6 months",
+            }
+        ]
+    )
+    assert len(out) == 1
+    roi = out[0].roi_estimate
+    assert roi.competitor_products_count == 3
+    assert roi.competitor_density_label == "moderate"
+    assert roi.competitor_drug_names == ["Verzenio", "Ibrance", "Kisqali"]
+
+
+@pytest.mark.unit
+def test_convert_opportunities_competitor_density_absent_is_none():
+    """Honest empty state: when the ROI node wrote no density, the API fields are
+    None (never fabricated)."""
+    from src.api.routes.gaps import _convert_opportunities
+
+    out = _convert_opportunities(
+        [
+            {
+                "rank": 1,
+                "gap": {
+                    "gap_id": "g",
+                    "metric": "trx",
+                    "segment": "region",
+                    "segment_value": "X",
+                    "current_value": 1.0,
+                    "target_value": 2.0,
+                    "gap_size": 1.0,
+                    "gap_percentage": 50.0,
+                    "gap_type": "vs_target",
+                },
+                "roi_estimate": {
+                    "gap_id": "g",
+                    "estimated_revenue_impact": 1.0,
+                    "estimated_cost_to_close": 1.0,
+                    "expected_roi": 1.0,
+                    "risk_adjusted_roi": 1.0,
+                    "payback_period_months": 6,
+                    "attribution_level": "partial",
+                    "attribution_rate": 0.5,
+                    "confidence": 0.7,
+                },
+                "recommended_action": "x",
+                "implementation_difficulty": "low",
+                "time_to_impact": "3-6 months",
+            }
+        ]
+    )
+    roi = out[0].roi_estimate
+    assert roi.competitor_products_count is None
+    assert roi.competitor_density_label is None
+    assert roi.competitor_drug_names is None

@@ -4,6 +4,8 @@ https://api.fda.gov/drug/label.json verified 2026-06-20."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Callable
 
 import httpx
@@ -246,6 +248,87 @@ def test_limitations_of_use_extracts_text() -> None:
 def test_limitations_of_use_returns_none_when_absent() -> None:
     assert _OpenFDAClient.limitations_of_use(_IPTACOPAN) is None
     assert _OpenFDAClient.limitations_of_use({}) is None
+
+
+# Path to the captured real-world OpenFDA label fixtures.
+_OPENFDA_FIXTURES = Path(__file__).parents[3] / "fixtures" / "openfda_labels"
+
+
+def _load_fixture(name: str) -> dict:
+    return json.loads((_OPENFDA_FIXTURES / name).read_text())
+
+
+def test_limitations_of_use_trims_to_bounded_clause_real_fixture() -> None:
+    """Regression (#1056): the captured RHAPSIDO label concatenates the Highlights
+    and full-text indication blocks, so the raw indications field carries a
+    duplicated indication sentence and a SECOND Limitations-of-Use copy after the
+    first marker. The extractor must return ONLY the bounded Limitations-of-Use
+    clause, not the trailing indication / repeated text."""
+    label = _load_fixture("remibrutinib.json")
+
+    lou = _OpenFDAClient.limitations_of_use(label)
+
+    assert lou == "Limitations of Use: RHAPSIDO is not indicated for other forms of urticaria."
+    # The trailing duplicated indication block must NOT bleed in.
+    assert "kinase inhibitor" not in lou
+    # The duplicated 2nd Limitations-of-Use copy + reference tag must be gone.
+    assert lou.count("Limitations of Use") == 1
+    assert "( 1 )" not in lou
+
+
+def test_limitations_of_use_no_lou_real_fixtures_return_none() -> None:
+    """Brands whose captured label carries no Limitations of Use still return None
+    (fail-open contract unchanged)."""
+    assert _OpenFDAClient.limitations_of_use(_load_fixture("iptacopan.json")) is None
+    assert _OpenFDAClient.limitations_of_use(_load_fixture("ribociclib.json")) is None
+
+
+def test_limitations_of_use_returns_none_for_contentless_marker() -> None:
+    """A bare or doubled "Limitations of Use" marker with no actual limitation
+    text must fail open to None, not surface a contentless "Limitations of Use:"
+    stub (degenerate/malformed labels)."""
+    # Marker present but nothing follows it.
+    assert (
+        _OpenFDAClient.limitations_of_use(
+            {
+                "indications_and_usage": [
+                    "1 INDICATIONS AND USAGE X is indicated for Y. Limitations of Use:"
+                ]
+            }
+        )
+        is None
+    )
+    # Doubled marker with the content only after the duplicate.
+    assert (
+        _OpenFDAClient.limitations_of_use(
+            {
+                "indications_and_usage": [
+                    "Limitations of Use: Limitations of Use: Not indicated for Z."
+                ]
+            }
+        )
+        is None
+    )
+
+
+def test_limitations_of_use_keeps_multi_sentence_limitations() -> None:
+    """A Limitations-of-Use clause may legitimately span multiple sentences,
+    including a restrictive 'indicated only ... not for' phrasing. Those are
+    limitations and must be kept whole — the bounding logic must not truncate at
+    the bare word 'indicated' (it only stops at a POSITIVE indication restart)."""
+    label = {
+        "indications_and_usage": [
+            "1 INDICATIONS AND USAGE DRUG is indicated for condition X. "
+            "Limitations of Use: DRUG is not for use in children. "
+            "DRUG is indicated only after failure of therapy A and not for first-line use."
+        ]
+    }
+
+    lou = _OpenFDAClient.limitations_of_use(label)
+
+    assert lou is not None
+    assert "not for use in children" in lou
+    assert "indicated only after failure of therapy A and not for first-line use" in lou
 
 
 # ---------------------------------------------------------------------------

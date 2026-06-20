@@ -253,6 +253,20 @@ _LOU_PATTERN: re.Pattern[str] = re.compile(r"Limitations of Use", re.IGNORECASE)
 _INDICATIONS_HEADER: re.Pattern[str] = re.compile(
     r"^1\s+INDICATIONS?\s+AND\s+USAGE\s*", re.IGNORECASE
 )
+# Sentence splitter that keeps each sentence's terminating punctuation. Used to
+# bound the Limitations-of-Use clause (issue #1056).
+_SENTENCE_RE: re.Pattern[str] = re.compile(r"[^.!?]*[.!?]|[^.!?]+$")
+# A full-text subsection header like "1.1 Early Breast Cancer" — ends the clause.
+_SUBSECTION_RE: re.Pattern[str] = re.compile(r"\b\d+\.\d+\s+[A-Z]")
+# A trailing Highlights reference tag like "( 1 )" / "( 1.1 )" to drop.
+_TRAILING_REF_TAG_RE: re.Pattern[str] = re.compile(r"\s*\(\s*\d+(?:\.\d+)?\s*\)\s*$")
+# Word-bounded negation / restriction cues that mark a sentence as a LIMITATION
+# (so it is KEPT). A duplicated POSITIVE indication carries none of these, which
+# is how the clause boundary is told apart from a multi-sentence limitation like
+# "... is indicated only after failure of therapy A and not for first-line use".
+_LIMITATION_CUE_RE: re.Pattern[str] = re.compile(
+    r"\bnot\b|\bonly\b|\bshould\b|\blimited\b|contraindicat", re.IGNORECASE
+)
 
 
 class _OpenFDAClient:
@@ -393,10 +407,24 @@ class _OpenFDAClient:
 
     @staticmethod
     def limitations_of_use(label: dict[str, Any]) -> Optional[str]:
-        """Return the "Limitations of Use" paragraph from ``label``, or ``None``.
+        """Return the bounded "Limitations of Use" clause from ``label``, or ``None``.
 
-        Extracts the trimmed substring starting at the "Limitations of Use"
-        marker (case-insensitive) from ``indications_and_usage[0]``.
+        The OpenFDA ``indications_and_usage`` field frequently CONCATENATES the
+        Highlights summary and the full-text section, so the "Limitations of Use"
+        marker can appear twice and a repeated indication block can follow the
+        first one. Taking everything from the first marker to the end therefore
+        over-grabs trailing indication text (issue #1056). Instead, keep only the
+        leading run of *limitation* sentences and stop at the first boundary:
+
+          * a POSITIVE indication restart — a sentence that asserts an indication
+            (contains ``indicated``) with no negation / restriction cue (the
+            duplicated indication block; a limitation such as ``is not indicated``
+            or ``indicated only ... not for`` carries a cue and is kept);
+          * a DUPLICATED ``Limitations of Use`` marker;
+          * a full-text subsection header like ``1.1 Title``.
+
+        A trailing Highlights reference tag (``( 1 )``) is then dropped. Returns
+        ``None`` when there is no marker (fail-open contract unchanged).
         """
         raw_list: Any = label.get("indications_and_usage")
         if not raw_list or not isinstance(raw_list, list):
@@ -407,7 +435,49 @@ class _OpenFDAClient:
         m = _LOU_PATTERN.search(text)
         if not m:
             return None
-        return text[m.start() :].strip()
+
+        after = text[m.end() :]  # everything after the first marker phrase
+        boundaries: list[int] = []
+
+        # First positive-indication sentence = the duplicated indication restart.
+        # The sentence immediately after the marker is ALWAYS the limitation, so
+        # only sentences past it (start > 0) can be a boundary. A boundary asserts
+        # an indication WITHOUT any negation / restriction cue; a limitation that
+        # happens to use the word "indicated" (e.g. "indicated only ... not for")
+        # carries a cue and is therefore kept, not truncated. This biases an
+        # ambiguous duplicated indication (e.g. "indicated only for adults")
+        # toward being KEPT — i.e. toward a verbose over-grab (the original,
+        # cosmetic issue) rather than silently DROPPING a real safety limitation,
+        # which is the worse failure. The dup-marker / subsection boundaries below
+        # still bound the common structured cases.
+        for sentence in _SENTENCE_RE.finditer(after):
+            if sentence.start() == 0:
+                continue
+            phrase = sentence.group()
+            if "indicated" in phrase.lower() and not _LIMITATION_CUE_RE.search(phrase):
+                boundaries.append(sentence.start())
+                break
+
+        # A duplicated Limitations-of-Use marker (the Highlights/full-text copy).
+        dup = _LOU_PATTERN.search(after)
+        if dup:
+            boundaries.append(dup.start())
+
+        # A numbered full-text subsection header ("1.1 Title").
+        sub = _SUBSECTION_RE.search(after)
+        if sub:
+            boundaries.append(sub.start())
+
+        end = m.end() + min(boundaries) if boundaries else len(text)
+        clause = text[m.start() : end].strip()
+        # Drop a trailing Highlights reference tag, e.g. "... urticaria. ( 1 )".
+        clause = _TRAILING_REF_TAG_RE.sub("", clause).rstrip()
+        # Fail open to None when the clause is just the marker with no actual
+        # limitation text (e.g. a bare "Limitations of Use:" or a doubled marker
+        # whose content sits past the duplicate) — never surface a contentless stub.
+        marker_len = m.end() - m.start()
+        content = clause[marker_len:].lstrip(" :–—-").strip()
+        return clause if content else None
 
     @staticmethod
     def boxed_warning(label: dict[str, Any]) -> Optional[str]:

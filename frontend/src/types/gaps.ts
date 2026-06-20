@@ -168,6 +168,16 @@ export interface ROIEstimate {
   label_verdict?: LabelVerdict;
   /** True when the verdict was confirmed against the FDA drug label. */
   label_evidence_confirmed?: boolean;
+  /**
+   * Market landscape (#1056) — surface-only curated competitor density for the
+   * brand's indication, computed per bet by the backend ROI node. INFORMATIONAL:
+   * it does NOT affect the ROI value or the ranking.
+   */
+  competitor_products_count?: number;
+  /** Market saturation label: limited | moderate | crowded | unknown. */
+  competitor_density_label?: string;
+  /** Names of the competing products (curated, not FDA-sourced). */
+  competitor_drug_names?: string[];
 }
 
 /**
