@@ -158,7 +158,18 @@ class KPICalculator:
         # to the cache context only (not the calculator context, which the
         # calculators echo into metadata["context"]).
         include_synthetic = kpi_include_synthetic()
-        cache_context = {**context, "_include_synthetic": include_synthetic}
+        # The requested window changes the underlying SQL (base vs _windowed
+        # twin) and therefore the value, so it MUST be part of the cache key --
+        # otherwise a default-window value could be served for an explicit
+        # window (or two different windows could collide). Keyed by the
+        # (start, end) pair only (not the whole window dict) so the key is a
+        # stable, hashable scalar.
+        window = context.get("window")
+        cache_context = {
+            **context,
+            "_include_synthetic": include_synthetic,
+            "_window": (window.get("start"), window.get("end")) if window else None,
+        }
 
         # Check cache (unless force_refresh)
         if use_cache and not force_refresh and self._cache.enabled:
