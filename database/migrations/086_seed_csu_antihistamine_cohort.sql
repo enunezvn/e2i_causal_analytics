@@ -18,12 +18,15 @@
 --
 -- WHY THIS IS HONEST (not a hardcoded KPI value): one real, fully-coded
 -- baseline-antihistamine event per Remibrutinib CSU patient — ATC R06A drug_class,
--- a real H1-antihistamine RxCUI, and a UAS7 disease-activity reading — mirroring
--- src/ml/data_generator.py:660-691 and the constants in
+-- a real H1-antihistamine RxCUI, and a UAS7 disease-activity reading. The CLINICAL
+-- CODING mirrors src/ml/data_generator.py:660-691 and the constants in
 -- src/ml/synthetic/clinical_codes.py (ANTIHISTAMINES, ANTIHISTAMINE_ATC_CLASS=R06A,
--- UAS7_ASSAY, UAS7_UNCONTROLLED_THRESHOLD=7, UAS7_UNCONTROLLED_PREVALENCE=0.45).
--- Rows are is_synthetic=true (the demo substrate). BR-001 COMPUTES the realized
--- uncontrolled fraction (UAS7>=7) from these rows — it is not asserted.
+-- UAS7_ASSAY, UAS7_UNCONTROLLED_THRESHOLD=7, UAS7_UNCONTROLLED_PREVALENCE=0.45). The
+-- ONLY deliberate divergence from the generator is event_type (the generator tags
+-- these 'prescription'; we use 'consultation' — see the ⚠️ note below — which is
+-- safe because BR-001 does not filter on event_type). Rows are is_synthetic=true
+-- (the demo substrate). BR-001 COMPUTES the realized uncontrolled fraction
+-- (UAS7>=7) from these rows — it is not asserted.
 --
 -- ⚠️ event_type = 'consultation', NOT 'prescription'. The generator tags these
 -- 'prescription' (data_generator.py:673), but TRx / NRx / NBRx
@@ -99,6 +102,10 @@ WHERE pj.brand::text = 'Remibrutinib'
       WHERE te.patient_id = pj.patient_id
         AND te.event_subtype = 'baseline_antihistamine'
   )
+-- DISTINCT ON requires the leading ORDER BY key; the secondary key makes the
+-- per-patient journey pick deterministic (matters only for any future
+-- multi-journey patient — the current cohort is 1:1 patient:journey).
+ORDER BY pj.patient_id, pj.patient_journey_id
 ON CONFLICT (treatment_event_id) DO NOTHING;
 
 -- (No COMMIT; run_migrations.sh / psql --single-transaction owns the outer txn.)
