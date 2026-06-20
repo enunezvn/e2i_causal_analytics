@@ -48,13 +48,8 @@ ws1_data_quality:
       critical: 0.50
     frequency: daily
     workstream: WS1
-    windowable: clean
-    window:
-      column: created_at
-      legs:
-        - covered
-        - universe
-    
+    windowable: not_applicable
+
   source_coverage_hcps:
     id: "WS1-DQ-002"
     name: "Source Coverage - HCPs"
@@ -141,10 +136,8 @@ ws1_data_quality:
       critical: 0.80
     frequency: daily
     workstream: WS1
-    windowable: clean
-    window:
-      column: created_at
-    
+    windowable: not_applicable
+
   geographic_consistency:
     id: "WS1-DQ-006"
     name: "Geographic Consistency"
@@ -377,10 +370,8 @@ ws1_model_performance:
       critical: 0.60
     frequency: daily
     workstream: WS1
-    windowable: clean
-    window:
-      column: created_at
-    
+    windowable: not_applicable
+
   fairness_gap_recall:
     id: "WS1-MP-008"
     name: "Fairness Gap (ΔRecall)"
@@ -444,10 +435,8 @@ ws2_triggers:
       critical: 0.40
     frequency: daily
     workstream: WS2
-    windowable: clean
-    window:
-      column: trigger_timestamp
-    
+    windowable: not_applicable
+
   trigger_recall:
     id: "WS2-TR-002"
     name: "Trigger Recall"
@@ -506,10 +495,8 @@ ws2_triggers:
       critical: 0.30
     frequency: daily
     workstream: WS2
-    windowable: clean
-    window:
-      column: trigger_timestamp
-    
+    windowable: not_applicable
+
   false_alert_rate:
     id: "WS2-TR-005"
     name: "False Alert Rate"
@@ -527,10 +514,8 @@ ws2_triggers:
       critical: 0.30
     frequency: daily
     workstream: WS2
-    windowable: clean
-    window:
-      column: trigger_timestamp
-    
+    windowable: not_applicable
+
   override_rate:
     id: "WS2-TR-006"
     name: "Override Rate"
@@ -548,10 +533,8 @@ ws2_triggers:
       critical: 0.40
     frequency: daily
     workstream: WS2
-    windowable: clean
-    window:
-      column: trigger_timestamp
-    
+    windowable: not_applicable
+
   lead_time_days:
     id: "WS2-TR-007"
     name: "Lead Time"
@@ -570,10 +553,8 @@ ws2_triggers:
     unit: days
     frequency: weekly
     workstream: WS2
-    windowable: clean
-    window:
-      column: trigger_timestamp
-    
+    windowable: not_applicable
+
   change_fail_rate:
     id: "WS2-TR-008"
     name: "Change-Fail Rate (CFR)"
@@ -595,9 +576,7 @@ ws2_triggers:
     frequency: weekly
     workstream: WS2
     note: "V3: New change tracking fields in triggers"
-    windowable: clean
-    window:
-      column: trigger_timestamp
+    windowable: not_applicable
 
 # ═══════════════════════════════════════════════════════════════════
 # WS3: BUSINESS IMPACT (10 KPIs)
@@ -624,10 +603,8 @@ ws3_business:
     frequency: daily
     workstream: WS3
     note: "V3: New user_sessions table"
-    windowable: clean
-    window:
-      column: session_start
-    
+    windowable: not_applicable
+
   active_users_wau:
     id: "WS3-BI-002"
     name: "Weekly Active Users (WAU)"
@@ -647,10 +624,8 @@ ws3_business:
     frequency: daily
     workstream: WS3
     note: "V3: New user_sessions table"
-    windowable: clean
-    window:
-      column: session_start
-    
+    windowable: not_applicable
+
   patient_touch_rate:
     id: "WS3-BI-003"
     name: "Patient Touch Rate"
@@ -764,13 +739,8 @@ ws3_business:
       critical: 0.10
     frequency: weekly
     workstream: WS3
-    windowable: clean
-    window:
-      column: event_date
-      legs:
-        - brand_rx
-        - category
-    
+    windowable: not_applicable
+
   conversion_rate:
     id: "WS3-BI-009"
     name: "Conversion Rate"
@@ -790,14 +760,8 @@ ws3_business:
       critical: 0.02
     frequency: weekly
     workstream: WS3
-    windowable: clean
-    window:
-      column: trigger_timestamp
-      legs:
-        - triggered
-        - converted
-      look_forward_days: 30
-    
+    windowable: not_applicable
+
   roi:
     id: "WS3-BI-010"
     name: "Return on Investment"
@@ -817,9 +781,7 @@ ws3_business:
       critical: 1.0
     frequency: monthly
     workstream: WS3
-    windowable: clean
-    window:
-      column: event_date
+    windowable: not_applicable
 
 # ═══════════════════════════════════════════════════════════════════
 # BRAND-SPECIFIC (5 KPIs)
@@ -932,9 +894,7 @@ brand_specific:
       warning: 0.55
       critical: 0.40
     frequency: weekly
-    windowable: clean
-    window:
-      column: trigger_timestamp
+    windowable: not_applicable
 
 # ═══════════════════════════════════════════════════════════════════
 # CAUSAL METRICS (5 KPIs)

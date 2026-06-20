@@ -325,27 +325,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """Calculate WS3-BI-010: Return on Investment.
 
         Value generated per dollar invested.
-
-        When a window is supplied, routes to the single `business_impact_roi`
-        windowed variant (`_windowed[_region]`) with [brand(, region), start,
-        end] -- the windowed ROI statement is time-bounded directly, so the
-        two-source (business_metrics / agent_activities) probe below applies
-        only to the un-windowed default path.
         """
-        if context.get("window") is not None:
-            query_id, params = self._resolve_windowed_call(
-                "business_impact_roi",
-                brand=context.get("brand"),
-                region=context.get("region"),
-                window=context.get("window"),
-            )
-            result = self._execute_query(query_id, params)
-            if result and result[0].get("avg_roi") is not None:
-                return float(result[0]["avg_roi"])
-            raise RuntimeError(
-                "KPI WS3-BI-010 unavailable: no data for return on investment (ROI)"
-            )
-
         # Try business_metrics table first
         result = self._execute_query("business_impact_roi_business_metrics", [])
         if result and result[0].get("avg_roi") is not None:

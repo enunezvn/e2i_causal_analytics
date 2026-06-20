@@ -1,9 +1,12 @@
 """Part 1: the business_impact VOLUME calculators route through the window helper.
 
-Each of the 4 volume methods (_calc_trx / _calc_nrx / _calc_nbrx / _calc_roi),
-when given a window in context, must send a `*_windowed` query_id with the
-positional params [brand, start, end]. Synthetic flags are pinned OFF so the
-windowed_query_id helper returns the bare (non-_include_synthetic) ids.
+NRx, TRx, and NBRx (_calc_nrx / _calc_trx / _calc_nbrx), when given a window
+in context, must send a `*_windowed` query_id with the positional params
+[brand, start, end]. Synthetic flags are pinned OFF so the windowed_query_id
+helper returns the bare (non-_include_synthetic) ids.
+
+ROI (_calc_roi) does NOT have a working windowed SQL path and is tagged
+windowable=not_applicable; it is not tested here.
 """
 
 import pytest
@@ -75,11 +78,3 @@ def test_nbrx_routes_windowed():
     assert client.calls[0]["params"] == ["Kisqali", "S", "E"]
 
 
-def test_roi_routes_windowed():
-    client = _StubClient({"avg_roi": 1.5})
-    calc = BusinessImpactCalculator(db_client=client)
-    value = calc._calc_roi(_CONTEXT)
-    assert value == 1.5
-    assert len(client.calls) == 1
-    assert client.calls[0]["query_id"] == "business_impact_roi_windowed"
-    assert client.calls[0]["params"] == ["Kisqali", "S", "E"]

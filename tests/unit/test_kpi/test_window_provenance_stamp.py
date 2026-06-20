@@ -128,6 +128,17 @@ def test_calculate_stamps_not_applicable_but_computes_value():
     assert res.value == 0.42
 
 
+def test_calculate_stamps_not_applicable_for_roi():
+    """WS3-BI-010 ROI has windowable=not_applicable: window is recorded but not applied."""
+    kpi = _kpi("WS3-BI-010", "not_applicable")
+    calc = _wired_calc(kpi, 2.5)
+    res = calc.calculate("WS3-BI-010", context={"brand": "Kisqali", "window": _WINDOW})
+    assert res.window_status == "not_applicable"
+    assert res.window_requested == _WINDOW
+    assert res.window_applied is None
+    assert res.value == 2.5  # ROI still computed, just not windowed
+
+
 def test_calculate_no_window_is_default():
     kpi = _kpi("WS3-BI-006", "clean")
     calc = _wired_calc(kpi, 1.0)

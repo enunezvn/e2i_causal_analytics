@@ -32,21 +32,23 @@ class TestWindowableFields:
         assert kpi.window is not None
         assert kpi.window["column"] == "event_date"
 
-    def test_trx_share_legs(self, registry):
-        """WS3-BI-008 TRx Share must have window.legs == ['brand_rx', 'category']."""
+    def test_trx_share_not_applicable(self, registry):
+        """WS3-BI-008 TRx Share is not windowed (no working SQL); must be not_applicable."""
         kpi = registry.get("WS3-BI-008")
         assert kpi is not None, "WS3-BI-008 not found in registry"
-        assert kpi.windowable == "clean"
-        assert kpi.window is not None
-        assert kpi.window["legs"] == ["brand_rx", "category"]
+        assert kpi.windowable == "not_applicable"
 
-    def test_conversion_rate_look_forward_days(self, registry):
-        """WS3-BI-009 Conversion Rate must have window.look_forward_days == 30."""
+    def test_conversion_rate_not_applicable(self, registry):
+        """WS3-BI-009 Conversion Rate is not windowed; must be not_applicable."""
         kpi = registry.get("WS3-BI-009")
         assert kpi is not None, "WS3-BI-009 not found in registry"
-        assert kpi.windowable == "clean"
-        assert kpi.window is not None
-        assert kpi.window["look_forward_days"] == 30
+        assert kpi.windowable == "not_applicable"
+
+    def test_roi_not_applicable(self, registry):
+        """WS3-BI-010 ROI has no working windowed SQL; must be not_applicable."""
+        kpi = registry.get("WS3-BI-010")
+        assert kpi is not None, "WS3-BI-010 not found in registry"
+        assert kpi.windowable == "not_applicable"
 
     def test_snapshot_kpi_not_applicable(self, registry):
         """WS1-MP-001 ROC-AUC (snapshot/ML KPI) must be windowable=not_applicable."""
@@ -54,10 +56,13 @@ class TestWindowableFields:
         assert kpi is not None, "WS1-MP-001 not found in registry"
         assert kpi.windowable == "not_applicable"
 
-    def test_clean_kpi_count_equals_18(self, registry):
-        """Exactly 18 KPIs in the config must have windowable='clean'."""
+    def test_clean_kpi_count_equals_3(self, registry):
+        """Exactly 3 KPIs (TRx/NRx/NBRx) must have windowable='clean'."""
         clean_kpis = [kpi for kpi in registry.get_all() if kpi.windowable == "clean"]
         ids = sorted(k.id for k in clean_kpis)
-        assert len(clean_kpis) == 18, (
-            f"Expected 18 clean KPIs, got {len(clean_kpis)}. IDs: {ids}"
+        assert len(clean_kpis) == 3, (
+            f"Expected 3 clean KPIs, got {len(clean_kpis)}. IDs: {ids}"
+        )
+        assert ids == ["WS3-BI-005", "WS3-BI-006", "WS3-BI-007"], (
+            f"Expected TRx/NRx/NBRx only, got: {ids}"
         )
