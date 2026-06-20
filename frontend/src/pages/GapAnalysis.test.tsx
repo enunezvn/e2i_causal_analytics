@@ -79,6 +79,81 @@ function mockRun(overrides: Record<string, unknown> = {}) {
   return mutate;
 }
 
+/**
+ * Build a minimal PrioritizedOpportunity carrying a curated `category` plus the
+ * fields the card reads. `category` is set by the LIST endpoint (membership in
+ * the prioritizer's quick_wins/strategic_bets lists) — it is NOT derived from
+ * `implementation_difficulty` (deliberately mismatched here to prove the page
+ * badges by category, not by effort).
+ */
+function makeOpp(opts: {
+  id: string;
+  rank: number;
+  category: 'quick_win' | 'strategic_bet' | 'other';
+  difficulty: 'low' | 'medium' | 'high';
+  action?: string;
+  roi?: number;
+}) {
+  return {
+    rank: opts.rank,
+    gap: {
+      gap_id: opts.id,
+      metric: 'trx',
+      segment: 'region',
+      segment_value: 'Northeast',
+      current_value: 100,
+      target_value: 150,
+      gap_size: 50,
+      gap_percentage: 33.3,
+      gap_type: 'vs_target',
+    },
+    roi_estimate: {
+      gap_id: opts.id,
+      estimated_revenue_impact: 1_000_000,
+      estimated_cost_to_close: 100_000,
+      expected_roi: opts.roi ?? 5,
+      risk_adjusted_roi: opts.roi ?? 5,
+      payback_period_months: 6,
+      attribution_level: 'high',
+      attribution_rate: 0.8,
+      confidence: 0.85,
+    },
+    recommended_action: opts.action ?? `Action ${opts.id}`,
+    implementation_difficulty: opts.difficulty,
+    time_to_impact: '3 months',
+    category: opts.category,
+  };
+}
+
+/**
+ * Load the opportunities query with a curated mix. `strategic_bets_count` /
+ * `quick_wins_count` are the AUTHORITATIVE headline counts and MUST equal the
+ * number of opportunities tagged with the matching category (the no-phantom
+ * invariant the page must preserve in the default "All" view).
+ */
+function mockLoadedOpportunities() {
+  const opportunities = [
+    // category=strategic_bet but LOW difficulty — proves the badge follows the
+    // curated category, not the effort attribute.
+    makeOpp({ id: 'sb1', rank: 1, category: 'strategic_bet', difficulty: 'low', action: 'Expand specialty coverage', roi: 7 }),
+    makeOpp({ id: 'sb2', rank: 2, category: 'strategic_bet', difficulty: 'high', action: 'Launch new payer program', roi: 6 }),
+    // category=quick_win but HIGH difficulty — same point in reverse.
+    makeOpp({ id: 'qw1', rank: 3, category: 'quick_win', difficulty: 'high', action: 'Optimize call cadence', roi: 5 }),
+    makeOpp({ id: 'ot1', rank: 4, category: 'other', difficulty: 'medium', action: 'Refresh sample mix', roi: 3 }),
+  ];
+  (useOpportunities as MockFn).mockReturnValue({
+    data: {
+      opportunities,
+      total_addressable_value: 4_000_000,
+      quick_wins_count: 1,
+      strategic_bets_count: 2,
+    },
+    isLoading: false,
+    refetch: vi.fn().mockResolvedValue({}),
+  });
+  return { opportunities, quick_wins_count: 1, strategic_bets_count: 2 };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockQueries();
@@ -175,6 +250,84 @@ describe('GapAnalysis — brand selection wiring (All Brands)', () => {
     });
     // Run Analysis needs a concrete brand → disabled for the cross-brand view.
     expect(screen.getByRole('button', { name: /run analysis/i })).toBeDisabled();
+  });
+});
+
+describe('GapAnalysis — Quick Win/Strategic Bet framework (effort folded in)', () => {
+  it('badges each card by its CURATED category (Quick Win / Strategic Bet / Other), not by effort', () => {
+    mockLoadedOpportunities();
+    mockRun();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    // Primary framework badges render.
+    expect(screen.getAllByText('Strategic Bet').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Quick Win').length).toBeGreaterThan(0);
+  });
+
+  it('preserves the no-phantom invariant: #cards badged "Strategic Bet" === strategic_bets_count (same for Quick Wins)', () => {
+    const { strategic_bets_count, quick_wins_count } = mockLoadedOpportunities();
+    mockRun();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    // The Opportunities tab is the default; count the primary category badges in
+    // the card list (the table lives in the Charts tab and is not rendered yet).
+    expect(screen.getAllByText('Strategic Bet')).toHaveLength(strategic_bets_count);
+    expect(screen.getAllByText('Quick Win')).toHaveLength(quick_wins_count);
+  });
+
+  it('shows a folded-in effort sub-badge on each card (secondary attribute, prefixed "Effort:")', () => {
+    const { opportunities } = mockLoadedOpportunities();
+    mockRun();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    const effortBadges = screen.getAllByText(/Effort:/i);
+    // One folded-in effort badge per visible card.
+    expect(effortBadges).toHaveLength(opportunities.length);
+    // The old primary-label form must be gone.
+    expect(screen.queryByText('High Effort')).not.toBeInTheDocument();
+    expect(screen.queryByText('Low Effort')).not.toBeInTheDocument();
+    expect(screen.queryByText('Medium Effort')).not.toBeInTheDocument();
+  });
+
+  it('offers the framework (positive) options in the opportunity-type dropdown and NOT "High Effort"', async () => {
+    mockLoadedOpportunities();
+    mockRun();
+    const user = userEvent.setup();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    // Two comboboxes now: brand (first) + opportunity type (second).
+    const combos = screen.getAllByRole('combobox');
+    expect(combos.length).toBeGreaterThanOrEqual(2);
+    await user.click(combos[1]);
+
+    expect(await screen.findByRole('option', { name: 'All Opportunities' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Quick Wins' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Strategic Bets' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Other' })).toBeInTheDocument();
+    // The negative-reading effort labels must NOT be options.
+    expect(screen.queryByRole('option', { name: /High Effort/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Low Effort/i })).not.toBeInTheDocument();
+  });
+
+  it('narrows the visible cards to category === strategic_bet when "Strategic Bets" is selected', async () => {
+    const { strategic_bets_count } = mockLoadedOpportunities();
+    mockRun();
+    const user = userEvent.setup();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    const combos = screen.getAllByRole('combobox');
+    await user.click(combos[1]);
+    await user.click(await screen.findByRole('option', { name: 'Strategic Bets' }));
+
+    await waitFor(() => {
+      // Only strategic-bet cards remain → no Quick Win / Other badges.
+      expect(screen.queryByText('Quick Win')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Other')).not.toBeInTheDocument();
+    // The strategic-bet cards are still all present.
+    expect(screen.getAllByText('Strategic Bet')).toHaveLength(strategic_bets_count);
+    expect(screen.getByText('Expand specialty coverage')).toBeInTheDocument();
+    expect(screen.queryByText('Optimize call cadence')).not.toBeInTheDocument();
   });
 });
 

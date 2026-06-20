@@ -172,6 +172,8 @@ export interface PrioritizedOpportunity {
   implementation_difficulty: ImplementationDifficulty;
   /** Expected time to results */
   time_to_impact: string;
+  /** Curated list-view category (set by the list endpoint). */
+  category?: 'quick_win' | 'strategic_bet' | 'other';
 }
 
 /**
