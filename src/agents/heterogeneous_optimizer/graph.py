@@ -12,6 +12,7 @@ Observability:
 
 import logging
 from functools import partial
+from typing import Any, Dict
 
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -27,9 +28,37 @@ from .nodes.hierarchical_analyzer import HierarchicalAnalyzerNode
 from .nodes.policy_learner import PolicyLearnerNode
 from .nodes.profile_generator import ProfileGeneratorNode
 from .nodes.segment_analyzer import SegmentAnalyzerNode
+from .nodes.uplift_analyzer import UpliftAnalyzerNode
 from .state import HeterogeneousOptimizerState
 
 logger = logging.getLogger(__name__)
+
+
+async def _run_uplift_nonfatal(
+    uplift_node: UpliftAnalyzerNode,
+    state: HeterogeneousOptimizerState,
+) -> Dict[str, Any]:
+    """Run the uplift analyzer as a NON-FATAL complementary step.
+
+    Uplift (AUUC / Qini / targeting efficiency) enriches the HTE analysis but is
+    NOT required for the CATE / responder / policy outputs. So any uplift failure
+    — including the node's deliberate fail-closed no-data ``RuntimeError`` (F-013)
+    — is downgraded to a warning HERE, at the graph boundary, so the run still
+    surfaces everything else rather than aborting. This does NOT reintroduce the
+    fabrication F-013 guarded against: the node itself still never returns mock
+    data unless mock is explicitly env-gated, and the page always feeds it real
+    ``tier0_data``. The orchestration choice (degrade vs abort) is the graph's;
+    the node's standalone fail-closed contract is unchanged for direct callers.
+    """
+    try:
+        return await uplift_node.execute(state)
+    except Exception as exc:  # noqa: BLE001 - complementary step is never fatal
+        logger.warning(
+            "uplift_analysis non-fatal failure; continuing without uplift metrics: %s",
+            exc,
+            extra={"node": "uplift_analyzer"},
+        )
+        return {"warnings": [f"Uplift analysis skipped: {exc}"]}
 
 
 async def error_handler_node(
@@ -49,6 +78,7 @@ async def error_handler_node(
 def create_heterogeneous_optimizer_graph(
     data_connector=None,
     enable_hierarchical: bool = True,
+    enable_uplift: bool = True,
 ) -> CompiledStateGraph:
     """Create the Heterogeneous Optimizer agent LangGraph workflow.
 
@@ -70,6 +100,11 @@ def create_heterogeneous_optimizer_graph(
     Args:
         data_connector: Data connector for fetching data (optional, uses mock if None)
         enable_hierarchical: Whether to include hierarchical analysis node (default: True)
+        enable_uplift: Whether to include the uplift analysis node (default: True).
+            Wired between hierarchical_analysis and learn_policy as a NON-FATAL
+            step (AUUC/Qini/targeting). The node existed but was never wired in,
+            so overall_auuc was never populated and the page's Uplift tab was
+            structurally empty regardless of substrate.
 
     Returns:
         Compiled LangGraph workflow
@@ -109,6 +144,10 @@ def create_heterogeneous_optimizer_graph(
     )
     policy_learner = PolicyLearnerNode()
     profile_generator = ProfileGeneratorNode()
+    # Uplift consumes the SAME shared connector as cate/hierarchical (and the
+    # route's tier0_data passthrough), so it reads one substrate — never
+    # fabricates, never double-fetches.
+    uplift_analyzer = UpliftAnalyzerNode(data_connector=data_connector) if enable_uplift else None
 
     # Create audit workflow initializer
     audit_initializer = create_workflow_initializer(
@@ -130,6 +169,10 @@ def create_heterogeneous_optimizer_graph(
     timed(workflow, "analyze_segments", segment_analyzer.execute)
     if enable_hierarchical:
         timed(workflow, "hierarchical_analysis", hierarchical_analyzer.execute)  # type: ignore[union-attr]
+    if enable_uplift:
+        # Wrapped so any uplift failure degrades to a warning (NON-FATAL); the
+        # CATE/responder/policy outputs must survive an uplift miss.
+        timed(workflow, "uplift_analysis", partial(_run_uplift_nonfatal, uplift_analyzer))
     timed(workflow, "learn_policy", policy_learner.execute)
     timed(workflow, "generate_profiles", profile_generator.execute)
     workflow.add_node("error_handler", error_handler_node)  # type: ignore[type-var,arg-type,call-overload]
@@ -147,21 +190,29 @@ def create_heterogeneous_optimizer_graph(
         {"analyze_segments": "analyze_segments", "error": "error_handler"},
     )
 
+    # Uplift (when enabled) is inserted just before learn_policy. ``pre_policy``
+    # is whichever node feeds learn_policy, so the insertion is transparent to the
+    # hierarchical-enabled/disabled branches below.
+    pre_policy = "learn_policy"
+    if enable_uplift:
+        workflow.add_edge("uplift_analysis", "learn_policy")
+        pre_policy = "uplift_analysis"
+
     if enable_hierarchical:
-        # analyze_segments → hierarchical_analysis → learn_policy
+        # analyze_segments → hierarchical_analysis → [uplift_analysis] → learn_policy
         workflow.add_conditional_edges(
             "analyze_segments",
             lambda s: "error" if s.get("status") == "failed" else "hierarchical_analysis",
             {"hierarchical_analysis": "hierarchical_analysis", "error": "error_handler"},
         )
-        # hierarchical_analysis always proceeds to learn_policy (failures are non-fatal)
-        workflow.add_edge("hierarchical_analysis", "learn_policy")
+        # hierarchical_analysis always proceeds (failures are non-fatal)
+        workflow.add_edge("hierarchical_analysis", pre_policy)
     else:
-        # analyze_segments → learn_policy (original flow)
+        # analyze_segments → [uplift_analysis] → learn_policy (original flow)
         workflow.add_conditional_edges(
             "analyze_segments",
-            lambda s: "error" if s.get("status") == "failed" else "learn_policy",
-            {"learn_policy": "learn_policy", "error": "error_handler"},
+            lambda s, _t=pre_policy: "error" if s.get("status") == "failed" else _t,
+            {pre_policy: pre_policy, "error": "error_handler"},
         )
 
     # Direct edges
