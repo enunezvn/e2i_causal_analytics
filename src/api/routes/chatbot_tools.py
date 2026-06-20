@@ -1345,6 +1345,13 @@ class KpiCalculateInput(BaseModel):
         description="Brand filter (e.g. Remibrutinib, Fabhalta, Kisqali), case-insensitive.",
     )
     region: Optional[str] = Field(default=None, description="Optional region/territory filter.")
+    window: Optional[str] = Field(
+        default=None,
+        description=(
+            "Time window, e.g. 'last 3 months', 'Q1 2025', or "
+            "'2025-01-01 to 2025-03-31'. Omit for the engine's default rolling window."
+        ),
+    )
 
 
 # Reporting window per KPI id, MIRRORED from the vetted SQL in the kpi_query
@@ -1365,16 +1372,22 @@ KPI_REPORTING_WINDOWS = {
 }
 
 
-def _kpi_result_to_response(kpi: Any, result: Any) -> Dict[str, Any]:
+def _kpi_result_to_response(
+    kpi: Any, result: Any, *, brand: Optional[str] = None, region: Optional[str] = None
+) -> Dict[str, Any]:
     """Map a ``KPIResult`` onto the chatbot tool response (pure; unit-tested, no DB).
 
     Surfaces ``data_source='synthetic'`` when the engine answered from the
     synthetic-gold substrate so the chatbot/FE badges the figure honestly rather
     than passing it off as real-world data.
 
-    For KPIs computed over a fixed rolling window (the WS3 volume metrics), also
-    surfaces ``reporting_window`` so the chatbot states the period the figure
-    actually covers rather than echoing whatever range the user asked for.
+    Echoes the ``brand``/``region`` the figure was computed for so the synthesizer
+    can name them instead of re-asking. Copies the engine's window provenance
+    (``window_requested``/``window_applied``/``window_status``) so the chatbot can
+    state exactly which period the figure covers. The static ``reporting_window``
+    note is included ONLY when ``window_status == 'default'`` (no custom window was
+    applied); when a custom window was honored or was not applicable, the stale
+    "rolling last 30 days" note would contradict the real answer.
     """
     if getattr(result, "error", None):
         return {
@@ -1385,6 +1398,7 @@ def _kpi_result_to_response(kpi: Any, result: Any) -> Dict[str, Any]:
             "error": result.error,
         }
     include_synthetic = bool((getattr(result, "metadata", None) or {}).get("include_synthetic"))
+    window_status = getattr(result, "window_status", "default")
     response: Dict[str, Any] = {
         "success": True,
         "query_type": "kpi_calculate",
@@ -1393,10 +1407,16 @@ def _kpi_result_to_response(kpi: Any, result: Any) -> Dict[str, Any]:
         "value": result.value,
         "status": result.status,
         "data_source": "synthetic" if include_synthetic else "database",
+        "brand": brand,
+        "region": region,
+        "window_requested": getattr(result, "window_requested", None),
+        "window_applied": getattr(result, "window_applied", None),
+        "window_status": window_status,
     }
-    window = KPI_REPORTING_WINDOWS.get(kpi.id)
-    if window:
-        response["reporting_window"] = window
+    if window_status == "default":
+        window = KPI_REPORTING_WINDOWS.get(kpi.id)
+        if window:
+            response["reporting_window"] = window
     return response
 
 
@@ -1405,6 +1425,7 @@ async def kpi_calculate_tool(
     kpi_name: str,
     brand: Optional[str] = None,
     region: Optional[str] = None,
+    window: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compute a DEFINED KPI on demand via the KPI engine (the 46 calculable KPIs).
 
@@ -1415,22 +1436,27 @@ async def kpi_calculate_tool(
     name to its definition and CALCULATES it from the real substrate (e.g. NBRx =
     count of each patient's first-brand prescription over ``treatment_events``).
 
-    TIME WINDOW: the volume KPIs (TRx/NRx/NBRx) are computed over the engine's
-    FIXED rolling window — currently the last 30 days — and this tool does NOT
-    accept a caller-supplied date range. When that window is known it is returned
-    as ``reporting_window``. If the user asks for a specific period (e.g. "past 3
-    months"), report the value together with its ``reporting_window`` and say a
-    custom range isn't available — do NOT imply the figure covers the requested
-    period.
+    TIME WINDOW: pass ``window`` (e.g. "last 3 months", "Q1 2025",
+    "2025-01-01 to 2025-03-31") to compute the volume KPIs (TRx/NRx/NBRx) over
+    that period. The engine reports back ``window_status`` ("applied" when the
+    requested window was honored, "not_applicable" when the KPI has no time
+    dimension, "default" when no window was requested), plus ``window_requested``
+    and ``window_applied``. When no custom window applies, the engine's fixed
+    rolling window is disclosed via ``reporting_window``. State the brand and the
+    period your answer actually covers — do NOT imply a figure covers a period it
+    does not.
 
     Args:
         kpi_name: the KPI to compute (resolved against the 46 defined KPIs).
         brand: optional brand filter (case-insensitive).
         region: optional region/territory filter.
+        window: optional time window (rolling or absolute); omit for the
+            engine's default rolling window.
 
     Returns:
-        Dict with success, kpi_id, kpi_name, value, status, data_source, and
-        (for fixed-window volume KPIs) reporting_window.
+        Dict with success, kpi_id, kpi_name, value, status, data_source, brand,
+        region, the window provenance fields, and (when no custom window applies)
+        reporting_window.
     """
     kpi = kpi_resolution.recognize_kpi(kpi_name)
     if kpi is None:
@@ -1441,11 +1467,28 @@ async def kpi_calculate_tool(
             "hint": "Try a defined KPI like NBRx, TRx, NRx, market share, conversion rate, or ROI.",
         }
 
+    # Parse the requested window BEFORE touching the calculator: an unparseable
+    # window is a user-input error, not a calculation error, so fail fast with a
+    # helpful hint and never hit the DB.
+    from src.services.time_window import WindowParseError, parse_window
+
+    try:
+        parsed = parse_window(window)
+    except WindowParseError as e:
+        return {
+            "success": False,
+            "query_type": "kpi_calculate",
+            "error": str(e),
+            "hint": "Try 'last 3 months', 'Q1 2025', or '2025-01-01 to 2025-03-31'.",
+        }
+
     context: Dict[str, Any] = {}
     if brand:
         context["brand"] = brand
     if region:
         context["territory"] = region
+    if parsed is not None:
+        context["window"] = parsed.as_dict()
 
     try:
         # Local import avoids a chatbot_tools <-> kpi route import cycle at load.
@@ -1465,7 +1508,7 @@ async def kpi_calculate_tool(
             "error": str(exc),
         }
 
-    return _kpi_result_to_response(kpi, result)
+    return _kpi_result_to_response(kpi, result, brand=brand, region=region)
 
 
 # List of all E2I chatbot tools for use in LangGraph ToolNode
