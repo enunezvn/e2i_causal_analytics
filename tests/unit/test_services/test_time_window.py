@@ -46,3 +46,33 @@ def test_to_params_iso():
     w = parse_window("Q1 2025", now=NOW)
     assert w.start_iso == "2025-01-01T00:00:00+00:00"
     assert w.end_iso == "2025-04-01T00:00:00+00:00"
+
+def test_single_month():
+    w = parse_window("March 2025", now=NOW)
+    assert w.kind == "absolute"
+    assert w.start == datetime(2025, 3, 1, tzinfo=timezone.utc)
+    assert w.end == datetime(2025, 4, 1, tzinfo=timezone.utc)
+
+def test_month_range():
+    w = parse_window("Jan-Mar 2025", now=NOW)
+    assert w.kind == "absolute"
+    assert w.start == datetime(2025, 1, 1, tzinfo=timezone.utc)
+    assert w.end == datetime(2025, 4, 1, tzinfo=timezone.utc)
+
+def test_iso_date_range():
+    w = parse_window("2025-01-01 to 2025-06-01", now=NOW)
+    assert w.kind == "absolute"
+    assert w.start == datetime(2025, 1, 1, tzinfo=timezone.utc)
+    assert w.end == datetime(2025, 6, 1, tzinfo=timezone.utc)
+
+def test_rolling_trailing_weeks():
+    w = parse_window("trailing 3 weeks", now=NOW)
+    assert w.kind == "rolling"
+    assert w.end == NOW
+    assert w.start == datetime(2026, 5, 30, tzinfo=timezone.utc)
+
+def test_rolling_previous_years():
+    w = parse_window("previous 2 years", now=NOW)
+    assert w.kind == "rolling"
+    assert w.end == NOW
+    assert w.start == datetime(2024, 6, 20, tzinfo=timezone.utc)

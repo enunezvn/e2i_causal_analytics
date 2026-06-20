@@ -55,7 +55,7 @@ def _validate(start: datetime, end: datetime, kind: str, label: str) -> Window:
 
 
 def parse_window(spec: Any, *, now: Optional[datetime] = None) -> Optional[Window]:
-    now = _utc(now) if now else datetime.now(timezone.utc)
+    now = _utc(now) if now is not None else datetime.now(timezone.utc)
     if spec is None or (isinstance(spec, str) and not spec.strip()):
         return None
 
