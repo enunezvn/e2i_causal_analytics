@@ -128,8 +128,18 @@ test.describe('Causal Analysis Page', () => {
       await expect(causalPage.estimatorsCard).toBeVisible()
     })
 
-    test('shows honest empty state before any analysis is run', async () => {
+    test('lands on the leaderboard with an honest empty state before a run', async () => {
       await expect(causalPage.emptyState).toBeVisible()
+    })
+
+    test('shows the Discover causal effects run control + grain/brand facets', async () => {
+      await expect(causalPage.discoverButton).toBeVisible()
+      await expect(causalPage.grainSelect).toBeVisible()
+      await expect(causalPage.brandSelect).toBeVisible()
+    })
+
+    test('keeps the secondary "Pose your own question" manual panel', async () => {
+      await expect(causalPage.poseYourOwnQuestion).toBeVisible()
     })
   })
 

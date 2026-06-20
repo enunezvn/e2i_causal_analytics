@@ -27,6 +27,8 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
   usePerformanceTrend: vi.fn(),
   usePerformanceAlerts: vi.fn(),
   useModelComparison: vi.fn(),
+  useConfusionMatrix: vi.fn(),
+  useRocCurve: vi.fn(),
 }));
 
 vi.mock('@/hooks/api/use-predictions', () => ({
@@ -38,6 +40,8 @@ import {
   usePerformanceTrend,
   usePerformanceAlerts,
   useModelComparison,
+  useConfusionMatrix,
+  useRocCurve,
 } from '@/hooks/api/use-monitoring';
 import { useModelsStatus } from '@/hooks/api/use-predictions';
 
@@ -123,6 +127,31 @@ const mockComparison = {
   better_model: 'propensity_v2.1.0',
 };
 
+const mockConfusion = {
+  model_id: 'propensity_v2.1.0',
+  available: true,
+  tn: 2946,
+  fp: 346,
+  fn: 1277,
+  tp: 506,
+  threshold: 0.5,
+  sample_size: 5075,
+  measured_at: '2026-06-10T00:00:00Z',
+};
+
+const mockRoc = {
+  model_id: 'propensity_v2.1.0',
+  available: true,
+  points: [
+    { fpr: 0.0, tpr: 0.0, threshold: 1.0 },
+    { fpr: 0.3, tpr: 0.6, threshold: 0.5 },
+    { fpr: 1.0, tpr: 1.0, threshold: 0.0 },
+  ],
+  auc: 0.671,
+  sample_size: 5075,
+  measured_at: '2026-06-10T00:00:00Z',
+};
+
 // =============================================================================
 // HELPERS
 // =============================================================================
@@ -156,6 +185,20 @@ function setHooksToSuccess() {
     error: null,
     refetch: vi.fn(),
   });
+  (useConfusionMatrix as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: mockConfusion,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
+  (useRocCurve as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: mockRoc,
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  });
 }
 
 // =============================================================================
@@ -183,6 +226,33 @@ describe('ModelPerformance', () => {
     expect(useModelsStatus).toHaveBeenCalled();
     expect(usePerformanceTrend).toHaveBeenCalled();
     expect(usePerformanceAlerts).toHaveBeenCalled();
+  });
+
+  it('renders the confusion matrix + ROC curve from live curve data', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Confusion Matrix/i }));
+    expect(await screen.findByText('True Positive')).toBeInTheDocument();
+    expect(screen.getByText('True Negative')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /ROC Curve/i }));
+    expect(await screen.findByText(/AUC = 0\.671/)).toBeInTheDocument();
+  });
+
+  it('shows an honest empty-state when curves are not yet recorded', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    (useConfusionMatrix as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { model_id: 'm', available: false, tn: 0, fp: 0, fn: 0, tp: 0, threshold: 0.5 },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Confusion Matrix/i }));
+    expect(await screen.findByText(/No confusion matrix recorded/i)).toBeInTheDocument();
   });
 
   it('issue-298: useModelComparison is called with both ids and disabled until 2nd model picked', () => {
@@ -231,6 +301,37 @@ describe('ModelPerformance', () => {
     expect(enabledCall?.[0]).toBe('propensity_v2.1.0');
     expect(enabledCall?.[1]).toBe('churn_v1.5.2');
     expect(enabledCall?.[2]).toBe('accuracy');
+  });
+
+  it('renders the comparison verdict with the better-model handle + significance note', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    // A non-significant comparison so the disclosure note also renders.
+    (useModelComparison as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { ...mockComparison, is_significant: false },
+      isLoading: false,
+      isError: false,
+      error: null,
+      isRefetching: false,
+      refetch: vi.fn(),
+    });
+
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    const compareTab = screen.getByRole('tab', { name: /Comparison/i });
+    await user.click(compareTab);
+
+    // Pick the 2nd model so the comparison cards render.
+    const compareSelects = screen.getAllByRole('combobox');
+    await user.click(compareSelects[compareSelects.length - 1]);
+    const churnOption = await screen.findByRole('option', { name: /churn_v1\.5\.2/ });
+    await user.click(churnOption);
+
+    // The verdict is its own card (label "Better model"), the winning handle is
+    // carried in a `title` attr (so a long name truncates instead of spilling a
+    // KPI value), and a non-significant difference is disclosed.
+    expect(await screen.findByText('Better model')).toBeInTheDocument();
+    expect(screen.getByTitle('propensity_v2.1.0')).toBeInTheDocument();
+    expect(screen.getByText(/not significant/i)).toBeInTheDocument();
   });
 
   it('issue-298: stale compareModelId after models-list shrink -> otherId=="" + enabled=false', async () => {

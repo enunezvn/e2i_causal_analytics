@@ -241,3 +241,171 @@ def test_delete_metrics_with_split_version():
     # Third eq should use the JSONB ->> form mirroring _apply_model_filter
     eq2.eq.assert_called_once_with("metadata->>split_version", "e2i_pilot_v3")
     assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# record_curve() + get_latest_curve() — structured eval artifacts in metadata
+# ---------------------------------------------------------------------------
+
+
+def test_record_curve_stores_payload_in_metadata(monkeypatch):
+    """record_curve writes ONE row: metric_name=kind, metric_value=value, metadata=payload."""
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+
+    repo = _make_repo()
+    ts = dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc)
+    rec = asyncio.run(
+        repo.record_curve(
+            "mv",
+            "confusion_matrix",
+            0.68,
+            {"tn": 1, "fp": 2, "fn": 3, "tp": 4, "threshold": 0.5},
+            500,
+            ts,
+            ts,
+            measured_at=ts,
+            source="holdout_curve",
+        )
+    )
+    assert rec is not None
+    assert rec.metric_name == "confusion_matrix"
+    assert rec.metric_value == 0.68
+    assert rec.metadata["tp"] == 4
+    assert rec.source == "holdout_curve"
+    # Payload survives serialisation into the row's metadata jsonb.
+    row = rec.to_db_row()
+    assert row["metadata"]["fn"] == 3
+    assert row["metric_name"] == "confusion_matrix"
+
+
+def test_record_curve_no_client_returns_none():
+    repo = PerformanceMetricRepository(None)
+    ts = dt.datetime(2026, 6, 10, tzinfo=dt.timezone.utc)
+    rec = asyncio.run(repo.record_curve("mv", "roc_curve", 0.7, {"points": []}, 10, ts, ts))
+    assert rec is None
+
+
+def _make_read_repo(rows):
+    """Repo whose select chain (eq/order/limit/execute) resolves to ``rows``."""
+    client = MagicMock()
+    chain = MagicMock()
+    chain.select = MagicMock(return_value=chain)
+    chain.eq = MagicMock(return_value=chain)
+    chain.order = MagicMock(return_value=chain)
+    chain.limit = MagicMock(return_value=chain)
+    chain.execute = AsyncMock(return_value=MagicMock(data=rows))
+    client.table = MagicMock(return_value=chain)
+    return PerformanceMetricRepository(client)
+
+
+def test_get_latest_curve_returns_latest_record(monkeypatch):
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+
+    row = {
+        "model_id": "mid",
+        "metric_name": "roc_curve",
+        "metric_value": 0.67,
+        "metadata": {"points": [{"fpr": 0.0, "tpr": 0.0, "threshold": 1.0}]},
+        "measured_at": "2026-06-10T00:00:00+00:00",
+    }
+    repo = _make_read_repo([row])
+    rec = asyncio.run(repo.get_latest_curve("mv", "roc_curve"))
+    assert rec is not None
+    assert rec.metric_name == "roc_curve"
+    assert rec.metadata["points"][0]["fpr"] == 0.0
+
+
+def test_get_latest_curve_none_when_empty(monkeypatch):
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+
+    repo = _make_read_repo([])
+    rec = asyncio.run(repo.get_latest_curve("mv", "confusion_matrix"))
+    assert rec is None
+
+
+# ---------------------------------------------------------------------------
+# get_metric_trend() — a TREND is a walk-forward time series. The point-in-time
+# 'holdout' snapshot (the headline eval, recorded once) is NOT a trend point;
+# mixing it in made current=holdout vs baseline=mean(walk-forward) — a
+# cross-source comparison that fabricated recall/F1 degradation on the
+# model-performance alert AND grafted a mislabeled point onto the Time Series
+# chart. It must be excluded from the trend read.
+# ---------------------------------------------------------------------------
+
+
+def _make_trend_repo(rows):
+    """Repo whose trend chain (select/eq/gte/order/limit/execute) resolves to rows."""
+    client = MagicMock()
+    chain = MagicMock()
+    for m in ("select", "eq", "gte", "order", "limit"):
+        setattr(chain, m, MagicMock(return_value=chain))
+    chain.execute = AsyncMock(return_value=MagicMock(data=rows))
+    client.table = MagicMock(return_value=chain)
+    return PerformanceMetricRepository(client)
+
+
+def _acc_row(value, measured_at, source):
+    return {
+        "model_id": "mid",
+        "metric_name": "accuracy",
+        "metric_value": value,
+        "measured_at": measured_at,
+        "source": source,
+    }
+
+
+def test_get_metric_trend_excludes_holdout_snapshot(monkeypatch):
+    """The point-in-time 'holdout' row must NOT appear in the trend series."""
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+
+    rows = [
+        _acc_row(0.7050, "2026-06-10T00:00:00+00:00", "holdout"),  # snapshot (latest)
+        _acc_row(0.6929, "2026-06-01T00:00:00+00:00", "backtest_wf"),
+        _acc_row(0.7065, "2026-05-01T00:00:00+00:00", "backtest_wf"),
+    ]
+    repo = _make_trend_repo(rows)
+    recs = asyncio.run(repo.get_metric_trend("mv", "accuracy", days=365))
+
+    assert len(recs) == 2, "holdout snapshot must be dropped from the trend"
+    assert all(r.source != "holdout" for r in recs)
+    # The holdout value (0.7050) must not be present as a trend point.
+    assert all(abs(r.metric_value - 0.7050) > 1e-9 for r in recs)
+
+
+def test_get_metric_trend_keeps_non_holdout_sources(monkeypatch):
+    """backtest_wf / mlflow / null-source rows are all retained (only holdout drops)."""
+    import src.repositories.drift_monitoring as D
+
+    async def _mid(client, model_version):
+        return "mid"
+
+    monkeypatch.setattr(D, "_resolve_model_id", _mid)
+
+    rows = [
+        _acc_row(0.70, "2026-06-01T00:00:00+00:00", "backtest_wf"),
+        _acc_row(0.72, "2026-05-01T00:00:00+00:00", "mlflow"),
+        _acc_row(0.71, "2026-04-01T00:00:00+00:00", None),
+    ]
+    repo = _make_trend_repo(rows)
+    recs = asyncio.run(repo.get_metric_trend("mv", "accuracy"))
+    assert len(recs) == 3, "only the holdout snapshot is excluded; other sources stay"

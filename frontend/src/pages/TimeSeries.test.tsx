@@ -346,15 +346,36 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     }
   });
 
-  it('default selection yields persistence_remibrutinib_goldstd_lr_v1', () => {
+  it('default selection enables the persistence_remibrutinib trend query', () => {
     render(<TimeSeries />, { wrapper: createWrapper() });
 
-    // After initial render the hook should have been called with the default per-brand model id.
+    // The page now issues one trend query per brand (so "All brands" can overlay
+    // them), each gated by `enabled`; the SELECTED brand is the enabled one.
     expect(mockUsePerformanceTrend).toHaveBeenCalled();
-    const lastCall = mockUsePerformanceTrend.mock.calls[
-      mockUsePerformanceTrend.mock.calls.length - 1
-    ];
-    expect(lastCall[0].model_id).toBe('persistence_remibrutinib_goldstd_lr_v1');
+    const enabled = mockUsePerformanceTrend.mock.calls.filter((c) => c[1]?.enabled);
+    expect(enabled.length).toBeGreaterThan(0);
+    expect(enabled[enabled.length - 1][0].model_id).toBe(
+      'persistence_remibrutinib_goldstd_lr_v1',
+    );
+  });
+
+  it('"All brands" enables a trend query for all three brands (overlay)', async () => {
+    const user = userEvent.setup();
+    render(<TimeSeries />, { wrapper: createWrapper() });
+
+    const brandSelect = screen.getByRole('combobox', { name: /brand/i });
+    await user.selectOptions(brandSelect, 'All');
+
+    await waitFor(() => {
+      const enabledIds = new Set(
+        mockUsePerformanceTrend.mock.calls
+          .filter((c) => c[1]?.enabled)
+          .map((c) => c[0].model_id),
+      );
+      expect(enabledIds.has('persistence_remibrutinib_goldstd_lr_v1')).toBe(true);
+      expect(enabledIds.has('persistence_fabhalta_goldstd_lr_v1')).toBe(true);
+      expect(enabledIds.has('persistence_kisqali_goldstd_lr_v1')).toBe(true);
+    });
   });
 
   it('cohort+brand dropdowns update the queried model id (initiation + Kisqali)', async () => {
@@ -370,9 +391,10 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     await user.selectOptions(brandSelect, 'Kisqali');
 
     await waitFor(() => {
-      const allCalls = mockUsePerformanceTrend.mock.calls;
-      const lastModelId = allCalls[allCalls.length - 1]?.[0]?.model_id;
-      expect(lastModelId).toBe('initiation_kisqali_goldstd_lr_v1');
+      const enabled = mockUsePerformanceTrend.mock.calls.filter((c) => c[1]?.enabled);
+      expect(enabled[enabled.length - 1]?.[0]?.model_id).toBe(
+        'initiation_kisqali_goldstd_lr_v1',
+      );
     });
   });
 
@@ -386,9 +408,10 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
 
     // Default brand is Remibrutinib; the model handle should reflect the template
     await waitFor(() => {
-      const allCalls = mockUsePerformanceTrend.mock.calls;
-      const lastModelId = allCalls[allCalls.length - 1]?.[0]?.model_id;
-      expect(lastModelId).toBe('hcp_adoption_remibrutinib_goldstd_lr_v1');
+      const enabled = mockUsePerformanceTrend.mock.calls.filter((c) => c[1]?.enabled);
+      expect(enabled[enabled.length - 1]?.[0]?.model_id).toBe(
+        'hcp_adoption_remibrutinib_goldstd_lr_v1',
+      );
     });
 
     // Also verify with a different brand (Fabhalta) to prove the template wiring
@@ -396,9 +419,10 @@ describe('TimeSeries (live data wiring — issue #302)', () => {
     await user.selectOptions(brandSelect, 'Fabhalta');
 
     await waitFor(() => {
-      const allCalls = mockUsePerformanceTrend.mock.calls;
-      const lastModelId = allCalls[allCalls.length - 1]?.[0]?.model_id;
-      expect(lastModelId).toBe('hcp_adoption_fabhalta_goldstd_lr_v1');
+      const enabled = mockUsePerformanceTrend.mock.calls.filter((c) => c[1]?.enabled);
+      expect(enabled[enabled.length - 1]?.[0]?.model_id).toBe(
+        'hcp_adoption_fabhalta_goldstd_lr_v1',
+      );
     });
   });
 

@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import FeatureImportance from './FeatureImportance';
@@ -212,7 +212,7 @@ describe('FeatureImportance — page chrome', () => {
 
   it('renders Cohort and Individual mode tabs (cohort default)', () => {
     render(<FeatureImportance />, { wrapper: createWrapper() });
-    expect(screen.getByRole('tab', { name: /Cohort \(global\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Cohort average/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Individual/i })).toBeInTheDocument();
   });
 
@@ -563,5 +563,74 @@ describe('FeatureImportance — brand selector + per-cohort ID label (#967)', ()
     expect(arg.patient_id).toBe('scvpt_000000');
     expect(arg.hcp_id).toBeUndefined();
     expect(arg.model_type).toBe('initiation');
+  });
+});
+
+describe('FeatureImportance — covariate grouping (encoded → raw covariate)', () => {
+  // initiation model now carries keep_columns (raw covariate names) so encoded
+  // SHAP columns group back to their parent covariate.
+  const groupedModels = {
+    supported_models: [
+      {
+        model_type: 'initiation',
+        latest_version: '1.0',
+        explainer_type: 'LinearExplainer' as const,
+        is_gold_standard: true,
+        keep_columns: ['disease_severity', 'academic_hcp', 'geographic_region'],
+      },
+    ],
+    total_models: 1,
+  };
+
+  // 3 region one-hots + an __isna twin: raw, they read as 5 rows; grouped, 2.
+  const groupedGlobal = {
+    ...mockGlobal,
+    features: [
+      { feature_name: 'disease_severity', mean_abs_shap: 0.77, mean_shap: 0.77, mean_feature_value: 4.6, contribution_rank: 1 },
+      { feature_name: 'geographic_region_west', mean_abs_shap: 0.1, mean_shap: -0.1, mean_feature_value: 0.4, contribution_rank: 2 },
+      { feature_name: 'geographic_region_northeast', mean_abs_shap: 0.07, mean_shap: -0.07, mean_feature_value: 0.3, contribution_rank: 3 },
+      { feature_name: 'geographic_region_south', mean_abs_shap: 0.04, mean_shap: -0.04, mean_feature_value: 0.2, contribution_rank: 4 },
+      { feature_name: 'disease_severity__isna', mean_abs_shap: 0, mean_shap: 0, mean_feature_value: 0, contribution_rank: 5 },
+    ],
+  };
+
+  beforeEach(() => {
+    (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: groupedModels,
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    (useGlobalFeatureImportance as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: groupedGlobal,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+  });
+
+  it('folds one-hot / __isna columns into one row per covariate (no duplicates)', () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    const rankings = screen.getByTestId('feature-rankings');
+    // One "geographic region" row, not 3 separate region one-hot rows.
+    expect(within(rankings).getByText('geographic region')).toBeInTheDocument();
+    expect(within(rankings).queryByText('geographic region west')).not.toBeInTheDocument();
+    // disease_severity + its __isna twin collapse to a single covariate row.
+    expect(within(rankings).getByText('disease severity')).toBeInTheDocument();
+    expect(within(rankings).queryByText('disease severity isna')).not.toBeInTheDocument();
+  });
+
+  it('expands a grouped covariate to reveal its encoded categories', async () => {
+    const user = userEvent.setup();
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    const rankings = screen.getByTestId('feature-rankings');
+    await user.click(within(rankings).getByText('geographic region'));
+    await waitFor(() => {
+      expect(within(rankings).getByText('geographic region west')).toBeInTheDocument();
+      expect(within(rankings).getByText('geographic region northeast')).toBeInTheDocument();
+      expect(within(rankings).getByText('geographic region south')).toBeInTheDocument();
+    });
   });
 });

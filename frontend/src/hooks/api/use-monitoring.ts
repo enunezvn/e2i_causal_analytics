@@ -32,6 +32,8 @@ import {
   getPerformanceTrend,
   getPerformanceAlerts,
   compareModelPerformance,
+  getConfusionMatrix,
+  getRocCurve,
   triggerProductionSweep,
   evaluateRetrainingNeed,
   triggerRetraining,
@@ -46,6 +48,7 @@ import type {
   AlertListParams,
   AlertListResponse,
   CompleteRetrainingRequest,
+  ConfusionMatrixResponse,
   DriftDetectionResponse,
   DriftHistoryParams,
   DriftHistoryResponse,
@@ -61,6 +64,7 @@ import type {
   RecordPerformanceRequest,
   RetrainingDecisionResponse,
   RetrainingJobResponse,
+  RocCurveResponse,
   RollbackRetrainingRequest,
   TaskStatusResponse,
   TriggerDriftDetectionRequest,
@@ -671,6 +675,52 @@ export function useModelComparison(
     queryFn: () => compareModelPerformance(modelId, otherModelId, metricName),
     enabled: !!modelId && !!otherModelId,
     staleTime: 10 * 60 * 1000, // 10 minutes
+    ...options,
+  });
+}
+
+/**
+ * Hook to get the latest holdout confusion matrix for a model.
+ *
+ * Returns `available: false` (honest empty state) when none is recorded yet.
+ *
+ * @example
+ * ```tsx
+ * const { data: cm } = useConfusionMatrix('initiation_goldstd');
+ * ```
+ */
+export function useConfusionMatrix(
+  modelId: string,
+  options?: Omit<UseQueryOptions<ConfusionMatrixResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<ConfusionMatrixResponse, ApiError>({
+    queryKey: queryKeys.monitoring.performanceConfusion(modelId),
+    queryFn: () => getConfusionMatrix(modelId),
+    enabled: !!modelId,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    ...options,
+  });
+}
+
+/**
+ * Hook to get the latest holdout ROC curve for a model.
+ *
+ * Returns `available: false` (honest empty state) when none is recorded yet.
+ *
+ * @example
+ * ```tsx
+ * const { data: roc } = useRocCurve('initiation_goldstd');
+ * ```
+ */
+export function useRocCurve(
+  modelId: string,
+  options?: Omit<UseQueryOptions<RocCurveResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<RocCurveResponse, ApiError>({
+    queryKey: queryKeys.monitoring.performanceRoc(modelId),
+    queryFn: () => getRocCurve(modelId),
+    enabled: !!modelId,
+    staleTime: 5 * 60 * 1000, // 5 minutes
     ...options,
   });
 }

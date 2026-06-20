@@ -556,9 +556,25 @@ class GraphBuilderNode:
                 if covariate_cols
                 else [[treatment], [outcome]]
             )
+            # Seed the question's MODELED confounders as REQUIRED edges so guided
+            # PC anchors them as confounders (confounder->treatment AND
+            # confounder->outcome) by construction, while the data still selects
+            # the rest. Replaces the generic KNOWN_CAUSAL_RELATIONSHIPS constants
+            # (~0 overlap with real covariates) as the discovery prior. Restricted
+            # to confounders actually present as frame columns (build_background_knowledge
+            # name-matches the frame; keeping required_edges clean keeps the prior honest).
+            modeled = [
+                c
+                for c in (state.get("modeled_confounders") or [])
+                if c in data.columns and c not in (treatment, outcome)
+            ]
+            required_edges: List[Tuple[str, str]] = [(treatment, outcome)]
+            for conf in modeled:
+                required_edges.append((conf, treatment))
+                required_edges.append((conf, outcome))
             prior_knowledge = CausalPriorKnowledge(
                 tiers=tiers,
-                required_edges=[(treatment, outcome)],
+                required_edges=required_edges,
             )
             # Only PC consumes BackgroundKnowledge; restrict to it so the ensemble
             # is not polluted by unconstrained orientations from other algorithms.

@@ -62,6 +62,7 @@ from src.api.schemas.causal import (
     CausalHealthResponse,
     CausalLibrary,
     CausalVariablesResponse,
+    ClinicalContext,
     CrossValidationRequest,
     CrossValidationResponse,
     DiscoveredEffect,
@@ -816,6 +817,7 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "engagement_score",
             "age_at_diagnosis",
             "academic_hcp",
+            "geographic_region",
             "egfr",
             "proteinuria_g_day",
             "ldh_ratio",
@@ -868,6 +870,16 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "adopted",
         "centrality_z",
     },
+}
+
+# Categorical covariates ONE-HOT ENCODED before the frame reaches the executors
+# (DoWhy/EconML require numeric inputs). DELIBERATELY absent from
+# _CAUSAL_NUMERIC_COLUMNS so the loader does NOT float-coerce them to None;
+# _one_hot_categoricals expands each into stable <col>=<level> 0/1 float dummies
+# (drop_first reference level). geographic_region is the modeled RETENTION
+# confounder: an unordered 4-level region (midwest/south/northeast/west).
+_CAUSAL_CATEGORICAL_COLUMNS: Dict[str, set] = {
+    "patient_journeys": {"geographic_region"},
 }
 
 
@@ -1034,7 +1046,7 @@ def _adjusted_partial_corr(
 async def _prerank_signal(dataset: str, q: "_CandidateQuestion") -> float:
     """Cheap FWL screen for one question; 0.0 when undefined / unloadable."""
     try:
-        df, _ = await _load_agent_estimation_frame(
+        df, select_cols = await _load_agent_estimation_frame(
             dataset=dataset,
             treatment_var=q.treatment,
             outcome_var=q.outcome,
@@ -1044,7 +1056,11 @@ async def _prerank_signal(dataset: str, q: "_CandidateQuestion") -> float:
         )
     except HTTPException:
         return 0.0
-    pc = _adjusted_partial_corr(df, q.treatment, q.outcome, q.adjustment_set)
+    # Use the loader's EXPANDED columns (categoricals like geographic_region are
+    # one-hot dummies in ``df``, not their raw name) so the FWL screen indexes real
+    # frame columns instead of KeyError-ing on the raw categorical in adjustment_set.
+    cov = [c for c in select_cols if c not in (q.treatment, q.outcome)]
+    pc = _adjusted_partial_corr(df, q.treatment, q.outcome, cov)
     return abs(pc) if pc is not None else 0.0
 
 
@@ -1142,6 +1158,14 @@ _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJob
 # running both is redundant, so one is skipped to dedupe the leaderboard.
 _COMPLEMENT_OUTCOMES_SKIP = {"discontinued_180d"}
 
+# Clinical Context enrichment service (lazy real REST clients inside; see
+# src/services/clinical_context). Module-level so tests can patch
+# ``causal._clinical_context_service.get_context``. Stateless apart from its
+# in-process per-brand cache.
+from src.services.clinical_context import ClinicalContextService  # noqa: E402
+
+_clinical_context_service = ClinicalContextService()
+
 
 class _CandidateQuestion(NamedTuple):
     treatment: str
@@ -1168,12 +1192,15 @@ async def _discover_candidate_questions(
 
     Reads distinct (treatment, outcome, brand) from ``causal_paths`` and attaches
     each row's modeled ``confounders_controlled``, intersected with the dataset's
-    numeric allowlist (geographic_region is non-numeric -> dropped here; restored
-    in P1b). The column-allowlist security gate in ``_load_agent_estimation_frame``
-    is unchanged — this replaces ENUMERATION only, not validation."""
+    numeric AND categorical allowlists (P1b/D5: ``geographic_region`` is categorical,
+    so it now enters the adjustment set as its RAW name here — the loader one-hot
+    EXPANDS it into ``geographic_region=<level>`` dummies downstream). The
+    column-allowlist security gate in ``_load_agent_estimation_frame`` is unchanged
+    — this replaces ENUMERATION only, not validation."""
     spec = _CAUSAL_DATASET_SPECS[dataset]
     numeric = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
-    allowed_cov = set(spec["covariate"]) & numeric
+    categorical = _CAUSAL_CATEGORICAL_COLUMNS.get(dataset, set())
+    allowed_cov = set(spec["covariate"]) & (numeric | categorical)
     repo = await _get_causal_path_repo()
     rows = await repo.get_distinct_questions(brand=brand, include_synthetic=True)
     out: List[_CandidateQuestion] = []
@@ -1337,15 +1364,19 @@ async def _run_discover_effects_task(
         effects[key] = _pending_effect(q, "running")
         await _publish("running", completed)
         try:
-            cov = q.adjustment_set
-            df, _select = await _load_agent_estimation_frame(
+            df, select_cols = await _load_agent_estimation_frame(
                 dataset=dataset,
                 treatment_var=t,
                 outcome_var=o,
-                covariates=cov,
+                covariates=q.adjustment_set,
                 limit=1500,
                 brand=q_brand,
             )
+            # The loader EXPANDS categorical covariates (e.g. geographic_region)
+            # into one-hot dummies; the agent run must adjust on the resolved frame
+            # columns (the dummy names), not the raw categorical. Derive them from
+            # the loader's returned column list, excluding treatment/outcome.
+            resolved_cov = [c for c in select_cols if c not in (t, o)]
             aid = str(uuid.uuid4())
             req = AgentCausalAnalysisRequest(
                 treatment_var=t,
@@ -1371,7 +1402,7 @@ async def _run_discover_effects_task(
                     latency_ms=0,
                 ),
             )
-            await _run_agent_analysis_task(aid, req, df, cov, data_source)
+            await _run_agent_analysis_task(aid, req, df, resolved_cov, data_source)
             resp = await _agent_analysis_store.get(aid)
             if resp is None:
                 raise RuntimeError(f"agent analysis {aid} produced no cached result")
@@ -1473,6 +1504,52 @@ async def get_discover_causal_effects(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
     return job
+
+
+@router.get(
+    "/clinical-context",
+    response_model=ClinicalContext,
+    summary="Brand-faithful, sourced clinical context for a discovered effect",
+    operation_id="get_causal_clinical_context",
+)
+async def get_clinical_context(
+    brand: str = Query(..., description="Brand to enrich (e.g. Kisqali / Fabhalta / Remibrutinib)"),
+    outcome: str = Query(
+        ...,
+        description=(
+            "The synthetic outcome column the effect uses (e.g. persistent_180d); "
+            "mapped to the real pivotal endpoint."
+        ),
+    ),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> ClinicalContext:
+    """Return the drug + mechanism of action (ChEMBL), the disease's real pivotal
+    endpoints (ClinicalTrials.gov), and a real-world-evidence citation (PubMed)
+    for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
+
+    Additive narrative ONLY — does not touch the causal estimate or its
+    adjustment set. Degrades gracefully (static fallbacks) when an upstream API
+    is down; never fabricates a citation. The payload's ``honesty_label`` states
+    the synthetic-estimate / real-context boundary.
+    """
+    available = await _list_dataset_brands(_DEFAULT_CAUSAL_DATASET)
+    if available and brand not in available:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown brand '{brand}'. Known brands: {available}",
+        )
+    try:
+        # Offload the synchronous httpx fan-out (ChEMBL + CT.gov + PubMed) to a
+        # worker thread so a slow / timing-out / rate-limited upstream cannot block
+        # the event loop (the cold-cache call can take tens of seconds worst case).
+        payload = await asyncio.to_thread(_clinical_context_service.get_context, brand, outcome)
+    except KeyError:
+        # The brand_map has no profile for this brand (no enrichment facts).
+        raise HTTPException(
+            status_code=404,
+            detail=f"No clinical-context profile for brand '{brand}'.",
+        )
+    return ClinicalContext.model_validate(payload)
 
 
 @router.get(
@@ -1776,6 +1853,30 @@ async def _load_hcp_adoption_join_frame(
     return pd.DataFrame(records), select_cols
 
 
+def _one_hot_categoricals(
+    df: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    categorical_cols: List[str],
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """One-hot encode the categorical columns present in ``df`` into stable
+    ``<col>=<level>`` 0/1 float dummies, dropping the original column. drop_first
+    drops the first sorted level as the reference category (avoids the
+    dummy-variable trap). Level order is sorted for deterministic dummy names.
+    Columns absent from ``df`` are skipped. Returns ``(expanded_df, dummy_names)``."""
+    present = [c for c in categorical_cols if c in df.columns]
+    if not present:
+        return df, []
+    out = df.copy()
+    dummy_names: List[str] = []
+    for col in present:
+        levels = sorted(str(v) for v in out[col].dropna().unique())
+        for level in levels[1:]:  # drop_first: first sorted level = reference
+            name = f"{col}={level}"
+            out[name] = (out[col].astype(str) == level).astype(float)
+            dummy_names.append(name)
+        out = out.drop(columns=[col])
+    return out, dummy_names
+
+
 async def _load_agent_estimation_frame(
     *,
     dataset: str,
@@ -1849,6 +1950,7 @@ async def _load_agent_estimation_frame(
     rows = result.data or []
 
     numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    categorical_cols = _CAUSAL_CATEGORICAL_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []
     for row in rows:
         rec = _coerce_estimation_row(
@@ -1857,6 +1959,7 @@ async def _load_agent_estimation_frame(
             treatment_var=treatment_var,
             outcome_var=outcome_var,
             numeric_cols=numeric_cols,
+            categorical_cols=frozenset(categorical_cols),
         )
         if rec is not None:
             records.append(rec)
@@ -1872,7 +1975,11 @@ async def _load_agent_estimation_frame(
 
     import pandas as pd
 
-    return pd.DataFrame(records), select_cols
+    frame = pd.DataFrame(records)
+    requested_categoricals = [c for c in select_cols if c in categorical_cols]
+    frame, dummy_names = _one_hot_categoricals(frame, requested_categoricals)
+    expanded_cols = [c for c in select_cols if c not in categorical_cols] + dummy_names
+    return frame, expanded_cols
 
 
 @router.post(
@@ -1932,7 +2039,7 @@ async def run_causal_agent_analysis(
     # 503 no data) before scheduling the heavy run. ``brand`` (optional) scopes
     # the cohort to one brand (a row subset; brand stays out of the estimation
     # columns) so the analyst can analyze a single brand's patients.
-    df, _select_cols = await _load_agent_estimation_frame(
+    df, select_cols = await _load_agent_estimation_frame(
         dataset=request.dataset,
         treatment_var=request.treatment_var,
         outcome_var=request.outcome_var,
@@ -1940,6 +2047,13 @@ async def run_causal_agent_analysis(
         limit=request.limit,
         brand=request.brand,
     )
+    # The loader EXPANDS categorical covariates (e.g. geographic_region) into
+    # one-hot dummies; the agent's confounders must be the resolved frame columns
+    # (the dummy names), not the raw categorical. Derive them from the loader's
+    # returned column list, excluding treatment/outcome.
+    resolved_covariates = [
+        c for c in select_cols if c not in (request.treatment_var, request.outcome_var)
+    ]
 
     analysis_id = str(uuid.uuid4())
     data_source = "synthetic" if deployment_includes_synthetic() else "database"
@@ -1959,7 +2073,7 @@ async def run_causal_agent_analysis(
     )
     await _agent_analysis_store.set(analysis_id, pending)
     background_tasks.add_task(
-        _run_agent_analysis_task, analysis_id, request, df, covariates, data_source
+        _run_agent_analysis_task, analysis_id, request, df, resolved_covariates, data_source
     )
     return pending
 
@@ -2021,6 +2135,9 @@ async def _run_agent_analysis_task(
         "treatment_var": request.treatment_var,
         "outcome_var": request.outcome_var,
         "confounders": covariates,
+        # Threaded so guided discovery seeds confounder->treatment/outcome priors
+        # from the question's modeled (resolved/expanded) adjustment set.
+        "modeled_confounders": covariates,
         "data_source": data_source,
         "data_cache": {"estimation_data": df},
         # Learn the DAG from data via GUIDED discovery (graph_builder anchors the

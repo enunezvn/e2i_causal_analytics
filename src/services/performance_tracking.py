@@ -390,6 +390,64 @@ class PerformanceTracker:
             "is_significant": abs(relative_diff) > 5,
         }
 
+    async def get_confusion_matrix(
+        self,
+        model_version: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Latest holdout confusion matrix for a model, or None if not recorded.
+
+        Reads the structured artifact the gold-standard eval persists
+        (``metric_name='confusion_matrix'``); the counts live in the row's
+        ``metadata``. None means "not recorded yet" — an honest empty state, not
+        an error (the eval re-run populates it).
+        """
+        from src.repositories.drift_monitoring import (
+            PerformanceMetricRepository,
+            get_drift_monitoring_client,
+        )
+
+        repo = PerformanceMetricRepository(await get_drift_monitoring_client())
+        rec = await repo.get_latest_curve(model_version, "confusion_matrix")
+        if rec is None:
+            return None
+        meta = rec.metadata or {}
+        return {
+            "tn": int(meta.get("tn", 0)),
+            "fp": int(meta.get("fp", 0)),
+            "fn": int(meta.get("fn", 0)),
+            "tp": int(meta.get("tp", 0)),
+            "threshold": float(meta.get("threshold", 0.5)),
+            "sample_size": rec.sample_size,
+            "measured_at": rec.measured_at,
+        }
+
+    async def get_roc_curve(
+        self,
+        model_version: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Latest holdout ROC curve for a model, or None if not recorded.
+
+        Reads the structured artifact the gold-standard eval persists
+        (``metric_name='roc_curve'``); the (fpr, tpr, threshold) points live in
+        the row's ``metadata`` and the AUC is the row's ``metric_value``.
+        """
+        from src.repositories.drift_monitoring import (
+            PerformanceMetricRepository,
+            get_drift_monitoring_client,
+        )
+
+        repo = PerformanceMetricRepository(await get_drift_monitoring_client())
+        rec = await repo.get_latest_curve(model_version, "roc_curve")
+        if rec is None:
+            return None
+        meta = rec.metadata or {}
+        return {
+            "points": meta.get("points", []),
+            "auc": float(rec.metric_value),
+            "sample_size": rec.sample_size,
+            "measured_at": rec.measured_at,
+        }
+
 
 # =============================================================================
 # FACTORY
