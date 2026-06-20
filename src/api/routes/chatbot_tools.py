@@ -1486,7 +1486,11 @@ async def kpi_calculate_tool(
     if brand:
         context["brand"] = brand
     if region:
-        context["territory"] = region
+        # KPI calculators read ``context.get("region")`` (business_impact /
+        # trigger_performance / data_quality); "territory" was a dead key, so a
+        # region filter silently dropped -> region-agnostic windowed query while
+        # the response still echoed the region. Pass the key the engine reads.
+        context["region"] = region
     if parsed is not None:
         context["window"] = parsed.as_dict()
 

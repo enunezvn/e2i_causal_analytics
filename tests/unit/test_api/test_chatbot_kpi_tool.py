@@ -174,7 +174,7 @@ async def test_kpi_calculate_tool_bad_window_fails_without_calculator(monkeypatc
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_window_into_context(monkeypatch):
     """A valid window is parsed and threaded into the calculator context as a
-    {'start','end'} dict alongside brand/territory."""
+    {'start','end'} dict alongside brand/region."""
     import src.api.routes.kpi as kpi_route
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
@@ -202,3 +202,32 @@ async def test_kpi_calculate_tool_passes_window_into_context(monkeypatch):
     assert ctx["brand"] == "Kisqali"
     assert isinstance(ctx.get("window"), dict)
     assert set(ctx["window"].keys()) == {"start", "end"}
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_kpi_calculate_tool_passes_region_into_context(monkeypatch):
+    """A region filter must reach the calculator under the key it actually reads
+    -- ``context['region']`` (business_impact/trigger_performance/data_quality).
+    A dead 'territory' key would silently drop the filter, running the
+    region-agnostic query while the response still echoed the region."""
+    import src.api.routes.kpi as kpi_route
+    from src.api.routes.chatbot_tools import kpi_calculate_tool
+
+    captured: dict = {}
+
+    class _FakeCalc:
+        def calculate(self, kpi_id, context=None):
+            captured["context"] = context
+            return KPIResult(kpi_id=kpi_id, value=7.0, status=KPIStatus.UNKNOWN)
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
+
+    resp = await kpi_calculate_tool.ainvoke(
+        {"kpi_name": "NBRx", "brand": "Kisqali", "region": "northeast"}
+    )
+    assert resp["success"] is True
+    ctx = captured["context"]
+    assert ctx["region"] == "northeast"
+    assert "territory" not in ctx  # the dead key must be gone
+    assert resp["region"] == "northeast"
