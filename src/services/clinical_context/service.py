@@ -20,14 +20,19 @@ from src.services.clinical_context.brand_map import (
 from src.services.clinical_context.clients import (
     ClinicalTrialsClient,
     PubMedClient,
+    _OpenFDAClient,
 )
 from src.services.clinical_context.providers import (
     ChEMBLMechanismProvider,
     CitationFragment,
     ClinicalContextProvider,
     ClinicalTrialsEndpointProvider,
+    CompetitorFragment,
+    CuratedCompetitorProvider,
     EndpointsFragment,
+    IndicationsFragment,
     MechanismFragment,
+    OpenFDAIndicationsProvider,
     PubMedRWEProvider,
 )
 
@@ -35,11 +40,19 @@ logger = logging.getLogger(__name__)
 
 HONESTY_LABEL = (
     "Effect estimate = a SYNTHETIC patient cohort (gold-standard demo data). "
-    "Clinical context below (mechanism of action, pivotal endpoints, real-world "
-    "evidence) is REAL and cited from public biomedical sources."
+    "Clinical context below (mechanism of action, pivotal endpoints, FDA-label "
+    "indications, real-world evidence) is REAL from public biomedical/regulatory "
+    "sources; the competitor landscape is a curated reference. Each item is "
+    "labelled with its source."
 )
 
-_FragmentTuple = Tuple[MechanismFragment, EndpointsFragment, CitationFragment]
+_FragmentTuple = Tuple[
+    MechanismFragment,
+    EndpointsFragment,
+    CitationFragment,
+    IndicationsFragment,
+    CompetitorFragment,
+]
 
 # A DEGRADED fan-out (any provider on a static_fallback / unavailable source, e.g.
 # from a transient PubMed 429 or CT.gov timeout) is reused only briefly so the
@@ -63,6 +76,8 @@ class ClinicalContextService:
         mechanism_provider: Optional[ClinicalContextProvider] = None,
         endpoints_provider: Optional[ClinicalContextProvider] = None,
         citation_provider: Optional[ClinicalContextProvider] = None,
+        indications_provider: Optional[ClinicalContextProvider] = None,
+        competitor_provider: Optional[ClinicalContextProvider] = None,
     ) -> None:
         # Default real providers wire the public-REST clients; tests inject stubs.
         # Q1: _default_chembl() already returns a ChEMBLMechanismProvider — single-wrap.
@@ -71,6 +86,10 @@ class ClinicalContextService:
             client=ClinicalTrialsClient()
         )
         self._citation = citation_provider or PubMedRWEProvider(client=PubMedClient())
+        self._indications = indications_provider or OpenFDAIndicationsProvider(
+            client=_OpenFDAClient()
+        )
+        self._competitor = competitor_provider or CuratedCompetitorProvider()
 
     def _fan_out(self, profile: BrandClinicalProfile) -> _FragmentTuple:
         key = (profile.brand, profile.disease)
@@ -84,16 +103,28 @@ class ClinicalContextService:
         moa = self._mechanism.enrich(profile)
         eps = self._endpoints.enrich(profile)
         cite = self._citation.enrich(profile)
+        indications = self._indications.enrich(profile)
+        competitors = self._competitor.enrich(profile)
         assert isinstance(moa, MechanismFragment)
         assert isinstance(eps, EndpointsFragment)
         assert isinstance(cite, CitationFragment)
+        assert isinstance(indications, IndicationsFragment)
+        assert isinstance(competitors, CompetitorFragment)
+        # Competitors are curated by design (the chosen SSOT), so "curated" is the
+        # intended live state — it does NOT make the result degraded. Only the four
+        # live-API providers gate the fully-live (cache-indefinitely) decision.
         fully_live = (
             moa.source == "chembl"
             and eps.source == "clinicaltrials.gov"
             and cite.source == "pubmed"
+            and indications.source == "openfda"
         )
-        _FRAGMENT_CACHE[key] = ((moa, eps, cite), time.monotonic(), fully_live)
-        return moa, eps, cite
+        _FRAGMENT_CACHE[key] = (
+            (moa, eps, cite, indications, competitors),
+            time.monotonic(),
+            fully_live,
+        )
+        return moa, eps, cite, indications, competitors
 
     def get_context(self, brand: str, outcome: str) -> Dict[str, Any]:
         """Return the assembled clinical-context payload for (brand, outcome).
@@ -102,7 +133,7 @@ class ClinicalContextService:
         Never raises on an API failure — providers degrade to static fallbacks.
         """
         profile = resolve_brand_profile(brand)
-        moa, eps, cite = self._fan_out(profile)
+        moa, eps, cite, indications, competitors = self._fan_out(profile)
         citation_payload: Optional[Dict[str, Any]] = None
         if cite.citation is not None:
             citation_payload = {
@@ -129,6 +160,17 @@ class ClinicalContextService:
                 "source": eps.source,
             },
             "real_world_evidence": citation_payload,
+            "approved_indications": {
+                "indications": list(indications.approved_indications),
+                "limitations_of_use": indications.limitations_of_use,
+                "boxed_warning": indications.boxed_warning,
+                "source": indications.source,
+            },
+            "competitor_landscape": {
+                "competitors": list(competitors.competitors),
+                "count": competitors.count,
+                "source": competitors.source,
+            },
             "honesty_label": HONESTY_LABEL,
         }
 
