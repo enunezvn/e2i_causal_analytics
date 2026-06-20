@@ -72,6 +72,7 @@ import {
   useSampleEntities,
 } from '@/hooks/api/use-explain';
 import { groupByCovariate, type CovariateGroup } from '@/lib/shap-covariates';
+import { interpretGlobalImportance } from '@/lib/feature-importance/interpret';
 import { cn } from '@/lib/utils';
 
 // =============================================================================
@@ -566,6 +567,32 @@ function FeatureImportance() {
   // Covariate-level features for the bar chart (consistent with the ranking).
   const barFeatures = useMemo(() => covariateGroups.map(groupToContribution), [covariateGroups]);
 
+  // Strategic interpretation of the cohort importance (rule-based, NO LLM).
+  // Cohort mode only — the canonical "feature importance" view the review
+  // targeted; null in individual mode / before data so the panel stays hidden.
+  const insight = useMemo(
+    () =>
+      viewMode === 'cohort' && global
+        ? interpretGlobalImportance(covariateGroups, {
+            modelLabel: selectedModelInfo
+              ? formatModelLabel(selectedModelInfo)
+              : effectiveModelType,
+            brand: selectedBrand,
+            sampleSize: global.sample_size,
+            grain: isHcpCohort ? 'hcp' : 'patient',
+          })
+        : null,
+    [
+      viewMode,
+      global,
+      covariateGroups,
+      selectedModelInfo,
+      effectiveModelType,
+      selectedBrand,
+      isHcpCohort,
+    ]
+  );
+
   const [expandedCovariates, setExpandedCovariates] = useState<Set<string>>(new Set());
   const toggleCovariate = useCallback((name: string) => {
     setExpandedCovariates((prev) => {
@@ -798,10 +825,18 @@ function FeatureImportance() {
                       <>
                         <span className="font-mono text-xs">{global.model_name}</span>
                         <span>•</span>
-                        <span>{global.features.length} features</span>
-                        <span>•</span>
                         <span>
-                          n = {global.sample_size} {isHcpCohort ? 'HCPs' : 'patients'}
+                          {covariateGroups.length} covariate
+                          {covariateGroups.length === 1 ? '' : 's'} · {global.features.length}{' '}
+                          encoded
+                        </span>
+                        <span>•</span>
+                        <span
+                          title={`Averaged over a ${global.sample_size}-${
+                            isHcpCohort ? 'HCP' : 'patient'
+                          } sample of the cohort — not the cohort size.`}
+                        >
+                          n = {global.sample_size} sampled {isHcpCohort ? 'HCPs' : 'patients'}
                         </span>
                         <span>•</span>
                         <span>{global.cached ? 'cached' : 'freshly computed'}</span>
@@ -842,6 +877,45 @@ function FeatureImportance() {
                 </div>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Strategic Interpretation (cohort mode) — rule-based, no LLM. Adds the
+          "so what": which covariate drives the prediction, how concentrated the
+          importance is, what's negligible, and honest caveats. */}
+      {viewMode === 'cohort' && global && insight?.available && (
+        <Card className="mb-6">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Info className="h-4 w-4" />
+              Strategic Interpretation
+            </CardTitle>
+            <CardDescription>{insight.headline}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <ul className="space-y-1.5">
+              {insight.statements.map((s, i) => (
+                <li key={i} className="flex gap-2 text-sm">
+                  <span className="text-primary mt-0.5">•</span>
+                  <span>{s}</span>
+                </li>
+              ))}
+            </ul>
+            {/* Provenance — attributed documentation, NOT a live metric (so it
+                cannot drift): explains WHY this model has a small covariate set. */}
+            <p className="text-xs text-muted-foreground border-t pt-2">
+              This deployed model uses an empirically-locked, leakage-safe covariate set; a
+              feature-selection experiment found additional columns did not improve held-out
+              performance — a small covariate set is by design, not an omission.
+            </p>
+            <ul className="space-y-1">
+              {insight.caveats.map((c, i) => (
+                <li key={i} className="text-xs text-muted-foreground">
+                  {c}
+                </li>
+              ))}
+            </ul>
           </CardContent>
         </Card>
       )}
@@ -896,6 +970,17 @@ function FeatureImportance() {
 
         {/* Right: Visualizations */}
         <div className="lg:col-span-2">
+          {/* Always-visible note: pre-empts the "are the beeswarm vertical
+              groupings normal?" question regardless of the active tab. */}
+          {viewMode === 'cohort' && (
+            <p className="text-xs text-muted-foreground mb-2 flex items-start gap-1.5">
+              <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+              <span>
+                Binary/one-hot features take only a few SHAP values under the linear model, so
+                their dots line up in vertical bands in the beeswarm — expected, not an artifact.
+              </span>
+            </p>
+          )}
           <Tabs defaultValue="bar" className="space-y-4">
             <TabsList>
               <TabsTrigger value="bar">Bar Chart</TabsTrigger>
@@ -942,7 +1027,7 @@ function FeatureImportance() {
                   </CardTitle>
                   <CardDescription>
                     {viewMode === 'cohort'
-                      ? 'One dot per sampled entity for each top feature. X-axis = SHAP value; color = feature value (red = high, blue = low). Binary/one-hot features take only a few SHAP values under the linear model, so their dots line up in vertical bands — expected, not an artifact. Zero-importance encoded columns are hidden.'
+                      ? 'One dot per sampled entity for each top feature. X-axis = SHAP value; color = feature value (red = high, blue = low). Zero-importance encoded columns are hidden. (See the note above on vertical bands.)'
                       : 'One dot per top feature for this entity. X-axis = SHAP value; color reflects SHAP direction.'}
                   </CardDescription>
                 </CardHeader>
