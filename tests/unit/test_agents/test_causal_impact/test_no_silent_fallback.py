@@ -772,6 +772,78 @@ class TestF006FailClosed:
         )
 
     @pytest.mark.asyncio
+    async def test_f006_fails_closed_when_treatment_outcome_not_in_data(self):
+        """#354 trapdoor #2: execute() must fail-closed when the graph's
+        treatment/outcome are NOT columns of the estimation data.
+
+        ``_select_estimator_with_energy_score`` resolves the treatment/outcome
+        arrays with ``data.get(treatment, data.iloc[:, 0])`` /
+        ``data.iloc[:, 1]`` — a silent POSITIONAL fallback. If the graph's
+        treatment/outcome names diverge from the loaded frame's columns
+        (query-inference, the hardcoded ``outcome='patient_conversion_rate'``
+        default in graph_builder, or any upstream rename), the node would
+        silently estimate over the FIRST TWO columns and emit a polished ATE
+        over the WRONG variables. The node MUST instead fail-closed.
+        """
+        import numpy as np
+        import pandas as pd
+
+        node = EstimationNode()
+
+        np.random.seed(7)
+        n = 200
+        # Frame columns deliberately NOT named like the graph's treatment/outcome.
+        # col_unrelated_x/y would be silently picked as treatment/outcome (iloc 0/1)
+        # if the positional-fallback trapdoor is live.
+        frame = pd.DataFrame(
+            {
+                "col_unrelated_x": np.random.normal(0, 1, n),
+                "col_unrelated_y": 0.9 * np.random.normal(0, 1, n) + np.random.normal(0, 0.2, n),
+                "geographic_region": np.random.randint(0, 2, n).astype(float),
+            }
+        )
+        graph: CausalGraph = {
+            "nodes": ["real_treatment", "real_outcome", "geographic_region"],
+            "edges": [
+                ("geographic_region", "real_treatment"),
+                ("geographic_region", "real_outcome"),
+                ("real_treatment", "real_outcome"),
+            ],
+            "treatment_nodes": ["real_treatment"],  # NOT a frame column
+            "outcome_nodes": ["real_outcome"],  # NOT a frame column
+            "adjustment_sets": [["geographic_region"]],
+            "dag_dot": "...",
+            "confidence": 0.85,
+        }
+        state: CausalImpactState = {
+            "query": "trapdoor-2 column-presence",
+            "query_id": "test-f006-cols-missing",
+            "treatment_var": "real_treatment",
+            "outcome_var": "real_outcome",
+            "confounders": ["geographic_region"],
+            "causal_graph": graph,
+            # Real-data passthrough so _get_data does NOT fail first — the frame
+            # exists, it just lacks the treatment/outcome columns.
+            "data_cache": {"estimation_data": frame},
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+
+        result = await node.execute(state)
+
+        assert result.get("status") == "failed", (
+            "#354 trapdoor #2 regression: treatment/outcome absent from the data "
+            "did NOT cause fail-closed. The node silently estimated over positional "
+            "columns (data.iloc[:, 0]/[:, 1]) and emitted a wrong-variable ATE."
+        )
+        error_msg = result.get("error_message", "").lower()
+        assert "column" in error_msg or "treatment" in error_msg or "outcome" in error_msg, (
+            f"#354 trapdoor #2 regression: error message does not indicate the "
+            f"missing-column cause: {result.get('error_message')!r}"
+        )
+
+    @pytest.mark.asyncio
     async def test_f006_estimation_error_type_is_structured(self):
         """F-006 RED pin: EstimationError must be importable and structured."""
         from src.causal_engine import EstimationError as ImportedEstimationError
