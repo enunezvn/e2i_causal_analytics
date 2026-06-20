@@ -47,6 +47,7 @@ function interventionTypesResult(availableValues: string[]) {
         label,
         effect_basis: 'synthetic',
         available: availableValues.includes(value),
+        available_for_effect: availableValues.includes(value),
       })),
       brand: 'Remibrutinib',
       twin_type: 'hcp',

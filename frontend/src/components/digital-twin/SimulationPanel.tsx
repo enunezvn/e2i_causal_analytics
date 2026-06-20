@@ -136,7 +136,9 @@ export function SimulationPanel({
       return FALLBACK_INTERVENTION_TYPES.map((i) => ({ value: i.value as string, label: i.label }));
     }
     return (typesData?.interventions ?? [])
-      .filter((i) => i.available)
+      // Only interventions whose effect is IDENTIFIED in the cohort (a real causal
+      // estimate is possible); non-identified types 422 at /simulate, so hide them.
+      .filter((i) => i.available && i.available_for_effect)
       .map((i) => ({ value: i.value, label: i.label }));
   }, [typesData, typesError]);
 

@@ -205,7 +205,9 @@ function SimulationForm({
       }));
     }
     return (typesData?.interventions ?? [])
-      .filter((i) => i.available)
+      // Expose only interventions whose effect is IDENTIFIED in the cohort — a trained
+      // model alone is not enough; non-identified types 422 at /simulate (no fabrication).
+      .filter((i) => i.available && i.available_for_effect)
       .map((i) => ({ value: i.value, label: i.label, effect_basis: i.effect_basis }));
   }, [typesData, typesError]);
 

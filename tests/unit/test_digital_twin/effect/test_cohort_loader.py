@@ -64,12 +64,17 @@ def _cohort_rows(n: int = 600, seed: int = 0):
     regions = rng.choice(["northeast", "south", "midwest", "west"], size=n)
     eng = rng.uniform(0, 10, size=n)
     conv = 0.4 + 0.06 * eng + rng.normal(0, 0.08, size=n)
+    market = rng.uniform(0, 1, size=n)
+    total_rx = rng.poisson(lam=80, size=n).astype(float)
     return [
         {
             "region": str(regions[i]),
             "engagement_score": float(eng[i]),
             "call_frequency": float(rng.uniform(0, 14)),
             "conversion_rate": float(conv[i]),
+            # Pre-treatment confounders the direct estimator/gate now require.
+            "market_share": float(market[i]),
+            "total_rx_count": float(total_rx[i]),
         }
         for i in range(n)
     ]

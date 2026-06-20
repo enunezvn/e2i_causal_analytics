@@ -39,17 +39,24 @@ INTERVENTION_CATALOG: tuple[tuple[str, str], ...] = (
 
 SUPPORTED_INTERVENTIONS = {value for value, _label in INTERVENTION_CATALOG}
 
-# Phase 2: interventions whose effect can be ESTIMATED from the synthetic-gold
-# per-HCP cohort (business_metrics/per_hcp_rollup), mapped to the cohort
-# treatment column that proxies them. Only these flip to effect_basis
-# "cohort_estimated"; the rest stay on the uniform synthetic uplift. (The cohort
-# has no rep_visits/email_campaigns columns, so email_campaign etc. are NOT
-# cohort-estimable in v1 — verified against the live DB.)
+# Interventions whose effect is IDENTIFIED in the gold-standard cohort DGP
+# (business_metrics/per_hcp_rollup) and therefore estimable by direct causal
+# estimation. Mapped to the cohort treatment column.
+#
+# Only `digital_engagement` (-> engagement_score) is identified: the DGP plants a
+# real region-heterogeneous causal effect of engagement on conversion
+# (backfill_segment_engagement.py: conversion = baseline + tau[region]*T_engagement).
+# `call_frequency` is an engagement-linked exposure CORRELATE, explicitly NOT in the
+# causal path, so `call_frequency_increase` is NOT identified and is surfaced as an
+# honest "unavailable" effect basis rather than a confounded number. Interventions with
+# no cohort treatment column (email/speaker/samples/peer) are likewise unavailable.
 INTERVENTION_TREATMENT_MAP: dict[str, str] = {
     "digital_engagement": "engagement_score",
-    "call_frequency_increase": "call_frequency",
 }
 COHORT_ESTIMABLE_INTERVENTIONS = frozenset(INTERVENTION_TREATMENT_MAP)
+
+# Pre-treatment confounder controls for the direct cohort estimate (present subset used).
+COHORT_CONFOUNDERS: tuple[str, ...] = ("market_share", "total_rx_count")
 
 _COHORT_OUTCOME = "conversion_rate"
 _COHORT_REGION = "region"
@@ -226,25 +233,18 @@ def region_standardized_ate(
 
 
 class CohortEffectDataProvider:
-    """Effect provider whose ATE is ESTIMATED from a brand's synthetic-gold cohort.
+    """Effect provider that exposes a brand's synthetic-gold cohort as a RAW labeled
+    frame for DIRECT causal estimation (Direction 2, design doc 2026-06-19).
 
-    v1 ("cohort_estimated"): the effect MAGNITUDE is a region-standardized
-    treatment effect computed from the brand's per-HCP cohort
-    (``business_metrics``/``per_hcp_rollup``) for the cohort treatment that
-    proxies the intervention (``digital_engagement``→``engagement_score``,
-    ``call_frequency_increase``→``call_frequency``). So the ATE is genuinely
-    brand- and intervention-differentiated (and data-grounded), unlike the flat
-    synthetic uplift.
+    Returns the cohort's (treatment, outcome, region, pre-treatment confounders) frame
+    UNCHANGED — paired with :class:`CohortCausalEstimator`, which runs a DML estimate over
+    it (region as the heterogeneity axis, ``COHORT_CONFOUNDERS`` as controls).
 
-    Because the cohort and the twin population share almost no numeric covariate
-    space (the cohort has region/engagement/call_frequency/conversion; twins have
-    decile/tenure/peer_influence/...), the data-derived ATE is carried into the
-    SAME validated reference-covariate frame the synthetic provider builds — so
-    confounders always align with the twin features and the existing uplift
-    estimator + twin-scoring path run unchanged. v1 LIMITATION: the per-twin
-    heterogeneity is therefore not driven by the cohort's covariate structure;
-    only the headline ATE is cohort-estimated. The substrate is synthetic-gold
-    (NOT real-world) — the UI keeps the SYNTHETIC badge.
+    This REPLACES the prior v1 behavior, which computed a region-only standardized ATE
+    and laundered it through ``SyntheticEffectDataProvider(true_ate=...)`` — a synthetic
+    injected-effect frame whose CI and per-twin heterogeneity were synthetic artifacts.
+    Now magnitude, CI, and per-region heterogeneity all come from the cohort. The
+    substrate is synthetic-gold (NOT real-world) — the UI keeps the SYNTHETIC badge.
     """
 
     def __init__(self, cohort_df: pd.DataFrame, *, seed: int = 42) -> None:
@@ -261,15 +261,25 @@ class CohortEffectDataProvider:
         treatment_col = INTERVENTION_TREATMENT_MAP.get(intervention_type)
         if treatment_col is None:
             raise EffectDataUnavailable(
-                f"CohortEffectDataProvider: intervention '{intervention_type}' has no "
-                "cohort treatment mapping (not cohort-estimable)."
+                f"CohortEffectDataProvider: intervention '{intervention_type}' is not "
+                "identified in the cohort DGP (not cohort-estimable)."
             )
-        ate = region_standardized_ate(self._cohort, treatment_col)
-        # Carry the data-derived ATE through the validated reference-frame
-        # mechanism (n sized to the cohort so the CI reflects the cohort scale).
-        delegate = SyntheticEffectDataProvider(
-            n=max(2000, len(self._cohort)), true_ate=ate, seed=self._seed
-        )
-        return delegate.get_training_frame(
-            intervention_type, brand, twin_type, reference_covariates
+        if treatment_col not in self._cohort.columns:
+            raise EffectDataUnavailable(
+                f"CohortEffectDataProvider: cohort missing treatment column '{treatment_col}'."
+            )
+        # RAW cohort frame for direct causal estimation — NO synthetic injected-effect
+        # handoff. region is the heterogeneity axis (effect_modifier); the present subset
+        # of COHORT_CONFOUNDERS is the pre-treatment control set; ground_truth_ate is None
+        # because the effect is ESTIMATED from the data, not injected.
+        # Pass the FULL required confounder set; the estimator fails closed if the cohort
+        # is missing any (refusing an under-adjusted estimate) rather than silently dropping.
+        confounders = list(COHORT_CONFOUNDERS)
+        return TrainingFrame(
+            df=self._cohort,
+            treatment_var=treatment_col,
+            outcome_var=_COHORT_OUTCOME,
+            confounders=confounders,
+            effect_modifiers=[_COHORT_REGION],
+            ground_truth_ate=None,
         )
