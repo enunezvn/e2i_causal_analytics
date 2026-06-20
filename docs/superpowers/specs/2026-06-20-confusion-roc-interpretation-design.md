@@ -126,10 +126,11 @@ interface RocInterpretation { band: string; text: string; }
 
 **Text:** `"AUC {auc.toFixed(3)} ({band}). The model ranks a random {subject} who
 {positiveEvent} above a random one who did not {round(auc*100)}% of the time — {compare}."`
-where `compare`:
-- `auc ≤ 0.55` → "barely above the 0.50 coin-flip baseline"
-- `0.55 < auc ≤ 0.70` → "modestly better than the 0.50 coin-flip baseline"
-- `0.70 < auc ≤ 0.85` → "clearly better than chance (0.50)"
+where `compare` (as-built — boundaries aligned to the `aucBand` edges so the band label and
+the comparison phrasing never contradict; see "As-built refinements" below):
+- `auc < 0.6` → "barely above the 0.50 coin-flip baseline"   (near-random band)
+- `0.6 ≤ auc < 0.7` → "modestly better than the 0.50 coin-flip baseline"   (weak band)
+- `0.7 ≤ auc ≤ 0.85` → "clearly better than chance (0.50)"   (acceptable + low-good)
 - `auc > 0.85` → "strong separation, well above chance (0.50)"
 
 Generic fallback (`meaning.known === false`) substitutes "a random positive case above a
@@ -144,11 +145,27 @@ passed from `selectedModel.model_name`):
   - a metrics row (Precision · Recall · Specificity · Accuracy · F1, each value or "n/a"),
   - an always-visible muted card (`bg-muted` / `text-sm`) containing `verdict`.
 - `RocCurveView`: after the chart + existing `AUC =` caption, render an always-visible
-  muted card containing `interpretRoc(...).text`, with the `band` shown as a small label.
+  muted card containing `interpretRoc(...).text`. As-built: no separate band-label chip —
+  the band is already embedded in the sentence ("AUC 0.671 (weak). …"), so a separate
+  uppercase label only duplicated it; the card matches the confusion verdict card.
 
 Always visible (the explicit goal is that the explanation is present, not hidden behind a
 toggle). The empty/`available=false` states are unchanged (interpretation only renders
 when `available` data exists).
+
+## As-built refinements (2026-06-20, from per-task code review)
+
+Two presentation refinements emerged during implementation review; both keep the design
+intent and improve it, and are recorded here so this spec stays a truthful reference:
+
+1. **ROC `compare` thresholds aligned to the `aucBand` edges.** The original draft cut at
+   `≤ 0.55` / `≤ 0.70`, which could pair the "near-random" band with "modestly better"
+   (at 0.58) and the "acceptable" band with "modestly better" (at exactly 0.70) — a
+   self-contradictory readout. Boundaries now sit at the band edges (`< 0.6` / `< 0.7`), so
+   the band label and the comparison phrasing are always consistent.
+2. **ROC band rendered inside the sentence, not as a separate chip.** `interpretRoc(...).text`
+   already begins "AUC 0.671 (weak). …", so a separate uppercase band label was redundant
+   and was dropped.
 
 ## Testing (TDD, vitest)
 
