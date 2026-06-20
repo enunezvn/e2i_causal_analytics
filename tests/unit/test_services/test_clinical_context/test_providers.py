@@ -50,9 +50,9 @@ class _FakePubMed:
 @pytest.mark.unit
 def test_chembl_provider_prefers_live_moa():
     profile = resolve_brand_profile("Kisqali")
-    frag = ChEMBLMechanismProvider(client=_FakeChEMBL("Cyclin-dependent kinase 4 inhibitor")).enrich(
-        profile
-    )
+    frag = ChEMBLMechanismProvider(
+        client=_FakeChEMBL("Cyclin-dependent kinase 4 inhibitor")
+    ).enrich(profile)
     assert frag.mechanism_of_action == "Cyclin-dependent kinase 4 inhibitor"
     assert frag.source == "chembl"
 
