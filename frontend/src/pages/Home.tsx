@@ -20,9 +20,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 // API Hooks
-import { useKPIList, useKPIHealth, useBatchCalculateKPIs, useKPIValue } from '@/hooks/api/use-kpi';
+import { useKPIList, useKPIHealth, useBatchCalculateKPIs } from '@/hooks/api/use-kpi';
 import { useGraphStats } from '@/hooks/api/use-graph';
-import { useAlerts } from '@/hooks/api/use-monitoring';
+import { useAlerts, useBrandModelSummary } from '@/hooks/api/use-monitoring';
 import { AlertStatus } from '@/types/monitoring';
 import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
@@ -164,14 +164,13 @@ const WORKSTREAM_ORDER = [
   'ws1_data_quality',
 ];
 
-// Workstreams hidden from the executive homepage KPI grid. The brand-specific
-// clinical KPIs (% PNH Tested, AH-Uncontrolled %, Dx-Adoption, …) need real
-// RWD to be meaningful; over the synthetic showcase substrate they read as a
-// misleading "0%" / empty on an exec dashboard, so the whole tab is removed
-// here per product decision. The calculators (src/kpi/calculators/
-// brand_specific.py), the per-KPI definitions (visible in the KPI Dictionary),
-// and the Brand SELECTOR above are all retained — only the homepage tab is hidden.
-const HIDDEN_HOME_WORKSTREAMS = new Set<string>(['brand_specific']);
+// Workstreams hidden wholesale from the executive homepage KPI grid. Empty now
+// (was {'brand_specific'}): dynamic visibility (computedKPIs below) hides any KPI
+// whose value did not compute, so brand-specific clinical KPIs surface when they
+// are calculable and drop out when they are not — and an empty "Brand" tab can no
+// longer occur, since the tab list is derived from the computed (non-null) KPIs.
+// The calculators, per-KPI definitions, and the Brand SELECTOR are all unchanged.
+const HIDDEN_HOME_WORKSTREAMS = new Set<string>([]);
 
 // Per-card drill-down destination. Only the Model Performance workstream has a
 // dedicated drill-down page; every other KPI has no deeper view, so its card is
@@ -330,6 +329,8 @@ interface QuickStatTileProps {
   /** Render `display` as smaller muted prose (e.g. "No recent activity — data
    *  through Dec 2025") instead of a large stat number. */
   muted?: boolean;
+  /** Small muted line under the value (e.g. "avg of 4 models"). */
+  sublabel?: string;
 }
 
 function QuickStatTile({
@@ -340,6 +341,7 @@ function QuickStatTile({
   error,
   provenanceBadge,
   muted,
+  sublabel,
 }: QuickStatTileProps) {
   return (
     <Card>
@@ -372,6 +374,9 @@ function QuickStatTile({
                 display
               )}
             </div>
+            {sublabel && !loading && !error && (
+              <div className="text-[11px] text-muted-foreground">{sublabel}</div>
+            )}
           </div>
         </div>
       </CardContent>
@@ -450,14 +455,12 @@ function Home() {
   // QUICK_STATS: Active Campaigns = count of running experiments.
   const { data: activeExp, isLoading: activeExpLoading } = useActiveExperimentCount();
 
-  // QUICK_STATS: Model Accuracy = real ROC-AUC (WS1-MP-001, ml_predictions.model_auc).
-  const {
-    data: rocAucResult,
-    isLoading: rocAucLoading,
-  } = useKPIValue(
-    'WS1-MP-001',
-    selectedBrand !== 'All' ? selectedBrand : undefined,
-    regionParam
+  // QUICK_STATS: Model Accuracy = per-brand average of the gold-standard models'
+  // holdout accuracy (labeled as an average); per-model detail lives on the
+  // model-performance page. Replaces the old corpus-wide ROC-AUC (WS1-MP-001),
+  // which returned the same value for every brand.
+  const { data: modelSummary, isLoading: modelSummaryLoading } = useBrandModelSummary(
+    selectedBrand !== 'All' ? selectedBrand : undefined
   );
 
   // System Health card: real agent-computed aggregate scores.
@@ -593,13 +596,33 @@ function Home() {
     return m;
   }, [batchData]);
 
+  // Batch values settle asynchronously; until they do we cannot know which KPIs
+  // compute, so don't flash an empty grid (or a wrong "N of M"). Demo mode
+  // (samples) has no batch, so it is always "settled".
+  const batchSettled = !liveKpiMode || !!batchData || batchFailed;
+
+  // Dynamic visibility (rule A): show ONLY KPIs whose batch value actually
+  // computed (real value, no error). Null / "Not yet computed" cards are hidden
+  // from the grid, the tabs, AND the counts together. Demo mode shows samples.
+  const computedKPIs = useMemo(() => {
+    if (!liveKpiMode) return effectiveKPIs;
+    if (!batchSettled) return [];
+    // A batch FAILURE is a degraded state, not "these KPIs don't compute": keep
+    // the cards visible (they render as "Unavailable" with the degraded banner)
+    // rather than hiding them, so the failure is legible, not a silent empty grid.
+    if (batchFailed) return effectiveKPIs;
+    return effectiveKPIs.filter((kpi) => {
+      const r = valueByKpiId.get(kpi.id);
+      return r != null && r.value != null && !r.error;
+    });
+  }, [liveKpiMode, batchSettled, batchFailed, effectiveKPIs, valueByKpiId]);
+
   // Page-level synthetic disclosure: true when ANY KPI surface on this page was
   // computed in E2I_KPI_INCLUDE_SYNTHETIC demo mode — the Home tiles (summary),
   // the Model Accuracy tile (roc-auc), or the KPI grid (batch). Drives the banner
   // so the whole dashboard (incl. the grid) is labelled, never read as real data.
   const isSyntheticKpis =
     kpiSummary?.data_source === 'synthetic' ||
-    rocAucResult?.data_source === 'synthetic' ||
     (batchData?.results?.some((r) => r.data_source === 'synthetic') ?? false);
 
   // Get navigation routes for quick actions
@@ -610,7 +633,7 @@ function Home() {
   // construction); the fixed demo categories apply only to SAMPLE_KPIS.
   const kpiCategories = useMemo(() => {
     if (!liveKpiMode) return KPI_CATEGORIES;
-    const present = new Set(effectiveKPIs.map((k) => k.category));
+    const present = new Set(computedKPIs.map((k) => k.category));
     const ordered = WORKSTREAM_ORDER.filter((ws) => present.has(ws));
     const extras = [...present]
       .filter((ws) => !WORKSTREAM_ORDER.includes(ws))
@@ -620,7 +643,7 @@ function Home() {
       label: WORKSTREAM_META[ws]?.label ?? (ws === 'other' ? 'Other' : ws),
       icon: WORKSTREAM_META[ws]?.icon ?? BarChart3,
     }));
-  }, [liveKpiMode, effectiveKPIs]);
+  }, [liveKpiMode, computedKPIs]);
 
   // Keep the active tab valid across demo/live category sets.
   const activeCategory = useMemo(() => {
@@ -630,28 +653,28 @@ function Home() {
 
   // Filter KPIs by category and brand (uses API data when available)
   const filteredKPIs = useMemo(() => {
-    if (activeCategory === 'all') return effectiveKPIs;
-    return effectiveKPIs.filter((kpi) => kpi.category === activeCategory);
-  }, [effectiveKPIs, activeCategory]);
+    if (activeCategory === 'all') return computedKPIs;
+    return computedKPIs.filter((kpi) => kpi.category === activeCategory);
+  }, [computedKPIs, activeCategory]);
 
   // Calculate summary stats (uses API data when available)
   const summaryStats = useMemo(() => {
-    const healthyCount = effectiveKPIs.filter((k) => k.status === 'healthy').length;
-    const warningCount = effectiveKPIs.filter((k) => k.status === 'warning').length;
-    const criticalCount = effectiveKPIs.filter((k) => k.status === 'critical').length;
+    const healthyCount = computedKPIs.filter((k) => k.status === 'healthy').length;
+    const warningCount = computedKPIs.filter((k) => k.status === 'warning').length;
+    const criticalCount = computedKPIs.filter((k) => k.status === 'critical').length;
 
     // Enhance with API health data if available
     const apiHealthy = kpiHealthData?.status === 'healthy';
 
     return {
-      total: effectiveKPIs.length,
+      total: computedKPIs.length,
       healthy: healthyCount,
       warning: warningCount,
       critical: criticalCount,
       apiConnected: !!kpiListData,
       apiHealthy,
     };
-  }, [effectiveKPIs, kpiHealthData, kpiListData]);
+  }, [computedKPIs, kpiHealthData, kpiListData]);
 
   // Visible alerts: REAL monitoring alerts only (no fabricated fallback).
   // Stable string ids (the old `Number(a.id) || Math.random()` broke
@@ -938,13 +961,17 @@ function Home() {
         <QuickStatTile
           label="Model Accuracy"
           icon={<Brain className="h-4 w-4 text-rose-500" />}
-          loading={rocAucLoading}
+          loading={modelSummaryLoading}
           display={
-            rocAucResult?.value != null
-              ? `${(rocAucResult.value * 100).toFixed(1)}%`
+            modelSummary?.available && modelSummary.accuracy != null
+              ? `${(modelSummary.accuracy * 100).toFixed(1)}%`
               : '—'
           }
-          provenanceBadge={rocAucResult?.data_source === 'synthetic' ? 'synthetic' : null}
+          sublabel={
+            modelSummary?.available && modelSummary.n_models
+              ? `avg of ${modelSummary.n_models} models`
+              : undefined
+          }
         />
       </div>
 
@@ -1013,6 +1040,12 @@ function Home() {
               )}
               {/* Category Tabs — live mode: the REAL workstreams present */}
               <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
+                {liveKpiMode && batchSettled && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing {computedKPIs.length} of {effectiveKPIs.length} defined KPIs
+                    {selectedBrand !== 'All' ? ` for ${selectedBrand}` : ''}
+                  </p>
+                )}
                 <TabsList className="flex flex-wrap h-auto gap-1">
                   {kpiCategories.map((cat) => (
                     <TabsTrigger key={cat.id} value={cat.id} className="flex items-center gap-1.5">
@@ -1025,7 +1058,7 @@ function Home() {
                 {kpiCategories.map((cat) => (
                   <TabsContent key={cat.id} value={cat.id} className="mt-4">
                     {filteredKPIs.length === 0 ? (
-                      kpisLoading ? (
+                      kpisLoading || (liveKpiMode && !batchSettled) ? (
                         <p className="text-sm text-muted-foreground py-4">Loading KPIs…</p>
                       ) : (
                         <EmptyState
