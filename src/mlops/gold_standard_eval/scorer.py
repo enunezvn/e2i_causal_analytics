@@ -8,8 +8,11 @@ Pure functions: no I/O, no mocking, no side effects.
 """
 
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
+    brier_score_loss,
     confusion_matrix,
     f1_score,
     precision_score,
@@ -18,7 +21,31 @@ from sklearn.metrics import (
     roc_curve,
 )
 
+# The 5 metrics the frontend Time-Series page trends. `score()` returns these
+# PLUS holdout scalar extras (pr_auc / brier_score / calibration_slope); this
+# tuple stays the page-trend set, it is NOT the full key set of `score()`.
 METRIC_NAMES = ("accuracy", "precision", "recall", "f1", "auc_roc")
+
+
+def _calibration_slope(y_true: "np.ndarray", y_score: "np.ndarray") -> "float | None":
+    """Cox calibration slope — the coefficient of a logistic regression of the
+    labels on ``logit(y_score)``. ~1.0 == well-calibrated; <1 over-confident,
+    >1 under-confident. Returns ``None`` when it cannot be fit (single-class
+    labels, or any numerical failure) so the caller omits the key rather than
+    recording a null into the NOT-NULL ``metric_value`` column.
+    """
+    y_true = np.asarray(y_true)
+    if np.unique(y_true).size < 2:
+        return None
+    try:
+        eps = 1e-6
+        p = np.clip(np.asarray(y_score, dtype=float), eps, 1.0 - eps)
+        logit = np.log(p / (1.0 - p)).reshape(-1, 1)
+        lr = LogisticRegression(penalty=None, solver="lbfgs", max_iter=1000)
+        lr.fit(logit, y_true)
+        return float(lr.coef_[0][0])
+    except Exception:
+        return None
 
 
 def score(
@@ -34,18 +61,31 @@ def score(
         threshold: Decision boundary applied to y_score (default 0.5).
 
     Returns:
-        Dict with keys matching METRIC_NAMES; all values in [0.0, 1.0].
+        Dict with the 5 page-trend metrics in ``METRIC_NAMES`` (each in [0, 1])
+        PLUS the holdout scalar extras ``pr_auc`` and ``brier_score`` (each in
+        [0, 1]), and ``calibration_slope`` (a real number, ~1.0 when well
+        calibrated) when it can be fit (omitted otherwise).
     """
     y_true = np.asarray(y_true)
     y_score = np.asarray(y_score)
     y_pred = (y_score >= threshold).astype(int)
-    return {
+    out = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "recall": float(recall_score(y_true, y_pred, zero_division=0)),
         "f1": float(f1_score(y_true, y_pred, zero_division=0)),
         "auc_roc": float(roc_auc_score(y_true, y_score)),
+        # Holdout scalar extras (same y_true / y_score inputs the eval already
+        # has): PR-AUC + Brier are always defined; calibration is added below
+        # only when fittable. These never trend on the page (not in METRIC_NAMES)
+        # but feed the per-brand model-performance KPIs (WS1-MP-002/005/006).
+        "pr_auc": float(average_precision_score(y_true, y_score)),
+        "brier_score": float(brier_score_loss(y_true, y_score, pos_label=1)),
     }
+    cal = _calibration_slope(y_true, y_score)
+    if cal is not None:
+        out["calibration_slope"] = cal
+    return out
 
 
 def confusion(

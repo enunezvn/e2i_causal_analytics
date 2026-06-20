@@ -201,7 +201,14 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         return self._get_metric_from_mlflow(model_name, "roc_auc")
 
     def _calc_pr_auc(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
-        """Calculate WS1-MP-002: PR-AUC."""
+        """Calculate WS1-MP-002: PR-AUC.
+
+        PRIMARY: per-brand average of the gold-standard models' holdout ``pr_auc``.
+        FALLBACK: MLflow (fail-closed; no fabricated default).
+        """
+        gs = self._goldstd_metric(context, "pr_auc")
+        if gs is not None:
+            return gs, None
         model_name = context.get("model_name", "default_model")
         return self._get_metric_from_mlflow(model_name, "pr_auc")
 
@@ -225,12 +232,26 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         return self._get_metric_from_mlflow(model_name, metric_name)
 
     def _calc_brier_score(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
-        """Calculate WS1-MP-005: Brier Score (lower is better)."""
+        """Calculate WS1-MP-005: Brier Score (lower is better).
+
+        PRIMARY: per-brand average of the gold-standard models' holdout
+        ``brier_score``. FALLBACK: MLflow (fail-closed; no fabricated default).
+        """
+        gs = self._goldstd_metric(context, "brier_score")
+        if gs is not None:
+            return gs, None
         model_name = context.get("model_name", "default_model")
         return self._get_metric_from_mlflow(model_name, "brier_score")
 
     def _calc_calibration_slope(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
-        """Calculate WS1-MP-006: Calibration Slope."""
+        """Calculate WS1-MP-006: Calibration Slope.
+
+        PRIMARY: per-brand average of the gold-standard models' holdout
+        ``calibration_slope``. FALLBACK: MLflow (fail-closed; no fabricated default).
+        """
+        gs = self._goldstd_metric(context, "calibration_slope")
+        if gs is not None:
+            return gs, None
         model_name = context.get("model_name", "default_model")
         return self._get_metric_from_mlflow(model_name, "calibration_slope")
 

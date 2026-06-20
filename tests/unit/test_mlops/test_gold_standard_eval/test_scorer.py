@@ -2,6 +2,7 @@ import numpy as np
 
 from src.mlops.gold_standard_eval.scorer import (
     METRIC_NAMES,
+    _calibration_slope,
     confusion,
     holdout_curve_records,
     roc_points,
@@ -9,13 +10,42 @@ from src.mlops.gold_standard_eval.scorer import (
 )
 
 
-def test_score_emits_page_aligned_names_and_real_values():
+def test_score_emits_page_aligned_names_plus_holdout_extras():
     y = np.array([0, 0, 1, 1])
     s = np.array([0.1, 0.4, 0.6, 0.9])
     out = score(y, s)
-    assert set(out) == set(METRIC_NAMES) == {"accuracy", "precision", "recall", "f1", "auc_roc"}
+    # The 5 page-trend metrics are always present, each in [0, 1]...
+    assert set(METRIC_NAMES) <= set(out)
     assert abs(out["auc_roc"] - 1.0) < 1e-9  # perfectly separable
-    assert all(0.0 <= v <= 1.0 for v in out.values())
+    assert all(0.0 <= out[m] <= 1.0 for m in METRIC_NAMES)
+    # ...plus the holdout scalar extras: PR-AUC + Brier (always) + calibration.
+    assert "pr_auc" in out and 0.0 <= out["pr_auc"] <= 1.0
+    assert abs(out["pr_auc"] - 1.0) < 1e-9  # perfectly separable -> AP 1.0
+    assert "brier_score" in out and 0.0 <= out["brier_score"] <= 1.0
+    assert "calibration_slope" in out and isinstance(out["calibration_slope"], float)
+
+
+def test_calibration_slope_none_for_single_class():
+    # A single-class holdout has no defined calibration slope -> None (omitted).
+    assert _calibration_slope(np.array([1, 1, 1]), np.array([0.2, 0.5, 0.9])) is None
+
+
+def test_calibration_slope_float_for_two_class():
+    y = np.array([0, 1, 0, 1, 1, 0])
+    s = np.array([0.3, 0.4, 0.6, 0.7, 0.5, 0.45])  # overlapping -> fit converges
+    slope = _calibration_slope(y, s)
+    assert isinstance(slope, float)
+
+
+def test_score_omits_calibration_when_unfittable(monkeypatch):
+    # When the slope helper can't fit (returns None), score() omits the key
+    # rather than recording a null (the DECIMAL column is NOT NULL).
+    import src.mlops.gold_standard_eval.scorer as scorer_mod
+
+    monkeypatch.setattr(scorer_mod, "_calibration_slope", lambda *_a, **_k: None)
+    out = score(np.array([0, 0, 1, 1]), np.array([0.1, 0.4, 0.6, 0.9]))
+    assert "calibration_slope" not in out
+    assert "pr_auc" in out and "brier_score" in out  # the always-present extras remain
 
 
 # ---------------------------------------------------------------------------

@@ -1354,6 +1354,9 @@ class BrandPerformanceSummaryResponse(BaseModel):
     recall: Optional[float] = None
     f1: Optional[float] = None
     auc_roc: Optional[float] = None
+    pr_auc: Optional[float] = None
+    brier_score: Optional[float] = None
+    calibration_slope: Optional[float] = None
     is_synthetic_cohort: bool = False
 
 

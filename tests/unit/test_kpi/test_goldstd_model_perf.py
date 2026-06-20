@@ -42,5 +42,28 @@ def test_average_holdout_none_when_no_models():
     assert average_holdout([], []) is None
 
 
+def test_average_holdout_includes_new_scalar_extras():
+    models = [{"id": "1"}, {"id": "2"}]
+    rows = [
+        {"model_id": "1", "metric_name": "pr_auc", "metric_value": 0.5, "source": "holdout"},
+        {"model_id": "2", "metric_name": "pr_auc", "metric_value": 0.7, "source": "holdout"},
+        {"model_id": "1", "metric_name": "brier_score", "metric_value": 0.2, "source": "holdout"},
+        {"model_id": "1", "metric_name": "calibration_slope", "metric_value": 0.9, "source": "holdout"},
+    ]
+    summary = average_holdout(models, rows)
+    assert summary["pr_auc"] == 0.6  # (0.5 + 0.7) / 2
+    assert summary["brier_score"] == 0.2
+    assert summary["calibration_slope"] == 0.9
+
+
 def test_goldstd_metrics_constant_is_the_verified_set():
-    assert set(GOLDSTD_METRICS) == {"accuracy", "precision", "recall", "f1", "auc_roc"}
+    assert set(GOLDSTD_METRICS) == {
+        "accuracy",
+        "precision",
+        "recall",
+        "f1",
+        "auc_roc",
+        "pr_auc",
+        "brier_score",
+        "calibration_slope",
+    }
