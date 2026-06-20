@@ -8,7 +8,6 @@
  *
  * @module lib/model-performance/interpret
  */
-import type { ConfusionMatrixResponse } from '@/types/monitoring';
 
 export interface ModelMeaning {
   /** Singular subject noun, e.g. "patient" | "HCP". */
@@ -28,16 +27,16 @@ export interface ModelMeaning {
  */
 export function describeModel(modelName: string): ModelMeaning {
   const n = (modelName || '').toLowerCase();
-  if (n.includes('hcp_adoption') || n.includes('hcp')) {
+  if (n.includes('hcp_adoption')) {
     return { subject: 'HCP', subjectPlural: 'HCPs', positiveEvent: 'adopted the brand', known: true };
   }
   if (n.includes('initiation')) {
     return { subject: 'patient', subjectPlural: 'patients', positiveEvent: 'initiated treatment', known: true };
   }
-  if (n.includes('persistence') || n.includes('persistent')) {
+  if (n.includes('persistence')) {
     return { subject: 'patient', subjectPlural: 'patients', positiveEvent: 'persisted ≥180 days', known: true };
   }
-  if (n.includes('discontinuation') || n.includes('discontinued')) {
+  if (n.includes('discontinuation')) {
     return {
       subject: 'patient',
       subjectPlural: 'patients',
@@ -47,6 +46,3 @@ export function describeModel(modelName: string): ModelMeaning {
   }
   return { subject: 'case', subjectPlural: 'cases', positiveEvent: 'were in the positive class', known: false };
 }
-
-// Re-export for consumers that need the type alongside describeModel.
-export type { ConfusionMatrixResponse };
