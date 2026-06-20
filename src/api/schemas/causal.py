@@ -523,6 +523,13 @@ class RefutationSummary(BaseModel):
     gate_decision: Optional[str] = Field(default=None, description="proceed / review / block")
     passed: bool = Field(default=False, description="True only on a PROCEED gate")
     needs_review: bool = Field(default=False)
+    expert_review_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "ID of the expert-review queue row created/looked-up for this DAG when "
+            "the gate is REVIEW or BLOCK; None when the result auto-proceeded."
+        ),
+    )
     tests_passed: Optional[int] = Field(default=None)
     tests_total: Optional[int] = Field(default=None)
     sensitivity_e_value: Optional[float] = Field(default=None)

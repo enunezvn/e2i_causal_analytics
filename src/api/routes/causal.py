@@ -2436,6 +2436,9 @@ def _agent_state_to_response(
         gate_decision=gate_decision,
         passed=bool(refutation_ran and gate_decision == "proceed"),
         needs_review=needs_review,
+        # Link to the expert-review queue row created for a REVIEW/BLOCK gate
+        # (None when the run auto-proceeded), so the result references its review.
+        expert_review_id=final_state.get("expert_review_id"),
         tests_passed=refutation.get("tests_passed"),
         tests_total=refutation.get("total_tests"),
         sensitivity_e_value=sensitivity.get("e_value"),
