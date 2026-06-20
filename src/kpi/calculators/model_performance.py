@@ -150,25 +150,47 @@ class ModelPerformanceCalculator(KPICalculatorBase):
             return KPIStatus.UNKNOWN
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
+    # ------------------------------------------------------------------ gold-standard helper
+
+    def _goldstd_metric(self, context: dict[str, Any], metric_name: str) -> float | None:
+        """Per-brand average of the gold-standard models' holdout ``metric_name``.
+
+        Best-effort PRIMARY source for the dashboard: ``context['brand']`` scopes
+        to that brand's ``*_goldstd_lr_v1`` staging models (absent/All -> all 12).
+        Returns ``None`` (caller then falls back to the existing corpus/MLflow
+        legs) when no gold-standard data is available or a read fails — never
+        raises, never fabricates.
+        """
+        from src.kpi.goldstd_model_perf import summarize_sync
+
+        try:
+            summary = summarize_sync(self.db_client, context.get("brand"))
+        except Exception:
+            return None
+        if not summary:
+            return None
+        val = summary.get(metric_name)
+        return float(val) if val is not None else None
+
     # ------------------------------------------------------------------ MLflow-backed metrics
 
     def _calc_roc_auc(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
         """Calculate WS1-MP-001: ROC-AUC.
 
-        PRIMARY (SQL): reads the real ``ml_predictions.model_auc`` column via the
-        ``kpi_query`` allowlist (registry id ``model_performance_roc_auc``), which
-        is exactly the source declared by ``config/kpi_definitions.yaml`` for
-        WS1-MP-001 (``tables:[ml_predictions] columns:[ml_predictions.model_auc]``).
-        Live-verified: ``ml_predictions`` has 626 non-null ``model_auc`` rows with
-        mean ~= 0.7998.
+        PRIMARY (gold-standard): per-brand average of the gold-standard models'
+        holdout ``auc_roc`` (brand-reactive; fixes the corpus-wide invariant
+        value the dashboard previously showed for every brand).
 
-        FALLBACK (MLflow): preserved as the fail-closed fallback. The previous
-        implementation queried MLflow ONLY (``default_model``/``roc_auc``), which
-        fail-closes to None in prod (no such registered model), so the YAML's
-        declared SQL source was never read. We now try SQL first and fall back to
-        MLflow only when the SQL leg is genuinely unavailable (query error / no
-        rows / NULL average) — never fabricating a plausible default.
+        FALLBACK 1 (SQL): the real ``ml_predictions.model_auc`` corpus mean via
+        the ``kpi_query`` allowlist (registry id ``model_performance_roc_auc``),
+        the source declared by ``config/kpi_definitions.yaml`` for WS1-MP-001.
+
+        FALLBACK 2 (MLflow): the preserved fail-closed leg. Never fabricates a
+        plausible default at any leg.
         """
+        gs = self._goldstd_metric(context, "auc_roc")
+        if gs is not None:
+            return gs, None
         result, db_error = self._execute_query("model_performance_roc_auc", [])
         if db_error is None and result:
             roc_auc = result[0].get("roc_auc")
@@ -184,7 +206,14 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         return self._get_metric_from_mlflow(model_name, "pr_auc")
 
     def _calc_f1_score(self, context: dict[str, Any]) -> tuple[float | None, str | None]:
-        """Calculate WS1-MP-003: F1 Score."""
+        """Calculate WS1-MP-003: F1 Score.
+
+        PRIMARY: per-brand average of the gold-standard models' holdout ``f1``.
+        FALLBACK: MLflow (fail-closed; no fabricated default).
+        """
+        gs = self._goldstd_metric(context, "f1")
+        if gs is not None:
+            return gs, None
         model_name = context.get("model_name", "default_model")
         return self._get_metric_from_mlflow(model_name, "f1_score")
 
