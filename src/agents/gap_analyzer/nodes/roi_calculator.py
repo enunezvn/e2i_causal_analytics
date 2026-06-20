@@ -209,6 +209,15 @@ class ROICalculatorNode:
                 roi_estimate = self._calculate_roi(gap, uplift_context=uplift_context)
                 roi_estimates.append(roi_estimate)
 
+            # Surface-only competitor density for this brand (curated, no network,
+            # case-insensitive; fail-open). INFORMATIONAL — does NOT change the ROI
+            # value or the prioritizer ranking (which sorts on risk_adjusted_roi).
+            density = self._competitor_density(state.get("brand"))
+            for est in roi_estimates:
+                est["competitor_products_count"] = density["competitor_products_count"]
+                est["competitor_density_label"] = density["competitor_density_label"]
+                est["competitor_drug_names"] = density["competitor_drug_names"]
+
             # Calculate total addressable value (attributed value)
             total_addressable_value = sum(est["estimated_revenue_impact"] for est in roi_estimates)
 
@@ -244,6 +253,48 @@ class ROICalculatorNode:
                 "roi_latency_ms": roi_latency_ms,
                 "status": "failed",
             }
+
+    @staticmethod
+    def _competitor_density(brand: Optional[str]) -> Dict[str, Any]:
+        """Curated competitor count + saturation label + names for a brand (no
+        network — the curated SSOT; case-insensitive brand match). Fail-open to
+        count 0 / "unknown". INFORMATIONAL only: surfaced on each strategic bet, it
+        NEVER alters the ROI value or the prioritizer ranking."""
+        empty = {
+            "competitor_products_count": 0,
+            "competitor_density_label": "unknown",
+            "competitor_drug_names": [],
+        }
+        if not brand:
+            return empty
+        try:
+            from src.services.clinical_context.brand_map import (
+                BRAND_CLINICAL_MAP,
+                resolve_brand_profile,
+            )
+            from src.services.clinical_context.providers import CuratedCompetitorProvider
+
+            key = next((k for k in BRAND_CLINICAL_MAP if k.lower() == brand.lower()), None)
+            if key is None:
+                return empty
+            frag = CuratedCompetitorProvider().enrich(resolve_brand_profile(key))
+            n = frag.count
+            if n == 0:
+                label = "unknown"
+            elif n <= 2:
+                label = "limited"
+            elif n <= 5:
+                label = "moderate"
+            else:
+                label = "crowded"
+            return {
+                "competitor_products_count": n,
+                "competitor_density_label": label,
+                "competitor_drug_names": list(frag.competitors),
+            }
+        except Exception as exc:  # noqa: BLE001 — best-effort; never alters the ROI
+            logger.debug("roi_calculator: competitor density unavailable for %s: %s", brand, exc)
+            return empty
 
     def _extract_uplift_context(self, state: GapAnalyzerState) -> Optional[Dict[str, Any]]:
         """Extract uplift context from state if available.

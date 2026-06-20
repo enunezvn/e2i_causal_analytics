@@ -9,6 +9,8 @@ from src.services.clinical_context.brand_map import resolve_brand_profile
 from src.services.clinical_context.providers import (
     ChEMBLMechanismProvider,
     ClinicalTrialsEndpointProvider,
+    CuratedCompetitorProvider,
+    OpenFDAIndicationsProvider,
     PubMedRWEProvider,
 )
 
@@ -162,3 +164,111 @@ def test_ctgov_provider_all_safety_falls_back_to_curated_efficacy():
     ).enrich(profile)
     assert frag.endpoints == profile.pivotal_endpoints_fallback
     assert frag.source == "static_fallback"
+
+
+# --- Task 3: OpenFDA indications + curated competitor providers ---
+
+
+class _FakeOpenFDA:
+    """Fake _OpenFDAClient: fetch_label returns a canned label (or raises); the
+    extraction helpers return canned values regardless of the label payload."""
+
+    def __init__(self, label=None, indications=None, lou=None, boxed=None, raise_on_fetch=None):
+        self._label = label
+        self._indications = indications if indications is not None else []
+        self._lou = lou
+        self._boxed = boxed
+        self._raise = raise_on_fetch
+
+    def fetch_label(self, drug_name):
+        if self._raise is not None:
+            raise self._raise
+        return self._label
+
+    def approved_indications(self, label):
+        return list(self._indications)
+
+    def limitations_of_use(self, label):
+        return self._lou
+
+    def boxed_warning(self, label):
+        return self._boxed
+
+
+@pytest.mark.unit
+def test_openfda_indications_prefers_live_label():
+    profile = resolve_brand_profile("Remibrutinib")
+    frag = OpenFDAIndicationsProvider(
+        client=_FakeOpenFDA(
+            label={"openfda": {"generic_name": ["remibrutinib"]}},
+            indications=["Chronic spontaneous urticaria (CSU) in adults"],
+            lou="Not indicated for other forms of urticaria.",
+            boxed=None,
+        )
+    ).enrich(profile)
+    assert frag.source == "openfda"
+    assert frag.approved_indications == ["Chronic spontaneous urticaria (CSU) in adults"]
+    assert frag.limitations_of_use == "Not indicated for other forms of urticaria."
+    assert frag.boxed_warning is None
+
+
+@pytest.mark.unit
+def test_openfda_indications_falls_back_on_error():
+    from src.services.clinical_context.clients import OpenFDAError
+
+    profile = resolve_brand_profile("Fabhalta")
+    frag = OpenFDAIndicationsProvider(
+        client=_FakeOpenFDA(raise_on_fetch=OpenFDAError("503"))
+    ).enrich(profile)
+    assert frag.source == "static_fallback"
+    assert frag.approved_indications == list(profile.indications_fallback)
+    # Fabhalta carries a curated boxed-warning fallback.
+    assert frag.boxed_warning == profile.boxed_warning_fallback
+    assert frag.boxed_warning
+
+
+@pytest.mark.unit
+def test_openfda_indications_falls_back_when_no_label():
+    profile = resolve_brand_profile("Kisqali")
+    frag = OpenFDAIndicationsProvider(client=_FakeOpenFDA(label=None)).enrich(profile)
+    assert frag.source == "static_fallback"
+    assert frag.approved_indications == list(profile.indications_fallback)
+
+
+@pytest.mark.unit
+def test_openfda_indications_falls_back_when_live_indications_empty():
+    profile = resolve_brand_profile("Kisqali")
+    frag = OpenFDAIndicationsProvider(client=_FakeOpenFDA(label={"x": 1}, indications=[])).enrich(
+        profile
+    )
+    assert frag.source == "static_fallback"
+    assert frag.approved_indications == list(profile.indications_fallback)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "brand,expected_member",
+    [
+        ("Kisqali", "Verzenio (abemaciclib)"),
+        ("Fabhalta", "Soliris (eculizumab)"),
+        ("Remibrutinib", "Xolair (omalizumab)"),
+    ],
+)
+def test_curated_competitor_resolves_by_disease(brand, expected_member):
+    profile = resolve_brand_profile(brand)
+    frag = CuratedCompetitorProvider().enrich(profile)
+    assert frag.source == "curated"
+    assert frag.count == len(frag.competitors)
+    assert frag.count > 0
+    assert expected_member in frag.competitors
+
+
+@pytest.mark.unit
+def test_curated_competitor_unknown_disease_is_empty():
+    from types import SimpleNamespace
+
+    fake_profile = SimpleNamespace(disease="Nonexistent Disease", competitor_map={})
+    frag = CuratedCompetitorProvider().enrich(fake_profile)  # type: ignore[arg-type]
+    assert frag.competitors == []
+    assert frag.count == 0
+    assert frag.source == "curated"

@@ -31,6 +31,13 @@ class BrandClinicalProfile:
     API is unreachable or unhelpful; the providers prefer the live API value and
     fall back to these. ``outcome_endpoint_map`` maps our synthetic outcome
     column -> the real pivotal-endpoint framing it stands in for.
+
+    Therapy-label + competitor fields (added 2026-06-20):
+    ``indications_fallback`` — curated approved indication strings (used when
+    OpenFDA label is unreachable); ``limitations_fallback`` / ``boxed_warning_fallback``
+    — curated LoU / boxed-warning text or None when absent for this drug;
+    ``competitor_map`` — dict keyed by disease string (lowercased) -> list of
+    competitor ``"Brand (generic)"`` strings within the same therapeutic class.
     """
 
     brand: str
@@ -42,6 +49,12 @@ class BrandClinicalProfile:
     rwe_search_term: str
     rwe_seed_pmid: Optional[str]
     outcome_endpoint_map: Dict[str, str] = field(default_factory=dict)
+    # Therapy-label fallback fields — default-empty so existing construction is unaffected.
+    indications_fallback: List[str] = field(default_factory=list)
+    limitations_fallback: Optional[str] = None
+    boxed_warning_fallback: Optional[str] = None
+    # key = disease string lowercased → list of competitor "Brand (generic)" strings
+    competitor_map: Dict[str, List[str]] = field(default_factory=dict)
 
 
 # Enrichment-only static facts keyed by brand. The drug_name / disease / drug_class
@@ -62,6 +75,20 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
             "persistent_180d": "Treatment persistence / duration of therapy (proxy for PFS-supporting adherence)",
             "discontinued_180d": "Treatment discontinuation / early termination",
         },
+        # Therapy-label fallback (OpenFDA SPL / prescribing information, verified 2026-06-20)
+        "indications_fallback": [
+            "HR+/HER2- advanced or metastatic breast cancer (with an aromatase inhibitor or fulvestrant)",
+            "HR+/HER2- node-positive early breast cancer, adjuvant (with an aromatase inhibitor)",
+        ],
+        "limitations_fallback": None,
+        "boxed_warning_fallback": None,
+        # disease key = "malignant neoplasm of breast" (BRAND_DIAGNOSIS["Kisqali"]["desc"].lower())
+        "competitor_map": {
+            "malignant neoplasm of breast": [
+                "Ibrance (palbociclib)",
+                "Verzenio (abemaciclib)",
+            ],  # ATC L01EF CDK4/6 inhibitors (OpenFDA/RxClass probe-confirmed)
+        },
     },
     "Remibrutinib": {
         "moa_fallback": "BTK inhibitor",
@@ -77,6 +104,19 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
             "persistent_180d": "Treatment persistence / sustained UAS7 control",
             "discontinued_180d": "Treatment discontinuation",
         },
+        # Therapy-label fallback (FDA prescribing information, verified 2026-06-20)
+        "indications_fallback": [
+            "Chronic spontaneous urticaria (CSU) in adults who remain symptomatic despite H1-antihistamine treatment",
+        ],
+        "limitations_fallback": "Not indicated for other forms of urticaria.",
+        "boxed_warning_fallback": None,
+        # disease key = "chronic spontaneous urticaria" (BRAND_DIAGNOSIS["Remibrutinib"]["desc"].lower())
+        "competitor_map": {
+            "chronic spontaneous urticaria": [
+                "Xolair (omalizumab)",
+                "Dupixent (dupilumab)",
+            ],  # CSU biologics approved for CSU (omalizumab FDA 2014; dupilumab FDA 2025)
+        },
     },
     "Fabhalta": {
         "moa_fallback": "complement Factor B inhibitor",
@@ -91,6 +131,31 @@ _STATIC_ENRICHMENT: Dict[str, Dict[str, object]] = {
             "treatment_initiated": "Treatment initiation (complement-inhibitor start/switch)",
             "persistent_180d": "Treatment persistence / sustained Hb stabilization",
             "discontinued_180d": "Treatment discontinuation",
+        },
+        # Therapy-label fallback (FDA prescribing information, verified 2026-06-20)
+        "indications_fallback": [
+            "Paroxysmal nocturnal hemoglobinuria (PNH)",
+            "Primary IgA nephropathy (IgAN), to reduce proteinuria",
+        ],
+        "limitations_fallback": None,
+        "boxed_warning_fallback": (
+            "Serious infections caused by encapsulated bacteria (e.g., S. pneumoniae, "
+            "N. meningitidis, H. influenzae) can occur; complete or update vaccinations "
+            "before initiation."
+        ),
+        # disease key = "paroxysmal nocturnal hemoglobinuria" (BRAND_DIAGNOSIS["Fabhalta"]["desc"].lower())
+        # A second key is included for IgAN so providers can resolve either indication.
+        "competitor_map": {
+            "paroxysmal nocturnal hemoglobinuria": [
+                "Soliris (eculizumab)",
+                "Ultomiris (ravulizumab)",
+                "Empaveli (pegcetacoplan)",
+                "Voydeya (danicopan)",
+            ],  # Complement inhibitors approved for PNH (FDA/EMA probe-confirmed)
+            "primary iga nephropathy": [
+                "Tarpeyo (budesonide)",
+                "Filspari (sparsentan)",
+            ],  # IgAN-approved therapies (FDA 2023-2024)
         },
     },
 }
@@ -114,6 +179,17 @@ def _build_map() -> Dict[str, BrandClinicalProfile]:
             rwe_search_term=str(extra["rwe_search_term"]),
             rwe_seed_pmid=(str(extra["rwe_seed_pmid"]) if extra["rwe_seed_pmid"] else None),
             outcome_endpoint_map=dict(extra["outcome_endpoint_map"]),  # type: ignore[call-overload]
+            # Therapy-label + competitor fields (Task 2, 2026-06-20)
+            indications_fallback=list(extra.get("indications_fallback", [])),  # type: ignore[call-overload]
+            limitations_fallback=(
+                str(extra["limitations_fallback"]) if extra.get("limitations_fallback") else None
+            ),
+            boxed_warning_fallback=(
+                str(extra["boxed_warning_fallback"])
+                if extra.get("boxed_warning_fallback")
+                else None
+            ),
+            competitor_map={k: list(v) for k, v in extra.get("competitor_map", {}).items()},  # type: ignore[attr-defined]
         )
     return out
 

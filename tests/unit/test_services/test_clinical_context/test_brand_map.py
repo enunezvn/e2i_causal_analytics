@@ -58,3 +58,50 @@ def test_outcome_to_real_endpoint_mapping_is_brand_aware():
 def test_unknown_brand_raises_keyerror():
     with pytest.raises(KeyError):
         resolve_brand_profile("NotABrand")
+
+
+# --- Task 2: therapy-label + curated-competitor fields ---
+
+
+@pytest.mark.unit
+def test_competitor_map_resolves_by_disease_key():
+    """competitor_map[profile.disease.lower()] must be a non-empty list for each brand."""
+    for brand in ("Kisqali", "Fabhalta", "Remibrutinib"):
+        profile = resolve_brand_profile(brand)
+        key = profile.disease.lower()
+        competitors = profile.competitor_map.get(key)
+        assert competitors, (
+            f"{brand}: competitor_map[{key!r}] is empty or missing; "
+            f"available keys: {list(profile.competitor_map)}"
+        )
+
+
+@pytest.mark.unit
+def test_kisqali_indications_fallback_non_empty():
+    profile = resolve_brand_profile("Kisqali")
+    assert len(profile.indications_fallback) >= 1
+    assert any("breast cancer" in ind.lower() for ind in profile.indications_fallback)
+
+
+@pytest.mark.unit
+def test_remibrutinib_limitations_fallback():
+    profile = resolve_brand_profile("Remibrutinib")
+    assert profile.limitations_fallback == "Not indicated for other forms of urticaria."
+
+
+@pytest.mark.unit
+def test_fabhalta_boxed_warning_non_empty():
+    profile = resolve_brand_profile("Fabhalta")
+    assert profile.boxed_warning_fallback
+    assert "encapsulated" in profile.boxed_warning_fallback.lower()
+
+
+@pytest.mark.unit
+def test_new_fields_default_empty_for_unknown_pattern():
+    """Verify the dataclass fields have sensible defaults (no construction breakage)."""
+    # We cannot call the private constructor directly for a frozen dataclass with
+    # required positional fields, so we verify via the existing resolved profiles that
+    # Kisqali (no LoU / no boxed warning) has None for those optional fields.
+    kis = resolve_brand_profile("Kisqali")
+    assert kis.limitations_fallback is None
+    assert kis.boxed_warning_fallback is None

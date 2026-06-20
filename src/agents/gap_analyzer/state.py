@@ -66,6 +66,13 @@ class ROIEstimate(TypedDict):
     # Risk factors
     total_risk_adjustment: float  # Combined risk adjustment (0.0-1.0)
 
+    # Market landscape (INFORMATIONAL, surface-only — added 2026-06-20). Curated
+    # competitor density for the brand's indication; does NOT alter the ROI or the
+    # ranking (the prioritizer still sorts on the unchanged risk_adjusted_roi).
+    competitor_products_count: NotRequired[int]
+    competitor_density_label: NotRequired[str]  # limited / moderate / crowded / unknown
+    competitor_drug_names: NotRequired[List[str]]
+
     # Value breakdown by driver
     value_by_driver: Optional[Dict[str, float]]  # e.g., {"trx_lift": 850000}
 

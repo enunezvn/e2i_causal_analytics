@@ -6,16 +6,52 @@ Additionally handles:
 - DSPy training signal collection and routing
 """
 
+import asyncio
 import logging
 import time
-from typing import Any, Dict
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Dict
 
 from src.agents.causal_impact.state import (
     CausalImpactState,
     NaturalLanguageInterpretation,
 )
 
+if TYPE_CHECKING:
+    from src.services.clinical_context import ClinicalContextService
+
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _get_clinical_context_service() -> "ClinicalContextService":
+    """Lazily build the shared clinical-context service (one instance; avoids
+    import-time client construction in the agent module). The service's fragment
+    cache is module-global, so live API results are reused across runs."""
+    from src.services.clinical_context import ClinicalContextService
+
+    return ClinicalContextService()
+
+
+def _clinical_context_sentence(ctx: Dict[str, Any]) -> str:
+    """Concise on-/off-label + market sentence from a get_context payload; returns
+    '' when there is nothing useful to add (the narrative is only extended when the
+    clinical context is real)."""
+    inds = ctx.get("approved_indications") or {}
+    ind_list = inds.get("indications") or []
+    lou = inds.get("limitations_of_use")
+    comp = ctx.get("competitor_landscape") or {}
+    count = comp.get("count") or 0
+    bits = []
+    if ind_list:
+        bits.append(f"FDA-approved use includes {ind_list[0]}")
+    if lou:
+        bits.append(f"label limitation of use — {lou}")
+    if count:
+        bits.append(f"{count} therapeutic competitor(s) occupy this indication")
+    if not bits:
+        return ""
+    return "Clinical/market context: " + "; ".join(bits) + "."
 
 
 class InterpretationNode:
@@ -253,6 +289,22 @@ class InterpretationNode:
             )
 
         narrative_parts.append(robustness_line)
+
+        # Clinical / market context woven into the narrative (fail-open: any failure
+        # leaves the narrative unchanged and NEVER blocks the estimate). Brand+outcome
+        # scoped; surfaces FDA-label use, any limitation of use, and competitor count.
+        brand = state.get("brand")
+        outcome_var = state.get("outcome_var")
+        if brand and outcome_var:
+            try:
+                ctx = await asyncio.to_thread(
+                    _get_clinical_context_service().get_context, brand, outcome_var
+                )
+                sentence = _clinical_context_sentence(ctx)
+                if sentence:
+                    narrative_parts.append(sentence)
+            except Exception as exc:  # noqa: BLE001 — best-effort; never blocks the estimate
+                logger.debug("interpretation: clinical context unavailable: %s", exc)
 
         # Recommendations
         if significance and overall_robust:

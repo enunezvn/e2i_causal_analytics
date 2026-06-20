@@ -1371,6 +1371,28 @@ def _effect_from_agent_response(
     )
 
 
+async def _attach_clinical_context(effect: DiscoveredEffect) -> None:
+    """Best-effort: attach brand+outcome-scoped clinical context to a completed
+    leaderboard row. FAIL-OPEN — any failure (unknown brand, API down) leaves
+    ``clinical_context=None`` and never disrupts the row or the discover job. Skips
+    rows without a brand or without an estimate. The service caches per (brand,
+    disease), so the many candidate rows of one brand trigger a single live fan-out."""
+    if not effect.brand or effect.ate is None:
+        return
+    try:
+        payload = await asyncio.to_thread(
+            _clinical_context_service.get_context, effect.brand, effect.outcome
+        )
+        effect.clinical_context = ClinicalContext.model_validate(payload)
+    except Exception as exc:  # noqa: BLE001 — best-effort; context never fails a row
+        logger.debug(
+            "discover-effects: clinical context unavailable for %s/%s: %s",
+            effect.brand,
+            effect.outcome,
+            exc,
+        )
+
+
 def _rank_effects(effects: List[DiscoveredEffect]) -> List[DiscoveredEffect]:
     """Rank by confidence (gate + significance) then impact (|ate|). Not-yet-run
     questions (score 0) sort last."""
@@ -1493,6 +1515,9 @@ async def _run_discover_effects_task(
         except Exception as e:  # noqa: BLE001
             logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
             effects[key] = _pending_effect(q, "failed")
+        # Best-effort clinical context for the freshly-built row (no-op for failed/
+        # pending rows; fail-open so it never disrupts the leaderboard).
+        await _attach_clinical_context(effects[key])
         completed += 1
         await _publish("running" if completed < len(questions) else "completed", completed)
 
