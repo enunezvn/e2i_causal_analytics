@@ -27,7 +27,7 @@ import logging
 import math
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Awaitable, Callable, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, cast
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -36,6 +36,10 @@ from redis.exceptions import RedisError
 
 from src.api.dependencies.auth import require_analyst
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
+from src.repositories.provenance import apply_provenance_filter
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -98,18 +102,60 @@ class QuestionType(str, Enum):
 
 
 class RunSegmentAnalysisRequest(BaseModel):
-    """Request to run segment analysis."""
+    """Request to run segment analysis.
+
+    Clinical-HTE rebuild (2026-06-20): the page is now agent-driven over the
+    curated ``patient_journeys`` gold-standard substrate. Only ``treatment_var``
+    / ``outcome_var`` are selectable (from the curated allowlist, enforced
+    server-side by :func:`_load_segment_hte_frame`); the clinical contract
+    (``effect_modifiers`` / ``confounders`` / ``segment_vars``) is FIXED
+    server-side in :func:`_execute_segment_analysis`, so those fields are now
+    optional and any request-supplied values for the patient_journeys path are
+    overridden. ``treatment_var`` / ``outcome_var`` default to
+    ``treatment_arm`` -> ``persistent_180d`` when omitted.
+    """
 
     query: str = Field(..., description="Natural language query describing the analysis")
-    treatment_var: str = Field(
-        ..., description="Treatment variable name (e.g., 'rep_visits', 'email_campaigns')"
+    brand: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional cohort FILTER (data-driven dropdown, like /causal/brands). "
+            "Scopes the gold-standard load to one brand server-side; it is a row "
+            "subset, NOT a causal variable. None => all brands."
+        ),
     )
-    outcome_var: str = Field(..., description="Outcome variable name (e.g., 'trx', 'conversion')")
-    segment_vars: List[str] = Field(
-        ..., description="Variables to segment by (e.g., ['region', 'specialty'])"
+    treatment_var: Optional[str] = Field(
+        default=None,
+        description=(
+            "Treatment variable (curated). Defaults to 'treatment_arm' when "
+            "omitted. Must be in the patient_journeys allowlist "
+            "(treatment_arm | treatment_initiated) — enforced server-side."
+        ),
+    )
+    outcome_var: Optional[str] = Field(
+        default=None,
+        description=(
+            "Outcome variable (curated). Defaults to 'persistent_180d' when "
+            "omitted. Must be in the patient_journeys allowlist "
+            "(persistent_180d | discontinued_180d | treatment_initiated) — "
+            "enforced server-side."
+        ),
+    )
+    segment_vars: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Variables to segment by. FIXED server-side to the clinical "
+            "allowlist for the patient_journeys path; any value supplied here is "
+            "overridden. Optional (the route sets it)."
+        ),
     )
     effect_modifiers: Optional[List[str]] = Field(
-        default=None, description="Variables that modify treatment effect"
+        default=None,
+        description=(
+            "Variables that modify treatment effect (X). FIXED server-side to "
+            "the numeric clinical covariate set for the patient_journeys path; "
+            "any value supplied here is overridden."
+        ),
     )
     confounders: Optional[List[str]] = Field(
         default=None,
@@ -118,7 +164,9 @@ class RunSegmentAnalysisRequest(BaseModel):
             "and residualized out, NOT modeled as effect modifiers — so the "
             "reported per-segment CATE reflects the de-confounded treatment "
             "effect rather than selection bias. Distinct from segment_vars "
-            "(reporting grouping) and effect_modifiers (heterogeneity features)."
+            "(reporting grouping) and effect_modifiers (heterogeneity features). "
+            "FIXED server-side (W=engagement_score) for the patient_journeys "
+            "path; any value supplied here is overridden."
         ),
     )
     data_source: str = Field(
@@ -275,6 +323,14 @@ class SegmentAnalysisResponse(BaseModel):
     high_responders: List[SegmentProfile] = Field(
         default_factory=list, description="High responder segments"
     )
+    mid_responders: List[SegmentProfile] = Field(
+        default_factory=list,
+        description=(
+            "Mid (average) responder segments — |CATE| in the band between the "
+            "low and high thresholds (responder_type='average'). [] when none "
+            "qualify. Surfaced so the page does not imply exactly two buckets."
+        ),
+    )
     low_responders: List[SegmentProfile] = Field(
         default_factory=list, description="Low responder segments"
     )
@@ -292,7 +348,44 @@ class SegmentAnalysisResponse(BaseModel):
 
     # Summary
     executive_summary: Optional[str] = Field(default=None, description="Executive-level summary")
+    strategic_interpretation: Optional[str] = Field(
+        default=None,
+        description=(
+            "3-tier business narrative (who responds, why, expected lift) from "
+            "the profile_generator node. Mapped from the final graph state — was "
+            "silently dropped at the route before the clinical-HTE rebuild."
+        ),
+    )
     key_insights: List[str] = Field(default_factory=list, description="Key findings")
+
+    # Hierarchical / heterogeneity (mapped from the final graph state)
+    segment_comparison: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="High/mid/low comparison summary (effect_ratio, counts) from segment_analyzer",
+    )
+    segment_heterogeneity: Optional[float] = Field(
+        default=None,
+        description=(
+            "Between-segment heterogeneity (I^2) from the hierarchical analyzer. "
+            "Maps result['segment_heterogeneity'] (note: NOT '_score' — that is "
+            "the TypedDict field name; the node emits 'segment_heterogeneity')."
+        ),
+    )
+    n_segments_analyzed: Optional[int] = Field(
+        default=None, description="Number of segments analyzed by the hierarchical analyzer"
+    )
+    segmentation_method_used: Optional[str] = Field(
+        default=None, description="Segmentation method used (quantile/kmeans/threshold/tree)"
+    )
+    overall_hierarchical_ate: Optional[float] = Field(
+        default=None, description="Aggregate ATE from the hierarchical (nested-CI) analysis"
+    )
+    hierarchical_segment_results: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Per-segment hierarchical CATE results"
+    )
+    uplift_by_segment: Optional[Dict[str, Any]] = Field(
+        default=None, description="Uplift scores grouped by segment dimension"
+    )
 
     # Multi-library support
     libraries_used: Optional[List[str]] = Field(default=None, description="Causal libraries used")
@@ -1107,6 +1200,285 @@ async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+#
+# Clinical-HTE rebuild (2026-06-20): the Segment Analysis page is agent-driven
+# over the curated ``patient_journeys`` gold-standard substrate (the same SSOT
+# the /causal pages use — see src/api/routes/causal.py ``_CAUSAL_DATASET_SPECS``).
+# The route loads the frame SERVER-SIDE (provenance-aware: ``apply_provenance_filter``
+# INCLUDES the is_synthetic=true gold-standard rows on this synthetic-showcase
+# deployment), bands the continuous clinical columns, and passes the prepared
+# frame as ``tier0_data`` so the CATE / hierarchical / uplift nodes all consume
+# ONE banded frame (no connector fetch, no double-read). The clinical contract
+# below is FIXED server-side; only treatment/outcome are selectable (curated).
+
+# Dataset the Segment Analysis page reads (gold-standard patient cohort).
+_SEGMENT_HTE_DATASET = "patient_journeys"
+
+# Curated defaults when the request omits treatment/outcome.
+_SEGMENT_HTE_DEFAULT_TREATMENT = "treatment_arm"
+_SEGMENT_HTE_DEFAULT_OUTCOME = "persistent_180d"
+
+# Effect modifiers (X -> heterogeneity model + feature_importance). NUMERIC only
+# (no region — categoricals would need encoding the heterogeneity model does not
+# do here). engagement_score is a PURE CONTROL (W, below), deliberately NOT in X
+# so there is no X/W overlap (codex MED-2).
+_SEGMENT_HTE_EFFECT_MODIFIERS = [
+    "disease_severity",
+    "age_at_diagnosis",
+    "academic_hcp",
+    "ecog_performance_status",
+    "egfr",
+    "proteinuria_g_day",
+    "ldh_ratio",
+    "urticaria_severity_uas7",
+]
+
+# Confounders (W -> pure controls routed into the DML nuisance model, NOT in X).
+_SEGMENT_HTE_CONFOUNDERS = ["engagement_score"]
+
+# Segment dimensions (post-hoc CATE breakdown). RAW categoricals that EXIST in
+# the prepared frame — banded continuous columns + naturally-categorical columns.
+# cate_estimator groups by ``df[seg].unique()`` and skips segments with <10 rows,
+# so these must be low-cardinality strings, never raw floats (codex HIGH-4).
+_SEGMENT_HTE_SEGMENT_VARS = [
+    "disease_severity_band",
+    "age_band",
+    "geographic_region",
+    "ecog_performance_status",
+    "academic_hcp",
+]
+
+# NUMERIC clinical covariates loaded from patient_journeys (kept intact alongside
+# the banded string columns). geographic_region is loaded RAW (categorical) and
+# is therefore NOT in this set (it must not be float-coerced to None).
+_SEGMENT_HTE_NUMERIC_COLUMNS = {
+    "treatment_arm",
+    "treatment_initiated",
+    "persistent_180d",
+    "discontinued_180d",
+    "disease_severity",
+    "engagement_score",
+    "age_at_diagnosis",
+    "academic_hcp",
+    "ecog_performance_status",
+    "egfr",
+    "proteinuria_g_day",
+    "ldh_ratio",
+    "urticaria_severity_uas7",
+}
+
+# Raw categorical columns kept as strings for post-hoc segmentation.
+_SEGMENT_HTE_CATEGORICAL_COLUMNS = {"geographic_region"}
+
+# Max rows pulled for the gold-standard cohort (whole synthetic cohort fits well
+# under this; mirrors the generous causal-loader ceiling).
+_SEGMENT_HTE_ROW_LIMIT = 100_000
+
+
+def _band_disease_severity(value: Any) -> Optional[str]:
+    """Band disease_severity into low/medium/high matching the DGP segments.
+
+    Matches src/ml/synthetic/generators/patient_generator.py: severity > 7 ->
+    high (strong CATE), > 4 -> medium, else low. Returns None when the value is
+    missing / non-numeric so the band column is honestly empty for that row
+    rather than mislabeled.
+    """
+    try:
+        sev = float(value)
+    except (TypeError, ValueError):
+        return None
+    if sev > 7:
+        return "high"
+    if sev > 4:
+        return "medium"
+    return "low"
+
+
+def _band_age(value: Any) -> Optional[str]:
+    """Band age_at_diagnosis into <50 / 50-65 / >65 string buckets."""
+    try:
+        age = float(value)
+    except (TypeError, ValueError):
+        return None
+    if age < 50:
+        return "<50"
+    if age <= 65:
+        return "50-65"
+    return ">65"
+
+
+async def _load_segment_hte_frame(
+    *,
+    brand: Optional[str],
+    treatment_var: str,
+    outcome_var: str,
+) -> "pd.DataFrame":  # type: ignore[name-defined] # noqa: F821
+    """Load the REAL gold-standard ``patient_journeys`` frame for the HTE agent.
+
+    Mirrors ``causal.py._load_agent_estimation_frame`` for the patient_journeys
+    dataset, with two deliberate differences for the segment-analysis use-case:
+
+    * ``geographic_region`` is kept as a RAW string column (NOT one-hot encoded):
+      it is a post-hoc SEGMENT dimension that ``cate_estimator`` groups by via
+      ``df[seg].unique()``; one-hot-dropping it would destroy the segmentation.
+    * the continuous clinical columns are BANDED into new low-cardinality string
+      columns (``disease_severity_band`` low/medium/high matching the DGP;
+      ``age_band`` <50/50-65/>65) so per-segment stratification has enough rows
+      per band (cate_estimator skips segments with <10 rows — raw floats would
+      all be skipped).
+
+    Security / honesty gates (same posture as the causal loader):
+      * treatment/outcome validated against the patient_journeys allowlist
+        (``_CAUSAL_DATASET_SPECS``) -> ``HTTPException`` 400 on a disallowed column.
+      * ``apply_provenance_filter`` (synthetic-showcase-aware: INCLUDES the
+        is_synthetic=true gold-standard rows on this deployment — reused, NOT a
+        local include_synthetic flag).
+      * brand ``.eq("brand", brand)`` when a brand is given (row FILTER).
+      * FAIL-CLOSED: a 503 with a specific message if the frame is empty after
+        coercion. NEVER returns an empty / fabricated frame silently.
+    """
+    import pandas as pd
+
+    # SSOT for the curated allowlist lives in causal.py (single source of truth).
+    from src.api.routes.causal import (
+        _CAUSAL_DATASET_SPECS,
+        _coerce_estimation_row,
+    )
+
+    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
+    allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
+    not_allowed = [c for c in (treatment_var, outcome_var) if c not in allowed]
+    if not_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {not_allowed} are not permitted for dataset "
+                f"'{_SEGMENT_HTE_DATASET}'. Allowed: {sorted(allowed)}"
+            ),
+        )
+
+    # Columns to pull: treatment, outcome, the numeric effect-modifiers (X), the
+    # confounders (W — engagement_score is W-ONLY, not in X, so it must be loaded
+    # here explicitly), and raw geographic_region. Constrained to the allowlist so
+    # a typo cannot inject an arbitrary column into the select (42703 — codex HIGH-3).
+    base_cols = (
+        [treatment_var, outcome_var]
+        + _SEGMENT_HTE_EFFECT_MODIFIERS
+        + _SEGMENT_HTE_CONFOUNDERS
+        + ["geographic_region"]
+    )
+    select_cols = [c for c in dict.fromkeys(base_cols) if c in allowed]
+
+    from src.memory.services.factories import get_async_supabase_client
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Segment analysis data store unavailable")
+
+    fetch_cols = list(select_cols)
+    if brand:
+        # patient_journeys uses the standard ``brand`` column.
+        fetch_cols = list(dict.fromkeys([*select_cols, "brand"]))
+
+    query = client.table(_SEGMENT_HTE_DATASET).select(",".join(fetch_cols))
+    # Provenance-aware: on this synthetic-showcase deployment this INCLUDES the
+    # is_synthetic=true gold-standard rows (do NOT add a local include flag).
+    query = apply_provenance_filter(query)
+    if brand:
+        query = query.eq("brand", brand)
+    result = await query.limit(_SEGMENT_HTE_ROW_LIMIT).execute()
+    rows = result.data or []
+
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        rec = _coerce_estimation_row(
+            row,
+            select_cols=select_cols,
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            numeric_cols=_SEGMENT_HTE_NUMERIC_COLUMNS,
+            # geographic_region passes through as a raw string (not float-coerced).
+            categorical_cols=frozenset(_SEGMENT_HTE_CATEGORICAL_COLUMNS),
+        )
+        if rec is not None:
+            records.append(rec)
+
+    if not records:
+        # FAIL-CLOSED: never return an empty / fabricated frame.
+        scope = brand or "all brands"
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"No usable patient_journeys rows for {scope}/{treatment_var}->"
+                f"{outcome_var}. The synthetic gold-standard substrate returned "
+                "no rows; not fabricating results."
+            ),
+        )
+
+    frame = pd.DataFrame(records)
+
+    # Band continuous columns into new RAW string columns for clean
+    # stratification (cate_estimator skips <10-row segments). Numeric columns are
+    # left intact too (they remain the effect modifiers X).
+    if "disease_severity" in frame.columns:
+        frame["disease_severity_band"] = frame["disease_severity"].map(_band_disease_severity)
+    if "age_at_diagnosis" in frame.columns:
+        frame["age_band"] = frame["age_at_diagnosis"].map(_band_age)
+
+    return frame
+
+
+# =============================================================================
+# DATASET CONFIG ENDPOINT
+# =============================================================================
+
+
+class SegmentDatasetsResponse(BaseModel):
+    """Curated config options for the Segment Analysis page (data-driven FE)."""
+
+    treatments: List[str] = Field(..., description="Curated selectable treatment columns")
+    outcomes: List[str] = Field(..., description="Curated selectable outcome columns")
+    brands: List[str] = Field(
+        default_factory=list,
+        description="Distinct brands present in the gold-standard cohort (filter)",
+    )
+
+
+@router.get(
+    "/datasets",
+    response_model=SegmentDatasetsResponse,
+    summary="Curated segment-analysis config options",
+    operation_id="get_segment_datasets",
+    description=(
+        "Curated treatment/outcome options + data-driven brand list for the "
+        "agent-driven Segment Analysis page (patient_journeys substrate)."
+    ),
+)
+async def get_segment_datasets() -> SegmentDatasetsResponse:
+    """Return the curated treatment/outcome options and the live brand list.
+
+    Treatment/outcome come from the patient_journeys allowlist SSOT in causal.py.
+    Brands are data-driven (distinct brands in the live cohort); fail-soft to an
+    empty list (FE shows "All brands") if the store / import is unavailable.
+    """
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+
+    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
+
+    brands: List[str] = []
+    try:
+        from src.api.routes.causal import _list_dataset_brands
+
+        brands = await _list_dataset_brands(_SEGMENT_HTE_DATASET)
+    except Exception as e:  # pragma: no cover - fail-soft, FE shows "All brands"
+        logger.warning(f"Segment datasets: brand list unavailable, returning []: {e}")
+        brands = []
+
+    return SegmentDatasetsResponse(
+        treatments=list(spec["treatment"]),
+        outcomes=list(spec["outcome"]),
+        brands=brands,
+    )
 
 
 async def _run_segment_analysis_task(
@@ -1159,6 +1531,20 @@ async def _execute_segment_analysis(
 
     start_time = time.time()
 
+    # Clinical-HTE rebuild: resolve the curated treatment/outcome (defaults when
+    # omitted) and load the gold-standard patient_journeys frame SERVER-SIDE. The
+    # loader enforces the curated allowlist (400 on a disallowed column) and
+    # fails CLOSED (503) on an empty frame — these HTTPExceptions must propagate,
+    # NOT be swallowed into a generic 500. We resolve + load BEFORE the import
+    # guard so the 400 fires even if the agent package is importable.
+    treatment_var = request.treatment_var or _SEGMENT_HTE_DEFAULT_TREATMENT
+    outcome_var = request.outcome_var or _SEGMENT_HTE_DEFAULT_OUTCOME
+    tier0_frame = await _load_segment_hte_frame(
+        brand=request.brand,
+        treatment_var=treatment_var,
+        outcome_var=outcome_var,
+    )
+
     try:
         # Try to use the actual Heterogeneous Optimizer agent
         from src.agents.heterogeneous_optimizer.graph import (
@@ -1166,21 +1552,29 @@ async def _execute_segment_analysis(
         )
         from src.agents.heterogeneous_optimizer.state import HeterogeneousOptimizerState
 
-        # Initialize state (cast partial state - remaining fields populated by graph nodes)
+        # Initialize state (cast partial state - remaining fields populated by graph nodes).
+        # The clinical contract is FIXED server-side (the prepared frame is passed
+        # as tier0_data so cate/hierarchical/uplift all consume ONE banded frame):
+        #   - effect_modifiers (X): numeric clinical covariates (drives feature
+        #     importance), NO region.
+        #   - confounders (W): engagement_score pure control — NOT in X (no overlap).
+        #   - segment_vars: banded / raw categoricals present in the frame.
         initial_state = cast(
             HeterogeneousOptimizerState,
             {
                 "query": request.query,
-                "treatment_var": request.treatment_var,
-                "outcome_var": request.outcome_var,
-                "segment_vars": request.segment_vars,
-                "effect_modifiers": request.effect_modifiers or [],
+                "treatment_var": treatment_var,
+                "outcome_var": outcome_var,
+                "segment_vars": list(_SEGMENT_HTE_SEGMENT_VARS),
+                "effect_modifiers": list(_SEGMENT_HTE_EFFECT_MODIFIERS),
                 # Explicit confounders take precedence-1 in cate_estimator's
                 # _resolve_confounders and are residualized as the DML W (issue
-                # #237). Empty list = no explicit confounders (falls back to
-                # role_attributions / W=None), preserving prior behavior.
-                "confounders": request.confounders or [],
-                "data_source": request.data_source,
+                # #237).
+                "confounders": list(_SEGMENT_HTE_CONFOUNDERS),
+                # The prepared, banded gold-standard frame — consumed as tier0
+                # priority-1 by cate_estimator / hierarchical / uplift.
+                "tier0_data": tier0_frame,
+                "data_source": _SEGMENT_HTE_DATASET,
                 "filters": request.filters,
                 "n_estimators": request.n_estimators,
                 "min_samples_leaf": request.min_samples_leaf,
@@ -1223,11 +1617,26 @@ async def _execute_segment_analysis(
             feature_importance=result.get("feature_importance"),
             uplift_metrics=_convert_uplift_metrics(result),
             high_responders=_convert_segment_profiles(result.get("high_responders", [])),
+            # mid_responders (responder_type="average") — the converter already
+            # accepts "average"; default [] when the graph omits the key.
+            mid_responders=_convert_segment_profiles(result.get("mid_responders", [])),
             low_responders=_convert_segment_profiles(result.get("low_responders", [])),
             policy_recommendations=_convert_policies(result.get("policy_recommendations", [])),
             expected_total_lift=result.get("expected_total_lift"),
             optimal_allocation_summary=result.get("optimal_allocation_summary"),
             executive_summary=result.get("executive_summary"),
+            # Clinical-HTE rebuild: map the fields that were previously dropped at
+            # the route (codex LOW-2 — read from the final graph state directly).
+            strategic_interpretation=result.get("strategic_interpretation"),
+            segment_comparison=result.get("segment_comparison"),
+            # NOTE: the hierarchical node emits the key 'segment_heterogeneity'
+            # (NOT 'segment_heterogeneity_score', which is the TypedDict field).
+            segment_heterogeneity=result.get("segment_heterogeneity"),
+            n_segments_analyzed=result.get("n_segments_analyzed"),
+            segmentation_method_used=result.get("segmentation_method_used"),
+            overall_hierarchical_ate=result.get("overall_hierarchical_ate"),
+            hierarchical_segment_results=result.get("hierarchical_segment_results"),
+            uplift_by_segment=result.get("uplift_by_segment"),
             key_insights=result.get("key_insights", []),
             libraries_used=result.get("libraries_executed"),
             library_agreement_score=result.get("library_agreement_score"),
@@ -1341,11 +1750,16 @@ def _generate_mock_response(
     """Generate mock response when agent is not available."""
     import time
 
+    # segment_vars is optional on the request now (the clinical contract is fixed
+    # server-side); fall back to the first fixed clinical segment dimension so the
+    # mock-fallback path never crashes on a minimal request.
+    primary_segment = (request.segment_vars or _SEGMENT_HTE_SEGMENT_VARS)[0]
+
     # Mock CATE results
     mock_cate = {
-        request.segment_vars[0]: [
+        primary_segment: [
             CATEResult(
-                segment_name=request.segment_vars[0],
+                segment_name=primary_segment,
                 segment_value="Northeast",
                 cate_estimate=15.2,
                 cate_ci_lower=8.5,
@@ -1354,7 +1768,7 @@ def _generate_mock_response(
                 statistical_significance=True,
             ),
             CATEResult(
-                segment_name=request.segment_vars[0],
+                segment_name=primary_segment,
                 segment_value="Southeast",
                 cate_estimate=8.7,
                 cate_ci_lower=3.2,
@@ -1367,11 +1781,11 @@ def _generate_mock_response(
 
     # Mock segment profiles
     mock_high_responder = SegmentProfile(
-        segment_id=f"{request.segment_vars[0]}_northeast",
+        segment_id=f"{primary_segment}_northeast",
         responder_type=ResponderType.HIGH,
         cate_estimate=15.2,
         defining_features=[
-            {"feature": request.segment_vars[0], "value": "Northeast"},
+            {"feature": primary_segment, "value": "Northeast"},
             {"feature": "specialty", "value": "Oncology"},
         ],
         size=1250,
@@ -1380,11 +1794,11 @@ def _generate_mock_response(
     )
 
     mock_low_responder = SegmentProfile(
-        segment_id=f"{request.segment_vars[0]}_southeast",
+        segment_id=f"{primary_segment}_southeast",
         responder_type=ResponderType.LOW,
         cate_estimate=3.1,
         defining_features=[
-            {"feature": request.segment_vars[0], "value": "Southeast"},
+            {"feature": primary_segment, "value": "Southeast"},
         ],
         size=420,
         size_percentage=9.5,
@@ -1411,7 +1825,7 @@ def _generate_mock_response(
         confidence_level=1.0 - request.significance_level,
         heterogeneity_score=0.65,
         feature_importance={
-            request.segment_vars[0]: 0.42,
+            primary_segment: 0.42,
             "specialty": 0.28,
             "practice_size": 0.18,
         },
@@ -1426,7 +1840,7 @@ def _generate_mock_response(
         policy_recommendations=[mock_policy],
         expected_total_lift=125.5,
         optimal_allocation_summary="Reallocate 20% of resources from low-responder to high-responder segments",
-        executive_summary=f"Analysis identified significant treatment effect heterogeneity across {request.segment_vars}. Northeast region shows 74% higher response than average.",
+        executive_summary=f"Analysis identified significant treatment effect heterogeneity across {request.segment_vars or _SEGMENT_HTE_SEGMENT_VARS}. Northeast region shows 74% higher response than average.",
         key_insights=[
             "Northeast region shows highest treatment response (CATE: 15.2)",
             "Oncology specialty is key effect modifier",
