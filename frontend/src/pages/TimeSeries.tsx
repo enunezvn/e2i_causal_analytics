@@ -53,6 +53,7 @@ import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { usePerformanceTrend } from '@/hooks/api/use-monitoring';
 import { useKPIValue, useKPIHistory, useKPIMetadata, useKPIList } from '@/hooks/api/use-kpi';
+import { mergeBrandSeries, meanPerDate } from '@/lib/timeseries-brands';
 
 // =============================================================================
 // CONSTANTS
@@ -62,7 +63,6 @@ import { useKPIValue, useKPIHistory, useKPIMetadata, useKPIList } from '@/hooks/
 // Handle convention: `{cohort}_{brand_lower}_goldstd_lr_v1`
 const DEFAULT_COHORT = 'persistence';
 const DEFAULT_BRAND = 'Remibrutinib';
-const DEFAULT_MODEL_ID = `${DEFAULT_COHORT}_${DEFAULT_BRAND.toLowerCase()}_goldstd_lr_v1`;
 
 const COHORT_OPTIONS: { value: string; label: string }[] = [
   { value: 'initiation', label: 'Initiation' },
@@ -71,11 +71,24 @@ const COHORT_OPTIONS: { value: string; label: string }[] = [
   { value: 'hcp_adoption', label: 'HCP Adoption' },
 ];
 
+// Sentinel for the "All brands" overlay (compares all three on one chart).
+const ALL_BRANDS = 'All';
+const GOLDSTD_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
+type GoldstdBrand = (typeof GOLDSTD_BRANDS)[number];
+
 const BRAND_OPTIONS: { value: string; label: string }[] = [
+  { value: ALL_BRANDS, label: 'All brands' },
   { value: 'Remibrutinib', label: 'Remibrutinib' },
   { value: 'Fabhalta', label: 'Fabhalta' },
   { value: 'Kisqali', label: 'Kisqali' },
 ];
+
+// Per-brand line colors for the overlay chart.
+const BRAND_COLORS: Record<GoldstdBrand, string> = {
+  Remibrutinib: 'var(--color-chart-1)',
+  Fabhalta: 'var(--color-chart-2)',
+  Kisqali: 'var(--color-chart-3)',
+};
 const DEFAULT_METRIC = 'accuracy';
 const DEFAULT_KPI_ID = 'WS1-DQ-001';
 
@@ -136,35 +149,52 @@ interface ChartPoint {
 function TimeSeries() {
   const [mode, setMode] = useState<'performance' | 'kpi'>('performance');
 
-  // Performance mode state — cohort/brand dropdowns drive modelId; free-text overrides
+  // Performance mode state — cohort × brand select the per-brand model(s).
+  // brand === ALL_BRANDS overlays all three gold-standard brands on one chart.
   const [cohort, setCohort] = useState<string>(DEFAULT_COHORT);
   const [brand, setBrand] = useState<string>(DEFAULT_BRAND);
-  const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
   const [metricName, setMetricName] = useState<string>(DEFAULT_METRIC);
   const [timeRange, setTimeRange] = useState<string>('1825d');
 
-  // Derive model handle from cohort/brand and sync into modelId whenever they change.
-  const handleCohortChange = (newCohort: string) => {
-    setCohort(newCohort);
-    setModelId(`${newCohort}_${brand.toLowerCase()}_goldstd_lr_v1`);
-  };
-
-  const handleBrandChange = (newBrand: string) => {
-    setBrand(newBrand);
-    setModelId(`${cohort}_${newBrand.toLowerCase()}_goldstd_lr_v1`);
-  };
+  const isAllBrands = brand === ALL_BRANDS;
+  const brandHandle = (b: string) => `${cohort}_${b.toLowerCase()}_goldstd_lr_v1`;
+  const cohortLabel = COHORT_OPTIONS.find((c) => c.value === cohort)?.label ?? cohort;
+  // Single-brand serving handle (display/export); a friendly label for "All".
+  const modelId = brandHandle(brand);
+  const modelLabel = isAllBrands ? `All brands · ${cohortLabel}` : modelId;
 
   // KPI mode state
   const [kpiId, setKpiId] = useState<string>(DEFAULT_KPI_ID);
 
   const days = rangeToDays(timeRange);
 
-  // ---- Performance mode hook ----
-  const performanceTrend = usePerformanceTrend({
-    model_id: modelId,
-    metric_name: metricName,
-    days,
-  });
+  // ---- Performance mode hooks ----
+  // One trend query per brand. A single-brand selection enables only that brand;
+  // "All brands" enables all three so they can be overlaid. Hooks are called
+  // unconditionally (stable order); only `enabled` varies.
+  const trendRemibrutinib = usePerformanceTrend(
+    { model_id: brandHandle('Remibrutinib'), metric_name: metricName, days },
+    { enabled: mode === 'performance' && (isAllBrands || brand === 'Remibrutinib') },
+  );
+  const trendFabhalta = usePerformanceTrend(
+    { model_id: brandHandle('Fabhalta'), metric_name: metricName, days },
+    { enabled: mode === 'performance' && (isAllBrands || brand === 'Fabhalta') },
+  );
+  const trendKisqali = usePerformanceTrend(
+    { model_id: brandHandle('Kisqali'), metric_name: metricName, days },
+    { enabled: mode === 'performance' && (isAllBrands || brand === 'Kisqali') },
+  );
+  const trendByBrand: Record<GoldstdBrand, typeof trendRemibrutinib> = {
+    Remibrutinib: trendRemibrutinib,
+    Fabhalta: trendFabhalta,
+    Kisqali: trendKisqali,
+  };
+  const visibleBrands = useMemo<GoldstdBrand[]>(
+    () => (isAllBrands ? [...GOLDSTD_BRANDS] : [brand as GoldstdBrand]),
+    [isAllBrands, brand],
+  );
+  // The single brand's trend backs the Trend Summary card; null for "All".
+  const activeTrend = isAllBrands ? null : trendByBrand[brand as GoldstdBrand];
 
   // ---- KPI mode hooks ----
   const kpiList = useKPIList();
@@ -177,21 +207,48 @@ function TimeSeries() {
   });
 
   // ---- Chart series ----
-  const performanceSeries: ChartPoint[] = useMemo(() => {
-    const history = performanceTrend.data?.history ?? [];
-    return history.map((h) => ({ date: h.recorded_at, value: h.metric_value }));
-  }, [performanceTrend.data]);
+  // Per-brand dated series, then merged for the overlay chart + a mean-per-date
+  // series for the summary cards/sparkline.
+  const perBrandSeries: Record<string, ChartPoint[]> = useMemo(
+    () => ({
+      Remibrutinib: (trendRemibrutinib.data?.history ?? []).map((h) => ({
+        date: h.recorded_at,
+        value: h.metric_value,
+      })),
+      Fabhalta: (trendFabhalta.data?.history ?? []).map((h) => ({
+        date: h.recorded_at,
+        value: h.metric_value,
+      })),
+      Kisqali: (trendKisqali.data?.history ?? []).map((h) => ({
+        date: h.recorded_at,
+        value: h.metric_value,
+      })),
+    }),
+    [trendRemibrutinib.data, trendFabhalta.data, trendKisqali.data],
+  );
+  // Overlay rows ({ date, <brand>: value }) — one line per visible brand.
+  const performanceOverlay = useMemo(
+    () => mergeBrandSeries(perBrandSeries, visibleBrands),
+    [perBrandSeries, visibleBrands],
+  );
+  // One representative series for the summary cards: the brand's own series, or
+  // the mean across brands when "All brands" is selected.
+  const performanceSummarySeries: ChartPoint[] = useMemo(
+    () =>
+      isAllBrands ? meanPerDate(perBrandSeries, GOLDSTD_BRANDS) : (perBrandSeries[brand] ?? []),
+    [isAllBrands, perBrandSeries, brand],
+  );
 
-  // #970: ml_performance_metrics.measured_at (surfaced as recorded_at) is the DATA
-  // boundary (the latest holdout journey_start_date), NOT wall-clock now. Surface
-  // the latest covered date so the x-axis is read as data coverage, not "today".
+  // #970: measured_at (surfaced as recorded_at) is the DATA boundary (the latest
+  // holdout journey_start_date), NOT wall-clock now. Surface the latest covered
+  // date so the x-axis is read as data coverage, not "today".
   const latestDataDate = useMemo<string | null>(() => {
-    if (performanceSeries.length === 0) return null;
-    return performanceSeries.reduce(
+    if (performanceSummarySeries.length === 0) return null;
+    return performanceSummarySeries.reduce(
       (max, p) => (Date.parse(p.date) > Date.parse(max) ? p.date : max),
-      performanceSeries[0].date,
+      performanceSummarySeries[0].date,
     );
-  }, [performanceSeries]);
+  }, [performanceSummarySeries]);
 
   const kpiSeries: ChartPoint[] = useMemo(() => {
     const full = (kpiHistory.data?.points ?? []).map((p) => ({
@@ -207,7 +264,7 @@ function TimeSeries() {
     });
   }, [kpiHistory.data, days]);
 
-  const currentSeries = mode === 'performance' ? performanceSeries : kpiSeries;
+  const currentSeries = mode === 'performance' ? performanceSummarySeries : kpiSeries;
   const currentSeriesLabel =
     mode === 'performance'
       ? METRIC_OPTIONS.find((m) => m.value === metricName)?.label ?? metricName
@@ -240,15 +297,17 @@ function TimeSeries() {
   // ---- Loading / error per mode ----
   // KPI mode drives the chart from kpiHistory (the time series); kpiValue backs
   // only the current-status card.
-  const isLoading =
-    mode === 'performance' ? performanceTrend.isLoading : kpiHistory.isLoading;
-  const error = mode === 'performance' ? performanceTrend.error : kpiHistory.error;
-  const refetch =
-    mode === 'performance' ? performanceTrend.refetch : kpiHistory.refetch;
-  const isRefetching =
-    mode === 'performance'
-      ? performanceTrend.isRefetching
-      : kpiHistory.isRefetching;
+  // Across the visible brand trend queries (1 for a single brand, 3 for "All").
+  const visibleTrends = visibleBrands.map((b) => trendByBrand[b]);
+  const perfLoading = visibleTrends.some((t) => t.isLoading);
+  const perfError = visibleTrends.find((t) => t.error)?.error ?? null;
+  const perfRefetching = visibleTrends.some((t) => t.isRefetching);
+  const refetchPerf = () => visibleTrends.forEach((t) => t.refetch());
+
+  const isLoading = mode === 'performance' ? perfLoading : kpiHistory.isLoading;
+  const error = mode === 'performance' ? perfError : kpiHistory.error;
+  const refetch = mode === 'performance' ? refetchPerf : kpiHistory.refetch;
+  const isRefetching = mode === 'performance' ? perfRefetching : kpiHistory.isRefetching;
 
   const handleRefresh = () => {
     refetch();
@@ -257,11 +316,13 @@ function TimeSeries() {
   const handleExport = () => {
     const exportData = {
       mode,
-      modelId: mode === 'performance' ? modelId : undefined,
+      brand: mode === 'performance' ? brand : undefined,
+      modelId: mode === 'performance' && !isAllBrands ? modelId : undefined,
+      models: mode === 'performance' && isAllBrands ? visibleBrands.map(brandHandle) : undefined,
       metric: mode === 'performance' ? metricName : undefined,
       kpiId: mode === 'kpi' ? kpiId : undefined,
       days,
-      series: currentSeries,
+      series: mode === 'performance' && isAllBrands ? perBrandSeries : currentSeries,
     };
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {
       type: 'application/json',
@@ -302,7 +363,7 @@ function TimeSeries() {
         <div>
           <h1 className="text-3xl font-bold mb-2">Time Series Analysis</h1>
           <p className="text-muted-foreground">
-            Time series trends, forecasting, seasonality decomposition, and anomaly detection.
+            Model-performance and KPI metric trends over time.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -388,7 +449,7 @@ function TimeSeries() {
               <CardDescription>
                 Resolves to{' '}
                 <Badge variant="outline" className="font-mono">
-                  {modelId}
+                  {modelLabel}
                 </Badge>
               </CardDescription>
             </CardHeader>
@@ -401,7 +462,7 @@ function TimeSeries() {
                   <select
                     id="ts-cohort"
                     value={cohort}
-                    onChange={(e) => handleCohortChange(e.target.value)}
+                    onChange={(e) => setCohort(e.target.value)}
                     className="p-2 border rounded-md text-sm bg-background"
                   >
                     {COHORT_OPTIONS.map((c) => (
@@ -418,7 +479,7 @@ function TimeSeries() {
                   <select
                     id="ts-brand"
                     value={brand}
-                    onChange={(e) => handleBrandChange(e.target.value)}
+                    onChange={(e) => setBrand(e.target.value)}
                     className="p-2 border rounded-md text-sm bg-background"
                   >
                     {BRAND_OPTIONS.map((b) => (
@@ -459,11 +520,10 @@ function TimeSeries() {
           </div>
         )}
 
-        {/* KPI Summary cards.
-            Pass real `sparklineSeries` everywhere — never the KPICard
-            default fallback (SAMPLE_SPARKLINE), which would render
-            fake trend visuals from a fixture array. Empty `[]` opts
-            out of sparkline rendering for non-trend metrics. */}
+        {/* Summary cards. Every card shows the real `sparklineSeries` trend
+            sparkline (never the KPICard SAMPLE_SPARKLINE fallback, which would
+            render a fixture array). For "All brands" the series is the
+            mean-per-date across the three brands. */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <KPICard
             title="Current Value"
@@ -475,26 +535,26 @@ function TimeSeries() {
             title="Average"
             value={Math.round(summary.average * 1000) / 1000 + ''}
             description="Over period"
-            sparklineData={[]}
+            sparklineData={sparklineSeries}
           />
           <KPICard
             title="Maximum"
             value={summary.max.toLocaleString()}
             description="Peak value"
             status="healthy"
-            sparklineData={[]}
+            sparklineData={sparklineSeries}
           />
           <KPICard
             title="Minimum"
             value={summary.min.toLocaleString()}
             description="Lowest value"
-            sparklineData={[]}
+            sparklineData={sparklineSeries}
           />
           <KPICard
             title="Data Points"
             value={summary.count.toLocaleString()}
             description="Observations"
-            sparklineData={[]}
+            sparklineData={sparklineSeries}
           />
         </div>
 
@@ -506,8 +566,8 @@ function TimeSeries() {
                 <div>
                   <CardTitle>Performance Trend</CardTitle>
                   <CardDescription>
-                    {currentSeriesLabel} over the last {days} days for model{' '}
-                    <Badge variant="outline">{modelId}</Badge>
+                    {currentSeriesLabel} over the last {days} days for{' '}
+                    <Badge variant="outline">{modelLabel}</Badge>
                   </CardDescription>
                   {/* #969 + #970: be honest about what this trend is. It is a
                       per-month walk-forward backtest (source='backtest_wf'), an
@@ -530,7 +590,7 @@ function TimeSeries() {
               </div>
             </CardHeader>
             <CardContent>
-              {!isLoading && performanceSeries.length === 0 ? (
+              {!isLoading && performanceOverlay.length === 0 ? (
                 <div
                   data-testid="performance-trend-empty"
                   className="flex h-[300px] flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground"
@@ -544,27 +604,33 @@ function TimeSeries() {
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height={400}>
-                  <LineChart data={performanceSeries} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                  <LineChart data={performanceOverlay} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                     <XAxis dataKey="date" tickFormatter={formatDate} fontSize={12} tickLine={false} />
                     <YAxis fontSize={12} tickLine={false} axisLine={false} />
                     <Tooltip formatter={formatTooltipValue} labelFormatter={formatDate} />
                     <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="value"
-                      stroke="var(--color-chart-1)"
-                      strokeWidth={2}
-                      dot={false}
-                      name={currentSeriesLabel}
-                    />
+                    {/* One line per visible brand — a single line for a specific
+                        brand, three overlaid lines for "All brands". */}
+                    {visibleBrands.map((b) => (
+                      <Line
+                        key={b}
+                        type="monotone"
+                        dataKey={b}
+                        stroke={BRAND_COLORS[b]}
+                        strokeWidth={2}
+                        dot={false}
+                        connectNulls
+                        name={b}
+                      />
+                    ))}
                   </LineChart>
                 </ResponsiveContainer>
               )}
             </CardContent>
           </Card>
 
-          {performanceTrend.data && (
+          {!isAllBrands && activeTrend?.data && (
             <Card>
               <CardHeader>
                 <CardTitle>Trend Summary</CardTitle>
@@ -574,23 +640,67 @@ function TimeSeries() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   <div>
                     <p className="text-muted-foreground">Current</p>
-                    <p className="font-medium">{performanceTrend.data.current_value.toFixed(4)}</p>
+                    <p className="font-medium">{activeTrend.data.current_value.toFixed(4)}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Baseline</p>
-                    <p className="font-medium">{performanceTrend.data.baseline_value.toFixed(4)}</p>
+                    <p className="font-medium">{activeTrend.data.baseline_value.toFixed(4)}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Change</p>
                     <p className="font-medium">
-                      {performanceTrend.data.change_percent > 0 ? '+' : ''}
-                      {performanceTrend.data.change_percent.toFixed(2)}%
+                      {activeTrend.data.change_percent > 0 ? '+' : ''}
+                      {activeTrend.data.change_percent.toFixed(2)}%
                     </p>
                   </div>
                   <div>
                     <p className="text-muted-foreground">Trend</p>
-                    <p className="font-medium capitalize">{performanceTrend.data.trend}</p>
+                    <p className="font-medium capitalize">{activeTrend.data.trend}</p>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* All-brands: per-brand snapshot instead of one model's Trend Summary. */}
+          {isAllBrands && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Per-Brand Snapshot</CardTitle>
+                <CardDescription>Latest value and change per brand (backend trend)</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                  {GOLDSTD_BRANDS.map((b) => {
+                    const d = trendByBrand[b].data;
+                    return (
+                      <div key={b} className="rounded-md border p-3">
+                        <p className="font-medium" style={{ color: BRAND_COLORS[b] }}>
+                          {b}
+                        </p>
+                        {d ? (
+                          <>
+                            <p className="text-muted-foreground">
+                              Current{' '}
+                              <span className="font-medium text-foreground">
+                                {d.current_value.toFixed(4)}
+                              </span>
+                            </p>
+                            <p className="text-muted-foreground">
+                              Change{' '}
+                              <span className="font-medium text-foreground">
+                                {d.change_percent > 0 ? '+' : ''}
+                                {d.change_percent.toFixed(2)}%
+                              </span>{' '}
+                              · <span className="capitalize">{d.trend}</span>
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-muted-foreground">No trend data</p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>

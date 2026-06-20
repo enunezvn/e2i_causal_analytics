@@ -523,6 +523,13 @@ class RefutationSummary(BaseModel):
     gate_decision: Optional[str] = Field(default=None, description="proceed / review / block")
     passed: bool = Field(default=False, description="True only on a PROCEED gate")
     needs_review: bool = Field(default=False)
+    expert_review_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "ID of the expert-review queue row created/looked-up for this DAG when "
+            "the gate is REVIEW or BLOCK; None when the result auto-proceeded."
+        ),
+    )
     tests_passed: Optional[int] = Field(default=None)
     tests_total: Optional[int] = Field(default=None)
     sensitivity_e_value: Optional[float] = Field(default=None)
@@ -675,6 +682,12 @@ class DiscoveredEffect(BaseModel):
 
     treatment: str
     outcome: str
+    brand: Optional[str] = Field(
+        None, description="Brand this question is scoped to (SSOT-derived)"
+    )
+    adjustment_set: List[str] = Field(
+        default_factory=list, description="Modeled backdoor set used for this estimate"
+    )
     status: str = Field(
         ...,
         description="pending / running / completed / needs_review / blocked / failed",
@@ -722,6 +735,75 @@ class DiscoverEffectsResponse(BaseModel):
             "Validated causal effects from the causal_impact agent (discovered DAG + "
             "data-driven estimator + refutation gate), ranked by confidence then impact."
         )
+    )
+
+
+# =============================================================================
+# CLINICAL CONTEXT SCHEMAS
+# =============================================================================
+
+
+class MechanismOfAction(BaseModel):
+    """Drug mechanism of action with its provenance.
+
+    ``source`` is ``chembl`` when the live ChEMBL mechanism lookup succeeded, or
+    ``static_fallback`` when it was unreachable and the curated MoA was used.
+    """
+
+    mechanism_of_action: str = Field(..., description="e.g. 'CDK4/6 inhibitor'")
+    source: str = Field(..., description="chembl / static_fallback")
+
+
+class PivotalEndpoint(BaseModel):
+    """The disease's real pivotal endpoints (from ClinicalTrials.gov) + source."""
+
+    endpoints: List[str] = Field(
+        default_factory=list,
+        description="Real primary outcome measures from registered trials (e.g. OS/PFS).",
+    )
+    source: str = Field(..., description="clinicaltrials.gov / static_fallback")
+
+
+class RealWorldEvidence(BaseModel):
+    """A real, cited real-world-evidence reference (from PubMed)."""
+
+    pmid: str = Field(..., description="PubMed ID")
+    title: str = Field(..., description="Article title")
+    journal: Optional[str] = Field(default=None, description="Journal / source")
+    pubdate: Optional[str] = Field(default=None, description="Publication date string")
+    doi: Optional[str] = Field(default=None, description="DOI when available")
+    url: str = Field(..., description="Canonical pubmed.ncbi.nlm.nih.gov URL")
+    source: str = Field(..., description="pubmed / pubmed_seed")
+
+
+class ClinicalContext(BaseModel):
+    """Brand-faithful, sourced clinical NARRATIVE for a discovered effect.
+
+    Additive over the causal result — does NOT change the math or adjustment set.
+    ``honesty_label`` always states the boundary: the effect estimate runs on a
+    SYNTHETIC cohort; this clinical context is REAL and cited. Any field whose
+    source is ``static_fallback`` came from the curated map because the live API
+    was unreachable (the layer degrades gracefully, never fabricates).
+    """
+
+    brand: str = Field(..., description="Brand the context is for")
+    drug_name: str = Field(..., description="INN drug name (e.g. ribociclib)")
+    disease: str = Field(..., description="Indication (e.g. Malignant neoplasm of breast)")
+    our_outcome: str = Field(..., description="Our synthetic outcome column this maps from")
+    mapped_endpoint: Optional[str] = Field(
+        default=None,
+        description=(
+            "The real pivotal-endpoint framing our synthetic outcome stands in for "
+            "(None when unmapped)."
+        ),
+    )
+    mechanism: MechanismOfAction
+    pivotal_endpoints: PivotalEndpoint
+    real_world_evidence: Optional[RealWorldEvidence] = Field(
+        default=None, description="A real cited RWE reference; None when none was found."
+    )
+    honesty_label: str = Field(
+        ..., description="Explicit synthetic-estimate / real-context boundary statement."
     )
 
 

@@ -481,12 +481,15 @@ class RefutationNode:
     async def _consult_review_gate(
         self, state: CausalImpactState, suite: "RefutationSuite"
     ) -> Dict[str, Any]:
-        """On a REVIEW-band gate, consult the ExpertReviewGate (H2).
+        """On a REVIEW- or BLOCK-band gate, consult the ExpertReviewGate.
 
-        Wires the built-but-previously-unwired ``ExpertReviewGate`` at the REVIEW
-        seam. Always flags ``needs_review`` and emits a user-facing caveat; the
-        gate consultation is best-effort (a missing repository bypasses to
-        PROCEED with a logged warning, a gate error degrades to needs_review).
+        Routes both borderline-robust (REVIEW) and failed-robustness (BLOCK)
+        estimates to the expert-review queue so a human can adjudicate. Emits a
+        band-specific caveat and returns the created/looked-up ``review_id``. The
+        consult is best-effort (a missing repository bypasses with a logged
+        warning; a gate error degrades without breaking the node). ``needs_review``
+        is set by the caller from ``suite.needs_review`` (REVIEW only), so a BLOCK
+        row is queued without being mislabelled valid-but-needs-review.
         """
         from src.causal_engine.expert_review_gate import ExpertReviewGate
 
@@ -494,10 +497,16 @@ class RefutationNode:
         treatment = state.get("treatment_var", "unknown_treatment")
         outcome = state.get("outcome_var", "unknown_outcome")
         brand = state.get("brand")
-        dag_hash = str(state.get("dag_hash") or "")
+        # FIX: read the DAG hash from the key the graph builder actually writes
+        # (`dag_version_hash`, graph_builder.py). The old `dag_hash` key was never
+        # populated, so every auto-created review row was keyed on "" — which broke
+        # the approval round-trip and left the queue effectively empty.
+        dag_hash = str(state.get("dag_version_hash") or "")
         requester_id = state.get("query_id") or "causal_impact_agent"
+        is_block = suite.gate_decision == GateDecision.BLOCK
 
         expert_review_decision: Optional[str] = None
+        review_id: Optional[str] = None
         try:
             review_result = await gate.check_approval(
                 dag_hash=dag_hash,
@@ -512,20 +521,31 @@ class RefutationNode:
                 ),
             )
             expert_review_decision = review_result.decision.value
+            review_id = review_result.review_id
         except Exception as gate_err:  # noqa: BLE001 - gate must never break the node
             logger.warning(
                 f"ExpertReviewGate consult failed (degrading to needs_review): {gate_err}"
             )
 
-        caveat = (
-            f"Refutation gate is REVIEW (borderline robust, "
-            f"confidence={suite.confidence_score:.2f}). This estimate needs expert "
-            f"review before it is used as a validated result."
-        )
+        if is_block:
+            caveat = (
+                f"Refutation gate is BLOCK (failed robustness, "
+                f"confidence={suite.confidence_score:.2f}). This estimate did not pass "
+                f"and has been routed to expert review for adjudication."
+            )
+        else:
+            caveat = (
+                f"Refutation gate is REVIEW (borderline robust, "
+                f"confidence={suite.confidence_score:.2f}). This estimate needs expert "
+                f"review before it is used as a validated result."
+            )
+        # `needs_review` is intentionally NOT returned here: the caller's result
+        # dict sets it from ``suite.needs_review`` (True only for REVIEW), so a
+        # BLOCK row is queued without being surfaced as valid-but-needs-review.
         return {
-            "needs_review": True,
             "expert_review_decision": expert_review_decision,
             "review_caveat": caveat,
+            "expert_review_id": review_id,
         }
 
     async def _log_validation_outcome_signal(
@@ -786,7 +806,7 @@ class RefutationNode:
                     "query_id": query_id,
                     "agent_activity_id": state.get("agent_activity_id"),
                 },
-                dag_hash=cast(Optional[str], state.get("dag_hash")),
+                dag_hash=cast(Optional[str], state.get("dag_version_hash")),
                 sample_size=cast(Optional[int], estimation_result.get("n_samples")),
             )
             validation_outcome_id = await self._log_validation_outcome_signal(validation_outcome)
@@ -803,6 +823,11 @@ class RefutationNode:
                 next_phase = "failed"
                 status = "failed"
                 error_message = self._format_block_reason(suite)
+                # Route BLOCKED (failed-robustness) estimates to the expert-review
+                # queue too, so a human can adjudicate or override the failure. The
+                # estimate still surfaces as failed (needs_review stays False from
+                # suite.needs_review); the queued row carries the gate=block context.
+                review_fields = await self._consult_review_gate(state, suite)
             elif suite.gate_decision == GateDecision.REVIEW:
                 logger.info(
                     f"Refutation requires REVIEW: confidence={suite.confidence_score:.2f}, "

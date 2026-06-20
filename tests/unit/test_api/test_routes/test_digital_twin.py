@@ -383,7 +383,7 @@ async def test_get_simulation_history_returns_rows(mock_twin_repository):
     (ate_estimate, recommendation_type, total/offset/limit)."""
     from src.api.routes.digital_twin import get_simulation_history
 
-    result = await get_simulation_history(limit=10, offset=0, user=_ADMIN_USER)
+    result = await get_simulation_history(brand=None, limit=10, offset=0, user=_ADMIN_USER)
 
     assert result.total >= 1
     assert result.limit == 10
@@ -393,6 +393,28 @@ async def test_get_simulation_history_returns_rows(mock_twin_repository):
     assert hasattr(row, "ate_estimate")
     assert hasattr(row, "recommendation_type")
     assert hasattr(row, "simulation_id")
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_history_brand_filter_passed_to_repo(mock_twin_repository):
+    """An admin's brand filter is threaded into the repository read."""
+    from src.api.routes.digital_twin import BrandEnum, get_simulation_history
+
+    await get_simulation_history(brand=BrandEnum.KISQALI, limit=10, offset=0, user=_ADMIN_USER)
+
+    _args, kwargs = mock_twin_repository.simulations.list_simulations.call_args
+    assert kwargs.get("brand") == "Kisqali"
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_history_all_brands_passes_no_brand(mock_twin_repository):
+    """Omitting brand ('All brands') reads every brand the admin may see (brand=None)."""
+    from src.api.routes.digital_twin import get_simulation_history
+
+    await get_simulation_history(brand=None, limit=10, offset=0, user=_ADMIN_USER)
+
+    _args, kwargs = mock_twin_repository.simulations.list_simulations.call_args
+    assert kwargs.get("brand") is None
 
 
 @pytest.mark.asyncio
@@ -418,7 +440,7 @@ async def test_get_simulation_history_repo_error_is_generic(mock_twin_repository
     mock_twin_repository.simulations.list_simulations.side_effect = Exception("SECRET-DSN-LEAK")
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_simulation_history(limit=10, offset=0, user=_ADMIN_USER)
+        await get_simulation_history(brand=None, limit=10, offset=0, user=_ADMIN_USER)
 
     assert exc_info.value.status_code == 500
     assert "SECRET-DSN-LEAK" not in str(exc_info.value.detail)

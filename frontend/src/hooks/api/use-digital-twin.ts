@@ -88,6 +88,7 @@ export function useSimulation(
  */
 export function useSimulationHistory(
   params?: {
+    brand?: string;
     limit?: number;
     offset?: number;
   },

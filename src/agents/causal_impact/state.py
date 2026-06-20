@@ -201,6 +201,13 @@ class CausalImpactState(TypedDict):
     parameters: NotRequired[Dict[str, Any]]  # Agent-specific parameters
     time_period: NotRequired[Dict[str, str]]  # {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
     brand: NotRequired[str]  # Brand context
+    # Modeled confounders for the question (the resolved/expanded adjustment set).
+    # Threaded SEPARATELY from ``confounders`` so guided discovery can seed
+    # CausalPriorKnowledge.required_edges (confounder->treatment, confounder->outcome)
+    # from the MODELED backdoor set instead of the generic KNOWN_CAUSAL_RELATIONSHIPS
+    # constants. Declared so LangGraph persists it across nodes (undeclared channels
+    # are dropped).
+    modeled_confounders: NotRequired[List[str]]
     # Cooperative compute deadline (absolute ``time.monotonic()`` seconds). When
     # set, the refutation node stops launching refuters that would not finish
     # before it, so a timed-out run returns cleanly instead of orphaning the
@@ -364,6 +371,9 @@ class CausalImpactState(TypedDict):
     refutation_passed: NotRequired[bool]
     needs_review: NotRequired[bool]  # REVIEW-band gate: borderline-robust, not "passed"
     gate_decision: NotRequired[str]  # refutation gate: "proceed" | "review" | "block"
+    review_caveat: NotRequired[str]  # band-specific caveat surfaced for REVIEW/BLOCK
+    expert_review_decision: NotRequired[str | None]  # ExpertReviewGate decision value
+    expert_review_id: NotRequired[str | None]  # expert_reviews row id (REVIEW/BLOCK)
     # NOTE: refutation_error is already declared earlier in this TypedDict
     # (set when refutation fails-closed, H1) — do not re-declare it here.
 

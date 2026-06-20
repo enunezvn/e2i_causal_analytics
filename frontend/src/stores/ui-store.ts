@@ -129,7 +129,10 @@ export type UIStore = UIState & UIActions;
  * Initial state for the UI store
  */
 const initialState: UIState = {
-  sidebarOpen: true,
+  // The mobile nav drawer starts CLOSED so the header hamburger clearly OPENS it
+  // (rather than closing an already-open drawer). On desktop (lg+) the sidebar is
+  // always visible via `lg:translate-x-0`, so this default has no effect there.
+  sidebarOpen: false,
   sidebarCollapsed: false,
   theme: 'system',
   globalLoading: false,
@@ -258,12 +261,29 @@ export const useUIStore = create<UIStore>()(
       }),
       {
         name: 'e2i-ui-store',
-        // Only persist specific fields
+        // Bump when the persisted shape changes so stale values are migrated.
+        version: 1,
+        // Only persist durable preferences. The mobile drawer open/closed state
+        // (`sidebarOpen`) is intentionally NOT persisted: it is ephemeral session
+        // UI that must always start closed on load (see initialState), otherwise
+        // the drawer rehydrates open and the hamburger appears to "do nothing".
         partialize: (state) => ({
           theme: state.theme,
-          sidebarOpen: state.sidebarOpen,
           sidebarCollapsed: state.sidebarCollapsed,
         }),
+        // v0 persisted `sidebarOpen` (defaulted open), which rehydrated the mobile
+        // drawer open on every load. Drop it here while preserving the user's
+        // theme + collapse preferences.
+        migrate: (persisted) => {
+          const prev = (persisted ?? {}) as {
+            theme?: UIState['theme'];
+            sidebarCollapsed?: boolean;
+          };
+          return {
+            theme: prev.theme ?? 'system',
+            sidebarCollapsed: prev.sidebarCollapsed ?? false,
+          };
+        },
       }
     ),
     { name: 'UIStore' }

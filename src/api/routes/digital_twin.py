@@ -1070,6 +1070,7 @@ async def list_simulations(
     operation_id="get_simulation_history",
 )
 async def get_simulation_history(
+    brand: Optional[BrandEnum] = Query(None, description="Filter by brand (omit for all brands)"),
     limit: int = Query(default=20, ge=1, le=100, description="Max records to return"),
     offset: int = Query(default=0, ge=0, description="Pagination offset"),
     user: Dict[str, Any] = Depends(require_viewer),
@@ -1089,9 +1090,10 @@ async def get_simulation_history(
         Simulation history rows with total count and pagination echo.
     """
 
-    # Fail-closed brand scoping (H11): no brand filter param here, so a non-admin
-    # is pinned to their first granted brand; admin / ['all'] sees all.
-    allowed, effective_brand = resolve_brand_for_read(user, None)
+    # Fail-closed brand scoping (H11): an optional brand filter (None = all
+    # brands the caller may see). A non-admin is still pinned to their grant;
+    # admin / ['all'] sees all brands, or the one selected here.
+    allowed, effective_brand = resolve_brand_for_read(user, brand.value if brand else None)
     if not allowed:
         raise HTTPException(status_code=403, detail="No brand grant for this user.")
 

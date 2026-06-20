@@ -32,7 +32,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import httpx
 
@@ -52,6 +52,49 @@ def _node_sequence(row: Dict[str, Any]) -> List[str]:
     if isinstance(row.get("end_node"), str) and row["end_node"]:
         seq.append(row["end_node"])
     return seq
+
+
+def _mediation_edges(start: str, mediators: List[str], end: str) -> List[Tuple[str, str, bool]]:
+    """Edges for one chain as PARALLEL mediation, returned as ``(cause, effect,
+    is_terminal)``.
+
+    A chain ``treatment_arm -> [m1, m2, ...] -> outcome`` does NOT mean the
+    mediators form a serial chain among themselves — they are parallel mediators
+    that each independently sit between treatment and outcome. The previous
+    consecutive-pair encoding (``start->m1->m2->outcome``) invented spurious
+    ``m1->m2`` edges, and because the generator orders mediators RANDOMLY per
+    row, those mediator->mediator edges accumulated in BOTH directions —
+    reciprocal cycles (``adherence<->prior_therapy`` etc.) that turned the
+    Knowledge-Graph variable layer into a hairball.
+
+    Emitting ``start -> mediator`` (non-terminal) and ``mediator -> outcome``
+    (terminal, so the chain effect rides it) for each mediator removes every
+    mediator->mediator edge while preserving the real mediation structure. With
+    no mediators it degrades to a single direct ``start -> outcome`` terminal
+    edge. Self/degenerate pairs (a mediator equal to start or end) are dropped.
+    """
+    edges: List[Tuple[str, str, bool]] = []
+    real_mediators = [m for m in mediators if m and m != start and m != end]
+    if not real_mediators:
+        if start != end:
+            edges.append((start, end, True))
+        return edges
+    for m in real_mediators:
+        edges.append((start, m, False))
+        edges.append((m, end, True))
+    return edges
+
+
+# Terminal patient-journey outcomes -> the commercial KPI they drive, matched by
+# KPI *name* (live KPI nodes carry no ``id``). These bridge edges connect the
+# variable layer to the KPI layer so the gold standard renders as ONE connected
+# graph rather than two disjoint islands. Kept brand/region-agnostic (a single
+# shared edge each), so the page's parallel-edge dedupe leaves them as one edge.
+_VARIABLE_KPI_BRIDGE: Dict[str, str] = {
+    "treatment_initiated": "NRx",
+    "persistent_180d": "Patient_Retention",
+    "discontinued_180d": "Patient_Retention",
+}
 
 
 def fetch_validated_paths() -> List[Dict[str, Any]]:
@@ -99,12 +142,18 @@ def main() -> int:
     chains = [(r, _node_sequence(r)) for r in rows]
     chains = [(r, seq) for r, seq in chains if len(seq) >= 2]
 
+    # Parallel-mediation edges per chain (start->mediator, mediator->outcome);
+    # NEVER mediator->mediator (see _mediation_edges for the de-cycle rationale).
+    chain_edges = [(row, _mediation_edges(seq[0], seq[1:-1], seq[-1])) for row, seq in chains]
     distinct_nodes = {n for _, seq in chains for n in seq}
-    edge_count = sum(len(seq) - 1 for _, seq in chains)
+    edge_count = sum(len(edges) for _, edges in chain_edges)
     print(f"causal_paths (validated): {len(rows)}")
     print(f"chains with >=2 nodes:    {len(chains)}")
     print(f"distinct variable nodes:  {len(distinct_nodes)}")
-    print(f"CAUSES edges to MERGE:     {edge_count}")
+    print(f"CAUSES edges to MERGE:     {edge_count} (parallel mediation, no mediator->mediator)")
+    print(
+        f"variable->KPI bridges:     {len(_VARIABLE_KPI_BRIDGE)} (matched by KPI name if present)"
+    )
 
     if not args.execute:
         print("\nDRY-RUN — no writes. Re-run with --execute to apply.")
@@ -120,7 +169,7 @@ def main() -> int:
     g = db.select_graph(graph_name)
 
     written = 0
-    for row, seq in chains:
+    for row, edges in chain_edges:
         conf = row.get("confidence_level")
         eff = row.get("causal_effect_size")
         params = {
@@ -133,12 +182,12 @@ def main() -> int:
             "cc": row.get("confirmation_count"),
             "ddate": str(row.get("discovery_date")) if row.get("discovery_date") else None,
         }
-        for i in range(len(seq) - 1):
-            params["sid"] = f"var:{seq[i]}"
-            params["sname"] = seq[i]
-            params["tid"] = f"var:{seq[i + 1]}"
-            params["tname"] = seq[i + 1]
-            params["is_terminal"] = i == len(seq) - 2
+        for src_name, tgt_name, is_terminal in edges:
+            params["sid"] = f"var:{src_name}"
+            params["sname"] = src_name
+            params["tid"] = f"var:{tgt_name}"
+            params["tname"] = tgt_name
+            params["is_terminal"] = is_terminal
             g.query(
                 """
                 MERGE (a:Variable {id: $sid}) SET a.name = $sname
@@ -155,7 +204,31 @@ def main() -> int:
             )
             written += 1
 
-    print(f"\nEXECUTED — MERGEd {written} edges across {len(chains)} chains into '{graph_name}'.")
+    # Bridge the terminal variable outcomes into the KPI layer so the variable
+    # graph and the KPI graph are one connected component. MATCH both endpoints
+    # (never CREATE a bare KPI or orphan variable); MERGE a single, idempotent,
+    # brand/region-agnostic CAUSES edge tagged is_bridge.
+    bridged = 0
+    for outcome, kpi_name in _VARIABLE_KPI_BRIDGE.items():
+        res = g.query(
+            """
+            MATCH (v:Variable {id: $vid})
+            MATCH (k:KPI {name: $kpi})
+            MERGE (v)-[r:CAUSES]->(k)
+            SET r.is_bridge = true,
+                r.confidence = $conf,
+                r.validation_status = 'validated'
+            RETURN count(r)
+            """,
+            params={"vid": f"var:{outcome}", "kpi": kpi_name, "conf": 0.7},
+        )
+        touched = res.result_set[0][0] if getattr(res, "result_set", None) else 0
+        bridged += int(touched or 0)
+
+    print(
+        f"\nEXECUTED — MERGEd {written} causal edges across {len(chains)} chains "
+        f"+ {bridged} variable->KPI bridge(s) into '{graph_name}'."
+    )
     return 0
 
 

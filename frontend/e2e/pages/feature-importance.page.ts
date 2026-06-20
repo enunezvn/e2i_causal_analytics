@@ -56,10 +56,11 @@ export class FeatureImportancePage extends BasePage {
       .first()
   }
 
-  // Top-level mode toggle (Cohort (global) | Individual). Radix Tabs renders
-  // each trigger as a [role="tab"].
+  // Top-level mode toggle (Cohort average | Individual). Radix Tabs renders
+  // each trigger as a [role="tab"]. PR #1043 renamed "Cohort (global)" ->
+  // "Cohort average" (the "global" SHAP jargon read as unclear).
   get cohortModeTab(): Locator {
-    return this.page.getByRole('tab', { name: /cohort \(global\)/i }).first()
+    return this.page.getByRole('tab', { name: /cohort average/i }).first()
   }
 
   get individualModeTab(): Locator {
@@ -144,9 +145,10 @@ export class FeatureImportancePage extends BasePage {
     return this.page.getByRole('tab', { name: /waterfall/i })
   }
 
-  // Visualization Cards
+  // Visualization Cards. PR #1043 renamed the cohort Bar Chart CardTitle
+  // "Global Feature Importance" -> "Average Feature Importance".
   get globalImportanceCard(): Locator {
-    return this.page.getByText('Global Feature Importance').first()
+    return this.page.getByText(/Average Feature Importance/i).first()
   }
 
   get featureDistributionCard(): Locator {
@@ -208,7 +210,7 @@ export class FeatureImportancePage extends BasePage {
     await this.entityPicker.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {})
   }
 
-  /** Switch back to the default Cohort (global) mode tab. */
+  /** Switch back to the default Cohort average mode tab. */
   async switchToCohortMode(): Promise<void> {
     await this.cohortModeTab.click()
   }
@@ -327,9 +329,9 @@ export class FeatureImportancePage extends BasePage {
     try {
       // Wait for tab content to render.
       await this.page.waitForTimeout(300)
-      // Cohort-mode Bar Chart CardTitle.
+      // Cohort-mode Bar Chart CardTitle (PR #1043: "Average Feature Importance").
       const hasGlobalImportance = await this.page
-        .getByText('Global Feature Importance')
+        .getByText(/Average Feature Importance/i)
         .first()
         .isVisible()
         .catch(() => false)

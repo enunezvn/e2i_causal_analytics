@@ -5,11 +5,12 @@ gate + significance) then impact (|ate|). These pure helpers are CI-safe (no DB,
 no agent run); the end-to-end agent runs are covered by a faithful check.
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
+from src.api.routes import causal as causal_routes
 from src.api.routes.causal import (
-    _CAUSAL_DATASET_SPECS,
-    _discover_candidate_pairs,
     _effect_confidence_score,
     _effect_from_agent_response,
     _effect_status_from_gate,
@@ -23,13 +24,120 @@ from src.api.schemas.causal import (
 )
 
 
-@pytest.mark.unit
-def test_candidate_pairs_dedupe_complement_and_self():
-    pairs = _discover_candidate_pairs(_CAUSAL_DATASET_SPECS["patient_journeys"])
-    # No self-pairs, and the complement outcome (discontinued_180d) is dropped.
-    assert all(t != o for t, o in pairs)
-    assert all(o != "discontinued_180d" for _, o in pairs)
-    assert ("treatment_arm", "persistent_180d") in pairs
+@pytest.mark.asyncio
+async def test_candidate_questions_come_from_ssot_with_modeled_adjustment_set():
+    fake_questions = [
+        {
+            "treatment": "treatment_arm",
+            "outcome": "persistent_180d",
+            "brand": "Kisqali",
+            # P1b/D5: geographic_region (categorical) is now ADMITTED into the
+            # adjustment set (the loader one-hot expands it downstream); only
+            # treatment_arm is dropped as a treatment-collision (the
+            # `c not in (t, o)` guard, I2).
+            "confounders": [
+                "disease_severity",
+                "academic_hcp",
+                "geographic_region",
+                "treatment_arm",
+            ],
+        },
+        {
+            "treatment": "treatment_arm",
+            "outcome": "treatment_initiated",
+            "brand": "Fabhalta",
+            "confounders": ["disease_severity", "age_at_diagnosis"],
+        },
+    ]
+    # _get_causal_path_repo is async (returns the repo), so patch it as an
+    # AsyncMock whose awaited result is the repo carrying get_distinct_questions.
+    with patch.object(causal_routes, "_get_causal_path_repo", new_callable=AsyncMock) as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(return_value=fake_questions)
+        qs = await causal_routes._discover_candidate_questions("patient_journeys", brand=None)
+    by_outcome = {q.outcome: q for q in qs}
+    # retention: numeric confounders kept AND geographic_region (categorical)
+    # admitted (P1b/D5 — the loader one-hot expands it downstream).
+    assert by_outcome["persistent_180d"].adjustment_set == [
+        "disease_severity",
+        "academic_hcp",
+        "geographic_region",
+    ]
+    # I2: a treatment-collision confounder is never adjusted on (would be invalid).
+    assert "treatment_arm" not in by_outcome["persistent_180d"].adjustment_set
+    assert by_outcome["persistent_180d"].brand == "Kisqali"
+    assert by_outcome["treatment_initiated"].adjustment_set == [
+        "disease_severity",
+        "age_at_diagnosis",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_brand_filter_subsets_questions():
+    # Brand subsetting is the repo's job (get_distinct_questions applies a
+    # {"brand": brand} DB filter), so the mock honors the brand kwarg the way the
+    # real repo does. Both rows use a NON-complement outcome so the ONLY thing
+    # that can drop the Fabhalta row is the brand filter being honored+forwarded
+    # (a complement outcome would be dropped by _COMPLEMENT_OUTCOMES_SKIP even if
+    # brand forwarding were deleted, which would mask a regression).
+    all_rows = [
+        {
+            "treatment": "treatment_arm",
+            "outcome": "persistent_180d",
+            "brand": "Kisqali",
+            "confounders": ["disease_severity"],
+        },
+        {
+            "treatment": "treatment_arm",
+            "outcome": "treatment_initiated",
+            "brand": "Fabhalta",
+            "confounders": ["disease_severity"],
+        },
+    ]
+
+    async def _distinct(*, brand=None, include_synthetic=True):
+        return [r for r in all_rows if brand is None or r["brand"] == brand]
+
+    with patch.object(causal_routes, "_get_causal_path_repo", new_callable=AsyncMock) as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(side_effect=_distinct)
+        qs = await causal_routes._discover_candidate_questions("patient_journeys", brand="Kisqali")
+    assert [q.brand for q in qs] == ["Kisqali"]
+    # The brand filter must be forwarded to the SSOT read (not applied only FE-side):
+    # if it were not forwarded, the Fabhalta row would survive and this list would
+    # contain two brands.
+    mk.return_value.get_distinct_questions.assert_awaited_once_with(
+        brand="Kisqali", include_synthetic=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_discover_candidate_questions_awaits_async_client(monkeypatch):
+    """FAITHFUL wiring check: does NOT mock _get_causal_path_repo, so a regression
+    to a SYNC client (object APIResponse can't be awaited) would surface here.
+    Patches only the async-client factory + the repo's get_many.
+
+    NOTE: _get_causal_path_repo imports get_async_supabase_client locally (lazy),
+    so we patch it at its SOURCE module, not as a causal_routes attribute."""
+    import src.memory.services.factories as factories
+    from src.repositories.causal_path import CausalPathRepository
+
+    monkeypatch.setattr(factories, "get_async_supabase_client", AsyncMock(return_value=object()))
+    fake_rows = [
+        {
+            "start_node": "treatment_arm",
+            "end_node": "persistent_180d",
+            "brand": "Kisqali",
+            "confounders_controlled": ["disease_severity"],
+        }
+    ]
+    get_many_mock = AsyncMock(return_value=fake_rows)
+    monkeypatch.setattr(CausalPathRepository, "get_many", get_many_mock)
+
+    # Must complete WITHOUT raising (proves the async/await chain is wired).
+    qs = await causal_routes._discover_candidate_questions("patient_journeys", brand="Kisqali")
+
+    get_many_mock.assert_awaited()
+    assert [q.outcome for q in qs] == ["persistent_180d"]
+    assert qs[0].adjustment_set == ["disease_severity"]
 
 
 @pytest.mark.unit
@@ -101,6 +209,26 @@ def test_effect_from_agent_response_maps_gate_and_impact():
     assert "not statistically significant" not in eff.summary
 
 
+@pytest.mark.asyncio
+async def test_questions_are_fwl_preranked(monkeypatch):
+    qs = [
+        causal_routes._CandidateQuestion(
+            "treatment_arm", "treatment_initiated", "Kisqali", ["disease_severity"]
+        ),
+        causal_routes._CandidateQuestion(
+            "treatment_arm", "persistent_180d", "Kisqali", ["disease_severity"]
+        ),
+    ]
+    strengths = {"treatment_initiated": 0.05, "persistent_180d": 0.60}
+
+    async def fake_signal(dataset, q):
+        return strengths[q.outcome]
+
+    monkeypatch.setattr(causal_routes, "_prerank_signal", fake_signal)
+    ordered = await causal_routes._prerank_questions("patient_journeys", qs)
+    assert [q.outcome for q in ordered] == ["persistent_180d", "treatment_initiated"]
+
+
 @pytest.mark.unit
 def test_effect_summary_none_until_estimated():
     """A pending/failed effect (no ATE) has no summary — never a fabricated one."""
@@ -120,3 +248,88 @@ def test_effect_summary_none_until_estimated():
     )
     eff = _effect_from_agent_response("treatment_arm", "persistent_180d", resp, "x2")
     assert eff.summary is None
+
+
+@pytest.mark.asyncio
+async def test_trigger_questions_from_ssot_have_empty_adjustment_set():
+    """The nba_triggers grain enumerates the RCT + effect-modifier questions from
+    the SSOT, each with an EMPTY modeled adjustment set (randomized / effect
+    modifier). Reuses P1's _discover_candidate_questions verbatim."""
+    from unittest.mock import AsyncMock, patch
+
+    fake = [
+        {
+            "treatment": "control_group_flag",
+            "outcome": "action_taken",
+            "brand": "Kisqali",
+            "confounders": [],
+        },
+        {
+            "treatment": "acceptance_status",
+            "outcome": "conversion_flag",
+            "brand": "Kisqali",
+            "confounders": [],
+        },
+    ]
+    with patch.object(causal_routes, "_get_causal_path_repo") as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(return_value=fake)
+        qs = await causal_routes._discover_candidate_questions("nba_triggers", brand="Kisqali")
+
+    by_outcome = {q.outcome: q for q in qs}
+    assert by_outcome["action_taken"].treatment == "control_group_flag"
+    assert by_outcome["action_taken"].adjustment_set == []
+    assert by_outcome["action_taken"].brand == "Kisqali"
+    assert by_outcome["conversion_flag"].treatment == "acceptance_status"
+    assert by_outcome["conversion_flag"].adjustment_set == []
+
+
+@pytest.mark.asyncio
+async def test_retention_question_includes_geographic_region_in_adjustment_set():
+    """After P1b, geographic_region (categorical) is admitted into the leaderboard
+    retention question's adjustment set (the loader expands it downstream)."""
+    fake = [
+        {
+            "treatment": "treatment_arm",
+            "outcome": "persistent_180d",
+            "brand": "Kisqali",
+            "confounders": ["disease_severity", "academic_hcp", "geographic_region"],
+        }
+    ]
+    with patch.object(causal_routes, "_get_causal_path_repo", new_callable=AsyncMock) as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(return_value=fake)
+        qs = await causal_routes._discover_candidate_questions("patient_journeys", brand=None)
+    adj = qs[0].adjustment_set
+    assert "geographic_region" in adj
+    assert "disease_severity" in adj and "academic_hcp" in adj
+
+
+@pytest.mark.asyncio
+async def test_prerank_signal_handles_categorical_adjustment_without_keyerror(monkeypatch):
+    """_prerank_signal must use the loader's EXPANDED columns (geo dummies), not the
+    raw categorical, so the FWL screen doesn't KeyError."""
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0, 0.0],
+            "persistent_180d": [1.0, 0.0, 1.0, 1.0],
+            "disease_severity": [2.0, 1.0, 3.0, 2.0],
+            "geographic_region=south": [1.0, 0.0, 0.0, 1.0],
+            "geographic_region=west": [0.0, 1.0, 0.0, 0.0],
+        }
+    )
+    expanded = [
+        "treatment_arm",
+        "persistent_180d",
+        "disease_severity",
+        "geographic_region=south",
+        "geographic_region=west",
+    ]
+    monkeypatch.setattr(
+        causal_routes, "_load_agent_estimation_frame", AsyncMock(return_value=(frame, expanded))
+    )
+    q = causal_routes._CandidateQuestion(
+        "treatment_arm", "persistent_180d", "Kisqali", ["disease_severity", "geographic_region"]
+    )
+    val = await causal_routes._prerank_signal("patient_journeys", q)
+    assert isinstance(val, float) and val >= 0.0

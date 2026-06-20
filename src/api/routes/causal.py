@@ -30,9 +30,12 @@ import math
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+
+if TYPE_CHECKING:
+    from src.repositories.causal_path import CausalPathRepository
 
 from src.api.dependencies.auth import require_analyst, require_viewer
 from src.api.dependencies.compute import HeavyComputeSaturated, heavy_compute_slot
@@ -59,6 +62,7 @@ from src.api.schemas.causal import (
     CausalHealthResponse,
     CausalLibrary,
     CausalVariablesResponse,
+    ClinicalContext,
     CrossValidationRequest,
     CrossValidationResponse,
     DiscoveredEffect,
@@ -118,6 +122,7 @@ from src.causal_engine.pipeline.state import (
 # read functions are patchable in tests as ``causal.count_memories_by_type`` /
 # ``causal.get_recent_memories``.
 from src.memory.episodic_memory import count_memories_by_type, get_recent_memories
+from src.memory.services.factories import get_async_supabase_client
 from src.repositories.provenance import apply_provenance_filter, deployment_includes_synthetic
 
 logger = logging.getLogger(__name__)
@@ -812,6 +817,7 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "engagement_score",
             "age_at_diagnosis",
             "academic_hcp",
+            "geographic_region",
             "egfr",
             "proteinuria_g_day",
             "ldh_ratio",
@@ -819,8 +825,37 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "ecog_performance_status",
         ],
     },
+    # HCP grain: hcp_brand_adoption (treatment_arm, adopted, brand) JOIN
+    # hcp_profiles (peer_influence_score, influence_network_size) on hcp_id. The
+    # JOIN loader derives centrality_z = zscore(log1p(influence_network_size)) as
+    # the modeled backdoor for the rep-engagement arm. peer_influence_score is the
+    # EXOGENOUS-centrality treatment (empty backdoor); treatment_arm is the rep
+    # engagement arm (adjust centrality_z). adopted is the binary outcome.
+    "hcp_adoption": {
+        "treatment": ["peer_influence_score", "treatment_arm"],
+        "outcome": ["adopted"],
+        "covariate": ["centrality_z"],
+    },
+    "nba_triggers": {
+        # The triggers table — the ONLY true RCT in the gold standard.
+        # Treatments: the randomized holdout flag (control_group_flag) and the
+        # "trigger accepted" indicator (acceptance_status). Outcomes: action_taken
+        # (an action was taken) and conversion_flag (the DB STORED-GENERATED
+        # outcome_value>0). No covariates: the RCT is randomized (empty backdoor)
+        # and acceptance->conversion is a designed effect with priority as an
+        # effect MODIFIER (surfaced, not adjusted), so no confounder is offered.
+        "treatment": ["control_group_flag", "acceptance_status"],
+        "outcome": ["action_taken", "conversion_flag"],
+        "covariate": [],
+    },
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+# Datasets that are NOT a single physical table — built by a JOIN-aware loader
+# (e.g. hcp_adoption = hcp_brand_adoption ⋈ hcp_profiles, centrality_z derived).
+# Endpoints that issue a single-table client.table(dataset) read MUST special-case
+# these (P3 adds its grain here if it is also non-single-table).
+_JOIN_DATASETS: frozenset = frozenset({"hcp_adoption"})
 
 # Columns coerced to float before handing the frame to the executors. Every
 # curated candidate above is numeric, so all are coerced; a value that cannot
@@ -841,6 +876,79 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "urticaria_severity_uas7",
         "ecog_performance_status",
     },
+    "hcp_adoption": {
+        "peer_influence_score",
+        "treatment_arm",
+        "adopted",
+        "centrality_z",
+    },
+    "nba_triggers": {
+        # Every trigger question column coerces to numeric 0/1 (booleans via
+        # float(bool); acceptance_status/action_taken via the derivations below).
+        "control_group_flag",
+        "action_taken",
+        "conversion_flag",
+        "acceptance_status",
+    },
+}
+
+# Per-dataset brand-filter column. The triggers table has NO `brand` column — it
+# carries `brand_id` (text, NOT NULL). Datasets absent here default to "brand"
+# (patient_journeys). Used by _list_dataset_brands + the loaders' brand filter.
+_CAUSAL_BRAND_COLUMN: Dict[str, str] = {
+    "nba_triggers": "brand_id",
+}
+
+
+# Per-dataset value derivations applied BEFORE float-coercion, for columns whose
+# raw value is not directly float()-able into the modeled 0/1 (categorical /
+# text / bool). Only allowlisted columns are reachable (the allowlist gate runs
+# first), so a derivation can never read an arbitrary column. Each maps a raw cell
+# (possibly None) to a float.
+def _derive_is_accepted(value: Any) -> float:
+    """acceptance_status -> 1.0 when 'accepted' (case-insensitive), else 0.0."""
+    if value is None:
+        return 0.0
+    return 1.0 if str(value).strip().lower() == "accepted" else 0.0
+
+
+def _derive_presence(value: Any) -> float:
+    """A nullable text/flag column -> 1.0 when a non-empty value is present."""
+    if value is None:
+        return 0.0
+    text = str(value).strip()
+    return 0.0 if text == "" or text.lower() in {"none", "false", "0"} else 1.0
+
+
+_CAUSAL_NUMERIC_DERIVATIONS: Dict[str, Dict[str, Callable[[Any], float]]] = {
+    "nba_triggers": {
+        "acceptance_status": _derive_is_accepted,
+        "action_taken": _derive_presence,
+    },
+}
+
+# Per-dataset outcome columns whose NULL is a DESIGNED zero (not missing data), so
+# a NULL value fills to 0.0 rather than dropping the row. On triggers, action_taken
+# is NULL when no action was taken (= 0) and conversion_flag is NULL when not
+# converted (the STORED-GENERATED outcome_value>0 is NULL-not-false); dropping those
+# rows would discard the RCT control arm / the non-converters and bias the estimate.
+_CAUSAL_FILL_ZERO_OUTCOMES: Dict[str, set] = {
+    "nba_triggers": {"action_taken", "conversion_flag"},
+}
+
+# Logical-dataset -> physical-table name. Datasets whose dataset key differs from
+# their real table go here (nba_triggers -> the triggers table). Absent => itself.
+_CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {"nba_triggers": "triggers"}
+
+
+# Categorical covariates ONE-HOT ENCODED before the frame reaches the executors
+# (DoWhy/EconML require numeric inputs). DELIBERATELY absent from
+# _CAUSAL_NUMERIC_COLUMNS so the loader does NOT float-coerce them to None;
+# _one_hot_categoricals expands each into stable <col>=<level> 0/1 float dummies
+# (drop_first reference level). geographic_region is the modeled RETENTION
+# confounder: an unordered 4-level region (midwest/south/northeast/west).
+_CAUSAL_CATEGORICAL_COLUMNS: Dict[str, set] = {
+    "patient_journeys": {"geographic_region"},
 }
 
 
@@ -859,16 +967,23 @@ async def _list_dataset_brands(dataset: str) -> List[str]:
     if client is None:
         return []
     try:
-        query = client.table(dataset).select("brand")
+        # hcp_adoption is a JOIN dataset; its brand column lives on hcp_brand_adoption.
+        brand_table = (
+            "hcp_brand_adoption"
+            if dataset == "hcp_adoption"
+            else _CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)
+        )
+        brand_col = _CAUSAL_BRAND_COLUMN.get(dataset, "brand")
+        query = client.table(brand_table).select(brand_col)
         query = apply_provenance_filter(query)
         result = await query.limit(20000).execute()
     except Exception as e:  # noqa: BLE001 — missing column / store hiccup => no brands
         logger.warning(f"causal brands: could not enumerate brands for '{dataset}': {e}")
         return []
     seen = {
-        str(row["brand"])
+        str(row[brand_col])
         for row in (result.data or [])
-        if isinstance(row, dict) and row.get("brand")
+        if isinstance(row, dict) and row.get(brand_col)
     }
     return sorted(seen)
 
@@ -932,6 +1047,19 @@ async def list_causal_variables(
             ),
         )
 
+    # JOIN datasets have no single physical table to probe; their curated spec
+    # lists ARE the candidate variables (derived columns like centrality_z live
+    # on no table). Return them directly instead of 500-ing on a missing relation.
+    if dataset in _JOIN_DATASETS:
+        all_cols = sorted(set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"]))
+        return CausalVariablesResponse(
+            dataset=dataset,
+            treatment_candidates=list(spec["treatment"]),
+            outcome_candidates=list(spec["outcome"]),
+            covariate_candidates=list(spec["covariate"]),
+            columns=all_cols,
+        )
+
     from src.memory.services.factories import get_async_supabase_client
 
     client = await get_async_supabase_client()
@@ -939,7 +1067,12 @@ async def list_causal_variables(
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
     # Probe one row to learn the columns actually present in the live schema.
-    probe = await client.table(dataset).select("*").limit(1).execute()
+    probe = (
+        await client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset))
+        .select("*")
+        .limit(1)
+        .execute()
+    )
     rows = probe.data or []
     present = set(rows[0].keys()) if rows else set()
 
@@ -987,6 +1120,38 @@ def _adjusted_partial_corr(
     if rt.std() == 0 or ro.std() == 0:
         return None
     return float(np.corrcoef(rt, ro)[0, 1])
+
+
+async def _prerank_signal(dataset: str, q: "_CandidateQuestion") -> float:
+    """Cheap FWL screen for one question; 0.0 when undefined / unloadable."""
+    try:
+        df, select_cols = await _load_agent_estimation_frame(
+            dataset=dataset,
+            treatment_var=q.treatment,
+            outcome_var=q.outcome,
+            covariates=q.adjustment_set,
+            limit=1500,
+            brand=q.brand,
+        )
+    except HTTPException:
+        return 0.0
+    # Use the loader's EXPANDED columns (categoricals like geographic_region are
+    # one-hot dummies in ``df``, not their raw name) so the FWL screen indexes real
+    # frame columns instead of KeyError-ing on the raw categorical in adjustment_set.
+    cov = [c for c in select_cols if c not in (q.treatment, q.outcome)]
+    pc = _adjusted_partial_corr(df, q.treatment, q.outcome, cov)
+    return abs(pc) if pc is not None else 0.0
+
+
+async def _prerank_questions(
+    dataset: str, questions: List["_CandidateQuestion"]
+) -> List["_CandidateQuestion"]:
+    """Order candidates by descending data-driven association so strong effects
+    validate first (the leaderboard fills progressively)."""
+    scored = await asyncio.gather(*[_prerank_signal(dataset, q) for q in questions])
+    return [
+        q for _, q in sorted(zip(scored, questions, strict=True), key=lambda p: p[0], reverse=True)
+    ]
 
 
 @router.get(
@@ -1072,17 +1237,66 @@ _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJob
 # running both is redundant, so one is skipped to dedupe the leaderboard.
 _COMPLEMENT_OUTCOMES_SKIP = {"discontinued_180d"}
 
+# Clinical Context enrichment service (lazy real REST clients inside; see
+# src/services/clinical_context). Module-level so tests can patch
+# ``causal._clinical_context_service.get_context``. Stateless apart from its
+# in-process per-brand cache.
+from src.services.clinical_context import ClinicalContextService  # noqa: E402
 
-def _discover_candidate_pairs(spec: Dict[str, Any]) -> List[tuple]:
-    """Deduped (treatment, outcome) questions for the leaderboard: no self-pairs,
-    and complementary outcomes collapsed to one representative."""
-    pairs: List[tuple] = []
-    for t in spec["treatment"]:
-        for o in spec["outcome"]:
-            if t == o or o in _COMPLEMENT_OUTCOMES_SKIP:
-                continue
-            pairs.append((t, o))
-    return pairs
+_clinical_context_service = ClinicalContextService()
+
+
+class _CandidateQuestion(NamedTuple):
+    treatment: str
+    outcome: str
+    brand: Optional[str]
+    adjustment_set: List[str]
+
+
+async def _get_causal_path_repo() -> "CausalPathRepository":
+    # ASYNC client is required: CausalPathRepository.get_many() awaits
+    # query.execute(), which only works on the async postgrest builder. Building
+    # the repo with the SYNC client raises "object APIResponse can't be used in
+    # 'await'" the moment a read runs (precedent: chatbot_tools._query_causal_chains).
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.causal_path import CausalPathRepository
+
+    return CausalPathRepository(supabase_client=await get_async_supabase_client())
+
+
+async def _discover_candidate_questions(
+    dataset: str, brand: Optional[str]
+) -> List[_CandidateQuestion]:
+    """SSOT-derived leaderboard questions (replaces the hand-curated cross-product).
+
+    Reads distinct (treatment, outcome, brand) from ``causal_paths`` and attaches
+    each row's modeled ``confounders_controlled``, intersected with the dataset's
+    numeric AND categorical allowlists (P1b/D5: ``geographic_region`` is categorical,
+    so it now enters the adjustment set as its RAW name here — the loader one-hot
+    EXPANDS it into ``geographic_region=<level>`` dummies downstream). The
+    column-allowlist security gate in ``_load_agent_estimation_frame`` is unchanged
+    — this replaces ENUMERATION only, not validation."""
+    spec = _CAUSAL_DATASET_SPECS[dataset]
+    numeric = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    categorical = _CAUSAL_CATEGORICAL_COLUMNS.get(dataset, set())
+    allowed_cov = set(spec["covariate"]) & (numeric | categorical)
+    repo = await _get_causal_path_repo()
+    rows = await repo.get_distinct_questions(brand=brand, include_synthetic=True)
+    out: List[_CandidateQuestion] = []
+    for r in rows:
+        t, o = r["treatment"], r["outcome"]
+        if t == o or o in _COMPLEMENT_OUTCOMES_SKIP:
+            continue
+        # Grain-scope guard (shared with later phases): causal_paths has no `grain`
+        # column and other grains will share the table, so restrict to questions
+        # whose treatment AND outcome are in THIS dataset's spec. No-op for patient.
+        if t not in spec["treatment"] or o not in spec["outcome"]:
+            continue
+        adj = [c for c in r.get("confounders", []) if c in allowed_cov and c not in (t, o)]
+        out.append(
+            _CandidateQuestion(treatment=t, outcome=o, brand=r.get("brand"), adjustment_set=adj)
+        )
+    return out
 
 
 def _effect_confidence_score(gate_decision: Optional[str], significant: bool) -> float:
@@ -1127,12 +1341,18 @@ def _effect_summary(
 
 
 def _effect_from_agent_response(
-    treatment: str, outcome: str, resp: "AgentCausalAnalysisResponse", analysis_id: str
+    treatment: str,
+    outcome: str,
+    resp: "AgentCausalAnalysisResponse",
+    analysis_id: str,
+    question: Optional[_CandidateQuestion] = None,
 ) -> DiscoveredEffect:
     gate = resp.refutation.gate_decision if resp.refutation else None
     return DiscoveredEffect(
         treatment=treatment,
         outcome=outcome,
+        brand=question.brand if question is not None else None,
+        adjustment_set=list(question.adjustment_set) if question is not None else [],
         status=_effect_status_from_gate(resp.ate, gate, resp.status),
         ate=resp.ate,
         ate_ci_lower=resp.ate_ci_lower,
@@ -1161,19 +1381,37 @@ def _rank_effects(effects: List[DiscoveredEffect]) -> List[DiscoveredEffect]:
     )
 
 
+def _pending_effect(q: _CandidateQuestion, status: str) -> DiscoveredEffect:
+    """A not-yet-validated leaderboard cell (pending/running/failed) carrying the
+    SSOT brand + modeled adjustment set but no estimate yet."""
+    return DiscoveredEffect(
+        treatment=q.treatment,
+        outcome=q.outcome,
+        brand=q.brand,
+        adjustment_set=list(q.adjustment_set),
+        status=status,
+    )
+
+
 async def _run_discover_effects_task(
-    job_id: str, dataset: str, pairs: List[tuple], data_source: str, brand: Optional[str] = None
+    job_id: str,
+    dataset: str,
+    questions: List[_CandidateQuestion],
+    data_source: str,
+    brand: Optional[str] = None,
 ) -> None:
     """Background: validate each candidate question with the causal_impact agent
     (serial — each acquires the heavy-compute slot), updating the cached job after
     each so the FE leaderboard fills in progressively, ranked by confidence+impact.
 
-    ``brand`` (optional) scopes every candidate's estimation frame to one brand."""
-    spec = _CAUSAL_DATASET_SPECS[dataset]
-    covariates_all = list(spec["covariate"])
-    # Keyed pending effects we mutate in place across the run.
+    Questions are SSOT-derived (see ``_discover_candidate_questions``): each carries
+    its own brand and modeled adjustment set. ``brand`` (the request-level filter)
+    is a fallback when a question's row has no brand."""
+    # Keyed pending effects we mutate in place across the run. The (treatment,
+    # outcome, brand) triple keys the dict because the SSOT can carry the same
+    # (treatment, outcome) for several brands.
     effects: Dict[tuple, DiscoveredEffect] = {
-        (t, o): DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs
+        (q.treatment, q.outcome, q.brand): _pending_effect(q, "pending") for q in questions
     }
 
     async def _publish(status: str, completed: int) -> None:
@@ -1184,26 +1422,40 @@ async def _run_discover_effects_task(
                 status=status,
                 dataset=dataset,
                 brand=brand,
-                total=len(pairs),
+                total=len(questions),
                 completed=completed,
                 effects=_rank_effects(list(effects.values())),
             ),
         )
 
+    questions = await _prerank_questions(dataset, questions)
     completed = 0
-    for t, o in pairs:
-        effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="running")
+    for q in questions:
+        t, o = q.treatment, q.outcome
+        key = (t, o, q.brand)
+        # Fallback to the request-level brand filter when the SSOT row has no
+        # brand. NOTE: this fallback scopes the DATA LOAD only; the effect's
+        # ``brand`` label stays q.brand (None here). Harmless for patient grain —
+        # the reseed populates brand per causal_paths row — but later grains that
+        # share this table must revisit whether the fallback brand should be the
+        # displayed label.
+        q_brand = q.brand or brand
+        effects[key] = _pending_effect(q, "running")
         await _publish("running", completed)
         try:
-            cov = [c for c in covariates_all if c not in (t, o)]
-            df, _select = await _load_agent_estimation_frame(
+            df, select_cols = await _load_agent_estimation_frame(
                 dataset=dataset,
                 treatment_var=t,
                 outcome_var=o,
-                covariates=cov,
+                covariates=q.adjustment_set,
                 limit=1500,
-                brand=brand,
+                brand=q_brand,
             )
+            # The loader EXPANDS categorical covariates (e.g. geographic_region)
+            # into one-hot dummies; the agent run must adjust on the resolved frame
+            # columns (the dummy names), not the raw categorical. Derive them from
+            # the loader's returned column list, excluding treatment/outcome.
+            resolved_cov = [c for c in select_cols if c not in (t, o)]
             aid = str(uuid.uuid4())
             req = AgentCausalAnalysisRequest(
                 treatment_var=t,
@@ -1211,7 +1463,7 @@ async def _run_discover_effects_task(
                 dataset=dataset,
                 limit=1500,
                 auto_discover=True,
-                brand=brand,
+                brand=q_brand,
             )
             await _agent_analysis_store.set(
                 aid,
@@ -1229,20 +1481,20 @@ async def _run_discover_effects_task(
                     latency_ms=0,
                 ),
             )
-            await _run_agent_analysis_task(aid, req, df, cov, data_source)
+            await _run_agent_analysis_task(aid, req, df, resolved_cov, data_source)
             resp = await _agent_analysis_store.get(aid)
             if resp is None:
                 raise RuntimeError(f"agent analysis {aid} produced no cached result")
-            effects[(t, o)] = _effect_from_agent_response(t, o, resp, aid)
+            effects[key] = _effect_from_agent_response(t, o, resp, aid, question=q)
         except HTTPException as e:
             # Fail-closed: a question with no usable data is marked failed, not faked.
             logger.warning(f"discover-effects: {t}->{o} failed-closed: {e.detail}")
-            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+            effects[key] = _pending_effect(q, "failed")
         except Exception as e:  # noqa: BLE001
             logger.error(f"discover-effects: {t}->{o} errored: {e}", exc_info=True)
-            effects[(t, o)] = DiscoveredEffect(treatment=t, outcome=o, status="failed")
+            effects[key] = _pending_effect(q, "failed")
         completed += 1
-        await _publish("running" if completed < len(pairs) else "completed", completed)
+        await _publish("running" if completed < len(questions) else "completed", completed)
 
 
 @router.post(
@@ -1289,7 +1541,7 @@ async def discover_causal_effects(
                 status_code=400,
                 detail=f"Unknown brand '{brand}' for dataset '{dataset}'. Known: {available}",
             )
-    pairs = _discover_candidate_pairs(spec)
+    questions = await _discover_candidate_questions(dataset, brand)
     job_id = str(uuid.uuid4())
     data_source = "synthetic" if deployment_includes_synthetic() else "database"
     initial = DiscoverEffectsResponse(
@@ -1297,13 +1549,22 @@ async def discover_causal_effects(
         status="pending",
         dataset=dataset,
         brand=brand,
-        total=len(pairs),
+        total=len(questions),
         completed=0,
-        effects=[DiscoveredEffect(treatment=t, outcome=o, status="pending") for (t, o) in pairs],
+        effects=[
+            DiscoveredEffect(
+                treatment=q.treatment,
+                outcome=q.outcome,
+                brand=q.brand,
+                adjustment_set=list(q.adjustment_set),
+                status="pending",
+            )
+            for q in questions
+        ],
     )
     await _discover_effects_store.set(job_id, initial)
     background_tasks.add_task(
-        _run_discover_effects_task, job_id, dataset, pairs, data_source, brand
+        _run_discover_effects_task, job_id, dataset, questions, data_source, brand
     )
     return initial
 
@@ -1322,6 +1583,52 @@ async def get_discover_causal_effects(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
     return job
+
+
+@router.get(
+    "/clinical-context",
+    response_model=ClinicalContext,
+    summary="Brand-faithful, sourced clinical context for a discovered effect",
+    operation_id="get_causal_clinical_context",
+)
+async def get_clinical_context(
+    brand: str = Query(..., description="Brand to enrich (e.g. Kisqali / Fabhalta / Remibrutinib)"),
+    outcome: str = Query(
+        ...,
+        description=(
+            "The synthetic outcome column the effect uses (e.g. persistent_180d); "
+            "mapped to the real pivotal endpoint."
+        ),
+    ),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> ClinicalContext:
+    """Return the drug + mechanism of action (ChEMBL), the disease's real pivotal
+    endpoints (ClinicalTrials.gov), and a real-world-evidence citation (PubMed)
+    for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
+
+    Additive narrative ONLY — does not touch the causal estimate or its
+    adjustment set. Degrades gracefully (static fallbacks) when an upstream API
+    is down; never fabricates a citation. The payload's ``honesty_label`` states
+    the synthetic-estimate / real-context boundary.
+    """
+    available = await _list_dataset_brands(_DEFAULT_CAUSAL_DATASET)
+    if available and brand not in available:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown brand '{brand}'. Known brands: {available}",
+        )
+    try:
+        # Offload the synchronous httpx fan-out (ChEMBL + CT.gov + PubMed) to a
+        # worker thread so a slow / timing-out / rate-limited upstream cannot block
+        # the event loop (the cold-cache call can take tens of seconds worst case).
+        payload = await asyncio.to_thread(_clinical_context_service.get_context, brand, outcome)
+    except KeyError:
+        # The brand_map has no profile for this brand (no enrichment facts).
+        raise HTTPException(
+            status_code=404,
+            detail=f"No clinical-context profile for brand '{brand}'.",
+        )
+    return ClinicalContext.model_validate(payload)
 
 
 @router.get(
@@ -1359,6 +1666,16 @@ async def get_causal_estimation_data(
             ),
         )
 
+    if dataset in _JOIN_DATASETS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Dataset '{dataset}' is a JOIN grain not served by this raw "
+                "estimation-data endpoint; use POST /causal/discover-effects or "
+                "POST /causal/agent-analyze."
+            ),
+        )
+
     allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
     covs = [c.strip() for c in (covariates or "").split(",") if c.strip()]
     requested = [treatment_var, outcome_var, *covs]
@@ -1381,32 +1698,25 @@ async def get_causal_estimation_data(
     if client is None:
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
-    query = client.table(dataset).select(",".join(select_cols))
+    query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select(",".join(select_cols))
     # Synthetic-showcase aware: on a synthetic-gold instance the synthetic rows
     # ARE the substrate; on a strict real-data instance they are excluded.
     query = apply_provenance_filter(query)
     result = await query.limit(limit).execute()
     rows = result.data or []
 
-    numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []
     for row in rows:
-        record: Dict[str, Any] = {}
-        usable = True
-        for col in select_cols:
-            value = row.get(col)
-            if col in numeric_cols and value is not None:
-                try:
-                    value = float(value)
-                except (TypeError, ValueError):
-                    value = None
-            # A missing treatment/outcome value makes the row unusable for
-            # estimation — drop it rather than impute.
-            if col in (treatment_var, outcome_var) and value is None:
-                usable = False
-                break
-            record[col] = value
-        if usable:
+        record = _coerce_estimation_row(
+            row,
+            select_cols=select_cols,
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            numeric_cols=_CAUSAL_NUMERIC_COLUMNS.get(dataset, set()),
+            derivations=_CAUSAL_NUMERIC_DERIVATIONS.get(dataset),
+            fill_zero=frozenset(_CAUSAL_FILL_ZERO_OUTCOMES.get(dataset, set())),
+        )
+        if record is not None:
             records.append(record)
 
     if not records:
@@ -1431,6 +1741,214 @@ async def get_causal_estimation_data(
 # =============================================================================
 
 
+def _coerce_estimation_row(
+    row: Dict[str, Any],
+    *,
+    select_cols: List[str],
+    treatment_var: str,
+    outcome_var: str,
+    numeric_cols: set,
+    categorical_cols: "frozenset[str]" = frozenset(),
+    derivations: Optional[Dict[str, Any]] = None,
+    fill_zero: "frozenset[str]" = frozenset(),
+) -> Optional[Dict[str, Any]]:
+    """Coerce one raw DB row into an estimation record, or None if unusable
+    (a treatment/outcome value is missing). Shared by every grain loader:
+      - numeric_cols: float-coerced (non-coercible -> None), UNLESS also in categorical_cols
+      - categorical_cols: passed through unchanged (P1b geo one-hot)
+      - derivations: per-column callable applied before coercion (P3 text->0/1)
+      - fill_zero: a None in these columns becomes 0.0 (P3 generated/nullable outcomes)
+    For P1 only numeric_cols is passed, so behavior is identical to the prior inline loop."""
+    derivations = derivations or {}
+    record: Dict[str, Any] = {}
+    for col in select_cols:
+        value = row.get(col)
+        if value is not None and col in derivations:
+            value = derivations[col](value)
+        if col in numeric_cols and col not in categorical_cols and value is not None:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                value = None
+        if value is None and col in fill_zero:
+            value = 0.0
+        if col in (treatment_var, outcome_var) and value is None:
+            return None
+        record[col] = value
+    return record
+
+
+async def _load_hcp_profile_centrality(client: Any) -> List[Dict[str, Any]]:
+    """Paged read of hcp_profiles centrality covariates (hcp_id,
+    peer_influence_score, influence_network_size). hcp_profiles is NOT
+    brand-partitioned, so this reads across the whole (synthetic) table — mirrors
+    the proven treatment-effects HCP loader. Provenance-aware (synthetic-gold)."""
+    rows: List[Dict[str, Any]] = []
+    for page in range(_TE_MAX_PAGES):
+        offset = page * _TE_PAGE_SIZE
+        query = client.table("hcp_profiles").select(
+            "hcp_id,peer_influence_score,influence_network_size"
+        )
+        query = apply_provenance_filter(query)
+        query = query.range(offset, offset + _TE_PAGE_SIZE - 1)
+        result = await query.execute()
+        batch: List[Dict[str, Any]] = result.data or []
+        rows.extend(batch)
+        if len(batch) < _TE_PAGE_SIZE:
+            break
+    return rows
+
+
+async def _te_paged_select_all_brands(client: Any) -> List[Dict[str, Any]]:
+    """Brand-agnostic paged read of hcp_brand_adoption (all brands) for the
+    hcp_adoption frame when no brand filter is set."""
+    rows: List[Dict[str, Any]] = []
+    for page in range(_TE_MAX_PAGES):
+        offset = page * _TE_PAGE_SIZE
+        query = client.table("hcp_brand_adoption").select("hcp_id,treatment_arm,adopted")
+        query = apply_provenance_filter(query)
+        query = query.range(offset, offset + _TE_PAGE_SIZE - 1)
+        result = await query.execute()
+        batch: List[Dict[str, Any]] = result.data or []
+        rows.extend(batch)
+        if len(batch) < _TE_PAGE_SIZE:
+            break
+    return rows
+
+
+async def _load_hcp_adoption_join_frame(
+    *,
+    treatment_var: str,
+    outcome_var: str,
+    covariates: List[str],
+    limit: int,
+    brand: Optional[str],
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """Build the hcp_adoption estimation frame: hcp_brand_adoption (treatment_arm,
+    adopted, hcp_id) JOIN hcp_profiles (peer_influence_score,
+    influence_network_size) on hcp_id, deriving centrality_z =
+    zscore(log1p(influence_network_size)).
+
+    Reuses the proven two-reads-plus-pandas-merge HCP pattern (``_te_paged_select``
+    + a separate hcp_profiles read) rather than a single-table select, because
+    hcp_profiles is not brand-partitioned. Applies the SAME column-allowlist +
+    numeric-coercion + drop-missing-treatment/outcome security gate as
+    :func:`_load_agent_estimation_frame`. Fail-closed: 400 disallowed column, 503
+    no store / no usable rows. Never fabricates rows.
+    """
+    import pandas as pd
+
+    spec = _CAUSAL_DATASET_SPECS["hcp_adoption"]
+    allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
+    requested = [treatment_var, outcome_var, *covariates]
+    not_allowed = [c for c in requested if c not in allowed]
+    if not_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Column(s) {not_allowed} are not permitted for dataset "
+                f"'hcp_adoption'. Allowed: {sorted(allowed)}"
+            ),
+        )
+    select_cols = list(dict.fromkeys(requested))
+
+    client = await get_async_supabase_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Causal data store unavailable")
+
+    # brand scopes the adoption read (brand lives on hcp_brand_adoption); the
+    # centrality covariates are brand-agnostic on hcp_profiles.
+    if brand:
+        adoption_rows = await _te_paged_select(
+            client, "hcp_brand_adoption", "hcp_id,treatment_arm,adopted", brand
+        )
+    else:
+        adoption_rows = await _te_paged_select_all_brands(client)
+    if not adoption_rows:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No usable estimation rows for the requested variables "
+                f"({treatment_var} -> {outcome_var}) in dataset 'hcp_adoption'."
+            ),
+        )
+    profile_rows = await _load_hcp_profile_centrality(client)
+    if not profile_rows:
+        raise HTTPException(status_code=503, detail="hcp_profiles centrality unavailable")
+
+    adoption_df = pd.DataFrame(adoption_rows)
+    profile_df = pd.DataFrame(profile_rows).drop_duplicates(subset="hcp_id")
+    merged = adoption_df.merge(profile_df, on="hcp_id", how="inner")
+    if merged.empty:
+        raise HTTPException(status_code=503, detail="hcp_adoption JOIN produced no rows")
+
+    # Derive centrality_z = zscore(log1p(influence_network_size)) — matches the DGP
+    # (hcp_adoption_artifact.py) the rep-engagement arm is confounded on.
+    ins = pd.to_numeric(merged["influence_network_size"], errors="coerce")
+    centrality = ins.map(lambda v: math.log1p(v) if pd.notna(v) else None).astype(float)
+    std = centrality.std(ddof=0)
+    merged["centrality_z"] = (centrality - centrality.mean()) / std if std and std > 0 else 0.0
+    merged["peer_influence_score"] = pd.to_numeric(
+        merged.get("peer_influence_score"), errors="coerce"
+    )
+
+    # Same numeric-coercion + drop-missing-treatment/outcome gate as the patient loader.
+    numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get("hcp_adoption", set())
+    records: List[Dict[str, Any]] = []
+    for _, row in merged.iterrows():
+        record: Dict[str, Any] = {}
+        usable = True
+        for col in select_cols:
+            value = row.get(col)
+            if col in numeric_cols and value is not None:
+                try:
+                    value = float(value)
+                except (TypeError, ValueError):
+                    value = None
+            if col in (treatment_var, outcome_var) and (value is None or pd.isna(value)):
+                usable = False
+                break
+            record[col] = None if (value is not None and pd.isna(value)) else value
+        if usable:
+            records.append(record)
+        if len(records) >= limit:
+            break
+
+    if not records:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No usable estimation rows for the requested variables "
+                f"({treatment_var} -> {outcome_var}) in dataset 'hcp_adoption'."
+            ),
+        )
+    return pd.DataFrame(records), select_cols
+
+
+def _one_hot_categoricals(
+    df: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    categorical_cols: List[str],
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """One-hot encode the categorical columns present in ``df`` into stable
+    ``<col>=<level>`` 0/1 float dummies, dropping the original column. drop_first
+    drops the first sorted level as the reference category (avoids the
+    dummy-variable trap). Level order is sorted for deterministic dummy names.
+    Columns absent from ``df`` are skipped. Returns ``(expanded_df, dummy_names)``."""
+    present = [c for c in categorical_cols if c in df.columns]
+    if not present:
+        return df, []
+    out = df.copy()
+    dummy_names: List[str] = []
+    for col in present:
+        levels = sorted(str(v) for v in out[col].dropna().unique())
+        for level in levels[1:]:  # drop_first: first sorted level = reference
+            name = f"{col}={level}"
+            out[name] = (out[col].astype(str) == level).astype(float)
+            dummy_names.append(name)
+        out = out.drop(columns=[col])
+    return out, dummy_names
+
+
 async def _load_agent_estimation_frame(
     *,
     dataset: str,
@@ -1449,6 +1967,17 @@ async def _load_agent_estimation_frame(
     unknown dataset, 400 disallowed column, 503 no data store / no usable rows) —
     never fabricates rows.
     """
+    # hcp_adoption is a JOIN dataset (hcp_brand_adoption JOIN hcp_profiles), not a
+    # single table — route it to the JOIN-aware loader (same allowlist/coercion gate).
+    if dataset == "hcp_adoption":
+        return await _load_hcp_adoption_join_frame(
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            covariates=covariates,
+            limit=limit,
+            brand=brand,
+        )
+
     spec = _CAUSAL_DATASET_SPECS.get(dataset)
     if spec is None:
         raise HTTPException(
@@ -1483,33 +2012,32 @@ async def _load_agent_estimation_frame(
     # scopes the cohort to one brand and stays out of the estimation columns
     # (categorical confounders would need encoding the executors don't do here).
     fetch_cols = list(select_cols)
+    brand_col = _CAUSAL_BRAND_COLUMN.get(dataset, "brand")
     if brand:
-        fetch_cols = list(dict.fromkeys([*select_cols, "brand"]))
-    query = client.table(dataset).select(",".join(fetch_cols))
+        fetch_cols = list(dict.fromkeys([*select_cols, brand_col]))
+    query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select(",".join(fetch_cols))
     query = apply_provenance_filter(query)
     if brand:
-        query = query.eq("brand", brand)
+        query = query.eq(brand_col, brand)
     result = await query.limit(limit).execute()
     rows = result.data or []
 
     numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
+    categorical_cols = _CAUSAL_CATEGORICAL_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []
     for row in rows:
-        record: Dict[str, Any] = {}
-        usable = True
-        for col in select_cols:
-            value = row.get(col)
-            if col in numeric_cols and value is not None:
-                try:
-                    value = float(value)
-                except (TypeError, ValueError):
-                    value = None
-            if col in (treatment_var, outcome_var) and value is None:
-                usable = False
-                break
-            record[col] = value
-        if usable:
-            records.append(record)
+        rec = _coerce_estimation_row(
+            row,
+            select_cols=select_cols,
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            numeric_cols=numeric_cols,
+            categorical_cols=frozenset(categorical_cols),
+            derivations=_CAUSAL_NUMERIC_DERIVATIONS.get(dataset),
+            fill_zero=frozenset(_CAUSAL_FILL_ZERO_OUTCOMES.get(dataset, set())),
+        )
+        if rec is not None:
+            records.append(rec)
 
     if not records:
         raise HTTPException(
@@ -1522,7 +2050,11 @@ async def _load_agent_estimation_frame(
 
     import pandas as pd
 
-    return pd.DataFrame(records), select_cols
+    frame = pd.DataFrame(records)
+    requested_categoricals = [c for c in select_cols if c in categorical_cols]
+    frame, dummy_names = _one_hot_categoricals(frame, requested_categoricals)
+    expanded_cols = [c for c in select_cols if c not in categorical_cols] + dummy_names
+    return frame, expanded_cols
 
 
 @router.post(
@@ -1582,7 +2114,7 @@ async def run_causal_agent_analysis(
     # 503 no data) before scheduling the heavy run. ``brand`` (optional) scopes
     # the cohort to one brand (a row subset; brand stays out of the estimation
     # columns) so the analyst can analyze a single brand's patients.
-    df, _select_cols = await _load_agent_estimation_frame(
+    df, select_cols = await _load_agent_estimation_frame(
         dataset=request.dataset,
         treatment_var=request.treatment_var,
         outcome_var=request.outcome_var,
@@ -1590,6 +2122,13 @@ async def run_causal_agent_analysis(
         limit=request.limit,
         brand=request.brand,
     )
+    # The loader EXPANDS categorical covariates (e.g. geographic_region) into
+    # one-hot dummies; the agent's confounders must be the resolved frame columns
+    # (the dummy names), not the raw categorical. Derive them from the loader's
+    # returned column list, excluding treatment/outcome.
+    resolved_covariates = [
+        c for c in select_cols if c not in (request.treatment_var, request.outcome_var)
+    ]
 
     analysis_id = str(uuid.uuid4())
     data_source = "synthetic" if deployment_includes_synthetic() else "database"
@@ -1609,7 +2148,7 @@ async def run_causal_agent_analysis(
     )
     await _agent_analysis_store.set(analysis_id, pending)
     background_tasks.add_task(
-        _run_agent_analysis_task, analysis_id, request, df, covariates, data_source
+        _run_agent_analysis_task, analysis_id, request, df, resolved_covariates, data_source
     )
     return pending
 
@@ -1671,6 +2210,9 @@ async def _run_agent_analysis_task(
         "treatment_var": request.treatment_var,
         "outcome_var": request.outcome_var,
         "confounders": covariates,
+        # Threaded so guided discovery seeds confounder->treatment/outcome priors
+        # from the question's modeled (resolved/expanded) adjustment set.
+        "modeled_confounders": covariates,
         "data_source": data_source,
         "data_cache": {"estimation_data": df},
         # Learn the DAG from data via GUIDED discovery (graph_builder anchors the
@@ -1894,6 +2436,9 @@ def _agent_state_to_response(
         gate_decision=gate_decision,
         passed=bool(refutation_ran and gate_decision == "proceed"),
         needs_review=needs_review,
+        # Link to the expert-review queue row created for a REVIEW/BLOCK gate
+        # (None when the run auto-proceeded), so the result references its review.
+        expert_review_id=final_state.get("expert_review_id"),
         tests_passed=refutation.get("tests_passed"),
         tests_total=refutation.get("total_tests"),
         sensitivity_e_value=sensitivity.get("e_value"),

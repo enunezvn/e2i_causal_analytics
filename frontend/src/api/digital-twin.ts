@@ -654,10 +654,12 @@ export function interpretEffectSize(
  * @returns Simulation history response
  */
 export async function getSimulationHistory(params?: {
+  brand?: string;
   limit?: number;
   offset?: number;
 }): Promise<SimulationHistoryResponse> {
   const searchParams = new URLSearchParams();
+  if (params?.brand) searchParams.append('brand', params.brand);
   if (params?.limit) searchParams.append('limit', params.limit.toString());
   if (params?.offset) searchParams.append('offset', params.offset.toString());
 

@@ -22,6 +22,7 @@ from src.data.kg.chembl import (
     Activity,
     ChEMBLClient,
     ChEMBLError,
+    Mechanism,
 )
 from src.data.kg.citation_resolver import (
     CAUSAL_CUE_VERBS,
@@ -74,6 +75,7 @@ __all__ = [
     "CausalRole",
     "ChEMBLClient",
     "ChEMBLError",
+    "Mechanism",
     "CitationResolver",
     "CitationResolverError",
     "CitationVerdict",

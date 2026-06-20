@@ -30,24 +30,29 @@ import {
 // ===========================================================================
 
 describe('queryKeys.digitalTwin.history (finding 1)', () => {
-  it('defaults to limit=20, offset=0 when no params given', () => {
+  it('defaults to brand=all, limit=20, offset=0 when no params given', () => {
     expect(queryKeys.digitalTwin.history()).toEqual([
       'e2i',
       'digital-twin',
       'history',
+      'all',
       20,
       0,
     ]);
   });
 
-  it('folds limit and offset into the key', () => {
-    expect(queryKeys.digitalTwin.history({ limit: 50, offset: 100 })).toEqual([
-      'e2i',
-      'digital-twin',
-      'history',
-      50,
-      100,
-    ]);
+  it('folds brand, limit and offset into the key', () => {
+    expect(
+      queryKeys.digitalTwin.history({ brand: 'Remibrutinib', limit: 50, offset: 100 })
+    ).toEqual(['e2i', 'digital-twin', 'history', 'Remibrutinib', 50, 100]);
+  });
+
+  it('different brands produce different keys (no cross-brand cache collision)', () => {
+    const all = queryKeys.digitalTwin.history({ limit: 25 });
+    const remi = queryKeys.digitalTwin.history({ brand: 'Remibrutinib', limit: 25 });
+    const kis = queryKeys.digitalTwin.history({ brand: 'Kisqali', limit: 25 });
+    expect(all).not.toEqual(remi);
+    expect(remi).not.toEqual(kis);
   });
 
   it('different limit/offset produce different keys', () => {

@@ -12,6 +12,7 @@ is enum-exact (data_split_type: train/validation/test/holdout/unassigned).
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import List, Tuple
 
 import pandas as pd
 
@@ -37,6 +38,35 @@ _COHORT_CONFOUNDERS = {
     "discontinued_180d": ["disease_severity", "academic_hcp", "geographic_region"],
 }
 
+# HCP-grain adoption edges (Shard 06.3 cohort: hcp_brand_adoption JOIN
+# hcp_profiles). TWO questions per brand, ADDITIVE to the patient cohort edges so
+# the leaderboard enumerates the HCP grain from the same causal_paths SSOT:
+#   peer_influence_score -> adopted : EXOGENOUS centrality, EMPTY backdoor.
+#   treatment_arm        -> adopted : rep engagement, confounded by centrality_z
+#                                     (= log1p(influence_network_size)).
+# centrality_z is the modeled backdoor for the rep-engagement arm; the loader
+# derives it from hcp_profiles. A single non-treatment/non-outcome mediator keeps
+# every chain a clean 2-hop path AND non-empty (the generator's mediator
+# invariant). HCP edges are brand-replicated for all three gold-standard brands.
+_HCP_QUESTIONS: Tuple[Tuple[str, str, List[str], str], ...] = (
+    ("peer_influence_score", "adopted", [], "centrality_diffusion"),
+    ("treatment_arm", "adopted", ["centrality_z"], "rep_engagement_path"),
+)
+
+# Trigger-grain edges (the NBA RCT). The triggers table carries the only TRUE
+# randomized experiment in the gold standard: control_group_flag is a randomized
+# holdout, so control_group_flag -> action_taken has an EMPTY backdoor set (no
+# confounder to adjust for — randomization breaks every back-door path). The
+# second edge, acceptance_status -> conversion_flag, is the designed effect
+# (conversion_flag is the DB STORED-GENERATED column outcome_value>0, set only for
+# accepted triggers) with priority as an EFFECT MODIFIER (not a confounder), so its
+# modeled backdoor set is also empty. Both are direct edges (no mediator injected).
+_TRIGGER_EDGES: Tuple[Tuple[str, str, List[str]], ...] = (
+    # (start_node, end_node, confounders_controlled)
+    ("control_group_flag", "action_taken", []),
+    ("acceptance_status", "conversion_flag", []),
+)
+
 
 class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
     @property
@@ -46,13 +76,12 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
     def generate(self) -> pd.DataFrame:
         now = datetime.now(timezone.utc)
         rows = []
+        # Full cross-product so every (brand × outcome) cell is represented.
+        # The old i%3 diagonal only emitted 3 of the 9 cells; decoupling the
+        # indices seeds all 9 for the leaderboard and KG sync.
+        cells = [(b, o) for b in _BRANDS for o in _COHORT_OUTCOMES]
         for i in range(self.config.n_records):
-            brand = _BRANDS[i % 3]
-            # Round-robin the gold-standard cohort outcome so every cohort is
-            # represented (treatment_arm -> treatment_initiated / persistent_180d
-            # / discontinued_180d). Mediators never include treatment_arm or an
-            # outcome, so chain nodes stay distinct (no _clean_causal_chains drop).
-            outcome = _COHORT_OUTCOMES[i % len(_COHORT_OUTCOMES)]
+            brand, outcome = cells[i % len(cells)]
             effect = round(float(self._rng.uniform(0.10, 0.55)), 4)  # recoverable band
             direct = round(effect * float(self._rng.uniform(0.4, 0.8)), 4)
             indirect = round(effect - direct, 4)
@@ -88,6 +117,85 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                     "confirmation_count": int(self._rng.integers(1, 5)),
                     "created_at": now.isoformat(),
                     "is_synthetic": True,
+                    "grain": "patient",
                 }
             )
+        # HCP-grain adoption edges — ADDITIVE, fixed 6-row block (2 questions x 3
+        # brands), independent of n_records, so the SSOT always carries every HCP
+        # question for the hcp_adoption-dataset leaderboard.
+        for brand in _BRANDS:
+            for start_node, end_node, confounders, mediator in _HCP_QUESTIONS:
+                effect = round(float(self._rng.uniform(0.10, 0.55)), 4)
+                direct = round(effect * float(self._rng.uniform(0.4, 0.8)), 4)
+                indirect = round(effect - direct, 4)
+                disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
+                rows.append(
+                    {
+                        "path_id": f"scp_{uuid.uuid4().hex[:13]}",
+                        "discovery_date": disc.isoformat(),
+                        "causal_chain": {"nodes": [start_node, mediator, end_node]},
+                        "start_node": start_node,
+                        "end_node": end_node,
+                        "intermediate_nodes": [mediator],
+                        "path_length": 2,
+                        "causal_effect_size": effect,
+                        "confidence_level": round(float(self._rng.uniform(0.80, 0.95)), 3),
+                        "method_used": "backdoor.linear_regression",
+                        "confounders_controlled": list(confounders),
+                        "mediators_identified": [mediator],
+                        "time_lag_days": int(self._rng.integers(7, 60)),
+                        "validation_status": "validated",
+                        "business_impact_estimate": round(
+                            effect * float(self._rng.uniform(1e5, 5e5)), 2
+                        ),
+                        "data_split": "unassigned",
+                        "direct_effect": direct,
+                        "indirect_effect": indirect,
+                        "brand": brand,
+                        "region": str(self._rng.choice(_REGIONS)),
+                        "confirmation_count": int(self._rng.integers(1, 5)),
+                        "created_at": now.isoformat(),
+                        "is_synthetic": True,
+                        "grain": "hcp",
+                    }
+                )
+        # Trigger grain: emit each RCT/effect-modifier edge for every brand so a
+        # brand-scoped leaderboard surfaces the trigger questions too. Empty
+        # confounders_controlled (randomized / effect-modifier — no backdoor set);
+        # direct two-node causal_chain; no mediators (mediators_identified=[] so the
+        # FalkorDB sync builds a clean direct (:Variable start)-[:CAUSES]->(:Variable end)).
+        for brand in _BRANDS:
+            for start_node, end_node, confounders in _TRIGGER_EDGES:
+                effect = round(float(self._rng.uniform(0.05, 0.25)), 4)
+                disc = (now - timedelta(days=int(self._rng.integers(0, 25)))).date()
+                rows.append(
+                    {
+                        "path_id": f"scp_{uuid.uuid4().hex[:13]}",
+                        "discovery_date": disc.isoformat(),
+                        "causal_chain": {"nodes": [start_node, end_node]},
+                        "start_node": start_node,
+                        "end_node": end_node,
+                        "intermediate_nodes": [],
+                        "path_length": 1,
+                        "causal_effect_size": effect,
+                        "confidence_level": round(float(self._rng.uniform(0.80, 0.95)), 3),
+                        "method_used": "backdoor.linear_regression",
+                        "confounders_controlled": list(confounders),
+                        "mediators_identified": [],
+                        "time_lag_days": int(self._rng.integers(7, 60)),
+                        "validation_status": "validated",
+                        "business_impact_estimate": round(
+                            effect * float(self._rng.uniform(1e5, 5e5)), 2
+                        ),
+                        "data_split": "unassigned",
+                        "direct_effect": effect,
+                        "indirect_effect": 0.0,
+                        "brand": brand,
+                        "region": str(self._rng.choice(_REGIONS)),
+                        "confirmation_count": int(self._rng.integers(1, 5)),
+                        "created_at": now.isoformat(),
+                        "is_synthetic": True,
+                        "grain": "trigger",
+                    }
+                )
         return pd.DataFrame(rows)
