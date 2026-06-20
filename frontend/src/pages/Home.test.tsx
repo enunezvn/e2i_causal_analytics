@@ -448,7 +448,7 @@ describe('Home', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/model-performance');
     });
 
-    it('routes any non-Model-Performance card to /kpi-dictionary', () => {
+    it('makes a non-Model-Performance card non-interactive (no drill-down)', () => {
       mockLiveKpis([{ id: 'WS2-TR-005', name: 'False Alert Rate', workstream: 'ws2_triggers' }], {
         'WS2-TR-005': 0,
       });
@@ -456,9 +456,12 @@ describe('Home', () => {
 
       // The real computed 0 renders (NOT "Not yet computed").
       expect(screen.getByText('False Alert Rate')).toBeInTheDocument();
+      // Non-MP KPIs have no drill-down page, so the card shows no "View details"
+      // affordance and clicking it navigates nowhere (no glossary redirect).
+      expect(screen.queryByText('View details')).not.toBeInTheDocument();
+      mockNavigate.mockClear();
       fireEvent.click(screen.getByText('False Alert Rate').closest('div')!);
-      expect(mockNavigate).toHaveBeenCalledWith('/kpi-dictionary');
-      expect(mockNavigate).not.toHaveBeenCalledWith('/model-performance');
+      expect(mockNavigate).not.toHaveBeenCalled();
     });
   });
 
@@ -529,6 +532,9 @@ describe('Home', () => {
 
       expect(screen.getByText('Northeast Territory Lift')).toBeInTheDocument();
       expect(screen.getByText('West TRx')).toBeInTheDocument();
+      // The redundant "Act" button was removed (it only re-navigated to the same
+      // page the card already opens); the card itself remains the "view" affordance.
+      expect(screen.queryByRole('button', { name: 'Act' })).not.toBeInTheDocument();
     });
   });
 

@@ -173,11 +173,12 @@ const WORKSTREAM_ORDER = [
 // and the Brand SELECTOR above are all retained — only the homepage tab is hidden.
 const HIDDEN_HOME_WORKSTREAMS = new Set<string>(['brand_specific']);
 
-// Per-card "View details" destination. Only the Model Performance workstream
-// has a dedicated drill-down page; every other KPI links to the KPI Dictionary
-// (the reference for what each metric means / how it is computed).
-const kpiDetailPath = (category: string): string =>
-  category === 'ws1_model_performance' ? '/model-performance' : '/kpi-dictionary';
+// Per-card drill-down destination. Only the Model Performance workstream has a
+// dedicated drill-down page; every other KPI has no deeper view, so its card is
+// non-interactive (no misleading "View details" affordance) rather than linking
+// to the KPI Dictionary glossary, which is not a metric drill-down.
+const kpiDrillPath = (category: string): string | null =>
+  category === 'ws1_model_performance' ? '/model-performance' : null;
 
 const SAMPLE_KPIS: Record<Brand, KPIMetric[]> = {
   All: [
@@ -947,82 +948,6 @@ function Home() {
         />
       </div>
 
-      {/* Active Alerts — real monitoring data | honest empty | labeled error */}
-      <div className="space-y-2">
-        <h3 className="text-sm font-medium text-[var(--color-muted-foreground)] flex items-center gap-2">
-          <AlertCircle className="h-4 w-4" />
-          Active Alerts ({visibleAlerts.length})
-        </h3>
-        {alertsError ? (
-          <div
-            role="alert"
-            className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
-          >
-            <AlertCircle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-            <span>
-              Alerts unavailable — the monitoring service could not be reached.
-              Live alert data cannot be displayed.
-            </span>
-          </div>
-        ) : !alertsData ? (
-          /* Query pending / unsettled — no claim either way. */
-          <p className="text-sm text-muted-foreground">Checking alerts…</p>
-        ) : visibleAlerts.length === 0 ? (
-          <EmptyState
-            title="No active alerts"
-            description="Monitoring is connected and no alerts are currently firing."
-            className="p-6"
-          />
-        ) : (
-          <div className="space-y-2">
-            {visibleAlerts.map((alert) => (
-              <div
-                key={alert.id}
-                className={cn(
-                  'flex items-center justify-between p-3 rounded-lg border',
-                  alert.severity === 'critical' && 'bg-rose-50 border-rose-200 dark:bg-rose-900/20 dark:border-rose-800',
-                  alert.severity === 'warning' && 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800',
-                  alert.severity === 'info' && 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800'
-                )}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={cn(
-                    'p-1.5 rounded-full',
-                    alert.severity === 'critical' && 'bg-rose-500',
-                    alert.severity === 'warning' && 'bg-amber-500',
-                    alert.severity === 'info' && 'bg-blue-500'
-                  )}>
-                    <AlertCircle className="h-3 w-3 text-white" />
-                  </div>
-                  <div>
-                    <p className={cn(
-                      'font-medium text-sm',
-                      alert.severity === 'critical' && 'text-rose-700 dark:text-rose-300',
-                      alert.severity === 'warning' && 'text-amber-700 dark:text-amber-300',
-                      alert.severity === 'info' && 'text-blue-700 dark:text-blue-300'
-                    )}>
-                      {alert.title}
-                    </p>
-                    <p className="text-xs text-[var(--color-muted-foreground)]">
-                      {alert.message}
-                      {alert.time ? ` • ${alert.time}` : ''}
-                    </p>
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleDismissAlert(alert.id)}
-                  className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
-                >
-                  Dismiss
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
       {/* Brand Context Card */}
       {selectedBrand !== 'All' && (
         <Card className={cn('border-l-4', selectedBrandInfo?.color.replace('bg-', 'border-l-'))}>
@@ -1088,7 +1013,7 @@ function Home() {
               )}
               {/* Category Tabs — live mode: the REAL workstreams present */}
               <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
-                <TabsList className="flex flex-wrap">
+                <TabsList className="flex flex-wrap h-auto gap-1">
                   {kpiCategories.map((cat) => (
                     <TabsTrigger key={cat.id} value={cat.id} className="flex items-center gap-1.5">
                       <cat.icon className="h-3.5 w-3.5" />
@@ -1112,6 +1037,9 @@ function Home() {
                     ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                       {filteredKPIs.map((kpi) => {
+                        // Only Model Performance KPIs have a drill-down page; the
+                        // rest are non-interactive (no misleading "View details").
+                        const drill = kpiDrillPath(kpi.category);
                         // In live mode, read the REAL value fetched via the batch
                         // endpoint. View-backed KPIs return a float; the rest
                         // return value:null/error → honest "Not yet computed".
@@ -1134,7 +1062,7 @@ function Home() {
                               status={hasValue ? mapKpiStatus(r!.status) : 'neutral'}
                               description={kpi.description}
                               size="sm"
-                              onClick={() => navigate(kpiDetailPath(kpi.category))}
+                              onClick={drill ? () => navigate(drill) : undefined}
                             />
                           );
                         }
@@ -1153,7 +1081,7 @@ function Home() {
                             description={kpi.description}
                             higherIsBetter={kpi.trend !== 'down' || kpi.status === 'healthy'}
                             size="sm"
-                            onClick={() => navigate(kpiDetailPath(kpi.category))}
+                            onClick={drill ? () => navigate(drill) : undefined}
                           />
                         );
                       })}
@@ -1233,18 +1161,6 @@ function Home() {
                           )}
                         </div>
                       </div>
-                      {insight.actionable && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            navigate(insightDest);
-                          }}
-                        >
-                          Act
-                        </Button>
-                      )}
                     </div>
                     );
                   })}
@@ -1400,6 +1316,83 @@ function Home() {
           </Card>
         </div>
       </div>
+
+      {/* Active Alerts — real monitoring data | honest empty | labeled error */}
+      <div className="space-y-2">
+        <h3 className="text-sm font-medium text-[var(--color-muted-foreground)] flex items-center gap-2">
+          <AlertCircle className="h-4 w-4" />
+          Active Alerts ({visibleAlerts.length})
+        </h3>
+        {alertsError ? (
+          <div
+            role="alert"
+            className="flex items-center gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
+          >
+            <AlertCircle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            <span>
+              Alerts unavailable — the monitoring service could not be reached.
+              Live alert data cannot be displayed.
+            </span>
+          </div>
+        ) : !alertsData ? (
+          /* Query pending / unsettled — no claim either way. */
+          <p className="text-sm text-muted-foreground">Checking alerts…</p>
+        ) : visibleAlerts.length === 0 ? (
+          <EmptyState
+            title="No active alerts"
+            description="Monitoring is connected and no alerts are currently firing."
+            className="p-6"
+          />
+        ) : (
+          <div className="space-y-2">
+            {visibleAlerts.map((alert) => (
+              <div
+                key={alert.id}
+                className={cn(
+                  'flex items-center justify-between p-3 rounded-lg border',
+                  alert.severity === 'critical' && 'bg-rose-50 border-rose-200 dark:bg-rose-900/20 dark:border-rose-800',
+                  alert.severity === 'warning' && 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800',
+                  alert.severity === 'info' && 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800'
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={cn(
+                    'p-1.5 rounded-full',
+                    alert.severity === 'critical' && 'bg-rose-500',
+                    alert.severity === 'warning' && 'bg-amber-500',
+                    alert.severity === 'info' && 'bg-blue-500'
+                  )}>
+                    <AlertCircle className="h-3 w-3 text-white" />
+                  </div>
+                  <div>
+                    <p className={cn(
+                      'font-medium text-sm',
+                      alert.severity === 'critical' && 'text-rose-700 dark:text-rose-300',
+                      alert.severity === 'warning' && 'text-amber-700 dark:text-amber-300',
+                      alert.severity === 'info' && 'text-blue-700 dark:text-blue-300'
+                    )}>
+                      {alert.title}
+                    </p>
+                    <p className="text-xs text-[var(--color-muted-foreground)]">
+                      {alert.message}
+                      {alert.time ? ` • ${alert.time}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDismissAlert(alert.id)}
+                  className="text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
