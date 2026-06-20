@@ -732,6 +732,75 @@ class DiscoverEffectsResponse(BaseModel):
 
 
 # =============================================================================
+# CLINICAL CONTEXT SCHEMAS
+# =============================================================================
+
+
+class MechanismOfAction(BaseModel):
+    """Drug mechanism of action with its provenance.
+
+    ``source`` is ``chembl`` when the live ChEMBL mechanism lookup succeeded, or
+    ``static_fallback`` when it was unreachable and the curated MoA was used.
+    """
+
+    mechanism_of_action: str = Field(..., description="e.g. 'CDK4/6 inhibitor'")
+    source: str = Field(..., description="chembl / static_fallback")
+
+
+class PivotalEndpoint(BaseModel):
+    """The disease's real pivotal endpoints (from ClinicalTrials.gov) + source."""
+
+    endpoints: List[str] = Field(
+        default_factory=list,
+        description="Real primary outcome measures from registered trials (e.g. OS/PFS).",
+    )
+    source: str = Field(..., description="clinicaltrials.gov / static_fallback")
+
+
+class RealWorldEvidence(BaseModel):
+    """A real, cited real-world-evidence reference (from PubMed)."""
+
+    pmid: str = Field(..., description="PubMed ID")
+    title: str = Field(..., description="Article title")
+    journal: Optional[str] = Field(default=None, description="Journal / source")
+    pubdate: Optional[str] = Field(default=None, description="Publication date string")
+    doi: Optional[str] = Field(default=None, description="DOI when available")
+    url: str = Field(..., description="Canonical pubmed.ncbi.nlm.nih.gov URL")
+    source: str = Field(..., description="pubmed / pubmed_seed")
+
+
+class ClinicalContext(BaseModel):
+    """Brand-faithful, sourced clinical NARRATIVE for a discovered effect.
+
+    Additive over the causal result — does NOT change the math or adjustment set.
+    ``honesty_label`` always states the boundary: the effect estimate runs on a
+    SYNTHETIC cohort; this clinical context is REAL and cited. Any field whose
+    source is ``static_fallback`` came from the curated map because the live API
+    was unreachable (the layer degrades gracefully, never fabricates).
+    """
+
+    brand: str = Field(..., description="Brand the context is for")
+    drug_name: str = Field(..., description="INN drug name (e.g. ribociclib)")
+    disease: str = Field(..., description="Indication (e.g. Malignant neoplasm of breast)")
+    our_outcome: str = Field(..., description="Our synthetic outcome column this maps from")
+    mapped_endpoint: Optional[str] = Field(
+        default=None,
+        description=(
+            "The real pivotal-endpoint framing our synthetic outcome stands in for "
+            "(None when unmapped)."
+        ),
+    )
+    mechanism: MechanismOfAction
+    pivotal_endpoints: PivotalEndpoint
+    real_world_evidence: Optional[RealWorldEvidence] = Field(
+        default=None, description="A real cited RWE reference; None when none was found."
+    )
+    honesty_label: str = Field(
+        ..., description="Explicit synthetic-estimate / real-context boundary statement."
+    )
+
+
+# =============================================================================
 # PIPELINE SCHEMAS
 # =============================================================================
 

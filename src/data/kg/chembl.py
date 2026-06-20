@@ -101,6 +101,23 @@ class Activity:
     pubmed_id: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class Mechanism:
+    """One mechanism-of-action row from ChEMBL ``/mechanism.json``.
+
+    Attributes:
+        mechanism_of_action: Free-text MoA string (e.g.
+            ``"Cyclin-dependent kinase 4 inhibitor"``).
+        action_type: ChEMBL action type (e.g. ``"INHIBITOR"``); ``None`` when
+            absent.
+        target_chembl_id: ChEMBL target ID the drug acts on; ``None`` when absent.
+    """
+
+    mechanism_of_action: str
+    action_type: Optional[str] = None
+    target_chembl_id: Optional[str] = None
+
+
 class ChEMBLClient:
     """Synchronous ChEMBL REST client.
 
@@ -324,6 +341,59 @@ class ChEMBLClient:
             out.append(_row_to_activity(row))
         return out
 
+    # ------------------------------------------------------------------
+    # Mechanism of action (#causal-enrichment)
+    # ------------------------------------------------------------------
+
+    def get_mechanism(self, molecule_chembl_id: str) -> "list[Mechanism]":
+        """Return ``Mechanism`` rows for a ChEMBL molecule ID.
+
+        Empty molecule ID returns an empty list with no HTTP call. The
+        ``/mechanism.json`` endpoint is the canonical drug-action surface (one
+        row per molecular target the drug modulates).
+        """
+        if not molecule_chembl_id:
+            return []
+        return _get_mechanism_cached(self, molecule_chembl_id)
+
+    def _get_mechanism_uncached(self, molecule_chembl_id: str) -> "list[Mechanism]":
+        payload = self._get(
+            "/mechanism.json",
+            {"molecule_chembl_id": molecule_chembl_id, "limit": 20},
+        )
+        rows = payload.get("mechanisms") or []
+        out: list[Mechanism] = []
+        for row in rows:
+            moa = row.get("mechanism_of_action")
+            if not isinstance(moa, str) or not moa:
+                continue
+            action = row.get("action_type")
+            target = row.get("target_chembl_id")
+            out.append(
+                Mechanism(
+                    mechanism_of_action=moa,
+                    action_type=action if isinstance(action, str) and action else None,
+                    target_chembl_id=target if isinstance(target, str) and target else None,
+                )
+            )
+        return out
+
+    def mechanism_of_action(self, drug_name: str) -> Optional[str]:
+        """Resolve a drug name → its first ChEMBL mechanism-of-action string.
+
+        Convenience wrapper: ``compound_search`` (name → molecule id) then
+        ``get_mechanism`` (id → MoA rows), returning the first MoA. Returns
+        ``None`` when the name does not resolve or the molecule has no recorded
+        mechanism. Empty name skips the network.
+        """
+        if not drug_name:
+            return None
+        molecule_id = self.compound_search(drug_name)
+        if not molecule_id:
+            return None
+        mechs = self.get_mechanism(molecule_id)
+        return mechs[0].mechanism_of_action if mechs else None
+
 
 def _row_to_activity(row: dict[str, Any]) -> Activity:
     """Coerce a raw ChEMBL activity row into the typed ``Activity``."""
@@ -391,8 +461,14 @@ def _get_bioactivity_cached(
     )
 
 
+@lru_cache(maxsize=_LRU_MAXSIZE)
+def _get_mechanism_cached(client: ChEMBLClient, molecule_chembl_id: str) -> list[Mechanism]:
+    return client._get_mechanism_uncached(molecule_chembl_id)
+
+
 def reset_caches() -> None:
     """Clear ChEMBL in-process caches (useful in tests)."""
     _compound_search_cached.cache_clear()
     _target_search_cached.cache_clear()
     _get_bioactivity_cached.cache_clear()
+    _get_mechanism_cached.cache_clear()

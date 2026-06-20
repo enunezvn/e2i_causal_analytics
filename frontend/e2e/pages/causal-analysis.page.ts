@@ -3,15 +3,18 @@ import { BasePage } from './base.page'
 import { gotoAndWaitForHeading } from '../fixtures/page-harness'
 
 /**
- * Page Object Model for the Causal Analysis page (`/causal-analysis`).
+ * Page Object Model for the unified Causal Analysis page (`/causal-analysis`).
  *
- * Agent-driven causal inference dashboard (DoWhy / EconML / CausalML). The page
- * leverages the causal_impact agent to build the DAG and estimate the
- * treatment->outcome effect. Honest states this POM exposes:
- *  - healthy banner: "Causal Engine Healthy" (from GET /api/causal/health)
- *  - degraded banner: "Service Issue" when status != 'healthy'
- *  - overview KPI cards driven by real health/estimator data
- *  - empty: EmptyState "No analysis run yet" (before a run)
+ * ONE agent-led page (the former /causal-discovery is now a redirect here). The
+ * LANDING is the validated-effects leaderboard: the analyst clicks "Discover
+ * causal effects" and the causal_impact agent validates + ranks each candidate
+ * question. A secondary "Pose your own question" panel keeps the manual
+ * treatment/outcome path. Honest states this POM exposes:
+ *  - header + "Agent-driven" badge
+ *  - healthy banner: "Causal Engine Healthy" / degraded: "Service Issue"
+ *  - the leaderboard "Discover causal effects" run control + grain/brand facets
+ *  - empty: EmptyState "No discovery run yet" before a run
+ *  - the "Pose your own question" manual panel trigger
  */
 export class CausalAnalysisPage extends BasePage {
   readonly url = '/causal-analysis'
@@ -30,7 +33,11 @@ export class CausalAnalysisPage extends BasePage {
   }
 
   get pageDescription(): Locator {
-    return this.page.getByText(/Agent-driven causal inference/i).first()
+    return this.page.getByText(/ranks them by confidence and impact/i).first()
+  }
+
+  get agentDrivenBadge(): Locator {
+    return this.page.getByText('Agent-driven', { exact: false }).first()
   }
 
   get healthyBanner(): Locator {
@@ -49,16 +56,26 @@ export class CausalAnalysisPage extends BasePage {
     return this.page.getByText('Estimators', { exact: true }).first()
   }
 
-  // Honest empty state on the default (Analysis) tab before a run.
+  // The leaderboard run control (landing).
+  get discoverButton(): Locator {
+    return this.page.getByRole('button', { name: /Discover causal effects/i }).first()
+  }
+
+  get grainSelect(): Locator {
+    return this.page.getByLabel('Grain')
+  }
+
+  get brandSelect(): Locator {
+    return this.page.getByLabel('Brand')
+  }
+
+  // Honest empty state on the leaderboard before a run.
   get emptyState(): Locator {
-    return this.page.getByText('No analysis run yet', { exact: true }).first()
+    return this.page.getByText('No discovery run yet', { exact: true }).first()
   }
 
-  get runAnalysisButton(): Locator {
-    return this.page.getByRole('button', { name: /Run Analysis/i }).first()
-  }
-
-  get analysisTab(): Locator {
-    return this.page.getByRole('tab', { name: /Analysis/i }).first()
+  // The secondary manual path trigger.
+  get poseYourOwnQuestion(): Locator {
+    return this.page.getByRole('button', { name: /Pose your own question/i }).first()
   }
 }

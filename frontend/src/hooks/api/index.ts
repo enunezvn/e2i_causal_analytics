@@ -58,6 +58,7 @@ export {
   useProposeQuestions,
   useDiscoverEffects,
   useCausalBrands,
+  useClinicalContext,
   useRunHierarchicalAnalysis,
   useRunHierarchicalAnalysisAndWait,
   useRunCausalAgentAnalysis,

@@ -341,6 +341,10 @@ export const queryKeys = {
       [...queryKeys.monitoring.all(), 'performance', 'alerts', modelId] as const,
     performanceCompare: (modelId: string, otherModelId: string) =>
       [...queryKeys.monitoring.all(), 'performance', 'compare', modelId, otherModelId] as const,
+    performanceConfusion: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'performance', 'confusion', modelId] as const,
+    performanceRoc: (modelId: string) =>
+      [...queryKeys.monitoring.all(), 'performance', 'roc', modelId] as const,
     // Retraining
     retrainingStatus: (jobId: string) =>
       [...queryKeys.monitoring.all(), 'retraining', 'status', jobId] as const,

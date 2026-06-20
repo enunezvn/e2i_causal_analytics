@@ -44,6 +44,8 @@ import {
   Loader2,
   Users,
   User,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import {
   SHAPBarChart,
@@ -69,6 +71,7 @@ import {
   useGlobalFeatureImportance,
   useSampleEntities,
 } from '@/hooks/api/use-explain';
+import { groupByCovariate, type CovariateGroup } from '@/lib/shap-covariates';
 import { cn } from '@/lib/utils';
 
 // =============================================================================
@@ -121,6 +124,29 @@ function globalToContribution(f: GlobalImportanceFeature): FeatureContribution {
     shap_value: signed,
     contribution_direction: f.mean_shap >= 0 ? 'positive' : 'negative',
     contribution_rank: f.contribution_rank,
+  };
+}
+
+/** Project a feature to the {name, abs, signed} the covariate grouping needs. */
+function featureGroupable(f: FeatureContribution) {
+  return { name: f.feature_name, abs: Math.abs(f.shap_value), signed: f.shap_value };
+}
+
+/**
+ * Collapse a covariate group into one FeatureContribution for the bar chart and
+ * details panel (per-category detail stays in the group's `categories`).
+ * Magnitude shown = net signed effect (sum of children); ranking uses the
+ * group's summed importance. feature_value is surfaced only for a bare
+ * (single-child) covariate — a multi-category covariate has no single value.
+ */
+function groupToContribution(group: CovariateGroup<FeatureContribution>): FeatureContribution {
+  const single = group.categories.length === 1 ? group.categories[0] : null;
+  return {
+    feature_name: group.covariate,
+    feature_value: single ? single.feature_value : null,
+    shap_value: group.signed,
+    contribution_direction: group.direction,
+    contribution_rank: group.rank,
   };
 }
 
@@ -274,6 +300,92 @@ function FeatureRow({
   );
 }
 
+/**
+ * One ranking row at the raw-covariate level. SHAP runs over encoded columns
+ * (one-hot `geographic_region_west`, missingness `disease_severity__isna`), so a
+ * single covariate would otherwise read as many duplicate rows. A grouped
+ * covariate shows a count badge + chevron and expands to its encoded
+ * categories; a bare covariate behaves like a plain selectable row.
+ */
+function CovariateGroupRow({
+  group,
+  expanded,
+  selectedName,
+  onToggle,
+  onSelectLeaf,
+}: {
+  group: CovariateGroup<FeatureContribution>;
+  expanded: boolean;
+  selectedName: string | null;
+  onToggle: () => void;
+  onSelectLeaf: (f: FeatureContribution) => void;
+}) {
+  const isSelected = selectedName === group.covariate;
+  const value = group.signed;
+  const TrendIcon = value > 0.02 ? TrendingUp : value < -0.02 ? TrendingDown : Minus;
+  const trendColor =
+    value > 0.02 ? 'text-emerald-600' : value < -0.02 ? 'text-rose-600' : 'text-gray-500';
+
+  return (
+    <div>
+      <div
+        className={cn(
+          'flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors',
+          isSelected ? 'bg-primary/10 border border-primary/20' : 'bg-muted/50 hover:bg-muted'
+        )}
+        onClick={() => (group.isGrouped ? onToggle() : onSelectLeaf(group.categories[0]))}
+      >
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <Badge
+            variant="outline"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-xs"
+          >
+            {group.rank}
+          </Badge>
+          <div className="flex-1 min-w-0">
+            <div className="font-medium truncate flex items-center gap-1.5">
+              {group.covariate.replace(/_/g, ' ')}
+              {group.isGrouped && (
+                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 leading-4">
+                  {group.categories.length}
+                </Badge>
+              )}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {group.isGrouped ? `${group.categories.length} encoded features` : 'importance'}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn('font-mono text-sm', trendColor)}>
+            {value >= 0 ? '+' : ''}
+            {value.toFixed(4)}
+          </span>
+          <TrendIcon className={cn('h-4 w-4', trendColor)} />
+          {group.isGrouped &&
+            (expanded ? (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            ))}
+        </div>
+      </div>
+      {group.isGrouped && expanded && (
+        <div className="ml-6 mt-1 space-y-1 border-l-2 border-muted/70 pl-2">
+          {group.categories.map((cat) => (
+            <FeatureRow
+              key={cat.feature_name}
+              feature={cat}
+              isSelected={selectedName === cat.feature_name}
+              onClick={() => onSelectLeaf(cat)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
@@ -333,8 +445,15 @@ function FeatureImportance() {
     () => (global?.features ?? []).map(globalToContribution),
     [global]
   );
+  // Denoise: drop encoded columns with zero mean |SHAP| (inactive __isna /
+  // unobserved one-hot categories) so the beeswarm shows only features that
+  // actually move the prediction — not a dense stack of dots on the zero line.
   const globalBeeswarm = useMemo(
-    () => buildGlobalBeeswarm(global?.points ?? [], global?.features ?? []),
+    () =>
+      buildGlobalBeeswarm(
+        global?.points ?? [],
+        (global?.features ?? []).filter((f) => f.mean_abs_shap > 0)
+      ),
     [global]
   );
 
@@ -406,7 +525,11 @@ function FeatureImportance() {
   );
   const localBaseValue = explanation?.base_value ?? 0;
   const localBeeswarm = useMemo(
-    () => buildLocalBeeswarm(localFeatures, explanation?.patient_id ?? ''),
+    () =>
+      buildLocalBeeswarm(
+        localFeatures.filter((f) => f.shap_value !== 0),
+        explanation?.patient_id ?? ''
+      ),
     [localFeatures, explanation?.patient_id]
   );
 
@@ -430,6 +553,31 @@ function FeatureImportance() {
     const query = searchQuery.toLowerCase();
     return features.filter((f) => f.feature_name.toLowerCase().includes(query));
   }, [features, searchQuery]);
+
+  // Group the ENCODED SHAP features back to their parent raw covariate so the
+  // ranking shows one row per covariate (expandable to its encoded categories)
+  // instead of "geographic region" ×5 + `X`/`X__isna` twins. keep_columns comes
+  // from the model info; when absent the helper passes through to the flat list.
+  const keepColumns = selectedModelInfo?.keep_columns ?? null;
+  const covariateGroups = useMemo(
+    () => groupByCovariate(filteredFeatures, keepColumns, featureGroupable),
+    [filteredFeatures, keepColumns]
+  );
+  // Covariate-level features for the bar chart (consistent with the ranking).
+  const barFeatures = useMemo(() => covariateGroups.map(groupToContribution), [covariateGroups]);
+
+  const [expandedCovariates, setExpandedCovariates] = useState<Set<string>>(new Set());
+  const toggleCovariate = useCallback((name: string) => {
+    setExpandedCovariates((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+  const selectLeaf = useCallback((f: FeatureContribution) => {
+    setSelectedFeature((prev) => (prev?.feature_name === f.feature_name ? null : f));
+  }, []);
 
   const hasData = viewMode === 'cohort' ? !!global : !!explanation;
   const isBusy = viewMode === 'cohort' ? isLoadingGlobal || isFetchingGlobal : isExplaining;
@@ -471,8 +619,8 @@ function FeatureImportance() {
         <div>
           <h1 className="text-3xl font-bold mb-2">Feature Importance</h1>
           <p className="text-muted-foreground">
-            SHAP feature importance for the gold-standard cohort models — cohort-level
-            (global) importance and per-entity explanations.
+            SHAP feature importance for the gold-standard cohort models — cohort-average
+            importance and per-entity explanations, grouped by covariate.
           </p>
         </div>
 
@@ -547,7 +695,7 @@ function FeatureImportance() {
       >
         <TabsList>
           <TabsTrigger value="cohort" className="gap-2">
-            <Users className="h-4 w-4" /> Cohort (global)
+            <Users className="h-4 w-4" /> Cohort average
           </TabsTrigger>
           <TabsTrigger value="individual" className="gap-2">
             <User className="h-4 w-4" /> Individual
@@ -689,7 +837,7 @@ function FeatureImportance() {
                 <div className="text-center">
                   <div className="text-sm text-muted-foreground">Top Feature</div>
                   <div className="text-lg font-semibold">
-                    {features[0]?.feature_name?.replace(/_/g, ' ') ?? '—'}
+                    {covariateGroups[0]?.covariate?.replace(/_/g, ' ') ?? '—'}
                   </div>
                 </div>
               </div>
@@ -706,7 +854,7 @@ function FeatureImportance() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 Feature Rankings
-                <Badge variant="secondary">{features.length}</Badge>
+                <Badge variant="secondary">{covariateGroups.length}</Badge>
               </CardTitle>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -718,25 +866,26 @@ function FeatureImportance() {
                 />
               </div>
             </CardHeader>
-            <CardContent className="space-y-2 max-h-[600px] overflow-y-auto">
-              {filteredFeatures.map((feature) => (
-                <FeatureRow
-                  key={feature.feature_name}
-                  feature={feature}
-                  isSelected={selectedFeature?.feature_name === feature.feature_name}
-                  onClick={() =>
-                    setSelectedFeature(
-                      selectedFeature?.feature_name === feature.feature_name ? null : feature
-                    )
-                  }
+            <CardContent
+              className="space-y-2 max-h-[600px] overflow-y-auto"
+              data-testid="feature-rankings"
+            >
+              {covariateGroups.map((group) => (
+                <CovariateGroupRow
+                  key={group.covariate}
+                  group={group}
+                  expanded={expandedCovariates.has(group.covariate)}
+                  selectedName={selectedFeature?.feature_name ?? null}
+                  onToggle={() => toggleCovariate(group.covariate)}
+                  onSelectLeaf={selectLeaf}
                 />
               ))}
-              {filteredFeatures.length === 0 && searchQuery && (
+              {covariateGroups.length === 0 && searchQuery && (
                 <div className="text-center py-8 text-muted-foreground">
                   No features match your search
                 </div>
               )}
-              {filteredFeatures.length === 0 && !searchQuery && (
+              {covariateGroups.length === 0 && !searchQuery && (
                 <div className="text-center py-8 text-muted-foreground text-sm">
                   {isBusy ? 'Loading…' : 'No feature contributions to show.'}
                 </div>
@@ -760,20 +909,20 @@ function FeatureImportance() {
                 <CardHeader>
                   <CardTitle>
                     {viewMode === 'cohort'
-                      ? 'Global Feature Importance'
+                      ? 'Average Feature Importance'
                       : `Feature Contributions (this ${grainLabel.toLowerCase()})`}
                   </CardTitle>
                   <CardDescription>
                     {viewMode === 'cohort'
                       ? `Mean |SHAP| over ${global?.sample_size ?? COHORT_SAMPLE_SIZE} real ${
                           isHcpCohort ? 'HCPs' : 'patients'
-                        }. Bar length = importance; color = net direction (green raises, red lowers the prediction).`
-                      : `Signed SHAP contributions for this ${grainLabel.toLowerCase()}. Positive values push the prediction higher.`}
+                        }, grouped by covariate. Bar length = importance; color = net direction (green raises, red lowers the prediction).`
+                      : `Signed SHAP contributions for this ${grainLabel.toLowerCase()}, grouped by covariate. Positive values push the prediction higher.`}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <SHAPBarChart
-                    features={features}
+                    features={barFeatures}
                     maxFeatures={10}
                     height={400}
                     showValues
@@ -793,7 +942,7 @@ function FeatureImportance() {
                   </CardTitle>
                   <CardDescription>
                     {viewMode === 'cohort'
-                      ? 'One dot per sampled entity for each top feature. X-axis = SHAP value; color = feature value (red = high, blue = low).'
+                      ? 'One dot per sampled entity for each top feature. X-axis = SHAP value; color = feature value (red = high, blue = low). Binary/one-hot features take only a few SHAP values under the linear model, so their dots line up in vertical bands — expected, not an artifact. Zero-importance encoded columns are hidden.'
                       : 'One dot per top feature for this entity. X-axis = SHAP value; color reflects SHAP direction.'}
                   </CardDescription>
                 </CardHeader>

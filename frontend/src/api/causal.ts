@@ -29,6 +29,7 @@ import type {
   CausalBrandsResponse,
   CausalLibrary,
   CausalVariablesResponse,
+  ClinicalContext,
   DiscoverEffectsResponse,
   ProposeQuestionsResponse,
   CrossValidationRequest,
@@ -296,6 +297,19 @@ export async function getCausalBrands(
   return get<CausalBrandsResponse>(
     `${CAUSAL_BASE}/brands?dataset=${encodeURIComponent(dataset)}`
   );
+}
+
+/**
+ * Fetch the brand-faithful, sourced clinical context for a discovered effect
+ * (drug + mechanism of action, the disease's real pivotal endpoints, a
+ * real-world-evidence citation). Additive narrative; never changes the estimate.
+ */
+export async function getClinicalContext(
+  brand: string,
+  outcome: string
+): Promise<ClinicalContext> {
+  // Flat params: `get(endpoint, params)` wraps them for axios (see api-client).
+  return get<ClinicalContext>(`${CAUSAL_BASE}/clinical-context`, { brand, outcome });
 }
 
 /** Poll a discover-effects job by id (ranked effects fill in progressively). */

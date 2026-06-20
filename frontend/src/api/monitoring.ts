@@ -29,6 +29,7 @@ import type {
   AlertListParams,
   AlertListResponse,
   CompleteRetrainingRequest,
+  ConfusionMatrixResponse,
   DriftDetectionResponse,
   DriftHistoryParams,
   DriftHistoryResponse,
@@ -44,6 +45,7 @@ import type {
   RecordPerformanceRequest,
   RetrainingDecisionResponse,
   RetrainingJobResponse,
+  RocCurveResponse,
   RollbackRetrainingRequest,
   TaskStatusResponse,
   TriggerDriftDetectionRequest,
@@ -418,6 +420,30 @@ export async function compareModelPerformance(
   return get<ModelComparisonResponse>(
     `${MONITORING_BASE}/performance/${encodeURIComponent(modelId)}/compare/${encodeURIComponent(otherModelId)}`,
     { metric_name: metricName }
+  );
+}
+
+/**
+ * Get the latest holdout confusion matrix for a model.
+ *
+ * Returns `available: false` (honest empty state) when none is recorded yet.
+ */
+export async function getConfusionMatrix(
+  modelId: string
+): Promise<ConfusionMatrixResponse> {
+  return get<ConfusionMatrixResponse>(
+    `${MONITORING_BASE}/performance/${encodeURIComponent(modelId)}/confusion`
+  );
+}
+
+/**
+ * Get the latest holdout ROC curve for a model.
+ *
+ * Returns `available: false` (honest empty state) when none is recorded yet.
+ */
+export async function getRocCurve(modelId: string): Promise<RocCurveResponse> {
+  return get<RocCurveResponse>(
+    `${MONITORING_BASE}/performance/${encodeURIComponent(modelId)}/roc`
   );
 }
 

@@ -399,6 +399,48 @@ export interface ModelComparisonResponse {
   difference: number;
   difference_percent: number;
   better_model: string;
+  /** Whether the difference is statistically meaningful (|relative diff| > 5%). */
+  is_significant?: boolean;
+}
+
+/**
+ * Latest holdout confusion matrix (eval-persisted).
+ *
+ * `available === false` is an honest empty state (no matrix recorded yet); the
+ * count fields are then all 0 and the UI keeps its placeholder.
+ */
+export interface ConfusionMatrixResponse {
+  model_id: string;
+  available: boolean;
+  tn: number;
+  fp: number;
+  fn: number;
+  tp: number;
+  threshold: number;
+  sample_size?: number | null;
+  measured_at?: string | null;
+}
+
+/** A single ROC operating point. */
+export interface RocCurvePoint {
+  fpr: number;
+  tpr: number;
+  threshold: number;
+}
+
+/**
+ * Latest holdout ROC curve (eval-persisted).
+ *
+ * `available === false` is an honest empty state (no curve recorded yet); the
+ * UI keeps its placeholder rather than drawing an empty chart.
+ */
+export interface RocCurveResponse {
+  model_id: string;
+  available: boolean;
+  points: RocCurvePoint[];
+  auc: number;
+  sample_size?: number | null;
+  measured_at?: string | null;
 }
 
 // =============================================================================

@@ -245,7 +245,10 @@ describe('KnowledgeGraphPage', () => {
       render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
 
       const nodesCall = (useNodes as ReturnType<typeof vi.fn>).mock.calls[0][0];
-      expect(nodesCall.entity_types).toBe('Variable,KPI,CausalPath,Region,Treatment');
+      // Treatment dropped from the fetch: product/regimen nodes carry no causal
+      // edge (CAUSES/EXPLAINS/INFLUENCES/AFFECTS), so they only ever rendered as
+      // isolated singletons. We no longer fetch them.
+      expect(nodesCall.entity_types).toBe('Variable,KPI,CausalPath,Region');
       // curated_only excludes agent-written runtime nodes from the gold-standard view.
       expect(nodesCall.curated_only).toBe(true);
       const relCall = (useRelationships as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -282,6 +285,80 @@ describe('KnowledgeGraphPage', () => {
       const select = screen.getByRole('combobox', { name: /brand/i }) as HTMLSelectElement;
       expect(select).toBeInTheDocument();
       expect(select.value).toBe('All');
+    });
+  });
+
+  // =========================================================================
+  // EDGE DE-DUPLICATION TESTS
+  // =========================================================================
+  // The synthetic gold standard stamps the SAME logical CAUSES edge once per
+  // (brand × region) — up to 3 brands × 4 regions = 12 parallel copies — which
+  // rendered as an unreadable hairball. The page collapses parallel edges that
+  // share (source, type, target) into one logical edge.
+
+  describe('Edge de-duplication', () => {
+    it('collapses parallel (brand×region) edges of the same source→target→type into one', () => {
+      (useNodes as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          nodes: [
+            { id: 'var:a', name: 'a', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+            { id: 'var:b', name: 'b', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+      (useRelationships as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          relationships: [
+            { id: 'e1', type: 'CAUSES', source_id: 'var:a', target_id: 'var:b', properties: { brand: 'Kisqali', region: 'northeast' }, confidence: 0.9, created_at: '2026-01-04' },
+            { id: 'e2', type: 'CAUSES', source_id: 'var:a', target_id: 'var:b', properties: { brand: 'Kisqali', region: 'south' }, confidence: 0.9, created_at: '2026-01-04' },
+            { id: 'e3', type: 'CAUSES', source_id: 'var:a', target_id: 'var:b', properties: { brand: 'Fabhalta', region: 'west' }, confidence: 0.9, created_at: '2026-01-04' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      // 3 physical (brand×region) edges between the same pair collapse to 1.
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('1');
+      expect(screen.getByTestId('nodes-count')).toHaveTextContent('2');
+    });
+
+    it('does NOT collapse edges that differ in direction or type', () => {
+      (useNodes as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          nodes: [
+            { id: 'var:a', name: 'a', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+            { id: 'var:b', name: 'b', type: 'Variable', properties: {}, created_at: '2026-01-04' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+      (useRelationships as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          relationships: [
+            { id: 'e1', type: 'CAUSES', source_id: 'var:a', target_id: 'var:b', properties: { brand: 'Kisqali', region: 'northeast' }, confidence: 0.9, created_at: '2026-01-04' },
+            { id: 'e2', type: 'CAUSES', source_id: 'var:a', target_id: 'var:b', properties: { brand: 'Kisqali', region: 'south' }, confidence: 0.9, created_at: '2026-01-04' },
+            // reverse direction — a genuinely distinct edge, must survive
+            { id: 'e3', type: 'CAUSES', source_id: 'var:b', target_id: 'var:a', properties: { brand: 'Kisqali', region: 'south' }, confidence: 0.9, created_at: '2026-01-04' },
+          ],
+        },
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      // a→b (2 copies → 1) plus the distinct b→a (1) = 2 logical edges.
+      expect(screen.getByTestId('relationships-count')).toHaveTextContent('2');
     });
   });
 

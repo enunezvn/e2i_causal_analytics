@@ -920,15 +920,28 @@ class TestCompareModelPerformance:
     """Test GET /monitoring/performance/{model_id}/compare/{other_model_id} endpoint."""
 
     def test_compare_models(self, client):
-        """Test comparing two model versions."""
+        """Route maps the tracker's NESTED comparison into the FLAT FE-facing contract.
+
+        ``PerformanceTracker.compare_model_versions`` returns nested
+        ``model_a``/``model_b`` objects plus ``metric`` /
+        ``relative_difference_percent`` keys. The frontend (and its
+        ``ModelComparisonResponse`` type) reads a FLAT shape:
+        ``model_id`` / ``other_model_id`` / ``metric_name`` / ``model_value`` /
+        ``other_model_value`` / ``difference_percent`` / ``better_model``.
+
+        Before this fix the route returned the nested dict raw (no
+        ``response_model``), so the page rendered "undefined undefined NaN%".
+        This test pins the flat contract so the drift cannot recur silently.
+        """
+        # The REAL shape returned by tracker.compare_model_versions(...).
         mock_result = {
-            "model_a": "propensity_v2.0.0",
-            "model_b": "propensity_v2.1.0",
-            "metric_name": "accuracy",
-            "model_a_value": 0.82,
-            "model_b_value": 0.85,
+            "model_a": {"version": "propensity_v2.0.0", "value": 0.82, "trend": "stable"},
+            "model_b": {"version": "propensity_v2.1.0", "value": 0.85, "trend": "improving"},
+            "metric": "accuracy",
             "difference": 0.03,
-            "winner": "propensity_v2.1.0",
+            "relative_difference_percent": 3.6585,
+            "better_model": "propensity_v2.1.0",
+            "is_significant": False,
         }
 
         with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
@@ -943,8 +956,93 @@ class TestCompareModelPerformance:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["winner"] == "propensity_v2.1.0"
-        assert data["difference"] == 0.03
+        # Flat shape the frontend actually reads.
+        assert data["model_id"] == "propensity_v2.0.0"
+        assert data["other_model_id"] == "propensity_v2.1.0"
+        assert data["metric_name"] == "accuracy"
+        assert data["model_value"] == pytest.approx(0.82)
+        assert data["other_model_value"] == pytest.approx(0.85)
+        assert data["difference"] == pytest.approx(0.03)
+        assert data["difference_percent"] == pytest.approx(3.6585)
+        assert data["better_model"] == "propensity_v2.1.0"
+        assert data["is_significant"] is False
+        # The nested tracker shape must NOT leak through to the client.
+        assert "model_a" not in data
+        assert "relative_difference_percent" not in data
+
+
+class TestConfusionAndRocEndpoints:
+    """GET /monitoring/performance/{model_id}/confusion and /roc."""
+
+    def test_confusion_available(self, client):
+        result = {
+            "tn": 2946,
+            "fp": 346,
+            "fn": 1277,
+            "tp": 506,
+            "threshold": 0.5,
+            "sample_size": 5075,
+            "measured_at": None,
+        }
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_confusion_matrix.return_value = result
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/initiation_goldstd/confusion")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is True
+        assert data["tp"] == 506 and data["tn"] == 2946
+        assert data["model_id"] == "initiation_goldstd"
+
+    def test_confusion_unavailable_is_honest_empty(self, client):
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_confusion_matrix.return_value = None
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/m1/confusion")
+
+        assert response.status_code == 200
+        data = response.json()
+        # available=false so the FE keeps its placeholder rather than showing 0s.
+        assert data["available"] is False
+        assert data["tp"] == 0
+
+    def test_roc_available(self, client):
+        result = {
+            "points": [
+                {"fpr": 0.0, "tpr": 0.0, "threshold": 1.0},
+                {"fpr": 1.0, "tpr": 1.0, "threshold": 0.0},
+            ],
+            "auc": 0.671,
+            "sample_size": 5075,
+            "measured_at": None,
+        }
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_roc_curve.return_value = result
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/m1/roc")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is True
+        assert data["auc"] == pytest.approx(0.671)
+        assert len(data["points"]) == 2
+        assert data["points"][0]["fpr"] == 0.0
+
+    def test_roc_unavailable_is_honest_empty(self, client):
+        with patch("src.services.performance_tracking.get_performance_tracker") as mock_get_tracker:
+            tracker = AsyncMock()
+            tracker.get_roc_curve.return_value = None
+            mock_get_tracker.return_value = tracker
+            response = client.get("/monitoring/performance/m1/roc")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["available"] is False
+        assert data["points"] == []
 
 
 # =============================================================================

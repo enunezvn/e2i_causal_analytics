@@ -48,8 +48,8 @@ import numpy as np
 
 from src.mlops.gold_standard_eval.cohort_spec import INITIATION
 from src.mlops.gold_standard_eval.feature_builder import FeatureBuilder
-from src.mlops.gold_standard_eval.recorder import MetricRecorder
-from src.mlops.gold_standard_eval.scorer import score
+from src.mlops.gold_standard_eval.recorder import HOLDOUT_CURVE_SOURCE, MetricRecorder
+from src.mlops.gold_standard_eval.scorer import holdout_curve_records, score
 from src.mlops.gold_standard_eval.walk_forward import WalkForwardRunner
 
 logger = logging.getLogger(__name__)
@@ -207,7 +207,7 @@ async def run(db: Any = None) -> dict[str, Any]:
     prior_model_id = await _resolve_model_id(client, GOLDSTD_MODEL_NAME)
     if prior_model_id is not None:
         cleared = 0
-        for src in (_BACKTEST_SOURCE, _HOLDOUT_SOURCE):
+        for src in (_BACKTEST_SOURCE, _HOLDOUT_SOURCE, HOLDOUT_CURVE_SOURCE):
             cleared += await repo.delete_metrics(prior_model_id, src, None)
         logger.info(
             "Re-run cleanup: cleared %d dependent metric row(s) for prior "
@@ -262,6 +262,16 @@ async def run(db: Any = None) -> dict[str, Any]:
         [(holdout_ts, holdout_metrics, n_holdout)],
         source=_HOLDOUT_SOURCE,
         split_version=None,
+    )
+
+    # --- 6b. Holdout confusion matrix + ROC curve (source='holdout_curve'). --- #
+    # Computed from the SAME y_holdout / y_score as the headline metrics and
+    # persisted under a disjoint source so the scalar 'holdout' rows are untouched.
+    await recorder.record_curves(
+        model_handle,
+        holdout_curve_records(y_holdout, y_score),
+        measured_at=holdout_ts,
+        sample_size=n_holdout,
     )
 
     return {

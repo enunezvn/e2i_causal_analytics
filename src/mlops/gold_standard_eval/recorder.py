@@ -27,6 +27,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Disjoint source tag for structured eval artifacts (confusion matrix / ROC
+# curve). Kept separate from the scalar 'holdout' rows so each idempotent delete
+# scope stays disjoint, and added to the eval runners' re-run cleanup loops so
+# the registry-row replace (FK RESTRICT) is not blocked by stale curve rows.
+HOLDOUT_CURVE_SOURCE = "holdout_curve"
+
 
 class MetricRecorder:
     """Idempotent recorder: delete prior rows for a run, then bulk-insert.
@@ -112,5 +118,57 @@ class MetricRecorder:
                 measured_at_month,  # window_start = month boundary
                 measured_at_month,  # window_end   = same (month-grain; caller refines if needed)
                 measured_at=measured_at_month,
+                source=source,
+            )
+
+    async def record_curves(
+        self,
+        model_version: str,
+        curves: list[tuple[str, float, dict]],
+        *,
+        measured_at: datetime,
+        sample_size: int,
+        source: str = HOLDOUT_CURVE_SOURCE,
+    ) -> None:
+        """Idempotently persist structured eval artifacts (confusion / ROC).
+
+        Like ``record_run`` this delete-then-inserts, but under its OWN ``source``
+        tag (default ``'holdout_curve'``) so it NEVER clobbers the scalar holdout
+        rows (``source='holdout'``) that ``record_run`` writes — the two share a
+        model but not a source, so each delete scope is disjoint.
+
+        Args:
+            model_version: Model handle/uuid passed to the repository.
+            curves: Sequence of ``(kind, scalar_value, payload)`` where ``kind``
+                is ``'confusion_matrix'`` / ``'roc_curve'``, ``scalar_value`` is a
+                representative metric (accuracy / auc) and ``payload`` is the
+                structured dict stored in the row's ``metadata``.
+            measured_at: Timestamp for the artifact (the holdout data boundary).
+            sample_size: Holdout sample size.
+            source: Disjoint source tag for the delete scope (default
+                ``'holdout_curve'``).
+        """
+        model_id = await _resolve_model_id(self.repo.client, model_version)
+        if model_id is None:
+            # Mirror record_run's fail-closed: an unresolved handle means the
+            # cohort model is not registered; a NULL model_id would be unreadable.
+            raise ValueError(
+                f"Cannot record curves: model handle {model_version!r} did not "
+                "resolve to a registered model_id (register the cohort model first)."
+            )
+
+        # Idempotency: clear prior curve rows for this (model_id, source) first.
+        await self.repo.delete_metrics(model_id, source, None)
+
+        for kind, value, payload in curves:
+            await self.repo.record_curve(
+                model_version,
+                kind,
+                value,
+                payload,
+                sample_size,
+                measured_at,  # window_start
+                measured_at,  # window_end
+                measured_at=measured_at,
                 source=source,
             )
