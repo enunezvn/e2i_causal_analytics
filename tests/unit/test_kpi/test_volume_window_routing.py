@@ -76,5 +76,3 @@ def test_nbrx_routes_windowed():
     assert len(client.calls) == 1
     assert client.calls[0]["query_id"] == "business_impact_nbrx_windowed"
     assert client.calls[0]["params"] == ["Kisqali", "S", "E"]
-
-

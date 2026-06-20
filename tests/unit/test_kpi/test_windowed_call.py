@@ -16,7 +16,8 @@ def _no_synthetic(monkeypatch):
 
 def test_no_window_brand_only():
     qid, params = _calc()._resolve_windowed_call(
-        "business_impact_nrx", brand="Kisqali", region=None, window=None)
+        "business_impact_nrx", brand="Kisqali", region=None, window=None
+    )
     assert qid == "business_impact_nrx"
     assert params == ["Kisqali"]
 
@@ -24,7 +25,8 @@ def test_no_window_brand_only():
 def test_window_brand():
     w = {"start": "2025-01-01T00:00:00+00:00", "end": "2025-04-01T00:00:00+00:00"}
     qid, params = _calc()._resolve_windowed_call(
-        "business_impact_nrx", brand="Kisqali", region=None, window=w)
+        "business_impact_nrx", brand="Kisqali", region=None, window=w
+    )
     assert qid == "business_impact_nrx_windowed"
     assert params == ["Kisqali", w["start"], w["end"]]
 
@@ -32,6 +34,7 @@ def test_window_brand():
 def test_window_region():
     w = {"start": "2025-01-01T00:00:00+00:00", "end": "2025-04-01T00:00:00+00:00"}
     qid, params = _calc()._resolve_windowed_call(
-        "business_impact_nrx", brand="Kisqali", region="northeast", window=w)
+        "business_impact_nrx", brand="Kisqali", region="northeast", window=w
+    )
     assert qid == "business_impact_nrx_windowed_region"
     assert params == ["Kisqali", "northeast", w["start"], w["end"]]

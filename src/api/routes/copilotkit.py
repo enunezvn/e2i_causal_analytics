@@ -1860,6 +1860,7 @@ COPILOT_ACTIONS = [
 # LANGGRAPH AGENT FOR E2I CHAT
 # =============================================================================
 
+
 # System prompt for the CopilotKit chat agent
 def build_synthesis_prompt(
     original_query: str, tool_calls: list[dict], tool_results: list[dict]
@@ -2479,8 +2480,12 @@ def create_e2i_chat_agent():
                 for c in tc:
                     tool_calls.append(
                         {
-                            "name": c.get("name") if isinstance(c, dict) else getattr(c, "name", None),
-                            "args": c.get("args") if isinstance(c, dict) else getattr(c, "args", None),
+                            "name": c.get("name")
+                            if isinstance(c, dict)
+                            else getattr(c, "name", None),
+                            "args": c.get("args")
+                            if isinstance(c, dict)
+                            else getattr(c, "args", None),
                         }
                     )
 
@@ -2520,9 +2525,7 @@ def create_e2i_chat_agent():
             # Ask LLM to synthesize the results — frame the user's question and
             # the tool-call args (brand/window) so the synthesizer answers the
             # actual question and never re-asks for a brand it already used.
-            synthesis_prompt = build_synthesis_prompt(
-                original_query, tool_calls, tool_results
-            )
+            synthesis_prompt = build_synthesis_prompt(original_query, tool_calls, tool_results)
 
             # STREAMING (v1.22.0): Stream synthesis response token-by-token
             full_content = ""

@@ -60,9 +60,7 @@ class TestWindowableFields:
         """Exactly 3 KPIs (TRx/NRx/NBRx) must have windowable='clean'."""
         clean_kpis = [kpi for kpi in registry.get_all() if kpi.windowable == "clean"]
         ids = sorted(k.id for k in clean_kpis)
-        assert len(clean_kpis) == 3, (
-            f"Expected 3 clean KPIs, got {len(clean_kpis)}. IDs: {ids}"
-        )
+        assert len(clean_kpis) == 3, f"Expected 3 clean KPIs, got {len(clean_kpis)}. IDs: {ids}"
         assert ids == ["WS3-BI-005", "WS3-BI-006", "WS3-BI-007"], (
             f"Expected TRx/NRx/NBRx only, got: {ids}"
         )

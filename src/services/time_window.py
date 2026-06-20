@@ -16,9 +16,13 @@ from typing import Any, Optional
 
 from dateutil.relativedelta import relativedelta
 
-_MONTHS = {m: i for i, m in enumerate(
-    ["jan", "feb", "mar", "apr", "may", "jun",
-     "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+_MONTHS = {
+    m: i
+    for i, m in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"],
+        start=1,
+    )
+}
 
 
 class WindowParseError(ValueError):
@@ -74,8 +78,12 @@ def parse_window(spec: Any, *, now: Optional[datetime] = None) -> Optional[Windo
     m = re.fullmatch(r"(?:last|past|trailing|previous)\s+(\d+)\s+(day|week|month|year)s?", s)
     if m:
         n, unit = int(m.group(1)), m.group(2)
-        delta = {"day": relativedelta(days=n), "week": relativedelta(weeks=n),
-                 "month": relativedelta(months=n), "year": relativedelta(years=n)}[unit]
+        delta = {
+            "day": relativedelta(days=n),
+            "week": relativedelta(weeks=n),
+            "month": relativedelta(months=n),
+            "year": relativedelta(years=n),
+        }[unit]
         return _validate(now - delta, now, "rolling", f"last {n} {unit}s")
 
     m = re.fullmatch(r"q([1-4])\s+(\d{4})", s)

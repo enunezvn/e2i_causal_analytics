@@ -9,18 +9,33 @@ def _reload(monkeypatch, flag):
     monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
     return importlib.reload(sm)
 
+
 def test_windowed_base(monkeypatch):
     m = _reload(monkeypatch, False)
-    assert m.windowed_query_id("business_impact_nrx", region=False) == "business_impact_nrx_windowed"
+    assert (
+        m.windowed_query_id("business_impact_nrx", region=False) == "business_impact_nrx_windowed"
+    )
+
 
 def test_windowed_region(monkeypatch):
     m = _reload(monkeypatch, False)
-    assert m.windowed_query_id("business_impact_nrx", region=True) == "business_impact_nrx_windowed_region"
+    assert (
+        m.windowed_query_id("business_impact_nrx", region=True)
+        == "business_impact_nrx_windowed_region"
+    )
+
 
 def test_windowed_synthetic(monkeypatch):
     m = _reload(monkeypatch, True)
-    assert m.windowed_query_id("business_impact_nrx", region=False) == "business_impact_nrx_windowed_include_synthetic"
+    assert (
+        m.windowed_query_id("business_impact_nrx", region=False)
+        == "business_impact_nrx_windowed_include_synthetic"
+    )
+
 
 def test_windowed_region_synthetic(monkeypatch):
     m = _reload(monkeypatch, True)
-    assert m.windowed_query_id("business_impact_nrx", region=True) == "business_impact_nrx_windowed_region_include_synthetic"
+    assert (
+        m.windowed_query_id("business_impact_nrx", region=True)
+        == "business_impact_nrx_windowed_region_include_synthetic"
+    )

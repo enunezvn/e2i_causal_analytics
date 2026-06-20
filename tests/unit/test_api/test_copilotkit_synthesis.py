@@ -14,7 +14,12 @@ from src.api.routes.copilotkit import build_synthesis_prompt
 def test_includes_question_and_args():
     p = build_synthesis_prompt(
         "NRx for Kisqali past 3 months",
-        [{"name": "kpi_calculate_tool", "args": {"kpi_name": "NRx", "brand": "Kisqali", "window": "past 3 months"}}],
+        [
+            {
+                "name": "kpi_calculate_tool",
+                "args": {"kpi_name": "NRx", "brand": "Kisqali", "window": "past 3 months"},
+            }
+        ],
         [{"tool": "kpi_calculate_tool", "result": '{"value": 3394, "window_status": "applied"}'}],
     )
     assert "Kisqali" in p and "past 3 months" in p and "3394" in p
