@@ -6,7 +6,7 @@ Uses CATE to recommend allocation changes.
 
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..state import HeterogeneousOptimizerState, PolicyRecommendation
 
@@ -22,8 +22,11 @@ class PolicyLearnerNode:
     - Average responders: Maintain current rate
     """
 
-    def __init__(self):
+    def __init__(self, label_criteria_provider: Optional[object] = None):
         self.min_cate_for_treatment = 0.01  # Minimum CATE to recommend treatment
+        # Injectable for tests; lazily defaulted (avoids import cost when the
+        # label-gater is off, and network at construction time).
+        self._label_provider = label_criteria_provider
 
     async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute policy learning."""
@@ -86,6 +89,10 @@ class PolicyLearnerNode:
                 )
                 logger.warning(partial_data_warning, extra={"node": "policy_learner"})
 
+            # Resolve the indicated population once (fail-open) if the label-gater
+            # is enabled for this run. None => gating is a no-op (existing behaviour).
+            population = self._resolve_population(state)
+
             # Generate policy recommendations
             recommendations = []
 
@@ -93,10 +100,17 @@ class PolicyLearnerNode:
                 for result in results:
                     rec = self._generate_recommendation(dict(result), ate)  # type: ignore[arg-type]
                     if rec:
+                        if population is not None:
+                            self._apply_label_gate(rec, dict(result), population)
                         recommendations.append(rec)
 
-            # Sort by expected incremental outcome
-            recommendations.sort(key=lambda x: x["expected_incremental_outcome"], reverse=True)
+            # Rank: on-label/indeterminate first (then by expected incremental
+            # outcome), off-label segments demoted to the bottom (codex#7 — explicit
+            # partition-by-verdict, metric preserved WITHIN each partition; the
+            # outcome value itself is never tampered with).
+            recommendations.sort(
+                key=lambda r: (r.get("off_label", False), -r["expected_incremental_outcome"])
+            )
 
             # Calculate total expected lift if policy is implemented
             total_lift = sum(r["expected_incremental_outcome"] for r in recommendations)
@@ -209,6 +223,52 @@ class PolicyLearnerNode:
             expected_incremental_outcome=expected_lift,
             confidence=confidence,
         )
+
+    def _resolve_population(self, state: HeterogeneousOptimizerState):
+        """Resolve the indicated population for the run, or None when the label-gater
+        is off / brand absent / lookup fails (fail-open — never breaks policy learning)."""
+        if not state.get("label_segmentation") or not state.get("brand"):
+            return None
+        provider = self._label_provider
+        if provider is None:
+            from src.services.clinical_context.label_criteria_provider import (
+                LabelCriteriaProvider,
+            )
+
+            provider = LabelCriteriaProvider()
+            self._label_provider = provider
+        try:
+            return provider.derive(state["brand"], state.get("indication"))  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "label-gater: indicated-population lookup failed; skipping gate",
+                extra={"node": "policy_learner", "brand": state.get("brand"), "error": str(exc)},
+            )
+            return None
+
+    def _apply_label_gate(self, rec: PolicyRecommendation, result: Dict[str, Any], population) -> None:
+        """Annotate a recommendation with its label verdict (fail-open, in place).
+        off_label is set ONLY for a label-evidenced violation; the recommendation is
+        surfaced either way (rank demotion, not deletion; outcome value untouched)."""
+        try:
+            from src.services.clinical_context.label_gate import (
+                descriptor_from_segment,
+                evaluate_segment,
+            )
+
+            descriptor = descriptor_from_segment(result["segment_name"], result["segment_value"])
+            verdict = evaluate_segment([descriptor], population)
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            logger.warning(
+                "label-gater: segment gate failed; leaving recommendation unflagged",
+                extra={"node": "policy_learner", "error": str(exc)},
+            )
+            return
+        rec["label_verdict"] = verdict.verdict
+        rec["off_label"] = verdict.verdict == "off_label"
+        rec["label_evidence_confirmed"] = verdict.confirmed_by_label
+        if verdict.reason:
+            rec["off_label_reason"] = verdict.reason
 
     def _generate_allocation_summary(
         self,

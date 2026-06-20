@@ -74,6 +74,30 @@ class GateVerdict:
     confirmed_by_label: bool = False
 
 
+def parse_segment_value(raw: object) -> object:
+    """Parse a CATE/gap ``segment_value`` (often a string) to a comparable value:
+    booleans, numerics, else the original string. cate_estimator emits one segment
+    per unique column value as ``str(value)``, so this recovers the typed value."""
+    if isinstance(raw, (bool, int, float)):
+        return raw
+    s = str(raw).strip()
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        f = float(s)
+        return int(f) if f.is_integer() else f
+    except ValueError:
+        return s
+
+
+def descriptor_from_segment(field: str, segment_value: object, source: str = "") -> "SegmentDescriptor":
+    """Build a scalar SegmentDescriptor from a (column, value) segment. (CATE/gap
+    segments are single-value, not bands; banding callers construct SegmentDescriptor
+    directly with low/high.)"""
+    return SegmentDescriptor(field=field, value=parse_segment_value(segment_value), source=source)
+
+
 def _as_float(x: object) -> Optional[float]:
     try:
         return float(x)  # type: ignore[arg-type]

@@ -24,8 +24,8 @@ import logging
 import re
 from typing import List, Optional, Tuple
 
-from src.agents.cohort_constructor.configs import get_brand_config
-from src.agents.cohort_constructor.types import CriterionType
+from src.agents.cohort_constructor.configs import get_brand_config, list_available_configs
+from src.agents.cohort_constructor.types import CriterionType, Operator
 from src.services.clinical_context.brand_map import resolve_brand_profile
 from src.services.clinical_context.clients import _OpenFDAClient
 from src.services.clinical_context.label_gate import GateCriterion, IndicatedPopulation
@@ -82,6 +82,51 @@ def _evidence_for_criterion(field: str, label_text: str, disease: str) -> Option
         if m:
             return _snippet(label_text, m)
     return None
+
+
+_CATEGORICAL_OPS = (Operator.EQUAL, Operator.NOT_EQUAL, Operator.IN, Operator.NOT_IN)
+
+
+def label_segment_columns(brand: str, indication: Optional[str] = None) -> List[str]:
+    """The brand's label-relevant CATEGORICAL inclusion-criterion columns — the
+    dimensions worth segmenting on so on/off-label bands form (codex HIGH#3). Excludes
+    diagnosis_code (constant within a brand) and continuous-threshold criteria (which
+    segment poorly per exact value and are label-unconfirmed anyway)."""
+    try:
+        cfg = get_brand_config(brand, indication)
+    except ValueError:
+        return []
+    cols: List[str] = []
+    for c in cfg.inclusion_criteria:
+        if c.field == "diagnosis_code":
+            continue
+        if c.operator in _CATEGORICAL_OPS and c.field not in cols:
+            cols.append(c.field)
+    return cols
+
+
+def resolve_indication(brand: str, diagnosis_codes) -> Optional[str]:
+    """Resolve the indication from the frame's diagnosis distribution (codex HIGH#2 —
+    Fabhalta must not silently default to PNH). Returns the brand indication whose
+    diagnosis_code set covers the frame's codes when UNAMBIGUOUS; else None (caller
+    falls back to the brand default, logged)."""
+    codes = {str(c).strip() for c in (diagnosis_codes or []) if c is not None and str(c).strip()}
+    if not codes:
+        return None
+    brand_lower = brand.lower()
+    matches: set[str] = set()
+    for key, summary in list_available_configs().items():
+        if not key.startswith(brand_lower):
+            continue
+        cfg = get_brand_config(brand, summary["indication"])
+        code_sets = [
+            set(c.value)
+            for c in cfg.inclusion_criteria
+            if c.field == "diagnosis_code" and isinstance(c.value, (list, tuple, set))
+        ]
+        if code_sets and codes & set().union(*code_sets):
+            matches.add(summary["indication"])
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 class LabelCriteriaProvider:
