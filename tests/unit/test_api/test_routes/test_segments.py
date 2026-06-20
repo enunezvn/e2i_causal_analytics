@@ -7,6 +7,7 @@ Mocks all external dependencies to ensure unit test isolation.
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
@@ -137,6 +138,43 @@ def mock_agent_result():
 def mock_user():
     """Mock authenticated user."""
     return {"user_id": "user123", "role": "analyst"}
+
+
+# Clinical-HTE rebuild: ``_execute_segment_analysis`` now loads the curated
+# patient_journeys gold-standard frame server-side (server-side allowlist guard
+# + fail-closed) BEFORE invoking the graph. The mechanism tests below exercise
+# the agent / mock-fallback / exception paths, so they use a CURATED request
+# (default treatment_arm -> persistent_180d) and stub the loader so no real
+# Supabase read happens.
+@pytest.fixture
+def curated_request():
+    """A valid curated request for the patient_journeys substrate."""
+    return RunSegmentAnalysisRequest(
+        query="Which clinical segments respond best to treatment?",
+    )
+
+
+def _stub_hte_frame(n: int = 120) -> "pd.DataFrame":
+    """Minimal prepared patient_journeys-shaped frame (>=100 rows)."""
+    return pd.DataFrame(
+        {
+            "treatment_arm": [i % 2 for i in range(n)],
+            "persistent_180d": [(i + 1) % 2 for i in range(n)],
+            "disease_severity": [i % 10 for i in range(n)],
+            "engagement_score": [float(i % 5) for i in range(n)],
+            "disease_severity_band": [["low", "medium", "high"][i % 3] for i in range(n)],
+            "age_band": [["<50", "50-65", ">65"][i % 3] for i in range(n)],
+            "geographic_region": [["midwest", "south"][i % 2] for i in range(n)],
+        }
+    )
+
+
+def _patch_hte_loader():
+    """Patch the server-side loader so the mechanism tests skip the real DB."""
+    return patch(
+        "src.api.routes.segments._load_segment_hte_frame",
+        new=AsyncMock(return_value=_stub_hte_frame()),
+    )
 
 
 # =============================================================================
@@ -628,16 +666,19 @@ async def test_run_segment_analysis_task_handles_error(sample_request):
 
 
 @pytest.mark.asyncio
-async def test_execute_segment_analysis_with_agent(sample_request, mock_agent_result):
+async def test_execute_segment_analysis_with_agent(curated_request, mock_agent_result):
     """Test _execute_segment_analysis uses real agent when available."""
     mock_graph = MagicMock()
     mock_graph.ainvoke = AsyncMock(return_value=mock_agent_result)
 
-    with patch(
-        "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
-        return_value=mock_graph,
+    with (
+        _patch_hte_loader(),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
     ):
-        result = await _execute_segment_analysis(sample_request)
+        result = await _execute_segment_analysis(curated_request)
 
         assert result.status == AnalysisStatus.COMPLETED
         assert result.overall_ate == 10.5
@@ -647,46 +688,55 @@ async def test_execute_segment_analysis_with_agent(sample_request, mock_agent_re
 
 @pytest.mark.asyncio
 async def test_execute_segment_analysis_falls_back_to_mock_when_explicitly_allowed(
-    sample_request, monkeypatch
+    curated_request, monkeypatch
 ):
     """Mock-fallback is gated on E2I_REQUIRE_AGENT_IMPORT=0 (closed-by-default policy)."""
     monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "0")
-    with patch(
-        "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
-        side_effect=ImportError,
+    with (
+        _patch_hte_loader(),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            side_effect=ImportError,
+        ),
     ):
-        result = await _execute_segment_analysis(sample_request)
+        result = await _execute_segment_analysis(curated_request)
 
         assert result.status == AnalysisStatus.COMPLETED
         assert "mock data" in result.warnings[0].lower()
 
 
 @pytest.mark.asyncio
-async def test_execute_segment_analysis_raises_503_when_mock_disabled(sample_request, monkeypatch):
+async def test_execute_segment_analysis_raises_503_when_mock_disabled(curated_request, monkeypatch):
     """Closed-by-default: ImportError must raise 503 when mock-fallback is disabled."""
     monkeypatch.setenv("E2I_REQUIRE_AGENT_IMPORT", "1")
-    with patch(
-        "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
-        side_effect=ImportError,
+    with (
+        _patch_hte_loader(),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            side_effect=ImportError,
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await _execute_segment_analysis(sample_request)
+            await _execute_segment_analysis(curated_request)
         assert exc_info.value.status_code == 503
         assert exc_info.value.detail["error"] == "agent_unavailable"
 
 
 @pytest.mark.asyncio
-async def test_execute_segment_analysis_handles_exception(sample_request):
+async def test_execute_segment_analysis_handles_exception(curated_request):
     """Test _execute_segment_analysis handles agent exceptions."""
     mock_graph = MagicMock()
     mock_graph.ainvoke = AsyncMock(side_effect=RuntimeError("Agent error"))
 
-    with patch(
-        "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
-        return_value=mock_graph,
+    with (
+        _patch_hte_loader(),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
     ):
         with pytest.raises(RuntimeError):
-            await _execute_segment_analysis(sample_request)
+            await _execute_segment_analysis(curated_request)
 
 
 # =============================================================================

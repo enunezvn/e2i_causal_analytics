@@ -123,8 +123,14 @@ class HeterogeneousOptimizerState(TypedDict):
     hierarchical_estimator_type: Optional[str]  # "causal_forest", "linear_dml", etc.
     hierarchical_latency_ms: Optional[int]  # Hierarchical analysis latency
 
-    # === SEGMENT DISCOVERY OUTPUTS (3 fields) ===
+    # === SEGMENT DISCOVERY OUTPUTS (4 fields) ===
     high_responders: Optional[List[SegmentProfile]]
+    # mid_responders: segments whose |CATE| sits strictly between the low and
+    # high thresholds (responder_type="average"). Previously this band was
+    # computed-then-discarded — only high/low were surfaced — so a near-average
+    # segment was invisible on the page. Optional/NotRequired by convention: when
+    # no segment qualifies the node emits [] (legacy two-bucket callers unaffected).
+    mid_responders: Optional[List[SegmentProfile]]
     low_responders: Optional[List[SegmentProfile]]
     segment_comparison: Optional[Dict[str, Any]]
 

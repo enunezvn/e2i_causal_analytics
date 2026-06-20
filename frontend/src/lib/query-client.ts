@@ -514,6 +514,7 @@ export const queryKeys = {
       [...queryKeys.segments.all(), 'analysis', analysisId] as const,
     policies: () => [...queryKeys.segments.all(), 'policies'] as const,
     health: () => [...queryKeys.segments.all(), 'health'] as const,
+    datasets: () => [...queryKeys.segments.all(), 'datasets'] as const,
   },
 
   /**

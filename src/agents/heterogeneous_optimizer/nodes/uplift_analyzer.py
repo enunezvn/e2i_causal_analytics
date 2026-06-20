@@ -67,6 +67,7 @@ class UpliftAnalyzerNode:
         max_depth: int = 5,
         use_propensity: bool = True,
         timeout_seconds: int = 120,
+        data_connector: Any = None,
     ):
         """Initialize Uplift Analyzer node.
 
@@ -76,12 +77,20 @@ class UpliftAnalyzerNode:
             max_depth: Maximum tree depth
             use_propensity: Whether to use propensity scores
             timeout_seconds: Maximum execution time
+            data_connector: Shared data connector. The graph factory passes the
+                SAME instance used by cate_estimator/hierarchical_analyzer so all
+                data nodes read one substrate. May be None when the caller
+                supplies ``tier0_data`` instead (the page's server-side-loaded
+                gold-standard frame). Previously absent — the node was unwired and
+                a no-connector construction fell straight to the fail-closed
+                RuntimeError (codex HIGH-1).
         """
         self.model_type = model_type
         self.n_estimators = n_estimators
         self.max_depth = max_depth
         self.use_propensity = use_propensity
         self.timeout_seconds = timeout_seconds
+        self.data_connector = data_connector
 
     async def execute(self, state: HeterogeneousOptimizerState) -> Dict[str, Any]:
         """Execute uplift analysis.
@@ -207,8 +216,24 @@ class UpliftAnalyzerNode:
         Uses mock data if data connector not available AND mock fallback is
         explicitly enabled (see ``_mock_connector_allowed``).
         """
-        # Try to use data connector from state or generate mock
-        if hasattr(self, "data_connector") and self.data_connector:
+        # Priority 1: tier0_data passthrough — the route's server-side gold-standard
+        # frame (loaded include_synthetic=True + brand filter + continuous banding).
+        # When present and carrying treatment+outcome, use it directly: no connector
+        # fetch (so we don't double-read the substrate, codex MED-1), no fabrication,
+        # and uplift sees the SAME banded frame the CATE/hierarchical nodes consume.
+        tier0 = state.get("tier0_data")
+        if isinstance(tier0, pd.DataFrame) and not tier0.empty:
+            needed = {state["treatment_var"], state["outcome_var"]}
+            if needed.issubset(set(tier0.columns)):
+                logger.info(
+                    "Uplift using tier0_data passthrough (%d rows)",
+                    len(tier0),
+                    extra={"node": "uplift_analyzer", "data_source": "tier0_passthrough"},
+                )
+                return tier0
+
+        # Priority 2: shared data connector (real substrate).
+        if self.data_connector:
             columns = (
                 [state["treatment_var"], state["outcome_var"]]
                 + state["effect_modifiers"]
