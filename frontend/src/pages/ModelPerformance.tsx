@@ -181,7 +181,8 @@ function ConfusionMatrixView({ data, modelName }: { data: ConfusionMatrixRespons
 
 /** ROC curve (TPR vs FPR) for the latest holdout evaluation, with the chance diagonal. */
 function RocCurveView({ data, modelName }: { data: RocCurveResponse; modelName: string }) {
-  const roc = interpretRoc(data.auc, describeModel(modelName));
+  const meaning = describeModel(modelName);
+  const roc = interpretRoc(data.auc, meaning);
   return (
     <div className="space-y-2">
       <ResponsiveContainer width="100%" height={320}>
@@ -225,12 +226,7 @@ function RocCurveView({ data, modelName }: { data: RocCurveResponse; modelName: 
         AUC = {data.auc.toFixed(3)}
         {data.sample_size ? ` · n=${data.sample_size.toLocaleString()}` : ''} · holdout
       </p>
-      <div className="rounded-md bg-muted p-3 text-sm">
-        <span className="text-xs uppercase tracking-wide text-muted-foreground mr-2">
-          {roc.band}
-        </span>
-        {roc.text}
-      </div>
+      <div className="rounded-md bg-muted p-3 text-sm">{roc.text}</div>
     </div>
   );
 }
