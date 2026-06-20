@@ -30,7 +30,7 @@ export class SegmentAnalysisPage extends BasePage {
   }
 
   get pageDescription(): Locator {
-    return this.page.getByText(/Heterogeneous treatment effect analysis/i).first()
+    return this.page.getByText(/Agent estimates CATE across all clinical segments/i).first()
   }
 
   // Health badge reflects the stubbed /api/segments/health response.

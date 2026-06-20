@@ -18,6 +18,7 @@ import {
   getSegmentAnalysis,
   listPolicies,
   getSegmentHealth,
+  getSegmentDatasets,
   runSegmentAnalysisAndWait,
   getHighResponders,
   getOptimalPolicy,
@@ -27,6 +28,7 @@ import type {
   PolicyListResponse,
   RunSegmentAnalysisRequest,
   SegmentAnalysisResponse,
+  SegmentDatasetsResponse,
   SegmentHealthResponse,
 } from '@/types/segments';
 
@@ -110,6 +112,33 @@ export function useSegmentHealth(
     queryKey: queryKeys.segments.health(),
     queryFn: () => getSegmentHealth(),
     staleTime: 30 * 1000,
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch the curated config options for the Segment Analysis page.
+ *
+ * Returns the curated treatment/outcome columns and the data-driven brand
+ * list. Drives the agent-driven config dropdowns (brand / treatment / outcome).
+ * Long-lived (curated allowlist + cohort brands rarely change).
+ *
+ * @param options - Additional query options
+ * @returns Query result with curated treatment/outcome options + brands
+ *
+ * @example
+ * ```tsx
+ * const { data: datasets } = useSegmentDatasets();
+ * // datasets?.treatments, datasets?.outcomes, datasets?.brands
+ * ```
+ */
+export function useSegmentDatasets(
+  options?: Omit<UseQueryOptions<SegmentDatasetsResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<SegmentDatasetsResponse, ApiError>({
+    queryKey: queryKeys.segments.datasets(),
+    queryFn: () => getSegmentDatasets(),
+    staleTime: 5 * 60 * 1000,
     ...options,
   });
 }

@@ -55,13 +55,29 @@ export enum QuestionType {
 export interface RunSegmentAnalysisRequest {
   /** Natural language query describing the analysis */
   query: string;
-  /** Treatment variable name (e.g., 'rep_visits', 'email_campaigns') */
-  treatment_var: string;
-  /** Outcome variable name (e.g., 'trx', 'conversion') */
-  outcome_var: string;
-  /** Variables to segment by (e.g., ['region', 'specialty']) */
-  segment_vars: string[];
-  /** Variables that modify treatment effect */
+  /**
+   * Optional cohort FILTER (data-driven dropdown, like /causal/brands). Scopes
+   * the gold-standard load to one brand server-side; it is a row subset, NOT a
+   * causal variable. `undefined` => all brands.
+   */
+  brand?: string;
+  /**
+   * Treatment variable name (curated). Optional — the backend defaults to
+   * `treatment_arm` and enforces the patient_journeys allowlist server-side.
+   */
+  treatment_var?: string;
+  /**
+   * Outcome variable name (curated). Optional — the backend defaults to
+   * `persistent_180d` and enforces the patient_journeys allowlist server-side.
+   */
+  outcome_var?: string;
+  /**
+   * Variables to segment by. Optional — for the patient_journeys path the
+   * backend FIXES the clinical segment set server-side; any value here is
+   * overridden.
+   */
+  segment_vars?: string[];
+  /** Variables that modify treatment effect (fixed server-side for the clinical path). */
   effect_modifiers?: string[];
   /**
    * Confounders to adjust for. Routed into the DML nuisance model (W) and
@@ -207,6 +223,12 @@ export interface SegmentAnalysisResponse {
   // Segment discovery
   /** High responder segments */
   high_responders: SegmentProfile[];
+  /**
+   * Mid (average) responder segments — |CATE| in the band between the low and
+   * high thresholds (responder_type 'average'). Defaults to `[]` when none
+   * qualify, so callers never need to null-check it.
+   */
+  mid_responders: SegmentProfile[];
   /** Low responder segments */
   low_responders: SegmentProfile[];
 
@@ -221,8 +243,30 @@ export interface SegmentAnalysisResponse {
   // Summary
   /** Executive-level summary */
   executive_summary?: string;
+  /**
+   * 3-tier business narrative (who responds, why, expected lift) from the
+   * profile_generator node. Multi-paragraph; render with whitespace-pre-line.
+   * Was silently dropped at the route before the clinical-HTE rebuild.
+   */
+  strategic_interpretation?: string;
   /** Key findings */
   key_insights: string[];
+
+  // Hierarchical / heterogeneity (mapped from the final graph state)
+  /** High/mid/low comparison summary (effect_ratio, counts) from segment_analyzer. */
+  segment_comparison?: Record<string, unknown>;
+  /** Between-segment heterogeneity (I^2, 0-100) from the hierarchical analyzer. */
+  segment_heterogeneity?: number;
+  /** Number of segments analyzed by the hierarchical analyzer. */
+  n_segments_analyzed?: number;
+  /** Segmentation method used (quantile/kmeans/threshold/tree). */
+  segmentation_method_used?: string;
+  /** Aggregate ATE from the hierarchical (nested-CI) analysis. */
+  overall_hierarchical_ate?: number;
+  /** Per-segment hierarchical CATE results. */
+  hierarchical_segment_results?: Array<Record<string, unknown>>;
+  /** Uplift scores grouped by segment dimension. */
+  uplift_by_segment?: Record<string, unknown>;
 
   // Multi-library support
   /** Causal libraries used */
@@ -281,4 +325,17 @@ export interface SegmentHealthResponse {
    * this worker, so cross-worker reads may 404). Optional for older responses.
    */
   storage_mode?: string;
+}
+
+/**
+ * Curated config options for the agent-driven Segment Analysis page.
+ * From GET /segments/datasets — drives the data-driven config dropdowns.
+ */
+export interface SegmentDatasetsResponse {
+  /** Curated selectable treatment columns (default: first entry). */
+  treatments: string[];
+  /** Curated selectable outcome columns (default: first entry). */
+  outcomes: string[];
+  /** Distinct brands present in the gold-standard cohort (filter dropdown). */
+  brands: string[];
 }
