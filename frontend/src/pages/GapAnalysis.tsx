@@ -87,16 +87,34 @@ const DIFFICULTY_COLORS: Record<string, string> = {
   high: '#ef4444',
 };
 
-// Implementation-EFFORT labels. These describe the difficulty of an individual
-// opportunity — deliberately distinct from the curated "Quick Wins" /
-// "Strategic Bets" KPI counts (the prioritizer's authoritative categories). The
-// page previously badged every high-difficulty opportunity "Strategic Bet",
-// conflating effort with the curated category and making it look like there
-// were far more strategic bets than the KPI reported.
+// Implementation-EFFORT labels — SHORT forms, because effort is now folded in as
+// a SECONDARY attribute (rendered with an "Effort:" prefix), not the primary
+// label. The primary label is the curated Quick Win / Strategic Bet category
+// (see CATEGORY_* below). The page previously badged every high-difficulty
+// opportunity "High Effort" as the headline label, conflating effort with the
+// curated category and making it look like there were far more strategic bets
+// than the KPI reported.
 const DIFFICULTY_LABELS: Record<string, string> = {
-  low: 'Low Effort',
-  medium: 'Medium Effort',
-  high: 'High Effort',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+};
+
+// Curated list-view category — the prioritizer's AUTHORITATIVE Quick Win /
+// Strategic Bet framework, set by the list endpoint (`category` on each
+// opportunity) by membership in the run's curated quick_wins/strategic_bets
+// lists. This is the PRIMARY card label. It is NOT derived from
+// implementation_difficulty: a high-difficulty opportunity is a strategic_bet
+// only if it actually cleared the ROI/cost thresholds.
+const CATEGORY_LABELS: Record<string, string> = {
+  quick_win: 'Quick Win',
+  strategic_bet: 'Strategic Bet',
+  other: 'Other',
+};
+const CATEGORY_COLORS: Record<string, string> = {
+  quick_win: '#10b981',     // green — low effort, high ROI
+  strategic_bet: '#8b5cf6', // purple — high impact, high effort
+  other: '#6b7280',         // neutral
 };
 
 // =============================================================================
@@ -109,9 +127,22 @@ function formatCurrency(value: number): string {
   return `$${value.toFixed(0)}`;
 }
 
+// Primary curated-category badge (Quick Win / Strategic Bet / Other).
+function getCategoryBadge(category?: string) {
+  const key = category ?? 'other';
+  const color = CATEGORY_COLORS[key] || '#6b7280';
+  return (
+    <Badge style={{ backgroundColor: `${color}20`, color, borderColor: color }} variant="outline">
+      {CATEGORY_LABELS[key] || key}
+    </Badge>
+  );
+}
+
+// Secondary, folded-in implementation-effort badge. Prefixed "Effort:" so it
+// reads as an attribute of the opportunity, not its primary classification.
 function getDifficultyBadge(difficulty: string) {
   const color = DIFFICULTY_COLORS[difficulty] || '#6b7280';
-  const label = DIFFICULTY_LABELS[difficulty] || difficulty;
+  const label = DIFFICULTY_LABELS[difficulty] ?? difficulty;
 
   return (
     <Badge
@@ -122,7 +153,7 @@ function getDifficultyBadge(difficulty: string) {
       }}
       variant="outline"
     >
-      {label}
+      {`Effort: ${label}`}
     </Badge>
   );
 }
@@ -133,7 +164,7 @@ function getDifficultyBadge(difficulty: string) {
 function GapAnalysis() {
   const [selectedBrand, setSelectedBrand] = useState<string>('Kisqali');
   const [searchQuery, setSearchQuery] = useState('');
-  const [difficultyFilter, setDifficultyFilter] = useState<string>('all');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const isAllBrands = selectedBrand === ALL_BRANDS;
@@ -184,29 +215,30 @@ function GapAnalysis() {
   // Filter opportunities
   const filteredOpportunities = useMemo(() => {
     return opportunities.filter((opp) => {
-      const matchesDifficulty = difficultyFilter === 'all' || opp.implementation_difficulty === difficultyFilter;
+      const matchesCategory = categoryFilter === 'all' || (opp.category ?? 'other') === categoryFilter;
       const matchesSearch =
         searchQuery === '' ||
         opp.recommended_action.toLowerCase().includes(searchQuery.toLowerCase()) ||
         opp.gap.metric.toLowerCase().includes(searchQuery.toLowerCase()) ||
         opp.gap.segment_value.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesDifficulty && matchesSearch;
+      return matchesCategory && matchesSearch;
     });
-  }, [opportunities, difficultyFilter, searchQuery]);
+  }, [opportunities, categoryFilter, searchQuery]);
 
-  // Chart data
-  const roiByDifficultyData = useMemo(() => {
+  // Chart data — average ROI grouped by curated opportunity TYPE (the Quick Win
+  // / Strategic Bet framework), not by implementation effort.
+  const roiByTypeData = useMemo(() => {
     const grouped: Record<string, { total: number; count: number }> = {};
     opportunities.forEach((opp) => {
-      const diff = opp.implementation_difficulty;
-      if (!grouped[diff]) grouped[diff] = { total: 0, count: 0 };
-      grouped[diff].total += opp.roi_estimate.expected_roi;
-      grouped[diff].count += 1;
+      const cat = opp.category ?? 'other';
+      if (!grouped[cat]) grouped[cat] = { total: 0, count: 0 };
+      grouped[cat].total += opp.roi_estimate.expected_roi;
+      grouped[cat].count += 1;
     });
-    return Object.entries(grouped).map(([difficulty, { total, count }]) => ({
-      difficulty: DIFFICULTY_LABELS[difficulty] || difficulty,
+    return Object.entries(grouped).map(([category, { total, count }]) => ({
+      type: CATEGORY_LABELS[category] || category,
       avgROI: total / count,
-      color: DIFFICULTY_COLORS[difficulty],
+      color: CATEGORY_COLORS[category] || '#6b7280',
     }));
   }, [opportunities]);
 
@@ -466,16 +498,16 @@ function GapAnalysis() {
                 className="pl-9"
               />
             </div>
-            <Select value={difficultyFilter} onValueChange={setDifficultyFilter}>
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
               <SelectTrigger className="w-48">
                 <Filter className="h-4 w-4 mr-2" />
-                <SelectValue placeholder="Difficulty" />
+                <SelectValue placeholder="Opportunity type" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Difficulties</SelectItem>
-                <SelectItem value="low">Low Effort</SelectItem>
-                <SelectItem value="medium">Medium Effort</SelectItem>
-                <SelectItem value="high">High Effort</SelectItem>
+                <SelectItem value="all">All Opportunities</SelectItem>
+                <SelectItem value="quick_win">Quick Wins</SelectItem>
+                <SelectItem value="strategic_bet">Strategic Bets</SelectItem>
+                <SelectItem value="other">Other</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -500,6 +532,7 @@ function GapAnalysis() {
                       <div className="flex-1">
                         <div className="flex flex-wrap items-center gap-2 mb-1">
                           <h3 className="font-semibold">{opp.recommended_action}</h3>
+                          {getCategoryBadge(opp.category)}
                           {getDifficultyBadge(opp.implementation_difficulty)}
                           <LabelGateBadge
                             label_verdict={opp.roi_estimate.label_verdict}
@@ -568,22 +601,22 @@ function GapAnalysis() {
         {/* Charts Tab */}
         <TabsContent value="charts" className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* ROI by Difficulty */}
+            {/* ROI by Opportunity Type */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <BarChart3 className="h-5 w-5" />
-                  Average ROI by Difficulty
+                  Average ROI by Opportunity Type
                 </CardTitle>
-                <CardDescription>Expected returns by implementation effort</CardDescription>
+                <CardDescription>Expected returns by opportunity type</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={roiByDifficultyData} layout="vertical">
+                    <BarChart data={roiByTypeData} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                       <XAxis type="number" stroke="var(--muted-foreground)" fontSize={12} />
-                      <YAxis dataKey="difficulty" type="category" stroke="var(--muted-foreground)" fontSize={12} width={80} />
+                      <YAxis dataKey="type" type="category" stroke="var(--muted-foreground)" fontSize={12} width={80} />
                       <Tooltip
                         contentStyle={{
                           backgroundColor: 'var(--card)',
@@ -593,7 +626,7 @@ function GapAnalysis() {
                         formatter={(value) => [`${(value as number)?.toFixed(1) ?? 0}x`, 'Avg ROI']}
                       />
                       <Bar dataKey="avgROI" radius={[0, 4, 4, 0]}>
-                        {roiByDifficultyData.map((entry, index) => (
+                        {roiByTypeData.map((entry, index) => (
                           <Cell key={index} fill={entry.color} />
                         ))}
                       </Bar>
@@ -666,7 +699,7 @@ function GapAnalysis() {
                       <th className="text-right py-3 px-4 font-medium text-muted-foreground">Revenue</th>
                       <th className="text-right py-3 px-4 font-medium text-muted-foreground">Cost</th>
                       <th className="text-right py-3 px-4 font-medium text-muted-foreground">ROI</th>
-                      <th className="text-center py-3 px-4 font-medium text-muted-foreground">Difficulty</th>
+                      <th className="text-center py-3 px-4 font-medium text-muted-foreground">Type</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -710,7 +743,7 @@ function GapAnalysis() {
                           {opp.roi_estimate.expected_roi.toFixed(1)}x
                         </td>
                         <td className="py-3 px-4 text-center">
-                          {getDifficultyBadge(opp.implementation_difficulty)}
+                          {getCategoryBadge(opp.category)}
                         </td>
                       </tr>
                     ))}
