@@ -1,0 +1,62 @@
+{
+  "indications_and_usage": [
+    "1 INDICATIONS AND USAGE KISQALI is a kinase inhibitor indicated: in combination with an aromatase inhibitor for the adjuvant treatment of adults with hormone receptor (HR)-positive, human epidermal growth factor receptor 2 (HER2)-negative stage II and III early breast cancer at high risk of recurrence. ( 1 ) for the treatment of adults with HR-positive, HER2-negative advanced or metastatic breast cancer in combination with: an aromatase inhibitor as initial endocrine-based therapy; or fulvestrant as initial endocrine-based therapy or following disease progression on endocrine therapy. ( 1 ) 1.1 Early Breast Cancer KISQALI is indicated in combination with an aromatase inhibitor for the adjuvant treatment of adults with hormone receptor (HR)-positive, human epidermal growth factor receptor 2 (HER2)-negative stage II and III early breast cancer at high risk of recurrence. 1.2 Advanced or Metastatic Breast Cancer KISQALI is indicated for the treatment of adults with HR-positive, HER2-negative advanced or metastatic breast cancer in combination with: an aromatase inhibitor as initial endocrine-based therapy; or fulvestrant as initial endocrine-based therapy or following disease progression on endocrine therapy."
+  ],
+  "openfda": {
+    "application_number": [
+      "NDA209092"
+    ],
+    "brand_name": [
+      "KISQALI"
+    ],
+    "generic_name": [
+      "RIBOCICLIB"
+    ],
+    "manufacturer_name": [
+      "Novartis Pharmaceuticals Corporation"
+    ],
+    "product_ndc": [
+      "0078-0860",
+      "0078-0867",
+      "0078-0874"
+    ],
+    "product_type": [
+      "HUMAN PRESCRIPTION DRUG"
+    ],
+    "route": [
+      "ORAL"
+    ],
+    "substance_name": [
+      "RIBOCICLIB SUCCINATE"
+    ],
+    "rxcui": [
+      "1873983",
+      "1873989",
+      "1873990",
+      "1873991",
+      "1873992",
+      "1873993",
+      "1873994",
+      "1873995"
+    ],
+    "spl_id": [
+      "0f5f8b14-d798-49dd-bfbf-e9643c545c93"
+    ],
+    "spl_set_id": [
+      "aaeaef94-f3f5-4367-8ea2-b181d7be2da8"
+    ],
+    "package_ndc": [
+      "0078-0860-01",
+      "0078-0867-14",
+      "0078-0867-42",
+      "0078-0874-21",
+      "0078-0874-63"
+    ],
+    "is_original_packager": [
+      true
+    ],
+    "unii": [
+      "BG7HLX2919"
+    ]
+  }
+}

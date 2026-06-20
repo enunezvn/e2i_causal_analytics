@@ -1,0 +1,17 @@
+{
+  "Remibrutinib": {
+    "drug_name": "remibrutinib",
+    "disease": "Chronic spontaneous urticaria",
+    "indications_chars": 510
+  },
+  "Kisqali": {
+    "drug_name": "ribociclib",
+    "disease": "Malignant neoplasm of breast",
+    "indications_chars": 1225
+  },
+  "Fabhalta": {
+    "drug_name": "iptacopan",
+    "disease": "Paroxysmal nocturnal hemoglobinuria",
+    "indications_chars": 1643
+  }
+}

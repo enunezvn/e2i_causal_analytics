@@ -166,6 +166,14 @@ class HeterogeneousOptimizerState(TypedDict):
     working_memory_context: Optional[Dict[str, Any]]  # Context from working memory
     episodic_context: Optional[List[Dict[str, Any]]]  # Similar past analyses
 
+    # === LABEL-GATER ===
+    # Brand for indicated-population (FDA-label) lookup. HeterogeneousOptimizerInput
+    # already carries `brand` (for memory/tracking) but it was dropped from state;
+    # the label-gater needs it in state to resolve the brand's label criteria and
+    # flag/de-prioritize off-label segments. NotRequired so existing constructors
+    # (tests, tier0 passthrough) that omit it still type-check.
+    brand: NotRequired[str]
+
     # ========================================================================
     # B7.4: Multi-Library Support (EconML + CausalML Cross-Validation)
     # ========================================================================
