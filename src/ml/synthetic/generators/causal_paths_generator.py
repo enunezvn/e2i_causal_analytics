@@ -46,13 +46,12 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
     def generate(self) -> pd.DataFrame:
         now = datetime.now(timezone.utc)
         rows = []
+        # Full cross-product so every (brand × outcome) cell is represented.
+        # The old i%3 diagonal only emitted 3 of the 9 cells; decoupling the
+        # indices seeds all 9 for the leaderboard and KG sync.
+        cells = [(b, o) for b in _BRANDS for o in _COHORT_OUTCOMES]
         for i in range(self.config.n_records):
-            brand = _BRANDS[i % 3]
-            # Round-robin the gold-standard cohort outcome so every cohort is
-            # represented (treatment_arm -> treatment_initiated / persistent_180d
-            # / discontinued_180d). Mediators never include treatment_arm or an
-            # outcome, so chain nodes stay distinct (no _clean_causal_chains drop).
-            outcome = _COHORT_OUTCOMES[i % len(_COHORT_OUTCOMES)]
+            brand, outcome = cells[i % len(cells)]
             effect = round(float(self._rng.uniform(0.10, 0.55)), 4)  # recoverable band
             direct = round(effect * float(self._rng.uniform(0.4, 0.8)), 4)
             indirect = round(effect - direct, 4)
@@ -88,6 +87,7 @@ class CausalPathsGenerator(BaseGenerator[pd.DataFrame]):
                     "confirmation_count": int(self._rng.integers(1, 5)),
                     "created_at": now.isoformat(),
                     "is_synthetic": True,
+                    "grain": "patient",
                 }
             )
         return pd.DataFrame(rows)
