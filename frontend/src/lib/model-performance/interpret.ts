@@ -142,3 +142,40 @@ export function interpretConfusion(
   const verdict = buildVerdict(tp, fn, precision, recall, specificity, meaning);
   return { precision, recall, specificity, accuracy, f1, verdict };
 }
+
+export interface RocInterpretation {
+  /** Quality band label. */
+  band: string;
+  /** Full plain-language sentence. */
+  text: string;
+}
+
+/** Non-inflated AUC quality band (0.5 = chance). */
+export function aucBand(auc: number): string {
+  if (auc < 0.6) return 'near-random';
+  if (auc < 0.7) return 'weak';
+  if (auc < 0.8) return 'acceptable';
+  if (auc < 0.9) return 'good';
+  return 'excellent';
+}
+
+/**
+ * Interpret an ROC AUC: quality band + the ranking-probability sentence vs the
+ * 0.5 chance baseline, framed in the model's cohort domain.
+ */
+export function interpretRoc(auc: number, meaning: ModelMeaning): RocInterpretation {
+  const band = aucBand(auc);
+  const pct = Math.round(auc * 100);
+  const rank = meaning.known
+    ? `a random ${meaning.subject} who ${meaning.positiveEvent} above a random one who did not`
+    : 'a random positive case above a random negative case';
+
+  let compare: string;
+  if (auc <= 0.55) compare = 'barely above the 0.50 coin-flip baseline';
+  else if (auc <= 0.7) compare = 'modestly better than the 0.50 coin-flip baseline';
+  else if (auc <= 0.85) compare = 'clearly better than chance (0.50)';
+  else compare = 'strong separation, well above chance (0.50)';
+
+  const text = `AUC ${auc.toFixed(3)} (${band}). The model ranks ${rank} ${pct}% of the time — ${compare}.`;
+  return { band, text };
+}

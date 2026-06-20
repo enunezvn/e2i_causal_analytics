@@ -108,3 +108,43 @@ describe('interpretConfusion', () => {
     expect(r.verdict.toLowerCase()).toContain('not enough');
   });
 });
+
+import { aucBand, interpretRoc } from './interpret';
+
+describe('aucBand', () => {
+  it('maps every band boundary', () => {
+    expect(aucBand(0.59)).toBe('near-random');
+    expect(aucBand(0.6)).toBe('weak');
+    expect(aucBand(0.69)).toBe('weak');
+    expect(aucBand(0.7)).toBe('acceptable');
+    expect(aucBand(0.79)).toBe('acceptable');
+    expect(aucBand(0.8)).toBe('good');
+    expect(aucBand(0.89)).toBe('good');
+    expect(aucBand(0.9)).toBe('excellent');
+  });
+});
+
+describe('interpretRoc', () => {
+  const meaning = describeModel('initiation_remibrutinib_goldstd_lr_v1');
+
+  it('formats AUC, band, ranking % and domain framing', () => {
+    const r = interpretRoc(0.671, meaning);
+    expect(r.band).toBe('weak');
+    expect(r.text).toContain('AUC 0.671 (weak)');
+    expect(r.text).toContain('67%');
+    expect(r.text).toContain('patient who initiated treatment');
+    expect(r.text).toContain('coin-flip');
+  });
+
+  it('uses each comparison branch', () => {
+    expect(interpretRoc(0.55, meaning).text).toContain('barely above');
+    expect(interpretRoc(0.65, meaning).text).toContain('modestly better');
+    expect(interpretRoc(0.78, meaning).text).toContain('clearly better than chance');
+    expect(interpretRoc(0.9, meaning).text).toContain('strong separation');
+  });
+
+  it('uses generic framing when the cohort is unknown', () => {
+    const r = interpretRoc(0.72, describeModel('mystery_model'));
+    expect(r.text).toContain('a random positive case above a random negative case');
+  });
+});
