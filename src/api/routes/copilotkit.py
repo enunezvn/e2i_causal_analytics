@@ -3306,7 +3306,7 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
             detail="Request user_id does not match the authenticated user.",
         )
 
-    return token_user_id
+    return str(token_user_id)
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:

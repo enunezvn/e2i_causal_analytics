@@ -152,7 +152,7 @@ class KPIResult(BaseModel):
     #   "not_applicable" -> KPI has no claims time-dimension; window ignored honestly
     window_requested: dict[str, Any] | None = None
     window_applied: dict[str, Any] | None = None
-    window_status: str = Field("default", description="default | applied | not_applicable")
+    window_status: str = Field(default="default", description="default | applied | not_applicable")
 
     # Causal analysis details (if applicable)
     causal_library_used: CausalLibrary | None = None
