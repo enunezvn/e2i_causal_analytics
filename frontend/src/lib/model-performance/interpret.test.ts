@@ -89,6 +89,13 @@ describe('interpretConfusion', () => {
     expect(r.verdict).toContain('balanced');
   });
 
+  it('selects the weak archetype when recall and precision are both moderate-low', () => {
+    // R=0.55, P=0.55, S=0.55 -> not conservative (R>=0.5), not aggressive (R<0.7),
+    // not balanced (P<0.6) -> weak
+    const r = interpretConfusion(cm({ tn: 55, fp: 45, fn: 45, tp: 55 }), meaning);
+    expect(r.verdict).toContain('limited discrimination');
+  });
+
   it('reads n/a (never a fake 0/100%) when a denominator is zero', () => {
     const r = interpretConfusion(cm({ tn: 50, fp: 0, fn: 0, tp: 0 }), meaning);
     expect(r.precision.value).toBeNull(); // tp+fp == 0

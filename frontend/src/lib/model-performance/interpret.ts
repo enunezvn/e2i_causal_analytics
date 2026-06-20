@@ -95,11 +95,14 @@ function buildVerdict(
 
   const actualPos = tp + fn;
   const caught =
-    `catches ${tp.toLocaleString()} of ${actualPos.toLocaleString()} ` +
+    `catches ${tp.toLocaleString('en-US')} of ${actualPos.toLocaleString('en-US')} ` +
     `${positivesPhrase(meaning)} (recall ${recall.pct})`;
   const right = P !== null ? `, and is right ${precision.pct} of the time when it predicts so (precision)` : '';
   const spec = S !== null ? `, with specificity ${specificity.pct}` : '';
 
+  // Only reached when at least one of R/P is non-null. If exactly one is null
+  // (e.g. tp+fn==0 but fp>0), the sentence still renders with an "(... n/a)"
+  // clause — acceptable: a trained model on real holdout has tp>=1.
   let archetype: string;
   if (R !== null && S !== null && R < 0.5 && S >= 0.7) {
     archetype = ' — conservative: it under-calls and misses most true cases.';
