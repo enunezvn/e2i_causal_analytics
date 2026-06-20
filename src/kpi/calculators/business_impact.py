@@ -220,16 +220,16 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         Total prescription volume. No threshold (volume metric). When a region
         is supplied, routes to the region-scoped variant (migration 077); brand
-        stays an optional filter.
+        stays an optional filter. When a window is supplied, routes to the
+        `_windowed[_region]` variant with [brand(, region), start, end].
         """
-        brand = context.get("brand")
-        region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_trx"), [brand, region]
-            )
-        else:
-            result = self._execute_query("business_impact_trx", [brand])
+        query_id, params = self._resolve_windowed_call(
+            "business_impact_trx",
+            brand=context.get("brand"),
+            region=context.get("region"),
+            window=context.get("window"),
+        )
+        result = self._execute_query(query_id, params)
         if result and result[0].get("trx") is not None:
             return float(result[0]["trx"])
         raise RuntimeError("KPI WS3-BI-005 unavailable: no data for total prescriptions (TRx)")
@@ -239,16 +239,17 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         First-time prescriptions for a patient. No threshold (volume metric).
         When a region is supplied, routes to the region-scoped variant
-        (migration 077); brand stays an optional filter.
+        (migration 077); brand stays an optional filter. When a window is
+        supplied, routes to the `_windowed[_region]` variant with
+        [brand(, region), start, end].
         """
-        brand = context.get("brand")
-        region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_nrx"), [brand, region]
-            )
-        else:
-            result = self._execute_query("business_impact_nrx", [brand])
+        query_id, params = self._resolve_windowed_call(
+            "business_impact_nrx",
+            brand=context.get("brand"),
+            region=context.get("region"),
+            window=context.get("window"),
+        )
+        result = self._execute_query(query_id, params)
         if result and result[0].get("nrx") is not None:
             return float(result[0]["nrx"])
         raise RuntimeError("KPI WS3-BI-006 unavailable: no data for new prescriptions (NRx)")
@@ -267,13 +268,13 @@ class BusinessImpactCalculator(KPICalculatorBase):
                 "KPI WS3-BI-007 unavailable: no brand specified for new-to-brand prescriptions (NBRx)"
             )
 
-        region = context.get("region")
-        if region:
-            result = self._execute_query(
-                self._region_variant("business_impact_nbrx"), [brand, region]
-            )
-        else:
-            result = self._execute_query("business_impact_nbrx", [brand])
+        query_id, params = self._resolve_windowed_call(
+            "business_impact_nbrx",
+            brand=brand,
+            region=context.get("region"),
+            window=context.get("window"),
+        )
+        result = self._execute_query(query_id, params)
         if result and result[0].get("nbrx") is not None:
             return float(result[0]["nbrx"])
         raise RuntimeError(
@@ -324,7 +325,27 @@ class BusinessImpactCalculator(KPICalculatorBase):
         """Calculate WS3-BI-010: Return on Investment.
 
         Value generated per dollar invested.
+
+        When a window is supplied, routes to the single `business_impact_roi`
+        windowed variant (`_windowed[_region]`) with [brand(, region), start,
+        end] -- the windowed ROI statement is time-bounded directly, so the
+        two-source (business_metrics / agent_activities) probe below applies
+        only to the un-windowed default path.
         """
+        if context.get("window") is not None:
+            query_id, params = self._resolve_windowed_call(
+                "business_impact_roi",
+                brand=context.get("brand"),
+                region=context.get("region"),
+                window=context.get("window"),
+            )
+            result = self._execute_query(query_id, params)
+            if result and result[0].get("avg_roi") is not None:
+                return float(result[0]["avg_roi"])
+            raise RuntimeError(
+                "KPI WS3-BI-010 unavailable: no data for return on investment (ROI)"
+            )
+
         # Try business_metrics table first
         result = self._execute_query("business_impact_roi_business_metrics", [])
         if result and result[0].get("avg_roi") is not None:
