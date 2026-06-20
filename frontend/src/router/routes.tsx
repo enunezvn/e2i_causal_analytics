@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import type { RouteObject } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { ProtectedRoute } from '@/components/auth';
 
 // Lazy load page components for code splitting
@@ -9,7 +10,6 @@ const Signup = lazy(() => import('@/pages/Signup'));
 const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
 const KnowledgeGraph = lazy(() => import('@/pages/KnowledgeGraph'));
-const CausalDiscovery = lazy(() => import('@/pages/CausalDiscovery'));
 const ModelPerformance = lazy(() => import('@/pages/ModelPerformance'));
 const FeatureImportance = lazy(() => import('@/pages/FeatureImportance'));
 const TimeSeries = lazy(() => import('@/pages/TimeSeries'));
@@ -74,14 +74,6 @@ export const routeConfigs: RouteConfig[] = [
   },
 
   // ── Causal Analytics — understand cause → effect ─────────────────────────
-  {
-    path: '/causal-discovery',
-    title: 'Causal Discovery',
-    description: 'Causal analysis and DAG visualization',
-    icon: 'git-branch',
-    section: 'causal',
-    showInNav: true,
-  },
   {
     path: '/knowledge-graph',
     title: 'Knowledge Graph',
@@ -335,15 +327,11 @@ export const routes: RouteObject[] = [
       </ProtectedRoute>
     ),
   },
+  // /causal-discovery retired — unified into the agent-led /causal-analysis.
+  // Kept as a redirect so bookmarks + the e2e smoke spec resolve (not a 404).
   {
     path: '/causal-discovery',
-    element: (
-      <ProtectedRoute>
-        <LazyPage>
-          <CausalDiscovery />
-        </LazyPage>
-      </ProtectedRoute>
-    ),
+    element: <Navigate to="/causal-analysis" replace />,
   },
   {
     path: '/model-performance',

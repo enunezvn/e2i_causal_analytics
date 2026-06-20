@@ -286,6 +286,10 @@ export interface ProposeQuestionsResponse {
 export interface DiscoveredEffect {
   treatment: string;
   outcome: string;
+  /** Brand this question is scoped to (SSOT-derived; null = all brands). */
+  brand?: string | null;
+  /** Modeled backdoor set used for this estimate (SSOT confounders_controlled). */
+  adjustment_set?: string[];
   /** pending / running / completed / needs_review / failed */
   status: string;
   ate?: number | null;

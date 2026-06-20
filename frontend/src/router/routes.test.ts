@@ -38,7 +38,6 @@ describe('navigation sections (IA grouping)', () => {
   it('orders Causal Analytics by the analytical workflow', () => {
     const causal = getNavigationSections().find((s) => s.key === 'causal');
     expect(causal?.routes.map((r) => r.title)).toEqual([
-      'Causal Discovery',
       'Knowledge Graph',
       'Causal Analysis',
       'Intervention Impact',

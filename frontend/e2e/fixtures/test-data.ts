@@ -98,6 +98,7 @@ export const AGENT_TIERS = {
 export const ROUTES = {
   HOME: '/',
   CAUSAL_DISCOVERY: '/causal-discovery',
+  CAUSAL_ANALYSIS: '/causal-analysis',
   KNOWLEDGE_GRAPH: '/knowledge-graph',
   MODEL_PERFORMANCE: '/model-performance',
   FEATURE_IMPORTANCE: '/feature-importance',
@@ -139,7 +140,6 @@ export const TEST_USERS = {
 export const UI_ELEMENTS = {
   SIDEBAR_LINKS: [
     'Home',
-    'Causal Discovery',
     'Knowledge Graph',
     'Model Performance',
     'Feature Importance',
