@@ -53,9 +53,10 @@ class _Query:
     def __init__(self, client: "FakeClient", table: str, op: str) -> None:
         self._client = client
         self._table = table
-        self._op = op  # "select" | "insert" | "delete"
+        self._op = op  # "select" | "insert" | "delete" | "upsert"
         self._filters: dict[str, Any] = {}
         self._payload: Any = None
+        self._on_conflict: Any = None
 
     # builder methods all return self for chaining
     def select(self, *_args: Any, **_kw: Any) -> "_Query":
@@ -67,6 +68,12 @@ class _Query:
         self._payload = row
         return self
 
+    def upsert(self, row: Any, on_conflict: Any = None) -> "_Query":
+        self._op = "upsert"
+        self._payload = row
+        self._on_conflict = on_conflict
+        return self
+
     def delete(self) -> "_Query":
         self._op = "delete"
         return self
@@ -76,7 +83,9 @@ class _Query:
         return self
 
     async def execute(self) -> _Result:
-        return self._client._dispatch(self._table, self._op, self._filters, self._payload)
+        return self._client._dispatch(
+            self._table, self._op, self._filters, self._payload, self._on_conflict
+        )
 
 
 class FakeClient:
@@ -92,22 +101,30 @@ class FakeClient:
 
     def __init__(self) -> None:
         self.inserts: list[tuple[str, dict[str, Any]]] = []
+        self.upserts: list[tuple[str, dict[str, Any], Any]] = []
         self.deletes: list[tuple[str, dict[str, Any]]] = []
         self.selects: list[tuple[str, dict[str, Any]]] = []
-        # last registry row inserted, surfaced by the read-back select
+        # last registry row written, surfaced by the read-back select
         self._last_registry_row: dict[str, Any] | None = None
 
     def table(self, name: str) -> _Query:
         return _Query(self, name, op="select")
 
-    def _dispatch(self, table: str, op: str, filters: dict[str, Any], payload: Any) -> _Result:
+    def _dispatch(
+        self,
+        table: str,
+        op: str,
+        filters: dict[str, Any],
+        payload: Any,
+        on_conflict: Any = None,
+    ) -> _Result:
         if op == "select":
             self.selects.append((table, dict(filters)))
             if table == "ml_experiments":
                 # No pre-existing experiment → caller creates one.
                 return _Result([])
             if table == "ml_model_registry":
-                # Read-back: echo the row just inserted (matching the filters).
+                # Read-back: echo the row just written (matching the filters).
                 if self._last_registry_row is not None:
                     return _Result([self._last_registry_row])
                 return _Result([])
@@ -117,6 +134,13 @@ class FakeClient:
             self.inserts.append((table, dict(payload)))
             if table == "ml_experiments":
                 return _Result([{"id": self.EXPERIMENT_ID}])
+            if table == "ml_model_registry":
+                self._last_registry_row = dict(payload)
+                return _Result([dict(payload)])
+            return _Result([dict(payload)])
+
+        if op == "upsert":
+            self.upserts.append((table, dict(payload), on_conflict))
             if table == "ml_model_registry":
                 self._last_registry_row = dict(payload)
                 return _Result([dict(payload)])
@@ -229,10 +253,10 @@ async def test_register_cohort_model_writes_staging_not_production(tmp_path):
 
     assert returned == "csu_initiation_goldstd_lr_v1"
 
-    # exactly one registry row written
-    registry_inserts = [r for (t, r) in client.inserts if t == "ml_model_registry"]
-    assert len(registry_inserts) == 1, f"expected 1 registry insert, got {registry_inserts}"
-    row = registry_inserts[0]
+    # exactly one registry row written (upsert in place, not delete+insert)
+    registry_writes = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
+    assert len(registry_writes) == 1, f"expected 1 registry upsert, got {registry_writes}"
+    row = registry_writes[0]
 
     # MANDATORY collision guard: staging, never production
     assert row["stage"] == "staging", f"must register at staging, got {row['stage']!r}"
@@ -248,7 +272,7 @@ async def test_register_cohort_model_writes_staging_not_production(tmp_path):
 
     # NO registry row may carry stage='production' (defense across all writes)
     assert all(
-        r.get("stage") != "production" for (t, r) in client.inserts if t == "ml_model_registry"
+        r.get("stage") != "production" for (t, r, _oc) in client.upserts if t == "ml_model_registry"
     )
 
     # distinct experiment was created for the gold-standard model (not the
@@ -263,10 +287,17 @@ async def test_register_cohort_model_writes_staging_not_production(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_register_cohort_model_idempotent_replace_and_readback(tmp_path):
-    """Mirror the deploy module's safety: delete-by-(name,version) then read-back.
+async def test_register_cohort_model_upserts_in_place_no_delete_fk_safe(tmp_path):
+    """Re-registration MUST upsert in place (preserve the registry id), NOT
+    delete+insert.
 
-    The read-back must confirm the row landed at the INTENDED stage (staging).
+    ``ml_performance_metrics`` / ``ml_drift_history`` / ``ml_monitoring_alerts``
+    carry a RESTRICT FK to ``ml_model_registry(id)``. A delete+insert churns the
+    id, so once any dependent row exists the registry DELETE 23503-fails (and any
+    pre-delete dependent cleanup that already ran is left as collateral damage).
+    Upserting on the ``(model_name, model_version)`` unique key UPDATEs the row in
+    place — the id (and every dependent FK reference) survives. The row must omit
+    ``id`` so the upsert-merge preserves the existing PK rather than minting a new one.
     """
     X, y, feature_columns = _tiny_gold_standard_xy()
     model = train_cohort_model(INITIATION, X, y)
@@ -283,13 +314,27 @@ async def test_register_cohort_model_idempotent_replace_and_readback(tmp_path):
         feature_count=len(feature_columns),
     )
 
-    # idempotent replace: a delete scoped to (model_name, model_version) fired
+    # NO delete on the registry — the id-churning delete+insert is the FK landmine.
     registry_deletes = [f for (t, f) in client.deletes if t == "ml_model_registry"]
-    assert len(registry_deletes) == 1
-    assert registry_deletes[0].get("model_name") == "csu_initiation_goldstd_lr_v1"
-    assert registry_deletes[0].get("model_version") == "1.0"
+    assert registry_deletes == [], (
+        "register_model_row must NOT delete the registry row (id churn trips the "
+        "ml_drift_history RESTRICT FK on re-run); it must upsert in place."
+    )
 
-    # read-back select on the registry happened (verification, not blind insert)
+    # Exactly one upsert on the (model_name, model_version) unique key.
+    registry_upserts = [(r, oc) for (t, r, oc) in client.upserts if t == "ml_model_registry"]
+    assert len(registry_upserts) == 1, f"expected 1 registry upsert, got {registry_upserts}"
+    row, on_conflict = registry_upserts[0]
+    assert on_conflict == "model_name,model_version", (
+        f"upsert must target the (model_name, model_version) unique key, got {on_conflict!r}"
+    )
+    # id MUST be omitted so the existing PK is preserved on UPDATE.
+    assert "id" not in row, "registry row must omit 'id' so upsert-merge preserves the PK"
+    assert row["stage"] == "staging"
+    assert row["model_name"] == "csu_initiation_goldstd_lr_v1"
+    assert row["model_version"] == "1.0"
+
+    # read-back select on the registry happened (verification, not a blind write).
     registry_selects = [f for (t, f) in client.selects if t == "ml_model_registry"]
     assert len(registry_selects) >= 1
 
@@ -348,9 +393,9 @@ async def test_register_cohort_model_uses_spec_target_for_experiment(tmp_path):
     assert exp_row["experiment_name"] == "persistence_goldstd_eval_v1"
 
     # Registry row must still be at staging, is_synthetic=False.
-    registry_inserts = [r for (t, r) in client.inserts if t == "ml_model_registry"]
-    assert len(registry_inserts) == 1
-    row = registry_inserts[0]
+    registry_writes = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
+    assert len(registry_writes) == 1
+    row = registry_writes[0]
     assert row["stage"] == "staging"
     assert row["is_synthetic"] is False
     assert row["model_name"] == "pnh_persistence_goldstd_lr_v1"
@@ -387,9 +432,9 @@ async def test_register_cohort_model_stamps_training_provenance_synthetic_gold(t
         feature_count=len(feature_columns),
     )
 
-    registry_inserts = [r for (t, r) in client.inserts if t == "ml_model_registry"]
-    assert len(registry_inserts) == 1
-    reg_row = registry_inserts[0]
+    registry_writes = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
+    assert len(registry_writes) == 1
+    reg_row = registry_writes[0]
     # semantics preserved: still a "real fitted model" for the serving/explain filters
     assert reg_row["is_synthetic"] is False
     # NEW (#968): self-describing training-data provenance
