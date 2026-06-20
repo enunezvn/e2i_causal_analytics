@@ -74,7 +74,9 @@ def test_mechanism_of_action_resolves_drug_name_to_first_moa() -> None:
         path = request.url.path
         if "/molecule.json" in path:
             assert "ribociclib" in request.url.query.decode("utf-8").lower()
-            return httpx.Response(200, json={"molecules": [{"molecule_chembl_id": "CHEMBL3545110"}]})
+            return httpx.Response(
+                200, json={"molecules": [{"molecule_chembl_id": "CHEMBL3545110"}]}
+            )
         assert "/mechanism.json" in path
         return httpx.Response(
             200,
