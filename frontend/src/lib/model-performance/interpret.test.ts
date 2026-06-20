@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { describeModel, interpretConfusion } from './interpret';
 import type { ConfusionMatrixResponse } from '@/types/monitoring';
+import { aucBand, describeModel, interpretConfusion, interpretRoc } from './interpret';
 
 describe('describeModel', () => {
   it('maps initiation cohort to patient/initiated treatment', () => {
@@ -109,8 +109,6 @@ describe('interpretConfusion', () => {
   });
 });
 
-import { aucBand, interpretRoc } from './interpret';
-
 describe('aucBand', () => {
   it('maps every band boundary', () => {
     expect(aucBand(0.59)).toBe('near-random');
@@ -146,5 +144,17 @@ describe('interpretRoc', () => {
   it('uses generic framing when the cohort is unknown', () => {
     const r = interpretRoc(0.72, describeModel('mystery_model'));
     expect(r.text).toContain('a random positive case above a random negative case');
+  });
+
+  it('keeps band and comparison consistent at the 0.7 boundary', () => {
+    const r = interpretRoc(0.7, meaning);
+    expect(r.band).toBe('acceptable');
+    expect(r.text).toContain('clearly better than chance');
+  });
+
+  it('keeps band and comparison consistent in the near-random upper range', () => {
+    const r = interpretRoc(0.58, meaning);
+    expect(r.band).toBe('near-random');
+    expect(r.text).toContain('barely above');
   });
 });

@@ -150,7 +150,11 @@ export interface RocInterpretation {
   text: string;
 }
 
-/** Non-inflated AUC quality band (0.5 = chance). */
+/**
+ * Non-inflated AUC quality band (0.5 = chance). Assumes `auc` in [0.5, 1.0]
+ * (holdout ROC AUC; the 12 gold-standard models are all > 0.5; sub-0.5
+ * anti-predictive AUC is out of scope).
+ */
 export function aucBand(auc: number): string {
   if (auc < 0.6) return 'near-random';
   if (auc < 0.7) return 'weak';
@@ -171,8 +175,8 @@ export function interpretRoc(auc: number, meaning: ModelMeaning): RocInterpretat
     : 'a random positive case above a random negative case';
 
   let compare: string;
-  if (auc <= 0.55) compare = 'barely above the 0.50 coin-flip baseline';
-  else if (auc <= 0.7) compare = 'modestly better than the 0.50 coin-flip baseline';
+  if (auc < 0.6) compare = 'barely above the 0.50 coin-flip baseline';
+  else if (auc < 0.7) compare = 'modestly better than the 0.50 coin-flip baseline';
   else if (auc <= 0.85) compare = 'clearly better than chance (0.50)';
   else compare = 'strong separation, well above chance (0.50)';
 
