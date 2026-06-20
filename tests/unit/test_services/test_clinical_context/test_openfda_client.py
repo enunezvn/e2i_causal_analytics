@@ -10,7 +10,6 @@ import httpx
 import pytest
 
 from src.services.clinical_context.clients import (
-    OpenFDAError,
     _OpenFDAClient,
     reset_caches,
 )

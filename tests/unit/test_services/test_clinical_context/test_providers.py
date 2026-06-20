@@ -238,9 +238,9 @@ def test_openfda_indications_falls_back_when_no_label():
 @pytest.mark.unit
 def test_openfda_indications_falls_back_when_live_indications_empty():
     profile = resolve_brand_profile("Kisqali")
-    frag = OpenFDAIndicationsProvider(
-        client=_FakeOpenFDA(label={"x": 1}, indications=[])
-    ).enrich(profile)
+    frag = OpenFDAIndicationsProvider(client=_FakeOpenFDA(label={"x": 1}, indications=[])).enrich(
+        profile
+    )
     assert frag.source == "static_fallback"
     assert frag.approved_indications == list(profile.indications_fallback)
 

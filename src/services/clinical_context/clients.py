@@ -314,9 +314,7 @@ class _OpenFDAClient:
         # Treat a sentinel `{}` (empty brand results) or None as a final miss.
         return brand_result if brand_result else None
 
-    def _fetch_by_field(
-        self, field: str, drug_name: str
-    ) -> Optional[dict[str, Any]]:
+    def _fetch_by_field(self, field: str, drug_name: str) -> Optional[dict[str, Any]]:
         """GET /drug/label.json searching by ``field``.
 
         Returns the best matching record dict, an empty dict sentinel when
@@ -355,9 +353,7 @@ class _OpenFDAClient:
         return self._pick_best(results, drug_name)
 
     @staticmethod
-    def _pick_best(
-        results: list[dict[str, Any]], drug_name: str
-    ) -> dict[str, Any]:
+    def _pick_best(results: list[dict[str, Any]], drug_name: str) -> dict[str, Any]:
         """Return the first record whose generic_name is a single-element list
         matching ``drug_name`` exactly (lowercased), else the first result."""
         target = drug_name.lower()

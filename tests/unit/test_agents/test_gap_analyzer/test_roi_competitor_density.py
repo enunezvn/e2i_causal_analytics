@@ -17,8 +17,7 @@ def test_competitor_density_case_insensitive(brand):
     assert d["competitor_products_count"] >= 1
     assert d["competitor_density_label"] in {"limited", "moderate", "crowded"}
     assert any(
-        "palbociclib" in c.lower() or "abemaciclib" in c.lower()
-        for c in d["competitor_drug_names"]
+        "palbociclib" in c.lower() or "abemaciclib" in c.lower() for c in d["competitor_drug_names"]
     )
 
 

@@ -272,6 +272,4 @@ class CuratedCompetitorProvider(ClinicalContextProvider):
 
     def enrich(self, profile: BrandClinicalProfile) -> CompetitorFragment:
         competitors = list(profile.competitor_map.get(profile.disease.lower(), []))
-        return CompetitorFragment(
-            competitors=competitors, count=len(competitors), source="curated"
-        )
+        return CompetitorFragment(competitors=competitors, count=len(competitors), source="curated")

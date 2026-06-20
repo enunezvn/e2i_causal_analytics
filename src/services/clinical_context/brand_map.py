@@ -181,8 +181,14 @@ def _build_map() -> Dict[str, BrandClinicalProfile]:
             outcome_endpoint_map=dict(extra["outcome_endpoint_map"]),  # type: ignore[call-overload]
             # Therapy-label + competitor fields (Task 2, 2026-06-20)
             indications_fallback=list(extra.get("indications_fallback", [])),  # type: ignore[call-overload]
-            limitations_fallback=(str(extra["limitations_fallback"]) if extra.get("limitations_fallback") else None),
-            boxed_warning_fallback=(str(extra["boxed_warning_fallback"]) if extra.get("boxed_warning_fallback") else None),
+            limitations_fallback=(
+                str(extra["limitations_fallback"]) if extra.get("limitations_fallback") else None
+            ),
+            boxed_warning_fallback=(
+                str(extra["boxed_warning_fallback"])
+                if extra.get("boxed_warning_fallback")
+                else None
+            ),
             competitor_map={k: list(v) for k, v in extra.get("competitor_map", {}).items()},  # type: ignore[attr-defined]
         )
     return out
