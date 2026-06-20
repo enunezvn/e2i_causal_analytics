@@ -144,7 +144,9 @@ class CausalPathRepository(BaseRepository):
         hand-curated cross-product). ``include_synthetic`` defaults True because
         the gold-standard substrate is synthetic.
         """
-        filters = {"brand": brand} if brand else None
+        # Empty dict (not None) = no brand filter; get_many iterates
+        # filters.items(), which would raise AttributeError on None.
+        filters = {"brand": brand} if brand else {}
         rows = await self.get_many(
             filters=filters, limit=limit, include_synthetic=include_synthetic
         )
