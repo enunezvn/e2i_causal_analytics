@@ -251,6 +251,39 @@ def test_effect_summary_none_until_estimated():
 
 
 @pytest.mark.asyncio
+async def test_trigger_questions_from_ssot_have_empty_adjustment_set():
+    """The nba_triggers grain enumerates the RCT + effect-modifier questions from
+    the SSOT, each with an EMPTY modeled adjustment set (randomized / effect
+    modifier). Reuses P1's _discover_candidate_questions verbatim."""
+    from unittest.mock import AsyncMock, patch
+
+    fake = [
+        {
+            "treatment": "control_group_flag",
+            "outcome": "action_taken",
+            "brand": "Kisqali",
+            "confounders": [],
+        },
+        {
+            "treatment": "acceptance_status",
+            "outcome": "conversion_flag",
+            "brand": "Kisqali",
+            "confounders": [],
+        },
+    ]
+    with patch.object(causal_routes, "_get_causal_path_repo") as mk:
+        mk.return_value.get_distinct_questions = AsyncMock(return_value=fake)
+        qs = await causal_routes._discover_candidate_questions("nba_triggers", brand="Kisqali")
+
+    by_outcome = {q.outcome: q for q in qs}
+    assert by_outcome["action_taken"].treatment == "control_group_flag"
+    assert by_outcome["action_taken"].adjustment_set == []
+    assert by_outcome["action_taken"].brand == "Kisqali"
+    assert by_outcome["conversion_flag"].treatment == "acceptance_status"
+    assert by_outcome["conversion_flag"].adjustment_set == []
+
+
+@pytest.mark.asyncio
 async def test_retention_question_includes_geographic_region_in_adjustment_set():
     """After P1b, geographic_region (categorical) is admitted into the leaderboard
     retention question's adjustment set (the loader expands it downstream)."""

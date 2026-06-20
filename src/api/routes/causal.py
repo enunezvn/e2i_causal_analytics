@@ -30,7 +30,7 @@ import math
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, NamedTuple, Optional, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
@@ -836,6 +836,18 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
         "outcome": ["adopted"],
         "covariate": ["centrality_z"],
     },
+    "nba_triggers": {
+        # The triggers table — the ONLY true RCT in the gold standard.
+        # Treatments: the randomized holdout flag (control_group_flag) and the
+        # "trigger accepted" indicator (acceptance_status). Outcomes: action_taken
+        # (an action was taken) and conversion_flag (the DB STORED-GENERATED
+        # outcome_value>0). No covariates: the RCT is randomized (empty backdoor)
+        # and acceptance->conversion is a designed effect with priority as an
+        # effect MODIFIER (surfaced, not adjusted), so no confounder is offered.
+        "treatment": ["control_group_flag", "acceptance_status"],
+        "outcome": ["action_taken", "conversion_flag"],
+        "covariate": [],
+    },
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
 
@@ -870,7 +882,64 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "adopted",
         "centrality_z",
     },
+    "nba_triggers": {
+        # Every trigger question column coerces to numeric 0/1 (booleans via
+        # float(bool); acceptance_status/action_taken via the derivations below).
+        "control_group_flag",
+        "action_taken",
+        "conversion_flag",
+        "acceptance_status",
+    },
 }
+
+# Per-dataset brand-filter column. The triggers table has NO `brand` column — it
+# carries `brand_id` (text, NOT NULL). Datasets absent here default to "brand"
+# (patient_journeys). Used by _list_dataset_brands + the loaders' brand filter.
+_CAUSAL_BRAND_COLUMN: Dict[str, str] = {
+    "nba_triggers": "brand_id",
+}
+
+
+# Per-dataset value derivations applied BEFORE float-coercion, for columns whose
+# raw value is not directly float()-able into the modeled 0/1 (categorical /
+# text / bool). Only allowlisted columns are reachable (the allowlist gate runs
+# first), so a derivation can never read an arbitrary column. Each maps a raw cell
+# (possibly None) to a float.
+def _derive_is_accepted(value: Any) -> float:
+    """acceptance_status -> 1.0 when 'accepted' (case-insensitive), else 0.0."""
+    if value is None:
+        return 0.0
+    return 1.0 if str(value).strip().lower() == "accepted" else 0.0
+
+
+def _derive_presence(value: Any) -> float:
+    """A nullable text/flag column -> 1.0 when a non-empty value is present."""
+    if value is None:
+        return 0.0
+    text = str(value).strip()
+    return 0.0 if text == "" or text.lower() in {"none", "false", "0"} else 1.0
+
+
+_CAUSAL_NUMERIC_DERIVATIONS: Dict[str, Dict[str, Callable[[Any], float]]] = {
+    "nba_triggers": {
+        "acceptance_status": _derive_is_accepted,
+        "action_taken": _derive_presence,
+    },
+}
+
+# Per-dataset outcome columns whose NULL is a DESIGNED zero (not missing data), so
+# a NULL value fills to 0.0 rather than dropping the row. On triggers, action_taken
+# is NULL when no action was taken (= 0) and conversion_flag is NULL when not
+# converted (the STORED-GENERATED outcome_value>0 is NULL-not-false); dropping those
+# rows would discard the RCT control arm / the non-converters and bias the estimate.
+_CAUSAL_FILL_ZERO_OUTCOMES: Dict[str, set] = {
+    "nba_triggers": {"action_taken", "conversion_flag"},
+}
+
+# Logical-dataset -> physical-table name. Datasets whose dataset key differs from
+# their real table go here (nba_triggers -> the triggers table). Absent => itself.
+_CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {"nba_triggers": "triggers"}
+
 
 # Categorical covariates ONE-HOT ENCODED before the frame reaches the executors
 # (DoWhy/EconML require numeric inputs). DELIBERATELY absent from
@@ -899,17 +968,22 @@ async def _list_dataset_brands(dataset: str) -> List[str]:
         return []
     try:
         # hcp_adoption is a JOIN dataset; its brand column lives on hcp_brand_adoption.
-        brand_table = "hcp_brand_adoption" if dataset == "hcp_adoption" else dataset
-        query = client.table(brand_table).select("brand")
+        brand_table = (
+            "hcp_brand_adoption"
+            if dataset == "hcp_adoption"
+            else _CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)
+        )
+        brand_col = _CAUSAL_BRAND_COLUMN.get(dataset, "brand")
+        query = client.table(brand_table).select(brand_col)
         query = apply_provenance_filter(query)
         result = await query.limit(20000).execute()
     except Exception as e:  # noqa: BLE001 — missing column / store hiccup => no brands
         logger.warning(f"causal brands: could not enumerate brands for '{dataset}': {e}")
         return []
     seen = {
-        str(row["brand"])
+        str(row[brand_col])
         for row in (result.data or [])
-        if isinstance(row, dict) and row.get("brand")
+        if isinstance(row, dict) and row.get(brand_col)
     }
     return sorted(seen)
 
@@ -993,7 +1067,12 @@ async def list_causal_variables(
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
     # Probe one row to learn the columns actually present in the live schema.
-    probe = await client.table(dataset).select("*").limit(1).execute()
+    probe = (
+        await client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset))
+        .select("*")
+        .limit(1)
+        .execute()
+    )
     rows = probe.data or []
     present = set(rows[0].keys()) if rows else set()
 
@@ -1619,32 +1698,25 @@ async def get_causal_estimation_data(
     if client is None:
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
-    query = client.table(dataset).select(",".join(select_cols))
+    query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select(",".join(select_cols))
     # Synthetic-showcase aware: on a synthetic-gold instance the synthetic rows
     # ARE the substrate; on a strict real-data instance they are excluded.
     query = apply_provenance_filter(query)
     result = await query.limit(limit).execute()
     rows = result.data or []
 
-    numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []
     for row in rows:
-        record: Dict[str, Any] = {}
-        usable = True
-        for col in select_cols:
-            value = row.get(col)
-            if col in numeric_cols and value is not None:
-                try:
-                    value = float(value)
-                except (TypeError, ValueError):
-                    value = None
-            # A missing treatment/outcome value makes the row unusable for
-            # estimation — drop it rather than impute.
-            if col in (treatment_var, outcome_var) and value is None:
-                usable = False
-                break
-            record[col] = value
-        if usable:
+        record = _coerce_estimation_row(
+            row,
+            select_cols=select_cols,
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
+            numeric_cols=_CAUSAL_NUMERIC_COLUMNS.get(dataset, set()),
+            derivations=_CAUSAL_NUMERIC_DERIVATIONS.get(dataset),
+            fill_zero=frozenset(_CAUSAL_FILL_ZERO_OUTCOMES.get(dataset, set())),
+        )
+        if record is not None:
             records.append(record)
 
     if not records:
@@ -1940,12 +2012,13 @@ async def _load_agent_estimation_frame(
     # scopes the cohort to one brand and stays out of the estimation columns
     # (categorical confounders would need encoding the executors don't do here).
     fetch_cols = list(select_cols)
+    brand_col = _CAUSAL_BRAND_COLUMN.get(dataset, "brand")
     if brand:
-        fetch_cols = list(dict.fromkeys([*select_cols, "brand"]))
-    query = client.table(dataset).select(",".join(fetch_cols))
+        fetch_cols = list(dict.fromkeys([*select_cols, brand_col]))
+    query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select(",".join(fetch_cols))
     query = apply_provenance_filter(query)
     if brand:
-        query = query.eq("brand", brand)
+        query = query.eq(brand_col, brand)
     result = await query.limit(limit).execute()
     rows = result.data or []
 
@@ -1960,6 +2033,8 @@ async def _load_agent_estimation_frame(
             outcome_var=outcome_var,
             numeric_cols=numeric_cols,
             categorical_cols=frozenset(categorical_cols),
+            derivations=_CAUSAL_NUMERIC_DERIVATIONS.get(dataset),
+            fill_zero=frozenset(_CAUSAL_FILL_ZERO_OUTCOMES.get(dataset, set())),
         )
         if rec is not None:
             records.append(rec)
