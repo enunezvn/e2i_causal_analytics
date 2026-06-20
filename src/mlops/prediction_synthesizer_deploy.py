@@ -290,9 +290,12 @@ async def register_model_row(
     """Write ONE ``ml_model_registry`` row idempotently, then verify it landed.
 
     The shared registration primitive. Idempotent at the
-    ``(model_name, model_version)`` grain (the schema unique key) — replaces only
-    the matching version, preserving other versions and avoiding FK fallout from
-    a name-wide delete. Verifies the artifact exists on disk before writing, and
+    ``(model_name, model_version)`` grain (the schema unique key) — UPSERTS the
+    matching version IN PLACE, preserving the row's ``id`` (and therefore every
+    RESTRICT FK reference from ml_performance_metrics / ml_drift_history /
+    ml_monitoring_alerts) and leaving other versions untouched. A delete+insert
+    would churn the id and 23503-fail once any dependent row exists. Verifies the
+    artifact exists on disk before writing, and
     reads the row back to confirm it actually landed AT THE INTENDED ``stage``
     (a trigger/RLS no-op, or a trigger that demotes the stage, must not be
     reported as success). Returns the registered ``model_name``.
@@ -313,14 +316,6 @@ async def register_model_row(
         promoted = stage == "production"
     now = datetime.now(timezone.utc).isoformat()
 
-    # Replace only this exact (model_name, model_version) — not all versions.
-    await (
-        client.table("ml_model_registry")
-        .delete()
-        .eq("model_name", model_name)
-        .eq("model_version", model_version)
-        .execute()
-    )
     row = {
         "experiment_id": experiment_id,
         "model_name": model_name,
@@ -344,7 +339,18 @@ async def register_model_row(
         row["training_provenance"] = training_provenance
     if promoted:
         row["promoted_at"] = now
-    await client.table("ml_model_registry").insert(row).execute()
+    # Upsert on the (model_name, model_version) unique key (constraint
+    # ``unique_model_version``) — UPDATE in place, preserving the row's ``id``.
+    # A delete+insert would mint a NEW id and 23503-fail against the RESTRICT
+    # FKs from ml_performance_metrics / ml_drift_history / ml_monitoring_alerts
+    # once any dependent row exists (the gold-standard eval re-run landmine: the
+    # registry DELETE was blocked, aborting AFTER the pre-delete metric cleanup
+    # had already run). ``row`` omits ``id`` so the existing PK survives the merge.
+    await (
+        client.table("ml_model_registry")
+        .upsert(row, on_conflict="model_name,model_version")
+        .execute()
+    )
 
     # Confirm the row actually landed at the INTENDED stage with the artifact
     # (no silent no-op, and not demoted to another stage by a trigger).
