@@ -25,7 +25,6 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIList: vi.fn(),
   useKPIHealth: vi.fn(),
   useBatchCalculateKPIs: vi.fn(),
-  useKPIValue: vi.fn(),
 }));
 vi.mock('@/hooks/api/use-health-score', () => ({
   useFullHealthCheck: vi.fn(),
@@ -64,7 +63,6 @@ import {
   useKPIList,
   useKPIHealth,
   useBatchCalculateKPIs,
-  useKPIValue,
 } from '@/hooks/api/use-kpi';
 import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
@@ -85,10 +83,6 @@ function resetHomeHookDefaults() {
     mutate: vi.fn(),
     data: undefined,
     isError: false,
-  });
-  (useKPIValue as ReturnType<typeof vi.fn>).mockReturnValue({
-    data: undefined,
-    isLoading: false,
   });
   (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
@@ -256,8 +250,41 @@ describe('Home', () => {
       isLoading: false,
     });
     renderWithAllProviders(<Home />);
-    expect(screen.getByText('Model Accuracy')).toBeInTheDocument();
-    expect(screen.queryByText(/avg of/)).not.toBeInTheDocument();
+    const label = screen.getByText('Model Accuracy');
+    const tile = label.parentElement as HTMLElement; // min-w-0 wrapper (label + value)
+    expect(within(tile).getByText('—')).toBeInTheDocument(); // honest dash, NOT a fabricated 0.0%
+    expect(within(tile).queryByText(/avg of/)).not.toBeInTheDocument();
+  });
+
+  it('discloses synthetic provenance when only the model-accuracy cohort is synthetic', () => {
+    // Real-data home tiles, but the gold-standard model-accuracy eval ran over a
+    // synthetic cohort (is_synthetic_cohort=true) — the page banner must still fire.
+    (useKpiSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'All',
+        period: 'Last 30 days',
+        metrics: { trx_volume: 100, hcp_reach: 10 },
+        data_source: 'database',
+      },
+      isLoading: false,
+      error: null,
+    });
+    (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'all',
+        available: true,
+        n_models: 12,
+        accuracy: 0.7,
+        precision: 0.66,
+        recall: 0.55,
+        f1: 0.6,
+        auc_roc: 0.75,
+        is_synthetic_cohort: true,
+      },
+      isLoading: false,
+    });
+    renderWithAllProviders(<Home />);
+    expect(screen.getByText(/synthetic demo data/i)).toBeInTheDocument();
   });
 
   it('labels synthetic-sourced KPIs honestly (page-level synthetic-demo banner)', () => {

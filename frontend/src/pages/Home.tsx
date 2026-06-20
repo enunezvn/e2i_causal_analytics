@@ -618,11 +618,13 @@ function Home() {
   }, [liveKpiMode, batchSettled, batchFailed, effectiveKPIs, valueByKpiId]);
 
   // Page-level synthetic disclosure: true when ANY KPI surface on this page was
-  // computed in E2I_KPI_INCLUDE_SYNTHETIC demo mode — the Home tiles (summary),
-  // the Model Accuracy tile (roc-auc), or the KPI grid (batch). Drives the banner
-  // so the whole dashboard (incl. the grid) is labelled, never read as real data.
+  // computed over synthetic data — the Home tiles (summary), the Model Accuracy
+  // tile (the gold-standard eval runs over a synthetic cohort → is_synthetic_cohort),
+  // or the KPI grid (batch). Drives the banner so the whole dashboard is labelled,
+  // never read as real-world data.
   const isSyntheticKpis =
     kpiSummary?.data_source === 'synthetic' ||
+    (modelSummary?.is_synthetic_cohort ?? false) ||
     (batchData?.results?.some((r) => r.data_source === 'synthetic') ?? false);
 
   // Get navigation routes for quick actions
@@ -968,7 +970,7 @@ function Home() {
               : '—'
           }
           sublabel={
-            modelSummary?.available && modelSummary.n_models
+            modelSummary?.available && modelSummary.n_models && modelSummary.accuracy != null
               ? `avg of ${modelSummary.n_models} models`
               : undefined
           }
@@ -1040,7 +1042,7 @@ function Home() {
               )}
               {/* Category Tabs — live mode: the REAL workstreams present */}
               <Tabs value={activeCategory} onValueChange={setSelectedCategory} className="space-y-4">
-                {liveKpiMode && batchSettled && (
+                {liveKpiMode && batchSettled && !batchFailed && (
                   <p className="text-xs text-muted-foreground">
                     Showing {computedKPIs.length} of {effectiveKPIs.length} defined KPIs
                     {selectedBrand !== 'All' ? ` for ${selectedBrand}` : ''}
