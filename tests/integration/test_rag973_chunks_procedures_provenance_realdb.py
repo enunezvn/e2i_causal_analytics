@@ -96,10 +96,7 @@ def test_rag_document_chunks_excluded_by_default_across_rag_rpcs():
                 f"opt-in must return BOTH chunks via {rpc}"
             )
     finally:
-        _psql(
-            "DELETE FROM rag_document_chunks WHERE document_id IN "
-            f"('{real_id}', '{synth_id}');"
-        )
+        _psql(f"DELETE FROM rag_document_chunks WHERE document_id IN ('{real_id}', '{synth_id}');")
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 RAG_005 = _ROOT / "database" / "rag" / "005_chunks_synthetic_provenance.sql"
 MEM_047 = _ROOT / "database" / "memory" / "047_procedural_synthetic_provenance.sql"
 
+
 # The platform default-exclude predicate, parameterised by table alias. Mirrors
 # the exact 045 / rag-004 shape: filters-jsonb opt-in (NOT a new SQL parameter,
 # so CREATE OR REPLACE keeps the signature and PostgREST RPC resolution stable),
