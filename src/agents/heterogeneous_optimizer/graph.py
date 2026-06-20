@@ -51,7 +51,7 @@ async def _run_uplift_nonfatal(
     the node's standalone fail-closed contract is unchanged for direct callers.
     """
     try:
-        return await uplift_node.execute(state)
+        out = await uplift_node.execute(state)
     except Exception as exc:  # noqa: BLE001 - complementary step is never fatal
         logger.warning(
             "uplift_analysis non-fatal failure; continuing without uplift metrics: %s",
@@ -59,6 +59,21 @@ async def _run_uplift_nonfatal(
             extra={"node": "uplift_analyzer"},
         )
         return {"warnings": [f"Uplift analysis skipped: {exc}"]}
+    # The node's OWN generic handler can RETURN an errors dict (without raising).
+    # Those errors accumulate into state["errors"] and would flip the agent's
+    # status to "failed" via _build_output — failing the WHOLE HTE run for a
+    # complementary miss. Demote any uplift errors to warnings here (no
+    # fabrication: the uplift result is simply absent / honest-empty, not faked).
+    errors = out.get("errors")
+    if errors:
+        warnings = list(out.get("warnings") or [])
+        warnings.extend(
+            f"Uplift analysis issue: {e.get('error', e) if isinstance(e, dict) else e}"
+            for e in errors
+        )
+        out = {k: v for k, v in out.items() if k != "errors"}
+        out["warnings"] = warnings
+    return out
 
 
 async def error_handler_node(
@@ -170,6 +185,7 @@ def create_heterogeneous_optimizer_graph(
     if enable_hierarchical:
         timed(workflow, "hierarchical_analysis", hierarchical_analyzer.execute)  # type: ignore[union-attr]
     if enable_uplift:
+        assert uplift_analyzer is not None  # constructed above when enable_uplift
         # Wrapped so any uplift failure degrades to a warning (NON-FATAL); the
         # CATE/responder/policy outputs must survive an uplift miss.
         timed(workflow, "uplift_analysis", partial(_run_uplift_nonfatal, uplift_analyzer))

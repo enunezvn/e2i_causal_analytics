@@ -12,8 +12,9 @@ new behavior:
   available"]`` field that Agent 3 renders.
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
+import pandas as pd
 import pytest
 from fastapi import HTTPException
 
@@ -144,6 +145,25 @@ class TestGapsFailClosed:
 
 
 class TestSegmentsFailClosed:
+    # Clinical-HTE rebuild: _execute_segment_analysis now loads the curated
+    # patient_journeys frame SERVER-SIDE before the agent import-guard. These
+    # tests target the import-guard mechanism, so they use a CURATED request
+    # (default treatment_arm -> persistent_180d) and stub the loader so the
+    # ImportError path is reached (a placeholder treatment/outcome would 400 at
+    # the allowlist first).
+    @staticmethod
+    def _patch_loader():
+        frame = pd.DataFrame(
+            {
+                "treatment_arm": [i % 2 for i in range(120)],
+                "persistent_180d": [(i + 1) % 2 for i in range(120)],
+            }
+        )
+        return patch(
+            "src.api.routes.segments._load_segment_hte_frame",
+            new=AsyncMock(return_value=frame),
+        )
+
     @pytest.mark.asyncio
     async def test_segments_raises_503_when_fail_closed(self):
         from src.api.routes.segments import (
@@ -154,20 +174,18 @@ class TestSegmentsFailClosed:
 
         request = RunSegmentAnalysisRequest(
             query="Q",
-            treatment_var="treat",
-            outcome_var="trx",
-            segment_vars=["region"],
             question_type=QuestionType.EFFECT_HETEROGENEITY,
         )
         with patch.dict("os.environ", _fail_closed_env(), clear=False):
-            with patch(
-                "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
-                side_effect=ImportError("module missing"),
-            ):
-                with pytest.raises(HTTPException) as exc_info:
-                    await _execute_segment_analysis(request)
-                assert exc_info.value.status_code == 503
-                assert exc_info.value.detail["agent"] == "Heterogeneous Optimizer"
+            with self._patch_loader():
+                with patch(
+                    "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+                    side_effect=ImportError("module missing"),
+                ):
+                    with pytest.raises(HTTPException) as exc_info:
+                        await _execute_segment_analysis(request)
+                    assert exc_info.value.status_code == 503
+                    assert exc_info.value.detail["agent"] == "Heterogeneous Optimizer"
 
     @pytest.mark.asyncio
     async def test_segments_mock_fallback_preserves_warnings(self):
@@ -179,17 +197,15 @@ class TestSegmentsFailClosed:
 
         request = RunSegmentAnalysisRequest(
             query="Q",
-            treatment_var="treat",
-            outcome_var="trx",
-            segment_vars=["region"],
             question_type=QuestionType.EFFECT_HETEROGENEITY,
         )
         with patch.dict("os.environ", _mock_allowed_env(), clear=False):
-            with patch(
-                "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
-                side_effect=ImportError("module missing"),
-            ):
-                response = await _execute_segment_analysis(request)
+            with self._patch_loader():
+                with patch(
+                    "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+                    side_effect=ImportError("module missing"),
+                ):
+                    response = await _execute_segment_analysis(request)
         assert len(response.warnings) > 0
         assert "mock data" in response.warnings[0].lower()
 
