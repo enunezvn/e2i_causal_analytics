@@ -33,6 +33,7 @@ vi.mock('@/hooks/api', () => ({
   useDiscoverEffects: vi.fn(),
   useRunCausalAgentAnalysis: vi.fn(),
   useEstimators: vi.fn(),
+  useClinicalContext: vi.fn(),
 }));
 
 vi.mock('@/api/causal', () => ({
@@ -47,6 +48,7 @@ import {
   useDiscoverEffects,
   useRunCausalAgentAnalysis,
   useEstimators,
+  useClinicalContext,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 
@@ -152,6 +154,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
       isError: false,
       error: null,
     });
+    (useClinicalContext as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
     (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(DETAIL);
     mockDiscover();
   });

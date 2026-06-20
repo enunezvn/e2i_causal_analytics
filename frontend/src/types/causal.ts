@@ -325,6 +325,52 @@ export interface DiscoverEffectsResponse {
   note: string;
 }
 
+/** Drug mechanism of action + provenance (chembl | static_fallback). */
+export interface MechanismOfAction {
+  mechanism_of_action: string;
+  /** chembl / static_fallback */
+  source: string;
+}
+
+/** The disease's real pivotal endpoints (clinicaltrials.gov | static_fallback). */
+export interface PivotalEndpoint {
+  endpoints: string[];
+  /** clinicaltrials.gov / static_fallback */
+  source: string;
+}
+
+/** A real, cited real-world-evidence reference (from PubMed). */
+export interface RealWorldEvidence {
+  pmid: string;
+  title: string;
+  journal?: string | null;
+  pubdate?: string | null;
+  doi?: string | null;
+  url: string;
+  /** pubmed / pubmed_seed */
+  source: string;
+}
+
+/**
+ * Brand-faithful, sourced clinical NARRATIVE for a discovered effect. Additive
+ * over the causal result — never changes the estimate or adjustment set.
+ * `honesty_label` states the boundary: estimate = synthetic cohort; context =
+ * real, cited. A `static_fallback` source means the live API was unreachable.
+ */
+export interface ClinicalContext {
+  brand: string;
+  drug_name: string;
+  disease: string;
+  /** Our synthetic outcome column this maps from. */
+  our_outcome: string;
+  /** The real pivotal-endpoint framing our synthetic outcome stands in for (null when unmapped). */
+  mapped_endpoint?: string | null;
+  mechanism: MechanismOfAction;
+  pivotal_endpoints: PivotalEndpoint;
+  real_world_evidence?: RealWorldEvidence | null;
+  honesty_label: string;
+}
+
 /** Brands present in a gold-standard dataset's cohort (drives the brand dropdown). */
 export interface CausalBrandsResponse {
   dataset: string;

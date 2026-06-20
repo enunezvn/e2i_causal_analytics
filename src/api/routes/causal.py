@@ -62,6 +62,7 @@ from src.api.schemas.causal import (
     CausalHealthResponse,
     CausalLibrary,
     CausalVariablesResponse,
+    ClinicalContext,
     CrossValidationRequest,
     CrossValidationResponse,
     DiscoveredEffect,
@@ -1103,6 +1104,14 @@ _discover_effects_store: DurableJobStore["DiscoverEffectsResponse"] = DurableJob
 # running both is redundant, so one is skipped to dedupe the leaderboard.
 _COMPLEMENT_OUTCOMES_SKIP = {"discontinued_180d"}
 
+# Clinical Context enrichment service (lazy real REST clients inside; see
+# src/services/clinical_context). Module-level so tests can patch
+# ``causal._clinical_context_service.get_context``. Stateless apart from its
+# in-process per-brand cache.
+from src.services.clinical_context import ClinicalContextService  # noqa: E402
+
+_clinical_context_service = ClinicalContextService()
+
 
 class _CandidateQuestion(NamedTuple):
     treatment: str
@@ -1434,6 +1443,52 @@ async def get_discover_causal_effects(
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown discover-effects job '{job_id}'")
     return job
+
+
+@router.get(
+    "/clinical-context",
+    response_model=ClinicalContext,
+    summary="Brand-faithful, sourced clinical context for a discovered effect",
+    operation_id="get_causal_clinical_context",
+)
+async def get_clinical_context(
+    brand: str = Query(..., description="Brand to enrich (e.g. Kisqali / Fabhalta / Remibrutinib)"),
+    outcome: str = Query(
+        ...,
+        description=(
+            "The synthetic outcome column the effect uses (e.g. persistent_180d); "
+            "mapped to the real pivotal endpoint."
+        ),
+    ),
+    user: Dict[str, Any] = Depends(require_viewer),
+) -> ClinicalContext:
+    """Return the drug + mechanism of action (ChEMBL), the disease's real pivotal
+    endpoints (ClinicalTrials.gov), and a real-world-evidence citation (PubMed)
+    for ``brand``, mapping our synthetic ``outcome`` to the real endpoint framing.
+
+    Additive narrative ONLY — does not touch the causal estimate or its
+    adjustment set. Degrades gracefully (static fallbacks) when an upstream API
+    is down; never fabricates a citation. The payload's ``honesty_label`` states
+    the synthetic-estimate / real-context boundary.
+    """
+    available = await _list_dataset_brands(_DEFAULT_CAUSAL_DATASET)
+    if available and brand not in available:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown brand '{brand}'. Known brands: {available}",
+        )
+    try:
+        # Offload the synchronous httpx fan-out (ChEMBL + CT.gov + PubMed) to a
+        # worker thread so a slow / timing-out / rate-limited upstream cannot block
+        # the event loop (the cold-cache call can take tens of seconds worst case).
+        payload = await asyncio.to_thread(_clinical_context_service.get_context, brand, outcome)
+    except KeyError:
+        # The brand_map has no profile for this brand (no enrichment facts).
+        raise HTTPException(
+            status_code=404,
+            detail=f"No clinical-context profile for brand '{brand}'.",
+        )
+    return ClinicalContext.model_validate(payload)
 
 
 @router.get(
