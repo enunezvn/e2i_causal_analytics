@@ -5,8 +5,9 @@ patched so no live HTTP runs."""
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from src.api.routes import causal as causal_routes
 from src.api.schemas.causal import ClinicalContext
@@ -47,13 +48,20 @@ async def test_endpoint_returns_assembled_context_for_known_brand():
         "our_outcome": "persistent_180d",
         "mapped_endpoint": "Treatment persistence / duration of therapy",
         "mechanism": {"mechanism_of_action": "CDK4/6 inhibitor", "source": "chembl"},
-        "pivotal_endpoints": {"endpoints": ["Overall Survival (OS)"], "source": "clinicaltrials.gov"},
+        "pivotal_endpoints": {
+            "endpoints": ["Overall Survival (OS)"],
+            "source": "clinicaltrials.gov",
+        },
         "real_world_evidence": None,
         "honesty_label": "estimate = synthetic; context = real, cited",
     }
-    with patch.object(causal_routes._clinical_context_service, "get_context", return_value=fake_ctx):
+    with patch.object(
+        causal_routes._clinical_context_service, "get_context", return_value=fake_ctx
+    ):
         with patch.object(
-            causal_routes, "_list_dataset_brands", return_value=["Kisqali", "Fabhalta", "Remibrutinib"]
+            causal_routes,
+            "_list_dataset_brands",
+            return_value=["Kisqali", "Fabhalta", "Remibrutinib"],
         ):
             resp = await causal_routes.get_clinical_context(
                 brand="Kisqali", outcome="persistent_180d", user={"sub": "t"}
@@ -87,12 +95,17 @@ async def test_endpoint_stays_200_when_service_degrades():
         "disease": "Paroxysmal nocturnal hemoglobinuria",
         "our_outcome": "treatment_initiated",
         "mapped_endpoint": "Treatment initiation (complement-inhibitor start/switch)",
-        "mechanism": {"mechanism_of_action": "complement Factor B inhibitor", "source": "static_fallback"},
+        "mechanism": {
+            "mechanism_of_action": "complement Factor B inhibitor",
+            "source": "static_fallback",
+        },
         "pivotal_endpoints": {"endpoints": ["Transfusion avoidance"], "source": "static_fallback"},
         "real_world_evidence": None,
         "honesty_label": "estimate = synthetic; context = real, cited",
     }
-    with patch.object(causal_routes._clinical_context_service, "get_context", return_value=degraded):
+    with patch.object(
+        causal_routes._clinical_context_service, "get_context", return_value=degraded
+    ):
         with patch.object(causal_routes, "_list_dataset_brands", return_value=["Fabhalta"]):
             resp = await causal_routes.get_clinical_context(
                 brand="Fabhalta", outcome="treatment_initiated", user={"sub": "t"}

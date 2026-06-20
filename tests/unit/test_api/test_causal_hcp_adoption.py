@@ -26,7 +26,6 @@ def test_hcp_adoption_spec_registered():
 import math
 from unittest.mock import AsyncMock, patch
 
-import pandas as pd
 from fastapi import HTTPException
 
 from src.api.routes import causal as causal_routes
@@ -128,10 +127,24 @@ async def test_hcp_dataset_enumerates_only_hcp_questions():
     """The HCP dataset must NOT surface patient questions (treatment_arm ->
     persistent_180d) even though they share the causal_paths SSOT."""
     ssot = [
-        {"treatment": "peer_influence_score", "outcome": "adopted", "brand": "Kisqali", "confounders": []},
-        {"treatment": "treatment_arm", "outcome": "adopted", "brand": "Kisqali", "confounders": ["centrality_z"]},
-        {"treatment": "treatment_arm", "outcome": "persistent_180d", "brand": "Kisqali",
-         "confounders": ["disease_severity", "academic_hcp", "geographic_region"]},
+        {
+            "treatment": "peer_influence_score",
+            "outcome": "adopted",
+            "brand": "Kisqali",
+            "confounders": [],
+        },
+        {
+            "treatment": "treatment_arm",
+            "outcome": "adopted",
+            "brand": "Kisqali",
+            "confounders": ["centrality_z"],
+        },
+        {
+            "treatment": "treatment_arm",
+            "outcome": "persistent_180d",
+            "brand": "Kisqali",
+            "confounders": ["disease_severity", "academic_hcp", "geographic_region"],
+        },
     ]
     with patch.object(causal_routes, "_get_causal_path_repo") as mk:
         mk.return_value.get_distinct_questions = AsyncMock(return_value=ssot)
@@ -152,9 +165,18 @@ async def test_hcp_dataset_enumerates_only_hcp_questions():
 async def test_patient_dataset_still_excludes_hcp_questions():
     """Symmetry: the patient dataset must NOT surface the adopted-outcome HCP rows."""
     ssot = [
-        {"treatment": "treatment_arm", "outcome": "treatment_initiated", "brand": "Fabhalta",
-         "confounders": ["disease_severity", "age_at_diagnosis"]},
-        {"treatment": "peer_influence_score", "outcome": "adopted", "brand": "Fabhalta", "confounders": []},
+        {
+            "treatment": "treatment_arm",
+            "outcome": "treatment_initiated",
+            "brand": "Fabhalta",
+            "confounders": ["disease_severity", "age_at_diagnosis"],
+        },
+        {
+            "treatment": "peer_influence_score",
+            "outcome": "adopted",
+            "brand": "Fabhalta",
+            "confounders": [],
+        },
     ]
     with patch.object(causal_routes, "_get_causal_path_repo") as mk:
         mk.return_value.get_distinct_questions = AsyncMock(return_value=ssot)
@@ -207,7 +229,10 @@ async def test_list_causal_variables_hcp_adoption_returns_curated_spec_no_db():
     # columns is the sorted union of all candidate lists for JOIN datasets
     # (no physical table to read column names from).
     assert set(response.columns) == {
-        "peer_influence_score", "treatment_arm", "adopted", "centrality_z"
+        "peer_influence_score",
+        "treatment_arm",
+        "adopted",
+        "centrality_z",
     }
 
 
