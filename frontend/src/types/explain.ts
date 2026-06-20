@@ -243,6 +243,17 @@ export interface ExplainableModelInfo {
   /** Human-readable description emitted by `/api/explain/models`. */
   description?: string;
   /**
+   * Raw covariate names (`keep_columns`) for gold-standard cohort families,
+   * null for legacy types and when BentoML is unavailable (best-effort). SHAP
+   * runs over the ENCODED vector (one-hot `geographic_region_west` + missingness
+   * `disease_severity__isna` columns); these parent names let the UI group those
+   * encoded columns back to the covariate the user thinks in terms of, so a
+   * single covariate no longer reads as many duplicate rows. Emitted by
+   * `/api/explain/models` (src/api/routes/explain.py). Brand-invariant within a
+   * family.
+   */
+  keep_columns?: string[] | null;
+  /**
    * Average latency in milliseconds.
    * Optional: the backend `/api/explain/models` handler does not emit this
    * field (no per-model latency telemetry source) — see src/api/routes/explain.py.

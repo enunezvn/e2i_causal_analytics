@@ -1224,3 +1224,72 @@ class TestSampleEntities:
         assert body["grain"] == "hcp"
         assert body["id_field"] == "hcp_id"
         assert body["entities"] == ["scvhcp_00000"]
+
+
+# Valid members of the ``data_split_type`` enum (database/core/
+# e2i_ml_complete_v3_schema.sql). The durable global-importance cache row writes
+# this column; any value outside this set is rejected by Postgres.
+_VALID_DATA_SPLIT = {"train", "validation", "test", "holdout", "unassigned"}
+
+
+class _CapturingInsertQuery:
+    """Records the dict passed to ``.insert(...)`` (async ``.execute()``)."""
+
+    def __init__(self, sink):
+        self._sink = sink
+
+    def insert(self, record):
+        self._sink["record"] = record
+        return self
+
+    async def execute(self):
+        return SimpleNamespace(data=[self._sink["record"]])
+
+    def table(self, *a, **k):
+        return self
+
+
+class TestGlobalImportanceCachePersists:
+    """Regression: the durable global-importance cache must actually persist.
+
+    ``_store_global_importance_row`` previously wrote ``data_split="synthetic"``,
+    which is NOT a member of the ``data_split_type`` enum, so every INSERT was
+    rejected by Postgres and silently swallowed by the function's broad
+    ``except`` — the cache never persisted and ``/explain/global`` recomputed the
+    full ~25-entity SHAP aggregate (under the heavy-compute slot) on every load.
+    The stored row must use a VALID enum value so the cache works.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stored_row_uses_valid_data_split_enum(self):
+        from src.api.routes.explain import ModelType, _store_global_importance_row
+
+        sink: dict = {}
+
+        async def _fake_client():
+            return _CapturingInsertQuery(sink)
+
+        agg = {
+            "features": [
+                {
+                    "feature_name": "disease_severity",
+                    "mean_abs_shap": 0.77,
+                    "mean_shap": 0.77,
+                    "mean_feature_value": 4.6,
+                    "contribution_rank": 1,
+                }
+            ],
+            "points": {"disease_severity": [(0.7, 5.0), (0.9, 6.0)]},
+            "base_value": -0.91,
+            "sample_size": 5,
+            "computation_method": "LinearExplainer",
+        }
+        with patch("src.memory.services.factories.get_async_supabase_client", new=_fake_client):
+            await _store_global_importance_row("reg-1", ModelType.INITIATION, agg)
+
+        record = sink.get("record")
+        assert record is not None, "no row was inserted (store path broke)"
+        assert record["data_split"] in _VALID_DATA_SPLIT, (
+            f"data_split={record['data_split']!r} is not a valid data_split_type "
+            f"enum member -> Postgres rejects the insert -> cache never persists"
+        )

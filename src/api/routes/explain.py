@@ -15,6 +15,7 @@ Author: E2I Causal Analytics Team
 Version: 4.2.0
 """
 
+import asyncio
 import inspect
 import logging
 import uuid
@@ -1859,6 +1860,58 @@ async def get_explanation_history(
         ) from e
 
 
+async def _keep_columns_for_goldstd_families(
+    service: "RealTimeSHAPService",
+) -> Dict[str, Optional[List[str]]]:
+    """Best-effort ``keep_columns`` (raw covariate names) per gold-standard family.
+
+    SHAP runs over the ENCODED feature vector (one-hot ``geographic_region_west``
+    + missingness ``disease_severity__isna`` columns), so the raw feature list a
+    user thinks in terms of (``geographic_region``, ``disease_severity``) is
+    spread across many encoded columns — the Feature-Importance page then shows
+    "geographic region" 4-5× and an ``X``/``X__isna`` twin, reading as
+    duplicates. Surfacing the model's ``keep_columns`` lets the FE group the
+    encoded columns back to their parent covariate.
+
+    ``keep_columns`` is brand-invariant within a cohort family (every per-brand
+    model shares the cohort's covariate schema — only the one-hot VALUES differ),
+    so we resolve once per family via the default brand's serving name. This is
+    DISPLAY metadata only and fully best-effort: any failure (BentoML down, a
+    legacy/bare-estimator model with no keep_columns) yields ``None`` for that
+    family and the FE falls back to the flat encoded list. The audit-grade
+    ``/predict`` path is untouched.
+    """
+    result: Dict[str, Optional[List[str]]] = {mt.value: None for mt in GOLDSTD_COHORT_MODEL_TYPES}
+    try:
+        await service._ensure_initialized()
+    except Exception as e:  # noqa: BLE001 — display-only enrichment, never load-bearing
+        logger.debug("keep_columns enrichment: service init unavailable: %s", e)
+        return result
+
+    client = service.bentoml_client
+    if client is None:
+        return result
+
+    async def _one(mt: ModelType) -> tuple[str, Optional[List[str]]]:
+        try:
+            serving_name = goldstd_serving_name(mt, _DEFAULT_GOLDSTD_BRAND)
+            info = await client.get_model_info(serving_name)
+            keep = info.get("keep_columns") if isinstance(info, dict) else None
+            if isinstance(keep, list) and keep:
+                return mt.value, [str(c) for c in keep]
+        except Exception as e:  # noqa: BLE001 — per-family best-effort
+            logger.debug("keep_columns enrichment failed for %s: %s", mt.value, e)
+        return mt.value, None
+
+    try:
+        pairs = await asyncio.gather(*[_one(mt) for mt in GOLDSTD_COHORT_MODEL_TYPES])
+        for family, keep in pairs:
+            result[family] = keep
+    except Exception as e:  # noqa: BLE001
+        logger.debug("keep_columns enrichment gather failed: %s", e)
+    return result
+
+
 @router.get(
     "/models",
     summary="List available models for explanation",
@@ -1879,6 +1932,11 @@ async def list_explainable_models() -> Dict[str, Any]:
     # Enrichment is best-effort: if the registry is unreachable, the field
     # is still present but ``None``.
     latest_versions = await _get_latest_versions_by_model_type()
+    # Raw covariate names per gold-standard family (best-effort) so the FE can
+    # group the ENCODED SHAP columns back to their parent covariate (kills the
+    # one-hot / __isna duplication on the Feature-Importance page). None for
+    # legacy types and on any enrichment failure.
+    keep_columns_by_family = await _keep_columns_for_goldstd_families(service)
 
     def _explainer_label(mt: ModelType) -> str:
         # Gold-standard cohorts are CalibratedClassifierCV(LogisticRegression) —
@@ -1901,6 +1959,9 @@ async def list_explainable_models() -> Dict[str, Any]:
                 "latest_version": latest_versions.get(mt.value),
                 "explainer_type": _explainer_label(mt),
                 "is_gold_standard": mt in GOLDSTD_COHORT_MODEL_TYPES,
+                # Raw covariate names (gold-standard families only; None otherwise)
+                # — the FE groups encoded SHAP columns under these parents.
+                "keep_columns": keep_columns_by_family.get(mt.value),
                 "description": f"SHAP explanations for {mt.value.replace('_', ' ')} predictions",
             }
             for mt in ModelType
@@ -2051,7 +2112,16 @@ async def _store_global_importance_row(
         "key_drivers": [f["feature_name"] for f in agg["features"][:5]],
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "entity_type": "hcp" if model_type == ModelType.HCP_ADOPTION else "patient",
-        "data_split": "synthetic",
+        # ``data_split`` is the ``data_split_type`` ENUM
+        # {train,validation,test,holdout,unassigned} (database/core/
+        # e2i_ml_complete_v3_schema.sql). A cohort-aggregate is not a designated
+        # split, so the honest value is ``unassigned``. The previous
+        # ``"synthetic"`` is NOT an enum member -> every INSERT was rejected by
+        # Postgres and swallowed by the except below, so this durable cache never
+        # persisted and /explain/global recomputed the full SHAP aggregate on
+        # every load. (Provenance is already carried by is_synthetic on the
+        # source rows / the model registry, not by this split label.)
+        "data_split": "unassigned",
     }
     record = {k: v for k, v in record.items() if v is not None}
     try:
