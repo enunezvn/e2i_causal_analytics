@@ -151,9 +151,14 @@ class EstimationNode:
         }
         selection_strategy = strategy_map.get(strategy, SelectionStrategy.BEST_ENERGY_SCORE)
 
-        # Get treatment/outcome arrays
-        treatment_col = data.get(treatment, data.iloc[:, 0]).values
-        outcome_col = data.get(outcome, data.iloc[:, 1]).values
+        # Get treatment/outcome arrays. STRICT named access — NO positional
+        # ``data.iloc[:, 0/1]`` fallback (#354 trapdoor #2): a missing column must
+        # raise (caught upstream as a fail-closed EstimationError) rather than
+        # silently estimate over the wrong column. ``execute`` validates presence
+        # before calling this; the strict access is the backstop for any direct
+        # caller so the silent-fallback pattern cannot reappear here.
+        treatment_col = data[treatment].values
+        outcome_col = data[outcome].values
 
         # Get covariates (use adjustment set if available, else all other columns).
         # PROVENANCE_DROP_COLS keeps the is_synthetic tag out of the design matrix: the
@@ -531,6 +536,29 @@ class EstimationNode:
 
             # Get or generate data
             data = self._get_data(state)
+
+            # #354 trapdoor #2 (fail-closed): the graph's treatment/outcome MUST
+            # be columns of the estimation frame. Without this guard,
+            # ``_select_estimator_with_energy_score`` resolves the arrays with
+            # ``data.get(treatment, data.iloc[:, 0])`` / ``data.iloc[:, 1]`` — a
+            # silent POSITIONAL fallback that estimates over the first two columns
+            # and emits a polished ATE over the WRONG variables when the graph's
+            # treatment/outcome diverge from the loaded frame (query-inference, the
+            # graph_builder ``outcome='patient_conversion_rate'`` default, or any
+            # upstream rename). Refuse rather than fabricate a wrong-variable answer.
+            missing_cols = [c for c in (treatment, outcome) if c not in data.columns]
+            if missing_cols:
+                raise EstimationError(
+                    f"Estimation data is missing required column(s) {missing_cols} "
+                    f"(treatment={treatment!r}, outcome={outcome!r}); refusing to fall "
+                    "back to positional columns (silent-wrong over the wrong variables).",
+                    details={
+                        "missing_columns": missing_cols,
+                        "treatment": treatment,
+                        "outcome": outcome,
+                        "available_columns": list(data.columns),
+                    },
+                )
 
             # V4.2: Check if energy score selection should be used
             parameters = state.get("parameters", {})
