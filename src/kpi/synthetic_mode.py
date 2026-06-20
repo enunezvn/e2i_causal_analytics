@@ -39,14 +39,19 @@ _SYNTHETIC_SUFFIX = "_include_synthetic"
 #: ``src/api/routes/copilotkit.py``).
 _TRUTHY = ("1", "true", "yes")
 
-#: The 36 base ``kpi_query_registry`` ids that have an
-#: ``{id}_include_synthetic`` twin, sourced verbatim from
-#: ``database/migrations/066_kpi_query_synthetic_exclusion.sql``. The twins are
-#: the synthetic-taggable statements; everything else in the registry is not
-#: synthetic-gated. This literal is kept in lock-step with the migration by
-#: ``tests/unit/test_kpi/test_synthetic_mode.py`` (it parses 066 and asserts
-#: equality — drift fails CI), so a future twin added by a later migration is a
-#: one-line update guarded by a red test, never a silent miss.
+#: The 37 base ``kpi_query_registry`` ids that have an
+#: ``{id}_include_synthetic`` twin: 36 sourced verbatim from
+#: ``database/migrations/066_kpi_query_synthetic_exclusion.sql`` plus
+#: ``business_impact_patient_touch_rate`` from
+#: ``database/migrations/085_kpi_patient_touch_rate_include_synthetic.sql``
+#: (#1064 — the touch-rate KPI reads a VIEW that migration 067 made
+#: synthetic-excluding, so it was absent from 066's table-wrapping pass and
+#: needed a view-backed twin). The twins are the synthetic-taggable statements;
+#: everything else in the registry is not synthetic-gated. This literal is kept
+#: in lock-step with the migrations by ``tests/unit/test_kpi/test_synthetic_mode.py``
+#: (it parses 066 + 085 and asserts equality — drift fails CI), so a future twin
+#: added by a later migration is a one-line update guarded by a red test, never a
+#: silent miss.
 SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
     {
         "brand_specific_fabhalta_pnh_tested",
@@ -61,6 +66,7 @@ SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
         "business_impact_mau_fallback",
         "business_impact_nbrx",
         "business_impact_nrx",
+        "business_impact_patient_touch_rate",
         "business_impact_roi_agent_activities",
         "business_impact_roi_business_metrics",
         "business_impact_trx",
