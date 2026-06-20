@@ -345,6 +345,8 @@ export const queryKeys = {
       [...queryKeys.monitoring.all(), 'performance', 'confusion', modelId] as const,
     performanceRoc: (modelId: string) =>
       [...queryKeys.monitoring.all(), 'performance', 'roc', modelId] as const,
+    brandSummary: (brand: string) =>
+      [...queryKeys.monitoring.all(), 'performance', 'brand-summary', brand] as const,
     // Retraining
     retrainingStatus: (jobId: string) =>
       [...queryKeys.monitoring.all(), 'retraining', 'status', jobId] as const,
