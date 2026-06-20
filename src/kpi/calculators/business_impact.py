@@ -21,7 +21,7 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
-from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id
+from src.kpi.synthetic_mode import region_query_id, resolve_kpi_query_id, windowed_query_id
 
 
 class BusinessImpactCalculator(KPICalculatorBase):
@@ -118,6 +118,30 @@ class BusinessImpactCalculator(KPICalculatorBase):
     # Region-scoped query id helper shared across calculators (migrations
     # 077/078). Kept as a thin alias so the call sites below stay readable.
     _region_variant = staticmethod(region_query_id)
+
+    def _resolve_windowed_call(
+        self,
+        base_query_id: str,
+        *,
+        brand: str | None,
+        region: str | None,
+        window: dict[str, Any] | None,
+    ) -> tuple[str, list[Any]]:
+        """Compose (query_id, positional params) for a windowable KPI.
+
+        Param order respects the kpi_query 4-param cap:
+          no region:  [brand, start, end]
+          region:     [brand, region, start, end]
+        With no window, falls back to the existing base / _region behavior.
+        """
+        if window is None:
+            if region:
+                return region_query_id(base_query_id), [brand, region]
+            return base_query_id, [brand]
+        qid = windowed_query_id(base_query_id, region=bool(region))
+        if region:
+            return qid, [brand, region, window["start"], window["end"]]
+        return qid, [brand, window["start"], window["end"]]
 
     def _calc_mau(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-001: Monthly Active Users.
