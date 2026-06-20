@@ -52,6 +52,7 @@ import {
 import { KPICard, StatusBadge } from '@/components/visualizations';
 import { WarningBanner } from '@/components/ui/WarningBanner';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { LabelGateBadge } from '@/components/insights/LabelGateBadge';
 import {
   useOpportunities,
   useGapHealth,
@@ -497,9 +498,15 @@ function GapAnalysis() {
 
                       {/* Main Content */}
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
                           <h3 className="font-semibold">{opp.recommended_action}</h3>
                           {getDifficultyBadge(opp.implementation_difficulty)}
+                          <LabelGateBadge
+                            label_verdict={opp.roi_estimate.label_verdict}
+                            off_label={opp.roi_estimate.off_label}
+                            off_label_reason={opp.roi_estimate.off_label_reason}
+                            label_evidence_confirmed={opp.roi_estimate.label_evidence_confirmed}
+                          />
                         </div>
                         <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
                           <span className="flex items-center gap-1">
@@ -669,7 +676,27 @@ function GapAnalysis() {
                         <td className="py-3 px-4">
                           <Badge variant="outline">{opp.gap.metric}</Badge>
                         </td>
-                        <td className="py-3 px-4 text-sm">{opp.gap.segment_value}</td>
+                        <td className="py-3 px-4 text-sm">
+                          <span className="inline-flex flex-wrap items-center gap-1">
+                            {opp.gap.segment_value}
+                            {(opp.roi_estimate.label_verdict === 'off_label' ||
+                              opp.roi_estimate.label_verdict === 'mixed') && (
+                              <Badge
+                                variant="warning"
+                                className="text-xs"
+                                title={
+                                  opp.roi_estimate.off_label_reason
+                                    ? `${opp.roi_estimate.off_label_reason} — de-prioritized in ranking.`
+                                    : 'Off-label — de-prioritized in ranking.'
+                                }
+                              >
+                                {opp.roi_estimate.label_verdict === 'mixed'
+                                  ? 'Partly off-label'
+                                  : 'Off-label'}
+                              </Badge>
+                            )}
+                          </span>
+                        </td>
                         <td className="py-3 px-4 text-right text-rose-500">
                           {opp.gap.gap_percentage.toFixed(1)}%
                         </td>

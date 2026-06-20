@@ -40,6 +40,7 @@ import { KPICard } from '@/components/visualizations';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { WarningBanner } from '@/components/ui/WarningBanner';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { LabelGateBadge } from '@/components/insights/LabelGateBadge';
 import {
   useSegmentHealth,
   useRunSegmentAnalysisAndWait,
@@ -701,6 +702,13 @@ export default function SegmentAnalysis() {
                       <div className="text-xs text-muted-foreground mt-1">
                         Confidence: {(policy.confidence * 100).toFixed(0)}%
                       </div>
+                      <LabelGateBadge
+                        label_verdict={policy.label_verdict}
+                        off_label={policy.off_label}
+                        off_label_reason={policy.off_label_reason}
+                        label_evidence_confirmed={policy.label_evidence_confirmed}
+                        className="mt-2"
+                      />
                     </div>
                   ))}
                 </div>
