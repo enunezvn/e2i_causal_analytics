@@ -21,16 +21,22 @@ from src.kpi.synthetic_mode import (
 
 _FLAG = "E2I_KPI_INCLUDE_SYNTHETIC"
 # tests/unit/test_kpi/test_synthetic_mode.py -> repo root is parents[3].
-_MIGRATION_066 = (
-    Path(__file__).resolve().parents[3]
-    / "database/migrations/066_kpi_query_synthetic_exclusion.sql"
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "database/migrations"
+# Migrations that register `*_include_synthetic` twins. 066 is the original M-family
+# bulk; 085 adds the view-backed WS3-BI-003 patient_touch_rate twin (#1064 — the
+# touch-rate KPI reads a view, so it was absent from 066's table-wrapping pass).
+_TWIN_MIGRATIONS = (
+    _MIGRATIONS_DIR / "066_kpi_query_synthetic_exclusion.sql",
+    _MIGRATIONS_DIR / "085_kpi_patient_touch_rate_include_synthetic.sql",
 )
 
 
 def _twin_bases_from_migration() -> set[str]:
-    """Base query_ids that migration 066 registers an `_include_synthetic` twin for."""
-    text = _MIGRATION_066.read_text()
-    return set(re.findall(r"\('([a-z0-9_]+)_include_synthetic'", text))
+    """Base query_ids that the twin-registering migrations expose an `_include_synthetic` twin for."""
+    bases: set[str] = set()
+    for path in _TWIN_MIGRATIONS:
+        bases |= set(re.findall(r"\('([a-z0-9_]+)_include_synthetic'", path.read_text()))
+    return bases
 
 
 # --- the env flag --------------------------------------------------------------
@@ -83,6 +89,18 @@ def test_resolver_swaps_twinned_when_flag_on(monkeypatch):
     )
 
 
+def test_resolver_swaps_patient_touch_rate_when_flag_on(monkeypatch):
+    """#1064: WS3-BI-003 patient_touch_rate is view-backed (v_patient_eligibility,
+    which migration 067 made synthetic-excluding) and was absent from the 066
+    table-wrapping pass. Its twin (migration 085) must be reachable so the demo
+    cohort (100% is_synthetic) computes instead of returning null."""
+    monkeypatch.setenv(_FLAG, "true")
+    assert (
+        resolve_kpi_query_id("business_impact_patient_touch_rate")
+        == "business_impact_patient_touch_rate_include_synthetic"
+    )
+
+
 def test_resolver_passes_through_twinless_when_flag_on(monkeypatch):
     """A registry id that touches no synthetic-taggable table has no twin and is
     not synthetic-gated -> base id is returned even in demo mode (no 404 twin)."""
@@ -109,10 +127,11 @@ def test_resolver_is_idempotent_on_a_twin_id(monkeypatch):
 # --- drift lock: the hard-coded set must equal migration 066's twin family -----
 
 
-def test_twinned_set_matches_migration_066():
+def test_twinned_set_matches_migrations():
     parsed = _twin_bases_from_migration()
     # Non-vacuous guard on the PARSED set first: a partial/empty regex match
     # would make the equality below pass for the wrong reason, so assert the
-    # migration actually yielded the expected 36 twins before comparing.
-    assert len(parsed) == 36, f"migration 066 parse found {len(parsed)} twins, expected 36"
+    # migrations actually yielded the expected twin count before comparing.
+    # 36 from 066 + 1 (business_impact_patient_touch_rate) from 085 = 37.
+    assert len(parsed) == 37, f"twin-migration parse found {len(parsed)} twins, expected 37"
     assert parsed == SYNTHETIC_TWINNED_QUERY_IDS
