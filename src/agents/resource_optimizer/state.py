@@ -25,8 +25,8 @@ def dedup_extend(existing: List[Any], new: List[Any]) -> List[Any]:
     first-seen order. Works for both ``List[str]`` (warnings) and ``List[Dict]``
     (errors); membership uses ``==`` so structurally-equal dicts dedupe too.
     """
-    merged = list(existing)
-    for item in new:
+    merged = list(existing or [])
+    for item in new or []:
         if item not in merged:
             merged.append(item)
     return merged

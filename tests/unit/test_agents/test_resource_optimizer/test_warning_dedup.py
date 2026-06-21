@@ -39,3 +39,33 @@ async def test_seeded_provenance_warning_is_not_duplicated(state_with_scenarios)
     assert result["warnings"].count(_PROVENANCE) == 1, result["warnings"]
     # And no warning is duplicated.
     assert len(result["warnings"]) == len(set(result["warnings"])), result["warnings"]
+
+
+@pytest.mark.asyncio
+async def test_failed_run_surfaces_real_cause_not_only_provenance():
+    """A graph failure whose cause lives in the `errors` channel must reach the
+    client. OptimizationResponse has no `errors` field, so `_execute_optimization`
+    folds the failure cause into `warnings`; otherwise the FE (which filters out
+    SYNTHETIC DATA provenance) would show a contentless "Unknown error"."""
+    from src.api.routes.resource_optimizer import (
+        RunOptimizationRequest,
+        _execute_optimization,
+    )
+
+    # Empty targets -> the formulator fails -> status=failed with the cause in the
+    # `errors` channel only (error_handler_node never writes `warnings`).
+    req = RunOptimizationRequest(
+        query="Optimize budget",
+        resource_type="budget",
+        allocation_targets=[],
+        objective="maximize_outcome",
+        run_scenarios=False,
+    )
+    resp = await _execute_optimization(
+        req, provenance_warnings=["SYNTHETIC DATA: illustrative dollar values."]
+    )
+
+    assert resp.status == "failed"
+    # A real, actionable cause survives alongside (not replaced by) the provenance.
+    non_provenance = [w for w in resp.warnings if not w.startswith("SYNTHETIC DATA:")]
+    assert non_provenance, resp.warnings

@@ -1194,7 +1194,7 @@ async def _execute_optimization(
         from src.agents.resource_optimizer.graph import (
             build_resource_optimizer_graph as create_resource_optimizer_graph,
         )
-        from src.agents.resource_optimizer.state import ResourceOptimizerState
+        from src.agents.resource_optimizer.state import ResourceOptimizerState, dedup_extend
 
         # Convert request targets to state format
         allocation_targets = [
@@ -1249,6 +1249,23 @@ async def _execute_optimization(
         # Convert agent output to API response
         total_latency = int((time.time() - start_time) * 1000)
 
+        # OptimizationResponse exposes only `warnings`, but the agent records the
+        # real failure cause in the `errors` channel (e.g. formulator validation
+        # via error_handler_node, which sets status=failed without ever touching
+        # `warnings`). On a non-completed run, surface those causes as warnings so
+        # the client renders the actual error instead of a contentless
+        # "Optimization failed: Unknown error". Deduped + order-preserving.
+        response_warnings = list(result.get("warnings", []))
+        if result.get("status") != "completed":
+            error_causes: List[str] = []
+            for err in result.get("errors") or []:
+                if isinstance(err, dict):
+                    msg = err.get("error") or err.get("message")
+                    error_causes.append(str(msg) if msg else str(err))
+                elif err:
+                    error_causes.append(str(err))
+            response_warnings = dedup_extend(response_warnings, error_causes)
+
         return OptimizationResponse(
             optimization_id="",  # Will be set by caller
             status=OptimizationStatus.COMPLETED
@@ -1270,7 +1287,7 @@ async def _execute_optimization(
             formulation_latency_ms=result.get("formulation_latency_ms", 0),
             optimization_latency_ms=result.get("optimization_latency_ms", 0),
             total_latency_ms=total_latency,
-            warnings=result.get("warnings", []),
+            warnings=response_warnings,
         )
 
     except ImportError as e:
