@@ -16,7 +16,10 @@ from __future__ import annotations
 import pytest
 
 from src.ml.synthetic.config import Brand
-from src.ml.synthetic.dgp.recovery_probe import measure_persistence_signal
+from src.ml.synthetic.dgp.recovery_probe import (
+    measure_persistence_signal,
+    recover_ate_and_cate,
+)
 from src.ml.synthetic.generators.base import GeneratorConfig
 from src.ml.synthetic.generators.patient_generator import PatientGenerator
 
@@ -39,3 +42,18 @@ def test_persistence_auc_in_target_band(brand):
 def test_brands_vary():
     aucs = [measure_persistence_signal(_frame(b))["holdout_auc"] for b in Brand]
     assert max(aucs) - min(aucs) > 0.005, f"brands should differ in AUC; got {aucs}"
+
+
+def test_ate_cate_recovery_unchanged_by_drivers():
+    """Invariant gate: the new prognostic drivers are independent of treatment_arm, so
+    the recoverable treatment effect (ATE) + segment heterogeneity (CATE ordering) are
+    preserved end-to-end. Measured (seed=42, n=6000): true_ate 0.171, recovered 0.197,
+    CATE high 0.266 >= med 0.233 >= low 0.093."""
+    df = _frame(Brand.REMIBRUTINIB, n=6000)
+    rec = recover_ate_and_cate(df)
+    true_ate = float(df.attrs["true_ate"])
+    assert abs(rec["linear_dml_ate"] - true_ate) < 0.10, (
+        f"ATE drifted: recovered {rec['linear_dml_ate']:.4f} vs true {true_ate:.4f}"
+    )
+    cate = rec["cate_by_segment_estimate"]
+    assert cate["high_severity"] >= cate["medium_severity"] >= cate["low_severity"], cate
