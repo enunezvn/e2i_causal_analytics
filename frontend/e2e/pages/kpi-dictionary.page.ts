@@ -4,7 +4,7 @@ import { ROUTES } from '../fixtures/test-data'
 
 /**
  * Page Object Model for KPI Dictionary page.
- * Comprehensive reference for all 46 KPIs with definitions, formulas, and thresholds.
+ * Comprehensive reference for all defined KPIs with definitions, formulas, and thresholds.
  */
 export class KPIDictionaryPage extends BasePage {
   readonly url = ROUTES.KPI_DICTIONARY

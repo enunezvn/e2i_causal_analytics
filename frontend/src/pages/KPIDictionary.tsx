@@ -2,7 +2,7 @@
  * KPI Dictionary Page
  * ===================
  *
- * Comprehensive reference for all 46 KPIs in the E2I Causal Analytics system.
+ * Comprehensive reference for all defined KPIs in the E2I Causal Analytics system.
  * Organized by workstream with definitions, formulas, and threshold information.
  *
  * Features:

@@ -107,11 +107,9 @@ export const WS1_MODEL_PERFORMANCE_KPIS: KPITableRow[] = [
     definition: 'Inter-Annotator Agreement measuring label consistency',
     formula: "Cohen's κ or Krippendorff's α",
   },
-  {
-    name: 'Fairness Gap (ΔRecall)',
-    definition: 'Worst-case recall gap across protected or relevant subgroups',
-    formula: 'max_g(Recall_g) - min_g(Recall_g)',
-  },
+  // WS1-MP-008 "Fairness Gap (ΔRecall)" removed in #1073 — decommissioned from the
+  // backend registry/scorer in #1068 (needs protected-group fairness_metrics the
+  // synthetic substrate does not populate), so it has no data path.
 ];
 
 // ============================================================================

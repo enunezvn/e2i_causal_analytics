@@ -66,7 +66,7 @@ const MODEL_PERFORMANCE_THRESHOLDS: ThresholdItem[] = [
   { label: 'ROC-AUC', criteria: 'Green: ≥0.80 | Yellow: 0.70-0.79 | Red: <0.70' },
   { label: 'Feature Drift (PSI)', criteria: 'Green: <0.10 | Yellow: 0.10-0.25 | Red: >0.25' },
   { label: 'Label Quality (IAA)', criteria: 'Green: κ≥0.70 | Yellow: κ=0.50-0.69 | Red: κ<0.50' },
-  { label: 'Fairness Gap', criteria: 'Green: ≤5pp | Yellow: 6-10pp | Red: >10pp' },
+  // 'Fairness Gap' removed in #1073 — WS1-MP-008 decommissioned (no data path).
 ];
 
 const TRIGGER_PERFORMANCE_THRESHOLDS: ThresholdItem[] = [
