@@ -79,6 +79,22 @@ _PATIENT_LABELS: dict[str, str] = {
     "discontinuation": "discontinued_180d",
 }
 _BASE3 = ("disease_severity", "academic_hcp", "geographic_region")
+# T9 (2026-06-21): persistence/discontinuation depend on 7 leakage-safe covariates
+# after the DGP enrichment (insurance access, age, comorbidity burden, prior-therapy
+# lines added as prognostic drivers in cohort_outcomes.py). initiation is unchanged
+# this round (3 covariates); the superseded pooled PERSISTENCE/DISCONTINUATION specs
+# above also stay at 3 (not retrained by run_patient_cohorts).
+_BASE7 = _BASE3 + (
+    "insurance_type",
+    "age_at_diagnosis",
+    "comorbidity_burden",
+    "prior_therapy_lines",
+)
+_PATIENT_COVARIATES: dict[str, tuple[str, ...]] = {
+    "initiation": _BASE3,
+    "persistence": _BASE7,
+    "discontinuation": _BASE7,
+}
 
 
 def make_patient_spec(cohort: str, brand: str) -> CohortSpec:
@@ -98,7 +114,7 @@ def make_patient_spec(cohort: str, brand: str) -> CohortSpec:
         brand=brand,
         label_column=_PATIENT_LABELS[cohort],
         grain="patient",
-        base_covariates=_BASE3,
+        base_covariates=_PATIENT_COVARIATES[cohort],
     )
 
 
