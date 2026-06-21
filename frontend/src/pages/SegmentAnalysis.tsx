@@ -528,7 +528,7 @@ export default function SegmentAnalysis() {
 
   // API hooks
   const { data: healthData, isLoading: healthLoading, error: healthError, refetch: refetchHealth, isRefetching: isRefetchingHealth } = useSegmentHealth();
-  const { data: datasets } = useSegmentDatasets();
+  const { data: datasets, isError: datasetsError } = useSegmentDatasets();
   const { data: _policiesData, error: policiesError } = usePolicies({ limit: 10 });
   const onMutationError = useMutationError({ context: 'running segment analysis' });
   // Use the polling variant: async_mode=true returns a PENDING stub first and
@@ -579,6 +579,12 @@ export default function SegmentAnalysis() {
         treatment_var: selectedTreatment,
         outcome_var: selectedOutcome,
       },
+      // The backend persists a DURABLE analysis record — the run completes
+      // server-side even if the FE stops polling. All-brands runs scan the full
+      // gold-standard cohort (~90s+); single-brand ~30s. The old 120s default
+      // raced the all-brands run and threw "timed out" on an analysis that had
+      // actually completed, so give the poll a generous, brand-scaled ceiling.
+      maxWaitMs: brandArg ? 150_000 : 300_000,
     });
   };
 
@@ -709,6 +715,21 @@ export default function SegmentAnalysis() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* When GET /segments/datasets fails, the dropdowns fall back to a
+              single curated default each (and an empty brand list). Surface
+              that honestly instead of letting the single defaults masquerade
+              as the full, data-driven option set. */}
+          {datasetsError && (
+            <div
+              data-testid="datasets-degraded-notice"
+              role="status"
+              className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+            >
+              Couldn&apos;t load the full analysis options from the segment
+              service — showing defaults. Brand, treatment, and outcome choices
+              may be incomplete.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
               <label htmlFor="brand-select" className="text-sm font-medium mb-2 block">Brand cohort</label>
