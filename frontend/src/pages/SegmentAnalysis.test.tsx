@@ -355,3 +355,48 @@ describe('SegmentAnalysis — agent-driven config request', () => {
     expect(req).not.toHaveProperty('filters');
   });
 });
+
+describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
+  it('runs with a poll ceiling above the old 120s default (durable record; no premature timeout)', () => {
+    primeBaseHooks();
+    const mutate = vi.fn();
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate,
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: /Run Analysis/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const arg = mutate.mock.calls[0][0] as { maxWaitMs?: number };
+    // All-brands runs scan the full cohort (~90s+); the old 120s FE cap raced a
+    // still-running, server-side-durable analysis and threw "timed out" on a run
+    // that actually completed. The page must give the poll a generous ceiling.
+    expect(arg.maxWaitMs).toBeGreaterThan(120000);
+  });
+
+  it('surfaces a degraded-options notice when GET /segments/datasets fails (no silent single-defaults)', () => {
+    primeBaseHooks();
+    // /datasets errors -> the page must NOT silently masquerade the single curated
+    // defaults as the full option set; it must tell the user options are incomplete.
+    mockHook(useSegmentDatasets).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error('segment service unavailable'),
+    });
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    expect(screen.getByTestId('datasets-degraded-notice')).toBeInTheDocument();
+  });
+});

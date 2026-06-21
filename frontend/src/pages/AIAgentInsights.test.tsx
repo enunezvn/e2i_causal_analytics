@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactElement, ReactNode } from 'react';
@@ -35,7 +36,9 @@ vi.mock('@/components/insights', () => ({
   ExecutiveAIBrief: ({ brand }: { brand?: string }) => (
     <div data-testid="executive-ai-brief">brand:{brand ?? '__none__'}</div>
   ),
-  PriorityActionsROI: () => <div data-testid="priority-actions-roi" />,
+  PriorityActionsROI: ({ brand }: { brand?: string }) => (
+    <div data-testid="priority-actions-roi">brand:{brand ?? '__none__'}</div>
+  ),
   PredictiveAlerts: () => <div data-testid="predictive-alerts" />,
   ActiveCausalChains: () => <div data-testid="active-causal-chains" />,
   ExperimentRecommendations: () => <div data-testid="experiment-recommendations" />,
@@ -313,5 +316,76 @@ describe('AIAgentInsights', () => {
         vi.doUnmock('@/providers/E2ICopilotProvider');
       });
     }
+  });
+
+  describe('Brand selector (T3)', () => {
+    it('renders a brand selector in the header', () => {
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.getByRole('combobox', { name: /brand/i })).toBeInTheDocument();
+    });
+
+    it('routes a chosen brand to BOTH the executive brief and priority actions', async () => {
+      const user = userEvent.setup();
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      await user.click(screen.getByRole('combobox', { name: /brand/i }));
+      await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Kisqali');
+      expect(screen.getByTestId('priority-actions-roi')).toHaveTextContent('brand:Kisqali');
+    });
+
+    it('"All brands" hands undefined to the children (component default kicks in)', async () => {
+      const user = userEvent.setup();
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      await user.click(screen.getByRole('combobox', { name: /brand/i }));
+      await user.click(await screen.findByRole('option', { name: /all brands/i }));
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:__none__');
+      expect(screen.getByTestId('priority-actions-roi')).toHaveTextContent('brand:__none__');
+    });
+
+    it('stays reactive to a post-mount context brand change (no snapshot regression)', () => {
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({
+        filters: { brand: 'Fabhalta' },
+      });
+      const { rerender } = render(<AIAgentInsights />, {
+        wrapper: createWrapperWithUrl('/ai-insights'),
+      });
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Fabhalta');
+
+      // The dashboard filter context changes (global filter / copilot) while the
+      // page is mounted and the user has NOT used the local selector -> the page
+      // must follow it (the brand is derived, not snapshotted into state).
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({
+        filters: { brand: 'Kisqali' },
+      });
+      rerender(<AIAgentInsights />);
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Kisqali');
+    });
+
+    it('a local selection overrides the ?brand= URL value', async () => {
+      const user = userEvent.setup();
+      render(<AIAgentInsights />, {
+        wrapper: createWrapperWithUrl('/ai-insights?brand=Fabhalta'),
+      });
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Fabhalta');
+      await user.click(screen.getByRole('combobox', { name: /brand/i }));
+      await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Kisqali');
+    });
+
+    it('falls back to "All brands" (undefined) when neither URL nor context set a brand', () => {
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({ filters: undefined });
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:__none__');
+    });
+
+    it('coerces an unknown ?brand= to "All brands" (never routes an invisible brand)', () => {
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({ filters: undefined });
+      render(<AIAgentInsights />, {
+        wrapper: createWrapperWithUrl('/ai-insights?brand=NotARealBrand'),
+      });
+      // The unknown brand is NOT forwarded to the children's API/RAG calls.
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:__none__');
+      expect(screen.getByTestId('priority-actions-roi')).toHaveTextContent('brand:__none__');
+    });
   });
 });
