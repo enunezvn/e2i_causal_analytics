@@ -309,6 +309,8 @@ export interface DiscoveredEffect {
   summary?: string | null;
   /** GET /causal/agent-analyze/{id} for the full DAG + refutation */
   analysis_id?: string | null;
+  /** Brand-faithful clinical context for this effect row (populated when available). */
+  clinical_context?: ClinicalContext | null;
 }
 
 /** Async discover-effects job: the agent's validated effects, ranked. */
@@ -351,6 +353,23 @@ export interface RealWorldEvidence {
   source: string;
 }
 
+/** FDA-approved indications from the drug label (openFDA) or a curated fallback. */
+export interface ApprovedIndications {
+  indications: string[];
+  limitations_of_use: string | null;
+  boxed_warning: string | null;
+  /** openfda | static_fallback */
+  source: string;
+}
+
+/** Competitive market landscape for this drug (curated). */
+export interface CompetitorLandscape {
+  competitors: string[];
+  count: number;
+  /** curated */
+  source: string;
+}
+
 /**
  * Brand-faithful, sourced clinical NARRATIVE for a discovered effect. Additive
  * over the causal result — never changes the estimate or adjustment set.
@@ -368,6 +387,10 @@ export interface ClinicalContext {
   mechanism: MechanismOfAction;
   pivotal_endpoints: PivotalEndpoint;
   real_world_evidence?: RealWorldEvidence | null;
+  /** FDA-approved indications from the drug label (openFDA | static_fallback). */
+  approved_indications?: ApprovedIndications | null;
+  /** Competitive market landscape (curated). */
+  competitor_landscape?: CompetitorLandscape | null;
   honesty_label: string;
 }
 

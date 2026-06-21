@@ -634,3 +634,124 @@ describe('FeatureImportance — covariate grouping (encoded → raw covariate)',
     });
   });
 });
+
+// =============================================================================
+// STRATEGIC INSIGHT + HONEST LABELS (review 2026-06-20)
+// =============================================================================
+//
+// User review: "n=25 hard to believe", "9 features but Rankings=3 — oversimplified",
+// "beeswarm vertical groupings — normal?", "no strategic insight interpretation".
+// The model genuinely uses 3 empirically-locked covariates → SHAP over 9 encoded
+// columns. These tests pin: (1) n labeled as a SAMPLE not cohort size, (2) the
+// encoded↔covariate counts reconciled, (3) the beeswarm vertical-band note made
+// always-visible, (4) a rule-based Strategic Interpretation panel.
+
+describe('FeatureImportance — strategic insight + honest labels', () => {
+  // keep_columns present → encoded columns group to raw covariates.
+  const keepModels = {
+    supported_models: [
+      {
+        model_type: 'initiation',
+        latest_version: '1.0',
+        explainer_type: 'LinearExplainer' as const,
+        is_gold_standard: true,
+        keep_columns: ['disease_severity', 'academic_hcp', 'geographic_region'],
+      },
+    ],
+    total_models: 1,
+  };
+
+  // 5 ENCODED features → 3 raw covariates (disease_severity{+__isna}, geographic_region{2}, academic_hcp).
+  const richGlobal = {
+    ...mockGlobal,
+    sample_size: 25,
+    requested_sample_size: 25,
+    features: [
+      { feature_name: 'disease_severity', mean_abs_shap: 0.8, mean_shap: 0.8, mean_feature_value: 5.0, contribution_rank: 1 },
+      { feature_name: 'academic_hcp', mean_abs_shap: 0.09, mean_shap: 0.09, mean_feature_value: 0.5, contribution_rank: 2 },
+      { feature_name: 'geographic_region_west', mean_abs_shap: 0.06, mean_shap: -0.06, mean_feature_value: 0.4, contribution_rank: 3 },
+      { feature_name: 'geographic_region_northeast', mean_abs_shap: 0.05, mean_shap: -0.05, mean_feature_value: 0.3, contribution_rank: 4 },
+      { feature_name: 'disease_severity__isna', mean_abs_shap: 0, mean_shap: 0, mean_feature_value: 0, contribution_rank: 5 },
+    ],
+  };
+
+  beforeEach(() => {
+    (useExplainableModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: keepModels,
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+    (useGlobalFeatureImportance as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: richGlobal,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+  });
+
+  it('labels n as a SAMPLE of the cohort, not the cohort size', () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    expect(screen.getByText(/25 sampled patients/i)).toBeInTheDocument();
+  });
+
+  it('reconciles encoded↔covariate counts so 9-vs-3 is not contradictory', () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    // 5 encoded features fold to 3 covariates → "3 covariates · 5 encoded".
+    expect(screen.getByText(/covariates.*encoded/i)).toBeInTheDocument();
+  });
+
+  it('shows an always-visible note explaining the beeswarm vertical bands (no tab switch)', () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    expect(screen.getByText(/vertical bands/i)).toBeInTheDocument();
+  });
+
+  it('renders a Strategic Interpretation panel naming the dominant driver', () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Strategic Interpretation/i)).toBeInTheDocument();
+    expect(screen.getByText(/dominant driver/i)).toBeInTheDocument();
+    // disease_severity dominates (0.80 of ~1.0 total importance)
+    expect(screen.getAllByText(/disease severity/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('surfaces the empirically-locked, leakage-safe feature-set provenance (honest, no live metric)', () => {
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    expect(screen.getByText(/leakage-safe|empirically/i)).toBeInTheDocument();
+  });
+
+  it('keeps the summary count + Strategic Interpretation on the FULL cohort when the rankings list is searched', async () => {
+    // Regression for the codex HIGH: the search box filters the Feature Rankings
+    // LIST only — it must NOT recompute the cohort-level summary count or the
+    // dominant-driver interpretation against the filtered subset.
+    const user = userEvent.setup();
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    // baseline: 5 encoded features fold to 3 covariates
+    expect(screen.getByText(/3 covariates.*encoded/i)).toBeInTheDocument();
+
+    // filter the rankings list down to region only
+    await user.type(screen.getByPlaceholderText(/search features/i), 'region');
+
+    // summary count stays on the FULL cohort (3 covariates), not the filtered 1
+    await waitFor(() => {
+      expect(screen.getByText(/3 covariates.*encoded/i)).toBeInTheDocument();
+    });
+    // and the interpretation still names the TRUE dominant driver (disease
+    // severity), not the searched subset (geographic region)
+    expect(screen.getByText(/disease severity is the dominant driver/i)).toBeInTheDocument();
+  });
+
+  it('keeps the Strategic Interpretation panel out of the DOM when there is no cohort data', () => {
+    (useGlobalFeatureImportance as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<FeatureImportance />, { wrapper: createWrapper() });
+    expect(screen.queryByText(/Strategic Interpretation/i)).not.toBeInTheDocument();
+  });
+});

@@ -136,15 +136,28 @@ class SegmentAnalyzerNode:
                 all_segments, ate, total_size, "low", self.low_responder_threshold
             )[:top_count]
 
+            # Mid responders: the band STRICTLY between the low and high
+            # thresholds (0.5x|ATE| < |CATE| < 1.5x|ATE|). Computed only in the
+            # NORMAL path below; when the fallback fires (no strict high/low),
+            # every segment is in-band and the fallback splits them into high/low
+            # halves, so emitting them as mid too would double-count.
+            mid_responders: List[SegmentProfile] = []
+
             # Fallback: if strict thresholds yield empty responders, use
             # percentile-based classification (top/bottom by effect ratio).
             if not high_responders and not low_responders and all_segments and abs(ate) > 1e-6:
                 high_responders, low_responders = self._fallback_classify(
                     all_segments, ate, total_size, top_count
                 )
+            else:
+                mid_responders = self._identify_mid_responders(all_segments, ate, total_size)[
+                    :top_count
+                ]
 
             # Create segment comparison
-            comparison = self._create_comparison(high_responders, low_responders, ate)
+            comparison = self._create_comparison(
+                high_responders, low_responders, ate, mid_responders
+            )
 
             analysis_time = int((time.time() - start_time) * 1000)
 
@@ -169,6 +182,7 @@ class SegmentAnalyzerNode:
             output_state: Dict[str, Any] = {
                 **state,
                 "high_responders": high_responders,
+                "mid_responders": mid_responders,
                 "low_responders": low_responders,
                 "segment_comparison": comparison,
                 "analysis_latency_ms": analysis_time,
@@ -275,6 +289,62 @@ class SegmentAnalyzerNode:
 
         return profiles
 
+    def _identify_mid_responders(
+        self,
+        all_segments: List[Dict],
+        ate: float,
+        total_size: int,
+    ) -> List[SegmentProfile]:
+        """Identify mid ("average") responder segments.
+
+        A mid responder is a segment whose effect magnitude sits STRICTLY between
+        the low and high thresholds: 0.5x|ATE| < |CATE| < 1.5x|ATE|. This is the
+        band the page never surfaced — segments that are neither clear high nor
+        clear low responders, but are still real, near-average segments worth
+        showing (and worth NOT reallocating). responder_type="average".
+
+        Mirrors ``_identify_responders`` (same profile shape, |ATE|>1e-6 guard,
+        size-percentage), differing only in the two-sided band test.
+        """
+        profiles = []
+
+        for seg in all_segments:
+            result = seg["result"]
+            cate = result["cate_estimate"]
+
+            if abs(ate) < 1e-6:
+                continue
+
+            qualifies = (
+                abs(ate) * self.low_responder_threshold
+                < abs(cate)
+                < abs(ate) * self.high_responder_threshold
+            )
+            if not qualifies:
+                continue
+
+            profile = SegmentProfile(
+                segment_id=f"{seg['segment_var']}_{result['segment_value']}",
+                responder_type="average",  # type: ignore[typeddict-item]
+                cate_estimate=cate,
+                defining_features=[
+                    {
+                        "variable": seg["segment_var"],
+                        "value": result["segment_value"],
+                        "effect_size": cate / ate if ate != 0 else 0,
+                    }
+                ],
+                size=result["sample_size"],
+                size_percentage=result["sample_size"] / total_size * 100 if total_size > 0 else 0,
+                recommendation=self._generate_recommendation(seg["segment_var"], result, "average"),
+            )
+            profiles.append(profile)
+
+        # Closest-to-average first (smallest deviation of effect ratio from 1.0).
+        profiles.sort(key=lambda x: abs(abs(x["cate_estimate"] / ate) - 1.0) if ate != 0 else 0.0)
+
+        return profiles
+
     def _fallback_classify(
         self,
         all_segments: List[Dict],
@@ -357,6 +427,8 @@ class SegmentAnalyzerNode:
 
         if responder_type == "high":
             return f"Prioritize treatment for {segment_var}={segment_value} (CATE: {cate:.3f}). High response expected."
+        elif responder_type == "average":
+            return f"Maintain current targeting for {segment_var}={segment_value} (CATE: {cate:.3f}). Near-average response — monitor, no reallocation indicated."
         else:
             return f"De-prioritize treatment for {segment_var}={segment_value} (CATE: {cate:.3f}). Consider alternative interventions."
 
@@ -365,17 +437,22 @@ class SegmentAnalyzerNode:
         high_responders: List[SegmentProfile],
         low_responders: List[SegmentProfile],
         ate: float,
+        mid_responders: Optional[List[SegmentProfile]] = None,
     ) -> Dict[str, Any]:
-        """Create comparison summary between high and low responders.
+        """Create comparison summary between high, mid and low responders.
 
         Args:
             high_responders: High responder segments
             low_responders: Low responder segments
             ate: Overall ATE
+            mid_responders: Mid ("average") responder segments (optional; counted
+                so downstream narratives reflect three buckets, not two)
 
         Returns:
             Comparison dictionary
         """
+
+        mid_responders = mid_responders or []
 
         high_avg_cate = (
             sum(h["cate_estimate"] for h in high_responders) / len(high_responders)
@@ -387,13 +464,20 @@ class SegmentAnalyzerNode:
             if low_responders
             else 0
         )
+        mid_avg_cate = (
+            sum(m["cate_estimate"] for m in mid_responders) / len(mid_responders)
+            if mid_responders
+            else 0
+        )
 
         return {
             "overall_ate": ate,
             "high_responder_avg_cate": high_avg_cate,
+            "mid_responder_avg_cate": mid_avg_cate,
             "low_responder_avg_cate": low_avg_cate,
             "effect_ratio": high_avg_cate / low_avg_cate if low_avg_cate != 0 else float("inf"),
             "high_responder_count": len(high_responders),
+            "mid_responder_count": len(mid_responders),
             "low_responder_count": len(low_responders),
         }
 

@@ -53,6 +53,15 @@ class PolicyRecommendation(TypedDict):
     recommended_treatment_rate: float
     expected_incremental_outcome: float
     confidence: float
+    # === LABEL-GATER (NotRequired so existing constructors are unaffected) ===
+    # off_label True => the segment provably violates a LABEL-EVIDENCED inclusion
+    # criterion -> de-prioritized below on-label segments (rank demotion only; the
+    # expected_incremental_outcome value is NOT tampered with). label_verdict carries
+    # the full trichotomy (on_label|off_label|mixed|indeterminate) for surfacing.
+    off_label: NotRequired[bool]
+    off_label_reason: NotRequired[str]
+    label_verdict: NotRequired[str]
+    label_evidence_confirmed: NotRequired[bool]
 
 
 class HeterogeneousOptimizerState(TypedDict):
@@ -123,8 +132,14 @@ class HeterogeneousOptimizerState(TypedDict):
     hierarchical_estimator_type: Optional[str]  # "causal_forest", "linear_dml", etc.
     hierarchical_latency_ms: Optional[int]  # Hierarchical analysis latency
 
-    # === SEGMENT DISCOVERY OUTPUTS (3 fields) ===
+    # === SEGMENT DISCOVERY OUTPUTS (4 fields) ===
     high_responders: Optional[List[SegmentProfile]]
+    # mid_responders: segments whose |CATE| sits strictly between the low and
+    # high thresholds (responder_type="average"). Previously this band was
+    # computed-then-discarded — only high/low were surfaced — so a near-average
+    # segment was invisible on the page. Optional/NotRequired by convention: when
+    # no segment qualifies the node emits [] (legacy two-bucket callers unaffected).
+    mid_responders: Optional[List[SegmentProfile]]
     low_responders: Optional[List[SegmentProfile]]
     segment_comparison: Optional[Dict[str, Any]]
 
@@ -165,6 +180,21 @@ class HeterogeneousOptimizerState(TypedDict):
     session_id: Optional[str]  # Session ID for memory operations
     working_memory_context: Optional[Dict[str, Any]]  # Context from working memory
     episodic_context: Optional[List[Dict[str, Any]]]  # Similar past analyses
+
+    # === LABEL-GATER ===
+    # Brand for indicated-population (FDA-label) lookup. HeterogeneousOptimizerInput
+    # already carries `brand` (for memory/tracking) but it was dropped from state;
+    # the label-gater needs it in state to resolve the brand's label criteria and
+    # flag/de-prioritize off-label segments. NotRequired so existing constructors
+    # (tests, tier0 passthrough) that omit it still type-check.
+    brand: NotRequired[str]
+    # Indication scope for the label lookup (codex HIGH#2 — Fabhalta must not silently
+    # default to PNH). Resolved from the loaded frame's diagnosis when absent.
+    indication: NotRequired[str]
+    # Opt-in (codex HIGH#3 / MED#5): when true, cate_estimator augments segment_vars
+    # with the brand's label-relevant variant columns AND policy_learner runs the gate.
+    # Default off => existing behaviour 100% unchanged.
+    label_segmentation: NotRequired[bool]
 
     # ========================================================================
     # B7.4: Multi-Library Support (EconML + CausalML Cross-Validation)

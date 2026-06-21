@@ -10,6 +10,8 @@ agent-only and unavailable to the FastAPI backend.
     -> primary outcome measures (the disease's pivotal endpoints).
   - PubMed E-utilities (https://eutils.ncbi.nlm.nih.gov/entrez/eutils): esearch
     -> top PMID; esummary -> title/journal/DOI (a real-world-evidence citation).
+  - OpenFDA drug label API (https://api.fda.gov/drug/label.json): drug labeling
+    -> approved indications, limitations of use, boxed warning.
 
 Both surface a SINGLE error class per source; transport / HTTP / JSON failures
 all raise it so the service layer can degrade per-provider on one except clause.
@@ -18,6 +20,8 @@ all raise it so the service layer can degrade per-provider on one except clause.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, List, Optional
@@ -28,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 CLINICAL_TRIALS_BASE: str = "https://clinicaltrials.gov/api/v2"
 PUBMED_BASE: str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+OPENFDA_BASE: str = "https://api.fda.gov/drug"
 # Short default timeout: enrichment is best-effort and must not hold the request
 # open. The service layer treats a timeout as "degrade to static fallback".
 DEFAULT_TIMEOUT: float = 8.0
@@ -40,6 +45,10 @@ class ClinicalTrialsError(Exception):
 
 class PubMedError(Exception):
     """PubMed E-utilities request failed (transport, HTTP, or JSON)."""
+
+
+class OpenFDAError(Exception):
+    """OpenFDA drug label request failed (transport, HTTP, or JSON)."""
 
 
 @dataclass(frozen=True)
@@ -236,6 +245,248 @@ class PubMedClient:
         if not pmid:
             return None
         return self._esummary(pmid)
+
+
+# Marker used to split indications text at the Limitations of Use section.
+_LOU_PATTERN: re.Pattern[str] = re.compile(r"Limitations of Use", re.IGNORECASE)
+# Header prefix present in every indications_and_usage field.
+_INDICATIONS_HEADER: re.Pattern[str] = re.compile(
+    r"^1\s+INDICATIONS?\s+AND\s+USAGE\s*", re.IGNORECASE
+)
+# Sentence splitter that keeps each sentence's terminating punctuation. Used to
+# bound the Limitations-of-Use clause (issue #1056).
+_SENTENCE_RE: re.Pattern[str] = re.compile(r"[^.!?]*[.!?]|[^.!?]+$")
+# A full-text subsection header like "1.1 Early Breast Cancer" — ends the clause.
+_SUBSECTION_RE: re.Pattern[str] = re.compile(r"\b\d+\.\d+\s+[A-Z]")
+# A trailing Highlights reference tag like "( 1 )" / "( 1.1 )" to drop.
+_TRAILING_REF_TAG_RE: re.Pattern[str] = re.compile(r"\s*\(\s*\d+(?:\.\d+)?\s*\)\s*$")
+# Word-bounded negation / restriction cues that mark a sentence as a LIMITATION
+# (so it is KEPT). A duplicated POSITIVE indication carries none of these, which
+# is how the clause boundary is told apart from a multi-sentence limitation like
+# "... is indicated only after failure of therapy A and not for first-line use".
+_LIMITATION_CUE_RE: re.Pattern[str] = re.compile(
+    r"\bnot\b|\bonly\b|\bshould\b|\blimited\b|contraindicat", re.IGNORECASE
+)
+
+
+class _OpenFDAClient:
+    """Synchronous OpenFDA drug label API client.
+
+    Fetches FDA therapy-label records from ``/drug/label.json`` and exposes
+    three static extraction helpers (approved_indications, limitations_of_use,
+    boxed_warning). The ``client=`` parameter accepts an ``httpx.Client`` for
+    ``httpx.MockTransport``-based testing — same pattern as the other clients
+    in this module.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        timeout: float = 30.0,
+        *,
+        client: Optional[httpx.Client] = None,
+    ) -> None:
+        # Read from env if not provided — never log the key.
+        self._api_key: Optional[str] = (
+            api_key if api_key is not None else os.environ.get("OPENFDA_API_KEY")
+        )
+        self._client = client if client is not None else httpx.Client(timeout=timeout)
+        self._owns_client = client is None
+
+    def __enter__(self) -> "_OpenFDAClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def fetch_label(self, drug_name: str) -> Optional[dict[str, Any]]:
+        """Fetch the FDA drug label for ``drug_name``.
+
+        Searches by ``openfda.generic_name`` first, with a single retry using
+        ``openfda.brand_name`` when the generic search returns empty results.
+
+        Preference order within results:
+        1. The first record whose ``openfda.generic_name`` equals
+           ``[drug_name]`` exactly (lowercased) — avoids combination products
+           like "letrozole and ribociclib".
+        2. The first result if no single-ingredient match is found.
+
+        Returns ``None`` on HTTP 404, empty results, or any exception.
+        """
+        result = self._fetch_by_field("openfda.generic_name", drug_name)
+        if result is None:
+            # 404 or exception — do not retry.
+            return None
+        if result:
+            return result
+        # Empty results (sentinel `{}`) — retry with brand_name.
+        brand_result = self._fetch_by_field("openfda.brand_name", drug_name)
+        # Treat a sentinel `{}` (empty brand results) or None as a final miss.
+        return brand_result if brand_result else None
+
+    def _fetch_by_field(self, field: str, drug_name: str) -> Optional[dict[str, Any]]:
+        """GET /drug/label.json searching by ``field``.
+
+        Returns the best matching record dict, an empty dict sentinel when
+        results are genuinely empty, or ``None`` on 404 / exception.
+        """
+        params: dict[str, Any] = {
+            "search": f'{field}:"{drug_name}"',
+            "limit": 5,
+        }
+        if self._api_key:
+            params["api_key"] = self._api_key
+        try:
+            response = self._client.get(f"{OPENFDA_BASE}/label.json", params=params)
+        except Exception as exc:
+            logger.debug("OpenFDA transport error for %r: %s", drug_name, exc)
+            return None
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            logger.debug(
+                "OpenFDA HTTP %d for %r: %s",
+                response.status_code,
+                drug_name,
+                response.text[:200],
+            )
+            return None
+        try:
+            payload: dict[str, Any] = response.json()
+        except Exception as exc:
+            logger.debug("OpenFDA non-JSON body for %r: %s", drug_name, exc)
+            return None
+        results: list[dict[str, Any]] = payload.get("results") or []
+        if not results:
+            # Sentinel: empty results (not an error) — caller may retry.
+            return {}
+        return self._pick_best(results, drug_name)
+
+    @staticmethod
+    def _pick_best(results: list[dict[str, Any]], drug_name: str) -> dict[str, Any]:
+        """Return the first record whose generic_name is a single-element list
+        matching ``drug_name`` exactly (lowercased), else the first result."""
+        target = drug_name.lower()
+        for record in results:
+            names: Any = record.get("openfda", {}).get("generic_name")
+            if isinstance(names, list) and len(names) == 1 and names[0].lower() == target:
+                return record
+        return results[0]
+
+    @staticmethod
+    def approved_indications(label: dict[str, Any]) -> list[str]:
+        """Extract approved indication bullet(s) from ``label``.
+
+        Strips the "1 INDICATIONS AND USAGE" header and discards everything
+        from the first "Limitations of Use" marker onward. Best-effort split
+        on newlines / semicolons.
+
+        Returns ``[]`` when the field is absent.
+        """
+        raw_list: Any = label.get("indications_and_usage")
+        if not raw_list or not isinstance(raw_list, list):
+            return []
+        text: str = raw_list[0]
+        if not isinstance(text, str) or not text:
+            return []
+        # Strip the section header.
+        text = _INDICATIONS_HEADER.sub("", text).strip()
+        # Truncate at Limitations of Use.
+        m = _LOU_PATTERN.search(text)
+        if m:
+            text = text[: m.start()].strip()
+        if not text:
+            return []
+        # Split on newlines or semicolons, drop empty fragments.
+        parts = [p.strip() for p in re.split(r"\n|;", text) if p.strip()]
+        return parts if parts else [text]
+
+    @staticmethod
+    def limitations_of_use(label: dict[str, Any]) -> Optional[str]:
+        """Return the bounded "Limitations of Use" clause from ``label``, or ``None``.
+
+        The OpenFDA ``indications_and_usage`` field frequently CONCATENATES the
+        Highlights summary and the full-text section, so the "Limitations of Use"
+        marker can appear twice and a repeated indication block can follow the
+        first one. Taking everything from the first marker to the end therefore
+        over-grabs trailing indication text (issue #1056). Instead, keep only the
+        leading run of *limitation* sentences and stop at the first boundary:
+
+          * a POSITIVE indication restart — a sentence that asserts an indication
+            (contains ``indicated``) with no negation / restriction cue (the
+            duplicated indication block; a limitation such as ``is not indicated``
+            or ``indicated only ... not for`` carries a cue and is kept);
+          * a DUPLICATED ``Limitations of Use`` marker;
+          * a full-text subsection header like ``1.1 Title``.
+
+        A trailing Highlights reference tag (``( 1 )``) is then dropped. Returns
+        ``None`` when there is no marker (fail-open contract unchanged).
+        """
+        raw_list: Any = label.get("indications_and_usage")
+        if not raw_list or not isinstance(raw_list, list):
+            return None
+        text: Any = raw_list[0]
+        if not isinstance(text, str):
+            return None
+        m = _LOU_PATTERN.search(text)
+        if not m:
+            return None
+
+        after = text[m.end() :]  # everything after the first marker phrase
+        boundaries: list[int] = []
+
+        # First positive-indication sentence = the duplicated indication restart.
+        # The sentence immediately after the marker is ALWAYS the limitation, so
+        # only sentences past it (start > 0) can be a boundary. A boundary asserts
+        # an indication WITHOUT any negation / restriction cue; a limitation that
+        # happens to use the word "indicated" (e.g. "indicated only ... not for")
+        # carries a cue and is therefore kept, not truncated. This biases an
+        # ambiguous duplicated indication (e.g. "indicated only for adults")
+        # toward being KEPT — i.e. toward a verbose over-grab (the original,
+        # cosmetic issue) rather than silently DROPPING a real safety limitation,
+        # which is the worse failure. The dup-marker / subsection boundaries below
+        # still bound the common structured cases.
+        for sentence in _SENTENCE_RE.finditer(after):
+            if sentence.start() == 0:
+                continue
+            phrase = sentence.group()
+            if "indicated" in phrase.lower() and not _LIMITATION_CUE_RE.search(phrase):
+                boundaries.append(sentence.start())
+                break
+
+        # A duplicated Limitations-of-Use marker (the Highlights/full-text copy).
+        dup = _LOU_PATTERN.search(after)
+        if dup:
+            boundaries.append(dup.start())
+
+        # A numbered full-text subsection header ("1.1 Title").
+        sub = _SUBSECTION_RE.search(after)
+        if sub:
+            boundaries.append(sub.start())
+
+        end = m.end() + min(boundaries) if boundaries else len(text)
+        clause = text[m.start() : end].strip()
+        # Drop a trailing Highlights reference tag, e.g. "... urticaria. ( 1 )".
+        clause = _TRAILING_REF_TAG_RE.sub("", clause).rstrip()
+        # Fail open to None when the clause is just the marker with no actual
+        # limitation text (e.g. a bare "Limitations of Use:" or a doubled marker
+        # whose content sits past the duplicate) — never surface a contentless stub.
+        marker_len = m.end() - m.start()
+        content = clause[marker_len:].lstrip(" :–—-").strip()
+        return clause if content else None
+
+    @staticmethod
+    def boxed_warning(label: dict[str, Any]) -> Optional[str]:
+        """Return the first element of ``label["boxed_warning"]``, or ``None``."""
+        warnings: Any = label.get("boxed_warning")
+        if not warnings or not isinstance(warnings, list):
+            return None
+        value = warnings[0]
+        return str(value) if isinstance(value, str) else None
 
 
 # ---------------------------------------------------------------------------

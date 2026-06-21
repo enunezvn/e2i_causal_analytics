@@ -158,25 +158,75 @@ class KPICalculator:
         # to the cache context only (not the calculator context, which the
         # calculators echo into metadata["context"]).
         include_synthetic = kpi_include_synthetic()
-        cache_context = {**context, "_include_synthetic": include_synthetic}
+        # The requested window changes the underlying SQL (base vs _windowed
+        # twin) and therefore the value, so it MUST be part of the cache key --
+        # otherwise a default-window value could be served for an explicit
+        # window (or two different windows could collide). Keyed by the
+        # (start, end) pair only (not the whole window dict) so the key is a
+        # stable, hashable scalar.
+        window = context.get("window")
+        cache_context = {
+            **context,
+            "_include_synthetic": include_synthetic,
+            "_window": (window.get("start"), window.get("end")) if window else None,
+        }
 
         # Check cache (unless force_refresh)
         if use_cache and not force_refresh and self._cache.enabled:
             cached = self._cache.get(kpi_id, **cache_context)
             if cached is not None:
-                return cached
+                # A cached entry was computed for THIS window (window is part of
+                # the cache key), so reflect the requested window on the served
+                # result rather than the cache's serialized "default".
+                return self._stamp_window(cached, kpi, window)
 
         # Calculate the KPI
         result = self._calculate_kpi(kpi, context)
         # Provenance travels with the (cached) result so the API/FE can label a
         # synthetic-sourced figure honestly rather than passing it off as real.
         result.metadata["include_synthetic"] = include_synthetic
+        # Window provenance is generic across ALL KPIs and both the
+        # registered-calculator and default paths, so stamp it here (the single
+        # place the successful result is produced for calculate() to return).
+        result = self._stamp_window(result, kpi, window)
 
         # Cache the result
         if use_cache and result.error is None:
             ttl = self._get_cache_ttl(kpi)
             self._cache.set(result, ttl=ttl, **cache_context)
 
+        return result
+
+    @staticmethod
+    def _stamp_window(
+        result: KPIResult, kpi: KPIMetadata, window: dict[str, Any] | None
+    ) -> KPIResult:
+        """Stamp window provenance on a result from the KPI's windowable class.
+
+        Generic across every KPI (registered-calculator path AND default path):
+
+        * ``windowable in {"clean", "needs_care"}`` + a requested window ->
+          ``window_status="applied"``; both requested and applied carry the
+          window. The value itself is left as computed (the windowed SQL already
+          time-bounded it).
+        * ``windowable == "not_applicable"`` (or anything else) + a requested
+          window -> ``window_status="not_applicable"``; the window is recorded as
+          requested but NOT applied, and the value is kept (the KPI is a
+          snapshot/ML metric with no claims time-dimension -- ignore the window
+          honestly rather than erroring or fabricating).
+        * No requested window -> the model defaults are left untouched
+          (``window_status="default"``).
+        """
+        if not window:
+            return result
+        if kpi.windowable in ("clean", "needs_care"):
+            result.window_requested = window
+            result.window_applied = window
+            result.window_status = "applied"
+        else:
+            result.window_requested = window
+            result.window_applied = None
+            result.window_status = "not_applicable"
         return result
 
     def calculate_batch(

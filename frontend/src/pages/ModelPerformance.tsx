@@ -69,6 +69,11 @@ import type {
   PerformanceMetricItem,
   RocCurveResponse,
 } from '@/types/monitoring';
+import {
+  describeModel,
+  interpretConfusion,
+  interpretRoc,
+} from '@/lib/model-performance/interpret';
 
 // =============================================================================
 // HELPERS
@@ -125,12 +130,21 @@ function toMetricDataPoints(history: PerformanceMetricItem[] | undefined): Metri
  * Confusion matrix (2x2) for the latest holdout evaluation. Counts are EXACT —
  * computed in the gold-standard eval, not derived from rounded scalar metrics.
  */
-function ConfusionMatrixView({ data }: { data: ConfusionMatrixResponse }) {
+function ConfusionMatrixView({ data, modelName }: { data: ConfusionMatrixResponse; modelName: string }) {
   const cells = [
     { label: 'True Negative', value: data.tn, good: true },
     { label: 'False Positive', value: data.fp, good: false },
     { label: 'False Negative', value: data.fn, good: false },
     { label: 'True Positive', value: data.tp, good: true },
+  ];
+  const meaning = describeModel(modelName);
+  const interp = interpretConfusion(data, meaning);
+  const metrics = [
+    { label: 'Precision', m: interp.precision },
+    { label: 'Recall', m: interp.recall },
+    { label: 'Specificity', m: interp.specificity },
+    { label: 'Accuracy', m: interp.accuracy },
+    { label: 'F1', m: interp.f1 },
   ];
   return (
     <div className="space-y-3">
@@ -152,12 +166,23 @@ function ConfusionMatrixView({ data }: { data: ConfusionMatrixResponse }) {
         {data.sample_size ? ` · n=${data.sample_size.toLocaleString()}` : ''} · rows = actual,
         columns = predicted
       </p>
+      <div className="flex flex-wrap gap-4 text-sm">
+        {metrics.map(({ label, m }) => (
+          <div key={label} className="flex flex-col">
+            <span className="text-muted-foreground text-xs">{label}</span>
+            <span className="font-medium">{m.pct}</span>
+          </div>
+        ))}
+      </div>
+      <div className="rounded-md bg-muted p-3 text-sm">{interp.verdict}</div>
     </div>
   );
 }
 
 /** ROC curve (TPR vs FPR) for the latest holdout evaluation, with the chance diagonal. */
-function RocCurveView({ data }: { data: RocCurveResponse }) {
+function RocCurveView({ data, modelName }: { data: RocCurveResponse; modelName: string }) {
+  const meaning = describeModel(modelName);
+  const roc = interpretRoc(data.auc, meaning);
   return (
     <div className="space-y-2">
       <ResponsiveContainer width="100%" height={320}>
@@ -201,6 +226,7 @@ function RocCurveView({ data }: { data: RocCurveResponse }) {
         AUC = {data.auc.toFixed(3)}
         {data.sample_size ? ` · n=${data.sample_size.toLocaleString()}` : ''} · holdout
       </p>
+      <div className="rounded-md bg-muted p-3 text-sm">{roc.text}</div>
     </div>
   );
 }
@@ -739,7 +765,7 @@ function ModelPerformance() {
               {confusionQuery.isLoading ? (
                 <LoadingPulse className="h-40 w-full" />
               ) : confusionQuery.data?.available ? (
-                <ConfusionMatrixView data={confusionQuery.data} />
+                <ConfusionMatrixView data={confusionQuery.data} modelName={effectiveModelId} />
               ) : (
                 <div className="py-8 text-center text-sm text-muted-foreground">
                   No confusion matrix recorded for this model yet. It is computed and
@@ -763,7 +789,7 @@ function ModelPerformance() {
               {rocQuery.isLoading ? (
                 <LoadingPulse className="h-[320px] w-full" />
               ) : rocQuery.data?.available && rocQuery.data.points.length > 0 ? (
-                <RocCurveView data={rocQuery.data} />
+                <RocCurveView data={rocQuery.data} modelName={effectiveModelId} />
               ) : (
                 <div className="py-8 text-center text-sm text-muted-foreground">
                   No ROC curve recorded for this model yet. It is computed and stored by

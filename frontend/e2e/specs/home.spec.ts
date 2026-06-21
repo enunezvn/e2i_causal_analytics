@@ -79,7 +79,8 @@ test.describe('Home Page', () => {
 
     test('renders REAL quick-stat values, not the old fabricated constants', async ({ page }) => {
       // Mocked summary -> Total TRx (MTD) = 125,000 ; HCPs Reached = 8,500 ;
-      // Active Campaigns = 12 ; Model Accuracy = 80.0% (ROC-AUC 0.7998).
+      // Active Campaigns = 12. Model Accuracy = 80.0% comes from the per-brand
+      // gold-standard summary (brand-summary mock, accuracy=0.80) since #1067.
       await expect(page.getByText('125,000')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
       await expect(page.getByText('8,500')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
       await expect(page.getByText('80.0%')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
@@ -164,8 +165,10 @@ test.describe('Home Page', () => {
       // (#994 moved the Home System Health card to the FULL, all-dimension check
       // so Components/Models/Pipelines/Agents rows all render real per-dimension
       // scores instead of a fabricated component-only "0%".)
-      await expect(page.getByText('Components')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
-      await expect(page.getByText('Models')).toBeVisible()
+      // Exact match: the Model Accuracy tile's "avg of N models" subline (#1067)
+      // otherwise also matches a substring getByText('Models') (strict-mode clash).
+      await expect(page.getByText('Components', { exact: true })).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })
+      await expect(page.getByText('Models', { exact: true })).toBeVisible()
       // Fabricated infra latencies must NOT appear.
       await expect(page.getByText('45ms')).toHaveCount(0)
       await expect(page.getByText('API Gateway')).toHaveCount(0)

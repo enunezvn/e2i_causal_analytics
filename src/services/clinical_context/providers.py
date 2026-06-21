@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional, Protocol
+from typing import Any, List, Optional, Protocol
 
 from src.services.clinical_context.brand_map import BrandClinicalProfile
 from src.services.clinical_context.clients import (
@@ -47,6 +47,24 @@ class CitationFragment:
     source: str  # "pubmed" | "pubmed_seed" | "unavailable"
 
 
+@dataclass(frozen=True)
+class IndicationsFragment:
+    approved_indications: List[str] = field(default_factory=list)
+    limitations_of_use: Optional[str] = None
+    boxed_warning: Optional[str] = None
+    source: str = "static_fallback"  # "openfda" | "static_fallback"
+
+
+@dataclass(frozen=True)
+class CompetitorFragment:
+    competitors: List[str] = field(default_factory=list)
+    count: int = 0
+    # Always "curated" — the chosen SSOT. OpenFDA/ATC auto-derivation was disproved
+    # as clinically misleading for our brands (e.g. a urticaria drug landing in a
+    # broad transplant-immunosuppressant ATC bucket), so competitors are curated.
+    source: str = "curated"
+
+
 # --- Minimal structural protocols so tests can inject fakes --------------------
 
 
@@ -64,6 +82,16 @@ class _PubMedLike(Protocol):
     def top_article(self, term: str) -> Optional[PubMedArticle]: ...
 
     def fetch_by_pmid(self, pmid: str) -> Optional[PubMedArticle]: ...
+
+
+class _OpenFDALike(Protocol):
+    def fetch_label(self, drug_name: str) -> Optional[dict[str, Any]]: ...
+
+    def approved_indications(self, label: dict[str, Any]) -> List[str]: ...
+
+    def limitations_of_use(self, label: dict[str, Any]) -> Optional[str]: ...
+
+    def boxed_warning(self, label: dict[str, Any]) -> Optional[str]: ...
 
 
 # --- The provider interface ----------------------------------------------------
@@ -192,3 +220,56 @@ class PubMedRWEProvider(ClinicalContextProvider):
             if seed is not None:
                 return CitationFragment(citation=seed, source="pubmed_seed")
         return CitationFragment(citation=None, source="unavailable")
+
+
+class OpenFDAIndicationsProvider(ClinicalContextProvider):
+    """Drug -> FDA-label approved indications + limitations of use + boxed warning
+    via OpenFDA, with the curated static fallback. Real-first: when a live label is
+    found WITH indications, the live indications/LoU/boxed-warning are authoritative
+    (even if LoU/boxed are absent for that drug). Any failure / no label / no live
+    indication degrades to the curated brand-map fallback, honestly labelled."""
+
+    provider_name = "openfda_indications"
+
+    def __init__(self, client: _OpenFDALike) -> None:
+        self._client = client
+
+    def enrich(self, profile: BrandClinicalProfile) -> IndicationsFragment:
+        try:
+            label = self._client.fetch_label(profile.drug_name)
+        except Exception as exc:  # noqa: BLE001 — best-effort; any failure => fallback
+            logger.warning(
+                "clinical-context: OpenFDA label lookup failed for %s: %s",
+                profile.drug_name,
+                exc,
+            )
+            label = None
+        if label:
+            indications = self._client.approved_indications(label)
+            if indications:
+                return IndicationsFragment(
+                    approved_indications=indications,
+                    limitations_of_use=self._client.limitations_of_use(label),
+                    boxed_warning=self._client.boxed_warning(label),
+                    source="openfda",
+                )
+        return IndicationsFragment(
+            approved_indications=list(profile.indications_fallback),
+            limitations_of_use=profile.limitations_fallback,
+            boxed_warning=profile.boxed_warning_fallback,
+            source="static_fallback",
+        )
+
+
+class CuratedCompetitorProvider(ClinicalContextProvider):
+    """Therapeutic competitors from the curated, evidence-grounded brand map, keyed
+    by the brand's disease. ``source`` is always ``"curated"`` — the chosen single
+    source of truth (OpenFDA/ATC auto-derivation was disproved as clinically
+    misleading for our brands), never fabricated and never auto-derived. An unknown
+    disease yields an empty, honest result (count 0)."""
+
+    provider_name = "curated_competitor"
+
+    def enrich(self, profile: BrandClinicalProfile) -> CompetitorFragment:
+        competitors = list(profile.competitor_map.get(profile.disease.lower(), []))
+        return CompetitorFragment(competitors=competitors, count=len(competitors), source="curated")

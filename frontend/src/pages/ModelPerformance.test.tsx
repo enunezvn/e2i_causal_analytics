@@ -488,4 +488,78 @@ describe('ModelPerformance', () => {
 
     expect(screen.getByRole('button', { name: /Export/i })).toBeInTheDocument();
   });
+
+  it('renders confusion interpretation verdict and ROC band after clicking tabs', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    // Override models to use an initiation cohort model
+    const initiationModel = {
+      model_name: 'initiation_remibrutinib_goldstd_lr_v1',
+      status: 'healthy',
+      endpoint: '/predict/initiation_remibrutinib',
+      last_check: '2026-06-20T10:00:00Z',
+    };
+    (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        total_models: 1,
+        healthy_count: 1,
+        unhealthy_count: 0,
+        models: [initiationModel],
+        timestamp: '2026-06-20T10:00:00Z',
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const initiationConfusion = {
+      model_id: 'initiation_remibrutinib_goldstd_lr_v1',
+      available: true,
+      tn: 2946,
+      fp: 346,
+      fn: 1277,
+      tp: 506,
+      threshold: 0.5,
+      sample_size: 5075,
+      measured_at: '2026-06-20T00:00:00Z',
+    };
+    (useConfusionMatrix as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: initiationConfusion,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    const initiationRoc = {
+      model_id: 'initiation_remibrutinib_goldstd_lr_v1',
+      available: true,
+      points: [
+        { fpr: 0, tpr: 0, threshold: 1 },
+        { fpr: 1, tpr: 1, threshold: 0 },
+      ],
+      auc: 0.671,
+      sample_size: 5075,
+      measured_at: '2026-06-20T00:00:00Z',
+    };
+    (useRocCurve as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: initiationRoc,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    // Click the Confusion Matrix tab and assert interpretation verdict
+    await user.click(screen.getByRole('tab', { name: /Confusion Matrix/i }));
+    expect(await screen.findByText(/conservative/i)).toBeInTheDocument();
+    expect(screen.getByText(/initiated treatment/i)).toBeInTheDocument();
+
+    // Click the ROC Curve tab and assert AUC band sentence
+    await user.click(screen.getByRole('tab', { name: /ROC Curve/i }));
+    expect(await screen.findByText(/AUC 0\.671 \(weak\)/i)).toBeInTheDocument();
+  });
 });

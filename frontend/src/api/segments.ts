@@ -23,6 +23,7 @@ import type {
   PolicyListResponse,
   RunSegmentAnalysisRequest,
   SegmentAnalysisResponse,
+  SegmentDatasetsResponse,
   SegmentHealthResponse,
 } from '@/types/segments';
 
@@ -169,6 +170,30 @@ export async function getSegmentHealth(): Promise<SegmentHealthResponse> {
   return get<SegmentHealthResponse>(`${SEGMENTS_BASE}/health`, undefined, {
     schema: SegmentHealthResponseWireSchema,
   });
+}
+
+// =============================================================================
+// CONFIG ENDPOINTS
+// =============================================================================
+
+/**
+ * Get the curated config options for the agent-driven Segment Analysis page.
+ *
+ * Returns the curated treatment/outcome columns (patient_journeys allowlist
+ * SSOT) and the data-driven brand list (distinct brands in the live cohort).
+ * Drives the page's config dropdowns.
+ *
+ * @returns Curated treatment/outcome options + brand filter list
+ *
+ * @example
+ * ```typescript
+ * const { treatments, outcomes, brands } = await getSegmentDatasets();
+ * // treatments: ['treatment_arm', 'treatment_initiated']
+ * // outcomes: ['persistent_180d', 'discontinued_180d', 'treatment_initiated']
+ * ```
+ */
+export async function getSegmentDatasets(): Promise<SegmentDatasetsResponse> {
+  return get<SegmentDatasetsResponse>(`${SEGMENTS_BASE}/datasets`);
 }
 
 // =============================================================================

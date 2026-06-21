@@ -1,0 +1,64 @@
+{
+  "indications_and_usage": [
+    "1 INDICATIONS AND USAGE RHAPSIDO ® is indicated for the treatment of chronic spontaneous urticaria (CSU) in adult patients who remain symptomatic despite H1 antihistamine treatment. Limitations of Use: RHAPSIDO is not indicated for other forms of urticaria. RHAPSIDO ® is a kinase inhibitor indicated for the treatment of chronic spontaneous urticaria (CSU) in adult patients who remain symptomatic despite H1 antihistamine treatment. ( 1 ) Limitations of Use: Not indicated for other forms of urticaria. ( 1 )"
+  ],
+  "openfda": {
+    "application_number": [
+      "NDA218436"
+    ],
+    "brand_name": [
+      "RHAPSIDO"
+    ],
+    "generic_name": [
+      "REMIBRUTINIB"
+    ],
+    "manufacturer_name": [
+      "Novartis Pharmaceuticals Corporation"
+    ],
+    "product_ndc": [
+      "0078-1483"
+    ],
+    "product_type": [
+      "HUMAN PRESCRIPTION DRUG"
+    ],
+    "route": [
+      "ORAL"
+    ],
+    "substance_name": [
+      "REMIBRUTINIB"
+    ],
+    "rxcui": [
+      "2724392",
+      "2724398"
+    ],
+    "spl_id": [
+      "9e44a793-9940-4ae3-9fe6-0f901afa37e0"
+    ],
+    "spl_set_id": [
+      "e5e89bff-6ced-4165-acc5-fb13136b3a3d"
+    ],
+    "package_ndc": [
+      "0078-1483-20",
+      "0078-1483-92",
+      "0078-1483-93"
+    ],
+    "is_original_packager": [
+      true
+    ],
+    "nui": [
+      "N0000175605",
+      "N0000193934",
+      "N0000185503"
+    ],
+    "pharm_class_epc": [
+      "Kinase Inhibitor [EPC]"
+    ],
+    "pharm_class_moa": [
+      "Bruton's Tyrosine Kinase Inhibitors [MoA]",
+      "P-Glycoprotein Inhibitors [MoA]"
+    ],
+    "unii": [
+      "I7MVZ8HDNU"
+    ]
+  }
+}

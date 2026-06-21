@@ -714,6 +714,13 @@ class DiscoveredEffect(BaseModel):
     analysis_id: Optional[str] = Field(
         default=None, description="GET /causal/agent-analyze/{id} for the full DAG + refutation"
     )
+    clinical_context: Optional["ClinicalContext"] = Field(
+        default=None,
+        description=(
+            "Brand+outcome-scoped therapy label + competitor landscape; None until "
+            "estimated or for an unknown brand (honest omission)."
+        ),
+    )
 
 
 class DiscoverEffectsResponse(BaseModel):
@@ -776,6 +783,40 @@ class RealWorldEvidence(BaseModel):
     source: str = Field(..., description="pubmed / pubmed_seed")
 
 
+class ApprovedIndications(BaseModel):
+    """FDA-label approved indications + limitations of use + boxed warning.
+
+    ``source`` is ``openfda`` when the live OpenFDA label was used, or
+    ``static_fallback`` from the curated map when OpenFDA was unreachable.
+    """
+
+    indications: List[str] = Field(
+        default_factory=list, description="Approved indication statements from the FDA label."
+    )
+    limitations_of_use: Optional[str] = Field(
+        default=None, description="The label's Limitations of Use, when present."
+    )
+    boxed_warning: Optional[str] = Field(
+        default=None, description="The label's boxed warning, when present."
+    )
+    source: str = Field(..., description="openfda / static_fallback")
+
+
+class CompetitorLandscape(BaseModel):
+    """Curated therapeutic competitors for the brand's indication.
+
+    ``source`` is always ``curated`` — the chosen single source of truth (OpenFDA/
+    ATC auto-derivation was disproved as clinically misleading for these brands).
+    """
+
+    competitors: List[str] = Field(
+        default_factory=list,
+        description="Competitor 'Brand (generic)' strings in the same therapeutic class.",
+    )
+    count: int = Field(default=0, description="Number of curated competitors.")
+    source: str = Field(default="curated", description="Always 'curated' (curated SSOT).")
+
+
 class ClinicalContext(BaseModel):
     """Brand-faithful, sourced clinical NARRATIVE for a discovered effect.
 
@@ -802,9 +843,21 @@ class ClinicalContext(BaseModel):
     real_world_evidence: Optional[RealWorldEvidence] = Field(
         default=None, description="A real cited RWE reference; None when none was found."
     )
+    approved_indications: Optional[ApprovedIndications] = Field(
+        default=None, description="FDA-label approved indications + limitations + boxed warning."
+    )
+    competitor_landscape: Optional[CompetitorLandscape] = Field(
+        default=None, description="Curated therapeutic competitors for the indication."
+    )
     honesty_label: str = Field(
         ..., description="Explicit synthetic-estimate / real-context boundary statement."
     )
+
+
+# DiscoveredEffect.clinical_context forward-references ClinicalContext (defined in
+# this section, after DiscoveredEffect); resolve the forward ref now.
+DiscoveredEffect.model_rebuild()
+DiscoverEffectsResponse.model_rebuild()
 
 
 # =============================================================================
