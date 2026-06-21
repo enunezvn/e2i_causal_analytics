@@ -557,7 +557,7 @@ objectTypes:
     displayName: KPI
     pluralDisplayName: KPIs
     description: >
-      KPI catalog entry. CONFIG-BACKED, not a DB table: the 46 KPIs live in
+      KPI catalog entry. CONFIG-BACKED, not a DB table: the 45 KPIs live in
       config/kpi_definitions.yaml (v3.0.0, mirrored by
       docs/data/06-KPI-REFERENCE.md); live values are computed at request
       time by src/kpi/calculators/* through the kpi_query allowlist RPC.

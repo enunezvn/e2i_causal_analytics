@@ -69,7 +69,7 @@ e2i_causal_analytics/
 ├── config/                    # YAML configurations (20 files)
 │   ├── agent_config.yaml      # Agent definitions
 │   ├── domain_vocabulary_v3.1.0.yaml
-│   ├── kpi_definitions.yaml   # 46 KPIs
+│   ├── kpi_definitions.yaml   # 45 KPIs
 │   └── ...
 │
 ├── database/                  # SQL schemas (120+ tables)
@@ -472,7 +472,7 @@ See [`docs/data/00-INDEX.md`](docs/data/00-INDEX.md) for the complete data dicti
   - [ML Pipeline Schema](docs/data/03-ML-PIPELINE-SCHEMA.md) — 60+ ML lifecycle tables
   - [Knowledge Graph Ontology](docs/data/04-KNOWLEDGE-GRAPH-ONTOLOGY.md) — FalkorDB schema
   - [Feature Store Reference](docs/data/05-FEATURE-STORE-REFERENCE.md) — Feast entities & features
-  - [KPI Reference](docs/data/06-KPI-REFERENCE.md) — All 46 KPIs with formulas & thresholds
+  - [KPI Reference](docs/data/06-KPI-REFERENCE.md) — All KPIs with formulas & thresholds
   - [Supporting Schemas](docs/data/07-SUPPORTING-SCHEMAS.md) — Memory, RAG, Chat, Audit
   - [CSV Templates](docs/data/templates/) — Ready-to-use templates with example rows
 - **API Reference**: `docs/api/openapi.json` — OpenAPI 3.0 spec (auto-generated via `scripts/generate_api_docs.sh`)
