@@ -140,8 +140,8 @@ def test_model_metrics_stamped_on_synthetic_predictions():
         ), f"{col} not stamped on synthetic ml_predictions"
 
 
-def test_all_46_kpis_return_nonnull():
-    """Run the coverage probe and assert ZERO EMPTY / ZERO N/A across the 46 KPIs."""
+def test_all_45_kpis_return_nonnull():
+    """Run the coverage probe and assert ZERO EMPTY / ZERO N/A across the 45 KPIs."""
     out = subprocess.run(
         [sys.executable, "scripts/check_kpi_coverage.py"],
         capture_output=True,
@@ -150,4 +150,4 @@ def test_all_46_kpis_return_nonnull():
     )
     assert out.returncode == 0, f"coverage probe failed:\n{out.stdout}\n{out.stderr}"
     summary = out.stdout.strip().splitlines()[-1]
-    assert "MAPPED 46" in summary and "EMPTY 0" in summary and "N/A 0" in summary, summary
+    assert "MAPPED 45" in summary and "EMPTY 0" in summary and "N/A 0" in summary, summary

@@ -1,6 +1,6 @@
 """KPI coverage probe (Shard 09).
 
-Maps every one of the 46 KPIs in config/kpi_definitions.yaml to the kpi_query
+Maps every one of the 45 KPIs in config/kpi_definitions.yaml to the kpi_query
 registry query_id (the *_include_synthetic / view variant) that exercises the
 synthetic substrate, runs it against the faithful docker Supabase, and reports
 non-NULL / EMPTY per KPI.
@@ -31,7 +31,6 @@ DIRECT_PROBES: dict[str, str] = {
     "WS1-MP-004": "SELECT count(*) AS n FROM ml_predictions WHERE is_synthetic AND rank_metrics IS NOT NULL",
     "WS1-MP-005": "SELECT count(*) AS n FROM ml_predictions WHERE is_synthetic AND brier_score IS NOT NULL",
     "WS1-MP-006": "SELECT count(*) AS n FROM ml_predictions WHERE is_synthetic AND calibration_score IS NOT NULL",
-    "WS1-MP-008": "SELECT count(*) AS n FROM ml_predictions WHERE is_synthetic AND fairness_metrics IS NOT NULL",
 }
 
 # KPI id -> (registry query_id, params_json, value_key_substring_or_None)
@@ -58,7 +57,7 @@ PROBES: dict[str, tuple[str, str, str | None]] = {
     "WS1-DQ-009": ("data_quality_time_to_release", "[]", "avg_ttr_hours"),
     # --- WS1 model performance ---
     "WS1-MP-001": ("model_performance_roc_auc_include_synthetic", "[]", "roc_auc"),
-    # WS1-MP-002/003/004/005/006/008 -> DIRECT_PROBES (no kpi_query registry entry).
+    # WS1-MP-002/003/004/005/006 -> DIRECT_PROBES (no kpi_query registry entry).
     "WS1-MP-007": ("model_performance_shap_coverage_include_synthetic", "[]", "coverage"),
     "WS1-MP-009": ("model_performance_feature_drift", "[]", "avg_psi"),
     # --- WS2 triggers ---
@@ -162,7 +161,7 @@ def _value_present(row_json: str, key: str | None) -> bool:
 
 def main() -> int:
     ids = _kpi_ids()
-    assert len(ids) == 46, f"expected 46 KPIs, found {len(ids)}"
+    assert len(ids) == 45, f"expected 45 KPIs, found {len(ids)}"
     faithful = os.environ.get("E2I_DB_INTEGRATION") == "1"
     mapped = empty = na = 0
     for kid in ids:

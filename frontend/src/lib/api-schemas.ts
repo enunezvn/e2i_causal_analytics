@@ -1601,6 +1601,9 @@ export const BrandModelSummaryWireSchema = z.object({
   recall: z.number().nullable().optional(),
   f1: z.number().nullable().optional(),
   auc_roc: z.number().nullable().optional(),
+  pr_auc: z.number().nullable().optional(),
+  brier_score: z.number().nullable().optional(),
+  calibration_slope: z.number().nullable().optional(),
   is_synthetic_cohort: z.boolean(),
 });
 export type BrandModelSummary = z.infer<typeof BrandModelSummaryWireSchema>;

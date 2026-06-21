@@ -49,7 +49,6 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS1-MP-005 | Brier Score | `ml_predictions.brier_score` (agent-read, direct) — **stamped** | MAPPED | 3738 synthetic rows populated |
 | WS1-MP-006 | Calibration Slope | `ml_predictions.calibration_score` (agent-read, direct) — **stamped** | MAPPED | 3738 synthetic rows populated |
 | WS1-MP-007 | SHAP Coverage | `ml_predictions.shap_values` → `model_performance_shap_coverage` — **stamped** | MAPPED | coverage=1.0 |
-| WS1-MP-008 | Fairness Gap (ΔRecall) | `ml_predictions.fairness_metrics` (agent-read, direct) — **stamped** | MAPPED | 3738 synthetic rows populated |
 | WS1-MP-009 | Feature Drift (PSI) | `ml_drift_history.test_statistic` (test_type=psi) → `model_performance_feature_drift` | MAPPED | avg_psi=0.094 |
 | WS2-TR-001 | Trigger Precision | `triggers.outcome_tracked/outcome_value` → `trigger_performance_precision` (Shard 05 arms) | MAPPED | precision=0.391 |
 | WS2-TR-002 | Trigger Recall | `triggers`+`treatment_events` → `trigger_performance_recall` | MAPPED | recall=0.474 |

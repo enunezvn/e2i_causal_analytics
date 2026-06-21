@@ -18,10 +18,22 @@ from __future__ import annotations
 from typing import Any, Optional
 
 GOLDSTD_SUFFIX = "_goldstd_lr_v1"
-# Holdout scalar metrics that exist for the gold-standard models (verified
-# 2026-06-20). PR-AUC / Brier / calibration / fairness / recall@k are NOT
-# present, so they are deliberately absent here.
-GOLDSTD_METRICS = ("accuracy", "precision", "recall", "f1", "auc_roc")
+# Holdout scalar metrics emitted by the gold-standard eval scorer
+# (src/mlops/gold_standard_eval/scorer.py:score). accuracy/precision/recall/f1/
+# auc_roc are the originals; pr_auc/brier_score/calibration_slope were added so
+# WS1-MP-002/005/006 compute per-brand too. Recall@k (WS1-MP-004) stays
+# MLflow-only; the Fairness Gap KPI (WS1-MP-008) was removed (it needed a
+# designated protected attribute the eval does not carry).
+GOLDSTD_METRICS = (
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "auc_roc",
+    "pr_auc",
+    "brier_score",
+    "calibration_slope",
+)
 
 
 def select_goldstd_models(registry_rows: Any, brand: Optional[str]) -> list[dict]:
