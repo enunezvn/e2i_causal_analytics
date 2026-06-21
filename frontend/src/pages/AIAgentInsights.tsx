@@ -55,9 +55,12 @@ export function AIAgentInsights() {
   // hands `undefined` to each child so its own documented default kicks in —
   // the page never hard-codes a brand.
   const brandFromUrl = searchParams.get('brand')?.trim();
-  const [selectedBrand, setSelectedBrand] = useState<string>(
-    brandFromUrl || filters?.brand || ALL_BRANDS,
-  );
+  // Local override: `null` means "follow URL/context" so issue #304's
+  // precedence stays REACTIVE if the dashboard filter context changes after
+  // mount; once the user picks from the in-page selector their choice wins.
+  // We derive (rather than snapshot into state) to avoid a stale selection.
+  const [brandOverride, setBrandOverride] = useState<string | null>(null);
+  const selectedBrand = brandOverride || brandFromUrl || filters?.brand || ALL_BRANDS;
   const brand = selectedBrand === ALL_BRANDS ? undefined : selectedBrand;
 
   // Model id: URL query takes precedence, then a deploy-time env override
@@ -89,7 +92,7 @@ export function AIAgentInsights() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <Select value={selectedBrand} onValueChange={setSelectedBrand}>
+          <Select value={selectedBrand} onValueChange={setBrandOverride}>
             <SelectTrigger aria-label="Brand" className="w-[160px]">
               <SelectValue placeholder="All brands" />
             </SelectTrigger>

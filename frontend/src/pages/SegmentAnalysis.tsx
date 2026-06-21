@@ -580,11 +580,14 @@ export default function SegmentAnalysis() {
         outcome_var: selectedOutcome,
       },
       // The backend persists a DURABLE analysis record — the run completes
-      // server-side even if the FE stops polling. All-brands runs scan the full
-      // gold-standard cohort (~90s+); single-brand ~30s. The old 120s default
-      // raced the all-brands run and threw "timed out" on an analysis that had
-      // actually completed, so give the poll a generous, brand-scaled ceiling.
-      maxWaitMs: brandArg ? 150_000 : 300_000,
+      // server-side even if the FE stops polling. Single-brand runs (~30s) never
+      // raced the 120s default; only the all-brands run (scans the full
+      // gold-standard cohort, ~90s+ and load-variable) did, throwing "timed out"
+      // on an analysis that had actually completed. Scale the ceiling by scope:
+      // keep 120s for single-brand, give all-brands ~2.6x margin (bounded at 240s
+      // so a genuinely stuck run can't hold the UI forever). A user-facing cancel
+      // path during the wait is a tracked follow-up (see PR notes).
+      maxWaitMs: brandArg ? 120_000 : 240_000,
     });
   };
 

@@ -341,5 +341,24 @@ describe('AIAgentInsights', () => {
       expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:__none__');
       expect(screen.getByTestId('priority-actions-roi')).toHaveTextContent('brand:__none__');
     });
+
+    it('stays reactive to a post-mount context brand change (no snapshot regression)', () => {
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({
+        filters: { brand: 'Fabhalta' },
+      });
+      const { rerender } = render(<AIAgentInsights />, {
+        wrapper: createWrapperWithUrl('/ai-insights'),
+      });
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Fabhalta');
+
+      // The dashboard filter context changes (global filter / copilot) while the
+      // page is mounted and the user has NOT used the local selector -> the page
+      // must follow it (the brand is derived, not snapshotted into state).
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({
+        filters: { brand: 'Kisqali' },
+      });
+      rerender(<AIAgentInsights />);
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Kisqali');
+    });
   });
 });
