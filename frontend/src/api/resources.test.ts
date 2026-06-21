@@ -10,10 +10,15 @@
 
 import { describe, it, expect } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { listScenarios, getResourceHealth } from './resources';
+import {
+  listScenarios,
+  getResourceHealth,
+  runOptimizationAndWait,
+} from './resources';
 import { server } from '@/mocks/server';
 import { env } from '@/config/env';
 import { ApiValidationError } from '@/lib/api-client';
+import type { RunOptimizationRequest } from '@/types/resources';
 
 describe('Resources API Client - response validation (C31)', () => {
   describe('listScenarios', () => {
@@ -83,6 +88,84 @@ describe('Resources API Client - response validation (C31)', () => {
       await expect(getResourceHealth()).rejects.toBeInstanceOf(
         ApiValidationError
       );
+    });
+  });
+
+  describe('runOptimizationAndWait - failed-run error message', () => {
+    const req = {
+      query: 'Optimize budget allocation to maximize roi',
+      resource_type: 'budget',
+      allocation_targets: [],
+      objective: 'maximize_roi',
+      run_scenarios: false,
+      scenario_count: 3,
+    } as unknown as RunOptimizationRequest;
+
+    it('keeps the real failure cause but drops benign SYNTHETIC DATA provenance', async () => {
+      // Initial POST is non-terminal -> the poll loop runs; the polled GET fails
+      // carrying BOTH a benign provenance warning and the real solver cause.
+      server.use(
+        http.post(`${env.apiUrl}/resources/optimize`, () =>
+          HttpResponse.json({
+            optimization_id: 'opt-fail-1',
+            status: 'formulating',
+            warnings: [],
+          })
+        ),
+        http.get(`${env.apiUrl}/resources/opt-fail-1`, () =>
+          HttpResponse.json({
+            optimization_id: 'opt-fail-1',
+            status: 'failed',
+            warnings: [
+              'SYNTHETIC DATA: no real per-entity budget source is wired; dollar values are illustrative.',
+              'Solver returned: infeasible',
+            ],
+          })
+        )
+      );
+
+      let message = '';
+      try {
+        await runOptimizationAndWait(req, 1, 2000);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+
+      // The honest failure cause is surfaced...
+      expect(message).toContain('Solver returned: infeasible');
+      // ...but the benign synthetic-data disclosure is NOT dumped into the red error.
+      expect(message).not.toContain('SYNTHETIC DATA');
+    });
+
+    it('falls back to a generic message when the only warnings are provenance', async () => {
+      server.use(
+        http.post(`${env.apiUrl}/resources/optimize`, () =>
+          HttpResponse.json({
+            optimization_id: 'opt-fail-2',
+            status: 'formulating',
+            warnings: [],
+          })
+        ),
+        http.get(`${env.apiUrl}/resources/opt-fail-2`, () =>
+          HttpResponse.json({
+            optimization_id: 'opt-fail-2',
+            status: 'failed',
+            warnings: [
+              'SYNTHETIC DATA: notional budget; dollar values are illustrative.',
+            ],
+          })
+        )
+      );
+
+      let message = '';
+      try {
+        await runOptimizationAndWait(req, 1, 2000);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+
+      expect(message).toContain('Optimization failed');
+      expect(message).not.toContain('SYNTHETIC DATA');
     });
   });
 });

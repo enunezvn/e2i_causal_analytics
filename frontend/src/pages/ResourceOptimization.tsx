@@ -737,22 +737,10 @@ export default function ResourceOptimization() {
             </CardContent>
           </Card>
 
-          {optimizationResult.warnings.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-warning">Warnings</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ul className="list-disc list-inside space-y-1">
-                  {optimizationResult.warnings.map((warning, idx) => (
-                    <li key={idx} className="text-warning">
-                      {warning}
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
+          {/* Warnings are surfaced once, up front, in the always-visible
+              "Illustrative result — synthetic data" banner above the tabs.
+              A second per-tab "Warnings" card here only re-printed the same
+              (now backend-deduplicated) provenance line. */}
 
           {/* Metadata */}
           <Card>

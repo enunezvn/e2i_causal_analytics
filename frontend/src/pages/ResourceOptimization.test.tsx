@@ -140,6 +140,30 @@ describe('ResourceOptimization', () => {
     expect(screen.getByText(/seeded from synthetic territory_metrics/i)).toBeInTheDocument();
   });
 
+  it('renders each warning exactly once, even on the Recommendations tab', () => {
+    // The always-visible provenance banner AND a per-tab "Warnings" card under
+    // Recommendations both rendered optimizationResult.warnings -> the same line
+    // appeared twice once that tab was opened. The card was removed; warnings are
+    // surfaced once, up front. (The 32x backend duplication is fixed separately.)
+    mockRun({
+      data: completedResult({
+        warnings: [
+          'SYNTHETIC DATA: no real per-entity budget source is wired, so this optimization ran on 10 territories seeded from synthetic territory_metrics.',
+        ],
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    // Default (allocations) tab: surfaced once by the top banner.
+    expect(
+      screen.getAllByText(/seeded from synthetic territory_metrics/i)
+    ).toHaveLength(1);
+    // Open the Recommendations tab, where the duplicate "Warnings" card lived.
+    fireEvent.click(screen.getByRole('tab', { name: /Recommendations/i }));
+    expect(
+      screen.getAllByText(/seeded from synthetic territory_metrics/i)
+    ).toHaveLength(1);
+  });
+
   it('does NOT fabricate an allocation trend; renders an honest empty state', () => {
     mockRun({
       data: completedResult({

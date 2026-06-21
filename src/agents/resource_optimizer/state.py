@@ -6,9 +6,30 @@ Purpose: LangGraph state for resource allocation optimization
 
 from __future__ import annotations
 
-import operator
 from typing import Annotated, Any, Dict, List, Literal, NotRequired, Optional, TypedDict
 from uuid import UUID
+
+
+def dedup_extend(existing: List[Any], new: List[Any]) -> List[Any]:
+    """Order-preserving union reducer for additive LangGraph state channels.
+
+    Every node in this graph returns ``{**state, ...}``, which re-emits the WHOLE
+    accumulated ``warnings`` / ``errors`` list back into the channel. A plain
+    ``operator.add`` reducer then concatenates the accumulated list onto itself,
+    doubling every entry once per node — a single seeded provenance warning became
+    32 identical lines across the 5-node scenario chain (audit_init -> formulate ->
+    optimize -> scenario -> project), surfaced as a wall of warnings in the UI.
+
+    Appending only items not already present makes that re-emission idempotent and
+    collapses genuinely-identical entries to a single occurrence, while preserving
+    first-seen order. Works for both ``List[str]`` (warnings) and ``List[Dict]``
+    (errors); membership uses ``==`` so structurally-equal dicts dedupe too.
+    """
+    merged = list(existing)
+    for item in new:
+        if item not in merged:
+            merged.append(item)
+    return merged
 
 
 class AllocationTarget(TypedDict, total=False):
@@ -115,8 +136,8 @@ class ResourceOptimizerState(TypedDict):
     total_latency_ms: NotRequired[int]
 
     # === ERROR HANDLING (Required outputs) ===
-    errors: Annotated[List[Dict[str, Any]], operator.add]
-    warnings: Annotated[List[str], operator.add]
+    errors: Annotated[List[Dict[str, Any]], dedup_extend]
+    warnings: Annotated[List[str], dedup_extend]
     status: Literal[
         "pending",
         "formulating",

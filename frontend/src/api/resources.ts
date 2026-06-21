@@ -32,6 +32,14 @@ import type {
 
 const RESOURCES_BASE = '/resources';
 
+/**
+ * Prefix the backend tags onto benign synthetic-data provenance disclosures
+ * (mirrors `SYNTHETIC_PROVENANCE_PREFIX` in `resource_optimizer.py`). These are
+ * honest caveats surfaced as amber `warnings`, NOT failure causes — they must
+ * never be concatenated into a red "Optimization failed" message.
+ */
+export const SYNTHETIC_PROVENANCE_PREFIX = 'SYNTHETIC DATA:';
+
 // =============================================================================
 // OPTIMIZATION ENDPOINTS
 // =============================================================================
@@ -233,8 +241,13 @@ export async function runOptimizationAndWait(
     }
 
     if (result.status === 'failed') {
+      // Benign synthetic-data provenance disclosures are NOT the failure cause —
+      // surface only the real error(s) in the red banner, never the amber caveats.
+      const causes = (result.warnings ?? []).filter(
+        (w) => !w.startsWith(SYNTHETIC_PROVENANCE_PREFIX)
+      );
       throw new Error(
-        `Optimization failed: ${result.warnings.join(', ') || 'Unknown error'}`
+        `Optimization failed: ${causes.join(', ') || 'Unknown error'}`
       );
     }
   }
