@@ -16,7 +16,7 @@ import pytest
 from src.services import kpi_resolution as kr
 
 # ---------------------------------------------------------------------------
-# recognize_kpi — registry-driven (46 KPIs), dynamic, not keyed to "conversion"
+# recognize_kpi — registry-driven (all defined KPIs), dynamic, not keyed to "conversion"
 # ---------------------------------------------------------------------------
 
 

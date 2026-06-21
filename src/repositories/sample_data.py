@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 BRANDS = ["Remibrutinib", "Fabhalta", "Kisqali"]
 REGIONS = ["US", "EU", "APAC", "LATAM", "JP"]
 
-# KPI Names (subset of the 46+ KPIs)
+# KPI Names (subset of the defined KPIs)
 KPIS = [
     "TRx_volume",
     "NRx_volume",

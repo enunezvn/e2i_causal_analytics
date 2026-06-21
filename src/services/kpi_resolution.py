@@ -17,7 +17,7 @@ patient grain can never bind that outcome, so the causal core fails.
 This service makes the pipeline KPI-aware:
 
 1. :func:`recognize_kpi` — map a query to a defined KPI via the KPI registry
-   (``src/kpi/registry.py``, 46 KPIs) + a small KPI-vocabulary alias map.
+   (``src/kpi/registry.py``) + a small KPI-vocabulary alias map.
 2. :func:`resolve_kpi_frame` — materialize the **analyzable** frame for that KPI
    from its REAL substrate, returning the outcome column + candidate driver
    columns so the planner can bind the causal outcome to the KPI.
@@ -84,7 +84,7 @@ _TRIGGER_SELECT = [
 _MAX_ROWS = 100_000
 
 # KPI vocabulary aliases: common user terms -> KPI id. This maps the FIXED,
-# defined KPI vocabulary (46 KPIs) to ids; it is NOT brand/region hardcoding.
+# defined KPI vocabulary to ids; it is NOT brand/region hardcoding.
 _ALIASES: Dict[str, str] = {
     "conversion": CONVERSION_KPI_ID,
     "conversion rate": CONVERSION_KPI_ID,
@@ -144,7 +144,7 @@ class KpiFrame:
 
 
 # ---------------------------------------------------------------------------
-# KPI recognition (registry-driven, dynamic across all 46 KPIs)
+# KPI recognition (registry-driven, dynamic across all defined KPIs)
 # ---------------------------------------------------------------------------
 def recognize_kpi(query: Optional[str]) -> Optional[KPIMetadata]:
     """Recognize a defined KPI referenced by ``query``, else ``None``.

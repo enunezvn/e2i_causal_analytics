@@ -1326,7 +1326,7 @@ async def tool_composer_tool(
 
 
 # =============================================================================
-# KPI ENGINE TOOL — compute a DEFINED KPI on demand (the 46 calculable KPIs)
+# KPI ENGINE TOOL — compute a DEFINED KPI on demand (the registry's calculable KPIs)
 # =============================================================================
 
 
@@ -1337,7 +1337,7 @@ class KpiCalculateInput(BaseModel):
         description=(
             "The KPI to compute, e.g. 'NBRx' (new-to-brand Rx), 'TRx', 'NRx', "
             "'market share', 'conversion rate', 'ROI', 'HCP coverage'. Resolved "
-            "against the 46 defined KPIs."
+            "against the defined KPI registry."
         )
     )
     brand: Optional[str] = Field(
@@ -1427,7 +1427,7 @@ async def kpi_calculate_tool(
     region: Optional[str] = None,
     window: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compute a DEFINED KPI on demand via the KPI engine (the 46 calculable KPIs).
+    """Compute a DEFINED KPI on demand via the KPI engine (the registry's calculable KPIs).
 
     Use this for "what is the <KPI> for <brand>?" questions — NBRx (new-to-brand
     Rx), TRx, NRx, market share, conversion rate, ROI, HCP coverage, etc. Unlike
@@ -1447,7 +1447,7 @@ async def kpi_calculate_tool(
     does not.
 
     Args:
-        kpi_name: the KPI to compute (resolved against the 46 defined KPIs).
+        kpi_name: the KPI to compute (resolved against the defined KPI registry).
         brand: optional brand filter (case-insensitive).
         region: optional region/territory filter.
         window: optional time window (rolling or absolute); omit for the

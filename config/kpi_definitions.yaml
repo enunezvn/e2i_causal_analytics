@@ -1,5 +1,7 @@
 # E2I Causal Analytics - KPI Definitions V3.0
-# 46 KPIs - 100% Calculable from V3 Schema
+# 45 KPIs - 100% Calculable from V3 Schema
+# (WS1-MP-008 "Fairness Gap (ΔRecall)" removed in #1068 — needs protected-group
+#  fairness_metrics the synthetic substrate does not populate.)
 
 version: "3.0.0"
 last_updated: "2025-11-28"
@@ -9,14 +11,14 @@ last_updated: "2025-11-28"
 # ═══════════════════════════════════════════════════════════════════
 
 summary:
-  total_kpis: 46
-  direct_calculable: 28
-  derived_calculable: 18
+  total_kpis: 45
+  direct_calculable: 22
+  derived_calculable: 23
   gaps: 0
-  
+
   by_workstream:
     ws1_data_quality: 9
-    ws1_model_performance: 9
+    ws1_model_performance: 8
     ws2_triggers: 8
     ws3_business: 10
     brand_specific: 5
