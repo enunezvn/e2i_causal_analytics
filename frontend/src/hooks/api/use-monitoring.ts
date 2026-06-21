@@ -34,6 +34,7 @@ import {
   compareModelPerformance,
   getConfusionMatrix,
   getRocCurve,
+  getBrandModelSummary,
   triggerProductionSweep,
   evaluateRetrainingNeed,
   triggerRetraining,
@@ -42,6 +43,7 @@ import {
   rollbackRetraining,
   triggerRetrainingSweep,
 } from '@/api/monitoring';
+import type { BrandModelSummary } from '@/lib/api-schemas';
 import type {
   AlertActionRequest,
   AlertItem,
@@ -274,6 +276,28 @@ export function useAlerts(
     queryFn: () => listAlerts(params),
     // Alerts should be relatively fresh
     staleTime: 60 * 1000, // 1 minute
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch the per-brand gold-standard model-performance summary.
+ *
+ * Drives the Home "Model Accuracy" tile (per-brand average accuracy). Pass no
+ * brand (or 'All') for the all-12-model average; `available=false` => honest
+ * empty (no gold-standard models recorded).
+ */
+export function useBrandModelSummary(
+  brand?: string,
+  options?: Omit<
+    UseQueryOptions<BrandModelSummary, ApiError>,
+    'queryKey' | 'queryFn'
+  >
+) {
+  return useQuery<BrandModelSummary, ApiError>({
+    queryKey: queryKeys.monitoring.brandSummary(brand ?? 'all'),
+    queryFn: () => getBrandModelSummary(brand),
+    staleTime: 5 * 60 * 1000, // 5 minutes — eval metrics are stable
     ...options,
   });
 }

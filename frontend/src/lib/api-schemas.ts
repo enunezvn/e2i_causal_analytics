@@ -1588,3 +1588,19 @@ export type BatchKPICalculateRequest = z.infer<typeof BatchKPICalculateRequestSc
 export type LearningCycleRequest = z.infer<typeof LearningCycleRequestSchema>;
 export type ExperimentDesignRequest = z.infer<typeof ExperimentDesignRequestSchema>;
 export type InterventionType = z.infer<typeof InterventionTypeEnum>;
+
+// Per-brand gold-standard model-performance summary
+// (GET /monitoring/performance/brand-summary). `available=false` / null metrics
+// are honest empty states (no gold-standard models), never fabricated zeros.
+export const BrandModelSummaryWireSchema = z.object({
+  brand: z.string(),
+  available: z.boolean(),
+  n_models: z.number().int().nonnegative(),
+  accuracy: z.number().nullable().optional(),
+  precision: z.number().nullable().optional(),
+  recall: z.number().nullable().optional(),
+  f1: z.number().nullable().optional(),
+  auc_roc: z.number().nullable().optional(),
+  is_synthetic_cohort: z.boolean(),
+});
+export type BrandModelSummary = z.infer<typeof BrandModelSummaryWireSchema>;

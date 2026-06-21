@@ -448,6 +448,28 @@ class PerformanceTracker:
             "measured_at": rec.measured_at,
         }
 
+    async def get_brand_goldstd_summary(
+        self,
+        brand: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Per-brand average of the gold-standard models' holdout metrics.
+
+        Averages accuracy/precision/recall/f1/auc_roc across the brand's
+        ``*_goldstd_lr_v1`` staging models (``brand=None``/``"all"`` -> all 12).
+        Returns ``None`` when no gold-standard models are found (honest empty —
+        the endpoint renders ``available=false``, never a fabricated 0).
+        """
+        from src.kpi.goldstd_model_perf import summarize_async
+        from src.repositories.drift_monitoring import get_drift_monitoring_client
+
+        client = await get_drift_monitoring_client()
+        summary = await summarize_async(client, brand)
+        if summary is None:
+            return None
+        # The gold-standard models are is_synthetic=False, but the eval cohort is
+        # synthetic demo data — carried for honest disclosure by consumers.
+        return {"brand": brand or "all", **summary, "is_synthetic_cohort": True}
+
 
 # =============================================================================
 # FACTORY

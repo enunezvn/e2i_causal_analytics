@@ -25,7 +25,6 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIList: vi.fn(),
   useKPIHealth: vi.fn(),
   useBatchCalculateKPIs: vi.fn(),
-  useKPIValue: vi.fn(),
 }));
 vi.mock('@/hooks/api/use-health-score', () => ({
   useFullHealthCheck: vi.fn(),
@@ -44,6 +43,7 @@ vi.mock('@/hooks/api/use-gaps', () => ({
 // fallback was removed) — mock the hook for deterministic alert states.
 vi.mock('@/hooks/api/use-monitoring', () => ({
   useAlerts: vi.fn(),
+  useBrandModelSummary: vi.fn(),
 }));
 // Agent Status uses useQuery(getValidated(...)). Mock the client fn so the
 // query resolves to a deterministic roster (or empty when desired).
@@ -63,13 +63,12 @@ import {
   useKPIList,
   useKPIHealth,
   useBatchCalculateKPIs,
-  useKPIValue,
 } from '@/hooks/api/use-kpi';
 import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { useKpiSummary, useActiveExperimentCount } from '@/hooks/api/use-home-stats';
 import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insights';
 import { useOpportunities } from '@/hooks/api/use-gaps';
-import { useAlerts } from '@/hooks/api/use-monitoring';
+import { useAlerts, useBrandModelSummary } from '@/hooks/api/use-monitoring';
 import { getValidated } from '@/lib/api-client';
 
 /** Reset all Home hooks to their honest "no data yet" defaults. */
@@ -84,10 +83,6 @@ function resetHomeHookDefaults() {
     mutate: vi.fn(),
     data: undefined,
     isError: false,
-  });
-  (useKPIValue as ReturnType<typeof vi.fn>).mockReturnValue({
-    data: undefined,
-    isLoading: false,
   });
   (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
@@ -117,6 +112,10 @@ function resetHomeHookDefaults() {
     data: undefined,
     isLoading: false,
     error: null,
+  });
+  (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: undefined,
+    isLoading: false,
   });
   (getValidated as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: [], total: 0 });
 }
@@ -191,8 +190,18 @@ describe('Home', () => {
       data: { active_count: 12 },
       isLoading: false,
     });
-    (useKPIValue as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { kpi_id: 'WS1-MP-001', value: 0.7998, status: 'good' },
+    (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'all',
+        available: true,
+        n_models: 12,
+        accuracy: 0.7998,
+        precision: 0.7,
+        recall: 0.6,
+        f1: 0.65,
+        auc_roc: 0.75,
+        is_synthetic_cohort: false,
+      },
       isLoading: false,
     });
 
@@ -214,6 +223,70 @@ describe('Home', () => {
     expect(screen.queryByText('synthetic data')).not.toBeInTheDocument();
   });
 
+  it('shows per-brand model accuracy as an average of N models', () => {
+    (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'Kisqali',
+        available: true,
+        n_models: 4,
+        accuracy: 0.7,
+        precision: 0.66,
+        recall: 0.55,
+        f1: 0.6,
+        auc_roc: 0.75,
+        is_synthetic_cohort: true,
+      },
+      isLoading: false,
+    });
+    renderWithAllProviders(<Home />);
+    expect(screen.getByText('Model Accuracy')).toBeInTheDocument();
+    expect(screen.getByText('70.0%')).toBeInTheDocument();
+    expect(screen.getByText('avg of 4 models')).toBeInTheDocument();
+  });
+
+  it('shows an honest dash for Model Accuracy when no summary is available', () => {
+    (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { brand: 'all', available: false, n_models: 0, is_synthetic_cohort: false },
+      isLoading: false,
+    });
+    renderWithAllProviders(<Home />);
+    const label = screen.getByText('Model Accuracy');
+    const tile = label.parentElement as HTMLElement; // min-w-0 wrapper (label + value)
+    expect(within(tile).getByText('—')).toBeInTheDocument(); // honest dash, NOT a fabricated 0.0%
+    expect(within(tile).queryByText(/avg of/)).not.toBeInTheDocument();
+  });
+
+  it('discloses synthetic provenance when only the model-accuracy cohort is synthetic', () => {
+    // Real-data home tiles, but the gold-standard model-accuracy eval ran over a
+    // synthetic cohort (is_synthetic_cohort=true) — the page banner must still fire.
+    (useKpiSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'All',
+        period: 'Last 30 days',
+        metrics: { trx_volume: 100, hcp_reach: 10 },
+        data_source: 'database',
+      },
+      isLoading: false,
+      error: null,
+    });
+    (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'all',
+        available: true,
+        n_models: 12,
+        accuracy: 0.7,
+        precision: 0.66,
+        recall: 0.55,
+        f1: 0.6,
+        auc_roc: 0.75,
+        is_synthetic_cohort: true,
+      },
+      isLoading: false,
+    });
+    renderWithAllProviders(<Home />);
+    expect(screen.getByText(/synthetic demo data/i)).toBeInTheDocument();
+  });
+
   it('labels synthetic-sourced KPIs honestly (page-level synthetic-demo banner)', () => {
     // E2I_KPI_INCLUDE_SYNTHETIC demo mode: the backend reports data_source
     // 'synthetic' so the figures are populated AND clearly labelled as synthetic
@@ -232,8 +305,18 @@ describe('Home', () => {
       data: { active_count: 693 },
       isLoading: false,
     });
-    (useKPIValue as ReturnType<typeof vi.fn>).mockReturnValue({
-      data: { kpi_id: 'WS1-MP-001', value: 0.7704, status: 'good' },
+    (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'all',
+        available: true,
+        n_models: 12,
+        accuracy: 0.7704,
+        precision: 0.7,
+        recall: 0.6,
+        f1: 0.65,
+        auc_roc: 0.75,
+        is_synthetic_cohort: true,
+      },
       isLoading: false,
     });
 
@@ -418,24 +501,43 @@ describe('Home', () => {
       });
     }
 
-    it('does NOT render the Brand (brand_specific) tab or its KPIs', () => {
+    it('surfaces calculable brand-specific KPIs and hides the null ones', () => {
       mockLiveKpis(
         [
-          { id: 'BR-003', name: '% PNH Tested', workstream: 'brand_specific' },
+          { id: 'BR-002', name: 'CSU Severity Index', workstream: 'brand_specific' },
+          { id: 'BR-001', name: 'AH Uncontrolled %', workstream: 'brand_specific' },
           { id: 'WS1-MP-001', name: 'ROC-AUC', workstream: 'ws1_model_performance' },
-          { id: 'WS2-TR-005', name: 'False Alert Rate', workstream: 'ws2_triggers' },
         ],
-        { 'BR-003': 0, 'WS1-MP-001': 0.82, 'WS2-TR-005': 0 }
+        { 'BR-002': 1.0, 'WS1-MP-001': 0.82 } // BR-001 omitted -> null -> hidden
       );
       renderWithAllProviders(<Home />);
 
       const tablist = screen.getByRole('tablist');
-      // The brand-clinical tab is gone; the real workstream tabs remain.
-      expect(within(tablist).queryByText('Brand')).not.toBeInTheDocument();
-      expect(within(tablist).getByText('Model Performance')).toBeInTheDocument();
-      expect(within(tablist).getByText('Triggers')).toBeInTheDocument();
-      // ...and the brand KPI itself is not shown anywhere on the page.
-      expect(screen.queryByText('% PNH Tested')).not.toBeInTheDocument();
+      // brand_specific is now surfaced (the wholesale hide was removed): its
+      // calculable KPI shows under the Brand tab; the null one stays hidden.
+      expect(within(tablist).getByText('Brand')).toBeInTheDocument();
+      expect(screen.getByText('CSU Severity Index')).toBeInTheDocument();
+      expect(screen.queryByText('AH Uncontrolled %')).not.toBeInTheDocument();
+    });
+
+    it('hides non-computed KPI cards (null value) from grid, tabs, and counts', () => {
+      mockLiveKpis(
+        [
+          { id: 'WS1-MP-001', name: 'ROC-AUC', workstream: 'ws1_model_performance' },
+          { id: 'WS1-MP-005', name: 'Brier Score', workstream: 'ws1_model_performance' },
+          { id: 'WS2-TR-005', name: 'False Alert Rate', workstream: 'ws2_triggers' },
+        ],
+        { 'WS1-MP-001': 0.75 } // only this one computes; the rest are null -> hidden
+      );
+      renderWithAllProviders(<Home />);
+
+      expect(screen.getByText('ROC-AUC')).toBeInTheDocument();
+      expect(screen.queryByText('Brier Score')).not.toBeInTheDocument();
+      expect(screen.queryByText('False Alert Rate')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Not yet computed/)).not.toBeInTheDocument();
+      const tablist = screen.getByRole('tablist');
+      expect(within(tablist).queryByText('Triggers')).not.toBeInTheDocument();
+      expect(screen.getByText(/Showing 1 of 3 defined KPIs/)).toBeInTheDocument();
     });
 
     it('routes a Model Performance card to /model-performance', () => {
@@ -843,8 +945,6 @@ describe('KPI value honesty (H1)', () => {
     (useKPIList as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         kpis: [
-          // workstream includes "commercial" so the KPI lands in the default
-          // (commercial) category tab and is mounted in the DOM.
           { id: 'trx_total', name: 'Total TRx', workstream: 'commercial', definition: 'Total prescriptions', unit: undefined },
         ],
         total: 1,
@@ -852,16 +952,24 @@ describe('KPI value honesty (H1)', () => {
       isLoading: false,
       error: null,
     });
+    // Live batch value so the KPI computes and renders under dynamic visibility.
+    (useBatchCalculateKPIs as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: {
+        results: [
+          { kpi_id: 'trx_total', value: 1234, status: 'healthy', error: null, data_source: 'database' },
+        ],
+      },
+      isError: false,
+    });
 
     renderWithAllProviders(<Home />);
 
     // The fabricated SAMPLE values must NOT appear when live metadata is present.
     expect(screen.queryByText('125,430')).not.toBeInTheDocument();
     expect(screen.queryByText(/\$425/)).not.toBeInTheDocument();
-    // The live KPI name IS rendered.
+    // The live KPI name renders with its REAL computed value (never the SAMPLE figure).
     expect(screen.getByText('Total TRx')).toBeInTheDocument();
-    // Numeric value shows the honest "not yet computed" placeholder.
-    expect(screen.getAllByText(/not yet computed|—/i).length).toBeGreaterThan(0);
   });
 });
 
@@ -944,6 +1052,17 @@ describe('SAMPLE_KPIS green-badge edge (task 5)', () => {
       },
       isLoading: false,
       error: null,
+    });
+    // Both KPIs compute, so both render under their REAL workstream tabs.
+    (useBatchCalculateKPIs as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      data: {
+        results: [
+          { kpi_id: 'trx', value: 1000, status: 'healthy', error: null, data_source: 'database' },
+          { kpi_id: 'roc_auc', value: 0.8, status: 'healthy', error: null, data_source: 'database' },
+        ],
+      },
+      isError: false,
     });
 
     renderWithAllProviders(<Home />);

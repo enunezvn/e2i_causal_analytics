@@ -1336,6 +1336,53 @@ class RocCurveResponse(BaseModel):
     measured_at: Optional[datetime] = None
 
 
+class BrandPerformanceSummaryResponse(BaseModel):
+    """Per-brand average of the gold-standard models' holdout metrics.
+
+    ``available=false`` is an HONEST empty state (no gold-standard models found),
+    not an error — never a fabricated 0. ``is_synthetic_cohort`` flags that the
+    eval cohort is synthetic demo data.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    brand: str
+    available: bool
+    n_models: int = 0
+    accuracy: Optional[float] = None
+    precision: Optional[float] = None
+    recall: Optional[float] = None
+    f1: Optional[float] = None
+    auc_roc: Optional[float] = None
+    is_synthetic_cohort: bool = False
+
+
+@router.get(
+    "/performance/brand-summary",
+    response_model=BrandPerformanceSummaryResponse,
+    summary="Per-brand gold-standard model-performance averages",
+    operation_id="get_brand_performance_summary",
+)
+async def get_brand_performance_summary(
+    brand: Optional[str] = Query(
+        default=None,
+        description="Brand filter (case-insensitive); omitted/'all' = all gold-standard models",
+    ),
+) -> BrandPerformanceSummaryResponse:
+    """Average accuracy/precision/recall/f1/auc_roc over the brand's gold-standard
+    models, or ``available=false`` when none are found (honest empty state)."""
+    from src.services.performance_tracking import get_performance_tracker
+
+    try:
+        tracker = get_performance_tracker()
+        summary = await tracker.get_brand_goldstd_summary(brand)
+        if summary is None:
+            return BrandPerformanceSummaryResponse(brand=(brand or "all"), available=False)
+        return BrandPerformanceSummaryResponse(available=True, **summary)
+    except Exception as e:
+        raise _log_and_500("Failed to load brand performance summary", e)
+
+
 @router.get(
     "/performance/{model_id}/confusion",
     response_model=ConfusionMatrixResponse,

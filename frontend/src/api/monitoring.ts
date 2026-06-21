@@ -19,10 +19,12 @@
 import { get, post } from '@/lib/api-client';
 import {
   AlertListResponseWireSchema,
+  BrandModelSummaryWireSchema,
   DriftHistoryResponseWireSchema,
   MonitoringRunsResponseWireSchema,
   ModelHealthSummaryWireSchema,
 } from '@/lib/api-schemas';
+import type { BrandModelSummary } from '@/lib/api-schemas';
 import type {
   AlertActionRequest,
   AlertItem,
@@ -303,6 +305,20 @@ export async function getModelHealth(
     `${MONITORING_BASE}/health/${encodeURIComponent(modelId)}`,
     undefined,
     { schema: ModelHealthSummaryWireSchema }
+  );
+}
+
+/**
+ * Per-brand average of the gold-standard models' holdout metrics. Pass no brand
+ * (or 'All') for the all-12-model average. `available=false` => honest empty.
+ */
+export async function getBrandModelSummary(
+  brand?: string
+): Promise<BrandModelSummary> {
+  return get<BrandModelSummary>(
+    `${MONITORING_BASE}/performance/brand-summary`,
+    brand && brand !== 'All' ? { brand } : undefined,
+    { schema: BrandModelSummaryWireSchema }
   );
 }
 

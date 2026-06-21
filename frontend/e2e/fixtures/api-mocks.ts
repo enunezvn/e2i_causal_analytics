@@ -632,7 +632,10 @@ export async function mockApiRoutes(page: Page): Promise<void> {
     })
   })
 
-  // Model Accuracy ROC-AUC (GET /api/kpis/WS1-MP-001) — real value ~0.80.
+  // Corpus-wide ROC-AUC (GET /api/kpis/WS1-MP-001) — real value ~0.80. NOTE:
+  // since #1067 the Home "Model Accuracy" tile no longer reads this; it now uses
+  // the per-brand gold-standard summary below. Kept for the Model Performance
+  // page and any other WS1-MP-001 consumers.
   await page.route('**/api/kpis/WS1-MP-001**', async (route: Route) => {
     await route.fulfill({
       status: 200,
@@ -644,6 +647,28 @@ export async function mockApiRoutes(page: Page): Promise<void> {
         calculated_at: new Date().toISOString(),
         cached: false,
         metadata: {},
+      }),
+    })
+  })
+
+  // Home "Model Accuracy" tile (#1067): per-brand average of the gold-standard
+  // models' holdout accuracy (GET /api/monitoring/performance/brand-summary; no
+  // brand => the all-models "All" average). available=true + accuracy=0.80 => the
+  // tile renders "80.0%" ("avg of N models"); shape mirrors BrandModelSummaryWireSchema.
+  await page.route('**/api/monitoring/performance/brand-summary**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        brand: 'All',
+        available: true,
+        n_models: 12,
+        accuracy: 0.80,
+        precision: 0.74,
+        recall: 0.69,
+        f1: 0.71,
+        auc_roc: 0.7998,
+        is_synthetic_cohort: false,
       }),
     })
   })
