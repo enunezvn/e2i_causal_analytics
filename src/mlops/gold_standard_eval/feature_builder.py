@@ -123,15 +123,16 @@ class FeatureBuilder:
         # ``keep_columns`` resolution:
         #   * explicit value (incl. ()) → use it verbatim (() disables the
         #     allowlist → keep all non-denylisted columns, e.g. ad-hoc probes).
-        #   * None → grain-aware default so ``FeatureBuilder(spec)`` (the
-        #     ``_run_one_cohort`` call shape) gets the right allowlist per grain:
-        #       - grain == "hcp": the HCP covariates JOIN-embedded from
-        #         hcp_profiles (the patient KEEP_COLUMNS do not exist on the HCP
-        #         frame).
-        #       - else: the locked patient allowlist (UNCHANGED).
+        #   * None → the cohort's OWN ``spec.base_covariates`` (the per-cohort,
+        #     per-grain locked allowlist). This is load-bearing: T9 enriched the
+        #     persistence/discontinuation cohorts to 7 covariates while initiation
+        #     stays 3, and the HCP cohort uses its JOIN-embedded HCP covariates —
+        #     all carried on ``spec.base_covariates``. Using the module KEEP_COLUMNS
+        #     here would silently force every patient cohort back to the 3-tuple.
+        #   * empty base_covariates → module KEEP_COLUMNS fallback (legacy specs).
         if keep_columns is not None:
             self.keep_columns: tuple[str, ...] = keep_columns
-        elif spec.grain == "hcp":
+        elif spec.base_covariates:
             self.keep_columns = tuple(spec.base_covariates)
         else:
             self.keep_columns = KEEP_COLUMNS
