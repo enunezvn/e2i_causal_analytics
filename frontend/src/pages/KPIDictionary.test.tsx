@@ -321,7 +321,7 @@ describe('KPIDictionary', () => {
   it('shows frequency information', () => {
     render(<KPIDictionary />, { wrapper: createWrapper() });
 
-    // Component uses SAMPLE_KPIS (46 KPIs) with various frequencies
+    // Component renders the registry-driven KPI list (via the API hooks) with various frequencies
     expect(screen.getAllByText('daily').length).toBeGreaterThan(0);
     expect(screen.getAllByText('weekly').length).toBeGreaterThan(0);
   });

@@ -195,7 +195,7 @@ export const routeConfigs: RouteConfig[] = [
   {
     path: '/kpi-dictionary',
     title: 'KPI Dictionary',
-    description: '46 KPIs across 6 workstreams',
+    description: 'KPI reference across 6 workstreams',
     icon: 'book-open',
     section: 'data',
     showInNav: true,
