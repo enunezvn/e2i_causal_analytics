@@ -60,7 +60,14 @@ export function AIAgentInsights() {
   // mount; once the user picks from the in-page selector their choice wins.
   // We derive (rather than snapshot into state) to avoid a stale selection.
   const [brandOverride, setBrandOverride] = useState<string | null>(null);
-  const selectedBrand = brandOverride || brandFromUrl || filters?.brand || ALL_BRANDS;
+  const rawBrand = brandOverride || brandFromUrl || filters?.brand || ALL_BRANDS;
+  // Normalize to a representable value: an unknown brand (e.g. a stale ?brand=
+  // link or a non-gold context brand) must not silently flow into the children's
+  // RAG prompt / opportunities API filter while the Select shows only a
+  // placeholder. Coerce anything outside the gold-standard set to "All brands".
+  const selectedBrand = (GOLDSTD_BRANDS as readonly string[]).includes(rawBrand)
+    ? rawBrand
+    : ALL_BRANDS;
   const brand = selectedBrand === ALL_BRANDS ? undefined : selectedBrand;
 
   // Model id: URL query takes precedence, then a deploy-time env override

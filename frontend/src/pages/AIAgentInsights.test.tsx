@@ -360,5 +360,32 @@ describe('AIAgentInsights', () => {
       rerender(<AIAgentInsights />);
       expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Kisqali');
     });
+
+    it('a local selection overrides the ?brand= URL value', async () => {
+      const user = userEvent.setup();
+      render(<AIAgentInsights />, {
+        wrapper: createWrapperWithUrl('/ai-insights?brand=Fabhalta'),
+      });
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Fabhalta');
+      await user.click(screen.getByRole('combobox', { name: /brand/i }));
+      await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:Kisqali');
+    });
+
+    it('falls back to "All brands" (undefined) when neither URL nor context set a brand', () => {
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({ filters: undefined });
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:__none__');
+    });
+
+    it('coerces an unknown ?brand= to "All brands" (never routes an invisible brand)', () => {
+      (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({ filters: undefined });
+      render(<AIAgentInsights />, {
+        wrapper: createWrapperWithUrl('/ai-insights?brand=NotARealBrand'),
+      });
+      // The unknown brand is NOT forwarded to the children's API/RAG calls.
+      expect(screen.getByTestId('executive-ai-brief')).toHaveTextContent('brand:__none__');
+      expect(screen.getByTestId('priority-actions-roi')).toHaveTextContent('brand:__none__');
+    });
   });
 });
