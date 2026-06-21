@@ -10,7 +10,6 @@ from src.mlops.gold_standard_eval.cohort_spec import (
     make_patient_spec,
 )
 
-
 _THREE = ("disease_severity", "academic_hcp", "geographic_region")
 # T9: persistence/discontinuation now depend on 7 leakage-safe covariates.
 _SEVEN = _THREE + (

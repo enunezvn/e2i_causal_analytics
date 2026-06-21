@@ -210,13 +210,19 @@ def regenerate(covariates: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Data
         insurance_type = _read_or_draw_str(
             sub,
             "insurance_type",
-            lambda k: rng.choice(["commercial", "medicare", "medicaid"], k, p=[0.6, 0.3, 0.1]),
+            lambda k, rng=rng: rng.choice(
+                ["commercial", "medicare", "medicaid"], k, p=[0.6, 0.3, 0.1]
+            ),
         )
-        age_at_diagnosis = _read_or_draw_num(sub, "age_at_diagnosis", lambda k: rng.integers(18, 85, k))
+        age_at_diagnosis = _read_or_draw_num(
+            sub, "age_at_diagnosis", lambda k, rng=rng: rng.integers(18, 85, k)
+        )
         comorbidity_burden = _read_or_draw_num(
-            sub, "comorbidity_burden", lambda k: rng.poisson(1.3, k).clip(0, 5)
+            sub, "comorbidity_burden", lambda k, rng=rng: rng.poisson(1.3, k).clip(0, 5)
         )
-        prior_therapy_lines = _read_or_draw_num(sub, "prior_therapy_lines", lambda k: rng.integers(0, 4, k))
+        prior_therapy_lines = _read_or_draw_num(
+            sub, "prior_therapy_lines", lambda k, rng=rng: rng.integers(0, 4, k)
+        )
         res = generate_discontinuation_outcomes(
             rng=rng,
             treatment_arm=sub["treatment_arm"].to_numpy(dtype=int),
@@ -327,7 +333,13 @@ def update_labels(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_S
     columns change -- covariates and all other columns are untouched.
     """
     written = 0
-    cols = [KEY, "persistent_180d", "discontinued_180d", "comorbidity_burden", "prior_therapy_lines"]
+    cols = [
+        KEY,
+        "persistent_180d",
+        "discontinued_180d",
+        "comorbidity_burden",
+        "prior_therapy_lines",
+    ]
     records = regen[cols].to_dict(orient="records")
     for rec in records:
         client.table(TABLE).update(

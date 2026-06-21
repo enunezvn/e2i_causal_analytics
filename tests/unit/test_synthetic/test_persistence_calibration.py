@@ -19,9 +19,8 @@ small-sample noise (a 600-row holdout swings ±0.03).
 
 from __future__ import annotations
 
-from sklearn.metrics import roc_auc_score
-
 import pytest
+from sklearn.metrics import roc_auc_score
 
 from src.ml.synthetic.config import Brand
 from src.ml.synthetic.dgp.recovery_probe import recover_ate_and_cate
@@ -64,7 +63,9 @@ def test_persistence_auc_in_target_band(faithful):
     for b, m in faithful.items():
         assert 0.05 <= m["disc_prev"] <= 0.60, f"{b.value}: prevalence {m['disc_prev']} out of band"
         # 7 covariates → ~19 encoded features (was 9 for the 3-covariate model).
-        assert m["n_features"] >= 15, f"{b.value}: only {m['n_features']} encoded features (expected the 7-covariate set)"
+        assert m["n_features"] >= 15, (
+            f"{b.value}: only {m['n_features']} encoded features (expected the 7-covariate set)"
+        )
         assert 0.78 <= m["auc"] <= 0.83, (
             f"{b.value}: faithful holdout AUC {m['auc']:.4f} out of realistic [0.78, 0.83]"
         )

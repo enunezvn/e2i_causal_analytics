@@ -113,9 +113,7 @@ def generate_discontinuation_outcomes(
     region_pull = np.array(
         [_DISC_REGION_LOGIT.get(str(r), 0.0) for r in geographic_region], dtype=float
     )
-    ins_pull = np.array(
-        [_INS_DISC_PULL.get(str(i), 0.0) for i in insurance_type], dtype=float
-    )
+    ins_pull = np.array([_INS_DISC_PULL.get(str(i), 0.0) for i in insurance_type], dtype=float)
     logit = (
         _DISC_INTERCEPT
         + brand_cate_scale * seg_treat * treatment_arm  # causal effect — UNCHANGED
