@@ -32,6 +32,12 @@ def _fit_bundle(spec, seed: int) -> dict[str, Any]:
             "disease_severity": rng.normal(5, 1.5, n).round(2),
             "academic_hcp": rng.integers(0, 2, n),
             "geographic_region": rng.choice(["midwest", "northeast", "south", "west"], n),
+            # T9: the 4 prognostic drivers for the 7-covariate persistence/discontinuation
+            # cohorts (initiation's FeatureBuilder ignores them via its 3-col allowlist).
+            "insurance_type": rng.choice(["commercial", "medicare", "medicaid"], n),
+            "age_at_diagnosis": rng.integers(18, 85, n),
+            "comorbidity_burden": rng.integers(0, 6, n),
+            "prior_therapy_lines": rng.integers(0, 4, n),
             spec.label_column: rng.integers(0, 2, n),
         }
     )
@@ -83,16 +89,27 @@ class TestRoutingByModelName:
                 "persistence_fabhalta_goldstd_lr_v1": m_pers,
             },
         )
-        raw = {"disease_severity": 5.61, "academic_hcp": 0, "geographic_region": "northeast"}
+        raw_init = {"disease_severity": 5.61, "academic_hcp": 0, "geographic_region": "northeast"}
+        # T9: persistence carries 4 extra prognostic drivers. The service validates EVERY
+        # key against the ROUTED model's own covariate types, so each model gets exactly
+        # its own set (mirrors production: predictions.py builds raw_features from the
+        # cohort's base_covariates — never a superset).
+        raw_pers = {
+            **raw_init,
+            "insurance_type": "commercial",
+            "age_at_diagnosis": 52,
+            "comorbidity_burden": 1,
+            "prior_therapy_lines": 0,
+        }
 
         out_init = await service.predict(
             serving_module.PredictionInput(
-                model_name="initiation_remibrutinib_goldstd_lr_v1", raw_features=[raw]
+                model_name="initiation_remibrutinib_goldstd_lr_v1", raw_features=[raw_init]
             )
         )
         out_pers = await service.predict(
             serving_module.PredictionInput(
-                model_name="persistence_fabhalta_goldstd_lr_v1", raw_features=[raw]
+                model_name="persistence_fabhalta_goldstd_lr_v1", raw_features=[raw_pers]
             )
         )
         # Both real, finite probabilities.
@@ -100,9 +117,9 @@ class TestRoutingByModelName:
         assert np.isfinite(out_pers.probabilities[0])
         # Routed to the correct model: the value matches that model's own transform.
         exp_init = float(
-            m_init["model"].predict_proba(m_init["preprocessor"].transform(pd.DataFrame([raw])))[
-                :, 1
-            ][0]
+            m_init["model"].predict_proba(
+                m_init["preprocessor"].transform(pd.DataFrame([raw_init]))
+            )[:, 1][0]
         )
         assert abs(out_init.probabilities[0] - exp_init) < 1e-9
         # Two distinct models → distinct probabilities (independently fit).

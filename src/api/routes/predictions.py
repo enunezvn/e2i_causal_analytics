@@ -823,6 +823,9 @@ _PATIENT_COHORTS = ("initiation", "persistence", "discontinuation")
 _HCP_COHORT = "hcp_adoption"
 # Mirrors RegionEnum / HCPGenerator.REGION_DIST (brand-agnostic US regions).
 _REGION_CHOICES = ["northeast", "south", "midwest", "west"]
+# T9: insurance_type is a categorical persistence driver (access gradient) — render
+# it as a dropdown on the score-cohort form, not a free numeric input.
+_INSURANCE_CHOICES = ["commercial", "medicare", "medicaid"]
 
 
 def _parse_model_brand_cohort(model_name: str):
@@ -879,6 +882,8 @@ def build_curated_input_fields(model_name: str) -> Optional[List[Dict[str, Any]]
             fields.append({"name": cov, "type": "category", "choices": specialty_choices})
         elif cov == "geographic_region":
             fields.append({"name": cov, "type": "category", "choices": list(_REGION_CHOICES)})
+        elif cov == "insurance_type":
+            fields.append({"name": cov, "type": "category", "choices": list(_INSURANCE_CHOICES)})
         else:
             fields.append({"name": cov, "type": "number"})
     return fields

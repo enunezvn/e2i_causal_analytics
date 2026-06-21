@@ -66,15 +66,25 @@ def test_fabhalta_hcp_adoption_specialty_is_pnh():
 
 def test_patient_cohort_features_have_no_specialty():
     fields = build_curated_input_fields("persistence_kisqali_goldstd_lr_v1")
+    # T9: persistence/discontinuation cohorts now carry 7 leakage-safe covariates.
     assert [f["name"] for f in fields] == [
         "disease_severity",
         "academic_hcp",
         "geographic_region",
+        "insurance_type",
+        "age_at_diagnosis",
+        "comorbidity_burden",
+        "prior_therapy_lines",
     ]
     by = _by_name(fields)
     assert "specialty" not in by
     assert by["disease_severity"]["type"] == "number"
     assert by["geographic_region"]["type"] == "category"
+    # insurance_type is a categorical access gradient → dropdown, not a number input.
+    assert by["insurance_type"]["type"] == "category"
+    assert set(by["insurance_type"]["choices"]) == {"commercial", "medicare", "medicaid"}
+    assert by["comorbidity_burden"]["type"] == "number"
+    assert by["prior_therapy_lines"]["type"] == "number"
 
 
 def test_unknown_model_returns_none():
