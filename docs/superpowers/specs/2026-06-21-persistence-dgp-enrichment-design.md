@@ -56,8 +56,8 @@ reuse this exact recipe on their own equations (`patient_generator.py` initiatio
 | Accuracy target | Realistic **~0.78–0.82**, varied per brand |
 | Scope this round | **Persistence + discontinuation only** (6 models: 3 brands × {persistence, discontinuation}) |
 | Driver set | **7 covariates** = existing {disease_severity, academic_hcp, geographic_region} + 4 new |
-| New drivers | `age_at_diagnosis`, `insurance_type`, `comorbidity_burden`, `prior_therapy_experienced` |
-| New columns? | Reuse **existing `patient_journeys` columns** (`age_at_diagnosis`, `insurance_type`, `comorbidities[]`, `previous_treatment`); minimal/no migration |
+| New drivers | `age_at_diagnosis`, `insurance_type`, `comorbidity_burden`, `prior_therapy_lines` |
+| New columns? | Reuse `insurance_type` + `age_at_diagnosis` (already generated at `patient_generator.py:220,225`); **one additive migration** for `comorbidity_burden` + `prior_therapy_lines` (the schema's `comorbidities[]` is unpopulated and `previous_treatment` is on `treatment_events`, not `patient_journeys`) |
 | Causal safety | New drivers are **prognostic-only, independent of `treatment_arm`** |
 | Calibration | **Measure, don't assume** — a harness tunes coefficients to the achieved AUC + prevalence |
 
@@ -74,7 +74,7 @@ logit = intercept*                                          # RE-TUNED for preva
         + β_age   · f(age_at_diagnosis)                     # NEW prognostic
         + β_ins   · insurance_pull(insurance_type)          # NEW prognostic
         + β_com   · comorbidity_burden                      # NEW prognostic
-        + β_prior · prior_therapy_experienced               # NEW prognostic
+        + β_prior · prior_therapy_lines               # NEW prognostic
         + Normal(0, σ*)                                     # σ* ≤ 0.35 — a calibration lever (§3)
 ```
 
@@ -102,13 +102,15 @@ Per-driver:
 
 | Driver | Source column | Encoding | Realistic effect on persistence |
 |---|---|---|---|
-| `insurance_type` | `patient_journeys.insurance_type` | one-hot | access gradient: commercial > Medicare > Medicaid > uninsured |
-| `comorbidity_burden` | derived count from `comorbidities[]` | numeric | higher burden → less persistence |
-| `age_at_diagnosis` | `patient_journeys.age_at_diagnosis` | numeric | monotonic persistence gradient |
-| `prior_therapy_experienced` | derived from `previous_treatment` | binary | experienced vs naïve persist differently |
+| `insurance_type` | `patient_journeys.insurance_type` (already generated) | one-hot | access gradient: commercial > Medicare > Medicaid |
+| `comorbidity_burden` | NEW column (additive migration), Poisson-drawn 0–5 | numeric | higher burden → less persistence |
+| `age_at_diagnosis` | `patient_journeys.age_at_diagnosis` (already generated) | numeric | monotonic persistence gradient |
+| `prior_therapy_lines` | NEW column (additive migration), 0–3 | numeric | more prior lines → less persistence |
 
-**Population audit (implementation step):** confirm whether the generators currently populate these columns
-with per-patient variance. Where null/constant, add realistic distributions (independent of `treatment_arm`).
+**Population note:** `insurance_type` and `age_at_diagnosis` are already drawn in `patient_generator.py` (lines
+220, 225) but *after* the outcome call, so they don't yet feed the equation — the implementation hoists their
+generation above the outcome call. `comorbidity_burden` and `prior_therapy_lines` are new columns, generated
+fresh and drawn independently of `treatment_arm`.
 
 ### 3. Calibration harness — measure, don't assume
 Hand-picking coefficients and hoping for 0.80 is exactly the premise-guessing the project forbids. Instead,
@@ -158,5 +160,5 @@ extend `src/ml/synthetic/dgp/recovery_probe.py` into a calibration/validation st
 - `src/ml/synthetic/dgp/recovery_probe.py` — calibration/validation harness + asserted gates.
 - `src/mlops/gold_standard_eval/feature_builder.py` — `KEEP_COLUMNS` re-lock for persistence/discontinuation (per-cohort).
 - `src/mlops/gold_standard_eval/run_persistence_eval.py` — retrain the 6 models.
-- Possibly a migration only if a derived column (e.g. `comorbidity_burden`) is materialized vs computed in `FeatureBuilder`.
+- `database/migrations/0NN_persistence_drivers.sql` — additive `comorbidity_burden` + `prior_therapy_lines` columns on `patient_journeys`.
 - Tests: DGP unit tests (equation, prevalence band, complement, treatment-independence), calibration gates, ATE/CATE invariant tests.
