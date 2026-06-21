@@ -1,8 +1,8 @@
 # Synthetic KPI Coverage Map (Shard 09)
 
-**Goal:** map every one of the 46 KPIs in `config/kpi_definitions.yaml` to the
+**Goal:** map every one of the 45 calculable KPIs in `config/kpi_definitions.yaml` to the
 synthetic substrate that makes it return **non-NULL**, and prove it on the faithful
-docker Supabase. **Result: 46/46 MAPPED — ZERO N/A, ZERO EMPTY.**
+docker Supabase. **Result: 45/45 MAPPED — ZERO N/A, ZERO EMPTY.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate.)
 
 Reproduce:
 
@@ -10,9 +10,9 @@ Reproduce:
 # load the synthetic substrate (rolling-window anchored):
 PYTHONPATH=$(pwd) LOKY_MAX_CPU_COUNT=1 \
   dotenv -f /path/to/.env run -- python scripts/load_synthetic_data.py --small --anchor-to-now
-# probe all 46 KPIs against the faithful DB:
+# probe all 45 KPIs against the faithful DB:
 E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py
-# -> TOTAL 46  MAPPED 46  EMPTY 0  N/A 0
+# -> TOTAL 45  MAPPED 45  EMPTY 0  N/A 0
 ```
 
 ## How a KPI is proven
@@ -21,7 +21,7 @@ The `kpi_query` RPC reads from `kpi_query_registry`. The DEFAULT query for each 
 filters `is_synthetic = false` (Shard 07 default-exclude); each has an
 `*_include_synthetic` twin that reads the synthetic rows. The 7 view-backed KPIs read
 a `v_kpi_*` view that excludes synthetic (migration 067) and fall back to an
-`*_include_synthetic` / direct-table query that includes it. WS1-MP-002/003/004/005/006/008
+`*_include_synthetic` / direct-table query that includes it. WS1-MP-002/003/004/005/006
 have **no registry entry** — the model-performance agent reads `ml_predictions`
 columns directly; those are proven by a direct COUNT of the populated synthetic column
 (the same column the agent reads). The probe map is `scripts/check_kpi_coverage.py`.
@@ -29,7 +29,7 @@ columns directly; those are proven by a direct COUNT of the populated synthetic 
 Every probe value below is the **measured** output of `kpi_query(<id>_include_synthetic, ...)`
 on the faithful docker DB after a `--small --anchor-to-now` load.
 
-## Coverage table (46 KPIs)
+## Coverage table (45 KPIs)
 
 | KPI id | name | substrate (table.column → resolver) | verdict | measured |
 |---|---|---|---|---|
@@ -134,9 +134,9 @@ defect is `BLOCKED-BY-Fn` (not a Shard-09 failure).
   unique violation — the FeatureStoreSeeder emits fixed names (`hcp_demographics`) that
   already exist while the loader UPSERTs on `id` (uuid); (b) `feature_values`
   `valid_event_timestamp` CHECK rejects the FeatureValueGenerator's future-dated
-  anchored timestamps. **No KPI in the 46 depends on `feature_values`** (drift_monitor's
+  anchored timestamps. **No KPI in the 45 depends on `feature_values`** (drift_monitor's
   WS1-MP-009 reads `ml_drift_history`, which loads fine), so this does not affect the
-  46/46 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
+  45/45 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
   deferred to their owning shards.
 - The substrate completions added beyond the plan's Task list (model-quality metrics,
   `sequence_number`, change-tracking) are post-hoc column stamps onto **existing,

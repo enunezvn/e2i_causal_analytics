@@ -108,9 +108,20 @@ def test_yaml_by_workstream_matches_actual_sections() -> None:
         )
 
 
-# Files that historically hardcoded the registry size as "46 KPIs". The fix makes
-# them count-agnostic; this guard ensures the stale number cannot reappear.
-_FORBIDDEN = re.compile(r"\b46\b\s*\+?\s*(?:KPIs?|calculable|defined)", re.IGNORECASE)
+# Surfaces that asserted the registry size as "46 KPIs" / "46/46 mapped". After
+# #1068 removed WS1-MP-008 the calculable count is 45; these guards ensure the
+# stale number cannot reappear in any CURRENT-STATE reference (code, config, and
+# the live framework/reference docs). Dated historical records (completed-issue
+# plans/reports, design specs) are intentionally NOT scanned — "46" was true when
+# they were written. The framework reference (06-KPI-REFERENCE.md) keeps WS1-MP-008
+# documented as DECOMMISSIONED, so it may still say "WS1-MP-008"/"9 KPIs", just not
+# a stale calculable-count of 46.
+_FORBIDDEN_PATTERNS = [
+    re.compile(r"\b46\b\s*\+?\s*(?:KPIs?|calculable|defined)", re.IGNORECASE),
+    re.compile(r"Total\s+KPIs\D{0,6}46\b", re.IGNORECASE),  # "Total KPIs: 46"
+    re.compile(r"\b46/46\b"),  # coverage map "46/46 MAPPED"
+    re.compile(r"\bTOTAL\s+46\b"),  # coverage probe "TOTAL 46 MAPPED 46"
+]
 _SCANNED_FILES = [
     "config/kpi_definitions.yaml",
     "src/api/routes/chatbot_tools.py",
@@ -118,6 +129,14 @@ _SCANNED_FILES = [
     "src/kpi/__init__.py",
     "src/repositories/sample_data.py",
     "tests/unit/test_services/test_kpi_resolution.py",
+    # Current-state reference docs (issue #1075).
+    "README.md",
+    "docs/data/00-INDEX.md",
+    "docs/data/04-KNOWLEDGE-GRAPH-ONTOLOGY.md",
+    "docs/data/06-KPI-REFERENCE.md",
+    "docs/data/kpi_coverage_map_synthetic.md",
+    "docs/foundry/e2i_lineage.yaml",
+    "docs/foundry/e2i_ontology.yaml",
 ]
 
 
@@ -126,6 +145,6 @@ def test_no_stale_hardcoded_kpi_count_references() -> None:
     for rel in _SCANNED_FILES:
         text = (REPO_ROOT / rel).read_text()
         for i, line in enumerate(text.splitlines(), 1):
-            if _FORBIDDEN.search(line):
+            if any(p.search(line) for p in _FORBIDDEN_PATTERNS):
                 offenders.append(f"{rel}:{i}: {line.strip()}")
     assert not offenders, "Stale hardcoded KPI count references:\n" + "\n".join(offenders)

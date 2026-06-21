@@ -161,7 +161,7 @@ const mockWorkstreamsResponse: WorkstreamListResponse = {
 const mockKPIHealthResponse: KPIHealthResponse = {
   status: 'healthy',
   registry_loaded: true,
-  total_kpis: 46,
+  total_kpis: 45,
   cache_enabled: true,
   cache_size: 150,
   database_connected: true,

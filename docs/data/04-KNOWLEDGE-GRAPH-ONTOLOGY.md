@@ -162,7 +162,7 @@ Key Performance Indicator entity.
 
 **Category values**: `ws1_data_quality`, `ws1_model_performance`, `ws2_triggers`, `ws3_business`, `brand_specific`, `causal_metrics`
 
-See [06-KPI-REFERENCE.md](06-KPI-REFERENCE.md) for all 46 KPI definitions.
+See [06-KPI-REFERENCE.md](06-KPI-REFERENCE.md) for all KPI definitions.
 
 ---
 

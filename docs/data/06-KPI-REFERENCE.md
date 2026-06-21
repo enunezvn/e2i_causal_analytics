@@ -1,6 +1,6 @@
 # KPI Reference
 
-**Version**: 3.0.0 | **Last Updated**: 2025-11-28 | **Total KPIs**: 46 | **Gaps**: 0
+**Version**: 3.0.0 | **Last Updated**: 2025-11-28 | **Calculable KPIs**: 45 | **Decommissioned**: 1 (WS1-MP-008) | **Gaps**: 0
 
 ---
 
@@ -14,7 +14,7 @@
 
 ## Summary Table
 
-All 46 KPIs at a glance. See the detailed sections below for full definitions, source tables, and calculation logic.
+All 45 calculable KPIs at a glance, plus WS1-MP-008 (row 17) retained as **decommissioned** (#1068 — see its section below). See the detailed sections for full definitions, source tables, and calculation logic.
 
 | # | ID | Name | Workstream | Formula | Target | Warning | Critical | Freq |
 |---|-----|------|-----------|---------|--------|---------|----------|------|
@@ -34,7 +34,7 @@ All 46 KPIs at a glance. See the detailed sections below for full definitions, s
 | 14 | WS1-MP-005 | Brier Score | WS1 MP | `mean((p - y)^2)` | 0.15 | 0.25 | 0.35 | Daily |
 | 15 | WS1-MP-006 | Calibration Slope | WS1 MP | `logistic_reg(y ~ p).slope` | 1.0 | 0.8 | 0.6 | Weekly |
 | 16 | WS1-MP-007 | SHAP Coverage | WS1 MP | `has_shap / total_predictions` | 0.95 | 0.80 | 0.60 | Daily |
-| 17 | WS1-MP-008 | Fairness Gap (dRecall) | WS1 MP | `max_group(R) - min_group(R)` | 0.05 | 0.10 | 0.20 | Weekly |
+| 17 | WS1-MP-008 | Fairness Gap (dRecall) — ⚠️ DECOMMISSIONED (#1068) | WS1 MP | `max_group(R) - min_group(R)` | 0.05 | 0.10 | 0.20 | Weekly |
 | 18 | WS1-MP-009 | Feature Drift (PSI) | WS1 MP | `sum (q-p) * ln(q/p)` | 0.10 | 0.20 | 0.25 | Daily |
 | 19 | WS2-TR-001 | Trigger Precision | WS2 TR | `TP / (TP + FP)` | 0.70 | 0.55 | 0.40 | Daily |
 | 20 | WS2-TR-002 | Trigger Recall | WS2 TR | `TP / (TP + FN)` | 0.60 | 0.45 | 0.30 | Daily |
@@ -327,6 +327,8 @@ SELECT avg_ttr_hours FROM v_kpi_time_to_release LIMIT 1
 
 These KPIs monitor the predictive quality, calibration, explainability, and fairness of the ML models powering the engagement triggers. Metrics are sourced from MLflow experiment tracking and the `ml_predictions` table.
 
+> **Note:** 8 of these 9 are currently calculable. **WS1-MP-008 (Fairness Gap) is decommissioned** (#1068) — it needs protected-group `fairness_metrics` the synthetic substrate does not populate. It is retained below as a designed KPI.
+
 ### WS1-MP-001: ROC-AUC
 
 | Field | Value |
@@ -507,6 +509,8 @@ WHERE p.created_at >= NOW() - INTERVAL '30 days'
 ---
 
 ### WS1-MP-008: Fairness Gap (Delta Recall)
+
+> ⚠️ **DECOMMISSIONED (#1068):** Removed from the KPI registry and the gold-standard scorer — it requires protected-group `ml_predictions.fairness_metrics` that the synthetic substrate does not populate, so it is **not currently calculable**. Retained here as a *designed* KPI for when protected-group data exists.
 
 | Field | Value |
 |-------|-------|
@@ -1306,7 +1310,7 @@ The following KPIs use lower-is-better evaluation:
 | WS1-DQ-007 | Data Lag (Median) | 3 days | 7 days | 14 days |
 | WS1-DQ-009 | Time-to-Release (TTR) | 24 hrs | 48 hrs | 72 hrs |
 | WS1-MP-005 | Brier Score | 0.15 | 0.25 | 0.35 |
-| WS1-MP-008 | Fairness Gap | 0.05 | 0.10 | 0.20 |
+| WS1-MP-008 | Fairness Gap — ⚠️ DECOMMISSIONED (#1068) | 0.05 | 0.10 | 0.20 |
 | WS1-MP-009 | Feature Drift (PSI) | 0.10 | 0.20 | 0.25 |
 | WS2-TR-005 | False Alert Rate | 0.10 | 0.20 | 0.30 |
 | WS2-TR-006 | Override Rate | 0.15 | 0.25 | 0.40 |
