@@ -53,7 +53,12 @@ def test_average_holdout_includes_new_scalar_extras():
         {"model_id": "1", "metric_name": "pr_auc", "metric_value": 0.5, "source": "holdout"},
         {"model_id": "2", "metric_name": "pr_auc", "metric_value": 0.7, "source": "holdout"},
         {"model_id": "1", "metric_name": "brier_score", "metric_value": 0.2, "source": "holdout"},
-        {"model_id": "1", "metric_name": "calibration_slope", "metric_value": 0.9, "source": "holdout"},
+        {
+            "model_id": "1",
+            "metric_name": "calibration_slope",
+            "metric_value": 0.9,
+            "source": "holdout",
+        },
     ]
     summary = average_holdout(models, rows)
     assert summary["pr_auc"] == 0.6  # (0.5 + 0.7) / 2

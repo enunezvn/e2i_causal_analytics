@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 E2I Causal Analytics - KPI Coverage Validator V3.0
-Validates that all 46 KPIs are calculable from the V3 schema.
+Validates that all 45 KPIs are calculable from the V3 schema.
 
 Usage:
     python validate_kpi_coverage.py                    # Validate against Supabase
@@ -84,7 +84,7 @@ class ValidationResult:
 
 
 # =============================================================================
-# KPI DEFINITIONS (46 Total)
+# KPI DEFINITIONS (45 Total)
 # =============================================================================
 
 KPI_DEFINITIONS: List[KPIDefinition] = [
@@ -208,12 +208,6 @@ KPI_DEFINITIONS: List[KPIDefinition] = [
         category="Model Performance", calculation_type=CalculationType.DERIVED,
         tables=["ml_predictions"],
         columns=["ml_predictions.shap_values"]
-    ),
-    KPIDefinition(
-        id="WS1-MP-008", name="Fairness Gap (ΔRecall)", workstream="WS1",
-        category="Model Performance", calculation_type=CalculationType.DIRECT,
-        tables=["ml_predictions"],
-        columns=["ml_predictions.fairness_metrics"]
     ),
     KPIDefinition(
         id="WS1-MP-009", name="Feature Drift (PSI)", workstream="WS1",

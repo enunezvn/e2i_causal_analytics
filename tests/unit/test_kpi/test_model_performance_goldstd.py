@@ -99,7 +99,12 @@ def test_brier_uses_per_brand_goldstd_average():
     store = {
         "ml_model_registry": [{"id": "1", "model_name": "initiation_remibrutinib_goldstd_lr_v1"}],
         "ml_performance_metrics": [
-            {"model_id": "1", "metric_name": "brier_score", "metric_value": 0.18, "source": "holdout"},
+            {
+                "model_id": "1",
+                "metric_name": "brier_score",
+                "metric_value": 0.18,
+                "source": "holdout",
+            },
         ],
     }
     calc = ModelPerformanceCalculator(db_client=_SyncClient(store))
@@ -111,7 +116,12 @@ def test_calibration_uses_per_brand_goldstd_average():
     store = {
         "ml_model_registry": [{"id": "1", "model_name": "hcp_adoption_fabhalta_goldstd_lr_v1"}],
         "ml_performance_metrics": [
-            {"model_id": "1", "metric_name": "calibration_slope", "metric_value": 0.95, "source": "holdout"},
+            {
+                "model_id": "1",
+                "metric_name": "calibration_slope",
+                "metric_value": 0.95,
+                "source": "holdout",
+            },
         ],
     }
     calc = ModelPerformanceCalculator(db_client=_SyncClient(store))
