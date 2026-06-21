@@ -173,6 +173,10 @@ def _patient_covariates(n: int = 3000, seed: int = 13) -> pd.DataFrame:
             "academic_hcp": (rng.random(n) < 0.3).astype(int),
             "geographic_region": rng.choice(["midwest", "northeast", "south", "west"], n),
             "segment_assignment": segment,
+            # T9 drivers present on live rows (insurance + age). comorbidity_burden /
+            # prior_therapy_lines are omitted here to exercise regenerate()'s backfill draw.
+            "insurance_type": rng.choice(["commercial", "medicare", "medicaid"], n, p=[0.6, 0.3, 0.1]),
+            "age_at_diagnosis": rng.integers(18, 85, n),
             # current "live" labels (unused by regenerate, present for shape parity)
             "persistent_180d": rng.integers(0, 2, n),
             "discontinued_180d": rng.integers(0, 2, n),

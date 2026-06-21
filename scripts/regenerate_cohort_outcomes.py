@@ -19,12 +19,16 @@ labels are reproducible from version control.
 WHAT IT DOES
 ------------
 Reads the EXISTING synthetic patients' covariates (treatment_arm, disease_severity,
-academic_hcp, geographic_region, segment_assignment, brand) -- the causal inputs are
-NOT re-drawn -- and re-applies ``generate_discontinuation_outcomes`` per brand
-(``brand_cate_scale`` from ``_BRAND_CATE_SCALE``: Remi 1.0 / Fabhalta 0.7 /
-Kisqali 1.4) to re-derive ``persistent_180d`` / ``discontinued_180d``. The UPDATE
-is idempotent, keyed on ``patient_id``. ``persistent_180d == 1 - discontinued_180d``
-by construction (no complement violations possible).
+academic_hcp, geographic_region, segment_assignment, brand, plus the T9 prognostic
+drivers insurance_type + age_at_diagnosis) -- the causal inputs are NOT re-drawn --
+and re-applies ``generate_discontinuation_outcomes`` per brand (``brand_cate_scale``
+from ``_BRAND_CATE_SCALE``: Remi 1.0 / Fabhalta 0.7 / Kisqali 1.4) to re-derive
+``persistent_180d`` / ``discontinued_180d``. The two NEW driver columns
+(comorbidity_burden, prior_therapy_lines; migration 087) are read when already present
+or else drawn deterministically (independent of treatment_arm), so a single
+``--execute`` pass BACKFILLS them alongside the labels. The UPDATE is idempotent,
+keyed on ``patient_id``. ``persistent_180d == 1 - discontinued_180d`` by construction
+(no complement violations possible).
 
 REPRODUCIBILITY VERDICT (honest, data-driven; see ``--dry-run`` output)
 -----------------------------------------------------------------------
@@ -105,9 +109,36 @@ _COVARIATE_COLS = [
     "academic_hcp",
     "geographic_region",
     "segment_assignment",
+    # T9 prognostic drivers. insurance_type + age_at_diagnosis already exist on live
+    # rows; comorbidity_burden + prior_therapy_lines are new (migration 087) and may be
+    # NULL until this script backfills them (drawn deterministically, independent of
+    # treatment_arm, then written by --execute alongside the labels).
+    "insurance_type",
+    "age_at_diagnosis",
+    "comorbidity_burden",
+    "prior_therapy_lines",
     "persistent_180d",  # current live labels (for the backup + comparison)
     "discontinued_180d",
 ]
+
+
+def _read_or_draw_num(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
+    """Return ``sub[col]`` as a numeric array when fully populated, else a fresh
+    deterministic draw (used to backfill the new T9 driver columns on live rows)."""
+    if col in sub.columns:
+        s = pd.to_numeric(sub[col], errors="coerce")
+        if s.notna().all() and len(s) > 0:
+            return s.to_numpy()
+    return draw(len(sub))
+
+
+def _read_or_draw_str(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
+    """String-valued analogue of ``_read_or_draw_num`` (for ``insurance_type``)."""
+    if col in sub.columns:
+        s = sub[col].astype("object")
+        if s.notna().all() and len(s) > 0:
+            return s.to_numpy()
+    return draw(len(sub))
 
 
 # ---------------------------------------------------------------------------
@@ -165,26 +196,50 @@ def regenerate(covariates: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Data
 
     out_persist = pd.Series(index=df.index, dtype="Int64")
     out_disc = pd.Series(index=df.index, dtype="Int64")
+    out_com = pd.Series(index=df.index, dtype="Int64")
+    out_prior = pd.Series(index=df.index, dtype="Int64")
 
     for brand, sub in df.groupby("brand"):
         sub = sub.sort_values(KEY)
         scale = _BRAND_CATE_SCALE.get(_BRAND_ENUM.get(str(brand), Brand.REMIBRUTINIB), 1.0)
         rng = np.random.default_rng(seed)
+        # T9 prognostic drivers. insurance_type + age_at_diagnosis are READ from the
+        # existing covariates (live has them); comorbidity_burden + prior_therapy_lines
+        # are read when already backfilled, else drawn deterministically (independent of
+        # treatment_arm) so a single --execute pass backfills them AND re-derives labels.
+        insurance_type = _read_or_draw_str(
+            sub,
+            "insurance_type",
+            lambda k: rng.choice(["commercial", "medicare", "medicaid"], k, p=[0.6, 0.3, 0.1]),
+        )
+        age_at_diagnosis = _read_or_draw_num(sub, "age_at_diagnosis", lambda k: rng.integers(18, 85, k))
+        comorbidity_burden = _read_or_draw_num(
+            sub, "comorbidity_burden", lambda k: rng.poisson(1.3, k).clip(0, 5)
+        )
+        prior_therapy_lines = _read_or_draw_num(sub, "prior_therapy_lines", lambda k: rng.integers(0, 4, k))
         res = generate_discontinuation_outcomes(
             rng=rng,
             treatment_arm=sub["treatment_arm"].to_numpy(dtype=int),
             disease_severity=sub["disease_severity"].to_numpy(dtype=float),
             academic_hcp=sub["academic_hcp"].to_numpy(dtype=int),
             geographic_region=sub["geographic_region"].to_numpy(dtype=str),
+            insurance_type=np.asarray(insurance_type, dtype=str),
+            age_at_diagnosis=np.asarray(age_at_diagnosis, dtype=int),
+            comorbidity_burden=np.asarray(comorbidity_burden, dtype=int),
+            prior_therapy_lines=np.asarray(prior_therapy_lines, dtype=int),
             segment=sub["segment_assignment"].to_numpy(dtype=str),
             brand_cate_scale=float(scale),
         )
         out_persist.loc[sub.index] = res["persistent_180d"].astype(int)
         out_disc.loc[sub.index] = res["discontinued_180d"].astype(int)
+        out_com.loc[sub.index] = np.asarray(comorbidity_burden, dtype=int)
+        out_prior.loc[sub.index] = np.asarray(prior_therapy_lines, dtype=int)
 
     result = df[[KEY, "brand", "treatment_initiated"]].copy()
     result["persistent_180d"] = out_persist.astype(int).to_numpy()
     result["discontinued_180d"] = out_disc.astype(int).to_numpy()
+    result["comorbidity_burden"] = out_com.astype(int).to_numpy()
+    result["prior_therapy_lines"] = out_prior.astype(int).to_numpy()
     return result
 
 
@@ -272,12 +327,16 @@ def update_labels(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_S
     columns change -- covariates and all other columns are untouched.
     """
     written = 0
-    records = regen[[KEY, "persistent_180d", "discontinued_180d"]].to_dict(orient="records")
+    cols = [KEY, "persistent_180d", "discontinued_180d", "comorbidity_burden", "prior_therapy_lines"]
+    records = regen[cols].to_dict(orient="records")
     for rec in records:
         client.table(TABLE).update(
             {
                 "persistent_180d": int(rec["persistent_180d"]),
                 "discontinued_180d": int(rec["discontinued_180d"]),
+                # T9: backfill the new prognostic driver columns alongside the labels.
+                "comorbidity_burden": int(rec["comorbidity_burden"]),
+                "prior_therapy_lines": int(rec["prior_therapy_lines"]),
             }
         ).eq(KEY, rec[KEY]).execute()
         written += 1

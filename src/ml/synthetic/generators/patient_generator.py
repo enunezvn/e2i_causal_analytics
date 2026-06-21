@@ -126,6 +126,19 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         # record dict below — single SSOT, no second random draw.
         geographic_region = self._random_choice([r.value for r in RegionEnum], n)
 
+        # T9: prognostic persistence drivers — drawn INDEPENDENTLY of treatment_arm
+        # (so they raise predictive AUC without changing the true ATE/CATE). Hoisted
+        # above the outcome call so they feed the enriched discontinuation equation;
+        # also reused verbatim in the record dict below (single SSOT, no re-draw).
+        insurance_type = self._random_choice(
+            [i.value for i in InsuranceTypeEnum],
+            n,
+            p=[self.INSURANCE_DIST[i] for i in InsuranceTypeEnum],
+        )
+        age_at_diagnosis = self._random_int(18, 85, n)
+        comorbidity_burden = self._rng.poisson(1.3, n).clip(0, 5)
+        prior_therapy_lines = self._rng.integers(0, 4, n)
+
         # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
         # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses
         # Shard 03's _BRAND_CATE_SCALE so a Kisqali probe differs from a Remibrutinib one.
@@ -135,6 +148,10 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             disease_severity=confounders["disease_severity"],
             academic_hcp=confounders["academic_hcp"],
             geographic_region=np.asarray(geographic_region),
+            insurance_type=np.asarray(insurance_type),
+            age_at_diagnosis=np.asarray(age_at_diagnosis),
+            comorbidity_burden=np.asarray(comorbidity_burden),
+            prior_therapy_lines=np.asarray(prior_therapy_lines),
             segment=np.asarray(segment),
             brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
         )
@@ -217,12 +234,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "treatment_initiated": treatment_initiated,
                 "days_to_treatment": days_to_treatment,
                 "geographic_region": geographic_region,
-                "insurance_type": self._random_choice(
-                    [i.value for i in InsuranceTypeEnum],
-                    n,
-                    p=[self.INSURANCE_DIST[i] for i in InsuranceTypeEnum],
-                ),
-                "age_at_diagnosis": self._random_int(18, 85, n),
+                "insurance_type": insurance_type,
+                "age_at_diagnosis": age_at_diagnosis,
                 # Brand eligibility columns (Shard 04 M5). primary_diagnosis_code is
                 # an existing column; the other 10 are added by migration 068.
                 "primary_diagnosis_code": primary_dx,
@@ -248,6 +261,8 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "treatment_effect_estimate": np.round(tau_i, 4),
                 "discontinued_180d": _coh["discontinued_180d"],
                 "persistent_180d": _coh["persistent_180d"],
+                "comorbidity_burden": comorbidity_burden,
+                "prior_therapy_lines": prior_therapy_lines,
             }
         )
 
