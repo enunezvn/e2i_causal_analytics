@@ -29,7 +29,12 @@ def test_average_holdout_means_only_present_values():
         {"model_id": "1", "metric_name": "accuracy", "metric_value": 0.6, "source": "holdout"},
         {"model_id": "2", "metric_name": "accuracy", "metric_value": 0.8, "source": "holdout"},
         {"model_id": "1", "metric_name": "f1", "metric_value": 0.4, "source": "holdout"},
-        {"model_id": "2", "metric_name": "auc_roc", "metric_value": 0.9, "source": "backtest_wf"},  # wrong source, ignored
+        {
+            "model_id": "2",
+            "metric_name": "auc_roc",
+            "metric_value": 0.9,
+            "source": "backtest_wf",
+        },  # wrong source, ignored
     ]
     summary = average_holdout(models, rows)
     assert summary["n_models"] == 2
