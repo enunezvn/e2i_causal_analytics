@@ -1,6 +1,6 @@
 # Gitleaks configuration — extends default rules, no rule changes.
-# All allowlists below scope to specific paths, commits, or content
-# verified non-secret. Anything outside these allowlists still trips.
+# Every suppression below is scoped to a specific path, commit, or content
+# string verified non-secret. Anything outside this allowlist still trips.
 #
 # Two v8 gotchas pinned here so future edits don't repeat them:
 #
@@ -8,151 +8,127 @@
 #     ignores 10-char prefixes — no warning, allowlist becomes inert.
 #     Use `git rev-parse <prefix>` before pasting.
 #
-#   Gotcha 2 — multi-scope allowlists go in top-level [[allowlists]] blocks
-#     (gitleaks >= v8.21), NOT under [[rules]] / [rules.allowlist].
-#     The latter requires the rule itself to define `regex` or `path`
-#     and fails with: "<rule-id>: both |regex| and |path| are empty".
+#   Gotcha 2 — use a SINGULAR top-level [allowlist] table, NOT the plural
+#     [[allowlists]] array. EMPIRICALLY VERIFIED against gitleaks 8.24.3 (the
+#     version pinned by gitleaks/gitleaks-action@v2): with `[extend]
+#     useDefault = true`, findings from the DEFAULT/extended rules (e.g.
+#     generic-api-key) are matched ONLY against the singular [allowlist].
+#     The plural [[allowlists]] blocks are parsed but NOT applied to
+#     default-rule findings — every such block is silently inert (this bit
+#     the T9 `persistent_180d` column-name false positive: a plural block
+#     with the right path + regexes did nothing; the identical content in a
+#     singular [allowlist] suppresses it). Keep ALL suppressions in the one
+#     [allowlist] table below. Match condition is OR across paths / commits /
+#     regexes / stopwords — any one matching allowlists the finding.
 #
-# Validate locally before pushing:
-#   docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
-#     detect --source /repo --config /repo/.gitleaks.toml --no-banner --log-level info
+# Validate locally before pushing (faithful to CI — same 8.24.3, git mode):
+#   docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.24.3 \
+#     detect --source /repo -v --log-opts="--no-merges --first-parent <range>"
 
 [extend]
 useDefault = true
 
+[allowlist]
+description = "E2I verified non-secret suppressions (paths, commits, content)"
+
 # ---------------------------------------------------------------------------
-# Path allowlist — files whose entire purpose is to contain
-# secret-shaped data that is not a real secret. (45/57 findings.)
+# Paths — files whose entire purpose is to contain secret-shaped data that is
+# not a real secret, plus project modules the generic-api-key rule
+# false-positives on.
 # ---------------------------------------------------------------------------
-[[allowlists]]
-description = "Path allowlist: detect-secrets baseline, test fixtures, lockfiles"
 paths = [
   # detect-secrets audit baseline. Contains hashed_secret values + filenames
-  # of audited test fixtures. Not real secrets. (43/57 findings.)
+  # of audited test fixtures. Not real secrets.
   '''^\.secrets\.baseline$''',
 
   # Test fixtures that intentionally contain fake API keys / JWTs.
-  # (2/57 findings — both in tests/.)
   '''^tests/.*\.py$''',
 
-  # advanced_validation.py contains Plan v3 Tier 1B step 1 docstrings
-  # listing result-mapping key identifier strings (`permutation_null_p95`,
+  # advanced_validation.py contains Plan v3 Tier 1B step 1 docstrings listing
+  # result-mapping key identifier strings (`permutation_null_p95`,
   # `permutation_null_p99`, `permutation_n_permutations`,
-  # `permutation_n_effective`). The generic-api-key rule false-positives
-  # on the docstring patterns. The file is a pure Python module — no API
-  # keys, tokens, or secrets.
+  # `permutation_n_effective`). The generic-api-key rule false-positives on
+  # the docstring patterns. Pure Python module — no API keys, tokens, secrets.
   '''^src/agents/ml_foundation/model_trainer/nodes/advanced_validation\.py$''',
 
-  # Lockfiles — never contain real secrets, only entropy noise.
+  # Lockfiles — never contain real secrets, only entropy noise. (Belt-and-
+  # suspenders; the gitleaks default allowlist also covers these.)
   '''(?i).*\.lock$''',
   '''(?i)package-lock\.json$''',
   '''(?i)pnpm-lock\.yaml$''',
   '''(?i)poetry\.lock$''',
   '''(?i)uv\.lock$''',
+
+  # Gold-standard reproducible reseed loader. The `KEY = "patient_id"`
+  # constant sits next to long outcome-column names in pandas column lists
+  # (`cols = [KEY, "persistent_180d", ...]`), which the generic-api-key
+  # heuristic reads as a key/value pair. Pure synthetic-data relabel loader —
+  # no API keys, tokens, or secrets.
+  '''^scripts/regenerate_cohort_outcomes\.py$''',
+
+  # Generated, code-verified lineage & certification reports. They embed code
+  # snippets, config-key identifiers, path:line refs, and an inlined mermaid
+  # JS bundle that false-positive the generic/high-entropy rules. Read-only
+  # documentation — no real secrets.
+  '''^docs/reports/.*''',
 ]
 
 # ---------------------------------------------------------------------------
-# Commit allowlist — historical commits that introduced placeholder
-# values into files since removed from the tree (commit 889ff0f removed
-# docs/ wholesale Feb 2026). Listed individually to keep the scope tight;
-# any FUTURE leak in any other commit still trips Gitleaks.
-# (11/57 findings: 4 + 1 + 1 + 3 + 2 placeholder-doc/template hits.)
+# Commits — historical commits that introduced placeholder values into files
+# since removed from the tree (commit 889ff0f removed docs/ wholesale Feb
+# 2026). Listed individually to keep scope tight; any FUTURE leak in any other
+# commit still trips. Full 40-char SHAs required (prefixes do not match).
 # ---------------------------------------------------------------------------
-[[allowlists]]
-description = "Removed docs/template files from pre-Feb-2026 history"
-# Full 40-char SHAs required by gitleaks (prefixes do not match).
 commits = [
   "30300294ef41a950a6d8ca09fe666839b1d63552",  # docs/AUTHENTICATION.md (4 hits)
   "d28a058d2a1af2858322bead6b815902fb2627e4",  # INFRASTRUCTURE.md (1 hit)
   "5eb76e4a8e07d97abeaf7d844eeaafd20c02db3f",  # INFRASTRUCTURE.md (1 hit)
   "b61404cec6cfe3668ab6a14d8177d442eea5d471",  # INFRASTRUCTURE.md + .env.template (3 hits)
   "3e1c70cf40efb46c0b3cf59b14e8bb27de2bd53f",  # docs/FEATURE_STORE_QUICKSTART.md (2 hits)
-  "2aa69645e490ef6c522ed2f0fc0ad1e2c08212f1",  # PR #118 perm-null surface — Plan v3 Tier 1B step 1 docstring lists `permutation_null_p95` etc. as result-mapping keys; generic-api-key false-positive
-  "58cfb93227191950a7cf77c38ffb5242e83a73b5",  # PR #119 perm-null surface (rebased SHA) — same docstring false positive
-  "3cf522aa39bb16dffa50aef8a72b6d59345c2eaa",  # PR #121 perm-null surface (rebased SHA) — same docstring false positive
+  "2aa69645e490ef6c522ed2f0fc0ad1e2c08212f1",  # PR #118 perm-null docstring false positive
+  "58cfb93227191950a7cf77c38ffb5242e83a73b5",  # PR #119 perm-null docstring false positive (rebased SHA)
+  "3cf522aa39bb16dffa50aef8a72b6d59345c2eaa",  # PR #121 perm-null docstring false positive (rebased SHA)
 ]
 
 # ---------------------------------------------------------------------------
-# Content allowlist — Supabase anon key embedded in frontend/.env.production.
-# JWT payload: {"role":"anon", iss:"supabase"}. Anon keys are intended
-# for public client embedding and are gated by RLS, not secrecy.
-# (1/57 findings.)
+# Content — verified non-secret strings (matched against the captured secret).
 # ---------------------------------------------------------------------------
-[[allowlists]]
-description = "Supabase frontend anon key (RLS-protected, safe public token)"
 regexes = [
+  # Supabase frontend anon key embedded in frontend/.env.production. JWT
+  # payload {"role":"anon", iss:"supabase"}. Anon keys are intended for public
+  # client embedding and are gated by RLS, not secrecy.
   '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY5MzUzMDYzLCJleHAiOjIwODQ3MTMwNjN9\.HB_ImkVYor5f4xBYK9kLRTfYW1aq3p-NQOurBIYWYC8''',
-]
 
-# ---------------------------------------------------------------------------
-# Content allowlist — placeholder string in echo statement.
-# (1/57 findings.)
-# ---------------------------------------------------------------------------
-[[allowlists]]
-description = "docker/supabase/start.sh echo prints 'YOUR_ANON_KEY' literal"
-regexes = [
+  # docker/supabase/start.sh echo prints the 'YOUR_ANON_KEY' literal.
   '''YOUR_ANON_KEY''',
-]
 
-# ---------------------------------------------------------------------------
-# Content allowlist — Plan v3 §3 Tier 1B step 1 surface-key Python
-# identifiers (`permutation_null_p95`, `permutation_null_p99`,
-# `permutation_n_permutations`, `permutation_n_effective`) appearing in
-# docstrings as code-formatted result-mapping keys.
-# Gitleaks's `generic-api-key` rule was matching the
-#   "surface keys: ``permutation_null_p95``, ..."
-# pattern as a quoted-key/value assignment. The strings are public Python
-# identifiers, not secrets.
-# ---------------------------------------------------------------------------
-[[allowlists]]
-description = "Plan v3 Tier 1B step 1 permutation-null surface key identifiers"
-regexes = [
+  # Plan v3 Tier 1B step 1 permutation-null surface-key Python identifiers
+  # appearing in docstrings as code-formatted result-mapping keys.
   '''permutation_null_p9[59]''',
   '''permutation_n_permutations''',
   '''permutation_n_effective''',
+
+  # T9 patient_journeys cohort-outcome column-name identifiers appearing as
+  # quoted string literals in DB update payloads (e.g.
+  # `cols = [KEY, "persistent_180d", ...]`). Public DB column names, not
+  # secrets — same false-positive class as the permutation-null identifiers.
+  '''persistent_180d''',
+  '''discontinued_180d''',
+  '''comorbidity_burden''',
+  '''prior_therapy_lines''',
 ]
+
+# Stopwords — a finding whose captured secret CONTAINS any of these is
+# allowlisted. Redundant backstop to the regexes above (the regex match
+# intermittently fails on secrets captured from multi-backtick docstring
+# context in gitleaks 8.24.3).
 stopwords = [
   "permutation_null_p95",
   "permutation_null_p99",
   "permutation_n_permutations",
   "permutation_n_effective",
-]
-
-# ---------------------------------------------------------------------------
-# Path allowlist — advanced_validation.py contains Plan v3 Tier 1B
-# step 1 docstrings that list result-mapping key identifier strings
-# (`permutation_null_p95`, `permutation_null_p99`, ...). The
-# generic-api-key rule false-positives on these.
-# The file is a pure Python module — no API keys, no tokens, no secrets.
-# Belt-and-suspenders backup to the regex allowlist above (the regex
-# pattern intermittently fails to match in gitleaks 8.24.3 when the
-# secret is captured from a multi-backtick docstring context).
-# ---------------------------------------------------------------------------
-[[allowlists]]
-description = "advanced_validation.py: surface-key docstrings, no secrets"
-paths = [
-  '''^src/agents/ml_foundation/model_trainer/nodes/advanced_validation\.py$''',
-]
-
-# ---------------------------------------------------------------------------
-# Path allowlist — gold-standard reproducible loaders + generated reports.
-# Added 2026-06-15 (PRs #975 / #976). Both are verified non-secret false
-# positives of the default generic-api-key rule:
-#   * scripts/regenerate_cohort_outcomes.py — the `KEY = "patient_id"`
-#     constant sits next to long outcome-column names in pandas column lists
-#     (`df[[KEY, "persistent_180d", "discontinued_180d"]]`), which the
-#     generic-api-key heuristic reads as a key/value pair (flagged at
-#     :215 and :275). Pure synthetic-data relabel loader — no API keys,
-#     tokens, or secrets.
-#   * docs/reports/** — generated, code-verified lineage & certification
-#     reports. They embed code snippets, config-key identifiers, path:line
-#     refs, and an inlined mermaid JS bundle that false-positive the
-#     generic/high-entropy rules (e.g. the report HTML at :2742). Read-only
-#     documentation — no real secrets.
-# ---------------------------------------------------------------------------
-[[allowlists]]
-description = "Gold-standard loaders + generated lineage/cert reports (verified non-secret)"
-paths = [
-  '''^scripts/regenerate_cohort_outcomes\.py$''',
-  '''^docs/reports/.*''',
+  "persistent_180d",
+  "discontinued_180d",
+  "comorbidity_burden",
+  "prior_therapy_lines",
 ]

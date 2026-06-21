@@ -12,9 +12,11 @@ patient_generator expit>0.5 threshold (which drove the real synthetic init label
 to 0.93+ before Shard 03 banded it). The intercept _DISC_INTERCEPT is tuned so the
 marginal discontinuation rate lands inside the [0.05,0.60] band across brands.
 Confounder coefficients were boosted (severity 0.55, academic -0.80, + per-region
-pull ±0.9 logit, noise 0.35) so leakage-safe covariates carry real predictive
-signal for gold-standard model-eval, while the treatment effect and prevalence band
-are preserved.
+pull ±0.9 logit) so leakage-safe covariates carry real predictive signal for
+gold-standard model-eval, while the treatment effect and prevalence band are
+preserved. T9 (2026-06-21) adds 4 prognostic drivers — insurance access, comorbidity
+burden, age, prior-therapy lines — drawn independently of treatment_arm so they lift
+predictive AUC to a realistic ~0.78-0.82 WITHOUT changing the recoverable ATE/CATE.
 
 Sign convention (resource_optimizer-safe): treatment LOWERS discontinuation
 (improves retention). retention_benefit is a NON-NEGATIVE per-unit covariate
@@ -30,9 +32,11 @@ from typing import Dict
 import numpy as np
 from scipy.special import expit
 
-# Marginal-rate intercept (logit). Tuned so AVG(discontinued_180d) lands in-band
-# ~0.47-0.50 with the BOOSTED confounder coefficients below.
-_DISC_INTERCEPT = -2.4
+# Marginal-rate intercept (logit). T9: re-tuned to -2.9 (was -2.4) for the richer
+# 7-covariate equation — the 4 net-positive prognostic drivers raise the mean logit,
+# so the intercept drops to keep AVG(discontinued_180d) in-band [0.05,0.60] (measured
+# ~0.47). Calibration (test_persistence_calibration) verifies prevalence + AUC.
+_DISC_INTERCEPT = -2.9
 
 # Designed treatment effect on the discontinuation LOGIT (negative = retention).
 # Heterogeneous by segment: high severity benefits MOST from treatment, so its
@@ -57,6 +61,23 @@ _DISC_REGION_LOGIT = {
     "west": 0.9,
 }
 
+# --- T9 (2026-06-21): NEW prognostic drivers --------------------------------
+# Prognostic-only: drawn independently of treatment_arm in patient_generator, so
+# they raise predictive AUC WITHOUT changing the true ATE/CATE. Signs are on the
+# discontinuation logit (negative = improves persistence).
+_INS_DISC_PULL = {  # access gradient: commercial best, medicaid worst
+    "commercial": -0.65,
+    "medicare": 0.10,
+    "medicaid": 0.75,
+}
+_COMORBIDITY_COEF = 0.28  # per comorbidity: more burden -> more discontinuation
+_PRIOR_THERAPY_COEF = 0.32  # per prior line: harder-to-treat -> more discontinuation
+_AGE_CENTER = 50.0
+_AGE_COEF = 0.018  # per year above center -> slightly more discontinuation
+# Gaussian logit-noise SD. T9: reduced (was 0.35 inline) so the added signal lifts
+# the achievable AUC toward ~0.80. Calibration locks it.
+_DISC_NOISE_SD = 0.25
+
 # Per-unit, non-negative retention covariate scale (read by resource_optimizer as
 # expected_response). Strictly positive so the validator never sees a negative.
 PERSISTENCE_RETENTION_BENEFIT_PER_SEVERITY = 0.05
@@ -69,6 +90,10 @@ def generate_discontinuation_outcomes(
     disease_severity: np.ndarray,
     academic_hcp: np.ndarray,
     geographic_region: np.ndarray,
+    insurance_type: np.ndarray,
+    age_at_diagnosis: np.ndarray,
+    comorbidity_burden: np.ndarray,
+    prior_therapy_lines: np.ndarray,
     segment: np.ndarray,
     brand_cate_scale: float,
 ) -> Dict[str, np.ndarray]:
@@ -88,13 +113,18 @@ def generate_discontinuation_outcomes(
     region_pull = np.array(
         [_DISC_REGION_LOGIT.get(str(r), 0.0) for r in geographic_region], dtype=float
     )
+    ins_pull = np.array([_INS_DISC_PULL.get(str(i), 0.0) for i in insurance_type], dtype=float)
     logit = (
         _DISC_INTERCEPT
         + brand_cate_scale * seg_treat * treatment_arm  # causal effect — UNCHANGED
         + _DISC_SEVERITY_COEF * disease_severity
         + _DISC_ACADEMIC_COEF * academic_hcp
         + region_pull
-        + rng.normal(0.0, 0.35, n)
+        + ins_pull  # T9 prognostic: access gradient
+        + _COMORBIDITY_COEF * np.asarray(comorbidity_burden, dtype=float)
+        + _PRIOR_THERAPY_COEF * np.asarray(prior_therapy_lines, dtype=float)
+        + _AGE_COEF * (np.asarray(age_at_diagnosis, dtype=float) - _AGE_CENTER)
+        + rng.normal(0.0, _DISC_NOISE_SD, n)
     )
     p_disc = expit(logit)
     discontinued = (rng.random(n) < p_disc).astype(int)

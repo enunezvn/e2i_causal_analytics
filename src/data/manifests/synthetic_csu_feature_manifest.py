@@ -58,6 +58,11 @@ _PATIENT_FEATURES = [
     # Demographics / access attributes (static draws)
     _pre("age_at_diagnosis", "synthetic_dgp", at=_ENROLLMENT),
     _pre("insurance_type", "synthetic_dgp", at=_ENROLLMENT),
+    # T9 prognostic persistence drivers — pre-index static draws (independent of
+    # treatment_arm), wired into the discontinuation/persistence outcome equation
+    # (cohort_outcomes.py). Declared pre-index so manifest-filtered pipelines keep them.
+    _pre("comorbidity_burden", "synthetic_dgp", at=_ENROLLMENT),
+    _pre("prior_therapy_lines", "synthetic_dgp", at=_ENROLLMENT),
     _pre("geographic_region", "synthetic_dgp", at=_ENROLLMENT),
     _pre("primary_diagnosis_code", "synthetic_dgp", at=_ENROLLMENT),
     # Emitted covariate, explicitly non-causal in the live DGP

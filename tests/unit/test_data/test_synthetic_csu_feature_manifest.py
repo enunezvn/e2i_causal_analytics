@@ -24,6 +24,8 @@ DECLARED_SAFE = [
     "segment_assignment",
     "treatment_arm",
     "insurance_type",
+    "comorbidity_burden",
+    "prior_therapy_lines",
     "geographic_region",
     "primary_diagnosis_code",
     "urticaria_severity_uas7",

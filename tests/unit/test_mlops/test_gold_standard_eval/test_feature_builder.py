@@ -45,6 +45,38 @@ def test_feature_builder_is_leakage_safe_and_restricts_to_keep_columns():
     assert len(fb.feature_columns) == X.shape[1]
 
 
+def test_persistence_spec_keeps_seven_covariates():
+    """T9: FeatureBuilder(spec) must honor the per-cohort base_covariates. Persistence/
+    discontinuation now carry 7 covariates — the patient-grain default MUST use
+    spec.base_covariates, not the module KEEP_COLUMNS 3-tuple, or the real models
+    silently train on 3 features and /feature-importance shows 3."""
+    from src.mlops.gold_standard_eval.cohort_spec import make_patient_spec
+
+    spec = make_patient_spec("persistence", "Remibrutinib")
+    fb = FeatureBuilder(spec)
+    assert fb.keep_columns == spec.base_covariates
+    assert len(fb.keep_columns) == 7
+    raw = pd.DataFrame(
+        {
+            "patient_id": ["p1", "p2", "p3", "p4"],
+            "persistent_180d": [1, 0, 1, 0],  # label (dropped)
+            "disease_severity": [0.8, 0.2, 0.5, 0.9],
+            "academic_hcp": [1, 0, 1, 0],
+            "geographic_region": ["west", "south", "midwest", "northeast"],
+            "insurance_type": ["commercial", "medicaid", "medicare", "commercial"],
+            "age_at_diagnosis": [45, 70, 55, 33],
+            "comorbidity_burden": [0, 3, 1, 2],
+            "prior_therapy_lines": [0, 2, 1, 3],
+        }
+    )
+    X, _ = fb.build_from_frame(raw)
+    cols = list(X.columns)
+    assert any(c.startswith("insurance_type") for c in cols), cols
+    assert "age_at_diagnosis" in cols, cols
+    assert "comorbidity_burden" in cols, cols
+    assert "prior_therapy_lines" in cols, cols
+
+
 def test_transform_reindexes_eval_to_fitted_columns():
     """The critical behavior: train/eval one-hot column sets WILL differ.
 
