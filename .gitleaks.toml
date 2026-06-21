@@ -156,3 +156,28 @@ paths = [
   '''^scripts/regenerate_cohort_outcomes\.py$''',
   '''^docs/reports/.*''',
 ]
+
+# ---------------------------------------------------------------------------
+# Content allowlist — T9 patient_journeys cohort-outcome column-name identifiers
+# appearing as quoted string literals in DB update payloads (e.g.
+# regenerate_cohort_outcomes.py `cols = [KEY, "persistent_180d", ...]`).
+# Gitleaks's generic-api-key rule matches the KEY-identifier-adjacent quoted
+# column name as a key/value secret. These are public DB column names, not
+# secrets — same false-positive class as the permutation-null identifiers above.
+# Content+stopword scope (path-independent) so it suppresses across commit-mode
+# scans regardless of the reported path.
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "T9 patient_journeys cohort-outcome column-name identifiers"
+regexes = [
+  '''persistent_180d''',
+  '''discontinued_180d''',
+  '''comorbidity_burden''',
+  '''prior_therapy_lines''',
+]
+stopwords = [
+  "persistent_180d",
+  "discontinued_180d",
+  "comorbidity_burden",
+  "prior_therapy_lines",
+]
