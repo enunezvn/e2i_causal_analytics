@@ -277,6 +277,62 @@ describe('CausalAnalysis — unified agent-led page', () => {
     expect(screen.queryByText(/not wired yet/i)).not.toBeInTheDocument();
   }, 20000);
 
+  // ── T4 (codex Finding 1): a drilled-into deep view belongs to the (dataset,
+  // brand)-scoped leaderboard that produced it; switching grain must close it so
+  // a Patient analysis never lingers under the HCP grain. (The leaderboard reset
+  // itself lives in useDiscoverEffects — covered by use-causal.test.ts.)
+  it('closes an open deep view when the grain changes (no stale cross-grain analysis)', async () => {
+    const user = userEvent.setup();
+    mockDiscover({ job: COMPLETED_JOB });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('persistent_180d'));
+    expect(await screen.findByTestId('causal-detail')).toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'HCP' }));
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
+  }, 20000);
+
+  // ── T4 (codex Finding 2): the manual panel's treatment/outcome default to
+  // Patient values; the candidate sets are dataset-specific, so a grain switch
+  // must clamp any now-invalid selection to a valid candidate — else the manual
+  // run submits a column the backend allowlist rejects (400).
+  it('clamps the manual treatment/outcome to the new grain’s candidates on switch', async () => {
+    const user = userEvent.setup();
+    const TRIGGER_VARIABLES = {
+      dataset: 'nba_triggers',
+      treatment_candidates: ['control_group_flag', 'acceptance_status'],
+      outcome_candidates: ['action_taken', 'conversion_flag'],
+      covariate_candidates: [],
+      columns: [],
+    };
+    (useCausalVariables as ReturnType<typeof vi.fn>).mockImplementation((ds: string) => ({
+      data: ds === 'nba_triggers' ? TRIGGER_VARIABLES : VARIABLES,
+    }));
+    const mutateAsync = vi.fn().mockResolvedValue({ analysis_id: 'm1', status: 'completed' });
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Switch to the Trigger grain (Patient defaults treatment_arm/persistent_180d
+    // are both invalid here).
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'Trigger' }));
+    // Open the manual panel and run — the payload must carry Trigger-valid columns.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataset: 'nba_triggers',
+        treatment_var: 'control_group_flag',
+        outcome_var: 'action_taken',
+      })
+    );
+  }, 20000);
+
   it('renders the live estimator-registry total on the overview card', () => {
     (useEstimators as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { estimators: [], total: 12, by_library: {} },

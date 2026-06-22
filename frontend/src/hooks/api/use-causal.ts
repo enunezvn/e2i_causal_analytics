@@ -8,7 +8,7 @@
  * @module hooks/api/use-causal
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { UseQueryOptions, UseMutationOptions } from '@tanstack/react-query';
 import { queryKeys } from '@/lib/query-client';
@@ -155,10 +155,27 @@ export function useDiscoverEffects(
 ) {
   const [jobId, setJobId] = useState<string | null>(null);
 
-  const submit = useMutation<DiscoverEffectsResponse, ApiError>({
+  const {
+    mutate: startMutate,
+    isPending: isStarting,
+    error: startError,
+    data: submitData,
+    reset: resetSubmit,
+  } = useMutation<DiscoverEffectsResponse, ApiError>({
     mutationFn: () => discoverCausalEffects(dataset, brand),
     onSuccess: (r) => setJobId(r.job_id),
   });
+
+  // A discovered leaderboard is scoped to exactly (dataset, brand). When either
+  // facet changes, the previous job's effects no longer describe the new scope —
+  // drop them so the page returns to the honest empty state instead of showing
+  // e.g. a Patient-grain leaderboard under the HCP grain. Without this, both the
+  // polled job AND the retained mutation result (submitData) would leak across
+  // grain/brand switches as plausible-but-wrong results.
+  useEffect(() => {
+    setJobId(null);
+    resetSubmit();
+  }, [dataset, brand, resetSubmit]);
 
   const poll = useQuery<DiscoverEffectsResponse, ApiError>({
     queryKey: ['causal', 'discover-effects', jobId],
@@ -170,10 +187,10 @@ export function useDiscoverEffects(
   });
 
   return {
-    start: submit.mutate,
-    isStarting: submit.isPending,
-    startError: submit.error,
-    job: poll.data ?? submit.data ?? null,
+    start: startMutate,
+    isStarting,
+    startError,
+    job: poll.data ?? submitData ?? null,
     isPolling: poll.isFetching,
   };
 }

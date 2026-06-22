@@ -18,7 +18,7 @@
  * @module pages/CausalAnalysis
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -195,11 +195,26 @@ export default function CausalAnalysis() {
   const effects: DiscoveredEffect[] = useMemo(() => job?.effects ?? [], [job]);
   const running = !!job && job.status !== 'completed';
 
+  // A drilled-into effect belongs to the leaderboard that produced it; that
+  // leaderboard is scoped to (dataset, brand). When the grain or brand changes,
+  // the open deep view no longer matches the new scope — close it so we never
+  // show e.g. a Patient analysis under the HCP grain (the leaderboard itself is
+  // reset in useDiscoverEffects).
+  useEffect(() => {
+    setSelectedId(null);
+  }, [dataset, brandArg]);
+
   // ── Manual "Pose your own question" panel ──────────────────────────────────
   const [manualOpen, setManualOpen] = useState(false);
   const { data: variables } = useCausalVariables(dataset);
-  const treatmentCandidates = variables?.treatment_candidates ?? ['treatment_arm'];
-  const outcomeCandidates = variables?.outcome_candidates ?? ['persistent_180d'];
+  const treatmentCandidates = useMemo(
+    () => variables?.treatment_candidates ?? ['treatment_arm'],
+    [variables]
+  );
+  const outcomeCandidates = useMemo(
+    () => variables?.outcome_candidates ?? ['persistent_180d'],
+    [variables]
+  );
   const [treatmentVar, setTreatmentVar] = useState('treatment_arm');
   const [outcomeVar, setOutcomeVar] = useState('persistent_180d');
   const [estimator, setEstimator] = useState(AUTO_ESTIMATOR);
@@ -210,6 +225,22 @@ export default function CausalAnalysis() {
       ),
     [variables, treatmentVar, outcomeVar]
   );
+  // Keep the manual panel's treatment/outcome valid for the active dataset. The
+  // candidate sets are dataset-specific (e.g. HCP's only outcome is `adopted`,
+  // Trigger's treatments are control_group_flag/acceptance_status), so the
+  // Patient-grain defaults become invalid on a grain switch. Clamp any stale
+  // selection to the first valid candidate once the new dataset's variables load
+  // — otherwise a manual run submits a column the backend allowlist rejects (400).
+  useEffect(() => {
+    if (!variables) return;
+    if (treatmentCandidates.length && !treatmentCandidates.includes(treatmentVar)) {
+      setTreatmentVar(treatmentCandidates[0]);
+    }
+    if (outcomeCandidates.length && !outcomeCandidates.includes(outcomeVar)) {
+      setOutcomeVar(outcomeCandidates[0]);
+    }
+  }, [variables, treatmentCandidates, outcomeCandidates, treatmentVar, outcomeVar]);
+
   const runAgent = useRunCausalAgentAnalysis();
   const manualResult = runAgent.data;
 
