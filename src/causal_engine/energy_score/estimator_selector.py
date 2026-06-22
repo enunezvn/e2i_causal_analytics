@@ -590,10 +590,21 @@ class OLSWrapper(BaseEstimatorWrapper):
             from sklearn.linear_model import LinearRegression
 
             X = covariates.values
-            # With an EMPTY backdoor (0 covariates — the correct adjustment set
-            # for a randomized / exogenous treatment) ``column_stack`` reduces to
+            # An EMPTY backdoor (0-feature X) is the CORRECT adjustment set for a
+            # randomized / exogenous treatment. ``column_stack`` then reduces to
             # the treatment column alone, so OLS yields the UNADJUSTED ATE (the
             # treatment coefficient == difference-in-means for a binary T).
+            empty_backdoor = X.shape[1] == 0
+            if empty_backdoor:
+                # An unadjusted contrast needs BOTH arms present; a one-arm sample
+                # has no contrast and would produce a degenerate ate / constant
+                # propensity (0 or 1). Fail-closed rather than report a fake number.
+                n_treated = int(np.count_nonzero(treatment))
+                if n_treated == 0 or n_treated == len(treatment):
+                    raise ValueError(
+                        "Unadjusted empty-backdoor estimation requires both "
+                        f"treatment arms; got n_treated={n_treated} of {len(treatment)}."
+                    )
             X_with_treatment = np.column_stack([treatment, X])
 
             model = LinearRegression()
@@ -625,7 +636,7 @@ class OLSWrapper(BaseEstimatorWrapper):
             # what lets the unadjusted OLS estimate be PRODUCED rather than
             # fail-closing the whole (RCT / exogenous-treatment) question. With
             # >=1 covariate we fit the propensity model as before.
-            if X.shape[1] == 0:
+            if empty_backdoor:
                 propensity_scores = np.full(len(treatment), float(np.mean(treatment)))
             else:
                 from sklearn.linear_model import LogisticRegressionCV

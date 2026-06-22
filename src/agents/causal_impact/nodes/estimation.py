@@ -166,7 +166,7 @@ class EstimationNode:
         data: pd.DataFrame,
         treatment: str,
         outcome: str,
-        adjustment_set: List[str],
+        adjustment_set: Optional[List[str]],
         strategy: str = "best_energy",
         explicit_method: Optional[str] = None,
     ) -> tuple[EstimationResult, Dict[str, Any], float]:
@@ -182,7 +182,9 @@ class EstimationNode:
             data: DataFrame with treatment, outcome, and covariates
             treatment: Treatment variable name
             outcome: Outcome variable name
-            adjustment_set: List of adjustment variables
+            adjustment_set: Validated backdoor set. ``[]`` = zero covariates
+                (unadjusted ATE for an RCT / exogenous treatment); ``None`` = no
+                set identified, fall back to the all-other-columns design matrix.
             strategy: Selection strategy (first_success, best_energy, ensemble)
             explicit_method: If set, run only this estimator (legacy compat).
 
@@ -218,15 +220,22 @@ class EstimationNode:
         # Shard 07 C1: a provenance column (is_synthetic) must NEVER enter the
         # design matrix — even when a caller passes it explicitly in the
         # adjustment_set. Sanitize BOTH branches against PROVENANCE_DROP_COLS.
-        if adjustment_set:
+        # A VALIDATED but EMPTY backdoor (``adjustment_set == []``) is the correct
+        # adjustment set for a randomized / exogenous treatment — it means ZERO
+        # covariates (-> unadjusted ATE), NOT "fall back to every column". Only a
+        # MISSING set (``adjustment_set is None`` — no backdoor identified at all)
+        # falls back to the best-effort all-other-columns design matrix. Conflating
+        # the two would silently adjust an RCT question on every frame column.
+        if adjustment_set is not None:
             covariate_cols = [c for c in adjustment_set if c not in PROVENANCE_DROP_COLS]
+            covariates = data[covariate_cols] if covariate_cols else data.iloc[:, :0]
         else:
             covariate_cols = [c for c in data.columns if c not in _excluded]
-        covariates = (
-            data[covariate_cols]
-            if covariate_cols
-            else data.drop(columns=_excluded, errors="ignore")
-        )
+            covariates = (
+                data[covariate_cols]
+                if covariate_cols
+                else data.drop(columns=_excluded, errors="ignore")
+            )
 
         # Convert treatment to binary if continuous
         if not np.array_equal(treatment_col, treatment_col.astype(int)):
@@ -593,8 +602,14 @@ class EstimationNode:
 
             treatment = causal_graph["treatment_nodes"][0]
             outcome = causal_graph["outcome_nodes"][0]
+            # A validated EMPTY backdoor (``adjustment_sets == [[]]``) means zero
+            # covariates (unadjusted ATE for an RCT / exogenous treatment); a
+            # MISSING set (``adjustment_sets == []`` — none identified) passes
+            # ``None`` so the estimator falls back to the all-other-columns design
+            # matrix. These must NOT be conflated (see the empty-backdoor branch in
+            # ``_select_estimator_with_energy_score``).
             adjustment_set = (
-                causal_graph["adjustment_sets"][0] if causal_graph["adjustment_sets"] else []
+                causal_graph["adjustment_sets"][0] if causal_graph["adjustment_sets"] else None
             )
 
             # Get or generate data

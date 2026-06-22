@@ -347,7 +347,11 @@ class TestCATESegments:
                 "edges": [("hcp_engagement_level", "patient_conversion_rate")],
                 "treatment_nodes": ["hcp_engagement_level"],
                 "outcome_nodes": ["patient_conversion_rate"],
-                "adjustment_sets": [[]],
+                # A CATE forest needs covariates; use the real backdoor from the
+                # synthetic frame. (An EMPTY [[]] backdoor would mean zero
+                # covariates -> CausalForestDML cannot fit -> fail-closed; that
+                # path is covered by TestEmptyBackdoorEstimation.)
+                "adjustment_sets": [["geographic_region", "hcp_specialty"]],
                 "dag_dot": "...",
                 "confidence": 0.8,
             },
@@ -685,6 +689,39 @@ class TestEmptyBackdoorEstimation:
         # The naive-contrast foil agrees with the unadjusted estimate.
         if result.get("naive_ate") is not None:
             assert result["naive_ate"] == pytest.approx(naive_diff, abs=1e-9)
+
+    @pytest.mark.heavy_ml
+    def test_explicit_empty_set_not_expanded_on_wide_frame(self):
+        """An EXPLICIT empty backdoor ([]) must run UNADJUSTED even when the frame
+        carries extra columns — it must NOT be silently expanded to all columns
+        (which would adjust an RCT/exogenous question on spurious covariates).
+        Only a MISSING set (None) falls back to all-other-columns."""
+        import numpy as np
+        import pandas as pd
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        rng = np.random.RandomState(2)
+        n = 1500
+        t = (rng.rand(n) < 0.4).astype(int)
+        y = (rng.rand(n) < (0.3 + 0.3 * t)).astype(float)
+        # A spurious extra column present in the frame but NOT in the backdoor.
+        data = pd.DataFrame({"treatment_arm": t, "adopted": y, "spurious": rng.rand(n)})
+        naive_diff = float(y[t == 1].mean() - y[t == 0].mean())
+
+        node = EstimationNode()
+        result, _sel, _lat = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="treatment_arm",
+            outcome="adopted",
+            adjustment_set=[],  # EXPLICIT empty -> zero covariates, ignore 'spurious'
+            strategy="best_energy",
+        )
+        assert result["selected_estimator"] == "ols"
+        assert result["covariates_adjusted"] == []
+        # If 'spurious' had been (wrongly) used as a covariate, the OLS coefficient
+        # would differ from the pure diff-in-means.
+        assert result["ate"] == pytest.approx(naive_diff, abs=1e-9)
 
     def test_continuous_treatment_binarized_unadjusted(self):
         """A continuous treatment with an empty backdoor is binarized at the
