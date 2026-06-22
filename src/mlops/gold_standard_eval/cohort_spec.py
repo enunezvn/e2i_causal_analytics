@@ -81,9 +81,14 @@ _PATIENT_LABELS: dict[str, str] = {
 _BASE3 = ("disease_severity", "academic_hcp", "geographic_region")
 # T9 (2026-06-21): persistence/discontinuation depend on 7 leakage-safe covariates
 # after the DGP enrichment (insurance access, age, comorbidity burden, prior-therapy
-# lines added as prognostic drivers in cohort_outcomes.py). initiation is unchanged
-# this round (3 covariates); the superseded pooled PERSISTENCE/DISCONTINUATION specs
-# above also stay at 3 (not retrained by run_patient_cohorts).
+# lines added as prognostic drivers in cohort_outcomes.py).
+# T11 (2026-06-22): initiation now ALSO uses the 7-covariate set — the same 4
+# prognostic drivers were added to the treatment_initiated outcome equation
+# (binary_outcome_with_cate via initiation_prognostic_offset), drawn ⊥ treatment_arm
+# so ATE/CATE recovery is preserved. (geographic_region was never in the initiation
+# eqn — region≈0 — so the lift comes from the 4 NEW drivers, not region.) The
+# superseded pooled PERSISTENCE/DISCONTINUATION specs above stay at 3 (not retrained
+# by run_patient_cohorts).
 _BASE7 = _BASE3 + (
     "insurance_type",
     "age_at_diagnosis",
@@ -91,7 +96,7 @@ _BASE7 = _BASE3 + (
     "prior_therapy_lines",
 )
 _PATIENT_COVARIATES: dict[str, tuple[str, ...]] = {
-    "initiation": _BASE3,
+    "initiation": _BASE7,
     "persistence": _BASE7,
     "discontinuation": _BASE7,
 }
