@@ -590,6 +590,28 @@ class OLSWrapper(BaseEstimatorWrapper):
             from sklearn.linear_model import LinearRegression
 
             X = covariates.values
+            # An EMPTY backdoor (0-feature X) is the CORRECT adjustment set for a
+            # randomized / exogenous treatment. ``column_stack`` then reduces to
+            # the treatment column alone, so OLS yields the UNADJUSTED ATE (the
+            # treatment coefficient == difference-in-means for a binary T).
+            empty_backdoor = X.shape[1] == 0
+            if empty_backdoor:
+                # An unadjusted contrast needs EXACTLY TWO arms (both present). Use
+                # the DISTINCT values (not count_nonzero, which would mis-handle a
+                # non-0/1 encoding such as 1/2 or -1/1): a one-arm or multi-level
+                # treatment has no well-defined difference-in-means, so fail-closed
+                # rather than report a fake number. Normalize the two arms to 0/1 so
+                # the OLS coefficient IS the difference-in-means (the same category
+                # contrast the discrete-treatment CATE estimators report), regardless
+                # of the raw encoding.
+                arms = np.unique(treatment)
+                if arms.size != 2:
+                    raise ValueError(
+                        "Unadjusted empty-backdoor estimation requires exactly two "
+                        f"treatment arms; got {arms.size} distinct value(s): "
+                        f"{arms.tolist()}."
+                    )
+                treatment = (treatment == arms[1]).astype(int)
             X_with_treatment = np.column_stack([treatment, X])
 
             model = LinearRegression()
@@ -613,12 +635,22 @@ class OLSWrapper(BaseEstimatorWrapper):
             # Constant CATE (OLS gives ATE only)
             cate = np.full(len(treatment), ate)
 
-            # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
+            # Propensity scores. An EMPTY backdoor (0-feature X) is the CORRECT
+            # adjustment set for a randomized / exogenous treatment: there is
+            # nothing to model, so P(T|X) collapses to the constant marginal
+            # P(T)=mean(T). Fitting LogisticRegressionCV on a 0-feature X raises
+            # ("0 feature(s)"), so use the constant propensity instead — this is
+            # what lets the unadjusted OLS estimate be PRODUCED rather than
+            # fail-closing the whole (RCT / exogenous-treatment) question. With
+            # >=1 covariate we fit the propensity model as before.
+            if empty_backdoor:
+                propensity_scores = np.full(len(treatment), float(np.mean(treatment)))
+            else:
+                from sklearn.linear_model import LogisticRegressionCV
 
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
-            ps_model.fit(X, treatment)
-            propensity_scores = ps_model.predict_proba(X)[:, 1]
+                ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+                ps_model.fit(X, treatment)
+                propensity_scores = ps_model.predict_proba(X)[:, 1]
 
             elapsed = (time.perf_counter() - start) * 1000
 

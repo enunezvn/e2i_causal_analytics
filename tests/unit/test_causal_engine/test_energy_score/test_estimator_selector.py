@@ -1098,3 +1098,96 @@ class TestSelectionResultRequiresReview:
         )
         assert sr.requires_review is False
         assert sr.exceeded_max_energy_score is False
+
+
+# =============================================================================
+# Empty-backdoor (0-covariate) unadjusted estimation
+#
+# An empty validated backdoor is the CORRECT adjustment set for a randomized
+# (RCT) or exogenous treatment — there is nothing to confound, so P(T|X)
+# reduces to the constant marginal P(T). The energy-score CATE chain
+# (CausalForest/LinearDML/DRLearner) genuinely cannot fit a 0-feature X, but
+# the unadjusted ATE (OLS coefficient on the treatment alone == difference in
+# means for a binary treatment) is well-defined and must be produced rather
+# than fail-closing the whole question. See estimation.py empty-backdoor path.
+# =============================================================================
+
+
+class TestEmptyBackdoorUnadjusted:
+    """OLS + selector must produce an unadjusted ATE when there are 0 covariates."""
+
+    @staticmethod
+    def _rct_frame(n: int = 1500, p_treat: float = 0.4, lift: float = 0.3):
+        rng = np.random.RandomState(0)
+        treatment = (rng.rand(n) < p_treat).astype(int)
+        outcome = (rng.rand(n) < (0.3 + lift * treatment)).astype(float)
+        covariates = pd.DataFrame(index=range(n))  # ZERO columns
+        diff = float(outcome[treatment == 1].mean() - outcome[treatment == 0].mean())
+        return treatment, outcome, covariates, diff
+
+    def test_ols_wrapper_succeeds_with_zero_covariates(self):
+        """OLSWrapper.fit on a 0-column covariate frame returns the unadjusted ATE
+        (== difference in means) instead of raising on the propensity fit."""
+        treatment, outcome, covariates, diff = self._rct_frame()
+        wrapper = OLSWrapper(EstimatorConfig(EstimatorType.OLS))
+
+        result = wrapper.fit(treatment, outcome, covariates)
+
+        assert result.success is True, result.error_message
+        assert result.ate is not None
+        assert result.ate == pytest.approx(diff, abs=1e-9)
+        assert result.ate_std is not None and result.ate_std > 0.0
+        assert result.ate_ci_lower is not None and result.ate_ci_upper is not None
+        assert result.ate_ci_lower < result.ate < result.ate_ci_upper
+        # Propensity for an empty backdoor is the constant marginal P(T)=mean(T).
+        assert result.propensity_scores is not None
+        assert np.allclose(result.propensity_scores, float(np.mean(treatment)))
+
+    def test_selector_selects_ols_with_zero_covariates(self):
+        """The selector returns a successful unadjusted estimate (OLS) when the
+        CATE estimators all fail on 0 features; the energy score stays finite and
+        below the review threshold (a clean RCT estimate is NOT 'unreliable')."""
+        treatment, outcome, covariates, diff = self._rct_frame()
+        selector = EstimatorSelector()
+
+        sel = selector.select(treatment=treatment, outcome=outcome, covariates=covariates)
+
+        assert sel.selected.success is True, sel.selected.error_message
+        assert sel.selected.estimator_type == EstimatorType.OLS
+        assert sel.selected.ate == pytest.approx(diff, abs=1e-9)
+        # The CATE estimators genuinely cannot fit 0-feature X — recorded as failures.
+        failed = {r.estimator_type for r in sel.all_results if not r.success}
+        assert EstimatorType.CAUSAL_FOREST in failed
+        assert EstimatorType.LINEAR_DML in failed
+        # Finite, good-tier energy score -> not requires_review.
+        assert np.isfinite(sel.selected.energy_score)
+        assert sel.requires_review is False
+
+    def test_ols_wrapper_non_01_encoding_normalized_to_diff_in_means(self):
+        """A non-0/1 two-arm encoding (e.g. {1,2}) is accepted and normalized so
+        the ATE is the difference-in-means, NOT a per-unit slope (codex r2)."""
+        rng = np.random.RandomState(3)
+        n = 1500
+        base = (rng.rand(n) < 0.4).astype(int)
+        treatment = base + 1  # arms encoded as {1, 2}
+        outcome = (rng.rand(n) < (0.3 + 0.3 * base)).astype(float)
+        covariates = pd.DataFrame(index=range(n))
+        diff = float(outcome[base == 1].mean() - outcome[base == 0].mean())
+
+        result = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+
+        assert result.success is True, result.error_message
+        assert result.ate == pytest.approx(diff, abs=1e-9)
+
+    def test_ols_wrapper_one_arm_fails_closed(self):
+        """A one-arm (single distinct value) empty-backdoor sample fails-closed
+        rather than emitting a degenerate ate / constant 0-or-1 propensity."""
+        n = 1500
+        treatment = np.ones(n, dtype=int)  # only one arm present
+        outcome = np.random.RandomState(4).rand(n)
+        covariates = pd.DataFrame(index=range(n))
+
+        result = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+
+        assert result.success is False
+        assert "two treatment arms" in (result.error_message or "")

@@ -347,7 +347,11 @@ class TestCATESegments:
                 "edges": [("hcp_engagement_level", "patient_conversion_rate")],
                 "treatment_nodes": ["hcp_engagement_level"],
                 "outcome_nodes": ["patient_conversion_rate"],
-                "adjustment_sets": [[]],
+                # A CATE forest needs covariates; use the real backdoor from the
+                # synthetic frame. (An EMPTY [[]] backdoor would mean zero
+                # covariates -> CausalForestDML cannot fit -> fail-closed; that
+                # path is covered by TestEmptyBackdoorEstimation.)
+                "adjustment_sets": [["geographic_region", "hcp_specialty"]],
                 "dag_dot": "...",
                 "confidence": 0.8,
             },
@@ -642,3 +646,146 @@ async def test_energy_score_selection_offloaded_to_thread(monkeypatch):
     assert "_select_estimator_with_energy_score" in offloaded
     # ...and the run still produced a real estimate (offload is transparent).
     assert "ate" in result["estimation_result"]
+
+
+class TestEmptyBackdoorEstimation:
+    """An empty adjustment set (RCT / exogenous treatment) must produce an
+    UNADJUSTED estimate via OLS, not fail-closed. See the empty-backdoor path in
+    the energy-score OLS wrapper. The estimation-node success mapping flows
+    unchanged (covariates_adjusted=[], selected_estimator='ols')."""
+
+    @pytest.mark.heavy_ml
+    def test_empty_adjustment_set_yields_unadjusted_ols(self):
+        import numpy as np
+        import pandas as pd
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        rng = np.random.RandomState(0)
+        n = 1500
+        t = (rng.rand(n) < 0.4).astype(int)
+        y = (rng.rand(n) < (0.3 + 0.3 * t)).astype(float)
+        data = pd.DataFrame({"treatment_arm": t, "adopted": y})  # ONLY t + outcome
+        naive_diff = float(y[t == 1].mean() - y[t == 0].mean())
+
+        node = EstimationNode()
+        result, selection_dict, _latency = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="treatment_arm",
+            outcome="adopted",
+            adjustment_set=[],  # empty backdoor
+            strategy="best_energy",
+        )
+
+        # Unadjusted OLS estimate produced (NOT fail-closed).
+        assert result["selected_estimator"] == "ols"
+        assert result["method"] == "linear_regression"
+        assert result["covariates_adjusted"] == []
+        assert result["ate"] == pytest.approx(naive_diff, abs=1e-9)
+        assert result["ate_ci_lower"] < result["ate"] < result["ate_ci_upper"]
+        # Clean RCT estimate: a finite, good-tier energy score, not 'unreliable'.
+        assert result["requires_review"] is False
+        assert result["energy_score_data"]["quality_tier"] != "unreliable"
+        # The naive-contrast foil agrees with the unadjusted estimate.
+        if result.get("naive_ate") is not None:
+            assert result["naive_ate"] == pytest.approx(naive_diff, abs=1e-9)
+
+    @pytest.mark.heavy_ml
+    def test_explicit_empty_set_not_expanded_on_wide_frame(self):
+        """An EXPLICIT empty backdoor ([]) must run UNADJUSTED even when the frame
+        carries extra columns — it must NOT be silently expanded to all columns
+        (which would adjust an RCT/exogenous question on spurious covariates).
+        Only a MISSING set (None) falls back to all-other-columns."""
+        import numpy as np
+        import pandas as pd
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        rng = np.random.RandomState(2)
+        n = 1500
+        t = (rng.rand(n) < 0.4).astype(int)
+        y = (rng.rand(n) < (0.3 + 0.3 * t)).astype(float)
+        # A spurious extra column present in the frame but NOT in the backdoor.
+        data = pd.DataFrame({"treatment_arm": t, "adopted": y, "spurious": rng.rand(n)})
+        naive_diff = float(y[t == 1].mean() - y[t == 0].mean())
+
+        node = EstimationNode()
+        result, _sel, _lat = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="treatment_arm",
+            outcome="adopted",
+            adjustment_set=[],  # EXPLICIT empty -> zero covariates, ignore 'spurious'
+            strategy="best_energy",
+        )
+        assert result["selected_estimator"] == "ols"
+        assert result["covariates_adjusted"] == []
+        # If 'spurious' had been (wrongly) used as a covariate, the OLS coefficient
+        # would differ from the pure diff-in-means.
+        assert result["ate"] == pytest.approx(naive_diff, abs=1e-9)
+
+    def test_continuous_treatment_binarized_unadjusted(self):
+        """A continuous treatment with an empty backdoor is binarized at the
+        median, and the unadjusted estimate equals the diff-in-means on the
+        binarized arms (the same estimand the adjusted path would report)."""
+        import numpy as np
+        import pandas as pd
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        rng = np.random.RandomState(1)
+        n = 1500
+        score = rng.rand(n)  # continuous treatment in [0,1)
+        hi = (score > np.median(score)).astype(int)
+        y = (rng.rand(n) < (0.3 + 0.3 * hi)).astype(float)
+        data = pd.DataFrame({"peer_influence_score": score, "adopted": y})
+        naive_diff = float(y[hi == 1].mean() - y[hi == 0].mean())
+
+        node = EstimationNode()
+        result, _sel, _lat = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="peer_influence_score",
+            outcome="adopted",
+            adjustment_set=[],
+            strategy="best_energy",
+        )
+        assert result["selected_estimator"] == "ols"
+        assert result["ate"] == pytest.approx(naive_diff, abs=1e-9)
+
+
+class TestDegenerateQueryGuard:
+    """A degenerate query (treatment == outcome, or a node absent from the DAG)
+    yields graph_builder's trivial [[]] backdoor; the estimation node must
+    fail-closed rather than route it as a validated empty backdoor (codex r2)."""
+
+    @pytest.mark.asyncio
+    async def test_treatment_equals_outcome_fails_closed(self):
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        node = EstimationNode()
+        state: dict = {
+            "query": "q",
+            "query_id": "deg-1",
+            "treatment_var": "x",
+            "outcome_var": "x",
+            "confounders": [],
+            "data_source": "synthetic",
+            "causal_graph": {
+                "nodes": ["x", "y"],
+                "edges": [],
+                "treatment_nodes": ["x"],
+                "outcome_nodes": ["x"],  # treatment == outcome -> degenerate
+                "adjustment_sets": [[]],
+                "dag_dot": "...",
+                "confidence": 0.8,
+            },
+            "parameters": {},
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+
+        result = await node.execute(state)
+
+        assert result["status"] == "failed"
+        blob = f"{result.get('estimation_error', '')} {result.get('error_message', '')}"
+        assert "egenerate" in blob  # "Degenerate"/"degenerate"
