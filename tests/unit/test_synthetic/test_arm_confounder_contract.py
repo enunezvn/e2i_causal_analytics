@@ -44,6 +44,38 @@ def test_causal_route_patient_journeys_adjusts_for_arm_confounders():
 
 
 @pytest.mark.unit
+def test_treatment_effects_route_adjusts_for_arm_confounders():
+    """The GET /causal/treatment-effects cohort×brand ATE surface estimates
+    treatment_arm on the patient cohorts using _TE_PATIENT_CONFOUNDERS — that
+    adjustment set must also contain every DGP arm confounder (it may be a
+    superset; supersets over-adjust harmlessly, a missing confounder does not)."""
+    from src.api.routes.causal import _TE_PATIENT_CONFOUNDERS, _TE_TREATMENT_VAR
+
+    assert _TE_TREATMENT_VAR == "treatment_arm"
+    confounders = set(_TE_PATIENT_CONFOUNDERS)
+    missing = set(ARM_CONFOUNDERS) - confounders
+    assert not missing, (
+        "GET /causal/treatment-effects patient confounders are missing DGP arm "
+        f"confounder(s) {sorted(missing)}; the cohort×brand ATE would be confounded."
+    )
+
+
+@pytest.mark.unit
+def test_recovery_probe_adjusts_for_arm_confounders():
+    """The DGP recovery/calibration probe (LinearDML on treatment_arm) must adjust
+    for every arm confounder, else the acceptance gate validates recovery against
+    a stale adjustment set and false-greens. _COVARS is sourced from
+    ARM_CONFOUNDERS, so this also pins that wiring."""
+    from src.ml.synthetic.dgp.recovery_probe import _COVARS
+
+    missing = set(ARM_CONFOUNDERS) - set(_COVARS)
+    assert not missing, (
+        f"recovery_probe._COVARS is missing DGP arm confounder(s) {sorted(missing)}; "
+        "the recovery gate would validate against a stale adjustment set."
+    )
+
+
+@pytest.mark.unit
 def test_segment_hte_adjusts_for_arm_confounders():
     """The segment-HTE effect-modifier set (X — conditioned on by the DML
     heterogeneity model) must contain every DGP arm confounder, since the
