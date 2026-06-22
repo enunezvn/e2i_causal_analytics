@@ -590,6 +590,10 @@ class OLSWrapper(BaseEstimatorWrapper):
             from sklearn.linear_model import LinearRegression
 
             X = covariates.values
+            # With an EMPTY backdoor (0 covariates — the correct adjustment set
+            # for a randomized / exogenous treatment) ``column_stack`` reduces to
+            # the treatment column alone, so OLS yields the UNADJUSTED ATE (the
+            # treatment coefficient == difference-in-means for a binary T).
             X_with_treatment = np.column_stack([treatment, X])
 
             model = LinearRegression()
@@ -613,12 +617,22 @@ class OLSWrapper(BaseEstimatorWrapper):
             # Constant CATE (OLS gives ATE only)
             cate = np.full(len(treatment), ate)
 
-            # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
+            # Propensity scores. An EMPTY backdoor (0-feature X) is the CORRECT
+            # adjustment set for a randomized / exogenous treatment: there is
+            # nothing to model, so P(T|X) collapses to the constant marginal
+            # P(T)=mean(T). Fitting LogisticRegressionCV on a 0-feature X raises
+            # ("0 feature(s)"), so use the constant propensity instead — this is
+            # what lets the unadjusted OLS estimate be PRODUCED rather than
+            # fail-closing the whole (RCT / exogenous-treatment) question. With
+            # >=1 covariate we fit the propensity model as before.
+            if X.shape[1] == 0:
+                propensity_scores = np.full(len(treatment), float(np.mean(treatment)))
+            else:
+                from sklearn.linear_model import LogisticRegressionCV
 
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
-            ps_model.fit(X, treatment)
-            propensity_scores = ps_model.predict_proba(X)[:, 1]
+                ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+                ps_model.fit(X, treatment)
+                propensity_scores = ps_model.predict_proba(X)[:, 1]
 
             elapsed = (time.perf_counter() - start) * 1000
 

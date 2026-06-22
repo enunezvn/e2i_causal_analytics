@@ -642,3 +642,74 @@ async def test_energy_score_selection_offloaded_to_thread(monkeypatch):
     assert "_select_estimator_with_energy_score" in offloaded
     # ...and the run still produced a real estimate (offload is transparent).
     assert "ate" in result["estimation_result"]
+
+
+class TestEmptyBackdoorEstimation:
+    """An empty adjustment set (RCT / exogenous treatment) must produce an
+    UNADJUSTED estimate via OLS, not fail-closed. See the empty-backdoor path in
+    the energy-score OLS wrapper. The estimation-node success mapping flows
+    unchanged (covariates_adjusted=[], selected_estimator='ols')."""
+
+    @pytest.mark.heavy_ml
+    def test_empty_adjustment_set_yields_unadjusted_ols(self):
+        import numpy as np
+        import pandas as pd
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        rng = np.random.RandomState(0)
+        n = 1500
+        t = (rng.rand(n) < 0.4).astype(int)
+        y = (rng.rand(n) < (0.3 + 0.3 * t)).astype(float)
+        data = pd.DataFrame({"treatment_arm": t, "adopted": y})  # ONLY t + outcome
+        naive_diff = float(y[t == 1].mean() - y[t == 0].mean())
+
+        node = EstimationNode()
+        result, selection_dict, _latency = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="treatment_arm",
+            outcome="adopted",
+            adjustment_set=[],  # empty backdoor
+            strategy="best_energy",
+        )
+
+        # Unadjusted OLS estimate produced (NOT fail-closed).
+        assert result["selected_estimator"] == "ols"
+        assert result["method"] == "linear_regression"
+        assert result["covariates_adjusted"] == []
+        assert result["ate"] == pytest.approx(naive_diff, abs=1e-9)
+        assert result["ate_ci_lower"] < result["ate"] < result["ate_ci_upper"]
+        # Clean RCT estimate: a finite, good-tier energy score, not 'unreliable'.
+        assert result["requires_review"] is False
+        assert result["energy_score_data"]["quality_tier"] != "unreliable"
+        # The naive-contrast foil agrees with the unadjusted estimate.
+        if result.get("naive_ate") is not None:
+            assert result["naive_ate"] == pytest.approx(naive_diff, abs=1e-9)
+
+    def test_continuous_treatment_binarized_unadjusted(self):
+        """A continuous treatment with an empty backdoor is binarized at the
+        median, and the unadjusted estimate equals the diff-in-means on the
+        binarized arms (the same estimand the adjusted path would report)."""
+        import numpy as np
+        import pandas as pd
+
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        rng = np.random.RandomState(1)
+        n = 1500
+        score = rng.rand(n)  # continuous treatment in [0,1)
+        hi = (score > np.median(score)).astype(int)
+        y = (rng.rand(n) < (0.3 + 0.3 * hi)).astype(float)
+        data = pd.DataFrame({"peer_influence_score": score, "adopted": y})
+        naive_diff = float(y[hi == 1].mean() - y[hi == 0].mean())
+
+        node = EstimationNode()
+        result, _sel, _lat = node._select_estimator_with_energy_score(
+            data=data,
+            treatment="peer_influence_score",
+            outcome="adopted",
+            adjustment_set=[],
+            strategy="best_energy",
+        )
+        assert result["selected_estimator"] == "ols"
+        assert result["ate"] == pytest.approx(naive_diff, abs=1e-9)
