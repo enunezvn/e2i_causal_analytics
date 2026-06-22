@@ -81,9 +81,12 @@ import type { DiscoveredEffect } from '@/types/causal';
 // CONSTANTS
 // =============================================================================
 
-// Each grain is a `dataset` the agent estimates over. Patient (patient_journeys)
-// is live; HCP (hcp_adoption) + Trigger (nba_triggers) datasets land in P2/P3,
-// so their facet options are present but disabled until then (honest, not faked).
+// Each grain is a `dataset` the agent estimates over. All three are live now —
+// the backend specs/loaders and the SSOT `causal_paths` rows (6 HCP + 6 Trigger,
+// all 3 brands) shipped, so their discover-effects leaderboards are non-empty.
+// `ready` is kept as the extensibility gate: a future grain added with
+// `ready: false` is shown disabled + "(coming soon)" (honest, not faked) until
+// its data lands.
 interface GrainOption {
   value: string;
   dataset: string;
@@ -92,8 +95,8 @@ interface GrainOption {
 }
 const GRAINS: GrainOption[] = [
   { value: 'patient', dataset: 'patient_journeys', label: 'Patient', ready: true },
-  { value: 'hcp', dataset: 'hcp_adoption', label: 'HCP', ready: false },
-  { value: 'trigger', dataset: 'nba_triggers', label: 'Trigger', ready: false },
+  { value: 'hcp', dataset: 'hcp_adoption', label: 'HCP', ready: true },
+  { value: 'trigger', dataset: 'nba_triggers', label: 'Trigger', ready: true },
 ];
 
 // "All brands" sentinel — the Select needs a non-empty value; null is sent to the API.
@@ -408,12 +411,6 @@ export default function CausalAnalysis() {
                   </span>
                 )}
               </div>
-              {!activeGrain.ready && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  The {activeGrain.label} grain&rsquo;s gold-standard loader is not wired yet — it
-                  arrives in a later phase. The Patient grain is live now.
-                </p>
-              )}
               {startError && (
                 <Alert variant="destructive" className="mt-4">
                   <AlertTriangle className="h-4 w-4" />

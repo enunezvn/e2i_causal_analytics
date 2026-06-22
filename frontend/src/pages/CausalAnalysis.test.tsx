@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
 
@@ -241,6 +242,39 @@ describe('CausalAnalysis — unified agent-led page', () => {
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     expect(screen.getByText(/Why these 2 questions\?/)).toBeInTheDocument();
+  }, 20000);
+
+  // ── T4: HCP + Trigger grains are now unlocked (backend specs + causal_paths
+  // rows shipped; the FE gate that hid them is stale). Selecting either grain
+  // must route the discover-effects job to its dataset, and no grain may render
+  // a "(coming soon)" / disabled affordance.
+  it('unlocks the HCP grain — selecting it discovers effects on hcp_adoption', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'HCP' }));
+    expect(useDiscoverEffects).toHaveBeenCalledWith('hcp_adoption', null);
+  }, 20000);
+
+  it('unlocks the Trigger grain — selecting it discovers effects on nba_triggers', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'Trigger' }));
+    expect(useDiscoverEffects).toHaveBeenCalledWith('nba_triggers', null);
+  }, 20000);
+
+  it('shows no "(coming soon)" / not-wired note now that every grain is live', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    // Every grain option is selectable — no disabled "(coming soon)" affordance.
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+    for (const opt of screen.getAllByRole('option')) {
+      expect(opt).not.toHaveAttribute('aria-disabled', 'true');
+    }
+    // The verbose "loader is not wired yet — arrives in a later phase" note is gone.
+    expect(screen.queryByText(/not wired yet/i)).not.toBeInTheDocument();
   }, 20000);
 
   it('renders the live estimator-registry total on the overview card', () => {
