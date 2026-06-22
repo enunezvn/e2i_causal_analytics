@@ -234,13 +234,20 @@ export default function CausalAnalysis() {
 
   const runAgent = useRunCausalAgentAnalysis();
   const resetManual = runAgent.reset;
-  // A manual analysis is scoped to the (dataset, brand) it was run for. Only
-  // surface it when its dataset still matches the active grain — its `dataset`
-  // is echoed in the response, so a Patient analysis can never render under the
-  // HCP grain even if its run resolves AFTER a grain switch (the render passes
-  // the CURRENT brandArg, so a stale result would otherwise be mislabeled).
+  // The (dataset, brand) a manual run was SUBMITTED for. The response echoes its
+  // dataset but NOT its brand, so we tag the submitted scope ourselves and only
+  // surface a result while BOTH still match the active facets. This closes the
+  // same-dataset brand-switch race: a run started for brand A that resolves after
+  // the user moves to brand B (resetManual cleared the old data, but the late
+  // mutation repopulates runAgent.data) is suppressed instead of rendered — and
+  // mislabeled — under brand B. Mirrors useDiscoverEffects' scope-tagging.
+  const [manualScope, setManualScope] = useState<{ dataset: string; brand: string | null } | null>(
+    null
+  );
   const manualResult =
-    runAgent.data && runAgent.data.dataset === dataset ? runAgent.data : undefined;
+    runAgent.data && runAgent.data.dataset === dataset && manualScope?.brand === brandArg
+      ? runAgent.data
+      : undefined;
 
   // Both the drilled-into deep view and a completed manual analysis are scoped
   // to (dataset, brand); on a grain/brand switch, drop them so nothing from the
@@ -258,6 +265,9 @@ export default function CausalAnalysis() {
   const leaderboardContext = useClinicalContext(brandArg, outcomeVar);
 
   const handleRunManual = async () => {
+    // Tag the scope this run is submitted for, so its result can only surface
+    // while (dataset, brand) still match (see manualResult above).
+    setManualScope({ dataset, brand: brandArg });
     try {
       await runAgent.mutateAsync({
         treatment_var: treatmentVar,

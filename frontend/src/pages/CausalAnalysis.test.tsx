@@ -336,26 +336,44 @@ describe('CausalAnalysis — unified agent-led page', () => {
     );
   }, 20000);
 
-  // ── T4 (codex round 2, Finding 2): a completed manual analysis is scoped to
-  // its dataset; switching grain must not leave a Patient-grain result rendered
-  // (mislabeled with the new brand) under the HCP grain.
-  it('drops a completed manual analysis when the grain changes (no stale cross-grain result)', async () => {
-    const user = userEvent.setup();
+  // ── T4 (codex round 2/3, Finding 2): a completed manual analysis is scoped to
+  // the (dataset, brand) it was RUN for; switching grain or brand must not leave
+  // it rendered (mislabeled with the new facets) under the new scope.
+  function mockCompletedManualRun() {
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: { analysis_id: 'm1', status: 'completed', dataset: 'patient_journeys' },
-      mutateAsync: vi.fn(),
+      mutateAsync: vi.fn().mockResolvedValue({ analysis_id: 'm1', status: 'completed' }),
       reset: vi.fn(),
       isPending: false,
       isError: false,
       error: null,
     });
+  }
+
+  it('drops a completed manual analysis when the grain changes (no stale cross-grain result)', async () => {
+    const user = userEvent.setup();
+    mockCompletedManualRun();
     render(<CausalAnalysis />, { wrapper: createWrapper() });
-    // Open the manual panel — the completed Patient analysis shows.
+    // Run a manual analysis on the Patient grain (tags the submitted scope).
     fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
-    expect(screen.getByTestId('causal-detail')).toHaveAttribute('data-analysis-id', 'm1');
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(await screen.findByTestId('causal-detail')).toHaveAttribute('data-analysis-id', 'm1');
     // Switch grain → the Patient-scoped manual result must not linger under HCP.
     await user.click(screen.getByRole('combobox', { name: 'Grain' }));
     await user.click(await screen.findByRole('option', { name: 'HCP' }));
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
+  }, 20000);
+
+  it('drops a completed manual analysis when the brand changes (same-dataset scope)', async () => {
+    const user = userEvent.setup();
+    mockCompletedManualRun();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Run on all-brands (brandArg null), then switch to a specific brand.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(await screen.findByTestId('causal-detail')).toHaveAttribute('data-analysis-id', 'm1');
+    await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+    await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
     expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
   }, 20000);
 
