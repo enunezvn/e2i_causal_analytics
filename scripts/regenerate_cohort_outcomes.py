@@ -142,8 +142,8 @@ def _read_or_draw_num(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
     if col in sub.columns:
         s = pd.to_numeric(sub[col], errors="coerce")
         if s.notna().all() and len(s) > 0:
-            return s.to_numpy()
-    return draw(len(sub))
+            return np.asarray(s.to_numpy())
+    return np.asarray(draw(len(sub)))
 
 
 def _read_or_draw_str(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
@@ -151,8 +151,8 @@ def _read_or_draw_str(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
     if col in sub.columns:
         s = sub[col].astype("object")
         if s.notna().all() and len(s) > 0:
-            return s.to_numpy()
-    return draw(len(sub))
+            return np.asarray(s.to_numpy())
+    return np.asarray(draw(len(sub)))
 
 
 # ---------------------------------------------------------------------------
