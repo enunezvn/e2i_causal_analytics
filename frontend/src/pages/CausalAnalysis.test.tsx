@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CausalAnalysis from './CausalAnalysis';
 
@@ -150,6 +151,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync: vi.fn(),
+      reset: vi.fn(),
       isPending: false,
       isError: false,
       error: null,
@@ -216,6 +218,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync,
+      reset: vi.fn(),
       isPending: false,
       isError: false,
       error: null,
@@ -241,6 +244,137 @@ describe('CausalAnalysis — unified agent-led page', () => {
     mockDiscover({ job: COMPLETED_JOB });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     expect(screen.getByText(/Why these 2 questions\?/)).toBeInTheDocument();
+  }, 20000);
+
+  // ── T4: HCP + Trigger grains are now unlocked (backend specs + causal_paths
+  // rows shipped; the FE gate that hid them is stale). Selecting either grain
+  // must route the discover-effects job to its dataset, and no grain may render
+  // a "(coming soon)" / disabled affordance.
+  it('unlocks the HCP grain — selecting it discovers effects on hcp_adoption', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'HCP' }));
+    expect(useDiscoverEffects).toHaveBeenCalledWith('hcp_adoption', null);
+  }, 20000);
+
+  it('unlocks the Trigger grain — selecting it discovers effects on nba_triggers', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'Trigger' }));
+    expect(useDiscoverEffects).toHaveBeenCalledWith('nba_triggers', null);
+  }, 20000);
+
+  it('shows no "(coming soon)" / not-wired note now that every grain is live', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    // Every grain option is selectable — no disabled "(coming soon)" affordance.
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
+    for (const opt of screen.getAllByRole('option')) {
+      expect(opt).not.toHaveAttribute('aria-disabled', 'true');
+    }
+    // The verbose "loader is not wired yet — arrives in a later phase" note is gone.
+    expect(screen.queryByText(/not wired yet/i)).not.toBeInTheDocument();
+  }, 20000);
+
+  // ── T4 (codex Finding 1): a drilled-into deep view belongs to the (dataset,
+  // brand)-scoped leaderboard that produced it; switching grain must close it so
+  // a Patient analysis never lingers under the HCP grain. (The leaderboard reset
+  // itself lives in useDiscoverEffects — covered by use-causal.test.ts.)
+  it('closes an open deep view when the grain changes (no stale cross-grain analysis)', async () => {
+    const user = userEvent.setup();
+    mockDiscover({ job: COMPLETED_JOB });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText('persistent_180d'));
+    expect(await screen.findByTestId('causal-detail')).toBeInTheDocument();
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'HCP' }));
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
+  }, 20000);
+
+  // ── T4 (codex Finding 2): the manual panel's treatment/outcome default to
+  // Patient values; the candidate sets are dataset-specific, so a grain switch
+  // must clamp any now-invalid selection to a valid candidate — else the manual
+  // run submits a column the backend allowlist rejects (400).
+  it('clamps the manual treatment/outcome to the new grain’s candidates on switch', async () => {
+    const user = userEvent.setup();
+    const TRIGGER_VARIABLES = {
+      dataset: 'nba_triggers',
+      treatment_candidates: ['control_group_flag', 'acceptance_status'],
+      outcome_candidates: ['action_taken', 'conversion_flag'],
+      covariate_candidates: [],
+      columns: [],
+    };
+    (useCausalVariables as ReturnType<typeof vi.fn>).mockImplementation((ds: string) => ({
+      data: ds === 'nba_triggers' ? TRIGGER_VARIABLES : VARIABLES,
+    }));
+    const mutateAsync = vi.fn().mockResolvedValue({ analysis_id: 'm1', status: 'completed' });
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      mutateAsync,
+      reset: vi.fn(),
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Switch to the Trigger grain (Patient defaults treatment_arm/persistent_180d
+    // are both invalid here).
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'Trigger' }));
+    // Open the manual panel and run — the payload must carry Trigger-valid columns.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataset: 'nba_triggers',
+        treatment_var: 'control_group_flag',
+        outcome_var: 'action_taken',
+      })
+    );
+  }, 20000);
+
+  // ── T4 (codex round 2/3, Finding 2): a completed manual analysis is scoped to
+  // the (dataset, brand) it was RUN for; switching grain or brand must not leave
+  // it rendered (mislabeled with the new facets) under the new scope.
+  function mockCompletedManualRun() {
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { analysis_id: 'm1', status: 'completed', dataset: 'patient_journeys' },
+      mutateAsync: vi.fn().mockResolvedValue({ analysis_id: 'm1', status: 'completed' }),
+      reset: vi.fn(),
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+  }
+
+  it('drops a completed manual analysis when the grain changes (no stale cross-grain result)', async () => {
+    const user = userEvent.setup();
+    mockCompletedManualRun();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Run a manual analysis on the Patient grain (tags the submitted scope).
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(await screen.findByTestId('causal-detail')).toHaveAttribute('data-analysis-id', 'm1');
+    // Switch grain → the Patient-scoped manual result must not linger under HCP.
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'HCP' }));
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
+  }, 20000);
+
+  it('drops a completed manual analysis when the brand changes (same-dataset scope)', async () => {
+    const user = userEvent.setup();
+    mockCompletedManualRun();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Run on all-brands (brandArg null), then switch to a specific brand.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Run analysis/i }));
+    expect(await screen.findByTestId('causal-detail')).toHaveAttribute('data-analysis-id', 'm1');
+    await user.click(screen.getByRole('combobox', { name: 'Brand' }));
+    await user.click(await screen.findByRole('option', { name: 'Kisqali' }));
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
   }, 20000);
 
   it('renders the live estimator-registry total on the overview card', () => {

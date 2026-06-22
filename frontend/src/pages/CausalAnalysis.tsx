@@ -18,7 +18,7 @@
  * @module pages/CausalAnalysis
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -81,9 +81,12 @@ import type { DiscoveredEffect } from '@/types/causal';
 // CONSTANTS
 // =============================================================================
 
-// Each grain is a `dataset` the agent estimates over. Patient (patient_journeys)
-// is live; HCP (hcp_adoption) + Trigger (nba_triggers) datasets land in P2/P3,
-// so their facet options are present but disabled until then (honest, not faked).
+// Each grain is a `dataset` the agent estimates over. All three are live now —
+// the backend specs/loaders and the SSOT `causal_paths` rows (6 HCP + 6 Trigger,
+// all 3 brands) shipped, so their discover-effects leaderboards are non-empty.
+// `ready` is kept as the extensibility gate: a future grain added with
+// `ready: false` is shown disabled + "(coming soon)" (honest, not faked) until
+// its data lands.
 interface GrainOption {
   value: string;
   dataset: string;
@@ -92,8 +95,8 @@ interface GrainOption {
 }
 const GRAINS: GrainOption[] = [
   { value: 'patient', dataset: 'patient_journeys', label: 'Patient', ready: true },
-  { value: 'hcp', dataset: 'hcp_adoption', label: 'HCP', ready: false },
-  { value: 'trigger', dataset: 'nba_triggers', label: 'Trigger', ready: false },
+  { value: 'hcp', dataset: 'hcp_adoption', label: 'HCP', ready: true },
+  { value: 'trigger', dataset: 'nba_triggers', label: 'Trigger', ready: true },
 ];
 
 // "All brands" sentinel — the Select needs a non-empty value; null is sent to the API.
@@ -195,8 +198,14 @@ export default function CausalAnalysis() {
   // ── Manual "Pose your own question" panel ──────────────────────────────────
   const [manualOpen, setManualOpen] = useState(false);
   const { data: variables } = useCausalVariables(dataset);
-  const treatmentCandidates = variables?.treatment_candidates ?? ['treatment_arm'];
-  const outcomeCandidates = variables?.outcome_candidates ?? ['persistent_180d'];
+  const treatmentCandidates = useMemo(
+    () => variables?.treatment_candidates ?? ['treatment_arm'],
+    [variables]
+  );
+  const outcomeCandidates = useMemo(
+    () => variables?.outcome_candidates ?? ['persistent_180d'],
+    [variables]
+  );
   const [treatmentVar, setTreatmentVar] = useState('treatment_arm');
   const [outcomeVar, setOutcomeVar] = useState('persistent_180d');
   const [estimator, setEstimator] = useState(AUTO_ESTIMATOR);
@@ -207,8 +216,47 @@ export default function CausalAnalysis() {
       ),
     [variables, treatmentVar, outcomeVar]
   );
+  // Keep the manual panel's treatment/outcome valid for the active dataset. The
+  // candidate sets are dataset-specific (e.g. HCP's only outcome is `adopted`,
+  // Trigger's treatments are control_group_flag/acceptance_status), so the
+  // Patient-grain defaults become invalid on a grain switch. Clamp any stale
+  // selection to the first valid candidate once the new dataset's variables load
+  // — otherwise a manual run submits a column the backend allowlist rejects (400).
+  useEffect(() => {
+    if (!variables) return;
+    if (treatmentCandidates.length && !treatmentCandidates.includes(treatmentVar)) {
+      setTreatmentVar(treatmentCandidates[0]);
+    }
+    if (outcomeCandidates.length && !outcomeCandidates.includes(outcomeVar)) {
+      setOutcomeVar(outcomeCandidates[0]);
+    }
+  }, [variables, treatmentCandidates, outcomeCandidates, treatmentVar, outcomeVar]);
+
   const runAgent = useRunCausalAgentAnalysis();
-  const manualResult = runAgent.data;
+  const resetManual = runAgent.reset;
+  // The (dataset, brand) a manual run was SUBMITTED for. The response echoes its
+  // dataset but NOT its brand, so we tag the submitted scope ourselves and only
+  // surface a result while BOTH still match the active facets. This closes the
+  // same-dataset brand-switch race: a run started for brand A that resolves after
+  // the user moves to brand B (resetManual cleared the old data, but the late
+  // mutation repopulates runAgent.data) is suppressed instead of rendered — and
+  // mislabeled — under brand B. Mirrors useDiscoverEffects' scope-tagging.
+  const [manualScope, setManualScope] = useState<{ dataset: string; brand: string | null } | null>(
+    null
+  );
+  const manualResult =
+    runAgent.data && runAgent.data.dataset === dataset && manualScope?.brand === brandArg
+      ? runAgent.data
+      : undefined;
+
+  // Both the drilled-into deep view and a completed manual analysis are scoped
+  // to (dataset, brand); on a grain/brand switch, drop them so nothing from the
+  // previous scope lingers under the new one. (The leaderboard itself resets in
+  // useDiscoverEffects.)
+  useEffect(() => {
+    setSelectedId(null);
+    resetManual();
+  }, [dataset, brandArg, resetManual]);
 
   // The brand of the effect currently drilled into (each effect is brand-scoped,
   // even when the run filter is "All brands"); falls back to the filter.
@@ -217,6 +265,9 @@ export default function CausalAnalysis() {
   const leaderboardContext = useClinicalContext(brandArg, outcomeVar);
 
   const handleRunManual = async () => {
+    // Tag the scope this run is submitted for, so its result can only surface
+    // while (dataset, brand) still match (see manualResult above).
+    setManualScope({ dataset, brand: brandArg });
     try {
       await runAgent.mutateAsync({
         treatment_var: treatmentVar,
@@ -408,12 +459,6 @@ export default function CausalAnalysis() {
                   </span>
                 )}
               </div>
-              {!activeGrain.ready && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  The {activeGrain.label} grain&rsquo;s gold-standard loader is not wired yet — it
-                  arrives in a later phase. The Patient grain is live now.
-                </p>
-              )}
               {startError && (
                 <Alert variant="destructive" className="mt-4">
                   <AlertTriangle className="h-4 w-4" />
