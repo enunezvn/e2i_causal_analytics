@@ -46,7 +46,7 @@ dependencies = [
     "scikit-survival>=0.26,<0.27", # Cox PH + Random Survival Forest (v5 B2); 0.26 lifts osqp constraint to >=1.0.2 (matches cvxpy 1.7.5) while staying under sklearn<1.8 (preserves econml 0.16 sklearn<1.7 pin). 0.27 requires sklearn>=1.8 — incompatible with econml. See backlog #36.
     "lifelines>=0.30.0",           # Kaplan-Meier, log-rank, time-to-event utilities
     "pandas>=2.2.0",
-    "numpy>=1.26.0",
+    "numpy>=2.0.0",  # Generator.spawn() (reseed RNG stream split, T11) requires NumPy 2.0+
     "scipy>=1.13.0",
 
     # MLOps Stack (7 Tools)

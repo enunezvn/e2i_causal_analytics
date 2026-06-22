@@ -38,6 +38,13 @@ def _fit_bundle(spec, seed: int) -> dict[str, Any]:
             "disease_severity": rng.normal(5, 1.5, n).round(2),
             "academic_hcp": rng.integers(0, 2, n),
             "geographic_region": rng.choice(["midwest", "northeast", "south", "west"], n),
+            # T11: the 4 prognostic drivers the enriched 7-covariate initiation cohort
+            # (and persistence/discontinuation) now require; specs that only list the
+            # 3 base covariates (e.g. the INITIATION constant) ignore the extra columns.
+            "insurance_type": rng.choice(["commercial", "medicare", "medicaid"], n),
+            "age_at_diagnosis": rng.integers(18, 85, n),
+            "comorbidity_burden": rng.integers(0, 6, n),
+            "prior_therapy_lines": rng.integers(0, 4, n),
             spec.label_column: rng.integers(0, 2, n),
         }
     )
@@ -63,7 +70,16 @@ class TestShapEndpoint:
         satisfies additivity (base + sum(shap) == inner-LR margin)."""
         bundle = _fit_bundle(make_patient_spec("initiation", "Kisqali"), 7)
         service = _service_with_models(serving_module, {"initiation_kisqali_goldstd_lr_v1": bundle})
-        raw = {"disease_severity": 5.26, "academic_hcp": 0, "geographic_region": "northeast"}
+        # initiation is now a 7-covariate gold-standard model (T11) — supply all 7.
+        raw = {
+            "disease_severity": 5.26,
+            "academic_hcp": 0,
+            "geographic_region": "northeast",
+            "insurance_type": "commercial",
+            "age_at_diagnosis": 54,
+            "comorbidity_burden": 2,
+            "prior_therapy_lines": 1,
+        }
 
         out = await service.shap(
             serving_module.ShapInput(

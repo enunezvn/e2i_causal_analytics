@@ -20,18 +20,23 @@ depend on this consistency.
 load_frame() loads patient_journeys rows from the live DB (Task 4).
 build_for_split() is the convenience wrapper that loads + fits in one call.
 
-KEEP_COLUMNS rationale (Task 3 EXPERIMENT lock, 2026-06-14):
-  Locked by MEASURED holdout AUC on real synthetic Remibrutinib initiation rows
-  (train n=2103, holdout n=5075, positive rate ~0.35).  Three candidate tiers
-  were fit on TRAIN and scored on HOLDOUT (LogisticRegression, class_weight
-  balanced):
-    A) base covariates only ......................... holdout AUC 0.6709
-    B) A + leakage-safe patient_journeys extras ..... holdout AUC 0.6694
-    C) B + new patient-keyed feature_values ......... holdout AUC 0.6659
-  The 3 codebase-intent base covariates ALONE gave the best held-out AUC
-  (stable across validation 0.685 / test 0.643 / holdout 0.671); extra columns
-  added noise, not signal.  So KEEP_COLUMNS == INITIATION.base_covariates.
-  See docs/superpowers/plans/experiments/2026-06-14-initiation-features.md.
+KEEP_COLUMNS rationale (Task 3 EXPERIMENT lock, 2026-06-14 — SUPERSEDED for
+initiation by T11, 2026-06-22):
+  The 2026-06-14 experiment measured that the 3 base covariates ALONE gave the
+  best held-out AUC (A) base only 0.6709 > (B) +PJ extras 0.6694 > (C) +feature
+  values 0.6659 — extra columns "added noise, not signal".  But that ceiling was
+  a property of the THEN-CURRENT initiation DGP: treatment_initiated's outcome eqn
+  (binary_outcome_with_cate) used ONLY disease_severity + academic_hcp + arm·τ +
+  noise, so any extra column WAS noise (the DGP never used it).  T11 raised the
+  ceiling instead of accepting it: it added 4 prognostic drivers to that eqn
+  (drawn ⊥ treatment_arm; see treatment_arm.initiation_prognostic_offset), exactly
+  as T9 did for persist/disc.  So initiation now uses the 7-covariate set via
+  ``spec.base_covariates`` (the keep_columns resolution prefers it), and the
+  faithful holdout AUC lifts ~0.67 → ~0.80 (test_initiation_calibration.py).
+  KEEP_COLUMNS below remains the LEGACY 3-column module default (used only when a
+  spec carries no base_covariates); it is NO LONGER equal to INITIATION.base_covariates.
+  See docs/superpowers/plans/experiments/2026-06-14-initiation-features.md and the
+  T11 plan (.claude/plans/2026-06-21-frontend-review-fixes.md TASK 11).
 
 LEAKAGE_DENYLIST rationale:
   All columns that are knowable only AFTER the initiation decision must never
@@ -79,11 +84,12 @@ LEAKAGE_DENYLIST = (
     "treatment_propensity",  # outcome-derived feature_value (verify w/ feature_contract)
 )
 
-# Empirically-locked raw column allowlist for the INITIATION cohort (Task 3).
-# Equal to INITIATION.base_covariates — the measured holdout AUC (0.6709) was
-# best with these three alone; PJ extras and patient-keyed feature_values did
-# not improve held-out AUC. An empty tuple means "no allowlist" (keep all
-# non-denylisted columns) so the encoding mechanism stays cohort-agnostic.
+# LEGACY 3-column module default (Task 3, 2026-06-14). Was equal to
+# INITIATION.base_covariates while the initiation DGP only used 3 covariates; T11
+# (2026-06-22) enriched that DGP and moved initiation to the 7-covariate set, so
+# this is NO LONGER == INITIATION.base_covariates. It is now only the fallback for a
+# spec that carries no base_covariates (keep_columns prefers spec.base_covariates).
+# An empty tuple means "no allowlist" so the encoding mechanism stays cohort-agnostic.
 KEEP_COLUMNS: tuple[str, ...] = (
     "disease_severity",
     "academic_hcp",

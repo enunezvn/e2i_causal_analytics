@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""Reproducible, idempotent regeneration of patient persistence/discontinuation labels.
+"""Reproducible, idempotent regeneration of patient initiation/persistence/discontinuation labels.
 
 WHY THIS SCRIPT EXISTS
 ----------------------
-The synthetic ``patient_journeys`` table carries two 180-day outcome labels used by
-the gold-standard persistence/discontinuation cohorts:
-``persistent_180d`` and ``discontinued_180d`` (8,750 initiators among 25,000 rows).
+The synthetic ``patient_journeys`` table carries three outcome labels used by the
+gold-standard cohorts: ``treatment_initiated`` (initiation) plus the two 180-day
+outcomes ``persistent_180d`` and ``discontinued_180d`` (persistence/discontinuation).
+T11 (2026-06-22): ``treatment_initiated`` is ALSO re-derived now — its outcome eqn
+(``binary_outcome_with_cate``) was enriched with 4 prognostic drivers (insurance
+access, age, comorbidity, prior-therapy) drawn ⊥ treatment_arm, so the goldstd
+initiation model lifts ~0.67 → ~0.80. Backfilling the driver columns WITHOUT
+re-deriving the initiation label would leave AUC at ~0.67 (the label must depend on
+the new drivers); re-derivation is prevalence-banded (~0.35) so the marginal rate is
+preserved while per-row labels shift. treatment_arm/propensity_score/segment_assignment/
+treatment_effect_estimate are UNTOUCHED (they key off the arm, not the outcome), so the
+causal substrate + ATE/CATE recovery are preserved.
 The committed DGP (``src/ml/synthetic/generators/cohort_outcomes.py:
 generate_discontinuation_outcomes``) produces these, and it runs inside
 ``PatientGenerator.generate()`` at synthetic-generation time. But the live values
@@ -75,7 +84,12 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(_PROJECT_ROOT / ".env")
 
 from src.ml.synthetic.config import Brand  # noqa: E402
-from src.ml.synthetic.dgp.treatment_arm import _BRAND_CATE_SCALE  # noqa: E402
+from src.ml.synthetic.dgp.treatment_arm import (  # noqa: E402
+    _BRAND_CATE_SCALE,
+    binary_outcome_with_cate,
+    brand_scaled_cate,
+    initiation_prognostic_offset,
+)
 from src.ml.synthetic.generators.cohort_outcomes import (  # noqa: E402
     generate_discontinuation_outcomes,
 )
@@ -128,8 +142,8 @@ def _read_or_draw_num(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
     if col in sub.columns:
         s = pd.to_numeric(sub[col], errors="coerce")
         if s.notna().all() and len(s) > 0:
-            return s.to_numpy()
-    return draw(len(sub))
+            return np.asarray(s.to_numpy())
+    return np.asarray(draw(len(sub)))
 
 
 def _read_or_draw_str(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
@@ -137,8 +151,8 @@ def _read_or_draw_str(sub: pd.DataFrame, col: str, draw: Any) -> np.ndarray:
     if col in sub.columns:
         s = sub[col].astype("object")
         if s.notna().all() and len(s) > 0:
-            return s.to_numpy()
-    return draw(len(sub))
+            return np.asarray(s.to_numpy())
+    return np.asarray(draw(len(sub)))
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +212,21 @@ def regenerate(covariates: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Data
     out_disc = pd.Series(index=df.index, dtype="Int64")
     out_com = pd.Series(index=df.index, dtype="Int64")
     out_prior = pd.Series(index=df.index, dtype="Int64")
+    out_init = pd.Series(index=df.index, dtype="Int64")  # T11: re-derived treatment_initiated
+    out_days = pd.Series(
+        index=df.index, dtype="float64"
+    )  # T11: days_to_treatment (NaN if not init)
 
     for brand, sub in df.groupby("brand"):
         sub = sub.sort_values(KEY)
         scale = _BRAND_CATE_SCALE.get(_BRAND_ENUM.get(str(brand), Brand.REMIBRUTINIB), 1.0)
-        rng = np.random.default_rng(seed)
+        # INDEPENDENT per-component streams (codex FINDING-2 fix): the driver backfill
+        # draws must NOT advance the RNG that feeds the discontinuation / initiation
+        # outcomes — otherwise a rerun where the driver columns are already populated
+        # (so _read_or_draw READS instead of DRAWS) would re-realize the outcomes off a
+        # different offset. Spawning makes disc/init deterministic functions of
+        # (seed, brand, covariates) regardless of the read-vs-draw path → idempotent.
+        drivers_rng, disc_rng, init_rng = np.random.default_rng(seed).spawn(3)
         # T9 prognostic drivers. insurance_type + age_at_diagnosis are READ from the
         # existing covariates (live has them); comorbidity_burden + prior_therapy_lines
         # are read when already backfilled, else drawn deterministically (independent of
@@ -210,21 +234,21 @@ def regenerate(covariates: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Data
         insurance_type = _read_or_draw_str(
             sub,
             "insurance_type",
-            lambda k, rng=rng: rng.choice(
+            lambda k, rng=drivers_rng: rng.choice(
                 ["commercial", "medicare", "medicaid"], k, p=[0.6, 0.3, 0.1]
             ),
         )
         age_at_diagnosis = _read_or_draw_num(
-            sub, "age_at_diagnosis", lambda k, rng=rng: rng.integers(18, 85, k)
+            sub, "age_at_diagnosis", lambda k, rng=drivers_rng: rng.integers(18, 85, k)
         )
         comorbidity_burden = _read_or_draw_num(
-            sub, "comorbidity_burden", lambda k, rng=rng: rng.poisson(1.3, k).clip(0, 5)
+            sub, "comorbidity_burden", lambda k, rng=drivers_rng: rng.poisson(1.3, k).clip(0, 5)
         )
         prior_therapy_lines = _read_or_draw_num(
-            sub, "prior_therapy_lines", lambda k, rng=rng: rng.integers(0, 4, k)
+            sub, "prior_therapy_lines", lambda k, rng=drivers_rng: rng.integers(0, 4, k)
         )
         res = generate_discontinuation_outcomes(
-            rng=rng,
+            rng=disc_rng,
             treatment_arm=sub["treatment_arm"].to_numpy(dtype=int),
             disease_severity=sub["disease_severity"].to_numpy(dtype=float),
             academic_hcp=sub["academic_hcp"].to_numpy(dtype=int),
@@ -241,7 +265,45 @@ def regenerate(covariates: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.Data
         out_com.loc[sub.index] = np.asarray(comorbidity_burden, dtype=int)
         out_prior.loc[sub.index] = np.asarray(prior_therapy_lines, dtype=int)
 
-    result = df[[KEY, "brand", "treatment_initiated"]].copy()
+        # T11: re-derive treatment_initiated from the ENRICHED initiation eqn — the
+        # SAME binary_outcome_with_cate the generator now calls, fed the SAME 4
+        # prognostic drivers via initiation_prognostic_offset (⊥ treatment_arm). It
+        # draws from its OWN spawned stream (init_rng), so the disc/persist
+        # re-derivation above is unaffected by it (and vice versa). Backfilling the
+        # driver columns WITHOUT re-deriving this label would leave the goldstd
+        # initiation model at ~0.67 (the label must actually depend on the new
+        # drivers). The prevalence-banded construction pins initiation prev at ~0.35.
+        brand_enum = _BRAND_ENUM.get(str(brand), Brand.REMIBRUTINIB)
+        new_init, _tau = binary_outcome_with_cate(
+            sub["treatment_arm"].to_numpy(dtype=int),
+            {
+                "disease_severity": sub["disease_severity"].to_numpy(dtype=float),
+                "academic_hcp": sub["academic_hcp"].to_numpy(dtype=float),
+            },
+            sub["segment_assignment"].to_numpy(dtype=str),
+            brand_scaled_cate(brand_enum),
+            init_rng,
+            prognostic_offset=initiation_prognostic_offset(
+                np.asarray(insurance_type, dtype=str),
+                np.asarray(age_at_diagnosis, dtype=int),
+                np.asarray(comorbidity_burden, dtype=int),
+                np.asarray(prior_therapy_lines, dtype=int),
+            ),
+        )
+        out_init.loc[sub.index] = np.asarray(new_init, dtype=int)
+        # T11: keep days_to_treatment internally consistent with the re-derived label
+        # (a value for initiators, NULL otherwise) — mirrors patient_generator. It is
+        # denylisted from every model and absent from all KPIs/views, but a relabel
+        # that left it stale (an "initiated" row with NULL days) would be a silent
+        # inconsistency. Drawn from init_rng (same component stream as the label).
+        new_init_arr = np.asarray(new_init, dtype=int)
+        out_days.loc[sub.index] = np.where(
+            new_init_arr == 1, init_rng.integers(7, 90, len(sub)).astype(float), np.nan
+        )
+
+    result = df[[KEY, "brand"]].copy()
+    result["treatment_initiated"] = out_init.astype(int).to_numpy()
+    result["days_to_treatment"] = out_days.to_numpy()
     result["persistent_180d"] = out_persist.astype(int).to_numpy()
     result["discontinued_180d"] = out_disc.astype(int).to_numpy()
     result["comorbidity_burden"] = out_com.astype(int).to_numpy()
@@ -262,6 +324,25 @@ def verify(regen: pd.DataFrame, live: pd.DataFrame) -> None:
 
     init = regen["treatment_initiated"].astype(int) == 1
     logger.info("--- PREVALENCE (regenerated) ---")
+    # T11: re-derived treatment_initiated — prevalence-banded ~0.35 by construction.
+    logger.info(
+        "  treatment_initiated (n=%d): prev=%.4f  [target ~0.35, band 0.25-0.45]",
+        len(regen),
+        float(regen["treatment_initiated"].mean()),
+    )
+    if "treatment_initiated" in live.columns:
+        cmp = regen[[KEY, "treatment_initiated"]].merge(
+            live[[KEY, "treatment_initiated"]], on=KEY, how="inner", suffixes=("_gen", "_live")
+        )
+        if len(cmp):
+            flips = int((cmp["treatment_initiated_gen"] != cmp["treatment_initiated_live"]).sum())
+            logger.info(
+                "  treatment_initiated flips vs live: %d/%d (%.1f%%)  live_prev=%.4f",
+                flips,
+                len(cmp),
+                100.0 * flips / len(cmp),
+                float(cmp["treatment_initiated_live"].mean()),
+            )
     logger.info(
         "  initiators (n=%d): persist=%.4f disc=%.4f  [target 0.456 / 0.544]",
         int(init.sum()),
@@ -335,6 +416,8 @@ def update_labels(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_S
     written = 0
     cols = [
         KEY,
+        "treatment_initiated",
+        "days_to_treatment",
         "persistent_180d",
         "discontinued_180d",
         "comorbidity_burden",
@@ -342,8 +425,14 @@ def update_labels(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_S
     ]
     records = regen[cols].to_dict(orient="records")
     for rec in records:
+        days = rec["days_to_treatment"]
         client.table(TABLE).update(
             {
+                # T11: re-derived from the enriched initiation eqn (the goldstd
+                # initiation label must depend on the new drivers to gain signal).
+                "treatment_initiated": int(rec["treatment_initiated"]),
+                # T11: kept consistent with the label (NULL when not initiated).
+                "days_to_treatment": (int(days) if pd.notna(days) else None),
                 "persistent_180d": int(rec["persistent_180d"]),
                 "discontinued_180d": int(rec["discontinued_180d"]),
                 # T9: backfill the new prognostic driver columns alongside the labels.

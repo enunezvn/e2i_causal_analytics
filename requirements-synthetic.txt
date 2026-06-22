@@ -8,7 +8,7 @@ pytest-asyncio>=0.23.0
 pytest-xdist>=3.5.0
 
 # Data processing (only what conftest.py needs)
-numpy>=1.26.0
+numpy>=2.0.0  # Generator.spawn() used by reseed/reproducibility tests (T11) needs NumPy 2.0+
 pandas>=2.0.0
 scikit-learn>=1.5.0
 # Parquet engine — the Shard 10 claims round-trip (test_claims_roundtrip.py) runs

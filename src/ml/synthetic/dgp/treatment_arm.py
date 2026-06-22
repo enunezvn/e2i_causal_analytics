@@ -57,6 +57,21 @@ _BRAND_CATE_SCALE: Dict[Brand, float] = {
 }
 
 
+# T11 (2026-06-22): the prognostic-driver enrichment of the initiation outcome
+# (binary_outcome_with_cate) compresses the binarized RD-scale treatment effect by
+# spreading the latent baseline (more prognostic variance → lower threshold-crossing
+# density → smaller mean tau_i). Measured: at _INIT_DRIVER_SCALE=0.75 the realized
+# true_ate drops to ~0.14, below the designed [0.15,0.50] band. We compensate by planting
+# a proportionally larger LATENT CATE so the RECOVERED RD-scale true_ate is restored to
+# ~the pre-T11 baseline (~0.177) — verified faithfully (true_ate 0.137→0.177 at boost
+# 1.30) with NO AUC change (~0.80), since τ is small vs the prognostic+noise variance and
+# treatment_arm is not a model feature. The boost is applied INSIDE binary_outcome_with_cate
+# (the initiation-only outcome fn, single SSOT both the generator and the reseed inherit),
+# NOT in brand_scaled_cate — so brand_scaled_cate stays the pure base×brand-scale map
+# (Remi@1.0 == base config). CATE high>med>low ordering is preserved (uniform factor).
+_INIT_LATENT_CATE_BOOST = 1.30
+
+
 def brand_scaled_cate(brand: Brand) -> Dict[str, float]:
     """Return the per-brand CATE-by-segment map (base map x brand scale).
 
@@ -82,6 +97,71 @@ def assign_segment(disease_severity: np.ndarray) -> np.ndarray:
     )
 
 
+# ---------------------------------------------------------------------------
+# T11 (2026-06-22): prognostic drivers on the INITIATION latent baseline.
+# ---------------------------------------------------------------------------
+# treatment_initiated's outcome eqn (binary_outcome_with_cate) used ONLY
+# disease_severity + academic_hcp + arm·τ + N(0,0.6) — so geographic_region (one
+# of its 3 "base" covariates) was NOT in the equation and the goldstd initiation
+# model's ~0.67 AUC was the Bayes ceiling of that thin eqn (the 2026-06-14 "more
+# features HURT" experiment measured that ceiling, NOT a model limit). These 4
+# drivers are added to the latent baseline, drawn INDEPENDENTLY of treatment_arm
+# in patient_generator, so arm·τ is untouched → the latent ATE and the segment
+# CATE ordering the recovery probe recovers are PRESERVED by construction (proven
+# by test_dgp_recovery_probe + test_initiation_calibration). Mirrors the T9
+# persistence enrichment (cohort_outcomes.py); coefs dialed so the faithful
+# FeatureBuilder+train_cohort_model holdout AUC lands ~0.80 (persist/disc parity).
+_INIT_INS_ACCESS = {  # insurance access gradient (commercial best → uninsured worst)
+    "commercial": 0.45,
+    "medicare": 0.10,
+    "medicaid": -0.35,
+    "uninsured": -0.55,
+}
+_INIT_AGE_COEF = 0.025  # latent score per year off _INIT_AGE_CENTER
+_INIT_AGE_CENTER = 50.0
+_INIT_COMORBIDITY_COEF = -0.18  # more burden → lower initiation propensity
+_INIT_PRIOR_THERAPY_COEF = -0.15  # more prior lines → lower initiation propensity
+_INIT_DRIVER_SCALE = 0.75  # TUNED (faithful FeatureBuilder+train_cohort_model sweep,
+# n=20000): lands the initiation holdout AUC ~0.80 (Remi 0.804 / Fab 0.797 / Kis 0.798),
+# persist/disc parity, inside the [0.78,0.83] band test_initiation_calibration.py locks.
+# NOTE: adding prognostic predictive signal to a fixed-prevalence BINARY outcome
+# necessarily COMPRESSES the binarized RD-scale treatment effect (mean tau_i) — at this
+# scale it drops to ~0.14, below the designed [0.15,0.50] true_ate band. That compression
+# is offset by _INIT_LATENT_CATE_BOOST (below), which plants a proportionally larger
+# latent CATE so the RECOVERED RD-scale true_ate is restored to ~the pre-T11 baseline
+# (~0.177) WITHOUT lowering AUC (τ is small vs the prognostic+noise variance). This keeps
+# both contracts: AUC ~0.80 AND causal fidelity. (User directive 2026-06-22.)
+
+
+def initiation_prognostic_offset(
+    insurance_type: np.ndarray,
+    age_at_diagnosis: np.ndarray,
+    comorbidity_burden: np.ndarray,
+    prior_therapy_lines: np.ndarray,
+    scale: float | None = None,
+) -> np.ndarray:
+    """Latent-baseline offset from the 4 prognostic drivers (⊥ treatment_arm).
+
+    Returned vector is ADDED to the initiation baseline in binary_outcome_with_cate.
+    Drawn independently of the arm so it raises predictive signal WITHOUT changing
+    the recoverable treatment effect. ``scale`` overrides _INIT_DRIVER_SCALE (used by
+    the tuning sweep); production passes None.
+    """
+    s = _INIT_DRIVER_SCALE if scale is None else scale
+    ins = np.array(
+        [_INIT_INS_ACCESS.get(str(i), 0.0) for i in np.asarray(insurance_type)], dtype=float
+    )
+    age = np.asarray(age_at_diagnosis, dtype=float)
+    com = np.asarray(comorbidity_burden, dtype=float)
+    prior = np.asarray(prior_therapy_lines, dtype=float)
+    return s * (
+        ins
+        + _INIT_AGE_COEF * (age - _INIT_AGE_CENTER)
+        + _INIT_COMORBIDITY_COEF * com
+        + _INIT_PRIOR_THERAPY_COEF * prior
+    )
+
+
 def binary_outcome_with_cate(
     arm: np.ndarray,
     covariates: Dict[str, np.ndarray],
@@ -92,6 +172,7 @@ def binary_outcome_with_cate(
     baseline_severity_coef: float = 0.10,
     baseline_academic_coef: float = 0.15,
     noise_std: float = 0.6,
+    prognostic_offset: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Binary outcome Y + per-unit RECOVERABLE segment CATE.
 
@@ -138,10 +219,22 @@ def binary_outcome_with_cate(
     severity = np.asarray(covariates["disease_severity"], dtype=float)
     academic = np.asarray(covariates["academic_hcp"], dtype=float)
 
-    # latent per-unit CATE from the brand-scaled segment map (score scale)
-    tau_latent = np.array([cate_map[str(s)] for s in segment], dtype=float)
+    # latent per-unit CATE from the brand-scaled segment map (score scale). The T11
+    # _INIT_LATENT_CATE_BOOST offsets the binarization attenuation the prognostic-driver
+    # baseline introduces, restoring the RECOVERED RD-scale true_ate to ~the pre-T11
+    # band [0.15,0.50] without changing AUC (see note by the constant). Applied here, the
+    # single initiation outcome SSOT, so both the generator and the reseed inherit it.
+    tau_latent = (
+        np.array([cate_map[str(s)] for s in segment], dtype=float) * _INIT_LATENT_CATE_BOOST
+    )
 
     baseline = baseline_severity_coef * (severity - 5.0) + baseline_academic_coef * academic
+    if prognostic_offset is not None:
+        # T11: prognostic drivers (⊥ arm) shift the latent baseline only — the
+        # arm·tau_latent term below is untouched, so E[tau] (latent ATE) and the
+        # segment CATE ordering are preserved; the RD-scale tau_i shifts only by the
+        # small binarization-attenuation the recovery gate re-validates with margin.
+        baseline = baseline + np.asarray(prognostic_offset, dtype=float)
     noise = rng.normal(0.0, noise_std, len(arm))
     score = baseline + arm.astype(float) * tau_latent + noise
 

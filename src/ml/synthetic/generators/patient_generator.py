@@ -25,6 +25,7 @@ from ..dgp.treatment_arm import (
     assign_treatment_arm,
     binary_outcome_with_cate,
     brand_scaled_cate,
+    initiation_prognostic_offset,
     rd_map_from_tau,
 )
 from .base import BaseGenerator, GeneratorConfig
@@ -111,25 +112,11 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         segment = assign_segment(confounders["disease_severity"])
         latent_cate_map = brand_scaled_cate(brand_enum)
 
-        # Prevalence-banded binary outcome carrying E[tau]=TRUE_ATE (Task 03.3).
-        # REPLACES the expit(...)>0.5 outcome for treatment_initiated so the label
-        # is recoverable (in-band [0.20,0.50]) rather than degenerate. tau_i is the
-        # per-unit RD-scale (de-confounded, recoverable) segment CATE.
-        treatment_initiated, tau_i = binary_outcome_with_cate(
-            treatment_arm, confounders, segment, latent_cate_map, self._rng
-        )
-        # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
-        cate_map = rd_map_from_tau(segment, tau_i)
-
-        # Hoist region generation here so it can be passed into the DGP (region now
-        # carries real leakage-safe signal via _DISC_REGION_LOGIT) and reused in the
-        # record dict below — single SSOT, no second random draw.
-        geographic_region = self._random_choice([r.value for r in RegionEnum], n)
-
-        # T9: prognostic persistence drivers — drawn INDEPENDENTLY of treatment_arm
-        # (so they raise predictive AUC without changing the true ATE/CATE). Hoisted
-        # above the outcome call so they feed the enriched discontinuation equation;
-        # also reused verbatim in the record dict below (single SSOT, no re-draw).
+        # T9/T11: prognostic drivers — drawn INDEPENDENTLY of treatment_arm so they
+        # raise predictive AUC WITHOUT changing the true ATE/CATE. Hoisted above BOTH
+        # outcome calls: T11 feeds them into the initiation eqn (treatment_initiated)
+        # via initiation_prognostic_offset, and T9 feeds them into the discontinuation
+        # eqn below. Reused verbatim in the record dict (single SSOT, no re-draw).
         insurance_type = self._random_choice(
             [i.value for i in InsuranceTypeEnum],
             n,
@@ -138,6 +125,30 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         age_at_diagnosis = self._random_int(18, 85, n)
         comorbidity_burden = self._rng.poisson(1.3, n).clip(0, 5)
         prior_therapy_lines = self._rng.integers(0, 4, n)
+
+        # Prevalence-banded binary outcome carrying E[tau]=TRUE_ATE (Task 03.3).
+        # REPLACES the expit(...)>0.5 outcome for treatment_initiated so the label
+        # is recoverable (in-band [0.20,0.50]) rather than degenerate. tau_i is the
+        # per-unit RD-scale (de-confounded, recoverable) segment CATE. T11: the 4
+        # prognostic drivers enter via prognostic_offset (⊥ arm) so the goldstd
+        # initiation model gains real signal while ATE/CATE recovery is preserved.
+        treatment_initiated, tau_i = binary_outcome_with_cate(
+            treatment_arm,
+            confounders,
+            segment,
+            latent_cate_map,
+            self._rng,
+            prognostic_offset=initiation_prognostic_offset(
+                insurance_type, age_at_diagnosis, comorbidity_burden, prior_therapy_lines
+            ),
+        )
+        # RD-scale ground-truth CATE map (what the estimators recover) — persisted.
+        cate_map = rd_map_from_tau(segment, tau_i)
+
+        # Hoist region generation here so it can be passed into the DGP (region now
+        # carries real leakage-safe signal via _DISC_REGION_LOGIT) and reused in the
+        # record dict below — single SSOT, no second random draw.
+        geographic_region = self._random_choice([r.value for r in RegionEnum], n)
 
         # Shard 06: disc/persist cohort outcomes from the Shard-03 CANONICAL arm +
         # segment (single SSOT — no second arm/segment source). brand_cate_scale reuses

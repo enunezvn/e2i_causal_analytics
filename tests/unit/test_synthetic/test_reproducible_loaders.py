@@ -197,6 +197,49 @@ def test_cohort_determinism():
     )
 
 
+def test_cohort_outcomes_invariant_to_driver_backfill_path():
+    """codex FINDING-2 regression: re-deriving with comorbidity_burden/prior_therapy_lines
+    ALREADY POPULATED (the rerun path, where _read_or_draw READS not DRAWS) must give
+    byte-identical treatment_initiated + persist/disc as the NULL path that draws them.
+    The reseed spawns independent per-component rng streams so the driver backfill draws
+    never advance the disc/initiation outcome streams. Without that, the populated rerun
+    would silently re-realize the outcomes off a shifted offset (non-idempotent)."""
+    cov = _patient_covariates()  # comorbidity/prior absent → DRAWN this pass
+    drawn = regenerate(cov, seed=74)
+    # Second pass: the driver columns are now persisted on the live rows → READ.
+    cov_pop = cov.merge(
+        drawn[[KEY, "comorbidity_burden", "prior_therapy_lines"]], on=KEY, how="left"
+    )
+    read = regenerate(cov_pop, seed=74)
+    a = drawn.sort_values(KEY).reset_index(drop=True)
+    b = read.sort_values(KEY).reset_index(drop=True)
+    for col in (
+        "treatment_initiated",
+        "persistent_180d",
+        "discontinued_180d",
+        "comorbidity_burden",
+        "prior_therapy_lines",
+    ):
+        assert (a[col].to_numpy() == b[col].to_numpy()).all(), (
+            f"{col} differs across the draw-vs-read driver backfill path (rng bifurcation)"
+        )
+
+
+def test_cohort_regenerates_treatment_initiated_in_band():
+    """T11: treatment_initiated is re-derived from the enriched eqn (prevalence-banded
+    ~0.35), and days_to_treatment stays consistent with the label (value iff initiated)."""
+    cov = _patient_covariates()
+    out = regenerate(cov, seed=74)
+    assert "treatment_initiated" in out.columns
+    prev = float(out["treatment_initiated"].mean())
+    assert 0.25 <= prev <= 0.45, f"init prevalence {prev} out of band"
+    assert set(out["treatment_initiated"].unique()) <= {0, 1}
+    init = out["treatment_initiated"].to_numpy() == 1
+    days = out["days_to_treatment"].to_numpy()
+    assert np.all(~np.isnan(days[init])), "initiators must have a days_to_treatment value"
+    assert np.all(np.isnan(days[~init])), "non-initiators must have NULL days_to_treatment"
+
+
 def test_cohort_complement_property():
     """persistent_180d == 1 - discontinued_180d for every row (no violations)."""
     cov = _patient_covariates()
@@ -234,10 +277,14 @@ def test_cohort_prevalence_in_designed_band():
 
 
 def test_cohort_covariates_not_redrawn():
-    """regenerate must preserve patient_id/brand/treatment_initiated exactly (only the
-    two label columns are derived) -- the causal inputs are never re-drawn."""
+    """regenerate must preserve the causal INPUTS (patient_id set + brand) exactly --
+    disease_severity/academic_hcp/geographic_region/treatment_arm/segment are READ, never
+    re-drawn. T11: treatment_initiated is no longer a preserved input -- it is RE-DERIVED
+    as the enriched initiation OUTCOME (covered by test_cohort_regenerates_treatment_
+    initiated_in_band), so it is NOT asserted equal to the input here."""
     cov = _patient_covariates()
     out = regenerate(cov, seed=74)
-    merged = cov[[KEY, "brand", "treatment_initiated"]].merge(out, on=KEY, suffixes=("_in", "_out"))
+    # same patients, no fabricated/dropped ids
+    assert set(out[KEY]) == set(cov[KEY])
+    merged = cov[[KEY, "brand"]].merge(out, on=KEY, suffixes=("_in", "_out"))
     assert (merged["brand_in"] == merged["brand_out"]).all()
-    assert (merged["treatment_initiated_in"] == merged["treatment_initiated_out"]).all()

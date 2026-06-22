@@ -32,8 +32,9 @@ def _fit_bundle(spec, seed: int) -> dict[str, Any]:
             "disease_severity": rng.normal(5, 1.5, n).round(2),
             "academic_hcp": rng.integers(0, 2, n),
             "geographic_region": rng.choice(["midwest", "northeast", "south", "west"], n),
-            # T9: the 4 prognostic drivers for the 7-covariate persistence/discontinuation
-            # cohorts (initiation's FeatureBuilder ignores them via its 3-col allowlist).
+            # T9/T11: the 4 prognostic drivers the 7-covariate persistence, discontinuation
+            # AND initiation cohorts now require; specs that list only the 3 base covariates
+            # (e.g. the INITIATION constant) ignore the extra columns.
             "insurance_type": rng.choice(["commercial", "medicare", "medicaid"], n),
             "age_at_diagnosis": rng.integers(18, 85, n),
             "comorbidity_burden": rng.integers(0, 6, n),
@@ -89,18 +90,21 @@ class TestRoutingByModelName:
                 "persistence_fabhalta_goldstd_lr_v1": m_pers,
             },
         )
-        raw_init = {"disease_severity": 5.61, "academic_hcp": 0, "geographic_region": "northeast"}
-        # T9: persistence carries 4 extra prognostic drivers. The service validates EVERY
-        # key against the ROUTED model's own covariate types, so each model gets exactly
-        # its own set (mirrors production: predictions.py builds raw_features from the
-        # cohort's base_covariates — never a superset).
-        raw_pers = {
-            **raw_init,
+        # T11: initiation is now also a 7-covariate gold-standard model (was 3) — supply
+        # its full set. persistence uses the same 7 covariates. The service validates EVERY
+        # key against the ROUTED model's own covariate types, so each model gets exactly its
+        # own set (mirrors production: predictions.py builds raw_features from the cohort's
+        # base_covariates).
+        raw_init = {
+            "disease_severity": 5.61,
+            "academic_hcp": 0,
+            "geographic_region": "northeast",
             "insurance_type": "commercial",
-            "age_at_diagnosis": 52,
-            "comorbidity_burden": 1,
-            "prior_therapy_lines": 0,
+            "age_at_diagnosis": 49,
+            "comorbidity_burden": 2,
+            "prior_therapy_lines": 1,
         }
+        raw_pers = dict(raw_init)
 
         out_init = await service.predict(
             serving_module.PredictionInput(
