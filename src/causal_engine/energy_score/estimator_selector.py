@@ -596,15 +596,22 @@ class OLSWrapper(BaseEstimatorWrapper):
             # treatment coefficient == difference-in-means for a binary T).
             empty_backdoor = X.shape[1] == 0
             if empty_backdoor:
-                # An unadjusted contrast needs BOTH arms present; a one-arm sample
-                # has no contrast and would produce a degenerate ate / constant
-                # propensity (0 or 1). Fail-closed rather than report a fake number.
-                n_treated = int(np.count_nonzero(treatment))
-                if n_treated == 0 or n_treated == len(treatment):
+                # An unadjusted contrast needs EXACTLY TWO arms (both present). Use
+                # the DISTINCT values (not count_nonzero, which would mis-handle a
+                # non-0/1 encoding such as 1/2 or -1/1): a one-arm or multi-level
+                # treatment has no well-defined difference-in-means, so fail-closed
+                # rather than report a fake number. Normalize the two arms to 0/1 so
+                # the OLS coefficient IS the difference-in-means (the same category
+                # contrast the discrete-treatment CATE estimators report), regardless
+                # of the raw encoding.
+                arms = np.unique(treatment)
+                if arms.size != 2:
                     raise ValueError(
-                        "Unadjusted empty-backdoor estimation requires both "
-                        f"treatment arms; got n_treated={n_treated} of {len(treatment)}."
+                        "Unadjusted empty-backdoor estimation requires exactly two "
+                        f"treatment arms; got {arms.size} distinct value(s): "
+                        f"{arms.tolist()}."
                     )
+                treatment = (treatment == arms[1]).astype(int)
             X_with_treatment = np.column_stack([treatment, X])
 
             model = LinearRegression()

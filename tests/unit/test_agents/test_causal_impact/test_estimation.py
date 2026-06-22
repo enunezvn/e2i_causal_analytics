@@ -750,3 +750,42 @@ class TestEmptyBackdoorEstimation:
         )
         assert result["selected_estimator"] == "ols"
         assert result["ate"] == pytest.approx(naive_diff, abs=1e-9)
+
+
+class TestDegenerateQueryGuard:
+    """A degenerate query (treatment == outcome, or a node absent from the DAG)
+    yields graph_builder's trivial [[]] backdoor; the estimation node must
+    fail-closed rather than route it as a validated empty backdoor (codex r2)."""
+
+    @pytest.mark.asyncio
+    async def test_treatment_equals_outcome_fails_closed(self):
+        from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+        node = EstimationNode()
+        state: dict = {
+            "query": "q",
+            "query_id": "deg-1",
+            "treatment_var": "x",
+            "outcome_var": "x",
+            "confounders": [],
+            "data_source": "synthetic",
+            "causal_graph": {
+                "nodes": ["x", "y"],
+                "edges": [],
+                "treatment_nodes": ["x"],
+                "outcome_nodes": ["x"],  # treatment == outcome -> degenerate
+                "adjustment_sets": [[]],
+                "dag_dot": "...",
+                "confidence": 0.8,
+            },
+            "parameters": {},
+            "status": "pending",
+            "errors": [],
+            "warnings": [],
+        }
+
+        result = await node.execute(state)
+
+        assert result["status"] == "failed"
+        blob = f"{result.get('estimation_error', '')} {result.get('error_message', '')}"
+        assert "egenerate" in blob  # "Degenerate"/"degenerate"

@@ -602,6 +602,26 @@ class EstimationNode:
 
             treatment = causal_graph["treatment_nodes"][0]
             outcome = causal_graph["outcome_nodes"][0]
+            # Degeneracy guard: graph_builder returns the trivial ``[[]]`` backdoor
+            # for a BROKEN query (treatment == outcome, or either node absent from
+            # the DAG — see graph_builder._find_adjustment_sets). That ``[[]]`` is
+            # indistinguishable from a VALIDATED empty backdoor downstream, so a
+            # degenerate query would otherwise materialize a meaningless unadjusted
+            # ATE. Fail-closed here instead. (Distinct, in-DAG nodes pass through.)
+            graph_nodes = set(causal_graph.get("nodes") or [])
+            if treatment == outcome or (
+                graph_nodes and (treatment not in graph_nodes or outcome not in graph_nodes)
+            ):
+                raise EstimationError(
+                    "Degenerate causal query: treatment and outcome must be "
+                    "distinct nodes present in the DAG; refusing to report an "
+                    "estimate for a broken graph.",
+                    details={
+                        "treatment": treatment,
+                        "outcome": outcome,
+                        "graph_nodes": sorted(graph_nodes)[:20],
+                    },
+                )
             # A validated EMPTY backdoor (``adjustment_sets == [[]]``) means zero
             # covariates (unadjusted ATE for an RCT / exogenous treatment); a
             # MISSING set (``adjustment_sets == []`` — none identified) passes

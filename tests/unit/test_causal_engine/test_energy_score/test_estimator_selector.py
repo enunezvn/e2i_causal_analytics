@@ -1162,3 +1162,32 @@ class TestEmptyBackdoorUnadjusted:
         # Finite, good-tier energy score -> not requires_review.
         assert np.isfinite(sel.selected.energy_score)
         assert sel.requires_review is False
+
+    def test_ols_wrapper_non_01_encoding_normalized_to_diff_in_means(self):
+        """A non-0/1 two-arm encoding (e.g. {1,2}) is accepted and normalized so
+        the ATE is the difference-in-means, NOT a per-unit slope (codex r2)."""
+        rng = np.random.RandomState(3)
+        n = 1500
+        base = (rng.rand(n) < 0.4).astype(int)
+        treatment = base + 1  # arms encoded as {1, 2}
+        outcome = (rng.rand(n) < (0.3 + 0.3 * base)).astype(float)
+        covariates = pd.DataFrame(index=range(n))
+        diff = float(outcome[base == 1].mean() - outcome[base == 0].mean())
+
+        result = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+
+        assert result.success is True, result.error_message
+        assert result.ate == pytest.approx(diff, abs=1e-9)
+
+    def test_ols_wrapper_one_arm_fails_closed(self):
+        """A one-arm (single distinct value) empty-backdoor sample fails-closed
+        rather than emitting a degenerate ate / constant 0-or-1 propensity."""
+        n = 1500
+        treatment = np.ones(n, dtype=int)  # only one arm present
+        outcome = np.random.RandomState(4).rand(n)
+        covariates = pd.DataFrame(index=range(n))
+
+        result = OLSWrapper(EstimatorConfig(EstimatorType.OLS)).fit(treatment, outcome, covariates)
+
+        assert result.success is False
+        assert "two treatment arms" in (result.error_message or "")
