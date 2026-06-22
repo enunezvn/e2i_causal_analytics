@@ -338,16 +338,37 @@ class GraphBuilderNode:
         # Every curated confounder is a common cause of BOTH treatment and
         # outcome — draw both edges (acyclicity-guarded) so the graph is
         # connected and the backdoor adjustment set is non-empty and honest.
+        self._add_curated_confounder_edges(dag, treatment, outcome, confounders)
+
+        return dag
+
+    def _add_curated_confounder_edges(
+        self, dag: nx.DiGraph, treatment: str, outcome: str, confounders: List[str]
+    ) -> None:
+        """Draw ``confounder -> treatment`` AND ``confounder -> outcome`` for each
+        curated confounder (acyclicity-guarded), mutating ``dag`` in place.
+
+        The ``confounders`` are the caller's curated adjustment covariates — domain
+        knowledge (e.g. the API's ``causal_paths.confounders_controlled``) that each
+        is a common cause of BOTH treatment and outcome. This is shared by the manual
+        DAG (``_construct_dag``) and the discovery-gate ACCEPT path so a supplied
+        confounder is NEVER silently dropped: an empty backdoor must mean 'no
+        confounder was supplied' (a randomized / exogenous treatment -> correctly
+        unadjusted), NOT 'discovery happened to omit a supplied one'. Constraint-based
+        discovery on binary data routinely fails to recover these edges, so without
+        this the ACCEPT branch returns an empty backdoor and leaves the estimate
+        CONFOUNDED — which the estimator's all-other-columns fallback used to mask
+        until that fallback was removed for validated-empty backdoors (PR #1084)."""
         for conf in confounders:
             if conf in (treatment, outcome):
                 continue
+            if conf not in dag:
+                dag.add_node(conf)
             for target in (treatment, outcome):
                 if not dag.has_edge(conf, target):
                     dag.add_edge(conf, target)
                     if not nx.is_directed_acyclic_graph(dag):
                         dag.remove_edge(conf, target)
-
-        return dag
 
     def _find_adjustment_sets(
         self, dag: nx.DiGraph, treatment: str, outcome: str
@@ -664,6 +685,14 @@ class GraphBuilderNode:
                     dag.add_edge(treatment, outcome)
                     if not nx.is_directed_acyclic_graph(dag):
                         dag.remove_edge(treatment, outcome)
+                # Preserve the caller's curated confounders on the discovered DAG.
+                # Constraint-based discovery on binary data routinely MISSES a
+                # confounder's edges; dropping a domain-known confounder would
+                # silently confound the estimate (the all-other-columns estimator
+                # fallback no longer rescues an empty backdoor since PR #1084). The
+                # other gate paths (AUGMENT/REVIEW/REJECT) already adjust for them
+                # via _construct_dag — ACCEPT must be consistent.
+                self._add_curated_confounder_edges(dag, treatment, outcome, confounders)
                 return dag, augmented_edges
 
         elif decision == GateDecision.AUGMENT.value:
