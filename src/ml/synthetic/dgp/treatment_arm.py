@@ -57,6 +57,21 @@ _BRAND_CATE_SCALE: Dict[Brand, float] = {
 }
 
 
+# T11 (2026-06-22): the prognostic-driver enrichment of the initiation outcome
+# (binary_outcome_with_cate) compresses the binarized RD-scale treatment effect by
+# spreading the latent baseline (more prognostic variance → lower threshold-crossing
+# density → smaller mean tau_i). Measured: at _INIT_DRIVER_SCALE=0.75 the realized
+# true_ate drops to ~0.14, below the designed [0.15,0.50] band. We compensate by planting
+# a proportionally larger LATENT CATE so the RECOVERED RD-scale true_ate is restored to
+# ~the pre-T11 baseline (~0.177) — verified faithfully (true_ate 0.137→0.177 at boost
+# 1.30) with NO AUC change (~0.80), since τ is small vs the prognostic+noise variance and
+# treatment_arm is not a model feature. The boost is applied INSIDE binary_outcome_with_cate
+# (the initiation-only outcome fn, single SSOT both the generator and the reseed inherit),
+# NOT in brand_scaled_cate — so brand_scaled_cate stays the pure base×brand-scale map
+# (Remi@1.0 == base config). CATE high>med>low ordering is preserved (uniform factor).
+_INIT_LATENT_CATE_BOOST = 1.30
+
+
 def brand_scaled_cate(brand: Brand) -> Dict[str, float]:
     """Return the per-brand CATE-by-segment map (base map x brand scale).
 
@@ -109,6 +124,13 @@ _INIT_PRIOR_THERAPY_COEF = -0.15  # more prior lines → lower initiation propen
 _INIT_DRIVER_SCALE = 0.75  # TUNED (faithful FeatureBuilder+train_cohort_model sweep,
 # n=20000): lands the initiation holdout AUC ~0.80 (Remi 0.804 / Fab 0.797 / Kis 0.798),
 # persist/disc parity, inside the [0.78,0.83] band test_initiation_calibration.py locks.
+# NOTE: adding prognostic predictive signal to a fixed-prevalence BINARY outcome
+# necessarily COMPRESSES the binarized RD-scale treatment effect (mean tau_i) — at this
+# scale it drops to ~0.14, below the designed [0.15,0.50] true_ate band. That compression
+# is offset by _INIT_LATENT_CATE_BOOST (below), which plants a proportionally larger
+# latent CATE so the RECOVERED RD-scale true_ate is restored to ~the pre-T11 baseline
+# (~0.177) WITHOUT lowering AUC (τ is small vs the prognostic+noise variance). This keeps
+# both contracts: AUC ~0.80 AND causal fidelity. (User directive 2026-06-22.)
 
 
 def initiation_prognostic_offset(
@@ -197,8 +219,14 @@ def binary_outcome_with_cate(
     severity = np.asarray(covariates["disease_severity"], dtype=float)
     academic = np.asarray(covariates["academic_hcp"], dtype=float)
 
-    # latent per-unit CATE from the brand-scaled segment map (score scale)
-    tau_latent = np.array([cate_map[str(s)] for s in segment], dtype=float)
+    # latent per-unit CATE from the brand-scaled segment map (score scale). The T11
+    # _INIT_LATENT_CATE_BOOST offsets the binarization attenuation the prognostic-driver
+    # baseline introduces, restoring the RECOVERED RD-scale true_ate to ~the pre-T11
+    # band [0.15,0.50] without changing AUC (see note by the constant). Applied here, the
+    # single initiation outcome SSOT, so both the generator and the reseed inherit it.
+    tau_latent = (
+        np.array([cate_map[str(s)] for s in segment], dtype=float) * _INIT_LATENT_CATE_BOOST
+    )
 
     baseline = baseline_severity_coef * (severity - 5.0) + baseline_academic_coef * academic
     if prognostic_offset is not None:
