@@ -195,15 +195,6 @@ export default function CausalAnalysis() {
   const effects: DiscoveredEffect[] = useMemo(() => job?.effects ?? [], [job]);
   const running = !!job && job.status !== 'completed';
 
-  // A drilled-into effect belongs to the leaderboard that produced it; that
-  // leaderboard is scoped to (dataset, brand). When the grain or brand changes,
-  // the open deep view no longer matches the new scope — close it so we never
-  // show e.g. a Patient analysis under the HCP grain (the leaderboard itself is
-  // reset in useDiscoverEffects).
-  useEffect(() => {
-    setSelectedId(null);
-  }, [dataset, brandArg]);
-
   // ── Manual "Pose your own question" panel ──────────────────────────────────
   const [manualOpen, setManualOpen] = useState(false);
   const { data: variables } = useCausalVariables(dataset);
@@ -242,7 +233,23 @@ export default function CausalAnalysis() {
   }, [variables, treatmentCandidates, outcomeCandidates, treatmentVar, outcomeVar]);
 
   const runAgent = useRunCausalAgentAnalysis();
-  const manualResult = runAgent.data;
+  const resetManual = runAgent.reset;
+  // A manual analysis is scoped to the (dataset, brand) it was run for. Only
+  // surface it when its dataset still matches the active grain — its `dataset`
+  // is echoed in the response, so a Patient analysis can never render under the
+  // HCP grain even if its run resolves AFTER a grain switch (the render passes
+  // the CURRENT brandArg, so a stale result would otherwise be mislabeled).
+  const manualResult =
+    runAgent.data && runAgent.data.dataset === dataset ? runAgent.data : undefined;
+
+  // Both the drilled-into deep view and a completed manual analysis are scoped
+  // to (dataset, brand); on a grain/brand switch, drop them so nothing from the
+  // previous scope lingers under the new one. (The leaderboard itself resets in
+  // useDiscoverEffects.)
+  useEffect(() => {
+    setSelectedId(null);
+    resetManual();
+  }, [dataset, brandArg, resetManual]);
 
   // The brand of the effect currently drilled into (each effect is brand-scoped,
   // even when the run filter is "All brands"); falls back to the filter.

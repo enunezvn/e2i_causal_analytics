@@ -153,29 +153,46 @@ export function useDiscoverEffects(
   dataset: string = 'patient_journeys',
   brand?: string | null
 ) {
-  const [jobId, setJobId] = useState<string | null>(null);
+  const brandKey = brand ?? null;
+  // The active job is TAGGED with the (dataset, brand) it was discovered for, so
+  // a job started for one scope can never surface under another — not via a
+  // lingering poll AND not via a submit that resolves AFTER a grain/brand switch
+  // (TanStack reset() does not suppress an in-flight mutation's onSuccess, so a
+  // bare setJobId there would re-adopt the stale job). `initial` preserves the
+  // immediate submit response so the leaderboard renders without waiting a poll.
+  const [active, setActive] = useState<{
+    jobId: string;
+    dataset: string;
+    brand: string | null;
+    initial: DiscoverEffectsResponse;
+  } | null>(null);
 
   const {
     mutate: startMutate,
     isPending: isStarting,
     error: startError,
-    data: submitData,
     reset: resetSubmit,
-  } = useMutation<DiscoverEffectsResponse, ApiError>({
-    mutationFn: () => discoverCausalEffects(dataset, brand),
-    onSuccess: (r) => setJobId(r.job_id),
-  });
+  } = useMutation<{ job: DiscoverEffectsResponse; dataset: string; brand: string | null }, ApiError>(
+    {
+      mutationFn: async () => {
+        const job = await discoverCausalEffects(dataset, brand);
+        return { job, dataset, brand: brandKey };
+      },
+      onSuccess: ({ job, dataset: ds, brand: br }) =>
+        setActive({ jobId: job.job_id, dataset: ds, brand: br, initial: job }),
+    }
+  );
 
-  // A discovered leaderboard is scoped to exactly (dataset, brand). When either
-  // facet changes, the previous job's effects no longer describe the new scope —
-  // drop them so the page returns to the honest empty state instead of showing
-  // e.g. a Patient-grain leaderboard under the HCP grain. Without this, both the
-  // polled job AND the retained mutation result (submitData) would leak across
-  // grain/brand switches as plausible-but-wrong results.
+  // Drop the active job (and any retained submit state) whenever the scope
+  // changes, so the previous scope's leaderboard returns to the honest empty
+  // state instead of e.g. showing a Patient-grain leaderboard under HCP.
   useEffect(() => {
-    setJobId(null);
+    setActive(null);
     resetSubmit();
-  }, [dataset, brand, resetSubmit]);
+  }, [dataset, brandKey, resetSubmit]);
+
+  const inScope = active !== null && active.dataset === dataset && active.brand === brandKey;
+  const jobId = inScope ? active.jobId : null;
 
   const poll = useQuery<DiscoverEffectsResponse, ApiError>({
     queryKey: ['causal', 'discover-effects', jobId],
@@ -190,7 +207,7 @@ export function useDiscoverEffects(
     start: startMutate,
     isStarting,
     startError,
-    job: poll.data ?? submitData ?? null,
+    job: inScope ? poll.data ?? active.initial : null,
     isPolling: poll.isFetching,
   };
 }

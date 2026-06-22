@@ -151,6 +151,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync: vi.fn(),
+      reset: vi.fn(),
       isPending: false,
       isError: false,
       error: null,
@@ -217,6 +218,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync,
+      reset: vi.fn(),
       isPending: false,
       isError: false,
       error: null,
@@ -312,6 +314,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
     (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
       mutateAsync,
+      reset: vi.fn(),
       isPending: false,
       isError: false,
       error: null,
@@ -331,6 +334,29 @@ describe('CausalAnalysis — unified agent-led page', () => {
         outcome_var: 'action_taken',
       })
     );
+  }, 20000);
+
+  // ── T4 (codex round 2, Finding 2): a completed manual analysis is scoped to
+  // its dataset; switching grain must not leave a Patient-grain result rendered
+  // (mislabeled with the new brand) under the HCP grain.
+  it('drops a completed manual analysis when the grain changes (no stale cross-grain result)', async () => {
+    const user = userEvent.setup();
+    (useRunCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { analysis_id: 'm1', status: 'completed', dataset: 'patient_journeys' },
+      mutateAsync: vi.fn(),
+      reset: vi.fn(),
+      isPending: false,
+      isError: false,
+      error: null,
+    });
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // Open the manual panel — the completed Patient analysis shows.
+    fireEvent.click(screen.getByRole('button', { name: /Pose your own question/i }));
+    expect(screen.getByTestId('causal-detail')).toHaveAttribute('data-analysis-id', 'm1');
+    // Switch grain → the Patient-scoped manual result must not linger under HCP.
+    await user.click(screen.getByRole('combobox', { name: 'Grain' }));
+    await user.click(await screen.findByRole('option', { name: 'HCP' }));
+    expect(screen.queryByTestId('causal-detail')).not.toBeInTheDocument();
   }, 20000);
 
   it('renders the live estimator-registry total on the overview card', () => {

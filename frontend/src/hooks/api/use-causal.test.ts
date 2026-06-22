@@ -97,4 +97,36 @@ describe('useDiscoverEffects — scope reset', () => {
     rerender({ dataset: 'patient_journeys', brand: 'Kisqali' });
     await waitFor(() => expect(result.current.job).toBeNull());
   });
+
+  it('does not adopt a job whose scope changed before its submit resolved (race)', async () => {
+    // The submit is in-flight when the user switches grain; reset() does not
+    // suppress its onSuccess, so the job is TAGGED with the scope it was started
+    // for and must not surface under the new scope when it resolves late.
+    let resolveSubmit!: (v: typeof PATIENT_JOB) => void;
+    (discoverCausalEffects as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((res) => { resolveSubmit = res as (v: typeof PATIENT_JOB) => void; })
+    );
+    const { result, rerender } = renderHook(
+      ({ dataset, brand }: { dataset: string; brand: string | null }) =>
+        useDiscoverEffects(dataset, brand),
+      {
+        wrapper: createWrapper(),
+        initialProps: { dataset: 'patient_journeys', brand: null as string | null },
+      }
+    );
+
+    act(() => {
+      result.current.start(); // Patient submit, in-flight
+    });
+    // Wait until the mutationFn has actually started (resolveSubmit captured).
+    await waitFor(() => expect(discoverCausalEffects).toHaveBeenCalled());
+    rerender({ dataset: 'hcp_adoption', brand: null }); // switch scope mid-flight
+    await act(async () => {
+      resolveSubmit(PATIENT_JOB); // Patient submit resolves AFTER the switch
+      await Promise.resolve();
+    });
+
+    // The Patient job must NOT surface under the HCP grain.
+    expect(result.current.job).toBeNull();
+  });
 });
