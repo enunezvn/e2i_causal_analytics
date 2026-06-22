@@ -137,6 +137,54 @@ function EstimatorComparisonPanel({ comparison }: { comparison: EstimatorCompari
   );
 }
 
+// Show the NAIVE (unadjusted) diff-in-means next to the ADJUSTED estimate and the
+// confounding bias adjustment removed (Option D). The gold-standard treatment_arm
+// is assigned by a covariate propensity, so the naive estimate is biased — making
+// the gap between naive and adjusted the headline demonstration of WHY the causal
+// adjustment matters. Binary-treatment only; honest not-applicable otherwise.
+function ConfoundingAdjustmentPanel({ result }: { result: AgentCausalAnalysisResponse }) {
+  const naive = result.naive_ate;
+  const hasNaive = naive !== null && naive !== undefined && !Number.isNaN(naive);
+  const delta = result.confounding_bias_removed;
+  const hasDelta = delta !== null && delta !== undefined && !Number.isNaN(delta);
+
+  return (
+    <div className="rounded-md border bg-muted/30 p-3 space-y-1">
+      <p className="text-sm font-medium">Confounding adjustment</p>
+      {hasNaive ? (
+        <>
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+            <span className="text-muted-foreground">
+              Naive (unadjusted):{' '}
+              <span className="font-semibold text-foreground">{formatEffect(naive)}</span>{' '}
+              <span className="text-xs">
+                95% CI {formatCI(result.naive_ate_ci_lower, result.naive_ate_ci_upper)}
+              </span>
+            </span>
+            <span className="text-muted-foreground">
+              Adjusted:{' '}
+              <span className="font-semibold text-primary">{formatEffect(result.ate)}</span>
+            </span>
+          </div>
+          {hasDelta && (
+            <p className="text-xs text-muted-foreground">
+              {Math.abs(delta) < 0.005
+                ? 'Adjustment left the estimate essentially unchanged — little confounding on the adjusted covariates.'
+                : delta > 0
+                  ? `Adjustment removed ${Math.abs(delta).toFixed(4)} of upward confounding bias — the naive difference-in-means overstated the effect because treated and untreated units differ on the adjusted covariates.`
+                  : `Adjustment corrected ${Math.abs(delta).toFixed(4)} of downward confounding bias — the naive difference-in-means understated the effect.`}
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Naive (unadjusted) contrast: not applicable (non-binary treatment).
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** The shared deep view for one validated causal effect (agent-analyze result). */
 export function CausalAnalysisDetail({
   result,
@@ -235,6 +283,8 @@ export function CausalAnalysisDetail({
           <span className="font-medium">{result.discovered_confounders.join(', ')}</span>
         </p>
       )}
+
+      <ConfoundingAdjustmentPanel result={result} />
 
       {vizNodes.length > 0 ? (
         <div className="space-y-2">

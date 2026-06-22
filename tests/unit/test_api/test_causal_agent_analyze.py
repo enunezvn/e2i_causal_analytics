@@ -86,6 +86,55 @@ def test_completed_run_maps_dag_effect_and_estimator():
 
 
 @pytest.mark.unit
+def test_naive_vs_adjusted_fields_pass_through():
+    """The unadjusted diff-in-means foil + the confounding bias it removes must
+    reach the API response so the page can show 'adjustment removed X bias'."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["estimation_result"].update(
+        {
+            "naive_ate": 0.2815,
+            "naive_ate_ci_lower": 0.26,
+            "naive_ate_ci_upper": 0.30,
+            # naive - adjusted = how much the naive estimate was inflated.
+            "confounding_bias_removed": 0.1615,
+        }
+    )
+    resp = _agent_state_to_response(
+        analysis_id="n1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=25000,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.naive_ate == 0.2815
+    assert (resp.naive_ate_ci_lower, resp.naive_ate_ci_upper) == (0.26, 0.30)
+    assert resp.confounding_bias_removed == pytest.approx(0.1615)
+
+
+@pytest.mark.unit
+def test_naive_fields_default_none_when_estimator_did_not_emit_them():
+    """A non-binary treatment (or an old result) carries no naive contrast — the
+    response must surface None, never a fabricated 0."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    resp = _agent_state_to_response(
+        analysis_id="n2",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=_base_state(),
+        latency_ms=10,
+    )
+    assert resp.naive_ate is None
+    assert resp.naive_ate_ci_lower is None
+    assert resp.naive_ate_ci_upper is None
+    assert resp.confounding_bias_removed is None
+
+
+@pytest.mark.unit
 def test_estimator_comparison_surfaced_when_multiple_evaluated():
     """The Auto path fits + energy-scores several estimators; that comparison
     lived in state but was dropped at the API boundary. Surface it so the UI can

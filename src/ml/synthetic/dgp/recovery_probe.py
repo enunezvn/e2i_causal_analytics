@@ -16,8 +16,14 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 
+from src.ml.synthetic.dgp.treatment_arm import ARM_CONFOUNDERS
+
 _SEGMENTS = ("high_severity", "medium_severity", "low_severity")
-_COVARS = ["disease_severity", "academic_hcp"]
+# The backdoor adjustment set for treatment_arm IS exactly the covariates the
+# arm is confounded on — sourced from the DGP SSOT so it can never drift from
+# assign_treatment_arm (a stale set here would silently false-green the recovery
+# gate). See ARM_CONFOUNDERS + tests/unit/test_synthetic/test_arm_confounder_contract.py.
+_COVARS = list(ARM_CONFOUNDERS)
 
 
 def recover_ate_and_cate(df: pd.DataFrame) -> Dict[str, Any]:

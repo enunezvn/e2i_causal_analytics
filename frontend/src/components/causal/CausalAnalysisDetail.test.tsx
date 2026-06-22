@@ -119,4 +119,33 @@ describe('CausalAnalysisDetail', () => {
     renderWithProviders(<CausalAnalysisDetail result={{ ...RESULT, dag: { ...RESULT.dag, nodes: [], edges: [] } }} />);
     expect(screen.getByText('No DAG produced')).toBeInTheDocument();
   });
+
+  it('surfaces the naive (unadjusted) ATE and the confounding bias adjustment removed', () => {
+    renderWithProviders(
+      <CausalAnalysisDetail
+        result={{
+          ...RESULT,
+          ate: 0.185,
+          naive_ate: 0.2815,
+          naive_ate_ci_lower: 0.26,
+          naive_ate_ci_upper: 0.3,
+          confounding_bias_removed: 0.0965,
+        }}
+      />
+    );
+    // Both the naive estimate and the bias-removed delta are shown to the analyst.
+    expect(screen.getByText(/naive \(unadjusted\)/i)).toBeInTheDocument();
+    expect(screen.getByText('0.2815')).toBeInTheDocument();
+    expect(screen.getByText(/0\.0965/)).toBeInTheDocument();
+    expect(screen.getByText(/bias removed|overstated/i)).toBeInTheDocument();
+  });
+
+  it('marks the naive contrast not-applicable for a non-binary treatment', () => {
+    renderWithProviders(
+      <CausalAnalysisDetail
+        result={{ ...RESULT, naive_ate: null, naive_ate_ci_lower: null, naive_ate_ci_upper: null, confounding_bias_removed: null }}
+      />
+    );
+    expect(screen.getByText(/not applicable/i)).toBeInTheDocument();
+  });
 });

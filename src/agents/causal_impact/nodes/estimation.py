@@ -48,6 +48,54 @@ from src.causal_engine.errors import EstimationError
 logger = logging.getLogger(__name__)
 
 
+def _compute_naive_contrast(
+    data: pd.DataFrame, treatment: str, outcome: str
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Unadjusted difference-in-means foil: ``mean(Y|T=1) - mean(Y|T=0)``.
+
+    This is a DIAGNOSTIC that lets the UI show how much confounding bias the
+    adjusted estimator removed (the naive estimate is biased when treated and
+    untreated units differ on the adjusted covariates — exactly how the
+    gold-standard ``treatment_arm`` is assigned, see
+    ``src.ml.synthetic.dgp.treatment_arm.ARM_CONFOUNDERS``).
+
+    DEFINED ONLY for a BINARY 0/1 treatment with both arms present. For a
+    continuous/multi-level treatment a "difference in means" would be a different
+    estimand than the adjusted estimator's contrast, so we return
+    ``(None, None, None)`` — an honest not-applicable, NEVER a fabricated number.
+
+    Returns ``(naive_ate, ci_lower, ci_upper)``. The 95% CI is the Welch
+    two-sample interval (``±1.96 * sqrt(var1/n1 + var0/n0)``) and is ``None``
+    when either arm has < 2 rows (variance undefined). Being a non-essential
+    foil, this fails OPEN to ``(None, None, None)`` on any error rather than
+    breaking the real (adjusted) estimate.
+    """
+    try:
+        t = pd.to_numeric(data[treatment], errors="coerce")
+        y = pd.to_numeric(data[outcome], errors="coerce")
+        mask = t.notna() & y.notna()
+        t_arr = t[mask].to_numpy(dtype=float)
+        y_arr = y[mask].to_numpy(dtype=float)
+        uniq = set(np.unique(t_arr).tolist())
+        # Require EXACTLY the two arms {0,1} — both present, nothing else.
+        if uniq != {0.0, 1.0}:
+            return None, None, None
+        y1 = y_arr[t_arr == 1.0]
+        y0 = y_arr[t_arr == 0.0]
+        if y1.size == 0 or y0.size == 0:
+            return None, None, None
+        point = float(y1.mean() - y0.mean())
+        if y1.size >= 2 and y0.size >= 2:
+            se = float(np.sqrt(y1.var(ddof=1) / y1.size + y0.var(ddof=1) / y0.size))
+            if np.isfinite(se) and se > 0.0:
+                half = 1.959963984540054 * se  # 97.5th percentile of N(0,1)
+                return point, point - half, point + half
+        return point, None, None
+    except Exception:  # noqa: BLE001 — diagnostic foil must never break estimation
+        logger.debug("naive contrast computation failed; surfacing None", exc_info=True)
+        return None, None, None
+
+
 class EstimationNode:
     """Estimates causal effects using DoWhy/EconML.
 
@@ -432,12 +480,27 @@ class EstimationNode:
         p_value_real = float(2.0 * (1.0 - _scipy_stats.norm.cdf(z_score)))
         statistical_significance_real = p_value_real < 0.05
 
+        # Naive (unadjusted) diff-in-means foil — surfaces how much confounding
+        # bias the adjustment removed (Option D). Binary-treatment only; None
+        # otherwise. ``confounding_bias_removed`` = naive - adjusted (> 0 means
+        # the naive estimate OVERSTATED the effect). Diagnostic-only: a None foil
+        # never blocks the real estimate above.
+        naive_ate, naive_ci_lower, naive_ci_upper = _compute_naive_contrast(
+            data, treatment, outcome
+        )
+        confounding_bias_removed = float(naive_ate - ate_f) if naive_ate is not None else None
+
         result: EstimationResult = {
             "method": method_name,
             "ate": ate_f,
             "ate_ci_lower": ate_ci_lower_f,
             "ate_ci_upper": ate_ci_upper_f,
             "standard_error": ate_std_f,
+            # Naive (unadjusted) foil + confounding bias removed (Option D).
+            "naive_ate": naive_ate,
+            "naive_ate_ci_lower": naive_ci_lower,
+            "naive_ate_ci_upper": naive_ci_upper,
+            "confounding_bias_removed": confounding_bias_removed,
             "effect_size": self._classify_effect_size(ate_f),
             "statistical_significance": statistical_significance_real,
             "p_value": p_value_real,
