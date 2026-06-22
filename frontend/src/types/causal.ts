@@ -243,12 +243,23 @@ export interface AgentCausalAnalysisResponse {
   dag_source?: string;
   /** Covariates the data identified as confounders (the adjustment set). */
   discovered_confounders?: string[];
+  /** Adjusted (headline) average treatment effect. */
   ate?: number | null;
   ate_ci_lower?: number | null;
   ate_ci_upper?: number | null;
   standard_error?: number | null;
   p_value?: number | null;
   statistical_significance: boolean;
+  /**
+   * Naive UNADJUSTED diff-in-means (mean(Y|T=1) - mean(Y|T=0)). Binary-treatment
+   * only; null for a continuous/multi-level treatment. A foil that shows how much
+   * confounding bias the adjusted estimate removed — NOT the causal effect.
+   */
+  naive_ate?: number | null;
+  naive_ate_ci_lower?: number | null;
+  naive_ate_ci_upper?: number | null;
+  /** naive_ate - ate (> 0 means the naive estimate overstated the effect). */
+  confounding_bias_removed?: number | null;
   /** Estimator the agent actually used (data-driven or forced) */
   selected_estimator?: string | null;
   /** The data-driven estimator evaluation (null when only one was evaluated). */

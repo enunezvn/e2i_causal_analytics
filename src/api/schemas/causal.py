@@ -612,12 +612,33 @@ class AgentCausalAnalysisResponse(BaseModel):
         default_factory=list,
         description="Covariates the data identified as confounders (the adjustment set).",
     )
-    ate: Optional[float] = Field(default=None, description="Average treatment effect")
+    ate: Optional[float] = Field(
+        default=None, description="Average treatment effect (ADJUSTED for confounders)"
+    )
     ate_ci_lower: Optional[float] = Field(default=None)
     ate_ci_upper: Optional[float] = Field(default=None)
     standard_error: Optional[float] = Field(default=None)
     p_value: Optional[float] = Field(default=None)
     statistical_significance: bool = Field(default=False)
+    naive_ate: Optional[float] = Field(
+        default=None,
+        description=(
+            "Naive UNADJUSTED difference-in-means (mean(Y|T=1) - mean(Y|T=0)). "
+            "Binary-treatment only; None for a continuous/multi-level treatment. "
+            "Surfaced as a foil so the analyst sees how much confounding bias the "
+            "adjusted estimate removed — it is NOT the causal effect."
+        ),
+    )
+    naive_ate_ci_lower: Optional[float] = Field(default=None)
+    naive_ate_ci_upper: Optional[float] = Field(default=None)
+    confounding_bias_removed: Optional[float] = Field(
+        default=None,
+        description=(
+            "naive_ate - ate: how much the unadjusted estimate was inflated by "
+            "confounding (> 0 means the naive estimate overstated the effect). "
+            "None when no naive contrast applies."
+        ),
+    )
     selected_estimator: Optional[str] = Field(
         default=None, description="Estimator the agent actually used"
     )

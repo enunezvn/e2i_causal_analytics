@@ -5,7 +5,7 @@ Contract: .claude/contracts/tier2-contracts.md
 """
 
 import operator
-from typing import Annotated, Any, Dict, List, Literal, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 from uuid import UUID
 
 from typing_extensions import NotRequired
@@ -58,10 +58,18 @@ class EstimationResult(TypedDict, total=False):
         "drlearner",
         "ols",
     ]
-    ate: float  # Average Treatment Effect
+    ate: float  # Average Treatment Effect (ADJUSTED, the headline estimate)
     ate_ci_lower: float  # 95% confidence interval lower bound
     ate_ci_upper: float  # 95% confidence interval upper bound
     standard_error: float  # Standard error of the ATE estimate
+    # Naive (unadjusted) diff-in-means foil + the confounding bias adjustment
+    # removed (Option D). Binary-treatment only; None for continuous/multi-level
+    # treatment (an honest not-applicable). confounding_bias_removed = naive - ate
+    # (> 0 means the naive estimate overstated the effect).
+    naive_ate: NotRequired[Optional[float]]
+    naive_ate_ci_lower: NotRequired[Optional[float]]
+    naive_ate_ci_upper: NotRequired[Optional[float]]
+    confounding_bias_removed: NotRequired[Optional[float]]
     cate_segments: NotRequired[List[Dict[str, Any]]]  # Conditional ATE by segment
     effect_size: str  # "small", "medium", "large"
     statistical_significance: bool

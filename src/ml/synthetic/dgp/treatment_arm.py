@@ -24,6 +24,19 @@ SEGMENT_MEDIUM = "medium_severity"
 SEGMENT_LOW = "low_severity"
 
 
+# The covariates the (intentionally confounded) treatment arm is assigned on —
+# the SINGLE SOURCE OF TRUTH for "what the DGP confounds on". assign_treatment_arm
+# below reads its propensity inputs through this tuple, so it cannot drift from the
+# code. EVERY production estimator that estimates an effect of treatment_arm MUST
+# adjust for these (carry them in its adjustment set / effect modifiers); otherwise
+# it silently reports the confounded naive diff-in-means (biased upward, ~0.28 vs
+# the designed ~0.18 true effect) as "the treatment effect". That contract is
+# locked by tests/unit/test_synthetic/test_arm_confounder_contract.py and made
+# visible to the analyst by the naive-vs-adjusted "confounding bias removed"
+# surfacing (Option D).
+ARM_CONFOUNDERS: Tuple[str, str] = ("disease_severity", "academic_hcp")
+
+
 def assign_treatment_arm(
     covariates: Dict[str, np.ndarray],
     rng: np.random.Generator,
@@ -36,9 +49,14 @@ def assign_treatment_arm(
     e(X) = sigmoid(intercept + beta_severity*(severity-5) + beta_academic*academic),
     clipped to [0.01,0.99] to GUARANTEE overlap (no near-separation) so the
     propensity is estimable with common support. Returns (arm[0/1], propensity).
+
+    The two propensity covariates are read through ``ARM_CONFOUNDERS`` so that
+    constant stays load-bearing (the contract guard test perturbs each and
+    asserts the propensity moves).
     """
-    severity = np.asarray(covariates["disease_severity"], dtype=float)
-    academic = np.asarray(covariates["academic_hcp"], dtype=float)
+    _severity_key, _academic_key = ARM_CONFOUNDERS
+    severity = np.asarray(covariates[_severity_key], dtype=float)
+    academic = np.asarray(covariates[_academic_key], dtype=float)
     # center severity at the population mean (5.0) so the intercept sets the
     # base treatment share rather than being absorbed by the severity scale.
     logit = intercept + beta_severity * (severity - 5.0) + beta_academic * academic
