@@ -21,8 +21,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+import httpx
 import pandas as pd
 import pytest
+from fastapi import HTTPException
 
 from src.api.routes import predictions as pred
 
@@ -97,6 +99,79 @@ class TestScoreCohortChunks:
             await pred._score_cohort_chunks(
                 _BadClient(), "m", [{"i": 0}, {"i": 1}], chunk_size=1000
             )
+
+
+# =============================================================================
+# T5: serving-schema-drift hardening — the BentoML client (predict_batch) RAISES
+# the raw httpx error on a non-2xx response (bentoml_client.py:387-390 does
+# response.raise_for_status() then `circuit.record_failure(); raise`). It does
+# NOT fold a 400 into the {"error": ...} body, so the old `result.get("error")`
+# branch never fires for a stale-schema 400 — the raw httpx.HTTPStatusError used
+# to propagate as an un-actionable job failure. The scorer must translate it into
+# a 502 whose detail tells the operator the remediation (restart the bentoml
+# service so it reloads the current serving schema).
+# =============================================================================
+def _http_status_error(code: int, body: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://bentoml:3000/predict_batch")
+    response = httpx.Response(code, request=request, text=body)
+    return httpx.HTTPStatusError(f"{code}", request=request, response=response)
+
+
+@pytest.mark.asyncio
+class TestScoreCohortChunksHttpError:
+    async def test_stale_schema_400_raises_actionable_502(self):
+        class _Raises400:
+            async def predict_batch(self, model_name, batch_data):
+                raise _http_status_error(400, "field required: 'features'")
+
+        with pytest.raises(HTTPException) as ei:
+            await pred._score_cohort_chunks(_Raises400(), "m", [{"i": 0}], chunk_size=1000)
+        assert ei.value.status_code == 502
+        detail = str(ei.value.detail).lower()
+        # Actionable: names the stale-schema cause AND the bentoml remediation.
+        assert "schema" in detail or "stale" in detail, detail
+        assert "bentoml" in detail or "restart" in detail, detail
+
+    async def test_422_validation_also_actionable_502(self):
+        class _Raises422:
+            async def predict_batch(self, model_name, batch_data):
+                raise _http_status_error(422, "unprocessable: schema mismatch")
+
+        with pytest.raises(HTTPException) as ei:
+            await pred._score_cohort_chunks(_Raises422(), "m", [{"i": 0}], chunk_size=1000)
+        assert ei.value.status_code == 502
+        detail = str(ei.value.detail).lower()
+        assert "bentoml" in detail or "restart" in detail, detail
+
+    async def test_other_5xx_status_raises_502_without_stale_claim(self):
+        """A 503 is NOT a schema-drift signal — it must still 502 but must NOT
+        misattribute it to a stale schema (that would send the operator down the
+        wrong remediation)."""
+
+        class _Raises503:
+            async def predict_batch(self, model_name, batch_data):
+                raise _http_status_error(503, "service unavailable")
+
+        with pytest.raises(HTTPException) as ei:
+            await pred._score_cohort_chunks(_Raises503(), "m", [{"i": 0}], chunk_size=1000)
+        assert ei.value.status_code == 502
+        detail = str(ei.value.detail).lower()
+        assert "stale" not in detail, detail
+        assert "503" in detail
+
+    async def test_unreachable_service_raises_502(self):
+        class _ConnError:
+            async def predict_batch(self, model_name, batch_data):
+                raise httpx.ConnectError(
+                    "connection refused",
+                    request=httpx.Request("POST", "http://bentoml:3000/predict_batch"),
+                )
+
+        with pytest.raises(HTTPException) as ei:
+            await pred._score_cohort_chunks(_ConnError(), "m", [{"i": 0}], chunk_size=1000)
+        assert ei.value.status_code == 502
+        detail = str(ei.value.detail).lower()
+        assert "reach" in detail or "unreachable" in detail or "running" in detail, detail
 
 
 def test_resolve_cohort_spec_rejects_non_goldstd_model():

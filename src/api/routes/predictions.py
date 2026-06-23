@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
@@ -1098,10 +1099,41 @@ async def _score_cohort_chunks(
     probabilities: List[float] = []
     for start in range(0, len(raw_features), chunk_size):
         chunk = raw_features[start : start + chunk_size]
-        result = await client.predict_batch(
-            model_name,
-            {"batch_id": str(uuid.uuid4()), "raw_features": chunk, "model_name": model_name},
-        )
+        try:
+            result = await client.predict_batch(
+                model_name,
+                {"batch_id": str(uuid.uuid4()), "raw_features": chunk, "model_name": model_name},
+            )
+        except httpx.HTTPStatusError as e:
+            # The BentoML client (bentoml_client.predict_batch) calls
+            # response.raise_for_status() and re-raises, so a non-2xx never reaches
+            # the `result.get("error")` branch below. A 400/422 here means the live
+            # serving schema rejected the current raw-covariate batch shape — i.e.
+            # the deployed bentoml service is STALE relative to
+            # scripts/bentoml/e2i_serving_service.py. Translate it into an actionable
+            # 502 instead of letting a bare httpx error surface as the job cause.
+            code = e.response.status_code
+            if code in (400, 422):
+                detail = (
+                    f"Cohort scoring rejected by the model server (HTTP {code}) for "
+                    f"'{model_name}': the BentoML serving schema is stale and no longer "
+                    "matches the request shape. Restart the bentoml service so it reloads "
+                    "the current scripts/bentoml/e2i_serving_service.py."
+                )
+            else:
+                detail = (
+                    f"Model server returned HTTP {code} scoring cohort '{model_name}'. "
+                    "Check the bentoml service logs."
+                )
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail) from e
+        except httpx.RequestError as e:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    f"Could not reach the model server to score '{model_name}': {e}. "
+                    "Is the bentoml service running?"
+                ),
+            ) from e
         err = result.get("error")
         if err:
             raise HTTPException(
