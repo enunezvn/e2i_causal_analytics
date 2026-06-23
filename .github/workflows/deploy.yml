@@ -32,6 +32,15 @@ on:
       # requirements.txt: ./patches/ag-ui-langgraph + ./patches/copilotkit). Kept in
       # sync with the in-script rebuild detector so a patch-only change still deploys.
       - 'patches/**'
+      # T5: the BentoML serving entrypoint + image live OUTSIDE src/, so a
+      # serving-SCHEMA change (scripts/bentoml/e2i_serving_service.py) or a build
+      # input (docker/bentoml/**) would NOT trigger a deploy under the paths above —
+      # the live serving schema then drifts from the API client until the next
+      # unrelated deploy. List them so a serving change deploys (and the in-script
+      # bentoml recreate below refreshes the container). src/mlops/bentoml_* is
+      # already covered by 'src/**'.
+      - 'scripts/bentoml/**'
+      - 'docker/bentoml/**'
   workflow_dispatch:
 
 env:
@@ -397,6 +406,50 @@ jobs:
               sleep 10
               echo "==> Rollback complete. Deploy FAILED."
               exit 1
+            fi
+
+            # T5: refresh the BentoML serving container when THIS deploy changed a
+            # serving input. The app + feast tiers are recreated above, but the
+            # `bentoml` service is NOT — so the live serving schema (baked from
+            # scripts/bentoml/e2i_serving_service.py in the prod target, or bind-mounted
+            # in the dev overlay) silently drifts from the API client every deploy,
+            # surfacing as a 400 on the cohort-scoring path. Recreate it ONLY when an
+            # input changed: bentoml has a 60s start_period, so a needless restart is a
+            # per-deploy serving blip. A no-delta re-run (PREV==NEW) also recreates,
+            # since we cannot prove the running container is current. `|| true` keeps
+            # set -e happy when grep matches nothing (mirrors the CHANGED_BAKED detector).
+            BENTOML_CHANGED=$(git diff --name-only "$PREV_SHA" "$NEW_SHA" \
+              | grep -E '^(scripts/bentoml/|docker/bentoml/|src/mlops/bentoml_)' \
+              || true)
+            if [ "$PREV_SHA" = "$NEW_SHA" ] || [ -n "$BENTOML_CHANGED" ]; then
+              echo "==> BentoML serving inputs changed — recreating bentoml so the live schema matches the client"
+              # --build is correct for BOTH overlays: it re-bakes the prod image and is a
+              # harmless no-op for the dev bind-mount (the fresh container re-reads it anyway).
+              if ! $COMPOSE_CMD up -d --build --no-deps --force-recreate bentoml; then
+                echo "==> bentoml recreate at ${NEW_SHA:0:7} failed — rolling bentoml back to ${PREV_SHA:0:7}. Deploy FAILED."
+                rollback_to_prev bentoml
+                exit 1
+              fi
+              # Gate on the serving liveness endpoint (the same /healthz the compose
+              # healthcheck uses; bentoml publishes 127.0.0.1:3000 on the host). 30x5s >
+              # the 60s start_period. A recreated-but-unhealthy serving container is the
+              # exact drift this step prevents, so a failed gate rolls bentoml back to its
+              # last-known-good PREV_SHA and fails the deploy loud.
+              BENTO_OK=false
+              for i in $(seq 1 30); do
+                if curl -sf --connect-timeout 3 --max-time 5 http://localhost:3000/healthz >/dev/null 2>&1; then
+                  BENTO_OK=true
+                  echo "==> bentoml healthy on attempt ${i}"
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$BENTO_OK" = false ]; then
+                echo "==> bentoml did not report healthy at /healthz — rolling back to ${PREV_SHA:0:7}. Deploy FAILED."
+                $COMPOSE_CMD logs --tail 50 bentoml 2>&1 || true
+                rollback_to_prev bentoml
+                exit 1
+              fi
             fi
 
             # Post-deploy prune (only reached when the health check passed). The
