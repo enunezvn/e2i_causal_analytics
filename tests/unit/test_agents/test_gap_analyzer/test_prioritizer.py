@@ -506,3 +506,143 @@ class TestPrioritizerEdgeCases:
 
         # May have no strategic bets
         assert isinstance(result["strategic_bets"], list)
+
+
+class TestPrioritizerThreeBucketAndSuppression:
+    """T6: 3-bucket scheme (no "other") + low-value suppression + drill-down data.
+
+    Grounded in live data: the "other" bucket was a MIX of buried gems (a $420k
+    ROI-4.6 medium opportunity) and pure noise (ROI -1.0, $0-1 revenue). The
+    prioritizer now (a) suppresses money-losers (ROI <= break-even), (b) stamps
+    every survivor with a 3-bucket ``category`` (never "other"), and (c) persists
+    a ``difficulty_rationale`` so the UI can explain WHY an opportunity is rated
+    the way it is.
+    """
+
+    def _gap(self, gap_id, metric="trx", gap_size=100.0, gap_pct=20.0):
+        return {
+            "gap_id": gap_id,
+            "metric": metric,
+            "segment": "region",
+            "segment_value": "Northeast",
+            "current_value": 400.0,
+            "target_value": 500.0,
+            "gap_size": gap_size,
+            "gap_percentage": gap_pct,
+            "gap_type": "vs_target",
+        }
+
+    def _roi(self, gap_id, roi, cost=10000.0):
+        return {
+            "gap_id": gap_id,
+            "estimated_revenue_impact": cost * (roi + 1),
+            "estimated_cost_to_close": cost,
+            "expected_roi": roi,
+            "payback_period_months": 6,
+            "confidence": 0.8,
+            "assumptions": ["Test assumption"],
+        }
+
+    def _state(self, gaps, rois):
+        return {
+            "query": "test",
+            "metrics": ["trx"],
+            "segments": ["region"],
+            "brand": "kisqali",
+            "time_period": "current_quarter",
+            "filters": None,
+            "gap_type": "vs_target",
+            "min_gap_threshold": 5.0,
+            "max_opportunities": 10,
+            "gaps_detected": gaps,
+            "gaps_by_segment": None,
+            "total_gap_value": 1000.0,
+            "roi_estimates": rois,
+            "total_addressable_value": 100000.0,
+            "prioritized_opportunities": None,
+            "quick_wins": None,
+            "strategic_bets": None,
+            "executive_summary": None,
+            "key_insights": None,
+            "detection_latency_ms": 100,
+            "roi_latency_ms": 50,
+            "total_latency_ms": 0,
+            "segments_analyzed": 1,
+            "errors": [],
+            "warnings": [],
+            "status": "prioritizing",
+        }
+
+    @pytest.mark.asyncio
+    async def test_suppresses_money_losing_opportunities(self):
+        node = PrioritizerNode()
+        gaps = [self._gap("g_good"), self._gap("g_loss", metric="nrx")]
+        rois = [self._roi("g_good", roi=3.0), self._roi("g_loss", roi=-1.0)]  # -1.0 = total loss
+        result = await node.execute(self._state(gaps, rois))
+
+        ids = [o["gap"]["gap_id"] for o in result["prioritized_opportunities"]]
+        assert "g_good" in ids
+        assert "g_loss" not in ids, "money-losing opportunity must be suppressed, not shown"
+        assert result["suppressed_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_marginal_positive_roi_is_kept(self):
+        """'report only marginal and above' — a marginally-profitable opp survives."""
+        node = PrioritizerNode()
+        gaps = [self._gap("g_marginal")]
+        rois = [self._roi("g_marginal", roi=0.13)]  # marginal but profitable
+        result = await node.execute(self._state(gaps, rois))
+
+        ids = [o["gap"]["gap_id"] for o in result["prioritized_opportunities"]]
+        assert "g_marginal" in ids
+        assert result["suppressed_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_every_surfaced_opportunity_has_a_three_bucket_category(self):
+        node = PrioritizerNode()
+        gaps = [
+            self._gap("qw", metric="trx", gap_size=30.0, gap_pct=5.0),
+            self._gap("sp", metric="market_share", gap_size=200.0, gap_pct=40.0),
+            self._gap("sb", metric="market_share", gap_size=200.0, gap_pct=40.0),
+        ]
+        rois = [
+            self._roi("qw", roi=2.0, cost=5_000.0),  # low diff, roi>1 -> quick_win
+            self._roi("sp", roi=1.5, cost=100_000.0),  # high diff, roi<=2 -> steady_play
+            self._roi("sb", roi=3.0, cost=100_000.0),  # high diff, roi>2, cost>50k -> strategic_bet
+        ]
+        result = await node.execute(self._state(gaps, rois))
+
+        cats = {o["gap"]["gap_id"]: o["category"] for o in result["prioritized_opportunities"]}
+        assert cats["qw"] == "quick_win"
+        assert cats["sp"] == "steady_play"
+        assert cats["sb"] == "strategic_bet"
+        # Totality: no "other", ever.
+        assert all(
+            o["category"] in {"quick_win", "steady_play", "strategic_bet"}
+            for o in result["prioritized_opportunities"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_high_difficulty_modest_bet_is_steady_play_not_phantom_strategic(self):
+        """#1056 invariant preserved: a high-effort opp that does not clear ROI>2 is
+        a steady_play, NEVER a phantom strategic_bet."""
+        node = PrioritizerNode()
+        gaps = [self._gap("sp", metric="market_share", gap_size=200.0, gap_pct=40.0)]
+        rois = [self._roi("sp", roi=1.8, cost=75_000.0)]  # high diff, roi 1.8 <= 2
+        result = await node.execute(self._state(gaps, rois))
+
+        assert result["prioritized_opportunities"][0]["category"] == "steady_play"
+        assert result["steady_plays"] and result["steady_plays"][0]["gap"]["gap_id"] == "sp"
+        assert result["strategic_bets"] == []
+
+    @pytest.mark.asyncio
+    async def test_difficulty_rationale_is_persisted_and_cites_drivers(self):
+        node = PrioritizerNode()
+        gaps = [self._gap("g", metric="trx")]
+        rois = [self._roi("g", roi=3.0, cost=100_000.0)]  # high cost drives effort up
+        result = await node.execute(self._state(gaps, rois))
+
+        opp = result["prioritized_opportunities"][0]
+        assert isinstance(opp.get("difficulty_rationale"), str)
+        assert len(opp["difficulty_rationale"]) > 0
+        assert "cost" in opp["difficulty_rationale"].lower()

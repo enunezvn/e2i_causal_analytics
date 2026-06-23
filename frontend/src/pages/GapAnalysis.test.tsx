@@ -89,7 +89,7 @@ function mockRun(overrides: Record<string, unknown> = {}) {
 function makeOpp(opts: {
   id: string;
   rank: number;
-  category: 'quick_win' | 'strategic_bet' | 'other';
+  category: 'quick_win' | 'steady_play' | 'strategic_bet';
   difficulty: 'low' | 'medium' | 'high';
   action?: string;
   roi?: number;
@@ -139,19 +139,21 @@ function mockLoadedOpportunities() {
     makeOpp({ id: 'sb2', rank: 2, category: 'strategic_bet', difficulty: 'high', action: 'Launch new payer program', roi: 6 }),
     // category=quick_win but HIGH difficulty — same point in reverse.
     makeOpp({ id: 'qw1', rank: 3, category: 'quick_win', difficulty: 'high', action: 'Optimize call cadence', roi: 5 }),
-    makeOpp({ id: 'ot1', rank: 4, category: 'other', difficulty: 'medium', action: 'Refresh sample mix', roi: 3 }),
+    // Steady Play — the meaningful middle bucket (replaces the old "other").
+    makeOpp({ id: 'sp1', rank: 4, category: 'steady_play', difficulty: 'medium', action: 'Refresh sample mix', roi: 3 }),
   ];
   (useOpportunities as MockFn).mockReturnValue({
     data: {
       opportunities,
       total_addressable_value: 4_000_000,
       quick_wins_count: 1,
+      steady_plays_count: 1,
       strategic_bets_count: 2,
     },
     isLoading: false,
     refetch: vi.fn().mockResolvedValue({}),
   });
-  return { opportunities, quick_wins_count: 1, strategic_bets_count: 2 };
+  return { opportunities, quick_wins_count: 1, steady_plays_count: 1, strategic_bets_count: 2 };
 }
 
 beforeEach(() => {
@@ -253,15 +255,17 @@ describe('GapAnalysis — brand selection wiring (All Brands)', () => {
   });
 });
 
-describe('GapAnalysis — Quick Win/Strategic Bet framework (effort folded in)', () => {
-  it('badges each card by its CURATED category (Quick Win / Strategic Bet / Other), not by effort', () => {
+describe('GapAnalysis — 3-bucket framework (Quick Win / Steady Play / Strategic Bet)', () => {
+  it('badges each card by its 3-bucket category (Quick Win / Steady Play / Strategic Bet), not by effort', () => {
     mockLoadedOpportunities();
     mockRun();
     render(<GapAnalysis />, { wrapper: createWrapper() });
 
-    // Primary framework badges render.
+    // All three primary framework badges render; "Other" never does.
     expect(screen.getAllByText('Strategic Bet').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Quick Win').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Steady Play').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Other')).not.toBeInTheDocument();
   });
 
   it('preserves the no-phantom invariant: #cards badged "Strategic Bet" === strategic_bets_count (same for Quick Wins)', () => {
@@ -302,8 +306,10 @@ describe('GapAnalysis — Quick Win/Strategic Bet framework (effort folded in)',
 
     expect(await screen.findByRole('option', { name: 'All Opportunities' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Quick Wins' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Steady Plays' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Strategic Bets' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Other' })).toBeInTheDocument();
+    // The old residual "Other" bucket is gone.
+    expect(screen.queryByRole('option', { name: 'Other' })).not.toBeInTheDocument();
     // The negative-reading effort labels must NOT be options.
     expect(screen.queryByRole('option', { name: /High Effort/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Low Effort/i })).not.toBeInTheDocument();
@@ -320,14 +326,53 @@ describe('GapAnalysis — Quick Win/Strategic Bet framework (effort folded in)',
     await user.click(await screen.findByRole('option', { name: 'Strategic Bets' }));
 
     await waitFor(() => {
-      // Only strategic-bet cards remain → no Quick Win / Other badges.
+      // Only strategic-bet cards remain → no Quick Win / Steady Play badges.
       expect(screen.queryByText('Quick Win')).not.toBeInTheDocument();
     });
-    expect(screen.queryByText('Other')).not.toBeInTheDocument();
+    expect(screen.queryByText('Steady Play')).not.toBeInTheDocument();
     // The strategic-bet cards are still all present.
     expect(screen.getAllByText('Strategic Bet')).toHaveLength(strategic_bets_count);
     expect(screen.getByText('Expand specialty coverage')).toBeInTheDocument();
     expect(screen.queryByText('Optimize call cadence')).not.toBeInTheDocument();
+  });
+
+  it('opens a drill-down dialog explaining WHY when an opportunity card is clicked', async () => {
+    mockLoadedOpportunities();
+    mockRun();
+    const user = userEvent.setup();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    // Click the first opportunity card (role=button, labeled by its action).
+    await user.click(screen.getByRole('button', { name: /Expand specialty coverage/i }));
+
+    // The drawer surfaces the rule-based "why" explanations.
+    expect(await screen.findByText('Why this rank')).toBeInTheDocument();
+    expect(screen.getByText('Why this timeline')).toBeInTheDocument();
+    expect(screen.getByText('ROI breakdown')).toBeInTheDocument();
+  });
+
+  it('shows a transparency notice when the backend suppressed low-value opportunities', () => {
+    const opportunities = [
+      makeOpp({ id: 'qw1', rank: 1, category: 'quick_win', difficulty: 'low', action: 'Do it', roi: 4 }),
+    ];
+    (useOpportunities as MockFn).mockReturnValue({
+      data: {
+        opportunities,
+        total_addressable_value: 1_000_000,
+        quick_wins_count: 1,
+        steady_plays_count: 0,
+        strategic_bets_count: 0,
+        suppressed_count: 3,
+      },
+      isLoading: false,
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    mockRun();
+    render(<GapAnalysis />, { wrapper: createWrapper() });
+
+    const notice = screen.getByTestId('suppressed-notice');
+    expect(notice).toHaveTextContent(/3 low-value opportunities hidden/i);
+    expect(notice).toHaveTextContent(/break-even/i);
   });
 });
 

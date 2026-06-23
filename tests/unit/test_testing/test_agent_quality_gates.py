@@ -634,10 +634,41 @@ class TestGapAnalyzerValidator:
         assert is_valid is True
 
     def test_no_opportunities(self):
-        """Test validation fails without opportunities."""
+        """Test validation fails without opportunities (and nothing suppressed)."""
         output = {
             "status": "completed",
             "prioritized_opportunities": [],
+        }
+        is_valid, reason = _validate_gap_analyzer(output)
+        assert is_valid is False
+
+    def test_all_candidates_suppressed_is_valid(self):
+        """T6: an empty survivor list is VALID when every candidate gap was
+        deliberately suppressed as value-destroying (ROI <= break-even). The
+        positive suppressed_count is the signal that this is an intentional
+        'nothing is worth pursuing' completion, not a malfunction. (Real case:
+        a brand whose entire synthetic/live run is money-losing.)"""
+        output = {
+            "status": "completed",
+            "prioritized_opportunities": [],
+            "suppressed_count": 36,
+            "total_addressable_value": 70685.0,
+            "executive_summary": (
+                "Analysis complete. Identified 36 candidate gaps across 3 segments, "
+                "but all fall at or below the break-even ROI threshold; none recommended."
+            ),
+        }
+        is_valid, reason = _validate_gap_analyzer(output)
+        assert is_valid is True, reason
+
+    def test_empty_without_suppression_still_fails(self):
+        """The suppression carve-out must NOT relax the gate into accepting a
+        genuinely empty/broken run: zero opportunities AND zero suppressed is
+        still a hard fail (a malfunctioning agent cannot launder itself green)."""
+        output = {
+            "status": "completed",
+            "prioritized_opportunities": [],
+            "suppressed_count": 0,
         }
         is_valid, reason = _validate_gap_analyzer(output)
         assert is_valid is False

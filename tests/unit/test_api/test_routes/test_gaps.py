@@ -322,6 +322,57 @@ class TestHelperFunctions:
         assert result[0].gap.gap_id == ""  # Default value
         assert result[0].gap.metric == ""  # Default value
 
+    def test_convert_opportunities_plumbs_rationale_and_roi_breakdown(self):
+        """T6: the rich drill-down fields the agent computes (difficulty_rationale,
+        category, ROI assumptions / value_by_driver / total_risk_adjustment) must
+        survive the agent->API conversion — they were silently dropped before
+        (the #1056 pattern)."""
+        opportunities = [
+            {
+                "rank": 1,
+                "gap": {
+                    "gap_id": "gap1",
+                    "metric": "trx",
+                    "segment": "region",
+                    "segment_value": "Northeast",
+                    "current_value": 85.0,
+                    "target_value": 100.0,
+                    "gap_size": 15.0,
+                    "gap_percentage": 15.0,
+                    "gap_type": "vs_target",
+                },
+                "roi_estimate": {
+                    "gap_id": "gap1",
+                    "estimated_revenue_impact": 500000.0,
+                    "estimated_cost_to_close": 100000.0,
+                    "expected_roi": 5.0,
+                    "risk_adjusted_roi": 4.0,
+                    "payback_period_months": 6,
+                    "attribution_level": "partial",
+                    "attribution_rate": 0.7,
+                    "confidence": 0.8,
+                    "total_risk_adjustment": 0.85,
+                    "value_by_driver": {"trx_lift": 425000.0, "patient_id": 75000.0},
+                    "assumptions": ["Value driver: trx_lift", "Unit value: $850/TRx"],
+                },
+                "recommended_action": "Increase coverage",
+                "implementation_difficulty": "high",
+                "time_to_impact": "6-12 months",
+                "category": "strategic_bet",
+                "difficulty_rationale": "Rated high implementation effort: high cost to close.",
+            }
+        ]
+
+        result = _convert_opportunities(opportunities)
+
+        assert len(result) == 1
+        opp = result[0]
+        assert opp.category == "strategic_bet"
+        assert opp.difficulty_rationale.startswith("Rated high")
+        assert opp.roi_estimate.total_risk_adjustment == 0.85
+        assert opp.roi_estimate.value_by_driver == {"trx_lift": 425000.0, "patient_id": 75000.0}
+        assert "Value driver: trx_lift" in opp.roi_estimate.assumptions
+
     def test_generate_mock_response(self, sample_gap_request):
         """Test mock response generation."""
         import time
@@ -636,25 +687,25 @@ class TestListOpportunitiesLatestRunDedup:
         assert resp.opportunities[0].gap.gap_id == "g_new"
 
     @pytest.mark.asyncio
-    async def test_strategic_bets_count_uses_curated_list_not_raw_difficulty(self):
-        """strategic_bets_count must reflect the prioritizer's curated bets, not a
-        re-count of every high-difficulty opportunity."""
+    async def test_strategic_bets_count_matches_classifier_not_raw_difficulty(self):
+        """strategic_bets_count must reflect the shared classifier (high AND ROI>2 AND
+        cost>$50k), not a re-count of every high-difficulty opportunity — the #1056
+        no-phantom-strategic-bet invariant, now enforced by classify_bucket. The two
+        high-difficulty-but-modest-ROI opps fall to steady_play, not strategic_bet."""
         t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
-        # 3 high-difficulty opps, but only 1 is a curated strategic bet.
+        # 3 high-difficulty opps; only the ROI>2 one is a strategic bet.
         prioritized = [
-            _make_opp("g1", ImplementationDifficulty.HIGH, 12.0),
-            _make_opp("g2", ImplementationDifficulty.HIGH, 1.5),
-            _make_opp("g3", ImplementationDifficulty.HIGH, 1.2),
+            _make_opp("g1", ImplementationDifficulty.HIGH, 12.0),  # -> strategic_bet
+            _make_opp("g2", ImplementationDifficulty.HIGH, 1.5),  # ROI<=2 -> steady_play
+            _make_opp("g3", ImplementationDifficulty.HIGH, 1.2),  # ROI<=2 -> steady_play
         ]
-        curated = [prioritized[0]]
-        _analyses_store["a"] = _make_analysis(
-            "a", "Kisqali", t, prioritized, strategic_bets=curated
-        )
+        _analyses_store["a"] = _make_analysis("a", "Kisqali", t, prioritized)
 
         resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
 
-        assert resp.strategic_bets_count == 1, "must use curated strategic_bets, not raw high count"
-        assert resp.total_count == 3, "the opportunity LIST is still all matching opps"
+        assert resp.strategic_bets_count == 1, "high difficulty alone must not inflate bets"
+        assert resp.steady_plays_count == 2, "high-but-modest opps are the meaningful middle"
+        assert resp.total_count == 3, "the opportunity LIST is still all surviving opps"
 
     @pytest.mark.asyncio
     async def test_all_brands_uses_latest_per_brand(self):
@@ -674,40 +725,126 @@ class TestListOpportunitiesLatestRunDedup:
         assert resp.quick_wins_count == 1
 
     @pytest.mark.asyncio
-    async def test_opportunities_tagged_with_curated_category(self):
-        """Each returned opportunity is tagged with its TRUE curated category by
-        membership in the latest run's quick_wins/strategic_bets lists -- NOT by
-        raw implementation_difficulty. opp A is in quick_wins -> 'quick_win';
-        opp B is in strategic_bets -> 'strategic_bet'; opp C is in neither ->
-        'other'. The count of returned strategic_bet/quick_win opportunities must
-        equal strategic_bets_count/quick_wins_count."""
+    async def test_opportunities_tagged_into_three_buckets_no_other(self):
+        """T6: every surfaced opportunity is tagged into exactly one of the three
+        buckets via the shared classifier — there is NO residual 'other'. A is a
+        low-effort earner (quick_win); B is a high-effort high-ROI big bet
+        (strategic_bet); C is high-effort but modest ROI (steady_play, NOT a
+        phantom strategic_bet, NOT 'other'). Returned counts equal badge counts."""
         t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
-        # A: low difficulty curated quick win; B: high difficulty curated bet;
-        # C: high difficulty but NOT curated (so it must read as 'other', proving
-        # category is membership-driven, not difficulty-driven).
-        opp_a = _make_opp("g_a", ImplementationDifficulty.LOW, 5.0)
-        opp_b = _make_opp("g_b", ImplementationDifficulty.HIGH, 8.0)
-        opp_c = _make_opp("g_c", ImplementationDifficulty.HIGH, 3.0)
-        _analyses_store["a"] = _make_analysis(
-            "a",
-            "Kisqali",
-            t,
-            [opp_a, opp_b, opp_c],
-            quick_wins=[opp_a],
-            strategic_bets=[opp_b],
-        )
+        opp_a = _make_opp("g_a", ImplementationDifficulty.LOW, 5.0)  # -> quick_win
+        opp_b = _make_opp("g_b", ImplementationDifficulty.HIGH, 8.0)  # -> strategic_bet
+        opp_c = _make_opp("g_c", ImplementationDifficulty.HIGH, 1.5)  # ROI<=2 -> steady_play
+        _analyses_store["a"] = _make_analysis("a", "Kisqali", t, [opp_a, opp_b, opp_c])
 
         resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
 
         by_id = {o.gap.gap_id: o for o in resp.opportunities}
         assert by_id["g_a"].category == "quick_win"
         assert by_id["g_b"].category == "strategic_bet"
-        assert by_id["g_c"].category == "other"
+        assert by_id["g_c"].category == "steady_play"
+        # Totality: NO opportunity is ever tagged "other".
+        assert all(
+            o.category in {"quick_win", "steady_play", "strategic_bet"} for o in resp.opportunities
+        )
 
         sb = [o for o in resp.opportunities if o.category == "strategic_bet"]
         qw = [o for o in resp.opportunities if o.category == "quick_win"]
         assert len(sb) == resp.strategic_bets_count
         assert len(qw) == resp.quick_wins_count
+
+    @pytest.mark.asyncio
+    async def test_money_losing_opportunities_suppressed_on_read(self):
+        """T6: the endpoint suppresses ROI<=break-even opps even from currently-
+        persisted (pre-fix) analyses, and reports how many it hid for transparency."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        prioritized = [
+            _make_opp("g_keep", ImplementationDifficulty.LOW, 2.0),  # profitable
+            _make_opp("g_loss", ImplementationDifficulty.MEDIUM, -0.5),  # money-losing
+            _make_opp("g_zero", ImplementationDifficulty.MEDIUM, 0.0),  # break-even
+        ]
+        _analyses_store["a"] = _make_analysis("a", "Kisqali", t, prioritized)
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        ids = {o.gap.gap_id for o in resp.opportunities}
+        assert ids == {"g_keep"}, "money-losing and break-even opps must be suppressed"
+        assert resp.suppressed_count == 2
+        assert resp.total_count == 1
+
+    @pytest.mark.asyncio
+    async def test_persisted_suppressed_count_is_reported_for_fresh_runs(self):
+        """On a freshly-run analysis the prioritizer already removed money-losers
+        BEFORE persistence, so prioritized_opportunities is clean. The hidden count
+        must still surface — it is carried on the persisted analysis and added to
+        anything suppressed on read (legacy rows)."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        clean = [_make_opp("g_keep", ImplementationDifficulty.LOW, 2.0)]
+        analysis = _make_analysis("a", "Kisqali", t, clean)
+        analysis.suppressed_count = 4  # what the prioritizer hid this run
+        _analyses_store["a"] = analysis
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        assert resp.suppressed_count == 4
+        assert resp.total_count == 1
+
+    @pytest.mark.asyncio
+    async def test_off_label_demoted_below_on_label_in_display_order(self):
+        """Display order must match the prioritizer's ranking: an off-label bet is
+        demoted below on-label ones even when its ROI is higher (a plain ROI sort
+        would wrongly float it to the top, contradicting its rank)."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        on = _make_opp("g_on", ImplementationDifficulty.LOW, 2.0)  # on-label, lower ROI
+        off = _make_opp("g_off", ImplementationDifficulty.LOW, 9.0)  # off-label, higher ROI
+        off.roi_estimate.off_label = True
+        _analyses_store["a"] = _make_analysis("a", "Kisqali", t, [off, on])
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        ids = [o.gap.gap_id for o in resp.opportunities]
+        assert ids == ["g_on", "g_off"], "on-label outranks a higher-ROI off-label opportunity"
+
+    @pytest.mark.asyncio
+    async def test_off_label_demoted_in_all_brands_pooled_display_order(self):
+        """The off-label demotion must hold across the brand=None pooled view too:
+        EVERY on-label opportunity (from any brand) outranks EVERY off-label one,
+        and within each partition higher ROI wins. A plain global ROI sort would
+        interleave the two high-ROI off-label bets above the on-label ones."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        k_on = _make_opp("g_k_on", ImplementationDifficulty.LOW, 3.0)  # Kisqali on-label
+        k_off = _make_opp("g_k_off", ImplementationDifficulty.LOW, 8.0)  # Kisqali off-label
+        k_off.roi_estimate.off_label = True
+        f_on = _make_opp("g_f_on", ImplementationDifficulty.LOW, 5.0)  # Fabhalta on-label
+        f_off = _make_opp("g_f_off", ImplementationDifficulty.LOW, 9.0)  # Fabhalta off-label
+        f_off.roi_estimate.off_label = True
+        _analyses_store["k"] = _make_analysis("k", "Kisqali", t, [k_off, k_on])
+        _analyses_store["f"] = _make_analysis("f", "Fabhalta", t, [f_off, f_on])
+
+        resp = await list_opportunities(brand=None, min_roi=None, difficulty=None, limit=50)
+
+        ids = [o.gap.gap_id for o in resp.opportunities]
+        # On-label partition first (ROI desc: 5.0 > 3.0), then off-label (9.0 > 8.0).
+        assert ids == ["g_f_on", "g_k_on", "g_f_off", "g_k_off"], (
+            "off-label opps from any brand sink below all on-label ones in the pooled view"
+        )
+
+    @pytest.mark.asyncio
+    async def test_steady_plays_count_reported(self):
+        """T6: the new middle bucket gets its own headline count."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        prioritized = [
+            _make_opp("g_qw", ImplementationDifficulty.LOW, 3.0),  # quick_win
+            _make_opp("g_sp1", ImplementationDifficulty.MEDIUM, 4.6),  # steady_play (medium)
+            _make_opp("g_sp2", ImplementationDifficulty.HIGH, 1.8),  # steady_play (high, ROI<=2)
+        ]
+        _analyses_store["a"] = _make_analysis("a", "Kisqali", t, prioritized)
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        assert resp.steady_plays_count == 2
+        assert resp.quick_wins_count == 1
+        assert resp.strategic_bets_count == 0
 
     @pytest.mark.asyncio
     async def test_handles_naive_timestamp_from_old_db_row(self):

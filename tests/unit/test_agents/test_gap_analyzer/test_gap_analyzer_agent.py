@@ -317,7 +317,12 @@ class TestGapAnalyzerOutputContract:
         required_fields = [
             "prioritized_opportunities",
             "quick_wins",
+            # T6: steady plays + the suppression count are first-class output, not
+            # API-only — the agent contract must surface the full 3-bucket partition
+            # and how many money-losers were hidden.
+            "steady_plays",
             "strategic_bets",
+            "suppressed_count",
             "total_addressable_value",
             "total_gap_value",
             "segments_analyzed",
@@ -334,6 +339,8 @@ class TestGapAnalyzerOutputContract:
 
         for field in required_fields:
             assert field in result, f"Missing required field: {field}"
+        assert isinstance(result["steady_plays"], list)
+        assert isinstance(result["suppressed_count"], int)
 
     @pytest.mark.asyncio
     async def test_output_types(self):
@@ -627,6 +634,59 @@ class TestGapAnalyzerFurtherAnalysis:
         result = await agent.run(input_data)
 
         assert isinstance(result["requires_further_analysis"], bool)
+
+
+class TestGapAnalyzerAllSuppressedNarrative:
+    """T6: when every candidate gap is money-losing and suppressed, the survivor
+    list is empty but the run is a VALID completion — the narrative must say so
+    honestly (gaps were found and suppressed) rather than the misleading 'no gaps
+    identified', which would conflate a deliberate decision with an empty result."""
+
+    def test_summary_distinguishes_suppressed_from_genuinely_empty(self):
+        from src.agents.gap_analyzer.nodes.formatter import FormatterNode
+
+        fmt = FormatterNode()
+
+        # Detected-then-suppressed: honest, names the count and the reason.
+        suppressed = fmt._generate_executive_summary(
+            prioritized_opportunities=[],
+            quick_wins=[],
+            strategic_bets=[],
+            total_addressable_value=70685.0,
+            total_gap_value=796.0,
+            segments_analyzed=3,
+            suppressed_count=36,
+        )
+        assert "36" in suppressed
+        assert "break-even" in suppressed.lower()
+        assert "no significant performance gaps identified" not in suppressed.lower()
+        assert len(suppressed) >= 50  # satisfies the semantic gate's substance check
+
+        # Genuinely empty (nothing detected): the original threshold message stands.
+        empty = fmt._generate_executive_summary(
+            prioritized_opportunities=[],
+            quick_wins=[],
+            strategic_bets=[],
+            total_addressable_value=0.0,
+            total_gap_value=0.0,
+            segments_analyzed=3,
+            suppressed_count=0,
+        )
+        assert "no significant performance gaps identified" in empty.lower()
+
+    def test_key_insight_reports_suppression(self):
+        from src.agents.gap_analyzer.nodes.formatter import FormatterNode
+
+        fmt = FormatterNode()
+        insights = fmt._extract_key_insights(
+            prioritized_opportunities=[],
+            quick_wins=[],
+            strategic_bets=[],
+            suppressed_count=36,
+        )
+        assert insights
+        assert "36" in insights[0]
+        assert "suppress" in insights[0].lower()
 
 
 class TestGapAnalyzerErrorHandling:

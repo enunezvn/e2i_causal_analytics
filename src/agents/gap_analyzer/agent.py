@@ -384,7 +384,16 @@ class GapAnalyzerAgent(SkillsMixin):
         output = {
             "prioritized_opportunities": state.get("prioritized_opportunities") or [],
             "quick_wins": state.get("quick_wins") or [],
+            # T6: steady plays are a first-class, surfaced bucket — expose them on the
+            # agent output (not just the API) so downstream consumers and the harness
+            # see the full 3-bucket partition, not just the two extremes.
+            "steady_plays": state.get("steady_plays") or [],
             "strategic_bets": state.get("strategic_bets") or [],
+            # T6: how many candidate opportunities were hidden as value-destroying
+            # (ROI <= break-even). This is the signal that distinguishes a deliberate
+            # "everything is a money-loser, nothing recommended" completion from a
+            # genuine empty/malfunctioning run.
+            "suppressed_count": state.get("suppressed_count") or 0,
             "total_addressable_value": state.get("total_addressable_value") or 0.0,
             "total_gap_value": state.get("total_gap_value") or 0.0,
             "segments_analyzed": state.get("segments_analyzed") or 0,
@@ -517,7 +526,12 @@ class GapAnalyzerAgent(SkillsMixin):
         return {
             "prioritized_opportunities": [],
             "quick_wins": [],
+            # T6: keep the output shape identical on success and failure branches so
+            # consumers can treat these as always-present (a failed run has no
+            # surviving plays and suppressed nothing).
+            "steady_plays": [],
             "strategic_bets": [],
+            "suppressed_count": 0,
             "total_addressable_value": 0.0,
             "total_gap_value": 0.0,
             "segments_analyzed": 0,

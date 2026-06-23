@@ -226,6 +226,18 @@ class ROIEstimate(BaseModel):
     competitor_drug_names: Optional[List[str]] = Field(
         default=None, description="Names of the competing products (curated, not FDA-sourced)"
     )
+    # ROI rationale (T6) — the agent's ROI node computes these for transparency but
+    # they were silently dropped before because this response model never declared
+    # them (the #1056 pattern). Surfaced for the opportunity drill-down drawer.
+    total_risk_adjustment: Optional[float] = Field(
+        default=None, description="Combined risk adjustment factor applied to the ROI (0-1)"
+    )
+    value_by_driver: Optional[Dict[str, float]] = Field(
+        default=None, description="Revenue impact broken down by value driver (USD)"
+    )
+    assumptions: Optional[List[str]] = Field(
+        default=None, description="Economic assumptions behind the ROI estimate"
+    )
 
 
 class PrioritizedOpportunity(BaseModel):
@@ -237,12 +249,18 @@ class PrioritizedOpportunity(BaseModel):
     recommended_action: str = Field(..., description="Specific action to close gap")
     implementation_difficulty: ImplementationDifficulty = Field(..., description="Difficulty level")
     time_to_impact: str = Field(..., description="Expected time to results")
-    # Curated category for the list view, assigned by membership in the latest
-    # run's prioritizer quick_wins/strategic_bets lists (see list_opportunities).
-    # NOT derived from implementation_difficulty — a high-difficulty opportunity
-    # is only a "strategic_bet" if it also clears the ROI/cost thresholds.
+    # 3-bucket category (T6), assigned by the shared opportunity_classification
+    # SSOT (quick_win | steady_play | strategic_bet) — a TOTAL partition with NO
+    # residual "other". NOT derived from raw implementation_difficulty alone: a
+    # high-difficulty opportunity is a "strategic_bet" only if it also clears the
+    # ROI/cost thresholds, otherwise it is the meaningful-middle "steady_play".
     category: Optional[str] = Field(
-        default=None, description="quick_win | strategic_bet | other (list view only)"
+        default=None, description="quick_win | steady_play | strategic_bet (list view only)"
+    )
+    # T6 drill-down: human-readable explanation of the difficulty rating (the
+    # cost/gap-size factors behind it). Populated by the prioritizer.
+    difficulty_rationale: Optional[str] = Field(
+        default=None, description="Why this opportunity is rated low/medium/high effort"
     )
 
 
@@ -264,6 +282,14 @@ class GapAnalysisResponse(BaseModel):
     )
     strategic_bets: List[PrioritizedOpportunity] = Field(
         default_factory=list, description="High impact, high difficulty (top 5)"
+    )
+    # T6: count of opportunities the prioritizer suppressed as low-value noise
+    # (ROI <= break-even). Persisted because the suppressed opportunities
+    # themselves are NOT kept in prioritized_opportunities — without this the
+    # transparency notice would silently undercount on freshly-run analyses.
+    suppressed_count: int = Field(
+        default=0,
+        description="Low-value opportunities hidden by the prioritizer (ROI <= break-even)",
     )
 
     # Aggregate values
@@ -318,17 +344,32 @@ class OpportunityListResponse(BaseModel):
     quick_wins_count: int = Field(
         ...,
         description=(
-            "Curated quick wins from the latest run per brand (prioritizer's "
-            "definition: low difficulty, ROI>1). Independent of the min_roi/"
-            "difficulty list filters."
+            "Quick wins among the brand's latest surviving opportunities "
+            "(classifier: low difficulty AND ROI>1). Brand-level — independent of "
+            "the min_roi/difficulty list filters."
+        ),
+    )
+    steady_plays_count: int = Field(
+        default=0,
+        description=(
+            "Steady plays — the meaningful middle (neither quick win nor strategic "
+            "bet) — among the brand's latest surviving opportunities. Brand-level."
         ),
     )
     strategic_bets_count: int = Field(
         ...,
         description=(
-            "Curated strategic bets from the latest run per brand (prioritizer's "
-            "definition: high difficulty AND ROI>2 AND cost>$50k, top 5). "
-            "Independent of the min_roi/difficulty list filters."
+            "Strategic bets among the brand's latest surviving opportunities "
+            "(classifier: high difficulty AND ROI>2 AND cost>$50k). Brand-level — "
+            "independent of the min_roi/difficulty list filters."
+        ),
+    )
+    suppressed_count: int = Field(
+        default=0,
+        description=(
+            "Low-value opportunities hidden from the brand's latest run because "
+            "their ROI is at or below break-even (revenue <= cost). Surfaced for "
+            "transparency so a short/empty list never looks broken."
         ),
     )
     opportunities: List[PrioritizedOpportunity] = Field(..., description="List of opportunities")
@@ -584,59 +625,82 @@ async def list_opportunities(
     # ("All Brands") therefore aggregates the latest run of EACH brand.
     latest_analyses = _latest_completed_per_brand(completed)
 
+    # Shared classification SSOT (lazy import — keeps the heavy gap_analyzer agent
+    # package off the API startup path; this route already lazy-imports the agent).
+    from src.agents.gap_analyzer.opportunity_classification import (
+        classify_bucket,
+        is_low_value,
+    )
+
     all_opportunities: List[PrioritizedOpportunity] = []
     total_value = 0.0
     quick_wins_count = 0
+    steady_plays_count = 0
     strategic_bets_count = 0
+    suppressed_count = 0
 
     for analysis in latest_analyses:
-        # Headline counts come from the prioritizer's OWN curated lists — its
-        # authoritative definitions (quick win = low difficulty, ROI>1; strategic
-        # bet = high difficulty AND ROI>2 AND cost>$50k, capped at top 5; see
-        # src/agents/gap_analyzer/nodes/prioritizer.py:_identify_quick_wins /
-        # _identify_strategic_bets for the enforced thresholds). The page
-        # previously re-derived "strategic bets" as *every* high-difficulty
-        # opportunity, which both diverged from this definition and inflated the
-        # number. These counts are brand-scoped (only this brand's latest run is
-        # kept) and intentionally independent of the list-view min_roi/difficulty
-        # filters below, which narrow the displayed cards, not the KPI totals.
-        quick_wins_count += len(analysis.quick_wins)
-        strategic_bets_count += len(analysis.strategic_bets)
-
-        # Tag each opportunity with its TRUE curated category by membership in
-        # this run's curated quick_wins/strategic_bets lists (matched by gap_id) —
-        # NOT by raw implementation_difficulty. A high-difficulty opportunity is a
-        # "strategic_bet" only if it actually cleared the ROI/cost thresholds and
-        # so appears in the prioritizer's curated list.
-        qw_ids = {o.gap.gap_id for o in analysis.quick_wins}
-        sb_ids = {o.gap.gap_id for o in analysis.strategic_bets}
+        # T6: derive everything from the shared classifier over THIS run's
+        # opportunities — re-applied on read so even currently-persisted (pre-fix)
+        # analyses display the 3-bucket scheme + suppression without a re-run. The
+        # brand-level headline counts are computed BEFORE the list-view
+        # min_roi/difficulty filters (those narrow the displayed cards, not the
+        # KPI totals).
+        #
+        # Count what the PRIORITIZER already suppressed (persisted; these
+        # opportunities are absent from prioritized_opportunities) PLUS what we
+        # suppress on read below (legacy rows that still carry money-losers). These
+        # are disjoint BY CONSTRUCTION: the prioritizer removes exactly the
+        # opportunities it counts, so a persisted-counted opportunity can never
+        # also appear in prioritized_opportunities to be re-counted on read.
+        # Summing is therefore exact for both freshly-run and legacy analyses.
+        suppressed_count += getattr(analysis, "suppressed_count", 0) or 0
 
         for opp in analysis.prioritized_opportunities:
-            # List-view filters (narrow the displayed opportunities only).
-            if min_roi and opp.roi_estimate.expected_roi < min_roi:
+            roi = opp.roi_estimate.expected_roi
+
+            # Suppress low-value noise (ROI <= break-even: revenue <= cost).
+            if is_low_value(roi):
+                suppressed_count += 1
+                continue
+
+            bucket = classify_bucket(
+                opp.implementation_difficulty.value,
+                roi,
+                opp.roi_estimate.estimated_cost_to_close,
+            )
+            if bucket == "quick_win":
+                quick_wins_count += 1
+            elif bucket == "steady_play":
+                steady_plays_count += 1
+            else:  # strategic_bet
+                strategic_bets_count += 1
+
+            # List-view filters (narrow the displayed opportunities only; counts
+            # above already captured the brand-level totals).
+            if min_roi and roi < min_roi:
                 continue
             if difficulty and opp.implementation_difficulty != difficulty:
                 continue
 
-            gid = opp.gap.gap_id
-            cat = "quick_win" if gid in qw_ids else "strategic_bet" if gid in sb_ids else "other"
-            all_opportunities.append(opp.model_copy(update={"category": cat}))
+            all_opportunities.append(opp.model_copy(update={"category": bucket}))
             total_value += opp.roi_estimate.estimated_revenue_impact
 
-    # Sort by ROI and limit. Never let `limit` drop a curated opportunity (a
-    # quick_win/strategic_bet that feeds the headline counts) in favour of an
-    # uncurated "other" — keep curated first, then fill with others, then re-sort.
-    all_opportunities.sort(key=lambda x: x.roi_estimate.expected_roi, reverse=True)
-    if len(all_opportunities) > limit:
-        curated = [o for o in all_opportunities if o.category != "other"]
-        others = [o for o in all_opportunities if o.category == "other"]
-        all_opportunities = (curated + others)[:limit]
-        all_opportunities.sort(key=lambda x: x.roi_estimate.expected_roi, reverse=True)
+    # Order to MATCH the prioritizer's ranking (and each opportunity's persisted
+    # `rank`): off-label opportunities demoted to the bottom, then ROI descending.
+    # A plain ROI sort would float a high-ROI off-label bet above on-label ones,
+    # contradicting both its `rank` and the drill-down's "why ranked" explanation.
+    all_opportunities.sort(
+        key=lambda x: (x.roi_estimate.off_label is True, -x.roi_estimate.expected_roi)
+    )
+    all_opportunities = all_opportunities[:limit]
 
     return OpportunityListResponse(
         total_count=len(all_opportunities),
         quick_wins_count=quick_wins_count,
+        steady_plays_count=steady_plays_count,
         strategic_bets_count=strategic_bets_count,
+        suppressed_count=suppressed_count,
         opportunities=all_opportunities,
         total_addressable_value=total_value,
     )
@@ -817,6 +881,7 @@ async def _execute_gap_analysis(
             ),
             quick_wins=_convert_opportunities(result.get("quick_wins", [])),
             strategic_bets=_convert_opportunities(result.get("strategic_bets", [])),
+            suppressed_count=result.get("suppressed_count", 0),
             total_addressable_value=result.get("total_addressable_value", 0.0),
             total_gap_value=result.get("total_gap_value", 0.0),
             executive_summary=result.get("executive_summary", ""),
@@ -881,6 +946,10 @@ def _convert_opportunities(
                 competitor_products_count=roi_data.get("competitor_products_count"),
                 competitor_density_label=roi_data.get("competitor_density_label"),
                 competitor_drug_names=roi_data.get("competitor_drug_names"),
+                # T6 ROI rationale — previously dropped (the #1056 pattern).
+                total_risk_adjustment=roi_data.get("total_risk_adjustment"),
+                value_by_driver=roi_data.get("value_by_driver"),
+                assumptions=roi_data.get("assumptions"),
             )
 
             result.append(
@@ -893,6 +962,9 @@ def _convert_opportunities(
                         opp.get("implementation_difficulty", "medium")
                     ),
                     time_to_impact=opp.get("time_to_impact", "3-6 months"),
+                    # T6: carry the 3-bucket category + difficulty rationale through.
+                    category=opp.get("category"),
+                    difficulty_rationale=opp.get("difficulty_rationale"),
                 )
             )
         except Exception as e:

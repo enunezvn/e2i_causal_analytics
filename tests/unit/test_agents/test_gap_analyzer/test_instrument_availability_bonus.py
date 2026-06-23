@@ -592,11 +592,19 @@ class TestInstrumentRoutingWire:
         assert state["instrument_strength_by_feature"]["trx"]["instrument_strength"] == "strong"
 
     @pytest.mark.asyncio
-    async def test_full_graph_strong_instrument_reorders_ranking(self):
-        """End-to-end: a strong-instrument feature outranks an equal-ROI non-instrumented one.
+    async def test_full_graph_flows_strong_instrument_signal_and_applies_t6(self):
+        """End-to-end WIRE: the IV producer populates ``instrument_strength_by_feature``
+        and that signal reaches the prioritizer through the REAL compiled graph, which
+        then applies the T6 suppression + 3-bucket classification in-graph.
 
-        Proves the new state field is populated by the IV producer and reaches the
-        prioritizer through the REAL compiled graph (the wire, not just arithmetic).
+        The synthetic business-metrics connector recomputes this brand/segment's ROI
+        to money-losing (rev < cost) — exactly like the live Fabhalta run — so the
+        opportunities are correctly SUPPRESSED end-to-end (ROI <= break-even). The
+        instrument-bonus *reordering of viable opportunities* is verified faithfully
+        at the prioritizer level in
+        ``TestInstrumentBonusExecuteIntegration::test_instrument_bonus_without_causal_evidence``
+        (positive ROI, survives suppression); here we prove the wire + that T6 runs
+        in the assembled graph.
         """
         rng = np.random.default_rng(11)
         n = 200
@@ -654,12 +662,26 @@ class TestInstrumentRoutingWire:
         graph = create_gap_analyzer_graph()
         final = await graph.ainvoke(state)
 
+        # (1) The IV producer ran in the compiled graph and emitted the strong signal.
         by_feature = final.get("instrument_strength_by_feature") or {}
         assert by_feature.get("trx", {}).get("instrument_strength") == "strong"
 
+        # (2) The PRIORITIZER actually CONSUMED that signal in the compiled graph —
+        #     it computed the strong-instrument ROI boost for trx and recorded it.
+        #     (The boost is applied BEFORE suppression, so it is observable even
+        #     though the boosted-but-still-money-losing opportunity is then hidden.)
+        instrument_warnings = [
+            w
+            for w in (final.get("causal_evidence_warnings") or [])
+            if "trx" in w and "strong instrument" in w
+        ]
+        assert instrument_warnings, "prioritizer must consume the strong-instrument signal in-graph"
+
+        # (3) T6 ran end-to-end: this brand/segment's connector ROI is money-losing,
+        #     so every opportunity was suppressed (none surface, suppressed_count > 0),
+        #     and any survivor would carry a valid 3-bucket category (never "other").
         opps = final["prioritized_opportunities"]
-        trx_opp = next(o for o in opps if o["gap"]["metric"] == "trx")
-        ms_opp = next(o for o in opps if o["gap"]["metric"] == "market_share")
-        # trx boosted above the equal-ROI market_share opportunity.
-        assert trx_opp["roi_estimate"]["expected_roi"] > ms_opp["roi_estimate"]["expected_roi"]
-        assert trx_opp["rank"] < ms_opp["rank"]
+        assert final.get("suppressed_count", 0) >= 1
+        assert opps == [] or all(
+            o.get("category") in {"quick_win", "steady_play", "strategic_bet"} for o in opps
+        )

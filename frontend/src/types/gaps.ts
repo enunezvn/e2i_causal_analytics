@@ -178,7 +178,21 @@ export interface ROIEstimate {
   competitor_density_label?: string;
   /** Names of the competing products (curated, not FDA-sourced). */
   competitor_drug_names?: string[];
+  /**
+   * ROI rationale (T6) — the backend ROI node computes these for transparency;
+   * surfaced for the opportunity drill-down. Previously dropped (the #1056
+   * pattern). Present only on runs after the T6 deploy.
+   */
+  /** Combined risk-adjustment factor applied to the ROI (0-1). */
+  total_risk_adjustment?: number;
+  /** Revenue impact broken down by value driver (USD). */
+  value_by_driver?: Record<string, number>;
+  /** Economic assumptions behind the ROI estimate. */
+  assumptions?: string[];
 }
+
+/** The 3-bucket opportunity category (T6). No residual "other". */
+export type OpportunityCategory = 'quick_win' | 'steady_play' | 'strategic_bet';
 
 /**
  * Prioritized gap with ROI estimate and action recommendation
@@ -196,8 +210,10 @@ export interface PrioritizedOpportunity {
   implementation_difficulty: ImplementationDifficulty;
   /** Expected time to results */
   time_to_impact: string;
-  /** Curated list-view category (set by the list endpoint). */
-  category?: 'quick_win' | 'strategic_bet' | 'other';
+  /** 3-bucket list-view category (set by the list endpoint). */
+  category?: OpportunityCategory;
+  /** Human-readable explanation of the difficulty rating (T6 drill-down). */
+  difficulty_rationale?: string;
 }
 
 /**
@@ -257,8 +273,12 @@ export interface OpportunityListResponse {
   total_count: number;
   /** Number of quick wins */
   quick_wins_count: number;
+  /** Number of steady plays — the meaningful middle bucket (T6). */
+  steady_plays_count?: number;
   /** Number of strategic bets */
   strategic_bets_count: number;
+  /** Low-value opportunities hidden (ROI at or below break-even) (T6). */
+  suppressed_count?: number;
   /** List of opportunities */
   opportunities: PrioritizedOpportunity[];
   /** Total potential value */
