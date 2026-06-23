@@ -568,3 +568,51 @@ class TestAcceptPathPreservesCuratedConfounders:
         assert cg["discovery_gate_decision"] == "accept"
         # No confounder supplied -> empty backdoor is the CORRECT, honest answer.
         assert cg["adjustment_sets"] == [[]]
+
+    @pytest.mark.asyncio
+    async def test_accept_contradictory_orientation_falls_back_and_adjusts(self, node):
+        """ACCEPT whose discovered DAG orients a curated confounder CONTRADICTORILY
+        (``treatment -> conf``) must NOT leave a half-edge confounder.
+
+        The codex HIGH: adding ``conf -> treatment`` and ``conf -> outcome`` with
+        an INDEPENDENT per-edge acyclicity guard silently drops one edge on the
+        cycle, leaving a half-edge (here ``conf -> outcome`` only = precision
+        covariate). The backdoor criterion then excludes it and the estimate is
+        silently UNADJUSTED -> the exact regression the patch exists to fix. The
+        fix places each confounder ATOMICALLY (both edges or neither) and, when a
+        contradictory orientation blocks it, falls back to the manual DAG so the
+        curated confounder is STILL adjusted.
+        """
+        state = {
+            "query": "Effect of treatment_arm on adopted?",
+            "treatment_var": "treatment_arm",
+            "outcome_var": "adopted",
+            "confounders": ["centrality_z"],
+            "auto_discover": True,
+        }
+        # Discovery oriented treatment_arm -> centrality_z (contradicts the curated
+        # common-cause prior); centrality_z -> treatment_arm would be a 2-cycle.
+        discovery = self._accept_discovery(
+            [("treatment_arm", "adopted"), ("treatment_arm", "centrality_z")]
+        )
+
+        with patch.object(node, "_run_discovery", new_callable=AsyncMock) as mock_discovery:
+            mock_discovery.return_value = discovery
+            result = await node.execute(state)
+
+        cg = result["causal_graph"]
+        adjustment_sets = cg["adjustment_sets"]
+        # No half-edge drop: the curated confounder must still be adjusted.
+        assert adjustment_sets != [[]], (
+            "contradictory ACCEPT left a half-edge confounder -> empty backdoor "
+            "(silently unadjusted) — the codex HIGH regression"
+        )
+        assert any("centrality_z" in s for s in adjustment_sets), (
+            f"centrality_z missing from adjustment sets {adjustment_sets}"
+        )
+        edges = cg["edges"]
+        # Fallback manual DAG draws it as a clean common cause; the contradictory
+        # treatment_arm->centrality_z orientation is discarded.
+        assert ("centrality_z", "treatment_arm") in edges
+        assert ("centrality_z", "adopted") in edges
+        assert ("treatment_arm", "centrality_z") not in edges

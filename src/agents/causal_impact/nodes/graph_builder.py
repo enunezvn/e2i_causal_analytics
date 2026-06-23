@@ -344,9 +344,10 @@ class GraphBuilderNode:
 
     def _add_curated_confounder_edges(
         self, dag: nx.DiGraph, treatment: str, outcome: str, confounders: List[str]
-    ) -> None:
+    ) -> List[str]:
         """Draw ``confounder -> treatment`` AND ``confounder -> outcome`` for each
-        curated confounder (acyclicity-guarded), mutating ``dag`` in place.
+        curated confounder (acyclicity-guarded), mutating ``dag`` in place. Returns
+        the confounders that could NOT be placed (see the atomicity note below).
 
         The ``confounders`` are the caller's curated adjustment covariates — domain
         knowledge (e.g. the API's ``causal_paths.confounders_controlled``) that each
@@ -358,17 +359,42 @@ class GraphBuilderNode:
         discovery on binary data routinely fails to recover these edges, so without
         this the ACCEPT branch returns an empty backdoor and leaves the estimate
         CONFOUNDED — which the estimator's all-other-columns fallback used to mask
-        until that fallback was removed for validated-empty backdoors (PR #1084)."""
+        until that fallback was removed for validated-empty backdoors (PR #1084).
+
+        Each confounder is placed ATOMICALLY. A half-edge (only one of the two
+        common-cause edges — left when the discovered DAG already orients
+        ``treatment -> conf`` or ``outcome -> conf`` so the other edge would be
+        cyclic) is an instrument or a precision covariate, NOT a backdoor
+        confounder: the backdoor criterion drops it and re-confounds the estimate
+        silently. So if both edges cannot coexist acyclically, any edge added for
+        that confounder is reverted and the confounder is returned as 'unplaced'
+        for the caller to handle (the ACCEPT path falls back to the manual DAG). A
+        fresh manual DAG has no contradictory orientation, so every confounder
+        places cleanly and the returned list is empty."""
+        unplaced: List[str] = []
         for conf in confounders:
             if conf in (treatment, outcome):
                 continue
             if conf not in dag:
                 dag.add_node(conf)
+            added: List[Tuple[str, str]] = []
             for target in (treatment, outcome):
                 if not dag.has_edge(conf, target):
                     dag.add_edge(conf, target)
-                    if not nx.is_directed_acyclic_graph(dag):
+                    if nx.is_directed_acyclic_graph(dag):
+                        added.append((conf, target))
+                    else:
                         dag.remove_edge(conf, target)
+            # A valid common cause needs BOTH edges present. If a contradictory
+            # discovered orientation blocked one, revert what we added (never
+            # leave a half-edge) and report the confounder for the caller.
+            if dag.has_edge(conf, treatment) and dag.has_edge(conf, outcome):
+                continue
+            for u, v in added:
+                if dag.has_edge(u, v):
+                    dag.remove_edge(u, v)
+            unplaced.append(conf)
+        return unplaced
 
     def _find_adjustment_sets(
         self, dag: nx.DiGraph, treatment: str, outcome: str
@@ -692,7 +718,24 @@ class GraphBuilderNode:
                 # fallback no longer rescues an empty backdoor since PR #1084). The
                 # other gate paths (AUGMENT/REVIEW/REJECT) already adjust for them
                 # via _construct_dag — ACCEPT must be consistent.
-                self._add_curated_confounder_edges(dag, treatment, outcome, confounders)
+                unplaced = self._add_curated_confounder_edges(dag, treatment, outcome, confounders)
+                if unplaced:
+                    # Discovery oriented a curated confounder contradictorily
+                    # (treatment->conf or outcome->conf), so it cannot be a clean
+                    # common cause on the discovered DAG — a half-edge confounder
+                    # is NOT in the backdoor and would silently UNADJUST the
+                    # estimate (the exact regression this guards against). Discard
+                    # the discovered DAG for this estimand and use the manual DAG,
+                    # which draws every curated confounder as a clean common cause.
+                    logger.warning(
+                        "Discovery ACCEPT contradicts curated confounder(s) %s; "
+                        "falling back to manual DAG to keep them adjusted.",
+                        unplaced,
+                    )
+                    return (
+                        self._construct_dag(treatment, outcome, confounders),
+                        augmented_edges,
+                    )
                 return dag, augmented_edges
 
         elif decision == GateDecision.AUGMENT.value:
