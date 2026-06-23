@@ -140,8 +140,15 @@ def test_model_metrics_stamped_on_synthetic_predictions():
         ), f"{col} not stamped on synthetic ml_predictions"
 
 
-def test_all_45_kpis_return_nonnull():
-    """Run the coverage probe and assert ZERO EMPTY / ZERO N/A across the 45 KPIs."""
+def test_all_kpis_return_nonnull():
+    """Run the coverage probe and assert ZERO EMPTY / ZERO N/A across every KPI.
+
+    Count-agnostic: the expected MAPPED count is derived from the probe's own live
+    KPI id list, so it tracks the registry (44 after T8 removed WS1-DQ-008) without
+    a hardcoded literal that would silently drift."""
+    from scripts.check_kpi_coverage import _kpi_ids
+
+    expected = len(_kpi_ids())
     out = subprocess.run(
         [sys.executable, "scripts/check_kpi_coverage.py"],
         capture_output=True,
@@ -150,4 +157,4 @@ def test_all_45_kpis_return_nonnull():
     )
     assert out.returncode == 0, f"coverage probe failed:\n{out.stdout}\n{out.stderr}"
     summary = out.stdout.strip().splitlines()[-1]
-    assert "MAPPED 45" in summary and "EMPTY 0" in summary and "N/A 0" in summary, summary
+    assert f"MAPPED {expected}" in summary and "EMPTY 0" in summary and "N/A 0" in summary, summary

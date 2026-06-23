@@ -293,9 +293,12 @@ SELECT median_lag_days FROM v_kpi_data_lag LIMIT 1
 
 **Note**: V3 schema addition. Uses the `ml_annotations` table with IAA group tracking.
 
-**Calculator**: `DataQualityCalculator._calc_label_quality`
+**Calculator**: _removed in T8_ — was `DataQualityCalculator._calc_label_quality` (the
+corpus-level generalized Fleiss κ). The retained `v_kpi_label_quality` view is no longer
+read by the live KPI engine.
 
 ```sql
+-- (Designed query — the view is retained but no longer wired to a live KPI)
 SELECT iaa_score FROM v_kpi_label_quality LIMIT 1
 ```
 

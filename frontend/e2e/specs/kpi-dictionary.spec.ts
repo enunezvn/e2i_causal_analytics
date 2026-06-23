@@ -19,7 +19,7 @@ test.describe('KPI Dictionary Page', () => {
         contentType: 'application/json',
         body: JSON.stringify({
           workstreams: [
-            { id: 'ws1_data_quality', name: 'WS1: Data Quality', kpi_count: 9 },
+            { id: 'ws1_data_quality', name: 'WS1: Data Quality', kpi_count: 8 },
             { id: 'ws1_model_performance', name: 'WS1: Model Performance', kpi_count: 9 },
             { id: 'ws2_triggers', name: 'WS2: Trigger Performance', kpi_count: 8 },
             { id: 'ws3_business', name: 'WS3: Business Impact', kpi_count: 10 },

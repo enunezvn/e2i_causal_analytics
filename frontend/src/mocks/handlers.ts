@@ -786,7 +786,7 @@ const kpiHandlers = [
     return HttpResponse.json({
       status: 'healthy',
       registry_loaded: true,
-      total_kpis: 45,
+      total_kpis: 44,
       cache_enabled: true,
       cache_size: 120,
       database_connected: true,

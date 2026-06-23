@@ -175,6 +175,8 @@ _FORBIDDEN_PATTERNS = [
     re.compile(r"\bTOTAL\s+45\b"),  # coverage probe "TOTAL 45 MAPPED 45"
     # Header form where the count trails the label: "Calculable KPIs: 45/46".
     re.compile(r"Calculable\s+KPIs\D{0,6}4[56]\b", re.IGNORECASE),
+    # JSON/object key form in API fixtures/mocks: `total_kpis: 45`, `"total_kpis":46`.
+    re.compile(r"total_kpis[\"'\s:=]+4[56]\b"),
 ]
 _SCANNED_FILES = [
     "config/kpi_definitions.yaml",
@@ -186,6 +188,10 @@ _SCANNED_FILES = [
     # Coverage tooling (probes the live calculable set; counts must track the registry).
     "scripts/check_kpi_coverage.py",
     "scripts/validate_kpi_coverage.py",
+    # FE API fixtures/mocks that echo the registry total (guarded via the total_kpis key
+    # pattern; the per-workstream designed-count "(9 KPIs)" mocks are intentionally not).
+    "frontend/src/mocks/handlers.ts",
+    "frontend/src/lib/api-schemas.test.ts",
     # Current-state reference docs (issue #1075).
     "README.md",
     "docs/data/00-INDEX.md",
