@@ -942,10 +942,11 @@ def test_base_bentoml_binds_shap_serving_bundles():
     mount target must land exactly there."""
     vols = "\n".join(_bentoml_volumes(BASE_COMPOSE))
     assert BENTOML_BUNDLE_MOUNT in vols, (
-        "base bentoml must bind the shap_serving bundle dir at "
-        "/home/bentoml/data/ml_artifacts/shap_serving so a deploy-recreated prod "
-        "container can serve the 12 cohort bundles (it boots degraded with 0 models "
-        f"otherwise — the deploy /model_info gate then fails). volumes=\n{vols}"
+        "base bentoml must bind the shap_serving bundle dir at its in-container "
+        "target (data/ml_artifacts/shap_serving under the bentoml workdir) so a "
+        "deploy-recreated prod container can serve the 12 cohort bundles (it boots "
+        f"degraded with 0 models otherwise — the deploy /model_info gate then fails). "
+        f"volumes=\n{vols}"
     )
 
 
@@ -957,8 +958,8 @@ def test_base_bentoml_binds_gold_standard_eval_for_unpickling():
     package is mounted at the matching import path. Bind it read-only."""
     vols = "\n".join(_bentoml_volumes(BASE_COMPOSE))
     assert BENTOML_GOLDSTD_MOUNT in vols, (
-        "base bentoml must bind src/mlops/gold_standard_eval at "
-        "/home/bentoml/src/mlops/gold_standard_eval so pickle.load can import "
+        "base bentoml must bind src/mlops/gold_standard_eval at its in-container "
+        "import path (under the bentoml workdir) so pickle.load can import "
         "FeatureBuilder+cohort_spec to deserialize the bundles (unpickle "
         f"ModuleNotFoundError -> 0 models otherwise). volumes=\n{vols}"
     )
