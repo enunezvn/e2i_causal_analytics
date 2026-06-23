@@ -806,6 +806,30 @@ class TestListOpportunitiesLatestRunDedup:
         assert ids == ["g_on", "g_off"], "on-label outranks a higher-ROI off-label opportunity"
 
     @pytest.mark.asyncio
+    async def test_off_label_demoted_in_all_brands_pooled_display_order(self):
+        """The off-label demotion must hold across the brand=None pooled view too:
+        EVERY on-label opportunity (from any brand) outranks EVERY off-label one,
+        and within each partition higher ROI wins. A plain global ROI sort would
+        interleave the two high-ROI off-label bets above the on-label ones."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        k_on = _make_opp("g_k_on", ImplementationDifficulty.LOW, 3.0)  # Kisqali on-label
+        k_off = _make_opp("g_k_off", ImplementationDifficulty.LOW, 8.0)  # Kisqali off-label
+        k_off.roi_estimate.off_label = True
+        f_on = _make_opp("g_f_on", ImplementationDifficulty.LOW, 5.0)  # Fabhalta on-label
+        f_off = _make_opp("g_f_off", ImplementationDifficulty.LOW, 9.0)  # Fabhalta off-label
+        f_off.roi_estimate.off_label = True
+        _analyses_store["k"] = _make_analysis("k", "Kisqali", t, [k_off, k_on])
+        _analyses_store["f"] = _make_analysis("f", "Fabhalta", t, [f_off, f_on])
+
+        resp = await list_opportunities(brand=None, min_roi=None, difficulty=None, limit=50)
+
+        ids = [o.gap.gap_id for o in resp.opportunities]
+        # On-label partition first (ROI desc: 5.0 > 3.0), then off-label (9.0 > 8.0).
+        assert ids == ["g_f_on", "g_k_on", "g_f_off", "g_k_off"], (
+            "off-label opps from any brand sink below all on-label ones in the pooled view"
+        )
+
+    @pytest.mark.asyncio
     async def test_steady_plays_count_reported(self):
         """T6: the new middle bucket gets its own headline count."""
         t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
