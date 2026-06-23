@@ -222,6 +222,19 @@ def _services_in(line: str | None) -> set[str]:
     return {tok for tok in line.split() if tok in SERVICES}
 
 
+def _services_in_rollback(calls: list[str], idx: int) -> set[str]:
+    """Union of recreate-target services across EVERY `up -d` after the checkout.
+
+    The #563 rollback now splits the GHCR app/frontend tier (pulled, recreated
+    --no-build) from the locally-built sidecars (--build) into SEPARATE `up`s, so a
+    single 'first up after checkout' no longer carries the whole rolled-back set."""
+    out: set[str] = set()
+    for c in calls[idx + 1 :]:
+        if "up -d" in c:
+            out |= _services_in(c)
+    return out
+
+
 def _app_up_was_invoked(calls: list[str]) -> bool:
     """A forward (pre-checkout) `up -d` carrying app services."""
     for c in calls:
@@ -261,10 +274,11 @@ def test_app_up_failure_rolls_back_feast_and_app_to_prev(tmp_path: Path) -> None
         "expected a rollback `git checkout " + PREV_SHA + "` after the app-up failure, "
         "but none ran (set -e aborted before any rollback). Calls:\n" + "\n".join(calls)
     )
-    rollback_up = _first_up_after(calls, ci)
-    assert _services_in(rollback_up) == SERVICES, (
+    rolled = _services_in_rollback(calls, ci)
+    assert rolled == SERVICES, (
         "the app-up-failure rollback must force-recreate feast+materializer+ALL app "
-        f"services at PREV_SHA; got {_services_in(rollback_up)} from: {rollback_up}"
+        f"services at PREV_SHA (aggregated across the split app/sidecar ups); got {rolled}\n"
+        + "\n".join(calls)
     )
     assert code == 1, f"deploy must exit 1 on app-up failure; got {code}"
 
@@ -308,5 +322,48 @@ def test_health_check_failure_rolls_back_app_services(tmp_path: Path) -> None:
     code, out, calls = _run(tmp_path, FAIL_HEALTH="1")
     ci = _checkout_prev_idx(calls)
     assert ci is not None, "health-check failure must roll back to PREV_SHA"
-    assert APP_SERVICES <= _services_in(_first_up_after(calls, ci))
+    assert APP_SERVICES <= _services_in_rollback(calls, ci)
     assert code == 1
+
+
+def _rollback_helper_body() -> str:
+    """Extract the rollback_to_prev() helper body from the SHIPPED deploy.yml text."""
+    lines = DEPLOY_WORKFLOW.read_text().splitlines()
+    start = next((i for i, ln in enumerate(lines) if "rollback_to_prev()" in ln), None)
+    assert start is not None, "rollback_to_prev() helper not found in deploy.yml"
+    # The helper closes on the first line that is exactly a `}` at the script indent;
+    # `${...}` expansions inside the body never match (they have a `$` prefix + content).
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].strip() == "}"), None)
+    assert end is not None, "rollback_to_prev() closing brace not found"
+    return "\n".join(lines[start : end + 1])
+
+
+def test_rollback_pulls_app_tier_instead_of_oom_prone_local_build() -> None:
+    """#563 double-fault fix: rollback_to_prev must PULL the GHCR app/frontend tier and
+    recreate it --no-build, so a rollback never locally rebuilds the OOM-prone frontend
+    React/esbuild bundle. The 2026-06-23 rollback ran `up --build`, OOM-killed esbuild
+    (write EPIPE), and left a PARTIAL state. A --build FALLBACK (no-GHCR / pre-flip
+    targets) and the locally-built feast/bentoml sidecars keep --build, so a rollback is
+    never WORSE than before."""
+    body = _rollback_helper_body()
+    assert "pull" in body, (
+        "rollback_to_prev must pull the GHCR app/frontend images at PREV_SHA before "
+        "recreating them, so it does not locally rebuild the OOM-prone frontend (#563)"
+    )
+    assert "--no-build" in body, (
+        "rollback_to_prev must recreate the pulled app/frontend tier with --no-build "
+        "(the #563 OOM is the frontend React build; pull + --no-build avoids it)"
+    )
+    assert "--build" in body, (
+        "rollback_to_prev must keep --build as a fallback (no-GHCR/pre-flip targets) and "
+        "for the locally-built feast/feast-materializer/bentoml sidecars"
+    )
+    # The frontend must be classified into the GHCR-pulled (never locally-built) tier.
+    assert "frontend" in body, (
+        "rollback_to_prev must classify `frontend` into the GHCR-pulled tier so it is "
+        "never the target of a local --build that OOMs"
+    )
+    # The rollback must still renew anon volumes (pre-flip /app/.venv mask targets).
+    assert "--renew-anon-volumes" in body, (
+        "rollback_to_prev must keep --renew-anon-volumes for pre-flip rollback targets"
+    )

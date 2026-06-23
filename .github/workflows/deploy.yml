@@ -201,27 +201,60 @@ jobs:
             }
 
             # Roll the named services back to PREV_SHA; the caller then `exit 1`s.
-            # Shared by all three failure paths (the feast recreate, the app-services flip,
-            # and the health check) so the rollback contract lives in ONE place — previously
-            # the two inline copies drifted (one carried --renew-anon-volumes, the other did
-            # not). Every step is BEST-EFFORT (`|| echo WARN`) so `set -e` can NEVER abort
-            # mid-rollback before the caller's `exit 1`; this is the #563 load-bearing
-            # guarantee for the double-fault case, where the rollback `up` hits the SAME
-            # OOM-prone build that triggered the rollback and is itself likely to fail. The
-            # guards live INSIDE the helper so its behavior is identical whether it is called
-            # bare or in a condition. Recompute COMPOSE_CMD after the checkout so the overlay
-            # matches the PREV_SHA tree (a pre-flip commit falls back to the dev overlay).
-            # --build + --renew-anon-volumes: a pre-flip PREV_SHA may still carry the
-            # /app/.venv anon-volume mask on the app services, so renew repopulates it from a
-            # freshly rebuilt PREV_SHA image; it is a harmless no-op for feast/feast-materializer
-            # (named volume + read-only bind mount only — no anonymous volume). Correctness
-            # over speed on the failure path.
+            # Shared by all failure paths (the feast recreate, the app-services flip, the
+            # health check, and the bentoml refresh) so the rollback contract lives in ONE
+            # place — previously inline copies drifted (one carried --renew-anon-volumes,
+            # the other did not). Every `up` is BEST-EFFORT (`|| echo WARN`) so `set -e` can
+            # NEVER abort mid-rollback before the caller's `exit 1`. Recompute COMPOSE_CMD
+            # after the checkout so the overlay matches the PREV_SHA tree (a pre-flip commit
+            # falls back to the dev overlay).
+            #
+            # #563 double-fault avoidance: the GHCR-backed app/frontend tier
+            # (api/frontend/worker_*/scheduler) is PULLED at PREV_SHA and recreated
+            # --no-build, so the rollback does NOT locally rebuild the frontend — that
+            # React/esbuild build is the OOM that turned the 2026-06-23 rollback into a
+            # double-fault (the rollback `up --build` OOM-killed esbuild, leaving a PARTIAL
+            # state). If the pull is unavailable (no IMAGE_OWNER, a registry hiccup, or a
+            # pre-flip PREV_SHA whose frontend image was never pushed) we FALL BACK to the
+            # prior `--build`, so a rollback is never WORSE than before. Locally-built
+            # sidecars (feast/feast-materializer/bentoml — never pushed to GHCR) always
+            # `--build`. --renew-anon-volumes on every up: a pre-flip PREV_SHA may still
+            # carry the /app/.venv anon-volume mask, so renew repopulates it from the
+            # PREV_SHA image; harmless no-op for the sidecars (named volume + ro binds only).
             rollback_to_prev() {
               git checkout "$PREV_SHA" \
                 || echo "==> WARN: rollback checkout to ${PREV_SHA:0:7} failed"
               COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
-              $COMPOSE_CMD up -d --build --no-deps --force-recreate --renew-anon-volumes "$@" \
-                || echo "==> WARN: rollback 'up' failed — droplet may be in a PARTIAL state; manual intervention required"
+              # Partition the requested services into the GHCR-backed app/frontend tier
+              # (pull, never local-build) and the locally-built sidecars (--build). No
+              # `local` (portable to a plain /bin/sh); the helper is never re-entrant, and
+              # both vars are reset on entry.
+              rb_ghcr=""; rb_local=""
+              for s in "$@"; do
+                case "$s" in
+                  api|frontend|worker_light|worker_medium|worker_heavy|scheduler) rb_ghcr="$rb_ghcr $s" ;;
+                  *) rb_local="$rb_local $s" ;;
+                esac
+              done
+              if [ -n "$rb_ghcr" ]; then
+                export IMAGE_OWNER="$(echo "${IMAGE_OWNER:-}" | tr '[:upper:]' '[:lower:]')"
+                export IMAGE_TAG="$PREV_SHA"
+                if [ -n "$IMAGE_OWNER" ] \
+                   && echo "${GHCR_TOKEN:-}" | docker login "${REGISTRY:-ghcr.io}" -u "${GHCR_USER:-$IMAGE_OWNER}" --password-stdin >/dev/null 2>&1 \
+                   && $COMPOSE_CMD pull $rb_ghcr; then
+                  $COMPOSE_CMD up -d --no-build --no-deps --force-recreate --renew-anon-volumes $rb_ghcr \
+                    || echo "==> WARN: rollback 'up' (pulled app tier) failed — droplet may be in a PARTIAL state; manual intervention required"
+                else
+                  # GHCR unavailable / pre-flip target — fall back to the prior local build
+                  # (never worse than before; the React build OOM risk is the same as old).
+                  $COMPOSE_CMD up -d --build --no-deps --force-recreate --renew-anon-volumes $rb_ghcr \
+                    || echo "==> WARN: rollback 'up' (local-build app tier) failed — droplet may be in a PARTIAL state; manual intervention required"
+                fi
+              fi
+              if [ -n "$rb_local" ]; then
+                $COMPOSE_CMD up -d --build --no-deps --force-recreate --renew-anon-volumes $rb_local \
+                  || echo "==> WARN: rollback 'up' (sidecars) failed — droplet may be in a PARTIAL state; manual intervention required"
+              fi
             }
 
             cd "$PROJECT_DIR"

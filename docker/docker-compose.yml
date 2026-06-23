@@ -424,6 +424,21 @@ services:
     volumes:
       - bentoml_models:/home/bentoml/bentos
       - model_registry:/models:ro  # Read-only: receives from MLflow
+      # Gold-standard cohort serving (2026-06-23 deploy-failure fix). The deploy
+      # FORCE-RECREATES bentoml under THIS base compose (pick_overlay() returns ""
+      # once the frontend has an `AS production` stage, #528-B — no overlay), so the
+      # 12 cohort bundles must be reachable from the base service, not only the dev
+      # overlay. Without these the recreated container boots degraded (0 models),
+      # fails the deploy /model_info readiness gate, and the rollback runs the
+      # OOM-prone frontend build (#563 double-fault). Both read-only:
+      #   * the FS-fallback discovery (_discover_goldstd_bundles_from_fs) walks
+      #     data/ml_artifacts/shap_serving relative to /home/bentoml; and
+      #   * pickle.load needs gold_standard_eval (FeatureBuilder + its cohort_spec
+      #     dep) — NOT baked into the prod image — to deserialize each bundle.
+      # The bundles are gitignored + re-materialized by scripts/sync_goldstd_serving
+      # and survive `git reset --hard` (untracked), so the bind stays populated.
+      - ../src/mlops/gold_standard_eval:/home/bentoml/src/mlops/gold_standard_eval:ro
+      - ../data/ml_artifacts/shap_serving:/home/bentoml/data/ml_artifacts/shap_serving:ro
     environment:
       - BENTOML_HOME=/home/bentoml
       - BENTOML_PORT=3000
