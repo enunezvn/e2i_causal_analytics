@@ -42,6 +42,11 @@ DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
 PREV_SHA = "aaaaaaa000prev"
 NEW_SHA = "bbbbbbb111new0"
 
+# The app services that were already flipped to NEW_SHA before the bentoml step; a
+# bentoml failure must roll these back to PREV_SHA TOO (coherent client+server), not
+# just bentoml.
+APP_SERVICES = {"api", "frontend", "worker_light", "worker_medium", "scheduler"}
+
 
 # --------------------------------------------------------------------------- #
 # Extraction
@@ -108,13 +113,18 @@ fi
 exit 0
 """
 
-# Port-aware: bentoml health is :3000, the app health is :8000. Failing one must
-# not fail the other (we must still REACH the bentoml step with a healthy app).
+# Port-aware: bentoml readiness is POST :3000/model_info, the app health is :8000.
+# Failing one must not fail the other (we must still REACH the bentoml step with a
+# healthy app). The :3000 body carries a non-empty available_models so the readiness
+# grep matches; FAIL_BENTOML_HEALTH makes the probe fail (curl -sf exits non-zero).
 _CURL_STUB = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$CALL_LOG"
 args="$*"
 case "$args" in
-  *localhost:3000*) [ "${FAIL_BENTOML_HEALTH:-0}" = "1" ] && exit 1; exit 0 ;;
+  *localhost:3000*)
+    [ "${FAIL_BENTOML_HEALTH:-0}" = "1" ] && exit 1
+    printf '%s\n' '{"model_loaded": true, "available_models": ["initiation_Kisqali_goldstd_lr_v1"]}'
+    exit 0 ;;
   *localhost:8000*) [ "${FAIL_HEALTH:-0}" = "1" ] && exit 1; exit 0 ;;
 esac
 exit 0
@@ -253,6 +263,11 @@ def test_recreates_bentoml_when_serving_inputs_change(tmp_path: Path) -> None:
     assert "force-recreate" in calls[fwd], (
         "bentoml must be force-recreated (not a no-op `up`):\n" + calls[fwd]
     )
+    # The readiness gate must probe /model_info (proves the cohort bundles loaded),
+    # NOT merely /healthz liveness or /health (which checks the legacy self._model).
+    assert any("localhost:3000/model_info" in c for c in calls), (
+        "the bentoml readiness gate must probe /model_info. Calls:\n" + "\n".join(calls)
+    )
     assert code == 0, f"a healthy bentoml refresh must exit 0; got {code}\n{out}"
 
 
@@ -268,10 +283,17 @@ def test_skips_bentoml_recreate_when_no_serving_change(tmp_path: Path) -> None:
     assert code == 0, f"a no-bentoml-change deploy must still succeed; got {code}\n{out}"
 
 
-def test_bentoml_health_failure_rolls_back_bentoml_and_exits_1(tmp_path: Path) -> None:
-    """If the recreated bentoml never reports healthy at /healthz, the deploy must
-    roll bentoml back to PREV_SHA and FAIL loud (exit 1) — never leave a wedged
-    serving container while reporting success."""
+def _rolled_services(rollback_up: str | None) -> set[str]:
+    if rollback_up is None:
+        return set()
+    return {tok for tok in rollback_up.split() if tok in APP_SERVICES or tok == "bentoml"}
+
+
+def test_bentoml_health_failure_rolls_back_app_and_bentoml_and_exits_1(tmp_path: Path) -> None:
+    """If the recreated bentoml never reaches readiness at /model_info, the deploy must
+    roll the APP TIER + bentoml back to PREV_SHA and FAIL loud (exit 1). Rolling only
+    bentoml would leave app@NEW talking to bentoml@PREV — the exact client/server schema
+    drift this step exists to prevent."""
     code, out, calls = _run(
         tmp_path, DIFF_FILES="scripts/bentoml/e2i_serving_service.py", FAIL_BENTOML_HEALTH="1"
     )
@@ -279,19 +301,20 @@ def test_bentoml_health_failure_rolls_back_bentoml_and_exits_1(tmp_path: Path) -
     assert fwd is not None, "the forward bentoml recreate must have run:\n" + "\n".join(calls)
     ci = _checkout_prev_idx(calls)
     assert ci is not None and ci > fwd, (
-        "a failed bentoml health gate must roll back via `git checkout " + PREV_SHA + "` "
+        "a failed bentoml readiness gate must roll back via `git checkout " + PREV_SHA + "` "
         "AFTER the forward recreate. Calls:\n" + "\n".join(calls)
     )
-    rollback_up = _first_up_after(calls, ci)
-    assert rollback_up is not None and " bentoml" in rollback_up, (
-        "the rollback must force-recreate bentoml at PREV_SHA:\n" + str(rollback_up)
+    rolled = _rolled_services(_first_up_after(calls, ci))
+    assert "bentoml" in rolled and APP_SERVICES <= rolled, (
+        "a failed bentoml gate must roll the app tier + bentoml back to PREV_SHA "
+        "(coherent client+server); got: " + str(rolled) + "\nCalls:\n" + "\n".join(calls)
     )
     assert code == 1, f"a failed bentoml refresh must exit 1; got {code}\n{out}"
 
 
-def test_bentoml_up_failure_rolls_back_bentoml_and_exits_1(tmp_path: Path) -> None:
+def test_bentoml_up_failure_rolls_back_app_and_bentoml_and_exits_1(tmp_path: Path) -> None:
     """If the recreate `up` itself fails (e.g. a bad serving build), same contract:
-    roll bentoml back to PREV_SHA and exit 1."""
+    roll the app tier + bentoml back to PREV_SHA and exit 1."""
     code, out, calls = _run(
         tmp_path, DIFF_FILES="scripts/bentoml/e2i_serving_service.py", FAIL_BENTOML_UP="1"
     )
@@ -299,9 +322,12 @@ def test_bentoml_up_failure_rolls_back_bentoml_and_exits_1(tmp_path: Path) -> No
     assert ci is not None, "a failed bentoml `up` must roll back to PREV_SHA. Calls:\n" + "\n".join(
         calls
     )
-    rollback_up = _first_up_after(calls, ci)
-    assert rollback_up is not None and " bentoml" in rollback_up, (
-        "the rollback must recreate bentoml at PREV_SHA:\n" + str(rollback_up)
+    rolled = _rolled_services(_first_up_after(calls, ci))
+    assert "bentoml" in rolled and APP_SERVICES <= rolled, (
+        "the rollback must recreate the app tier + bentoml at PREV_SHA; got: "
+        + str(rolled)
+        + "\nCalls:\n"
+        + "\n".join(calls)
     )
     assert code == 1, f"a failed bentoml `up` must exit 1; got {code}\n{out}"
 

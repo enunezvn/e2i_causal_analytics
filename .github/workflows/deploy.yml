@@ -418,36 +418,54 @@ jobs:
             # per-deploy serving blip. A no-delta re-run (PREV==NEW) also recreates,
             # since we cannot prove the running container is current. `|| true` keeps
             # set -e happy when grep matches nothing (mirrors the CHANGED_BAKED detector).
+            # gold_standard_eval is bind-mounted into bentoml in the dev overlay
+            # (FeatureBuilder unpickling for the cohort bundles), so a change there is
+            # also a serving input.
             BENTOML_CHANGED=$(git diff --name-only "$PREV_SHA" "$NEW_SHA" \
-              | grep -E '^(scripts/bentoml/|docker/bentoml/|src/mlops/bentoml_)' \
+              | grep -E '^(scripts/bentoml/|docker/bentoml/|src/mlops/bentoml_|src/mlops/gold_standard_eval/)' \
               || true)
             if [ "$PREV_SHA" = "$NEW_SHA" ] || [ -n "$BENTOML_CHANGED" ]; then
               echo "==> BentoML serving inputs changed — recreating bentoml so the live schema matches the client"
               # --build is correct for BOTH overlays: it re-bakes the prod image and is a
               # harmless no-op for the dev bind-mount (the fresh container re-reads it anyway).
+              # On ANY bentoml failure below, roll the APP TIER back TOO (not just bentoml):
+              # the app was already flipped to NEW_SHA above, so leaving app@NEW talking to
+              # bentoml@PREV is the exact client/server schema drift this step exists to
+              # prevent. Rolling both to PREV_SHA restores a coherent client+server pair
+              # (feast stays at NEW_SHA, matching the app-health rollback above).
               if ! $COMPOSE_CMD up -d --build --no-deps --force-recreate bentoml; then
-                echo "==> bentoml recreate at ${NEW_SHA:0:7} failed — rolling bentoml back to ${PREV_SHA:0:7}. Deploy FAILED."
-                rollback_to_prev bentoml
+                echo "==> bentoml recreate at ${NEW_SHA:0:7} failed — rolling app tier + bentoml back to ${PREV_SHA:0:7}. Deploy FAILED."
+                rollback_to_prev api frontend worker_light worker_medium scheduler bentoml
                 exit 1
               fi
-              # Gate on the serving liveness endpoint (the same /healthz the compose
-              # healthcheck uses; bentoml publishes 127.0.0.1:3000 on the host). 30x5s >
-              # the 60s start_period. A recreated-but-unhealthy serving container is the
-              # exact drift this step prevents, so a failed gate rolls bentoml back to its
-              # last-known-good PREV_SHA and fails the deploy loud.
+              # Readiness gate: a bare /healthz only proves the server is ALIVE. The
+              # gold-standard cohort bundles that actually serve /predict_batch live in
+              # self._models, whereas /health reports self._model (the LEGACY single default,
+              # frequently absent) and would FALSE-fail a healthy multi-model service. POST
+              # /model_info enumerates available_models (sorted self._models keys); require it
+              # non-empty so the gate proves the serving substrate the cohort path uses is
+              # actually loaded. curl -sf fails (-> empty) until the server is up, so this
+              # single probe also covers the 60s start_period. 30x5s = 150s budget.
               BENTO_OK=false
               for i in $(seq 1 30); do
-                if curl -sf --connect-timeout 3 --max-time 5 http://localhost:3000/healthz >/dev/null 2>&1; then
+                INFO=$(curl -sf --connect-timeout 3 --max-time 5 -X POST \
+                  -H 'Content-Type: application/json' -d '{}' \
+                  http://localhost:3000/model_info 2>/dev/null || true)
+                # Strip all whitespace first so the match is robust to compact OR
+                # pretty-printed JSON (a line-oriented grep would otherwise miss a `[`
+                # and the first quoted model name on separate lines). A non-empty array
+                # starts `["`; an empty `[]` does not match.
+                if printf '%s' "$INFO" | tr -d '[:space:]' | grep -q '"available_models":\["'; then
                   BENTO_OK=true
-                  echo "==> bentoml healthy on attempt ${i}"
+                  echo "==> bentoml is serving the cohort bundles on attempt ${i}"
                   break
                 fi
                 sleep 5
               done
               if [ "$BENTO_OK" = false ]; then
-                echo "==> bentoml did not report healthy at /healthz — rolling back to ${PREV_SHA:0:7}. Deploy FAILED."
+                echo "==> bentoml has no cohort bundles loaded at /model_info — rolling app tier + bentoml back to ${PREV_SHA:0:7}. Deploy FAILED."
                 $COMPOSE_CMD logs --tail 50 bentoml 2>&1 || true
-                rollback_to_prev bentoml
+                rollback_to_prev api frontend worker_light worker_medium scheduler bentoml
                 exit 1
               fi
             fi
