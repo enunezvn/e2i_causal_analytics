@@ -649,7 +649,7 @@ class TestDiscoveredDagIncludesEstimandEdge:
             ]
         )
         result = DiscoveryResult(success=True, config=DiscoveryConfig(), ensemble_dag=g)
-        dag, _augmented = node._build_dag_with_discovery(
+        dag, _augmented, dag_overridden = node._build_dag_with_discovery(
             "treatment_arm",
             "persistent_180d",
             ["disease_severity", "engagement_score"],
@@ -660,6 +660,9 @@ class TestDiscoveredDagIncludesEstimandEdge:
         # Discovered confounder edges preserved and the graph stays acyclic.
         assert dag.has_edge("disease_severity", "treatment_arm")
         assert nx.is_directed_acyclic_graph(dag)
+        # Confounders placed cleanly on the discovered DAG (no contradiction) ->
+        # the discovered DAG is KEPT, so provenance is honestly 'discovered'.
+        assert dag_overridden is False
 
 
 class TestConstructDagConnectsCuratedConfounders:

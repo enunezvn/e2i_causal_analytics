@@ -138,8 +138,9 @@ class GraphBuilderNode:
                     discovery_latency_ms = (time.time() - discovery_start) * 1000
 
             # Build DAG based on discovery results
+            dag_overridden = False
             if discovery_result and gate_evaluation:
-                dag, augmented_edges = self._build_dag_with_discovery(
+                dag, augmented_edges, dag_overridden = self._build_dag_with_discovery(
                     treatment, outcome, confounders, discovery_result, gate_evaluation
                 )
             else:
@@ -184,6 +185,9 @@ class GraphBuilderNode:
                 else 0.0,
                 "discovery_n_edges": discovery_result.n_edges if discovery_result else 0,
                 "augmented_edges": augmented_edges,
+                # Honest provenance: True only when an ACCEPTED discovered DAG was
+                # discarded for the manual one (curated-confounder contradiction).
+                "discovery_dag_overridden": dag_overridden,
             }
 
             # Compute DAG version hash for expert review tracking
@@ -674,7 +678,7 @@ class GraphBuilderNode:
         confounders: List[str],
         discovery_result: DiscoveryResult,
         gate_evaluation: Dict[str, Any],
-    ) -> Tuple[nx.DiGraph, List[Tuple[str, str]]]:
+    ) -> Tuple[nx.DiGraph, List[Tuple[str, str]], bool]:
         """Build DAG based on discovery results and gate decision.
 
         Args:
@@ -685,7 +689,14 @@ class GraphBuilderNode:
             gate_evaluation: Result from discovery gate
 
         Returns:
-            Tuple of (DAG, list of augmented edges)
+            Tuple of ``(DAG, augmented_edges, dag_overridden)``. ``dag_overridden``
+            is True ONLY when the gate ACCEPTED a discovered DAG but it
+            contradicted a curated confounder, so the discovered DAG was discarded
+            for the manual domain DAG — the caller surfaces this so the API's
+            ``dag_source`` provenance is honest ('domain_knowledge', not
+            'discovered'). False on every other path (clean ACCEPT keeps the
+            discovered DAG; AUGMENT/REVIEW/REJECT are already labeled by the gate
+            decision).
         """
         decision = gate_evaluation.get("decision")
         augmented_edges: List[Tuple[str, str]] = []
@@ -735,8 +746,9 @@ class GraphBuilderNode:
                     return (
                         self._construct_dag(treatment, outcome, confounders),
                         augmented_edges,
+                        True,  # discovered DAG discarded -> provenance is manual
                     )
-                return dag, augmented_edges
+                return dag, augmented_edges, False
 
         elif decision == GateDecision.AUGMENT.value:
             # Build manual DAG and augment with high-confidence discovered edges
@@ -759,18 +771,18 @@ class GraphBuilderNode:
                             dag.remove_edge(source, target)
                             logger.debug(f"Skipped edge (cycle): {source} -> {target}")
 
-            return dag, augmented_edges
+            return dag, augmented_edges, False
 
         elif decision == GateDecision.REVIEW.value:
             # Use manual DAG but flag for review
             logger.info("Using manual DAG, flagged for review (REVIEW)")
             dag = self._construct_dag(treatment, outcome, confounders)
-            return dag, augmented_edges
+            return dag, augmented_edges, False
 
         # REJECT or unknown: use manual DAG
         logger.info("Using manual DAG (REJECT or fallback)")
         dag = self._construct_dag(treatment, outcome, confounders)
-        return dag, augmented_edges
+        return dag, augmented_edges, False
 
 
 # Standalone function for LangGraph integration

@@ -546,6 +546,9 @@ class TestAcceptPathPreservesCuratedConfounders:
         edges = cg["edges"]
         assert ("centrality_z", "treatment_arm") in edges
         assert ("centrality_z", "adopted") in edges
+        # The discovered DAG was KEPT (confounder placed on it cleanly), so the
+        # provenance is honestly 'discovered' — the override flag must be falsy.
+        assert not cg.get("discovery_dag_overridden")
 
     @pytest.mark.asyncio
     async def test_accept_with_no_confounders_stays_unadjusted(self, node):
@@ -616,3 +619,8 @@ class TestAcceptPathPreservesCuratedConfounders:
         assert ("centrality_z", "treatment_arm") in edges
         assert ("centrality_z", "adopted") in edges
         assert ("treatment_arm", "centrality_z") not in edges
+        # Provenance honesty (codex round-2 finding): the discovered DAG was
+        # DISCARDED for the manual one, so the run must NOT advertise itself as
+        # 'discovered'. The override flag tells the API's dag_source classifier to
+        # report 'domain_knowledge', not 'discovered'.
+        assert cg.get("discovery_dag_overridden") is True

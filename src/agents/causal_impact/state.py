@@ -38,6 +38,14 @@ class CausalGraph(TypedDict, total=False):
     discovery_confidence: float  # Discovery ensemble confidence (0-1)
     discovery_n_edges: int  # Number of edges from discovery
     augmented_edges: List[tuple[str, str]]  # High-confidence edges added to manual DAG
+    # True when the gate ACCEPTED a discovered DAG but it contradicted a curated
+    # confounder's common-cause orientation, so graph_builder DISCARDED it and
+    # fell back to the manual domain DAG. ``discovery_gate_decision`` stays
+    # "accept" (the gate genuinely accepted — many consumers rely on that fact),
+    # but the API's ``dag_source`` provenance classifier consults THIS flag so it
+    # reports 'domain_knowledge' instead of mislabeling the manual DAG as
+    # 'discovered'. Absent/False on every non-fallback path.
+    discovery_dag_overridden: NotRequired[bool]
 
 
 class EstimationResult(TypedDict, total=False):
