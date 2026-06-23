@@ -102,7 +102,7 @@ def test_label_quality_calculator_method_removed() -> None:
 
 
 def test_yaml_summary_total_matches_registry() -> None:
-    """summary.total_kpis must equal the live registry size (currently 45)."""
+    """summary.total_kpis must equal the live registry size (currently 44)."""
     data = _load_yaml()
     registry = get_registry()
     n = len(registry.get_all())
@@ -192,6 +192,7 @@ _SCANNED_FILES = [
     # pattern; the per-workstream designed-count "(9 KPIs)" mocks are intentionally not).
     "frontend/src/mocks/handlers.ts",
     "frontend/src/lib/api-schemas.test.ts",
+    "frontend/src/hooks/api/use-kpi.test.ts",
     # Current-state reference docs (issue #1075).
     "README.md",
     "docs/data/00-INDEX.md",
