@@ -16,6 +16,7 @@ import logging
 import time
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
+from ..opportunity_classification import classify_bucket, is_low_value
 from ..state import (
     GapAnalyzerState,
     PerformanceGap,
@@ -75,7 +76,9 @@ class PrioritizerNode:
                 return {
                     "prioritized_opportunities": [],
                     "quick_wins": [],
+                    "steady_plays": [],
                     "strategic_bets": [],
+                    "suppressed_count": 0,
                     "warnings": ["No gaps or ROI estimates available for prioritization"],
                     "status": "completed",
                 }
@@ -95,8 +98,11 @@ class PrioritizerNode:
                 gap = gap_map[gap_id]
                 roi_estimate = roi_map[gap_id]
 
-                # Assess implementation difficulty
+                # Assess implementation difficulty + capture the human-readable
+                # rationale (the cost/gap-size factors that drove the rating —
+                # previously computed-then-discarded; T6 surfaces it for drill-down).
                 difficulty = self._assess_difficulty(gap, roi_estimate)
+                difficulty_rationale = self._explain_difficulty(gap, roi_estimate, difficulty)
 
                 # Generate recommended action
                 action = self._generate_action(gap, roi_estimate, difficulty)
@@ -111,6 +117,7 @@ class PrioritizerNode:
                     "recommended_action": action,
                     "implementation_difficulty": difficulty,
                     "time_to_impact": time_to_impact,
+                    "difficulty_rationale": difficulty_rationale,
                 }
 
                 opportunities.append(opportunity)
@@ -153,6 +160,27 @@ class PrioritizerNode:
                 for opp in opportunities:
                     self._apply_label_gate(opp["roi_estimate"], opp["gap"], population)
 
+            # T6: suppress low-value noise and stamp the 3-bucket category. An
+            # opportunity whose FINAL (causal/instrument-adjusted) expected_roi is
+            # at or below break-even returns no more than its cost — it is hidden
+            # rather than dumped into a junk "other" bucket. Survivors are tagged
+            # with exactly one of quick_win / steady_play / strategic_bet via the
+            # shared classification SSOT (so the agent, the headline counts, and
+            # the per-card badge can never disagree).
+            surviving: List[PrioritizedOpportunity] = []
+            suppressed_count = 0
+            for opp in opportunities:
+                if is_low_value(opp["roi_estimate"]["expected_roi"]):
+                    suppressed_count += 1
+                    continue
+                opp["category"] = classify_bucket(
+                    opp["implementation_difficulty"],
+                    opp["roi_estimate"]["expected_roi"],
+                    opp["roi_estimate"]["estimated_cost_to_close"],
+                )
+                surviving.append(opp)
+            opportunities = surviving
+
             # Rank: on-label/indeterminate first, off-label opportunities demoted to the
             # bottom (codex#7 — explicit partition-by-verdict; expected_roi order is
             # PRESERVED within each partition, the ROI value itself is never tampered
@@ -173,10 +201,13 @@ class PrioritizerNode:
             # Limit to max_opportunities
             prioritized_opportunities = opportunities[:max_opportunities]
 
-            # Categorize into quick wins and strategic bets AFTER the partitioned sort so
-            # they respect the off-label demotion (the identify_* helpers re-sort by
-            # expected_roi within their already-filtered, already-demotion-aware subset).
+            # Categorize by the stamped 3-bucket category AFTER the partitioned sort
+            # so the highlight lists respect the off-label demotion (each list is a
+            # filter on the already-sorted, already-classified survivors). Capped at
+            # the top 5 per bucket for the highlight lists; the API endpoint derives
+            # truthful brand-level counts from the same classifier.
             quick_wins = self._identify_quick_wins(opportunities)[:5]
+            steady_plays = self._identify_steady_plays(opportunities)[:5]
             strategic_bets = self._identify_strategic_bets(opportunities)[:5]
 
             prioritization_latency_ms = int((time.time() - start_time) * 1000)
@@ -184,7 +215,9 @@ class PrioritizerNode:
             result: Dict[str, Any] = {
                 "prioritized_opportunities": prioritized_opportunities,
                 "quick_wins": quick_wins,
+                "steady_plays": steady_plays,
                 "strategic_bets": strategic_bets,
+                "suppressed_count": suppressed_count,
                 "prioritization_latency_ms": prioritization_latency_ms,
                 "status": "completed",
             }
@@ -261,58 +294,89 @@ class PrioritizerNode:
         if verdict.reason:
             roi_estimate["off_label_reason"] = verdict.reason
 
-    def _assess_difficulty(
+    def _difficulty_factors(
         self, gap: PerformanceGap, roi_estimate: ROIEstimate
-    ) -> Literal["low", "medium", "high"]:
-        """Assess implementation difficulty.
+    ) -> Tuple[int, List[str]]:
+        """Compute the difficulty score AND the human-readable factors behind it.
+
+        Single source of truth for both ``_assess_difficulty`` (which maps the
+        score to a level) and ``_explain_difficulty`` (which renders the factors).
 
         Factors:
         - Cost to close (higher = harder)
         - Gap size (larger = harder)
         - Gap percentage (extreme = harder)
 
-        Args:
-            gap: Performance gap
-            roi_estimate: ROI estimate
-
         Returns:
-            Difficulty level: "low", "medium", "high"
+            (score, factor_phrases) where each phrase explains one +/- driver.
         """
         cost = roi_estimate["estimated_cost_to_close"]
         gap_size = abs(gap["gap_size"])
         gap_pct = abs(gap["gap_percentage"])
+        metric = gap["metric"]
 
-        # Difficulty score (0-3)
         score = 0
+        factors: List[str] = []
 
         # Cost factor
         if cost > 50000:
             score += 1
+            factors.append(f"high cost to close (${cost:,.0f} > $50k)")
         elif cost < 10000:
             score -= 1
+            factors.append(f"low cost to close (${cost:,.0f} < $10k)")
 
         # Gap size factor (metric-specific)
-        metric = gap["metric"]
         if metric in ["trx", "nrx"]:
             if gap_size > 100:
                 score += 1
+                factors.append(f"large {metric.upper()} gap ({gap_size:,.0f} units > 100)")
         elif metric in ["market_share", "conversion_rate"]:
             if gap_pct > 20:
                 score += 1
+                factors.append(f"wide {metric.replace('_', ' ')} gap ({gap_pct:.0f}% > 20%)")
 
         # Gap percentage factor
         if gap_pct > 50:
             score += 1
+            factors.append(f"extreme gap size ({gap_pct:.0f}% > 50%)")
         elif gap_pct < 10:
             score -= 1
+            factors.append(f"small gap size ({gap_pct:.0f}% < 10%)")
 
-        # Map score to difficulty
+        return score, factors
+
+    def _assess_difficulty(
+        self, gap: PerformanceGap, roi_estimate: ROIEstimate
+    ) -> Literal["low", "medium", "high"]:
+        """Assess implementation difficulty (low / medium / high)."""
+        score, _ = self._difficulty_factors(gap, roi_estimate)
         if score <= 0:
             return "low"
         elif score == 1:
             return "medium"
         else:
             return "high"
+
+    def _explain_difficulty(
+        self,
+        gap: PerformanceGap,
+        roi_estimate: ROIEstimate,
+        difficulty: Literal["low", "medium", "high"],
+    ) -> str:
+        """Render a one-line rationale for the difficulty rating (T6 drill-down).
+
+        Cites the cost/gap-size factors that pushed the score up or down, so the
+        UI can answer "why is this rated medium effort?". Falls back to a baseline
+        statement when no factor moved the needle.
+        """
+        _, factors = self._difficulty_factors(gap, roi_estimate)
+        if factors:
+            return f"Rated {difficulty} implementation effort: {'; '.join(factors)}."
+        return (
+            f"Rated {difficulty} implementation effort: no cost or gap-size factor "
+            "pushed it above the baseline."
+        )
 
     def _generate_action(
         self,
@@ -406,75 +470,32 @@ class PrioritizerNode:
     def _identify_quick_wins(
         self, opportunities: List[PrioritizedOpportunity]
     ) -> List[PrioritizedOpportunity]:
-        """Identify quick win opportunities.
+        """Highlight list of quick-win opportunities (category == "quick_win").
 
-        Criteria:
-        - Low implementation difficulty
-        - ROI > 1.0
-        - Cost < $10k (optional, for clarity)
-
-        Args:
-            opportunities: All prioritized opportunities
-
-        Returns:
-            List of quick wins (sorted by ROI)
+        A filter on the already-classified, already-partition-sorted survivors —
+        so order (on-label first, ROI desc) is preserved without re-sorting. The
+        ``quick_win`` category itself is defined by the shared classification SSOT
+        (low difficulty AND ROI > 1).
         """
-        quick_wins = [
-            opp
-            for opp in opportunities
-            if opp["implementation_difficulty"] == "low"
-            and opp["roi_estimate"]["expected_roi"] > 1.0
-        ]
+        return [opp for opp in opportunities if opp.get("category") == "quick_win"]
 
-        # Sort by ROI, but keep off-label opportunities demoted below on-label ones so
-        # the quick-wins list respects the same partition as prioritized_opportunities
-        # (off_label defaults False => identical to the prior ROI-descending sort when
-        # the label-gater is off).
-        quick_wins.sort(
-            key=lambda o: (
-                o["roi_estimate"].get("off_label", False),
-                -o["roi_estimate"]["expected_roi"],
-            )
-        )
-
-        return quick_wins
+    def _identify_steady_plays(
+        self, opportunities: List[PrioritizedOpportunity]
+    ) -> List[PrioritizedOpportunity]:
+        """Highlight list of steady-play opportunities (category == "steady_play")
+        — the meaningful middle ground (neither quick win nor strategic bet)."""
+        return [opp for opp in opportunities if opp.get("category") == "steady_play"]
 
     def _identify_strategic_bets(
         self, opportunities: List[PrioritizedOpportunity]
     ) -> List[PrioritizedOpportunity]:
-        """Identify strategic bet opportunities.
+        """Highlight list of strategic-bet opportunities (category == "strategic_bet").
 
-        Criteria:
-        - High implementation difficulty
-        - ROI > 2.0 (high impact)
-        - Cost > $50k (significant investment)
-
-        Args:
-            opportunities: All prioritized opportunities
-
-        Returns:
-            List of strategic bets (sorted by ROI)
+        ``strategic_bet`` is defined by the shared classification SSOT (high
+        difficulty AND ROI > 2 AND cost > $50k) — so a merely high-difficulty
+        opportunity is NEVER a phantom strategic bet here.
         """
-        strategic_bets = [
-            opp
-            for opp in opportunities
-            if opp["implementation_difficulty"] == "high"
-            and opp["roi_estimate"]["expected_roi"] > 2.0
-            and opp["roi_estimate"]["estimated_cost_to_close"] > 50000
-        ]
-
-        # Sort by ROI, but keep off-label opportunities demoted below on-label ones so
-        # the strategic-bets list respects the same partition as prioritized_opportunities
-        # (off_label defaults False => identical to the prior ROI-descending sort when
-        # the label-gater is off).
-        strategic_bets.sort(
-            key=lambda o: (
-                o["roi_estimate"].get("off_label", False),
-                -o["roi_estimate"]["expected_roi"],
-            )
-        )
-
-        return strategic_bets
+        return [opp for opp in opportunities if opp.get("category") == "strategic_bet"]
 
     # =========================================================================
     # V4.4: Causal Evidence Filtering Methods
@@ -591,15 +612,12 @@ class PrioritizerNode:
                 adjusted_roi_estimate["causal_adjustment_factor"] = adjustment_factor
                 adjusted_roi_estimate["causal_adjustment_reason"] = adjustment_reason
 
-                # Create adjusted opportunity
-                adjusted_opp: PrioritizedOpportunity = {
-                    "rank": opp["rank"],
-                    "gap": opp["gap"],
-                    "roi_estimate": cast(ROIEstimate, adjusted_roi_estimate),
-                    "recommended_action": opp["recommended_action"],
-                    "implementation_difficulty": opp["implementation_difficulty"],
-                    "time_to_impact": opp["time_to_impact"],
-                }
+                # Create adjusted opportunity. Spread the original so non-ROI keys
+                # (e.g. difficulty_rationale) are carried through, not dropped.
+                adjusted_opp = cast(
+                    PrioritizedOpportunity,
+                    {**opp, "roi_estimate": cast(ROIEstimate, adjusted_roi_estimate)},
+                )
                 adjusted_opportunities.append(adjusted_opp)
             else:
                 adjusted_opportunities.append(opp)
@@ -705,14 +723,12 @@ class PrioritizerNode:
                 adjusted_roi_estimate["instrument_adjustment_factor"] = adjustment_factor
                 adjusted_roi_estimate["instrument_adjustment_reason"] = adjustment_reason
 
-                adjusted_opp: PrioritizedOpportunity = {
-                    "rank": opp["rank"],
-                    "gap": opp["gap"],
-                    "roi_estimate": cast(ROIEstimate, adjusted_roi_estimate),
-                    "recommended_action": opp["recommended_action"],
-                    "implementation_difficulty": opp["implementation_difficulty"],
-                    "time_to_impact": opp["time_to_impact"],
-                }
+                # Spread the original so non-ROI keys (e.g. difficulty_rationale)
+                # are carried through, not dropped.
+                adjusted_opp = cast(
+                    PrioritizedOpportunity,
+                    {**opp, "roi_estimate": cast(ROIEstimate, adjusted_roi_estimate)},
+                )
                 adjusted_opportunities.append(adjusted_opp)
             else:
                 adjusted_opportunities.append(opp)

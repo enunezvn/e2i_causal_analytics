@@ -129,6 +129,14 @@ class PrioritizedOpportunity(TypedDict):
     implementation_difficulty: Literal["low", "medium", "high"]
     time_to_impact: str  # Expected time to see results (e.g., "1-3 months")
 
+    # T6: 3-bucket category (quick_win | steady_play | strategic_bet) stamped by
+    # the prioritizer via the shared opportunity_classification SSOT. NO "other".
+    category: NotRequired[str]
+    # T6: human-readable explanation of the difficulty rating (the cost/gap-size
+    # factors that drove the score) — previously computed-then-discarded; now
+    # surfaced for the drill-down drawer.
+    difficulty_rationale: NotRequired[str]
+
 
 class GapAnalyzerState(TypedDict):
     """Complete LangGraph state for Gap Analyzer agent workflow.
@@ -198,7 +206,13 @@ class GapAnalyzerState(TypedDict):
     # === PRIORITIZATION OUTPUTS (from prioritizer node) ===
     prioritized_opportunities: Optional[List[PrioritizedOpportunity]]  # All opportunities ranked
     quick_wins: Optional[List[PrioritizedOpportunity]]  # Low difficulty, high ROI (top 5)
+    # T6: the meaningful middle ground — solid earners that are neither quick wins
+    # nor strategic bets (medium effort, or high-effort-but-modest bets).
+    steady_plays: NotRequired[Optional[List[PrioritizedOpportunity]]]
     strategic_bets: Optional[List[PrioritizedOpportunity]]  # High impact, high difficulty (top 5)
+    # T6: count of opportunities suppressed as low-value noise (ROI <= break-even);
+    # surfaced for transparency so an empty/short list never looks broken.
+    suppressed_count: NotRequired[int]
 
     # === SUMMARY (from formatter node or final output) ===
     executive_summary: Optional[str]  # Executive-level summary

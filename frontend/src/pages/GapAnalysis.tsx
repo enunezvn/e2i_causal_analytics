@@ -41,6 +41,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Select,
@@ -59,6 +66,15 @@ import {
   useGapHealth,
   useRunGapAnalysisAndWait,
 } from '@/hooks/api';
+import type { PrioritizedOpportunity } from '@/types/gaps';
+import {
+  BUCKET_META,
+  bucketMeta,
+  explainBucket,
+  explainRank,
+  explainTimeline,
+  formatValueByDriver,
+} from '@/lib/gaps/interpret';
 
 // =============================================================================
 // CONSTANTS
@@ -101,22 +117,13 @@ const DIFFICULTY_LABELS: Record<string, string> = {
   high: 'High',
 };
 
-// Curated list-view category — the prioritizer's AUTHORITATIVE Quick Win /
-// Strategic Bet framework, set by the list endpoint (`category` on each
-// opportunity) by membership in the run's curated quick_wins/strategic_bets
-// lists. This is the PRIMARY card label. It is NOT derived from
-// implementation_difficulty: a high-difficulty opportunity is a strategic_bet
-// only if it actually cleared the ROI/cost thresholds.
-const CATEGORY_LABELS: Record<string, string> = {
-  quick_win: 'Quick Win',
-  strategic_bet: 'Strategic Bet',
-  other: 'Other',
-};
-const CATEGORY_COLORS: Record<string, string> = {
-  quick_win: '#10b981',     // green — low effort, high ROI
-  strategic_bet: '#8b5cf6', // purple — high impact, high effort
-  other: '#6b7280',         // neutral
-};
+// Curated list-view category — the 3-bucket scheme (Quick Win / Steady Play /
+// Strategic Bet) set by the list endpoint via the shared classification SSOT.
+// This is the PRIMARY card label. There is NO residual "other": every surfaced
+// opportunity is exactly one of the three. Labels/colors come from BUCKET_META
+// (lib/gaps/interpret) so the page, the drill-down, and the charts agree.
+// Default bucket when a (pre-T6) row carries no category.
+const DEFAULT_CATEGORY = 'steady_play';
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -128,13 +135,13 @@ function formatCurrency(value: number): string {
   return `$${value.toFixed(0)}`;
 }
 
-// Primary curated-category badge (Quick Win / Strategic Bet / Other).
+// Primary curated-category badge (Quick Win / Steady Play / Strategic Bet).
 function getCategoryBadge(category?: string) {
-  const key = category ?? 'other';
-  const color = CATEGORY_COLORS[key] || '#6b7280';
+  const meta = bucketMeta(category ?? DEFAULT_CATEGORY);
+  const color = meta.color;
   return (
     <Badge style={{ backgroundColor: `${color}20`, color, borderColor: color }} variant="outline">
-      {CATEGORY_LABELS[key] || key}
+      {meta.label}
     </Badge>
   );
 }
@@ -167,6 +174,8 @@ function GapAnalysis() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // T6 drill-down: the opportunity whose "why" drawer is open (null = closed).
+  const [drillOpp, setDrillOpp] = useState<PrioritizedOpportunity | null>(null);
 
   const isAllBrands = selectedBrand === ALL_BRANDS;
 
@@ -187,7 +196,11 @@ function GapAnalysis() {
   const opportunities = opportunitiesData?.opportunities ?? [];
   const totalAddressableValue = opportunitiesData?.total_addressable_value ?? 0;
   const quickWinsCount = opportunitiesData?.quick_wins_count ?? 0;
+  const steadyPlaysCount = opportunitiesData?.steady_plays_count ?? 0;
   const strategicBetsCount = opportunitiesData?.strategic_bets_count ?? 0;
+  // T6 transparency: how many low-value (ROI <= break-even) opportunities the
+  // backend hid from this run, so a short/empty list never looks broken.
+  const suppressedCount = opportunitiesData?.suppressed_count ?? 0;
 
   // F-010: surface backend-reported warnings from the analysis mutation
   // (the opportunities-list endpoint does not currently return warnings —
@@ -209,14 +222,15 @@ function GapAnalysis() {
       avgROI: avgROI.toFixed(1),
       avgConfidence: (avgConfidence * 100).toFixed(0),
       quickWins: quickWinsCount,
+      steadyPlays: steadyPlaysCount,
       strategicBets: strategicBetsCount,
     };
-  }, [opportunities, quickWinsCount, strategicBetsCount]);
+  }, [opportunities, quickWinsCount, steadyPlaysCount, strategicBetsCount]);
 
   // Filter opportunities
   const filteredOpportunities = useMemo(() => {
     return opportunities.filter((opp) => {
-      const matchesCategory = categoryFilter === 'all' || (opp.category ?? 'other') === categoryFilter;
+      const matchesCategory = categoryFilter === 'all' || (opp.category ?? DEFAULT_CATEGORY) === categoryFilter;
       const matchesSearch =
         searchQuery === '' ||
         opp.recommended_action.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -231,15 +245,15 @@ function GapAnalysis() {
   const roiByTypeData = useMemo(() => {
     const grouped: Record<string, { total: number; count: number }> = {};
     opportunities.forEach((opp) => {
-      const cat = opp.category ?? 'other';
+      const cat = opp.category ?? DEFAULT_CATEGORY;
       if (!grouped[cat]) grouped[cat] = { total: 0, count: 0 };
       grouped[cat].total += opp.roi_estimate.expected_roi;
       grouped[cat].count += 1;
     });
     return Object.entries(grouped).map(([category, { total, count }]) => ({
-      type: CATEGORY_LABELS[category] || category,
+      type: bucketMeta(category).label,
       avgROI: total / count,
-      color: CATEGORY_COLORS[category] || '#6b7280',
+      color: bucketMeta(category).color,
     }));
   }, [opportunities]);
 
@@ -420,7 +434,7 @@ function GapAnalysis() {
       )}
 
       {/* Overview Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4 mb-8">
         <KPICard
           title="Total Addressable"
           value={formatCurrency(totalAddressableValue)}
@@ -448,6 +462,13 @@ function GapAnalysis() {
           value={metrics.quickWins}
           status="healthy"
           description="Low effort, high ROI"
+          size="sm"
+        />
+        <KPICard
+          title="Steady Plays"
+          value={metrics.steadyPlays}
+          status="healthy"
+          description="Dependable middle ground"
           size="sm"
         />
         <KPICard
@@ -506,12 +527,23 @@ function GapAnalysis() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Opportunities</SelectItem>
-                <SelectItem value="quick_win">Quick Wins</SelectItem>
-                <SelectItem value="strategic_bet">Strategic Bets</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
+                <SelectItem value="quick_win">{BUCKET_META.quick_win.label}s</SelectItem>
+                <SelectItem value="steady_play">{BUCKET_META.steady_play.label}s</SelectItem>
+                <SelectItem value="strategic_bet">{BUCKET_META.strategic_bet.label}s</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          {/* T6 transparency: low-value opportunities the backend suppressed
+              (ROI at or below break-even) — shown so a short/empty list is
+              never mistaken for a broken page. */}
+          {suppressedCount > 0 && (
+            <p className="text-xs text-muted-foreground" data-testid="suppressed-notice">
+              {suppressedCount} low-value{' '}
+              {suppressedCount === 1 ? 'opportunity' : 'opportunities'} hidden (ROI at or below
+              break-even — revenue would not cover the cost to close).
+            </p>
+          )}
 
           {/* Opportunity Cards */}
           {opportunitiesLoading ? (
@@ -521,7 +553,20 @@ function GapAnalysis() {
           ) : (
             <div className="space-y-4">
               {filteredOpportunities.map((opp) => (
-                <Card key={opp.gap.gap_id} className="hover:shadow-md transition-shadow">
+                <Card
+                  key={opp.gap.gap_id}
+                  className="hover:shadow-md transition-shadow cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View details for ${opp.recommended_action}`}
+                  onClick={() => setDrillOpp(opp)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setDrillOpp(opp);
+                    }
+                  }}
+                >
                   <CardContent className="py-4">
                     <div className="flex flex-col lg:flex-row lg:items-center gap-4">
                       {/* Rank */}
@@ -764,6 +809,115 @@ function GapAnalysis() {
         </TabsContent>
       </Tabs>
       )}
+
+      {/* T6 drill-down: click an opportunity card to understand WHY it's ranked,
+          bucketed, and timed the way it is — plus the full ROI rationale. */}
+      <Dialog open={!!drillOpp} onOpenChange={(open) => { if (!open) setDrillOpp(null); }}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          {drillOpp && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2 flex-wrap">
+                  <span className="text-primary">#{drillOpp.rank}</span>
+                  {getCategoryBadge(drillOpp.category)}
+                  <span className="text-base font-semibold">{drillOpp.recommended_action}</span>
+                </DialogTitle>
+                <DialogDescription>{explainBucket(drillOpp)}</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4 text-sm">
+                <section>
+                  <h4 className="font-medium mb-1">Why this rank</h4>
+                  <p className="text-muted-foreground">{explainRank(drillOpp, opportunities)}</p>
+                </section>
+
+                <section>
+                  <h4 className="font-medium mb-1">Why this timeline</h4>
+                  <p className="text-muted-foreground">{explainTimeline(drillOpp)}</p>
+                </section>
+
+                <section>
+                  <h4 className="font-medium mb-1">ROI breakdown</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <p className="text-muted-foreground text-xs">Revenue impact</p>
+                      <p className="font-semibold text-emerald-600">
+                        {formatCurrency(drillOpp.roi_estimate.estimated_revenue_impact)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs">Investment</p>
+                      <p className="font-semibold text-amber-600">
+                        {formatCurrency(drillOpp.roi_estimate.estimated_cost_to_close)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs">Expected ROI</p>
+                      <p className="font-semibold text-primary">
+                        {drillOpp.roi_estimate.expected_roi.toFixed(1)}x
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs">Risk-adjusted ROI</p>
+                      <p className="font-semibold">
+                        {drillOpp.roi_estimate.risk_adjusted_roi.toFixed(1)}x
+                      </p>
+                    </div>
+                  </div>
+                  {typeof drillOpp.roi_estimate.total_risk_adjustment === 'number' && (
+                    <p className="text-muted-foreground text-xs mt-2">
+                      Risk adjustment retains{' '}
+                      {(drillOpp.roi_estimate.total_risk_adjustment * 100).toFixed(0)}% of the
+                      unadjusted value.
+                    </p>
+                  )}
+                </section>
+
+                {formatValueByDriver(drillOpp.roi_estimate.value_by_driver).length > 0 && (
+                  <section>
+                    <h4 className="font-medium mb-1">Revenue by value driver</h4>
+                    <ul className="space-y-1">
+                      {formatValueByDriver(drillOpp.roi_estimate.value_by_driver).map((row) => (
+                        <li key={row.key} className="flex justify-between text-muted-foreground">
+                          <span>{row.label}</span>
+                          <span className="font-medium">{formatCurrency(row.value)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                )}
+
+                {drillOpp.roi_estimate.assumptions &&
+                  drillOpp.roi_estimate.assumptions.length > 0 && (
+                    <section>
+                      <h4 className="font-medium mb-1">Assumptions</h4>
+                      <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
+                        {drillOpp.roi_estimate.assumptions.map((a, i) => (
+                          <li key={i}>{a}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                <section>
+                  <h4 className="font-medium mb-1">Gap detail</h4>
+                  <p className="text-muted-foreground">
+                    {drillOpp.gap.metric.toUpperCase()} — {drillOpp.gap.segment}:{' '}
+                    {drillOpp.gap.segment_value}. Current {drillOpp.gap.current_value} vs target{' '}
+                    {drillOpp.gap.target_value} ({drillOpp.gap.gap_percentage.toFixed(1)}% gap).
+                  </p>
+                  <CompetitorDensityBadge
+                    competitor_products_count={drillOpp.roi_estimate.competitor_products_count}
+                    competitor_density_label={drillOpp.roi_estimate.competitor_density_label}
+                    competitor_drug_names={drillOpp.roi_estimate.competitor_drug_names}
+                    className="mt-2"
+                  />
+                </section>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
