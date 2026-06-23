@@ -687,3 +687,8 @@ class TestAcceptPathPreservesCuratedConfounders:
         assert ("adopted", "treatment_arm") not in edges
         # Provenance honesty: discovered DAG discarded -> report 'domain_knowledge'.
         assert cg.get("discovery_dag_overridden") is True
+        # And NO discovered structure leaks through: the ACCEPT branch never
+        # populates augmented_edges (only AUGMENT does), so the override surfaces an
+        # empty discovered-edge set — never the reversed/discarded topology. Locks
+        # the invariant so a future edit can't surface the corrupt edges.
+        assert cg.get("augmented_edges") == []
