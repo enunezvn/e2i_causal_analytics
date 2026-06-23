@@ -526,7 +526,12 @@ class GapAnalyzerAgent(SkillsMixin):
         return {
             "prioritized_opportunities": [],
             "quick_wins": [],
+            # T6: keep the output shape identical on success and failure branches so
+            # consumers can treat these as always-present (a failed run has no
+            # surviving plays and suppressed nothing).
+            "steady_plays": [],
             "strategic_bets": [],
+            "suppressed_count": 0,
             "total_addressable_value": 0.0,
             "total_gap_value": 0.0,
             "segments_analyzed": 0,

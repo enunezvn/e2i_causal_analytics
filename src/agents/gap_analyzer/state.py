@@ -329,7 +329,12 @@ GapAnalyzerOutput = TypedDict(
     {
         "prioritized_opportunities": List[PrioritizedOpportunity],
         "quick_wins": List[PrioritizedOpportunity],
+        # T6: the surfaced middle bucket and the count of value-destroying
+        # candidates hidden by break-even suppression. Both are always emitted by
+        # _build_output, so the typed contract must declare them.
+        "steady_plays": List[PrioritizedOpportunity],
         "strategic_bets": List[PrioritizedOpportunity],
+        "suppressed_count": int,
         "total_addressable_value": float,
         "total_gap_value": float,
         "segments_analyzed": int,
