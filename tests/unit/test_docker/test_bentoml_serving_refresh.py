@@ -289,6 +289,19 @@ def _rolled_services(rollback_up: str | None) -> set[str]:
     return {tok for tok in rollback_up.split() if tok in APP_SERVICES or tok == "bentoml"}
 
 
+def _rolled_services_all(calls: list[str], idx: int) -> set[str]:
+    """Union of rolled-back services across EVERY `up -d` after the checkout.
+
+    The #563 rollback splits the GHCR app/frontend tier (pulled, --no-build) from the
+    locally-built sidecars like bentoml (--build) into SEPARATE `up`s, so the app tier
+    and bentoml land in different `up` lines — aggregate across all of them."""
+    out: set[str] = set()
+    for c in calls[idx + 1 :]:
+        if "up -d" in c:
+            out |= _rolled_services(c)
+    return out
+
+
 def test_bentoml_health_failure_rolls_back_app_and_bentoml_and_exits_1(tmp_path: Path) -> None:
     """If the recreated bentoml never reaches readiness at /model_info, the deploy must
     roll the APP TIER + bentoml back to PREV_SHA and FAIL loud (exit 1). Rolling only
@@ -304,10 +317,13 @@ def test_bentoml_health_failure_rolls_back_app_and_bentoml_and_exits_1(tmp_path:
         "a failed bentoml readiness gate must roll back via `git checkout " + PREV_SHA + "` "
         "AFTER the forward recreate. Calls:\n" + "\n".join(calls)
     )
-    rolled = _rolled_services(_first_up_after(calls, ci))
+    rolled = _rolled_services_all(calls, ci)
     assert "bentoml" in rolled and APP_SERVICES <= rolled, (
         "a failed bentoml gate must roll the app tier + bentoml back to PREV_SHA "
-        "(coherent client+server); got: " + str(rolled) + "\nCalls:\n" + "\n".join(calls)
+        "(coherent client+server, aggregated across the split app/sidecar ups); got: "
+        + str(rolled)
+        + "\nCalls:\n"
+        + "\n".join(calls)
     )
     assert code == 1, f"a failed bentoml refresh must exit 1; got {code}\n{out}"
 
@@ -322,12 +338,10 @@ def test_bentoml_up_failure_rolls_back_app_and_bentoml_and_exits_1(tmp_path: Pat
     assert ci is not None, "a failed bentoml `up` must roll back to PREV_SHA. Calls:\n" + "\n".join(
         calls
     )
-    rolled = _rolled_services(_first_up_after(calls, ci))
+    rolled = _rolled_services_all(calls, ci)
     assert "bentoml" in rolled and APP_SERVICES <= rolled, (
-        "the rollback must recreate the app tier + bentoml at PREV_SHA; got: "
-        + str(rolled)
-        + "\nCalls:\n"
-        + "\n".join(calls)
+        "the rollback must recreate the app tier + bentoml at PREV_SHA (aggregated "
+        "across the split app/sidecar ups); got: " + str(rolled) + "\nCalls:\n" + "\n".join(calls)
     )
     assert code == 1, f"a failed bentoml `up` must exit 1; got {code}\n{out}"
 

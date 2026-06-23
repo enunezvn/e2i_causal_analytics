@@ -899,3 +899,79 @@ def test_heavy_offload_flag_not_baked_on_in_any_compose():
     assert not offenders, (
         "HEAVY_OFFLOAD_ENABLED is baked truthy (P2 must ship dark) in: " + ", ".join(offenders)
     )
+
+
+# =============================================================================
+# 2026-06-23 deploy-failure class — the BASE prod compose bentoml service must
+# carry a gold-standard serving bundle source (not just the dev overlay).
+# =============================================================================
+# INCIDENT (deploy run 28055627598, batch T6 #1092 + T5 #1091 + T8 #1090): T5's
+# change-gated bentoml force-recreate ran under the BASE prod compose — pick_overlay()
+# in deploy.yml returns "" once the frontend Dockerfile has an `AS production` stage
+# (#528-B), so NO overlay is layered. But the base bentoml service mounts neither the
+# shap_serving cohort bundles NOR the gold_standard_eval package. The recreated
+# container booted in DEGRADED mode (available_models=[], model_loaded=false), failed
+# the deploy's POST /model_info readiness gate ("bentoml has no cohort bundles loaded
+# at /model_info"), and the ensuing rollback ran the OOM-prone frontend React build
+# (the #563 double-fault), failing the deploy. The 12 cohort bundles had only ever
+# been served by the dev-overlay container e2i_bentoml_dev (docker-compose.dev.yml),
+# which binds them; deploys never recreated bentoml until T5 added that step. So the
+# base service that the deploy actually recreates MUST be self-sufficient for serving.
+#
+# These guards pin the declared mounts; the faithful runtime proof is the deploy's
+# own /model_info readiness gate against a real recreated container.
+
+# Substring form is robust to the compose `../`-relative source prefix and the
+# trailing `:ro` access mode (`../data/...:/home/bentoml/...:ro`).
+BENTOML_BUNDLE_MOUNT = "data/ml_artifacts/shap_serving:/home/bentoml/data/ml_artifacts/shap_serving"
+BENTOML_GOLDSTD_MOUNT = "src/mlops/gold_standard_eval:/home/bentoml/src/mlops/gold_standard_eval"
+
+
+def _bentoml_volumes(compose_path: Path) -> list[str]:
+    svc = _services(_load(compose_path)).get("bentoml") or {}
+    return [str(v) for v in (svc.get("volumes") or [])]
+
+
+def test_base_bentoml_binds_shap_serving_bundles():
+    """The deploy force-recreates bentoml under the BASE prod compose (no overlay,
+    #528-B), so the base bentoml service must bind the shap_serving bundle dir — else
+    a recreated container FS-discovers ZERO cohort bundles and boots degraded (the
+    2026-06-23 deploy-failure root cause). The serving FS fallback
+    (_discover_goldstd_bundles_from_fs in scripts/bentoml/e2i_serving_service.py) walks
+    ``data/ml_artifacts/shap_serving`` relative to the /home/bentoml workdir, so the
+    mount target must land exactly there."""
+    vols = "\n".join(_bentoml_volumes(BASE_COMPOSE))
+    assert BENTOML_BUNDLE_MOUNT in vols, (
+        "base bentoml must bind the shap_serving bundle dir at "
+        "/home/bentoml/data/ml_artifacts/shap_serving so a deploy-recreated prod "
+        "container can serve the 12 cohort bundles (it boots degraded with 0 models "
+        f"otherwise — the deploy /model_info gate then fails). volumes=\n{vols}"
+    )
+
+
+def test_base_bentoml_binds_gold_standard_eval_for_unpickling():
+    """The cohort bundles pickle a FeatureBuilder (src.mlops.gold_standard_eval.
+    feature_builder; its only dep cohort_spec also lives in that package). The prod
+    bentoml image does NOT bake gold_standard_eval, so pickle.load raises
+    ModuleNotFoundError and EVERY bundle is silently skipped (0 models) unless the
+    package is mounted at the matching import path. Bind it read-only."""
+    vols = "\n".join(_bentoml_volumes(BASE_COMPOSE))
+    assert BENTOML_GOLDSTD_MOUNT in vols, (
+        "base bentoml must bind src/mlops/gold_standard_eval at "
+        "/home/bentoml/src/mlops/gold_standard_eval so pickle.load can import "
+        "FeatureBuilder+cohort_spec to deserialize the bundles (unpickle "
+        f"ModuleNotFoundError -> 0 models otherwise). volumes=\n{vols}"
+    )
+
+
+def test_base_bentoml_serving_binds_are_read_only():
+    """Both serving binds are READ-ONLY: bentoml serves from them, never writes. A
+    writable bind would let the serving container mutate the repo's gold_standard_eval
+    source or the materialized bundles (which sync_goldstd_serving owns)."""
+    vols = _bentoml_volumes(BASE_COMPOSE)
+    for needle in (BENTOML_BUNDLE_MOUNT, BENTOML_GOLDSTD_MOUNT):
+        entry = next((v for v in vols if needle in v), None)
+        assert entry is not None, f"missing bentoml serving bind for {needle}; volumes={vols}"
+        assert entry.rstrip().endswith(":ro"), (
+            f"bentoml serving bind must be read-only (:ro); got {entry!r}"
+        )
