@@ -624,3 +624,66 @@ class TestAcceptPathPreservesCuratedConfounders:
         # 'discovered'. The override flag tells the API's dag_source classifier to
         # report 'domain_knowledge', not 'discovered'.
         assert cg.get("discovery_dag_overridden") is True
+
+    @pytest.mark.asyncio
+    async def test_accept_reversed_treatment_outcome_edge_falls_back_and_adjusts(self, node):
+        """ACCEPT whose discovered DAG orients the estimand edge BACKWARDS
+        (``outcome -> treatment``) must fall back to the manual DAG.
+
+        This is the EXACT live failure (PR #1085 follow-up): guided constraint-based
+        discovery on binary data oriented ``adopted -> treatment_arm`` (outcome ->
+        treatment) while STILL recovering the curated confounder's common-cause edges
+        (``centrality_z -> treatment_arm`` AND ``centrality_z -> adopted``). The
+        confounder is therefore placed cleanly (no half-edge, ``_add_curated_confounder_edges``
+        reports nothing unplaced), so the prior fallback does NOT trigger — yet with
+        ``outcome`` a direct parent of ``treatment`` the two are ADJACENT, so the
+        backdoor criterion can never d-separate them: ``_find_adjustment_sets`` returns
+        ``[[]]`` and the estimate is left CONFOUNDED (live: treatment_arm->adopted =
+        naive 0.289, run fails on 0-feature estimators). The estimand edge
+        ``treatment -> outcome`` also cannot be added (it would close a 2-cycle).
+
+        The fix: a discovered ``outcome -> treatment`` edge contradicts the anchored
+        roles of the user's question, so the discovered DAG is discarded for the manual
+        DAG (treatment -> outcome with each curated confounder a clean common cause ->
+        a proper, non-empty backdoor), and the provenance override flag is set.
+        """
+        state = {
+            "query": "Effect of treatment_arm on adopted?",
+            "treatment_var": "treatment_arm",
+            "outcome_var": "adopted",
+            "confounders": ["centrality_z"],
+            "auto_discover": True,
+        }
+        # Discovery reversed the estimand edge (adopted -> treatment_arm) but DID
+        # recover centrality_z's common-cause edges — the exact live DAG.
+        discovery = self._accept_discovery(
+            [
+                ("adopted", "treatment_arm"),
+                ("centrality_z", "treatment_arm"),
+                ("centrality_z", "adopted"),
+            ]
+        )
+
+        with patch.object(node, "_run_discovery", new_callable=AsyncMock) as mock_discovery:
+            mock_discovery.return_value = discovery
+            result = await node.execute(state)
+
+        cg = result["causal_graph"]
+        adjustment_sets = cg["adjustment_sets"]
+        # The reversed estimand edge must NOT collapse the backdoor to empty.
+        assert adjustment_sets != [[]], (
+            "reversed outcome->treatment edge left treatment/outcome adjacent -> "
+            "empty backdoor (silently confounded) — the live regression"
+        )
+        assert any("centrality_z" in s for s in adjustment_sets), (
+            f"centrality_z missing from adjustment sets {adjustment_sets}"
+        )
+        edges = cg["edges"]
+        # Fallback manual DAG: estimand oriented correctly, confounder a common cause,
+        # the reversed orientation discarded.
+        assert ("treatment_arm", "adopted") in edges
+        assert ("centrality_z", "treatment_arm") in edges
+        assert ("centrality_z", "adopted") in edges
+        assert ("adopted", "treatment_arm") not in edges
+        # Provenance honesty: discovered DAG discarded -> report 'domain_knowledge'.
+        assert cg.get("discovery_dag_overridden") is True

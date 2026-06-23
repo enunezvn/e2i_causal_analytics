@@ -711,6 +711,32 @@ class GraphBuilderNode:
                     dag.add_node(treatment)
                 if outcome not in dag.nodes():
                     dag.add_node(outcome)
+                # Discovery oriented the estimand edge BACKWARDS (outcome->treatment),
+                # contradicting the anchored roles of the user's question. With outcome
+                # a direct PARENT of treatment the two are ADJACENT, so the backdoor
+                # criterion can NEVER d-separate them: _find_adjustment_sets returns an
+                # empty set and the estimate is left CONFOUNDED — and no curated
+                # confounder can rescue an adjacent treatment/outcome (live regression:
+                # treatment_arm->adopted = naive 0.289, run fails on 0-feature
+                # estimators). The estimand edge treatment->outcome also cannot be added
+                # below (it would close a 2-cycle). This is the same class of failure as
+                # an unplaced curated confounder, so take the same remedy: discard the
+                # discovered DAG for the manual domain DAG, which orients
+                # treatment->outcome with every curated confounder a clean common cause
+                # (a proper, non-empty backdoor). Provenance is therefore manual.
+                if treatment and outcome and dag.has_edge(outcome, treatment):
+                    logger.warning(
+                        "Discovery ACCEPT oriented %s->%s (outcome->treatment), "
+                        "contradicting the anchored estimand; falling back to the "
+                        "manual DAG to keep the effect adjustable.",
+                        outcome,
+                        treatment,
+                    )
+                    return (
+                        self._construct_dag(treatment, outcome, confounders),
+                        augmented_edges,
+                        True,  # discovered DAG discarded -> provenance is manual
+                    )
                 # The treatment->outcome edge is the estimand under test (the
                 # user's question). Constraint-based discovery may not DRAW it —
                 # a conditional-independence test can miss a real effect on
