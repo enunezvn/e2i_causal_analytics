@@ -161,7 +161,12 @@ def _value_present(row_json: str, key: str | None) -> bool:
 
 def main() -> int:
     ids = _kpi_ids()
-    assert len(ids) == 44, f"expected 44 KPIs, found {len(ids)}"
+    # Drift-proof sanity check: the enumerated section entries must match the YAML's own
+    # declared summary total (no hardcoded magic number that silently drifts on add/remove).
+    summary_total = yaml.safe_load(open("config/kpi_definitions.yaml"))["summary"]["total_kpis"]
+    assert len(ids) == summary_total, (
+        f"YAML drift: {len(ids)} enumerated KPI entries vs summary.total_kpis={summary_total}"
+    )
     faithful = os.environ.get("E2I_DB_INTEGRATION") == "1"
     mapped = empty = na = 0
     for kid in ids:
