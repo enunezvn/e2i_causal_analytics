@@ -54,8 +54,9 @@ class TestModelTypeTaxonomyReconcile:
             assert m.value in MODEL_FEATURE_REFS, f"missing refs for {m.value}"
 
     def test_goldstd_refs_point_at_raw_covariate_view(self) -> None:
-        """Gold-standard cohorts fetch the 3 RAW KEEP_COLUMNS covariates from
-        the new goldstd_cohort_features view."""
+        """Gold-standard cohorts fetch the 7 RAW _BASE7 covariates from the
+        goldstd_cohort_features view (T9/T11 enrichment): the base 3 plus the 4
+        arm-independent prognostic drivers the enriched models consume."""
         from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
 
         for cohort in ("initiation", "persistence", "discontinuation"):
@@ -64,6 +65,10 @@ class TestModelTypeTaxonomyReconcile:
                 "goldstd_cohort_features:disease_severity",
                 "goldstd_cohort_features:academic_hcp",
                 "goldstd_cohort_features:geographic_region",
+                "goldstd_cohort_features:insurance_type",
+                "goldstd_cohort_features:age_at_diagnosis",
+                "goldstd_cohort_features:comorbidity_burden",
+                "goldstd_cohort_features:prior_therapy_lines",
             ]
 
     def test_get_feature_refs_for_model_returns_goldstd_raw(self) -> None:
@@ -73,6 +78,10 @@ class TestModelTypeTaxonomyReconcile:
             "goldstd_cohort_features:disease_severity",
             "goldstd_cohort_features:academic_hcp",
             "goldstd_cohort_features:geographic_region",
+            "goldstd_cohort_features:insurance_type",
+            "goldstd_cohort_features:age_at_diagnosis",
+            "goldstd_cohort_features:comorbidity_burden",
+            "goldstd_cohort_features:prior_therapy_lines",
         ]
 
 
@@ -294,6 +303,16 @@ class TestGoldstdCohortFamilyMapping:
         assert _goldstd_cohort_family("persistence_kisqali_goldstd_lr_v1") == "persistence"
         assert _goldstd_cohort_family("pnh_discontinuation_goldstd_lr_v1") == "discontinuation"
         assert _goldstd_cohort_family("discontinuation_fabhalta_goldstd_lr_v1") == "discontinuation"
+
+    def test_hcp_adoption_per_brand_names_map_to_family(self) -> None:
+        """The 4th cohort (HCP-grain adoption) must also map to its family, else
+        /explain/models reports ``latest_version: null`` for hcp_adoption even
+        though the 3 ``hcp_adoption_{brand}_goldstd_lr_v1`` models ARE registered."""
+        from src.api.routes.explain import _goldstd_cohort_family
+
+        assert _goldstd_cohort_family("hcp_adoption_remibrutinib_goldstd_lr_v1") == "hcp_adoption"
+        assert _goldstd_cohort_family("hcp_adoption_fabhalta_goldstd_lr_v1") == "hcp_adoption"
+        assert _goldstd_cohort_family("hcp_adoption_kisqali_goldstd_lr_v1") == "hcp_adoption"
 
     def test_non_goldstd_name_returns_none(self) -> None:
         from src.api.routes.explain import _goldstd_cohort_family

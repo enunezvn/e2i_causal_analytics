@@ -2,16 +2,24 @@
 
 The gold-standard cohort models (initiation / persistence / discontinuation ×
 brand, ``*_goldstd_lr_v1``) are trained on a FeatureBuilder-encoded matrix whose
-ONLY raw inputs are the 3 leakage-safe base covariates locked in
-``src/mlops/gold_standard_eval/feature_builder.py`` (``KEEP_COLUMNS``):
+raw inputs are the 7 leakage-safe ``_BASE7`` covariates in
+``src/mlops/gold_standard_eval/cohort_spec.py`` after the T9/T11 DGP enrichment
+(2026-06-21/22):
 
-    disease_severity, academic_hcp, geographic_region
+    disease_severity, academic_hcp, geographic_region,
+    insurance_type, age_at_diagnosis, comorbidity_burden, prior_therapy_lines
 
-This view serves those RAW covariates per ``patient_id`` so the real-time SHAP
-explain route can fetch them from the Feast online store and hand them to the
-BentoML service, which applies the bundled FeatureBuilder (raw -> 9 encoded
-numeric features) before prediction. SHAP then runs over the encoded vector —
-the audit-grade contract.
+(The 4 trailing prognostic drivers are drawn ⊥ treatment_arm so ATE/CATE are
+preserved.) This view serves those RAW covariates per ``patient_id`` so the
+real-time SHAP explain route can fetch them from the Feast online store and hand
+them to the BentoML service, which applies the bundled FeatureBuilder (raw -> 19
+encoded numeric features) before prediction. SHAP then runs over the encoded
+vector — the audit-grade contract. Serving only the base 3 here feeds the
+7-covariate bundle an incomplete vector (the #576 null-trap → 503).
+
+The source window is widened to 2000 days because the synthetic cohort's
+``event_date`` spans ~3 years (2023→2026); a tighter window would silently drop
+older-dated patients from the online store, starving the cohort SHAP sample.
 
 Why a NEW source/view (not the existing ``patient_journey_features``): that view
 serves churn/adherence metrics (``days_on_therapy``, ``adherence_rate`` …) that
@@ -51,13 +59,17 @@ goldstd_cohort_source = PostgreSQLSource(
             created_at,
             disease_severity::DOUBLE PRECISION AS disease_severity,
             academic_hcp::BIGINT AS academic_hcp,
-            geographic_region::VARCHAR AS geographic_region
+            geographic_region::VARCHAR AS geographic_region,
+            insurance_type::VARCHAR AS insurance_type,
+            age_at_diagnosis::BIGINT AS age_at_diagnosis,
+            comorbidity_burden::BIGINT AS comorbidity_burden,
+            prior_therapy_lines::BIGINT AS prior_therapy_lines
         FROM patient_journeys
-        WHERE event_date >= NOW() - INTERVAL '365 days'
+        WHERE event_date >= NOW() - INTERVAL '2000 days'
     """,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_at",
-    description="Gold-standard cohort RAW covariates (KEEP_COLUMNS) for SHAP serving.",
+    description="Gold-standard cohort RAW covariates (_BASE7) for SHAP serving.",
 )
 
 
@@ -86,6 +98,32 @@ goldstd_cohort_features_fv = FeatureView(
             description="Patient geographic region (categorical raw covariate; "
             "one-hot-encoded by the bundled FeatureBuilder).",
         ),
+        # --- T9/T11 enrichment: 4 arm-independent prognostic drivers ---
+        # Added to the patient DGP (2026-06-21/22) and to the _BASE7 cohort spec;
+        # the enriched *_goldstd_lr_v1 models (feature_count=19) consume them, so
+        # the online serving contract MUST expose them or the SHAP explain path
+        # feeds an incomplete vector to the 7-covariate bundle (#576 null-trap).
+        Field(
+            name="insurance_type",
+            dtype=String,
+            description="Insurance access tier (categorical raw covariate; "
+            "one-hot-encoded by the bundled FeatureBuilder).",
+        ),
+        Field(
+            name="age_at_diagnosis",
+            dtype=Int64,
+            description="Patient age at diagnosis (numeric prognostic driver).",
+        ),
+        Field(
+            name="comorbidity_burden",
+            dtype=Int64,
+            description="Comorbidity burden count (numeric prognostic driver).",
+        ),
+        Field(
+            name="prior_therapy_lines",
+            dtype=Int64,
+            description="Number of prior therapy lines (numeric prognostic driver).",
+        ),
     ],
     source=goldstd_cohort_source,
     online=True,
@@ -95,8 +133,10 @@ goldstd_cohort_features_fv = FeatureView(
         "owner": "ml-foundation",
         "pii_category": "pseudonymized",
         "criticality": "high",
-        "feature_set": "KEEP_COLUMNS",
+        "feature_set": "_BASE7",
     },
-    description="RAW leakage-safe covariates (disease_severity, academic_hcp, "
-    "geographic_region) for gold-standard cohort SHAP explanations (#39).",
+    description="RAW leakage-safe _BASE7 covariates (disease_severity, "
+    "academic_hcp, geographic_region, insurance_type, age_at_diagnosis, "
+    "comorbidity_burden, prior_therapy_lines) for gold-standard cohort SHAP "
+    "explanations (#39 + T9/T11 enrichment).",
 )

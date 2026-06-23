@@ -63,6 +63,28 @@ def test_feature_refs_for_model_known_models():
         )
 
 
+def test_patient_goldstd_cohorts_fetch_enriched_base7():
+    """The 3 patient gold-standard cohorts must fetch the 7 ``_BASE7`` raw
+    covariates (T9/T11 enrichment), not just the legacy base 3 — else the
+    7-covariate serving bundle gets an incomplete vector (#576 null-trap) and
+    the live Feature-Importance page silently shows 3 covariates."""
+    from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS
+
+    expected = {
+        "goldstd_cohort_features:disease_severity",
+        "goldstd_cohort_features:academic_hcp",
+        "goldstd_cohort_features:geographic_region",
+        "goldstd_cohort_features:insurance_type",
+        "goldstd_cohort_features:age_at_diagnosis",
+        "goldstd_cohort_features:comorbidity_burden",
+        "goldstd_cohort_features:prior_therapy_lines",
+    }
+    for cohort in ("initiation", "persistence", "discontinuation"):
+        assert set(MODEL_FEATURE_REFS[cohort]) == expected, (
+            f"{cohort} must fetch the 7 _BASE7 covariates; got {MODEL_FEATURE_REFS[cohort]!r}"
+        )
+
+
 def test_explain_route_uses_canonical_registry():
     """``explain.py:_get_feature_refs_for_model`` must return the same
     feature_refs as the canonical registry for known model types,

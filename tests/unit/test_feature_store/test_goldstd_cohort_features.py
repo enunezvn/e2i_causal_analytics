@@ -43,21 +43,44 @@ class TestGoldstdCohortFeatureView:
         assert entity_names == ["patient"]
 
     def test_schema_is_exactly_keep_columns(self) -> None:
-        """The view serves EXACTLY the 3 RAW KEEP_COLUMNS covariates — no
-        post-index/leakage columns leak into the serving contract."""
+        """The view serves EXACTLY the 7 RAW _BASE7 covariates the enriched
+        gold-standard patient models consume (T9/T11 DGP enrichment) — no
+        post-index/leakage columns leak into the serving contract. The 4 new
+        prognostic drivers are arm-independent (ATE/CATE preserved) and are the
+        ones the live Feature-Importance page must surface alongside the base 3."""
         from features.goldstd_cohort_features import goldstd_cohort_features_fv
 
         served = {f.name for f in goldstd_cohort_features_fv.schema}
-        assert served == {"disease_severity", "academic_hcp", "geographic_region"}
+        assert served == {
+            "disease_severity",
+            "academic_hcp",
+            "geographic_region",
+            "insurance_type",
+            "age_at_diagnosis",
+            "comorbidity_burden",
+            "prior_therapy_lines",
+        }
 
     def test_geographic_region_served_as_string(self) -> None:
-        """The categorical covariate is served as a STRING (the FeatureBuilder
-        one-hot-encodes it), not coerced to a numeric type."""
+        """The categorical covariates are served as STRINGs (the FeatureBuilder
+        one-hot-encodes them), not coerced to a numeric type."""
         from feast.types import String
         from features.goldstd_cohort_features import goldstd_cohort_features_fv
 
         by_name = {f.name: f for f in goldstd_cohort_features_fv.schema}
         assert by_name["geographic_region"].dtype == String
+        # insurance_type is also categorical (one-hot -> insurance_type_* columns).
+        assert by_name["insurance_type"].dtype == String
+
+    def test_new_prognostic_drivers_typed_int(self) -> None:
+        """The 3 numeric prognostic drivers are served as Int64 (the
+        FeatureBuilder median-imputes/scales them; they are NOT one-hot)."""
+        from feast.types import Int64
+        from features.goldstd_cohort_features import goldstd_cohort_features_fv
+
+        by_name = {f.name: f for f in goldstd_cohort_features_fv.schema}
+        for col in ("age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines"):
+            assert by_name[col].dtype == Int64, col
 
     def test_view_online_enabled(self) -> None:
         from features.goldstd_cohort_features import goldstd_cohort_features_fv

@@ -52,25 +52,40 @@ MODEL_FEATURE_REFS: Dict[str, List[str]] = {
         "patient_nba_features:response_history",
         "patient_nba_features:timing_preference",
     ],
-    # Gold-standard cohort families (#39): the real ``*_goldstd_lr_v1`` models
-    # consume the 3 RAW leakage-safe KEEP_COLUMNS covariates served by the
-    # ``goldstd_cohort_features`` Feast view (feature_repo/features/
-    # goldstd_cohort_features.py). The served model's bundled FeatureBuilder
-    # one-hot/median-encodes these into the 9 numeric features SHAP runs over.
+    # Gold-standard cohort families (#39 + T9/T11 enrichment): the real
+    # ``*_goldstd_lr_v1`` models consume the 7 RAW leakage-safe ``_BASE7``
+    # covariates served by the ``goldstd_cohort_features`` Feast view
+    # (feature_repo/features/goldstd_cohort_features.py). The served model's
+    # bundled FeatureBuilder one-hot/median-encodes these into the 19 numeric
+    # features SHAP runs over. Fetching only the base 3 here would hand the
+    # 7-covariate bundle an incomplete vector (the #576 null-trap → 503), and
+    # the live Feature-Importance page would show 3 covariates instead of 7.
     "initiation": [
         "goldstd_cohort_features:disease_severity",
         "goldstd_cohort_features:academic_hcp",
         "goldstd_cohort_features:geographic_region",
+        "goldstd_cohort_features:insurance_type",
+        "goldstd_cohort_features:age_at_diagnosis",
+        "goldstd_cohort_features:comorbidity_burden",
+        "goldstd_cohort_features:prior_therapy_lines",
     ],
     "persistence": [
         "goldstd_cohort_features:disease_severity",
         "goldstd_cohort_features:academic_hcp",
         "goldstd_cohort_features:geographic_region",
+        "goldstd_cohort_features:insurance_type",
+        "goldstd_cohort_features:age_at_diagnosis",
+        "goldstd_cohort_features:comorbidity_burden",
+        "goldstd_cohort_features:prior_therapy_lines",
     ],
     "discontinuation": [
         "goldstd_cohort_features:disease_severity",
         "goldstd_cohort_features:academic_hcp",
         "goldstd_cohort_features:geographic_region",
+        "goldstd_cohort_features:insurance_type",
+        "goldstd_cohort_features:age_at_diagnosis",
+        "goldstd_cohort_features:comorbidity_burden",
+        "goldstd_cohort_features:prior_therapy_lines",
     ],
     # HCP-grain gold-standard adoption cohort (#39 multi-model): the per-brand
     # ``hcp_adoption_{brand}_goldstd_lr_v1`` models consume the 5 RAW leakage-safe
