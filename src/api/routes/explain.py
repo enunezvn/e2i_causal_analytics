@@ -559,7 +559,11 @@ def _goldstd_cohort_family(model_name: str) -> Optional[str]:
     if not model_name.endswith("_goldstd_lr_v1"):
         return None
     lowered = model_name.lower()
-    for family in ("initiation", "persistence", "discontinuation"):
+    # ``hcp_adoption`` is the 4th cohort (HCP grain). It MUST be checked — its 3
+    # ``hcp_adoption_{brand}_goldstd_lr_v1`` models are registered just like the
+    # patient cohorts; omitting it made /explain/models report
+    # ``latest_version: null`` for hcp_adoption despite live registry rows.
+    for family in ("initiation", "persistence", "discontinuation", "hcp_adoption"):
         if family in lowered:
             return family
     return None
