@@ -14,7 +14,12 @@ from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
 pytestmark = pytest.mark.heavy_ml  # groups econml import on one worker (pyproject:214)
 
 
-@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.KISQALI])
+# All 3 brands — Fabhalta INCLUDED. Its segment CATE ordering was historically
+# the fragile case (high>med>low held only 2/3 before the T11 latent-CATE boost);
+# leaving it out of the strict-ordering gate let that fragility regress silently.
+# Measured (seed=21, n=3000): Fabhalta high 0.227 > med 0.128 > low 0.036, |ATE
+# err| 0.025 — now locked.
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
 def test_estimators_recover_true_ate_and_cate_ordering(brand):
     cfg = GeneratorConfig(seed=21, n_records=3000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
     df = PatientGenerator(cfg).generate()
