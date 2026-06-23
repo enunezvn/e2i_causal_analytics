@@ -72,6 +72,12 @@ class FormatterNode:
             total_addressable_value = state.get("total_addressable_value", 0.0)
             total_gap_value = state.get("total_gap_value", 0.0)
             segments_analyzed = state.get("segments_analyzed", 0)
+            # T6: how many candidate gaps were detected but suppressed as value-
+            # destroying (ROI <= break-even). When EVERY candidate is a money-loser
+            # the survivor list is legitimately empty — the narrative must say so
+            # honestly ("found N, all below break-even") rather than the misleading
+            # "no gaps identified".
+            suppressed_count = int(state.get("suppressed_count") or 0)
 
             # Generate executive summary
             executive_summary = self._generate_executive_summary(
@@ -81,6 +87,7 @@ class FormatterNode:
                 total_addressable_value=total_addressable_value or 0.0,
                 total_gap_value=total_gap_value or 0.0,
                 segments_analyzed=segments_analyzed,
+                suppressed_count=suppressed_count,
             )
 
             # Extract key insights
@@ -88,6 +95,7 @@ class FormatterNode:
                 prioritized_opportunities=prioritized_opportunities or [],
                 quick_wins=quick_wins or [],
                 strategic_bets=strategic_bets or [],
+                suppressed_count=suppressed_count,
             )
 
             # Calculate total latency
@@ -276,6 +284,7 @@ class FormatterNode:
         total_addressable_value: float,
         total_gap_value: float,
         segments_analyzed: int,
+        suppressed_count: int = 0,
     ) -> str:
         """Generate executive summary.
 
@@ -286,11 +295,24 @@ class FormatterNode:
             total_addressable_value: Total potential revenue
             total_gap_value: Total gap size
             segments_analyzed: Number of segments analyzed
+            suppressed_count: Candidate gaps hidden as value-destroying (ROI <= 0)
 
         Returns:
             Executive summary text
         """
         if not prioritized_opportunities:
+            # T6: distinguish "nothing was found" from "everything found was a
+            # money-loser and was suppressed". Conflating the two would misreport a
+            # deliberate, correct decision as an empty analysis.
+            if suppressed_count > 0:
+                return (
+                    f"Analysis complete. Identified {suppressed_count} candidate "
+                    f"{'gap' if suppressed_count == 1 else 'gaps'} across "
+                    f"{segments_analyzed} segments, but all fall at or below the "
+                    f"break-even ROI threshold (each would cost at least as much to "
+                    f"close as it returns). None are recommended for action; the "
+                    f"value-destroying candidates were suppressed."
+                )
             return (
                 f"Analysis complete. No significant performance gaps identified "
                 f"across {segments_analyzed} segments that meet the minimum threshold."
@@ -336,6 +358,7 @@ class FormatterNode:
         prioritized_opportunities: List[PrioritizedOpportunity],
         quick_wins: List[PrioritizedOpportunity],
         strategic_bets: List[PrioritizedOpportunity],
+        suppressed_count: int = 0,
     ) -> List[str]:
         """Extract key insights from opportunities.
 
@@ -343,6 +366,7 @@ class FormatterNode:
             prioritized_opportunities: All prioritized opportunities
             quick_wins: Quick win opportunities
             strategic_bets: Strategic bet opportunities
+            suppressed_count: Candidate gaps hidden as value-destroying (ROI <= 0)
 
         Returns:
             List of 3-5 key insights
@@ -350,7 +374,14 @@ class FormatterNode:
         insights = []
 
         if not prioritized_opportunities:
-            insights.append("No significant performance gaps detected above threshold")
+            if suppressed_count > 0:
+                insights.append(
+                    f"{suppressed_count} candidate "
+                    f"{'gap was' if suppressed_count == 1 else 'gaps were'} detected "
+                    f"but suppressed as value-destroying (return at or below cost to close)"
+                )
+            else:
+                insights.append("No significant performance gaps detected above threshold")
             return insights
 
         # Insight 1: Top opportunity

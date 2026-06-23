@@ -666,9 +666,16 @@ def _validate_gap_analyzer(output: dict[str, Any]) -> tuple[bool, str]:
     status = output.get("status", "")
 
     if status in ("completed", "success"):
-        # Must identify at least one opportunity
+        # Must identify at least one opportunity — UNLESS every candidate gap was
+        # deliberately suppressed as value-destroying. T6 added break-even
+        # suppression: when ROI <= 0 for ALL detected gaps (e.g. a brand whose
+        # entire run is money-losing), the survivor list is legitimately empty and
+        # "nothing is worth pursuing" IS the correct, actionable answer. The
+        # positive `suppressed_count` signal distinguishes that deliberate decision
+        # from a genuine empty/malfunctioning run, which still fails here.
         opportunities = output.get("prioritized_opportunities", [])
-        if not opportunities:
+        suppressed_count = output.get("suppressed_count", 0) or 0
+        if not opportunities and suppressed_count <= 0:
             return (
                 False,
                 "Completed with no prioritized_opportunities - no gaps identified",
