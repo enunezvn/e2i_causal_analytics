@@ -105,12 +105,8 @@ SPECS = [
             "_calc_source_coverage_hcps",
             "_calc_geographic_consistency",
         ],
-        # #577 WS1-DQ-008: _calc_label_quality is wired to the corpus-level generalized Fleiss κ
-        # over the coherently-reseeded ml_annotations (latent-truth labels), but its faithful
-        # e2e lives in test_577_label_quality_live.py — which capability-gates on its OWN
-        # query_id (data_quality_label_quality, migration 052). Kept out of this shared list
-        # (which gates only on the 044-era causal_metrics_ate) to avoid a FAIL (vs skip) on a
-        # 044-but-not-052 target.
+        # WS1-DQ-008 (_calc_label_quality) was removed in T8 (product decision — a working
+        # metric, κ≈0.76, dropped from the live KPI set), so it is no longer a wired method.
         [],
     ),
     # #577 WS1-MP-009: _calc_feature_drift is wired to the corpus AVG PSI over the coherently-

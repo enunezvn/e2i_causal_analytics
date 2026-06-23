@@ -1,6 +1,6 @@
 """KPI coverage probe (Shard 09).
 
-Maps every one of the 45 KPIs in config/kpi_definitions.yaml to the kpi_query
+Maps every one of the 44 KPIs in config/kpi_definitions.yaml to the kpi_query
 registry query_id (the *_include_synthetic / view variant) that exercises the
 synthetic substrate, runs it against the faithful docker Supabase, and reports
 non-NULL / EMPTY per KPI.
@@ -53,7 +53,7 @@ PROBES: dict[str, tuple[str, str, str | None]] = {
         "max_gap",
     ),
     "WS1-DQ-007": ("data_quality_data_lag", "[]", "median_lag_days"),
-    "WS1-DQ-008": ("data_quality_label_quality", "[]", "iaa_group_id"),
+    # WS1-DQ-008 (Label Quality / IAA) removed in T8 — product decision (working metric).
     "WS1-DQ-009": ("data_quality_time_to_release", "[]", "avg_ttr_hours"),
     # --- WS1 model performance ---
     "WS1-MP-001": ("model_performance_roc_auc_include_synthetic", "[]", "roc_auc"),
@@ -161,7 +161,7 @@ def _value_present(row_json: str, key: str | None) -> bool:
 
 def main() -> int:
     ids = _kpi_ids()
-    assert len(ids) == 45, f"expected 45 KPIs, found {len(ids)}"
+    assert len(ids) == 44, f"expected 44 KPIs, found {len(ids)}"
     faithful = os.environ.get("E2I_DB_INTEGRATION") == "1"
     mapped = empty = na = 0
     for kid in ids:

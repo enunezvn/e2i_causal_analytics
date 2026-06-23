@@ -428,7 +428,7 @@ lineage:
       branches: [master]
       definesObjectTypes: [kpi]
       description: >
-        Materialized from config/kpi_definitions.yaml (45 KPIs, v3.0.0) by
+        Materialized from config/kpi_definitions.yaml (44 KPIs, v3.0.0) by
         tf-curate-kpi-definitions; ids WS1-DQ-001..CM-005 are the stable
         primary keys.
 
@@ -860,7 +860,7 @@ lineage:
     - id: tf-curate-kpi-definitions
       displayName: Curate — KPI definitions from config
       status: proposed
-      codePath: "(Foundry transform over config/kpi_definitions.yaml, 45 KPIs v3.0.0)"
+      codePath: "(Foundry transform over config/kpi_definitions.yaml, 44 KPIs v3.0.0)"
       inputs: []
       outputs: [ds-curated-kpi-definitions]
       trigger: Foundry build (on config change)

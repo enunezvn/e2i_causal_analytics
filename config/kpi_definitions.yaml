@@ -1,7 +1,10 @@
 # E2I Causal Analytics - KPI Definitions V3.0
-# 45 KPIs - 100% Calculable from V3 Schema
+# 44 KPIs - 100% Calculable from V3 Schema
 # (WS1-MP-008 "Fairness Gap (ΔRecall)" removed in #1068 — needs protected-group
-#  fairness_metrics the synthetic substrate does not populate.)
+#  fairness_metrics the synthetic substrate does not populate. WS1-DQ-008
+#  "Label Quality (IAA)" removed in T8 by product decision — a WORKING metric
+#  (corpus Fleiss κ ≈ 0.76) deprioritized from the live KPI set; the DB objects
+#  v_kpi_label_quality + ml_annotations are intentionally retained.)
 
 version: "3.0.0"
 last_updated: "2025-11-28"
@@ -11,13 +14,13 @@ last_updated: "2025-11-28"
 # ═══════════════════════════════════════════════════════════════════
 
 summary:
-  total_kpis: 45
-  direct_calculable: 22
+  total_kpis: 44
+  direct_calculable: 21
   derived_calculable: 23
   gaps: 0
 
   by_workstream:
-    ws1_data_quality: 9
+    ws1_data_quality: 8
     ws1_model_performance: 8
     ws2_triggers: 8
     ws3_business: 10
@@ -25,7 +28,7 @@ summary:
     causal_metrics: 5
 
 # ═══════════════════════════════════════════════════════════════════
-# WS1: DATA COVERAGE & QUALITY (9 KPIs)
+# WS1: DATA COVERAGE & QUALITY (8 KPIs; WS1-DQ-008 Label Quality removed in T8)
 # ═══════════════════════════════════════════════════════════════════
 
 ws1_data_quality:
@@ -184,30 +187,7 @@ ws1_data_quality:
     workstream: WS1
     note: "V3: New fields in patient_journeys"
     windowable: not_applicable
-    
-  label_quality_iaa:
-    id: "WS1-DQ-008"
-    name: "Label Quality (IAA)"
-    value_format: percent
-    definition: "Inter-annotator agreement score for labeled data"
-    formula: "avg(agreement_score) for iaa_groups"
-    calculation_type: direct
-    tables:
-      - ml_annotations    # V3 NEW
-    columns:
-      - ml_annotations.iaa_group_id
-      - ml_annotations.annotation_value
-      - ml_annotations.annotation_confidence
-    view: v_kpi_label_quality
-    threshold:
-      target: 0.85
-      warning: 0.70
-      critical: 0.60
-    frequency: weekly
-    workstream: WS1
-    note: "V3: New ml_annotations table with IAA tracking"
-    windowable: not_applicable
-    
+
   time_to_release:
     id: "WS1-DQ-009"
     name: "Time-to-Release (TTR)"
@@ -974,10 +954,6 @@ helper_views:
   - name: v_kpi_data_lag
     description: "Data lag statistics (avg, median, p95)"
     tables: [patient_journeys]
-    
-  - name: v_kpi_label_quality
-    description: "Label quality and IAA metrics"
-    tables: [ml_annotations]
     
   - name: v_kpi_time_to_release
     description: "TTR by pipeline"

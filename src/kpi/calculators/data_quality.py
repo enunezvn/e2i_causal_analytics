@@ -8,13 +8,14 @@ Implements calculators for data quality metrics:
 - Completeness pass rate
 - Geographic consistency
 - Data lag
-- Label quality
 - Time-to-release
+
+(WS1-DQ-008 "Label Quality (IAA)" was removed in T8 — a working metric, corpus
+Fleiss κ ≈ 0.76, deprioritized by product decision. The DB objects
+v_kpi_label_quality + ml_annotations are retained.)
 """
 
 from typing import Any
-
-import numpy as np
 
 from src.kpi.calculator import KPICalculatorBase
 from src.kpi.models import (
@@ -72,7 +73,6 @@ class DataQualityCalculator(KPICalculatorBase):
             "WS1-DQ-005": self._calc_completeness_pass_rate,
             "WS1-DQ-006": self._calc_geographic_consistency,
             "WS1-DQ-007": self._calc_data_lag,
-            "WS1-DQ-008": self._calc_label_quality,
             "WS1-DQ-009": self._calc_time_to_release,
         }
 
@@ -260,87 +260,6 @@ class DataQualityCalculator(KPICalculatorBase):
             raise RuntimeError("KPI WS1-DQ-007 unavailable: no data for median data lag")
         # A genuine 0.0 median lag (data lands same-day) is a legitimate best-case value.
         return float(result[0]["median_lag_days"])
-
-    def _calc_label_quality(self, context: dict[str, Any]) -> float:
-        """Calculate WS1-DQ-008: Label Quality (IAA) as the corpus-level GENERALIZED
-        Fleiss κ (Fleiss 1971, per-subject n_i) over the per-iaa_group
-        annotation_value->>'label' distribution.
-
-        The registry query data_quality_label_quality returns one row per iaa_group
-        (n_positive, n_negative, n_uncertain, n_raters; HAVING n_raters >= 2). We build
-        the subjects×categories count matrix and compute the chance-corrected agreement
-        in pure numpy — varying raters per group (2-4) are handled by the per-subject
-        form, which reduces to classic Fleiss when all n_i are equal (verified against
-        statsmodels.fleiss_kappa to 1e-9 on fixed-n subsets; see the unit parity test).
-        statsmodels is deliberately NOT imported here — it requires a fixed-n table and
-        would drag scipy/pandas into the API import path; it is the test-only oracle.
-
-        The YAML "formula" ("avg(agreement_score) for iaa_groups") is loose shorthand —
-        κ is the honest standard IAA estimator (chance-corrected agreement among raters
-        co-rating the SAME subject).
-
-        #577: fails loud (raises) ONLY on structural absence — zero iaa_groups, or zero
-        groups with >= 2 raters. A real κ (including a genuine 0.0 or a NEGATIVE
-        worse-than-chance value) is a LEGITIMATE realized statistic and is RETURNED, never
-        raised (the patient_touch_rate / action_rate_uplift precedent). A corpus where
-        every rating is the SAME single category (P_e == 1.0, 0/0 undefined) is defined
-        as 1.0 (perfect-but-degenerate agreement).
-        """
-        result = self._execute_query("data_quality_label_quality", [])
-        if not result:
-            raise RuntimeError(
-                "KPI WS1-DQ-008 label_quality unavailable: no iaa_groups with >=2 raters "
-                "to compute inter-annotator agreement over (apply the #577 latent-truth "
-                "annotation migration 052)"
-            )
-        # Build the subjects×categories count matrix (one row per iaa_group). Fixed-width
-        # n_positive/n_negative/n_uncertain so a group missing a category contributes a 0,
-        # never a dropped column.
-        matrix = np.array(
-            [
-                [
-                    int(r.get("n_positive") or 0),
-                    int(r.get("n_negative") or 0),
-                    int(r.get("n_uncertain") or 0),
-                ]
-                for r in result
-            ],
-            dtype=float,
-        )
-        return self._generalized_fleiss_kappa(matrix)
-
-    @staticmethod
-    def _generalized_fleiss_kappa(matrix: np.ndarray) -> float:
-        """Generalized Fleiss κ (Fleiss 1971) for a varying number of raters per subject.
-
-        ``matrix[i]`` = category counts for group ``i``; ``n_i`` = row sum may differ
-        across groups. Reduces to classic Fleiss κ when all ``n_i`` are equal::
-
-            P_i  = (Σ_j n_ij² − n_i) / (n_i (n_i − 1))   # per-group agreeing-pair proportion
-            P̄    = mean_i P_i                            # equal weight per group (Fleiss 1971)
-            p_j  = (Σ_i n_ij) / (Σ_i n_i)                # rater-weighted category marginal
-            P_e  = Σ_j p_j²
-            κ    = (P̄ − P_e) / (1 − P_e)
-
-        Groups with ``n_i < 2`` are masked out (a single rater yields no pairwise term).
-        Raises if none remain. ``P_e == 1.0`` (single-category corpus) → ``1.0``.
-        """
-        n_i = matrix.sum(axis=1)
-        keep = n_i >= 2
-        matrix = matrix[keep]
-        n_i = n_i[keep]
-        if matrix.shape[0] == 0:
-            raise RuntimeError(
-                "KPI WS1-DQ-008 label_quality unavailable: no iaa_groups with >=2 raters "
-                "after masking singletons"
-            )
-        p_obs = (np.square(matrix).sum(axis=1) - n_i) / (n_i * (n_i - 1))
-        p_bar = float(p_obs.mean())
-        p_j = matrix.sum(axis=0) / n_i.sum()
-        p_e = float(np.square(p_j).sum())
-        if np.isclose(p_e, 1.0):
-            return 1.0
-        return (p_bar - p_e) / (1.0 - p_e)
 
     def _calc_time_to_release(self, context: dict[str, Any]) -> float:
         """Calculate WS1-DQ-009: Time-to-Release (TTR).

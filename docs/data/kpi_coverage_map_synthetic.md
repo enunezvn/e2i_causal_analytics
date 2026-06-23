@@ -1,8 +1,8 @@
 # Synthetic KPI Coverage Map (Shard 09)
 
-**Goal:** map every one of the 45 calculable KPIs in `config/kpi_definitions.yaml` to the
+**Goal:** map every one of the 44 calculable KPIs in `config/kpi_definitions.yaml` to the
 synthetic substrate that makes it return **non-NULL**, and prove it on the faithful
-docker Supabase. **Result: 45/45 MAPPED — ZERO N/A, ZERO EMPTY.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate.)
+docker Supabase. **Result: 44/44 MAPPED — ZERO N/A, ZERO EMPTY.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB.)
 
 Reproduce:
 
@@ -10,9 +10,9 @@ Reproduce:
 # load the synthetic substrate (rolling-window anchored):
 PYTHONPATH=$(pwd) LOKY_MAX_CPU_COUNT=1 \
   dotenv -f /path/to/.env run -- python scripts/load_synthetic_data.py --small --anchor-to-now
-# probe all 45 KPIs against the faithful DB:
+# probe all 44 KPIs against the faithful DB:
 E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py
-# -> TOTAL 45  MAPPED 45  EMPTY 0  N/A 0
+# -> TOTAL 44  MAPPED 44  EMPTY 0  N/A 0
 ```
 
 ## How a KPI is proven
@@ -29,7 +29,10 @@ columns directly; those are proven by a direct COUNT of the populated synthetic 
 Every probe value below is the **measured** output of `kpi_query(<id>_include_synthetic, ...)`
 on the faithful docker DB after a `--small --anchor-to-now` load.
 
-## Coverage table (45 KPIs)
+## Coverage table (44 KPIs)
+
+> WS1-DQ-008 (Label Quality / IAA) was decommissioned in T8 (product decision) and is
+> omitted from this calculable-coverage table — mirroring WS1-MP-008 (#1068).
 
 | KPI id | name | substrate (table.column → resolver) | verdict | measured |
 |---|---|---|---|---|
@@ -40,7 +43,6 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS1-DQ-005 | Completeness Pass Rate | `patient_journeys` (patient_id/brand/event_date non-null) → `data_quality_completeness_pass_rate` | MAPPED | pass_rate=0.999 |
 | WS1-DQ-006 | Geographic Consistency | `patient_journeys.geographic_region` + `reference_universe` (universe_type=patient) → `data_quality_geographic_consistency` | MAPPED | max_gap=0.120 |
 | WS1-DQ-007 | Data Lag (Median) | `patient_journeys.data_lag_hours` → `v_kpi_data_lag` — **stamped by Task 5b** | MAPPED | median_lag_days=7.96 |
-| WS1-DQ-008 | Label Quality (IAA) | `ml_annotations.iaa_group_id` + `annotation_value.label` (positive/negative/uncertain) → `data_quality_label_quality` (Task 5) | MAPPED | n_raters≥2 per group |
 | WS1-DQ-009 | Time-to-Release (TTR) | `etl_pipeline_metrics.time_to_release_hours` → `v_kpi_time_to_release` (Task 5) | MAPPED | avg_ttr_hours=58.59 |
 | WS1-MP-001 | ROC-AUC | `ml_predictions.model_auc` → `model_performance_roc_auc` — **stamped by `stamp_model_metrics`** | MAPPED | roc_auc=0.774 |
 | WS1-MP-002 | PR-AUC | `ml_predictions.model_pr_auc` (agent-read, direct) — **stamped** | MAPPED | 3738 synthetic rows populated |
@@ -134,9 +136,9 @@ defect is `BLOCKED-BY-Fn` (not a Shard-09 failure).
   unique violation — the FeatureStoreSeeder emits fixed names (`hcp_demographics`) that
   already exist while the loader UPSERTs on `id` (uuid); (b) `feature_values`
   `valid_event_timestamp` CHECK rejects the FeatureValueGenerator's future-dated
-  anchored timestamps. **No KPI in the 45 depends on `feature_values`** (drift_monitor's
+  anchored timestamps. **No KPI in the 44 depends on `feature_values`** (drift_monitor's
   WS1-MP-009 reads `ml_drift_history`, which loads fine), so this does not affect the
-  45/45 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
+  44/44 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
   deferred to their owning shards.
 - The substrate completions added beyond the plan's Task list (model-quality metrics,
   `sequence_number`, change-tracking) are post-hoc column stamps onto **existing,
