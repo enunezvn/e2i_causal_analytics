@@ -2427,9 +2427,17 @@ def _agent_state_to_response(
     # discovery accepted by the gate), 'augmented' = domain DAG + discovered
     # edges, 'domain_knowledge' = the agent's curated DAG (discovery skipped or
     # not accepted). discovery_result is present only when discovery ran.
+    #
+    # ``discovery_dag_overridden`` guards an honesty corner case: the gate can
+    # ACCEPT a discovered DAG that contradicts a curated confounder, in which case
+    # graph_builder DISCARDS the discovered DAG for the manual domain one (so the
+    # confounder stays adjusted). The gate decision stays "accept" (true — many
+    # consumers rely on it), but the DAG that ships is manual, so provenance must
+    # report 'domain_knowledge', NOT 'discovered'.
     discovery_ran = final_state.get("discovery_result") is not None
     _gate_dec = causal_graph.get("discovery_gate_decision")
-    if discovery_ran and _gate_dec == "accept":
+    _dag_overridden = bool(causal_graph.get("discovery_dag_overridden"))
+    if discovery_ran and _gate_dec == "accept" and not _dag_overridden:
         dag_source = "discovered"
     elif discovery_ran and _gate_dec == "augment":
         dag_source = "augmented"

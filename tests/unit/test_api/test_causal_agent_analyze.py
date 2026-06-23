@@ -329,6 +329,32 @@ def test_dag_source_discovered_surfaces_confounders():
 
 
 @pytest.mark.unit
+def test_dag_source_domain_knowledge_when_accept_overridden_by_fallback():
+    """Discovery ran and the gate ACCEPTED, but the accepted DAG contradicted a
+    curated confounder so graph_builder DISCARDED it and fell back to the manual
+    domain DAG (``discovery_dag_overridden=True``). Provenance must report the
+    HONEST source — 'domain_knowledge', NOT 'discovered' — so the FE never claims
+    a human-curated DAG was learned from data, and no data-identified confounders
+    are attributed to a structure the data never produced."""
+    from src.api.routes.causal import _agent_state_to_response
+
+    state = _base_state()
+    state["discovery_result"] = {"n_edges": 5}  # discovery ran
+    state["causal_graph"]["discovery_gate_decision"] = "accept"  # gate did accept
+    state["causal_graph"]["discovery_dag_overridden"] = True  # but its DAG was discarded
+    resp = _agent_state_to_response(
+        analysis_id="o1",
+        request=_req(),
+        data_source="synthetic",
+        n_rows=120,
+        final_state=state,
+        latency_ms=10,
+    )
+    assert resp.dag_source == "domain_knowledge"
+    assert resp.discovered_confounders == []
+
+
+@pytest.mark.unit
 def test_dag_source_domain_knowledge_when_discovery_absent():
     """No discovery in the state -> the agent's domain DAG; no data-identified
     confounders are claimed (discovered_confounders stays empty)."""

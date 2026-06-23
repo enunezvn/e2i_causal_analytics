@@ -464,3 +464,163 @@ class TestKnownCausalRelationships:
         # Confounder should affect both treatment and outcome
         assert ("geographic_region", "hcp_engagement_level") in edges
         assert ("geographic_region", "patient_conversion_rate") in edges
+
+
+class TestAcceptPathPreservesCuratedConfounders:
+    """Regression guard: the discovery-gate ACCEPT branch must NOT silently drop
+    the caller's curated confounders.
+
+    ``_run_agent_analysis_task`` (API discover-effects) threads each question's
+    modeled adjustment set into ``state['confounders']`` — domain knowledge (from
+    ``causal_paths.confounders_controlled``) that the variable is a backdoor
+    confounder of BOTH treatment and outcome. Every gate decision EXCEPT ACCEPT
+    routes through ``_construct_dag``, which draws ``conf -> treatment`` AND
+    ``conf -> outcome`` edges so the backdoor set is non-empty. The ACCEPT branch
+    used the discovered DAG verbatim; constraint-based discovery on binary data
+    frequently FAILS to recover those confounder edges, so the backdoor came back
+    empty (``[[]]``) and the curated confounder was silently dropped.
+
+    Before the empty-backdoor estimation fix (PR #1084) this was masked: the
+    estimator's all-other-columns fallback scooped the confounder out of the loaded
+    frame. #1084 made a validated EMPTY backdoor mean 'zero covariates -> unadjusted'
+    (correct for an RCT / exogenous treatment), which exposed the ACCEPT-branch drop
+    as a CONFOUNDED estimate (hcp_adoption treatment_arm->adopted: adjusted 0.149 ->
+    confounded naive 0.289). The fix preserves curated confounders on the ACCEPT DAG.
+    """
+
+    @pytest.fixture
+    def node(self):
+        return GraphBuilderNode()
+
+    def _accept_discovery(self, dag_edges):
+        """A successful ACCEPT discovery whose ensemble DAG has exactly ``dag_edges``.
+
+        ``dag_edges`` deliberately OMITS the confounder edges to model the common
+        constraint-based-discovery miss on binary data.
+        """
+        dag = nx.DiGraph()
+        dag.add_edges_from(dag_edges)
+        result = DiscoveryResult(
+            success=True,
+            config=DiscoveryConfig(),
+            ensemble_dag=dag,
+            edges=[DiscoveredEdge(source=s, target=t, confidence=0.95) for s, t in dag_edges],
+        )
+        evaluation = GateEvaluation(
+            decision=GateDecision.ACCEPT,
+            confidence=0.9,
+            reasons=["High confidence"],
+            high_confidence_edges=[],
+        )
+        return result, evaluation.to_dict()
+
+    @pytest.mark.asyncio
+    async def test_accept_preserves_curated_confounder_in_backdoor(self, node):
+        """ACCEPT + discovery that MISSED the confounder edges must still adjust for
+        the caller's curated confounder (the hcp_adoption treatment_arm regression)."""
+        state = {
+            "query": "Effect of treatment_arm on adopted?",
+            "treatment_var": "treatment_arm",
+            "outcome_var": "adopted",
+            "confounders": ["centrality_z"],
+            "auto_discover": True,
+        }
+        # Discovery recovered only the estimand edge — NOT centrality_z's edges.
+        discovery = self._accept_discovery([("treatment_arm", "adopted")])
+
+        with patch.object(node, "_run_discovery", new_callable=AsyncMock) as mock_discovery:
+            mock_discovery.return_value = discovery
+            result = await node.execute(state)
+
+        cg = result["causal_graph"]
+        assert cg["discovery_gate_decision"] == "accept"
+        adjustment_sets = cg["adjustment_sets"]
+        # The curated confounder must survive as a real backdoor set — NOT [[]].
+        assert adjustment_sets != [[]], (
+            "ACCEPT branch silently dropped the curated confounder (empty backdoor)"
+        )
+        assert any("centrality_z" in s for s in adjustment_sets), (
+            f"centrality_z missing from adjustment sets {adjustment_sets}"
+        )
+        # And the DAG must show it as a common cause of both treatment and outcome.
+        edges = cg["edges"]
+        assert ("centrality_z", "treatment_arm") in edges
+        assert ("centrality_z", "adopted") in edges
+        # The discovered DAG was KEPT (confounder placed on it cleanly), so the
+        # provenance is honestly 'discovered' — the override flag must be falsy.
+        assert not cg.get("discovery_dag_overridden")
+
+    @pytest.mark.asyncio
+    async def test_accept_with_no_confounders_stays_unadjusted(self, node):
+        """ACCEPT + NO curated confounders (true RCT / exogenous treatment) must keep
+        the empty backdoor — guards PR #1084's win (unadjusted, not all-columns)."""
+        state = {
+            "query": "Effect of control_group_flag on action_taken?",
+            "treatment_var": "control_group_flag",
+            "outcome_var": "action_taken",
+            "confounders": [],
+            "auto_discover": True,
+        }
+        discovery = self._accept_discovery([("control_group_flag", "action_taken")])
+
+        with patch.object(node, "_run_discovery", new_callable=AsyncMock) as mock_discovery:
+            mock_discovery.return_value = discovery
+            result = await node.execute(state)
+
+        cg = result["causal_graph"]
+        assert cg["discovery_gate_decision"] == "accept"
+        # No confounder supplied -> empty backdoor is the CORRECT, honest answer.
+        assert cg["adjustment_sets"] == [[]]
+
+    @pytest.mark.asyncio
+    async def test_accept_contradictory_orientation_falls_back_and_adjusts(self, node):
+        """ACCEPT whose discovered DAG orients a curated confounder CONTRADICTORILY
+        (``treatment -> conf``) must NOT leave a half-edge confounder.
+
+        The codex HIGH: adding ``conf -> treatment`` and ``conf -> outcome`` with
+        an INDEPENDENT per-edge acyclicity guard silently drops one edge on the
+        cycle, leaving a half-edge (here ``conf -> outcome`` only = precision
+        covariate). The backdoor criterion then excludes it and the estimate is
+        silently UNADJUSTED -> the exact regression the patch exists to fix. The
+        fix places each confounder ATOMICALLY (both edges or neither) and, when a
+        contradictory orientation blocks it, falls back to the manual DAG so the
+        curated confounder is STILL adjusted.
+        """
+        state = {
+            "query": "Effect of treatment_arm on adopted?",
+            "treatment_var": "treatment_arm",
+            "outcome_var": "adopted",
+            "confounders": ["centrality_z"],
+            "auto_discover": True,
+        }
+        # Discovery oriented treatment_arm -> centrality_z (contradicts the curated
+        # common-cause prior); centrality_z -> treatment_arm would be a 2-cycle.
+        discovery = self._accept_discovery(
+            [("treatment_arm", "adopted"), ("treatment_arm", "centrality_z")]
+        )
+
+        with patch.object(node, "_run_discovery", new_callable=AsyncMock) as mock_discovery:
+            mock_discovery.return_value = discovery
+            result = await node.execute(state)
+
+        cg = result["causal_graph"]
+        adjustment_sets = cg["adjustment_sets"]
+        # No half-edge drop: the curated confounder must still be adjusted.
+        assert adjustment_sets != [[]], (
+            "contradictory ACCEPT left a half-edge confounder -> empty backdoor "
+            "(silently unadjusted) — the codex HIGH regression"
+        )
+        assert any("centrality_z" in s for s in adjustment_sets), (
+            f"centrality_z missing from adjustment sets {adjustment_sets}"
+        )
+        edges = cg["edges"]
+        # Fallback manual DAG draws it as a clean common cause; the contradictory
+        # treatment_arm->centrality_z orientation is discarded.
+        assert ("centrality_z", "treatment_arm") in edges
+        assert ("centrality_z", "adopted") in edges
+        assert ("treatment_arm", "centrality_z") not in edges
+        # Provenance honesty (codex round-2 finding): the discovered DAG was
+        # DISCARDED for the manual one, so the run must NOT advertise itself as
+        # 'discovered'. The override flag tells the API's dag_source classifier to
+        # report 'domain_knowledge', not 'discovered'.
+        assert cg.get("discovery_dag_overridden") is True
