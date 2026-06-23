@@ -8,9 +8,9 @@ value (including a real 0.0 from the query) must STILL be returned.
 Mirrors the MagicMock RPC pattern in test_kpi_query_forwarding.py:
 `DataQualityCalculator(db_client=<mock>)` whose `kpi_query` RPC returns `rows`.
 
-NOTE: WS1-DQ-008 (_calc_label_quality) already raises structurally (covered in the
-forwarding suite) and the tuple-returning fail-CLOSED feature_drift (WS1-MP-009, a
-DIFFERENT calculator) are intentionally NOT exercised here — they were already hardened.
+NOTE: WS1-DQ-008 (_calc_label_quality) was removed in T8 (product decision). The
+tuple-returning fail-CLOSED feature_drift (WS1-MP-009, a DIFFERENT calculator) is
+intentionally NOT exercised here — it was already hardened.
 """
 
 from unittest.mock import MagicMock

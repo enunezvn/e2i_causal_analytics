@@ -1,14 +1,16 @@
-"""Regression guard for KPI registry count consistency (issue #1072).
+"""Regression guard for KPI registry count consistency (issues #1072, T8).
 
 Background
 ----------
 PR #1068 removed WS1-MP-008 ("Fairness Gap (ΔRecall)") from the registry and the
 gold-standard scorer — it needs protected-group ``fairness_metrics`` the synthetic
-substrate does not populate. The framework therefore defines **45** calculable
-KPIs, not 46. #1068 left a tail of stale "46 KPIs" prose across unrelated
-subsystems (and the source-of-truth config summary block) which this test locks
-down so the documented count can never silently drift from the live registry
-again.
+substrate does not populate. T8 then removed WS1-DQ-008 ("Label Quality (IAA)") by
+product decision — a *working* metric (corpus Fleiss κ ≈ 0.76) that the user chose
+to drop from the live KPI set. The framework therefore defines **44** calculable
+KPIs, not 45 (and not the original 46). Each removal left a tail of stale count
+prose ("46 KPIs", "45 KPIs", "45/45 MAPPED") across unrelated subsystems (and the
+source-of-truth config summary block) which this test locks down so the documented
+count can never silently drift from the live registry again.
 
 These assertions are deliberately *count-agnostic*: they bind the documented
 summary to whatever the registry actually loads, so adding/removing a future KPI
@@ -57,8 +59,50 @@ def test_registry_loads_actual_yaml_entry_count() -> None:
     assert len(registry.get_all()) == _total_entry_count(data)
 
 
+# --- T8: WS1-DQ-008 (Label Quality / IAA) removed from the live KPI set ---
+# Removed by product decision (a WORKING metric, corpus κ≈0.76 — not a data limit).
+# DB objects (v_kpi_label_quality, ml_annotations) are intentionally retained; only the
+# live registry / calculator / coverage-tooling / FE surfaces are dropped, mirroring the
+# WS1-MP-008 decommission (#1068).
+_REMOVED_KPI_ID = "WS1-DQ-008"
+_REMOVED_KPI_KEY = "label_quality_iaa"
+
+
+def test_label_quality_iaa_absent_from_yaml() -> None:
+    """The ``label_quality_iaa`` entry (WS1-DQ-008) must be gone from the YAML registry."""
+    data = _load_yaml()
+    dq = data.get("ws1_data_quality") or {}
+    assert _REMOVED_KPI_KEY not in dq, f"{_REMOVED_KPI_KEY} still present in ws1_data_quality"
+    all_ids = {
+        v.get("id")
+        for s in WORKSTREAM_SECTIONS
+        for v in (data.get(s) or {}).values()
+        if isinstance(v, dict)
+    }
+    assert _REMOVED_KPI_ID not in all_ids, f"{_REMOVED_KPI_ID} is still defined in the YAML"
+
+
+def test_label_quality_iaa_absent_from_registry() -> None:
+    """CI-faithful: the live registry must not load WS1-DQ-008.
+
+    Import-based — the editable ``.venv`` pins ``src`` to the MAIN checkout, so this is
+    authoritative in CI / from the main checkout, not from a git worktree.
+    """
+    registry = get_registry()
+    ids = {k.id for k in registry.get_all()}
+    assert _REMOVED_KPI_ID not in ids, f"{_REMOVED_KPI_ID} is still loaded by the registry"
+
+
+def test_label_quality_calculator_method_removed() -> None:
+    """CI-faithful: the WS1-DQ-008 code path is gone, not merely unwired."""
+    from src.kpi.calculators.data_quality import DataQualityCalculator
+
+    assert not hasattr(DataQualityCalculator, "_calc_label_quality")
+    assert not hasattr(DataQualityCalculator, "_generalized_fleiss_kappa")
+
+
 def test_yaml_summary_total_matches_registry() -> None:
-    """summary.total_kpis must equal the live registry size (currently 45)."""
+    """summary.total_kpis must equal the live registry size (currently 44)."""
     data = _load_yaml()
     registry = get_registry()
     n = len(registry.get_all())
@@ -108,19 +152,31 @@ def test_yaml_by_workstream_matches_actual_sections() -> None:
         )
 
 
-# Surfaces that asserted the registry size as "46 KPIs" / "46/46 mapped". After
-# #1068 removed WS1-MP-008 the calculable count is 45; these guards ensure the
-# stale number cannot reappear in any CURRENT-STATE reference (code, config, and
-# the live framework/reference docs). Dated historical records (completed-issue
-# plans/reports, design specs) are intentionally NOT scanned — "46" was true when
-# they were written. The framework reference (06-KPI-REFERENCE.md) keeps WS1-MP-008
-# documented as DECOMMISSIONED, so it may still say "WS1-MP-008"/"9 KPIs", just not
-# a stale calculable-count of 46.
+# Surfaces that asserted a stale calculable count. #1068 removed WS1-MP-008 (46→45);
+# T8 removed WS1-DQ-008 (45→44). These guards ensure NEITHER stale number ("46" or
+# "45") can reappear in any CURRENT-STATE reference (code, config, coverage tooling,
+# and the live framework/reference docs). Dated historical records (completed-issue
+# plans/reports, design specs) are intentionally NOT scanned — the older counts were
+# true when they were written. The framework reference (06-KPI-REFERENCE.md) keeps the
+# two decommissioned KPIs documented as DECOMMISSIONED, so it may still say
+# "WS1-MP-008"/"WS1-DQ-008"/"9 KPIs" (designed-count section headers), just not a stale
+# *calculable*-count of 45 or 46. The patterns require KPI/calculable/defined adjacency
+# (or the "N/N MAPPED" / "TOTAL N" coverage-probe forms) so bare numbers — row indices
+# like "| 45 | CM-004", thresholds, dates — never false-match.
 _FORBIDDEN_PATTERNS = [
     re.compile(r"\b46\b\s*\+?\s*(?:KPIs?|calculable|defined)", re.IGNORECASE),
     re.compile(r"Total\s+KPIs\D{0,6}46\b", re.IGNORECASE),  # "Total KPIs: 46"
     re.compile(r"\b46/46\b"),  # coverage map "46/46 MAPPED"
     re.compile(r"\bTOTAL\s+46\b"),  # coverage probe "TOTAL 46 MAPPED 46"
+    # T8: 44 is now the live calculable count; "45" is the new stale tail.
+    re.compile(r"\b45\b\s*\+?\s*(?:KPIs?|calculable|defined)", re.IGNORECASE),
+    re.compile(r"Total\s+KPIs\D{0,6}45\b", re.IGNORECASE),  # "Total KPIs: 45"
+    re.compile(r"\b45/45\b"),  # coverage map "45/45 MAPPED"
+    re.compile(r"\bTOTAL\s+45\b"),  # coverage probe "TOTAL 45 MAPPED 45"
+    # Header form where the count trails the label: "Calculable KPIs: 45/46".
+    re.compile(r"Calculable\s+KPIs\D{0,6}4[56]\b", re.IGNORECASE),
+    # JSON/object key form in API fixtures/mocks: `total_kpis: 45`, `"total_kpis":46`.
+    re.compile(r"total_kpis[\"'\s:=]+4[56]\b"),
 ]
 _SCANNED_FILES = [
     "config/kpi_definitions.yaml",
@@ -129,6 +185,14 @@ _SCANNED_FILES = [
     "src/kpi/__init__.py",
     "src/repositories/sample_data.py",
     "tests/unit/test_services/test_kpi_resolution.py",
+    # Coverage tooling (probes the live calculable set; counts must track the registry).
+    "scripts/check_kpi_coverage.py",
+    "scripts/validate_kpi_coverage.py",
+    # FE API fixtures/mocks that echo the registry total (guarded via the total_kpis key
+    # pattern; the per-workstream designed-count "(9 KPIs)" mocks are intentionally not).
+    "frontend/src/mocks/handlers.ts",
+    "frontend/src/lib/api-schemas.test.ts",
+    "frontend/src/hooks/api/use-kpi.test.ts",
     # Current-state reference docs (issue #1075).
     "README.md",
     "docs/data/00-INDEX.md",

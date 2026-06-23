@@ -1,6 +1,6 @@
 # KPI Reference
 
-**Version**: 3.0.0 | **Last Updated**: 2025-11-28 | **Calculable KPIs**: 45 | **Decommissioned**: 1 (WS1-MP-008) | **Gaps**: 0
+**Version**: 3.0.0 | **Last Updated**: 2025-11-28 | **Calculable KPIs**: 44 | **Decommissioned**: 2 (WS1-MP-008, WS1-DQ-008) | **Gaps**: 0
 
 ---
 
@@ -14,7 +14,7 @@
 
 ## Summary Table
 
-All 45 calculable KPIs at a glance, plus WS1-MP-008 (row 17) retained as **decommissioned** (#1068 — see its section below). See the detailed sections for full definitions, source tables, and calculation logic.
+All 44 calculable KPIs at a glance, plus WS1-MP-008 (row 17) and WS1-DQ-008 (row 8) retained as **decommissioned** (#1068, T8 — see their sections below). See the detailed sections for full definitions, source tables, and calculation logic.
 
 | # | ID | Name | Workstream | Formula | Target | Warning | Critical | Freq |
 |---|-----|------|-----------|---------|--------|---------|----------|------|
@@ -25,7 +25,7 @@ All 45 calculable KPIs at a glance, plus WS1-MP-008 (row 17) retained as **decom
 | 5 | WS1-DQ-005 | Completeness Pass Rate | WS1 DQ | `1 - (null_critical / total)` | 0.95 | 0.90 | 0.80 | Daily |
 | 6 | WS1-DQ-006 | Geographic Consistency | WS1 DQ | `max \|share_source - share_universe\|` | 0.05 | 0.10 | 0.20 | Weekly |
 | 7 | WS1-DQ-007 | Data Lag (Median) | WS1 DQ | `median(ingestion - source)` | 3 days | 7 days | 14 days | Daily |
-| 8 | WS1-DQ-008 | Label Quality (IAA) | WS1 DQ | `avg(agreement_score)` | 0.85 | 0.70 | 0.60 | Weekly |
+| 8 | WS1-DQ-008 | Label Quality (IAA) — ⚠️ DECOMMISSIONED (T8) | WS1 DQ | `avg(agreement_score)` | 0.85 | 0.70 | 0.60 | Weekly |
 | 9 | WS1-DQ-009 | Time-to-Release (TTR) | WS1 DQ | `run_completed - source_timestamp` | 24 hrs | 48 hrs | 72 hrs | Daily |
 | 10 | WS1-MP-001 | ROC-AUC | WS1 MP | `integral TPR d(FPR)` | 0.80 | 0.70 | 0.60 | Daily |
 | 11 | WS1-MP-002 | PR-AUC | WS1 MP | `integral Precision d(Recall)` | 0.70 | 0.55 | 0.40 | Daily |
@@ -72,6 +72,8 @@ All 45 calculable KPIs at a glance, plus WS1-MP-008 (row 17) retained as **decom
 ## WS1: Data Coverage & Quality (9 KPIs)
 
 These KPIs measure the completeness, consistency, and timeliness of the data flowing into the ML pipeline. They are the foundation for all downstream model training and business analysis.
+
+> **Note:** 8 of these 9 are currently calculable. **WS1-DQ-008 (Label Quality / IAA) is decommissioned** (T8) — removed by **product decision**, not a data limit. Unlike WS1-MP-008, it is a *working* metric (the corpus-level generalized Fleiss κ computes a real ≈0.76), but it was deprioritized out of the live KPI set. The DB objects `v_kpi_label_quality` + `ml_annotations` are retained. It is kept below as a designed KPI.
 
 ### WS1-DQ-001: Source Coverage - Patients
 
@@ -265,6 +267,13 @@ SELECT median_lag_days FROM v_kpi_data_lag LIMIT 1
 
 ### WS1-DQ-008: Label Quality (IAA)
 
+> ⚠️ **DECOMMISSIONED (T8):** Removed from the live KPI registry, the data-quality
+> calculator, the coverage tooling, and the dashboard legend by **product decision**.
+> Unlike WS1-MP-008, this is a *working* metric — the corpus-level generalized Fleiss κ
+> computes a real ≈0.76 from `ml_annotations` — but it was deprioritized out of the live
+> KPI set. The DB objects (`v_kpi_label_quality`, `ml_annotations`) are intentionally
+> retained, so it remains documented here as a *designed* KPI.
+
 | Field | Value |
 |-------|-------|
 | **ID** | `WS1-DQ-008` |
@@ -284,9 +293,12 @@ SELECT median_lag_days FROM v_kpi_data_lag LIMIT 1
 
 **Note**: V3 schema addition. Uses the `ml_annotations` table with IAA group tracking.
 
-**Calculator**: `DataQualityCalculator._calc_label_quality`
+**Calculator**: _removed in T8_ — was `DataQualityCalculator._calc_label_quality` (the
+corpus-level generalized Fleiss κ). The retained `v_kpi_label_quality` view is no longer
+read by the live KPI engine.
 
 ```sql
+-- (Designed query — the view is retained but no longer wired to a live KPI)
 SELECT iaa_score FROM v_kpi_label_quality LIMIT 1
 ```
 
@@ -1364,7 +1376,7 @@ Eight Postgres views pre-compute KPI aggregations for performance. These are def
 | `v_kpi_cross_source_match` | Daily cross-source match rates by source | `data_source_tracking` | WS1-DQ-003 |
 | `v_kpi_stacking_lift` | Stacking lift percentages | `data_source_tracking` | WS1-DQ-004 |
 | `v_kpi_data_lag` | Data lag statistics (average, median, P95) | `patient_journeys` | WS1-DQ-007 |
-| `v_kpi_label_quality` | Label quality and inter-annotator agreement metrics | `ml_annotations` | WS1-DQ-008 |
+| `v_kpi_label_quality` | Label quality and inter-annotator agreement metrics (view retained; KPI decommissioned) | `ml_annotations` | WS1-DQ-008 (decommissioned, T8) |
 | `v_kpi_time_to_release` | Time-to-release by pipeline | `etl_pipeline_metrics` | WS1-DQ-009 |
 | `v_kpi_change_fail_rate` | Change-fail rate by change type | `triggers` | WS2-TR-008 |
 | `v_kpi_active_users` | MAU, WAU, and DAU counts | `user_sessions` | WS3-BI-001, WS3-BI-002 |

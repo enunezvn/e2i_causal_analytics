@@ -294,7 +294,7 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         # model_name is a STRING but ml_drift_history keys on a UUID `model_id` (NULL in the
         # seed — ml_model_registry has 0 rows), so a filter would be a LABEL-not-functional
         # no-op falsely implying per-model scoping that does not exist (cf. the max_params=0
-        # siblings model_performance_shap_coverage and data_quality_label_quality). A 1-element
+        # sibling model_performance_shap_coverage). A 1-element
         # `params` would make `kpi_query` RAISE "expects 0 param(s), got 1". A future PR that
         # seeds real ml_model_registry rows + per-model drift can promote this to arity 1.
         # `model_name` is still used by the MLflow fallback leg below. The two-leg fail-closed

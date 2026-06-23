@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 E2I Causal Analytics - KPI Coverage Validator V3.0
-Validates that all 45 KPIs are calculable from the V3 schema.
+Validates that all 44 KPIs are calculable from the V3 schema.
 
 Usage:
     python validate_kpi_coverage.py                    # Validate against Supabase
@@ -84,7 +84,7 @@ class ValidationResult:
 
 
 # =============================================================================
-# KPI DEFINITIONS (45 Total)
+# KPI DEFINITIONS (44 Total)
 # =============================================================================
 
 KPI_DEFINITIONS: List[KPIDefinition] = [
@@ -142,15 +142,9 @@ KPI_DEFINITIONS: List[KPIDefinition] = [
         view="v_kpi_data_lag",
         is_v3_new=True, note="V3: NEW fields in patient_journeys"
     ),
-    KPIDefinition(
-        id="WS1-DQ-008", name="Label Quality (IAA)", workstream="WS1",
-        category="Data Quality", calculation_type=CalculationType.VIEW,
-        tables=["ml_annotations"],
-        columns=["ml_annotations.iaa_group_id", "ml_annotations.annotation_value", 
-                 "ml_annotations.annotation_confidence"],
-        view="v_kpi_label_quality",
-        is_v3_new=True, note="V3: NEW ml_annotations table"
-    ),
+    # WS1-DQ-008 (Label Quality / IAA) removed in T8 — product decision (working
+    # metric, corpus Fleiss κ ≈ 0.76). DB objects v_kpi_label_quality + ml_annotations
+    # retained; the KPI is no longer in the live calculable set.
     KPIDefinition(
         id="WS1-DQ-009", name="Time-to-Release (TTR)", workstream="WS1",
         category="Data Quality", calculation_type=CalculationType.VIEW,
@@ -581,7 +575,6 @@ V3_SCHEMA = {
         "v_kpi_cross_source_match",
         "v_kpi_stacking_lift",
         "v_kpi_data_lag",
-        "v_kpi_label_quality",
         "v_kpi_time_to_release",
         "v_kpi_change_fail_rate",
         "v_kpi_active_users",

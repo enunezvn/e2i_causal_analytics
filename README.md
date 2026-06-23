@@ -69,7 +69,7 @@ e2i_causal_analytics/
 ├── config/                    # YAML configurations (20 files)
 │   ├── agent_config.yaml      # Agent definitions
 │   ├── domain_vocabulary_v3.1.0.yaml
-│   ├── kpi_definitions.yaml   # 45 KPIs
+│   ├── kpi_definitions.yaml   # 44 KPIs
 │   └── ...
 │
 ├── database/                  # SQL schemas (120+ tables)
