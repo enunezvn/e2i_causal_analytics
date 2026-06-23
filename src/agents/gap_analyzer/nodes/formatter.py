@@ -237,6 +237,10 @@ class FormatterNode:
 
             # Update with prioritization phase data
             quick_wins = state.get("quick_wins") or []
+            # T6: steady plays are surfaced, actionable opportunities too — include
+            # them in the actionable count so a steady-play-dominated run is not
+            # under-reported to the feedback signal.
+            steady_plays = state.get("steady_plays") or []
             strategic_bets = state.get("strategic_bets") or []
             key_insights = result.get("key_insights", [])
             executive_summary = result.get("executive_summary", "")
@@ -248,7 +252,9 @@ class FormatterNode:
                 prioritization_confidence=state.get("prioritization_confidence", 0.8),  # type: ignore[arg-type]
                 executive_summary_length=len(executive_summary),
                 key_insights_count=len(key_insights),
-                actionable_recommendations=len(quick_wins) + len(strategic_bets),
+                actionable_recommendations=len(quick_wins)
+                + len(steady_plays)
+                + len(strategic_bets),
                 total_latency_ms=total_latency_ms,
             )
 

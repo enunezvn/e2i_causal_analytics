@@ -88,18 +88,28 @@ export function explainRank(
   allOpps?: PrioritizedOpportunity[]
 ): string {
   const roi = opp.roi_estimate.expected_roi;
+  const off = opp.roi_estimate.off_label === true;
   let s = `Ranked #${opp.rank}: opportunities are ordered by expected ROI (highest first), and this one returns ${roi.toFixed(1)}× its cost`;
 
   if (allOpps && allOpps.length > 1) {
-    const higher = allOpps.filter((o) => o.roi_estimate.expected_roi > roi).length;
+    // Count what actually ranks ABOVE this one, honoring the off-label demotion
+    // (on-label always outranks off-label; within a partition, higher ROI wins).
+    // A plain ROI count would mislead for an off-label opportunity.
+    const ranksAbove = (o: PrioritizedOpportunity): boolean => {
+      if (o === opp) return false;
+      const oOff = o.roi_estimate.off_label === true;
+      if (oOff !== off) return !oOff;
+      return o.roi_estimate.expected_roi > roi;
+    };
+    const higher = allOpps.filter(ranksAbove).length;
     if (higher > 0) {
       s += ` — ${higher} ${higher === 1 ? 'opportunity ranks' : 'opportunities rank'} higher`;
     } else {
-      s += ' — the highest ROI in this view';
+      s += ' — the top-ranked opportunity in this view';
     }
   }
 
-  if (opp.roi_estimate.off_label === true) {
+  if (off) {
     s +=
       '. It is off-label (its segment falls outside the FDA-indicated population), so it is demoted below all on-label opportunities';
   }

@@ -647,11 +647,13 @@ async def list_opportunities(
         # min_roi/difficulty filters (those narrow the displayed cards, not the
         # KPI totals).
         #
-        # Count what the PRIORITIZER already suppressed (persisted, and so absent
-        # from prioritized_opportunities) PLUS what we suppress on read below
-        # (legacy rows that still carry money-losers). The two sets are disjoint,
-        # so summing is correct and the transparency notice is accurate for both
-        # freshly-run and legacy analyses.
+        # Count what the PRIORITIZER already suppressed (persisted; these
+        # opportunities are absent from prioritized_opportunities) PLUS what we
+        # suppress on read below (legacy rows that still carry money-losers). These
+        # are disjoint BY CONSTRUCTION: the prioritizer removes exactly the
+        # opportunities it counts, so a persisted-counted opportunity can never
+        # also appear in prioritized_opportunities to be re-counted on read.
+        # Summing is therefore exact for both freshly-run and legacy analyses.
         suppressed_count += getattr(analysis, "suppressed_count", 0) or 0
 
         for opp in analysis.prioritized_opportunities:
@@ -684,14 +686,14 @@ async def list_opportunities(
             all_opportunities.append(opp.model_copy(update={"category": bucket}))
             total_value += opp.roi_estimate.estimated_revenue_impact
 
-    # Sort by ROI and limit. Prefer the higher-value buckets when limiting so a
-    # large steady_play tail never crowds out quick wins / strategic bets.
-    all_opportunities.sort(key=lambda x: x.roi_estimate.expected_roi, reverse=True)
-    if len(all_opportunities) > limit:
-        headline = [o for o in all_opportunities if o.category != "steady_play"]
-        middle = [o for o in all_opportunities if o.category == "steady_play"]
-        all_opportunities = (headline + middle)[:limit]
-        all_opportunities.sort(key=lambda x: x.roi_estimate.expected_roi, reverse=True)
+    # Order to MATCH the prioritizer's ranking (and each opportunity's persisted
+    # `rank`): off-label opportunities demoted to the bottom, then ROI descending.
+    # A plain ROI sort would float a high-ROI off-label bet above on-label ones,
+    # contradicting both its `rank` and the drill-down's "why ranked" explanation.
+    all_opportunities.sort(
+        key=lambda x: (x.roi_estimate.off_label is True, -x.roi_estimate.expected_roi)
+    )
+    all_opportunities = all_opportunities[:limit]
 
     return OpportunityListResponse(
         total_count=len(all_opportunities),

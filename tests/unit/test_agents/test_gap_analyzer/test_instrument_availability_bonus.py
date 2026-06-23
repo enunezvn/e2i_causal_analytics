@@ -666,7 +666,18 @@ class TestInstrumentRoutingWire:
         by_feature = final.get("instrument_strength_by_feature") or {}
         assert by_feature.get("trx", {}).get("instrument_strength") == "strong"
 
-        # (2) T6 ran end-to-end: this brand/segment's connector ROI is money-losing,
+        # (2) The PRIORITIZER actually CONSUMED that signal in the compiled graph —
+        #     it computed the strong-instrument ROI boost for trx and recorded it.
+        #     (The boost is applied BEFORE suppression, so it is observable even
+        #     though the boosted-but-still-money-losing opportunity is then hidden.)
+        instrument_warnings = [
+            w
+            for w in (final.get("causal_evidence_warnings") or [])
+            if "trx" in w and "strong instrument" in w
+        ]
+        assert instrument_warnings, "prioritizer must consume the strong-instrument signal in-graph"
+
+        # (3) T6 ran end-to-end: this brand/segment's connector ROI is money-losing,
         #     so every opportunity was suppressed (none surface, suppressed_count > 0),
         #     and any survivor would carry a valid 3-bucket category (never "other").
         opps = final["prioritized_opportunities"]

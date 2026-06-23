@@ -120,6 +120,22 @@ describe('explainRank', () => {
     const s = explainRank(a, all);
     expect(s).toContain('2');
   });
+
+  it('honors the off-label demotion: an off-label opp with the highest ROI still ranks below on-label ones', () => {
+    const off = makeOpp({
+      rank: 2,
+      roi_estimate: { ...makeOpp().roi_estimate, expected_roi: 9, off_label: true },
+    });
+    const on = makeOpp({
+      rank: 1,
+      roi_estimate: { ...makeOpp().roi_estimate, expected_roi: 2, off_label: false },
+    });
+    const s = explainRank(off, [on, off]);
+    // The on-label (lower-ROI) opportunity ranks above it — not "top-ranked".
+    expect(s).toContain('1 opportunity ranks higher');
+    expect(s).not.toContain('top-ranked');
+    expect(s.toLowerCase()).toContain('demoted');
+  });
 });
 
 describe('formatValueByDriver', () => {

@@ -790,6 +790,22 @@ class TestListOpportunitiesLatestRunDedup:
         assert resp.total_count == 1
 
     @pytest.mark.asyncio
+    async def test_off_label_demoted_below_on_label_in_display_order(self):
+        """Display order must match the prioritizer's ranking: an off-label bet is
+        demoted below on-label ones even when its ROI is higher (a plain ROI sort
+        would wrongly float it to the top, contradicting its rank)."""
+        t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
+        on = _make_opp("g_on", ImplementationDifficulty.LOW, 2.0)  # on-label, lower ROI
+        off = _make_opp("g_off", ImplementationDifficulty.LOW, 9.0)  # off-label, higher ROI
+        off.roi_estimate.off_label = True
+        _analyses_store["a"] = _make_analysis("a", "Kisqali", t, [off, on])
+
+        resp = await list_opportunities(brand="Kisqali", min_roi=None, difficulty=None, limit=50)
+
+        ids = [o.gap.gap_id for o in resp.opportunities]
+        assert ids == ["g_on", "g_off"], "on-label outranks a higher-ROI off-label opportunity"
+
+    @pytest.mark.asyncio
     async def test_steady_plays_count_reported(self):
         """T6: the new middle bucket gets its own headline count."""
         t = datetime(2026, 6, 16, 1, 35, tzinfo=timezone.utc)
