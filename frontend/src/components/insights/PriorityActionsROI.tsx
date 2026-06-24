@@ -8,6 +8,7 @@
  * @module components/insights/PriorityActionsROI
  */
 
+import { useState } from 'react';
 import { ArrowUpRight, DollarSign, Target, Users, Clock, TrendingUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
@@ -17,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useOpportunities } from '@/hooks/api';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { OpportunityDrilldownDialog } from '@/components/gaps/OpportunityDrilldownDialog';
 import type { PrioritizedOpportunity } from '@/types/gaps';
 
 // =============================================================================
@@ -96,11 +98,24 @@ function toPriorityAction(opp: PrioritizedOpportunity): PriorityAction {
 // SUB-COMPONENTS
 // =============================================================================
 
-function ActionCard({ action, rank }: { action: PriorityAction; rank: number }) {
+function ActionCard({
+  action,
+  rank,
+  onSelect,
+}: {
+  action: PriorityAction;
+  rank: number;
+  /** Open the shared "why" drill-down for this opportunity. */
+  onSelect: () => void;
+}) {
   const effortConfig = getEffortConfig(action.effort);
 
   return (
-    <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] hover:border-[var(--color-primary)]/30 transition-colors">
+    <button
+      type="button"
+      onClick={onSelect}
+      className="w-full text-left p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] hover:border-[var(--color-primary)]/30 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+    >
       <div className="flex items-start gap-3">
         {/* Rank Badge */}
         <div className="flex-shrink-0 w-8 h-8 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center">
@@ -151,7 +166,7 @@ function ActionCard({ action, rank }: { action: PriorityAction; rank: number }) 
           </div>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -161,9 +176,14 @@ function ActionCard({ action, rank }: { action: PriorityAction; rank: number }) 
 
 export function PriorityActionsROI({ className, brand }: PriorityActionsROIProps) {
   const { data, isLoading, isError, error } = useOpportunities({ brand, limit: 4 });
-  const actions = (data?.opportunities ?? []).map(toPriorityAction);
+  // Keep the full opportunities alongside the lossy display shape so the
+  // drill-down can surface the complete ROI rationale (T7b).
+  const opportunities = data?.opportunities ?? [];
+  const actions = opportunities.map(toPriorityAction);
   const totalROI = data?.total_addressable_value ?? 0;
   const navigate = useNavigate();
+  // The opportunity whose "why" drawer is open (null = closed).
+  const [drillOpp, setDrillOpp] = useState<PrioritizedOpportunity | null>(null);
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -204,7 +224,12 @@ export function PriorityActionsROI({ className, brand }: PriorityActionsROIProps
         ) : (
           <>
             {actions.map((action, idx) => (
-              <ActionCard key={action.id} action={action} rank={idx + 1} />
+              <ActionCard
+                key={action.id}
+                action={action}
+                rank={idx + 1}
+                onSelect={() => setDrillOpp(opportunities[idx])}
+              />
             ))}
             <Button
               variant="outline"
@@ -217,6 +242,13 @@ export function PriorityActionsROI({ className, brand }: PriorityActionsROIProps
           </>
         )}
       </CardContent>
+
+      {/* Shared "why" drill-down — identical to the Gap-Analysis page (T7b). */}
+      <OpportunityDrilldownDialog
+        opp={drillOpp}
+        allOpps={opportunities}
+        onClose={() => setDrillOpp(null)}
+      />
     </Card>
   );
 }

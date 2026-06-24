@@ -18,7 +18,7 @@
  * @module components/insights/ExecutiveAIBrief
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Brain, RefreshCw, Sparkles, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,6 +27,8 @@ import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useCognitiveRAG } from '@/hooks/api/use-cognitive';
 import { useExecutiveInsights } from '@/hooks/api/use-executive-insights';
+import { useOpportunities } from '@/hooks/api';
+import { buildExecutiveBriefQuery } from '@/lib/insights/brief-query';
 
 // =============================================================================
 // TYPES
@@ -54,6 +56,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // AI-powered brief via cognitive RAG (real backend response).
   const {
     mutate: generateBrief,
+    reset: resetBrief,
     data: briefResponse,
     error: briefError,
     isPending: isGenerating,
@@ -62,6 +65,23 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // Real crystallized insights for this brand (M5 REWIRE). When present,
   // these take precedence over the cognitive-RAG path.
   const { data: crystallized } = useExecutiveInsights(brand);
+
+  // T7a: the cognitive-RAG fallback was STARVED of context — its query carried
+  // no KPI/ROI/gap numbers, so the brief read generic. Pull the brand's real
+  // gap-analysis figures (the same `/gaps/opportunities` feed the sibling
+  // Priority-Actions card uses) and ground the query in them. The RAG
+  // `user_query` is the primary synthesis input, so this materially enriches the
+  // brief with real data — no fabrication.
+  const { data: oppData, isLoading: oppLoading } = useOpportunities({
+    brand,
+    limit: 5,
+  });
+
+  // The grounded query (or the basic prompt when no real context is available).
+  const briefQuery = useMemo(
+    () => buildExecutiveBriefQuery(brand, oppData),
+    [brand, oppData]
+  );
 
   const crystallizedSections: BriefSection[] | null =
     crystallized && crystallized.length > 0
@@ -111,12 +131,44 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // than the raw error string masquerading as an insight.
   const ragErrorMessage = ragHasError ? briefResponse?.error ?? null : null;
 
-  // Generate initial brief on mount
+  // Synchronous (render-time) detection of a brand switch. The reset below is a
+  // passive effect that runs AFTER paint, so on a CACHED-opportunities switch
+  // the prior brand's brief/footer would paint for one frame before it clears.
+  // `brandChanged` folds into `isBusy` so that frame shows the busy state
+  // instead of stale content (codex round-2 HIGH).
+  const prevBrandRef = useRef(brand);
+  const brandChanged = prevBrandRef.current !== brand;
   useEffect(() => {
-    generateBrief({
-      query: `Generate an executive brief summary for ${brand}. Include key performance trends, emerging opportunities, and risk alerts.`,
-    });
-  }, [brand, generateBrief]);
+    prevBrandRef.current = brand;
+  }, [brand]);
+
+  // On a brand CHANGE (not the initial mount — reset-on-mount is a no-op since
+  // no brief has been generated yet), clear the previous brand's RAG result AND
+  // its "last updated" stamp immediately so neither can be displayed under the
+  // new brand while it (re)generates (the grounded fire below is gated on the
+  // opportunities feed settling). Without this, brand A's brief + footer would
+  // linger on screen — a stale-attribution honest-state violation
+  // (codex round-1 HIGH for the body, round-2 HIGH for the footer).
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    resetBrief();
+    setLastUpdated(null);
+  }, [brand, resetBrief]);
+
+  // Generate the brief once the opportunity context has SETTLED, so the first
+  // request is grounded in real figures rather than fired context-free. The
+  // effect re-runs whenever `briefQuery` changes (brand switch or the figures
+  // load), firing exactly one grounded request per distinct query. On an
+  // error/empty feed the query falls back to the basic prompt — honest
+  // degradation, never fabricated numbers.
+  useEffect(() => {
+    if (oppLoading) return;
+    generateBrief({ query: briefQuery });
+  }, [briefQuery, oppLoading, generateBrief]);
 
   // Track when a real (non-error) response arrives. A 200 carrying an in-band
   // error is NOT a successful update, so it must not stamp "Last updated".
@@ -130,14 +182,22 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   }, [briefResponse, ragHasRealAnswer]);
 
   const handleRefresh = () => {
-    generateBrief({
-      query: `Generate an executive brief summary for ${brand}. Include key performance trends, emerging opportunities, and risk alerts.`,
-    });
+    generateBrief({ query: briefQuery });
   };
 
+  // "Busy" covers the RAG call in flight, the opportunities feed still loading
+  // (grounded fire deferred), AND the single render after a brand switch before
+  // the reset effect clears the prior brief — in all three we show the loading
+  // state, never stale content or a premature empty/error state.
+  const isBusy = isGenerating || oppLoading || brandChanged;
+
+  // What the user actually sees. When busy, nothing real is shown yet, so the
+  // body AND footer must not surface the prior brand's sections/count.
+  const displaySections: BriefSection[] = isBusy ? [] : sections;
+
   const hasAnyError = !!briefError || ragHasError;
-  const showError = !isGenerating && sections.length === 0 && hasAnyError;
-  const showEmpty = !isGenerating && sections.length === 0 && !hasAnyError;
+  const showError = !isBusy && displaySections.length === 0 && hasAnyError;
+  const showEmpty = !isBusy && displaySections.length === 0 && !hasAnyError;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -163,17 +223,17 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
               variant="ghost"
               size="icon"
               onClick={handleRefresh}
-              disabled={isGenerating}
+              disabled={isBusy}
               className="h-8 w-8"
             >
-              <RefreshCw className={cn('h-4 w-4', isGenerating && 'animate-spin')} />
+              <RefreshCw className={cn('h-4 w-4', isBusy && 'animate-spin')} />
             </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Loading State */}
-        {isGenerating && (
+        {isBusy && (
           <div className="flex items-center justify-center py-8">
             <div className="flex items-center gap-3 text-[var(--color-muted-foreground)]">
               <RefreshCw className="h-5 w-5 animate-spin" />
@@ -202,9 +262,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
         )}
 
         {/* Brief Sections — real content only */}
-        {!isGenerating && sections.length > 0 && (
+        {!isBusy && displaySections.length > 0 && (
           <div className="space-y-4">
-            {sections.map((section, idx) => (
+            {displaySections.map((section, idx) => (
               <div
                 key={idx}
                 className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]"
@@ -227,12 +287,14 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
           </div>
         )}
 
-        {/* Footer */}
+        {/* Footer — reflects only the CURRENT brand's displayed brief. While
+            busy (incl. the brand-switch frame) the stamp/count are not shown so
+            the prior brand's state can never leak through. */}
         <div className="flex items-center justify-between pt-2 border-t border-[var(--color-border)]">
           <div className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
             <Clock className="h-3 w-3" />
             <span>
-              {lastUpdated
+              {!isBusy && lastUpdated
                 ? `Last updated: ${lastUpdated.toLocaleTimeString()}`
                 : 'Not yet generated'}
             </span>
@@ -240,14 +302,14 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
           <div
             className={cn(
               'flex items-center gap-1 text-xs',
-              sections.length > 0
+              displaySections.length > 0
                 ? 'text-emerald-600'
                 : 'text-[var(--color-muted-foreground)]'
             )}
           >
             <CheckCircle2 className="h-3 w-3" />
             <span>
-              {sections.length} insight{sections.length === 1 ? '' : 's'} generated
+              {displaySections.length} insight{displaySections.length === 1 ? '' : 's'} generated
             </span>
           </div>
         </div>

@@ -41,13 +41,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Select,
@@ -61,20 +54,14 @@ import { WarningBanner } from '@/components/ui/WarningBanner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { LabelGateBadge } from '@/components/insights/LabelGateBadge';
 import { CompetitorDensityBadge } from '@/components/insights/CompetitorDensityBadge';
+import { OpportunityDrilldownDialog } from '@/components/gaps/OpportunityDrilldownDialog';
 import {
   useOpportunities,
   useGapHealth,
   useRunGapAnalysisAndWait,
 } from '@/hooks/api';
 import type { PrioritizedOpportunity } from '@/types/gaps';
-import {
-  BUCKET_META,
-  bucketMeta,
-  explainBucket,
-  explainRank,
-  explainTimeline,
-  formatValueByDriver,
-} from '@/lib/gaps/interpret';
+import { BUCKET_META, bucketMeta } from '@/lib/gaps/interpret';
 
 // =============================================================================
 // CONSTANTS
@@ -810,114 +797,15 @@ function GapAnalysis() {
       </Tabs>
       )}
 
-      {/* T6 drill-down: click an opportunity card to understand WHY it's ranked,
-          bucketed, and timed the way it is — plus the full ROI rationale. */}
-      <Dialog open={!!drillOpp} onOpenChange={(open) => { if (!open) setDrillOpp(null); }}>
-        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-          {drillOpp && (
-            <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2 flex-wrap">
-                  <span className="text-primary">#{drillOpp.rank}</span>
-                  {getCategoryBadge(drillOpp.category)}
-                  <span className="text-base font-semibold">{drillOpp.recommended_action}</span>
-                </DialogTitle>
-                <DialogDescription>{explainBucket(drillOpp)}</DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-4 text-sm">
-                <section>
-                  <h4 className="font-medium mb-1">Why this rank</h4>
-                  <p className="text-muted-foreground">{explainRank(drillOpp, opportunities)}</p>
-                </section>
-
-                <section>
-                  <h4 className="font-medium mb-1">Why this timeline</h4>
-                  <p className="text-muted-foreground">{explainTimeline(drillOpp)}</p>
-                </section>
-
-                <section>
-                  <h4 className="font-medium mb-1">ROI breakdown</h4>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div>
-                      <p className="text-muted-foreground text-xs">Revenue impact</p>
-                      <p className="font-semibold text-emerald-600">
-                        {formatCurrency(drillOpp.roi_estimate.estimated_revenue_impact)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs">Investment</p>
-                      <p className="font-semibold text-amber-600">
-                        {formatCurrency(drillOpp.roi_estimate.estimated_cost_to_close)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs">Expected ROI</p>
-                      <p className="font-semibold text-primary">
-                        {drillOpp.roi_estimate.expected_roi.toFixed(1)}x
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs">Risk-adjusted ROI</p>
-                      <p className="font-semibold">
-                        {drillOpp.roi_estimate.risk_adjusted_roi.toFixed(1)}x
-                      </p>
-                    </div>
-                  </div>
-                  {typeof drillOpp.roi_estimate.total_risk_adjustment === 'number' && (
-                    <p className="text-muted-foreground text-xs mt-2">
-                      Risk adjustment retains{' '}
-                      {(drillOpp.roi_estimate.total_risk_adjustment * 100).toFixed(0)}% of the
-                      unadjusted value.
-                    </p>
-                  )}
-                </section>
-
-                {formatValueByDriver(drillOpp.roi_estimate.value_by_driver).length > 0 && (
-                  <section>
-                    <h4 className="font-medium mb-1">Revenue by value driver</h4>
-                    <ul className="space-y-1">
-                      {formatValueByDriver(drillOpp.roi_estimate.value_by_driver).map((row) => (
-                        <li key={row.key} className="flex justify-between text-muted-foreground">
-                          <span>{row.label}</span>
-                          <span className="font-medium">{formatCurrency(row.value)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-
-                {drillOpp.roi_estimate.assumptions &&
-                  drillOpp.roi_estimate.assumptions.length > 0 && (
-                    <section>
-                      <h4 className="font-medium mb-1">Assumptions</h4>
-                      <ul className="list-disc list-inside text-muted-foreground space-y-0.5">
-                        {drillOpp.roi_estimate.assumptions.map((a, i) => (
-                          <li key={i}>{a}</li>
-                        ))}
-                      </ul>
-                    </section>
-                  )}
-
-                <section>
-                  <h4 className="font-medium mb-1">Gap detail</h4>
-                  <p className="text-muted-foreground">
-                    {drillOpp.gap.metric.toUpperCase()} — {drillOpp.gap.segment}:{' '}
-                    {drillOpp.gap.segment_value}. Current {drillOpp.gap.current_value} vs target{' '}
-                    {drillOpp.gap.target_value} ({drillOpp.gap.gap_percentage.toFixed(1)}% gap).
-                  </p>
-                  <CompetitorDensityBadge
-                    competitor_products_count={drillOpp.roi_estimate.competitor_products_count}
-                    competitor_density_label={drillOpp.roi_estimate.competitor_density_label}
-                    competitor_drug_names={drillOpp.roi_estimate.competitor_drug_names}
-                    className="mt-2"
-                  />
-                </section>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* T6 drill-down (extracted to a shared component in T7 so the AI-Insights
+          Priority-Actions card surfaces the identical "why" drawer): click an
+          opportunity card to understand WHY it's ranked, bucketed, and timed the
+          way it is — plus the full ROI rationale. */}
+      <OpportunityDrilldownDialog
+        opp={drillOpp}
+        allOpps={opportunities}
+        onClose={() => setDrillOpp(null)}
+      />
     </div>
   );
 }
