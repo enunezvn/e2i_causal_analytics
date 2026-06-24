@@ -18,7 +18,7 @@
  * @module components/insights/ExecutiveAIBrief
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Brain, RefreshCw, Sparkles, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,6 +27,8 @@ import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useCognitiveRAG } from '@/hooks/api/use-cognitive';
 import { useExecutiveInsights } from '@/hooks/api/use-executive-insights';
+import { useOpportunities } from '@/hooks/api';
+import { buildExecutiveBriefQuery } from '@/lib/insights/brief-query';
 
 // =============================================================================
 // TYPES
@@ -62,6 +64,23 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // Real crystallized insights for this brand (M5 REWIRE). When present,
   // these take precedence over the cognitive-RAG path.
   const { data: crystallized } = useExecutiveInsights(brand);
+
+  // T7a: the cognitive-RAG fallback was STARVED of context — its query carried
+  // no KPI/ROI/gap numbers, so the brief read generic. Pull the brand's real
+  // gap-analysis figures (the same `/gaps/opportunities` feed the sibling
+  // Priority-Actions card uses) and ground the query in them. The RAG
+  // `user_query` is the primary synthesis input, so this materially enriches the
+  // brief with real data — no fabrication.
+  const { data: oppData, isLoading: oppLoading } = useOpportunities({
+    brand,
+    limit: 5,
+  });
+
+  // The grounded query (or the basic prompt when no real context is available).
+  const briefQuery = useMemo(
+    () => buildExecutiveBriefQuery(brand, oppData),
+    [brand, oppData]
+  );
 
   const crystallizedSections: BriefSection[] | null =
     crystallized && crystallized.length > 0
@@ -111,12 +130,16 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // than the raw error string masquerading as an insight.
   const ragErrorMessage = ragHasError ? briefResponse?.error ?? null : null;
 
-  // Generate initial brief on mount
+  // Generate the brief once the opportunity context has SETTLED, so the first
+  // request is grounded in real figures rather than fired context-free. The
+  // effect re-runs whenever `briefQuery` changes (brand switch or the figures
+  // load), firing exactly one grounded request per distinct query. On an
+  // error/empty feed the query falls back to the basic prompt — honest
+  // degradation, never fabricated numbers.
   useEffect(() => {
-    generateBrief({
-      query: `Generate an executive brief summary for ${brand}. Include key performance trends, emerging opportunities, and risk alerts.`,
-    });
-  }, [brand, generateBrief]);
+    if (oppLoading) return;
+    generateBrief({ query: briefQuery });
+  }, [briefQuery, oppLoading, generateBrief]);
 
   // Track when a real (non-error) response arrives. A 200 carrying an in-band
   // error is NOT a successful update, so it must not stamp "Last updated".
@@ -130,9 +153,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   }, [briefResponse, ragHasRealAnswer]);
 
   const handleRefresh = () => {
-    generateBrief({
-      query: `Generate an executive brief summary for ${brand}. Include key performance trends, emerging opportunities, and risk alerts.`,
-    });
+    generateBrief({ query: briefQuery });
   };
 
   const hasAnyError = !!briefError || ragHasError;

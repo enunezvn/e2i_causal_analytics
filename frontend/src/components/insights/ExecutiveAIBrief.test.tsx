@@ -12,16 +12,32 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { ExecutiveAIBrief } from './ExecutiveAIBrief';
 import * as useExec from '@/hooks/api/use-executive-insights';
 import * as useCog from '@/hooks/api/use-cognitive';
+import { useOpportunities } from '@/hooks/api';
 
 vi.mock('@/hooks/api/use-executive-insights');
 vi.mock('@/hooks/api/use-cognitive');
+// T7a: the brief now grounds its RAG query in the brand's real opportunity
+// figures. Mock the opportunities feed so these unit tests stay hermetic.
+vi.mock('@/hooks/api', () => ({ useOpportunities: vi.fn() }));
 
 type RagMutation = ReturnType<typeof useCog.useCognitiveRAG>;
 type ExecQuery = ReturnType<typeof useExec.useExecutiveInsights>;
+type MockFn = ReturnType<typeof vi.fn>;
+
+/** Default the opportunities feed to a settled, empty (no-data) state. */
+function mockOpps(overrides: Record<string, unknown> = {}) {
+  (useOpportunities as MockFn).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isError: false,
+    error: null,
+    ...overrides,
+  });
+}
 
 function mockRag(overrides: Partial<RagMutation> = {}) {
   vi.mocked(useCog.useCognitiveRAG).mockReturnValue({
@@ -47,6 +63,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockRag();
   mockExec();
+  mockOpps();
 });
 
 describe('ExecutiveAIBrief — real crystallized insights', () => {
@@ -263,5 +280,78 @@ describe('ExecutiveAIBrief — in-band error payload must never render as an ins
     // An error payload is not a successful update.
     expect(screen.getByText(/Not yet generated/)).toBeInTheDocument();
     expect(screen.queryByText(/Last updated:/)).not.toBeInTheDocument();
+  });
+});
+
+describe('ExecutiveAIBrief — query is grounded in real opportunity figures (T7a)', () => {
+  const OPP_CONTEXT = {
+    total_count: 1,
+    quick_wins_count: 1,
+    steady_plays_count: 0,
+    strategic_bets_count: 0,
+    suppressed_count: 0,
+    total_addressable_value: 2_400_000,
+    opportunities: [
+      {
+        rank: 1,
+        gap: {
+          gap_id: 'g1', metric: 'trx', segment: 'region', segment_value: 'Northeast',
+          current_value: 85, target_value: 100, gap_size: 15, gap_percentage: 15,
+          gap_type: 'vs_target',
+        },
+        roi_estimate: {
+          gap_id: 'g1', estimated_revenue_impact: 2_400_000, estimated_cost_to_close: 300_000,
+          expected_roi: 4, risk_adjusted_roi: 3, payback_period_months: 6,
+          attribution_level: 'partial', attribution_rate: 0.65, confidence: 0.8,
+        },
+        recommended_action: 'Expand specialty coverage in the Northeast',
+        implementation_difficulty: 'medium',
+        time_to_impact: '3-6 months',
+        category: 'steady_play',
+      },
+    ],
+  };
+
+  function lastQuery(mutate: MockFn): string {
+    const calls = mutate.mock.calls;
+    const call = calls[calls.length - 1];
+    return (call?.[0] as { query: string } | undefined)?.query ?? '';
+  }
+
+  it('grounds the generated brief query in the real opportunity figures once they load', async () => {
+    const mutate = vi.fn();
+    mockRag({ mutate } as unknown as Partial<RagMutation>);
+    mockOpps({ data: OPP_CONTEXT });
+
+    render(<ExecutiveAIBrief brand="Kisqali" />);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    const q = lastQuery(mutate);
+    expect(q).toContain('Kisqali');
+    expect(q).toContain('Expand specialty coverage in the Northeast');
+    expect(q).toMatch(/\$2\.4M/);
+  });
+
+  it('waits for opportunities to settle before generating (no premature context-free brief)', () => {
+    const mutate = vi.fn();
+    mockRag({ mutate } as unknown as Partial<RagMutation>);
+    mockOpps({ data: undefined, isLoading: true });
+
+    render(<ExecutiveAIBrief brand="Kisqali" />);
+
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('degrades to the basic prompt (no fabricated numbers) when opportunities fail to load', async () => {
+    const mutate = vi.fn();
+    mockRag({ mutate } as unknown as Partial<RagMutation>);
+    mockOpps({ data: undefined, isError: true });
+
+    render(<ExecutiveAIBrief brand="Kisqali" />);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    const q = lastQuery(mutate);
+    expect(q).toContain('Kisqali');
+    expect(q).not.toMatch(/\$\d/);
   });
 });

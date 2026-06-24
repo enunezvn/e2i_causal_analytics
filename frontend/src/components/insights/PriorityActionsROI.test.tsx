@@ -95,6 +95,31 @@ describe('PriorityActionsROI (H3)', () => {
     expect(screen.getByText(/Could not load opportunities/i)).toBeInTheDocument();
   });
 
+  it('opens the shared drill-down dialog when an opportunity card is clicked (T7b)', async () => {
+    (useOpportunities as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...idle,
+      data: {
+        total_count: 1,
+        quick_wins_count: 1,
+        strategic_bets_count: 0,
+        total_addressable_value: 2_400_000,
+        opportunities: [SAMPLE_OPP],
+      },
+    });
+    const user = userEvent.setup();
+    render(<PriorityActionsROI />, { wrapper: createWrapper() });
+
+    // The card is a button labeled by its recommended action — clicking it
+    // opens the same "why" drawer the Gap-Analysis page uses.
+    await user.click(
+      screen.getByRole('button', { name: /Add one rep call\/month in NE/i })
+    );
+
+    expect(await screen.findByText('Why this rank')).toBeInTheDocument();
+    expect(screen.getByText('Why this timeline')).toBeInTheDocument();
+    expect(screen.getByText('ROI breakdown')).toBeInTheDocument();
+  });
+
   it('navigates to /gap-analysis when "View All Recommendations" is clicked', async () => {
     (useOpportunities as ReturnType<typeof vi.fn>).mockReturnValue({
       ...idle,
