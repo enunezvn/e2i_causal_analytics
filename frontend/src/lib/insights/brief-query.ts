@@ -39,6 +39,12 @@ function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`;
 }
 
+/** Bound a single free-text field so one verbose opportunity can't crowd out the
+ *  others or get cut mid-line by the overall length cap. */
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
 /** The context-free fallback — preserves the original brief intent, no numbers. */
 function basicQuery(brand: string): string {
   return (
@@ -53,10 +59,14 @@ function opportunityLine(opp: PrioritizedOpportunity): string {
   const rev = money(opp.roi_estimate.estimated_revenue_impact);
   const gapPct = opp.gap.gap_percentage.toFixed(0);
   const metric = opp.gap.metric.toUpperCase();
-  const seg = opp.gap.segment_value;
+  // recommended_action / segment_value are unbounded backend free-text — cap
+  // each so a single verbose opportunity can't push the others out or get cut
+  // mid-line by the overall length backstop.
+  const action = truncate(opp.recommended_action, 160);
+  const seg = truncate(opp.gap.segment_value, 60);
   const effort = opp.implementation_difficulty;
   return (
-    `${opp.rank}. ${opp.recommended_action} — ${roi}× ROI, ${rev} revenue impact, ` +
+    `${opp.rank}. ${action} — ${roi}× ROI, ${rev} revenue impact, ` +
     `closing a ${gapPct}% ${metric} gap in ${seg} (${effort} effort).`
   );
 }

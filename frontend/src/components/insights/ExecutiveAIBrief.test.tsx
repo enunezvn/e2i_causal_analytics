@@ -356,6 +356,41 @@ describe('ExecutiveAIBrief — query is grounded in real opportunity figures (T7
     expect(q).not.toMatch(/\$\d/);
   });
 
+  it('clears the prior brand footer (last-updated + count) on a CACHED brand switch', () => {
+    // Codex round-2 HIGH(b): the footer leaked brand A's "Last updated" + insight
+    // count under brand B. Dynamic mock so reset() actually clears the RAG data,
+    // faithful to react-query.
+    let ragData: unknown = {
+      response: 'Kisqali real insight from the West region.',
+      evidence: [{ content: 'West region NBRx', source: 'kpi' }],
+      hop_count: 2,
+      visualization_config: {},
+      routed_agents: [],
+    };
+    const reset = vi.fn(() => { ragData = undefined; });
+    vi.mocked(useCog.useCognitiveRAG).mockImplementation(() => ({
+      mutate: vi.fn(),
+      reset,
+      data: ragData,
+      error: null,
+      isPending: false,
+    } as unknown as RagMutation));
+    mockOpps({ data: OPP_CONTEXT });
+
+    const { rerender } = render(<ExecutiveAIBrief brand="Kisqali" />);
+    expect(screen.getByText(/1 insight generated/)).toBeInTheDocument();
+    expect(screen.getByText(/Last updated:/)).toBeInTheDocument();
+
+    // Switch brand; the new brand's opportunities are already cached (settled).
+    mockOpps({ data: OPP_CONTEXT });
+    rerender(<ExecutiveAIBrief brand="Fabhalta" />);
+
+    // The prior brand's footer state must not linger.
+    expect(screen.queryByText(/Last updated:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/1 insight generated/)).not.toBeInTheDocument();
+    expect(screen.getByText(/0 insights generated/)).toBeInTheDocument();
+  });
+
   it('never shows the previous brand brief while the new brand opportunities load (no stale attribution)', () => {
     // Codex round-1 HIGH: gating the fire on !oppLoading meant a brand switch
     // held brand A's brief on screen until brand B's /gaps/opportunities

@@ -135,6 +135,26 @@ describe('buildExecutiveBriefQuery', () => {
     expect(q).toContain('Kisqali');
   });
 
+  it('truncates per-field so a long action on a high-ranked opp does not drop later lines', () => {
+    // Codex round-2 MED: a blind tail-slice would cut mid-line through opp #1 and
+    // lose opps #2/#3. Per-field truncation keeps every ranked line within the
+    // overall <=5000 budget.
+    const longAction = `A1 ${'X'.repeat(6000)}`;
+    const q = buildExecutiveBriefQuery('Kisqali', makeContext({
+      opportunities: [
+        makeOpp({ rank: 1, recommended_action: longAction }),
+        makeOpp({ rank: 2, recommended_action: 'A2 short action' }),
+        makeOpp({ rank: 3, recommended_action: 'A3 short action' }),
+      ],
+    }));
+    expect(q.length).toBeLessThanOrEqual(5000);
+    expect(q).toContain('Kisqali');
+    // All three ranked lines survive (per-field cap, not a blind tail cut).
+    expect(q).toMatch(/\n {2}1\. A1 X/);
+    expect(q).toContain('A2 short action');
+    expect(q).toContain('A3 short action');
+  });
+
   it('summarizes up to the top three opportunities by rank', () => {
     const opps = [
       makeOpp({ rank: 1, recommended_action: 'Action one' }),

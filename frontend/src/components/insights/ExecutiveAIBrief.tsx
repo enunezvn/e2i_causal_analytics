@@ -18,7 +18,7 @@
  * @module components/insights/ExecutiveAIBrief
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Brain, RefreshCw, Sparkles, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -131,13 +131,32 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // than the raw error string masquerading as an insight.
   const ragErrorMessage = ragHasError ? briefResponse?.error ?? null : null;
 
-  // On a brand switch, clear the previous brand's RAG result immediately so it
-  // can never be displayed under the new brand while the new brand's
-  // opportunities load (the grounded fire below is gated on that feed settling).
-  // Without this, brand A's brief would linger on screen — a stale-attribution
-  // honest-state violation (codex round-1 HIGH).
+  // Synchronous (render-time) detection of a brand switch. The reset below is a
+  // passive effect that runs AFTER paint, so on a CACHED-opportunities switch
+  // the prior brand's brief/footer would paint for one frame before it clears.
+  // `brandChanged` folds into `isBusy` so that frame shows the busy state
+  // instead of stale content (codex round-2 HIGH).
+  const prevBrandRef = useRef(brand);
+  const brandChanged = prevBrandRef.current !== brand;
   useEffect(() => {
+    prevBrandRef.current = brand;
+  }, [brand]);
+
+  // On a brand CHANGE (not the initial mount — reset-on-mount is a no-op since
+  // no brief has been generated yet), clear the previous brand's RAG result AND
+  // its "last updated" stamp immediately so neither can be displayed under the
+  // new brand while it (re)generates (the grounded fire below is gated on the
+  // opportunities feed settling). Without this, brand A's brief + footer would
+  // linger on screen — a stale-attribution honest-state violation
+  // (codex round-1 HIGH for the body, round-2 HIGH for the footer).
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
     resetBrief();
+    setLastUpdated(null);
   }, [brand, resetBrief]);
 
   // Generate the brief once the opportunity context has SETTLED, so the first
@@ -166,14 +185,19 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     generateBrief({ query: briefQuery });
   };
 
-  // "Busy" covers BOTH the RAG call in flight AND the opportunities feed still
-  // loading — during the latter the grounded fire is deferred, so we must show
-  // the loading state (never stale content or a premature empty/error state).
-  const isBusy = isGenerating || oppLoading;
+  // "Busy" covers the RAG call in flight, the opportunities feed still loading
+  // (grounded fire deferred), AND the single render after a brand switch before
+  // the reset effect clears the prior brief — in all three we show the loading
+  // state, never stale content or a premature empty/error state.
+  const isBusy = isGenerating || oppLoading || brandChanged;
+
+  // What the user actually sees. When busy, nothing real is shown yet, so the
+  // body AND footer must not surface the prior brand's sections/count.
+  const displaySections: BriefSection[] = isBusy ? [] : sections;
 
   const hasAnyError = !!briefError || ragHasError;
-  const showError = !isBusy && sections.length === 0 && hasAnyError;
-  const showEmpty = !isBusy && sections.length === 0 && !hasAnyError;
+  const showError = !isBusy && displaySections.length === 0 && hasAnyError;
+  const showEmpty = !isBusy && displaySections.length === 0 && !hasAnyError;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -238,9 +262,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
         )}
 
         {/* Brief Sections — real content only */}
-        {!isBusy && sections.length > 0 && (
+        {!isBusy && displaySections.length > 0 && (
           <div className="space-y-4">
-            {sections.map((section, idx) => (
+            {displaySections.map((section, idx) => (
               <div
                 key={idx}
                 className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]"
@@ -263,12 +287,14 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
           </div>
         )}
 
-        {/* Footer */}
+        {/* Footer — reflects only the CURRENT brand's displayed brief. While
+            busy (incl. the brand-switch frame) the stamp/count are not shown so
+            the prior brand's state can never leak through. */}
         <div className="flex items-center justify-between pt-2 border-t border-[var(--color-border)]">
           <div className="flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]">
             <Clock className="h-3 w-3" />
             <span>
-              {lastUpdated
+              {!isBusy && lastUpdated
                 ? `Last updated: ${lastUpdated.toLocaleTimeString()}`
                 : 'Not yet generated'}
             </span>
@@ -276,14 +302,14 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
           <div
             className={cn(
               'flex items-center gap-1 text-xs',
-              sections.length > 0
+              displaySections.length > 0
                 ? 'text-emerald-600'
                 : 'text-[var(--color-muted-foreground)]'
             )}
           >
             <CheckCircle2 className="h-3 w-3" />
             <span>
-              {sections.length} insight{sections.length === 1 ? '' : 's'} generated
+              {displaySections.length} insight{displaySections.length === 1 ? '' : 's'} generated
             </span>
           </div>
         </div>
