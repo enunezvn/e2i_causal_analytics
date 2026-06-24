@@ -56,6 +56,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // AI-powered brief via cognitive RAG (real backend response).
   const {
     mutate: generateBrief,
+    reset: resetBrief,
     data: briefResponse,
     error: briefError,
     isPending: isGenerating,
@@ -130,6 +131,15 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // than the raw error string masquerading as an insight.
   const ragErrorMessage = ragHasError ? briefResponse?.error ?? null : null;
 
+  // On a brand switch, clear the previous brand's RAG result immediately so it
+  // can never be displayed under the new brand while the new brand's
+  // opportunities load (the grounded fire below is gated on that feed settling).
+  // Without this, brand A's brief would linger on screen — a stale-attribution
+  // honest-state violation (codex round-1 HIGH).
+  useEffect(() => {
+    resetBrief();
+  }, [brand, resetBrief]);
+
   // Generate the brief once the opportunity context has SETTLED, so the first
   // request is grounded in real figures rather than fired context-free. The
   // effect re-runs whenever `briefQuery` changes (brand switch or the figures
@@ -156,9 +166,14 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     generateBrief({ query: briefQuery });
   };
 
+  // "Busy" covers BOTH the RAG call in flight AND the opportunities feed still
+  // loading — during the latter the grounded fire is deferred, so we must show
+  // the loading state (never stale content or a premature empty/error state).
+  const isBusy = isGenerating || oppLoading;
+
   const hasAnyError = !!briefError || ragHasError;
-  const showError = !isGenerating && sections.length === 0 && hasAnyError;
-  const showEmpty = !isGenerating && sections.length === 0 && !hasAnyError;
+  const showError = !isBusy && sections.length === 0 && hasAnyError;
+  const showEmpty = !isBusy && sections.length === 0 && !hasAnyError;
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -184,17 +199,17 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
               variant="ghost"
               size="icon"
               onClick={handleRefresh}
-              disabled={isGenerating}
+              disabled={isBusy}
               className="h-8 w-8"
             >
-              <RefreshCw className={cn('h-4 w-4', isGenerating && 'animate-spin')} />
+              <RefreshCw className={cn('h-4 w-4', isBusy && 'animate-spin')} />
             </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Loading State */}
-        {isGenerating && (
+        {isBusy && (
           <div className="flex items-center justify-center py-8">
             <div className="flex items-center gap-3 text-[var(--color-muted-foreground)]">
               <RefreshCw className="h-5 w-5 animate-spin" />
@@ -223,7 +238,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
         )}
 
         {/* Brief Sections — real content only */}
-        {!isGenerating && sections.length > 0 && (
+        {!isBusy && sections.length > 0 && (
           <div className="space-y-4">
             {sections.map((section, idx) => (
               <div

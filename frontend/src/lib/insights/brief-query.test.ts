@@ -122,6 +122,19 @@ describe('buildExecutiveBriefQuery', () => {
     expect(q).not.toMatch(/\$\d/);
   });
 
+  it('caps the assembled query at the cognitive-RAG length limit (<=5000 chars)', () => {
+    // recommended_action / segment_value are unbounded backend free-text; a
+    // verbose payload must never push the query past the 1-5000 char contract
+    // (frontend/src/types/cognitive.ts) and trigger a 422.
+    const longAction = 'X'.repeat(6000);
+    const q = buildExecutiveBriefQuery('Kisqali', makeContext({
+      opportunities: [makeOpp({ recommended_action: longAction })],
+    }));
+    expect(q.length).toBeLessThanOrEqual(5000);
+    // The brand (near the start) survives truncation.
+    expect(q).toContain('Kisqali');
+  });
+
   it('summarizes up to the top three opportunities by rank', () => {
     const opps = [
       makeOpp({ rank: 1, recommended_action: 'Action one' }),

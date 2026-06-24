@@ -21,6 +21,12 @@
 
 import type { OpportunityListResponse, PrioritizedOpportunity } from '@/types/gaps';
 
+// The cognitive-RAG endpoint validates `query` at 1-5000 chars
+// (frontend/src/types/cognitive.ts). `recommended_action` / `segment_value`
+// are unbounded backend free-text, so cap the assembled query defensively with
+// headroom to avoid a 422 on a verbose opportunities payload.
+const MAX_QUERY_CHARS = 4800;
+
 /** Compact USD formatting, mirroring the gap drill-down ($5.0M / $300K / $42). */
 function money(value: number): string {
   if (!Number.isFinite(value)) return '$0';
@@ -107,7 +113,8 @@ export function buildExecutiveBriefQuery(
     }
   }
 
-  return lines.join('\n');
+  const query = lines.join('\n');
+  return query.length > MAX_QUERY_CHARS ? query.slice(0, MAX_QUERY_CHARS) : query;
 }
 
 export default buildExecutiveBriefQuery;

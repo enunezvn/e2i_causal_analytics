@@ -42,6 +42,7 @@ function mockOpps(overrides: Record<string, unknown> = {}) {
 function mockRag(overrides: Partial<RagMutation> = {}) {
   vi.mocked(useCog.useCognitiveRAG).mockReturnValue({
     mutate: vi.fn(),
+    reset: vi.fn(),
     data: undefined,
     error: null,
     isPending: false,
@@ -353,5 +354,32 @@ describe('ExecutiveAIBrief — query is grounded in real opportunity figures (T7
     const q = lastQuery(mutate);
     expect(q).toContain('Kisqali');
     expect(q).not.toMatch(/\$\d/);
+  });
+
+  it('never shows the previous brand brief while the new brand opportunities load (no stale attribution)', () => {
+    // Codex round-1 HIGH: gating the fire on !oppLoading meant a brand switch
+    // held brand A's brief on screen until brand B's /gaps/opportunities
+    // resolved. While the new brand's feed is loading, the brief must show the
+    // busy state, never the previous brand's content.
+    mockRag({
+      mutate: vi.fn(),
+      data: {
+        response: 'Kisqali real insight from the West region.',
+        evidence: [{ content: 'West region NBRx', source: 'kpi' }],
+        hop_count: 2,
+        visualization_config: {},
+        routed_agents: [],
+      },
+    } as unknown as Partial<RagMutation>);
+    mockOpps({ data: OPP_CONTEXT });
+
+    const { rerender } = render(<ExecutiveAIBrief brand="Kisqali" />);
+    expect(screen.getByText(/Kisqali real insight/)).toBeInTheDocument();
+
+    // Brand switches; the new brand's opportunities are still loading.
+    mockOpps({ data: undefined, isLoading: true });
+    rerender(<ExecutiveAIBrief brand="Fabhalta" />);
+
+    expect(screen.queryByText(/Kisqali real insight/)).not.toBeInTheDocument();
   });
 });
