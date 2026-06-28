@@ -77,3 +77,51 @@ async def test_get_data_prefers_tier0_passthrough_over_failclosed():
     }
     out = await node._get_data(state)
     assert out is frame
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_uplift_binary_treatment_produces_metrics_not_out_of_bounds():
+    """Regression: with binary treatment {0,1}, the node left ``UpliftConfig.control_name``
+    at its default ``"control"`` — which matches neither ``"0"`` nor ``"1"``. CausalML
+    then treated BOTH values as treatment groups and returned a 2-D ``(n, 2)`` uplift
+    prediction. The metric / segment / targeting consumers flatten ``uplift_scores`` to
+    ``2n`` and index the ``n``-length treatment array, raising
+    ``index <2n-ish> is out of bounds for axis 0 with size <n>`` -> uplift failed and the
+    live page's uplift came back empty. The node must identify the control group and
+    produce per-unit (1-D) uplift aligned to ``n`` so AUUC/Qini compute.
+    """
+    import numpy as np
+
+    n = 240
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(
+        {
+            "treatment_arm": rng.integers(0, 2, n),
+            "persistent_180d": rng.integers(0, 2, n),
+            "disease_severity": rng.normal(size=n),
+            "engagement_score": rng.normal(size=n),
+            "age_at_diagnosis": rng.normal(size=n),
+            "disease_severity_band": rng.choice(["low", "medium", "high"], n),
+        }
+    )
+    state = {
+        "status": "completed",
+        "treatment_var": "treatment_arm",
+        "outcome_var": "persistent_180d",
+        "effect_modifiers": ["disease_severity", "engagement_score", "age_at_diagnosis"],
+        "segment_vars": ["disease_severity_band"],
+        "tier0_data": df,
+        "data_source": "patient_journeys",
+        "filters": None,
+    }
+    node = UpliftAnalyzerNode(model_type="random_forest", n_estimators=10, max_depth=4)
+    result = await node.execute(state)
+
+    # Uplift must have SUCCEEDED — before the fix this hit the out-of-bounds and
+    # returned the failed/empty path (no auuc, "failed" warning).
+    assert "Uplift analysis failed - continuing with CATE results only" not in result.get(
+        "warnings", []
+    )
+    assert result.get("overall_auuc") is not None
+    assert result.get("uplift_by_segment")

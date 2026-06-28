@@ -47,6 +47,19 @@ class UpliftAnalyzerOutput(TypedDict):
     uplift_latency_ms: int
 
 
+def _control_label(treatment: np.ndarray) -> str:
+    """Stringified control-group label for CausalML's ``control_name``.
+
+    ``BaseUpliftModel.fit`` stringifies treatment values with ``str(t)`` and derives
+    treatment groups as ``[str(g) for g in sorted(unique(treatment)) if str(g) != control_name]``.
+    For CausalML to recognize the control group, ``control_name`` must equal one of
+    those strings. Our substrate is binary {0,1} with 0=control, so the control is the
+    smallest distinct value; return ``str(...)`` of it (same encoding base.fit uses).
+    """
+    vals = np.unique(np.asarray(treatment))
+    return str(vals[0]) if len(vals) else "0"
+
+
 class UpliftAnalyzerNode:
     """Analyze treatment effect heterogeneity using CausalML uplift models.
 
@@ -136,6 +149,17 @@ class UpliftAnalyzerNode:
 
             # Fit uplift model and get scores
             uplift_scores, model_info = await self._fit_uplift_model(X, treatment, y)
+
+            # CausalML uplift models return per-treatment-group columns
+            # (n_samples, n_groups). Reduce to the single treatment-vs-control
+            # column so every downstream consumer (metrics, segments, targeting)
+            # aligns 1:1 with treatment/y (length n). Without this the metric
+            # functions flatten() inflates the array to n*n_groups and indexes the
+            # n-length treatment array out of bounds — failing uplift on every run
+            # (see test_uplift_binary_treatment_produces_metrics_not_out_of_bounds).
+            uplift_scores = np.asarray(uplift_scores)
+            if uplift_scores.ndim > 1:
+                uplift_scores = uplift_scores[:, -1]
 
             # Calculate metrics
             metrics = self._calculate_metrics(uplift_scores, treatment, y)
@@ -387,6 +411,11 @@ class UpliftAnalyzerNode:
             max_depth=self.max_depth,
             min_samples_leaf=max(10, len(X) // 50),
             random_state=42,
+            # CausalML needs the control group's (stringified) label to match an
+            # actual treatment value. Our binary treatment is {0,1} with 0=control;
+            # leaving the default "control" matched NEITHER, so CausalML treated both
+            # 0 and 1 as treatments and returned a degenerate (n, 2) prediction.
+            control_name=_control_label(treatment),
         )
 
         model = UpliftRandomForest(config)
@@ -435,6 +464,9 @@ class UpliftAnalyzerNode:
             meta_learner=GradientBoostingMetaLearner.T_LEARNER,
             use_xgboost=False,  # Use sklearn for compatibility
             random_state=42,
+            # See _fit_random_forest: the control label must match an actual
+            # treatment value (binary {0,1}, 0=control), not the default "control".
+            control_name=_control_label(treatment),
         )
 
         model = UpliftGradientBoosting(config)

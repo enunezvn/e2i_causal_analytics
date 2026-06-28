@@ -20,6 +20,7 @@ route's mapping + guards only, mirroring tests/unit/test_api/test_label_gater_co
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pandas as pd
 import pytest
 from fastapi import HTTPException
@@ -195,6 +196,45 @@ async def test_execute_maps_strategic_and_hierarchical_fields(stub_request, rich
     assert result.uplift_by_segment == {
         "disease_severity_band": [{"segment": "high", "uplift": 0.5}]
     }
+
+
+@pytest.mark.asyncio
+async def test_execute_coerces_numpy_scalars_so_response_serializes(
+    stub_request, rich_graph_result
+):
+    """Regression: pandas-derived numpy scalars (e.g. per-segment sizes/counts from
+    groupby/value_counts) leaked into the ``Dict[str, Any]`` / ``List[Dict[str, Any]]``
+    response fields (segment_comparison, hierarchical_segment_results, uplift_by_segment).
+
+    ``numpy.int64`` is NOT a python ``int`` subclass, so Pydantic stored it
+    un-coerced and the durable store's ``response.model_dump_json()`` raised
+    ``Unable to serialize unknown type: <class 'numpy.int64'>`` -> the whole
+    background analysis was marked FAILED on the live page. The route must coerce
+    numpy scalars to native python so the response serializes cleanly.
+    """
+    result = dict(rich_graph_result)
+    result["segment_comparison"] = {"effect_ratio": np.float64(3.3), "mid_count": np.int64(1)}
+    result["hierarchical_segment_results"] = [
+        {"segment_id": "sev_high", "size": np.int64(40), "cate_mean": np.float64(0.5)}
+    ]
+    result["uplift_by_segment"] = {"band": [{"segment": "high", "n": np.int64(7)}]}
+    result["feature_importance"] = {"disease_severity": np.float64(0.6)}
+
+    with _patch_loader(_make_stub_frame()), _patch_graph(result):
+        resp = await _execute_segment_analysis(stub_request)
+
+    # The durable store persists via model_dump_json(); this MUST NOT raise.
+    payload = resp.model_dump_json()
+    assert '"mid_count":1' in payload
+
+    # numpy scalars are coerced to native python (round-trip + type).
+    assert resp.segment_comparison["mid_count"] == 1
+    assert isinstance(resp.segment_comparison["mid_count"], int)
+    assert not isinstance(resp.segment_comparison["mid_count"], np.generic)
+    assert resp.hierarchical_segment_results[0]["size"] == 40
+    assert isinstance(resp.hierarchical_segment_results[0]["size"], int)
+    assert resp.uplift_by_segment["band"][0]["n"] == 7
+    assert isinstance(resp.uplift_by_segment["band"][0]["n"], int)
 
 
 @pytest.mark.asyncio
