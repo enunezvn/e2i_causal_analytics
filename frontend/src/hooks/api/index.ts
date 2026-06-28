@@ -59,6 +59,7 @@ export {
   useDiscoverEffects,
   useCausalBrands,
   useClinicalContext,
+  useTreatmentEffects,
   useRunHierarchicalAnalysis,
   useRunHierarchicalAnalysisAndWait,
   useRunCausalAgentAnalysis,

@@ -35,6 +35,7 @@ vi.mock('@/hooks/api', () => ({
   useRunCausalAgentAnalysis: vi.fn(),
   useEstimators: vi.fn(),
   useClinicalContext: vi.fn(),
+  useTreatmentEffects: vi.fn(),
 }));
 
 vi.mock('@/api/causal', () => ({
@@ -50,6 +51,7 @@ import {
   useRunCausalAgentAnalysis,
   useEstimators,
   useClinicalContext,
+  useTreatmentEffects,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 
@@ -157,6 +159,12 @@ describe('CausalAnalysis — unified agent-led page', () => {
       error: null,
     });
     (useClinicalContext as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+    (useTreatmentEffects as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: undefined,
+      isFetching: false,
+      isError: false,
+      error: null,
+    });
     (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(DETAIL);
     mockDiscover();
   });
@@ -385,5 +393,18 @@ describe('CausalAnalysis — unified agent-led page', () => {
     });
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     expect(screen.getByText('12')).toBeInTheDocument();
+  }, 20000);
+
+  it('renders a Treatment effects tab with the cohort×brand ATE card', async () => {
+    const user = userEvent.setup();
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+
+    const tab = await screen.findByRole('tab', { name: /treatment effects/i });
+    await user.click(tab);
+
+    expect(await screen.findByText(/Treatment Effect by Cohort/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Cohort$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Brand$/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /run estimate/i })).toBeInTheDocument();
   }, 20000);
 });
