@@ -303,6 +303,40 @@ async def test_get_segment_analysis_not_found():
     assert "not found" in str(exc_info.value)
 
 
+def test_get_segment_datasets_route_not_shadowed_by_analysis_id():
+    """GET /segments/datasets must reach get_segment_datasets, NOT the greedy
+    GET /segments/{analysis_id} route.
+
+    Regression: /datasets was declared AFTER /{analysis_id} in segments.py. FastAPI
+    matches routes in declaration order with no specificity ranking, so a request
+    to /segments/datasets matched the path-param route first -> get_segment_analysis
+    (analysis_id="datasets") -> 404. The FE config dropdowns then silently fell back
+    to a single curated default each (brand list empty -> only "All brands"). Static
+    paths MUST be declared before path-param routes. This test exercises the real
+    ASGI route table (TestClient), which the direct-call handler tests do not.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.routes.segments import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    with patch(
+        "src.api.routes.causal._list_dataset_brands",
+        new=AsyncMock(return_value=["Remibrutinib", "Fabhalta", "Kisqali"]),
+    ):
+        client = TestClient(app)
+        resp = client.get("/segments/datasets")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["treatments"], "treatments must be populated from the curated spec"
+    assert body["outcomes"], "outcomes must be populated from the curated spec"
+    assert body["brands"] == ["Remibrutinib", "Fabhalta", "Kisqali"]
+
+
 # =============================================================================
 # ENDPOINT TESTS - list_policies
 # =============================================================================
