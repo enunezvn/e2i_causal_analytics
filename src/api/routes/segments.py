@@ -1198,6 +1198,68 @@ async def get_segment_health() -> SegmentHealthResponse:
     )
 
 
+# =============================================================================
+# DATASET CONFIG ENDPOINT
+# =============================================================================
+#
+# ⚠️ ROUTE ORDER: this literal "/datasets" route MUST be declared BEFORE the
+# greedy "/{analysis_id}" route below. FastAPI matches routes in declaration
+# order with no specificity ranking, so if "/{analysis_id}" comes first a
+# request to GET /segments/datasets is captured by it (analysis_id="datasets")
+# -> get_segment_analysis -> 404. That silently degraded the FE config dropdowns
+# to a single curated default each (brands empty -> only "All brands"). Keep all
+# fixed-path GET routes ahead of the path-param route. (See test_segments.py:
+# test_get_segment_datasets_route_not_shadowed_by_analysis_id.)
+
+
+class SegmentDatasetsResponse(BaseModel):
+    """Curated config options for the Segment Analysis page (data-driven FE)."""
+
+    treatments: List[str] = Field(..., description="Curated selectable treatment columns")
+    outcomes: List[str] = Field(..., description="Curated selectable outcome columns")
+    brands: List[str] = Field(
+        default_factory=list,
+        description="Distinct brands present in the gold-standard cohort (filter)",
+    )
+
+
+@router.get(
+    "/datasets",
+    response_model=SegmentDatasetsResponse,
+    summary="Curated segment-analysis config options",
+    operation_id="get_segment_datasets",
+    description=(
+        "Curated treatment/outcome options + data-driven brand list for the "
+        "agent-driven Segment Analysis page (patient_journeys substrate)."
+    ),
+)
+async def get_segment_datasets() -> SegmentDatasetsResponse:
+    """Return the curated treatment/outcome options and the live brand list.
+
+    Treatment/outcome come from the patient_journeys allowlist SSOT in causal.py.
+    Brands are data-driven (distinct brands in the live cohort); fail-soft to an
+    empty list (FE shows "All brands") if the store / import is unavailable.
+    """
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+
+    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
+
+    brands: List[str] = []
+    try:
+        from src.api.routes.causal import _list_dataset_brands
+
+        brands = await _list_dataset_brands(_SEGMENT_HTE_DATASET)
+    except Exception as e:  # pragma: no cover - fail-soft, FE shows "All brands"
+        logger.warning(f"Segment datasets: brand list unavailable, returning []: {e}")
+        brands = []
+
+    return SegmentDatasetsResponse(
+        treatments=list(spec["treatment"]),
+        outcomes=list(spec["outcome"]),
+        brands=brands,
+    )
+
+
 @router.get(
     "/{analysis_id}",
     response_model=SegmentAnalysisResponse,
@@ -1462,59 +1524,6 @@ async def _load_segment_hte_frame(
         frame["age_band"] = frame["age_at_diagnosis"].map(_band_age)
 
     return frame
-
-
-# =============================================================================
-# DATASET CONFIG ENDPOINT
-# =============================================================================
-
-
-class SegmentDatasetsResponse(BaseModel):
-    """Curated config options for the Segment Analysis page (data-driven FE)."""
-
-    treatments: List[str] = Field(..., description="Curated selectable treatment columns")
-    outcomes: List[str] = Field(..., description="Curated selectable outcome columns")
-    brands: List[str] = Field(
-        default_factory=list,
-        description="Distinct brands present in the gold-standard cohort (filter)",
-    )
-
-
-@router.get(
-    "/datasets",
-    response_model=SegmentDatasetsResponse,
-    summary="Curated segment-analysis config options",
-    operation_id="get_segment_datasets",
-    description=(
-        "Curated treatment/outcome options + data-driven brand list for the "
-        "agent-driven Segment Analysis page (patient_journeys substrate)."
-    ),
-)
-async def get_segment_datasets() -> SegmentDatasetsResponse:
-    """Return the curated treatment/outcome options and the live brand list.
-
-    Treatment/outcome come from the patient_journeys allowlist SSOT in causal.py.
-    Brands are data-driven (distinct brands in the live cohort); fail-soft to an
-    empty list (FE shows "All brands") if the store / import is unavailable.
-    """
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
-
-    spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
-
-    brands: List[str] = []
-    try:
-        from src.api.routes.causal import _list_dataset_brands
-
-        brands = await _list_dataset_brands(_SEGMENT_HTE_DATASET)
-    except Exception as e:  # pragma: no cover - fail-soft, FE shows "All brands"
-        logger.warning(f"Segment datasets: brand list unavailable, returning []: {e}")
-        brands = []
-
-    return SegmentDatasetsResponse(
-        treatments=list(spec["treatment"]),
-        outcomes=list(spec["outcome"]),
-        brands=brands,
-    )
 
 
 async def _run_segment_analysis_task(
