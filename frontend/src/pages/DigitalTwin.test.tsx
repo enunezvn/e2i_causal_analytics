@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import DigitalTwin from './DigitalTwin';
@@ -407,11 +407,12 @@ describe('DigitalTwin', () => {
     render(<DigitalTwin />, { wrapper: createWrapper() });
 
     // Real ATE point estimate + CI bounds from the flat SimulationResponse.
-    // Use getAllByText because the Supporting Evidence section also surfaces these
-    // values — two occurrences are now expected and both are correct.
-    expect(screen.getAllByText(/0\.085/).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText(/0\.052/).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText(/0\.118/).length).toBeGreaterThanOrEqual(1);
+    // Each value now renders EXACTLY twice: once in the metrics grid and once in
+    // the Supporting Evidence list. Pinning to 2 catches a regression where the
+    // evidence section stops rendering (the grid alone would yield 1).
+    expect(screen.getAllByText(/0\.085/)).toHaveLength(2); // ATE (grid value + evidence line)
+    expect(screen.getAllByText(/0\.052/)).toHaveLength(2); // CI lower (grid hint + evidence line)
+    expect(screen.getAllByText(/0\.118/)).toHaveLength(2); // CI upper (grid hint + evidence line)
     // Real recommendation + rationale (not the sample text).
     expect(screen.getByText('Deploy')).toBeInTheDocument();
     expect(
@@ -421,9 +422,10 @@ describe('DigitalTwin', () => {
     expect(screen.getByText(/1840\s*ms/i)).toBeInTheDocument();
   });
 
-  it('renders a Supporting Evidence list for a completed simulation', async () => {
+  it('renders a Supporting Evidence list derived from the fixture values', async () => {
     // Reuse the exact mockRunResult fixture (is_significant: true,
-    // statistical_power: 0.86) — no fixture extension needed.
+    // effect_size_cohens_d: 0.42, statistical_power: 0.86,
+    // simulated_ate: 0.085, CI [0.052, 0.118]) — no fixture extension needed.
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,
       isPending: false,
@@ -433,10 +435,20 @@ describe('DigitalTwin', () => {
     });
     render(<DigitalTwin />, { wrapper: createWrapper() });
 
-    expect(await screen.findByText(/Supporting Evidence/i)).toBeInTheDocument();
-    expect(screen.getByText(/statistically significant/i)).toBeInTheDocument();
-    // mockRunResult has statistical_power: 0.86 — the power line must render.
-    expect(screen.getByText(/Statistical power:/i)).toBeInTheDocument();
+    // Locate the evidence SECTION (the heading's container) and scope all
+    // value assertions to it — proving the bullets reflect the fixture, not a
+    // hardcoded constant block that merely shares the labels.
+    const heading = await screen.findByText('Supporting Evidence');
+    const section = heading.closest('div') as HTMLElement;
+    expect(section).not.toBeNull();
+    const ev = within(section);
+
+    // Label text + every DERIVED value from the fixture must appear here:
+    expect(ev.getByText(/statistically significant/i)).toBeInTheDocument();
+    expect(ev.getByText(/ATE: 0\.085/)).toBeInTheDocument(); // simulated_ate
+    expect(ev.getByText(/Cohen's d\): 0\.42/)).toBeInTheDocument(); // effect_size_cohens_d
+    expect(ev.getByText(/Statistical power: 86%/)).toBeInTheDocument(); // 0.86 → 86%
+    expect(ev.getByText(/95% CI: \[0\.052, 0\.118\]/)).toBeInTheDocument(); // CI bounds
   });
 
   it('shows a SYNTHETIC badge when the result data_provenance is synthetic', () => {
@@ -529,8 +541,8 @@ describe('DigitalTwin', () => {
         screen.getByText(/Historical detail rationale for sim-001/i)
       ).toBeInTheDocument();
     });
-    // The Supporting Evidence section also shows "ATE: 0.067"; use getAllByText.
-    expect(screen.getAllByText(/0\.067/).length).toBeGreaterThanOrEqual(1);
+    // The detail ATE renders twice: metrics grid value + "ATE: 0.067" evidence line.
+    expect(screen.getAllByText(/0\.067/)).toHaveLength(2);
     expect(useSimulation as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'real-sim-001',
       expect.anything()

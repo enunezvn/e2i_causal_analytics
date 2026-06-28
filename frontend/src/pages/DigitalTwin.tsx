@@ -365,6 +365,23 @@ function provenanceLabel(provenance: string): string {
 function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
   const fmt = (n: number) => n.toFixed(3);
 
+  // Supporting evidence — plain-English summary of the signals behind the
+  // recommendation (ported from the retired Intervention Impact page, T10).
+  // Three of the four bullets are conditional, so an array + .map() reads
+  // cleaner than four conditional <li> blocks. Values are DERIVED from the
+  // simulation fields (not constants).
+  const evidence: string[] = [];
+  if (simulation.is_significant) {
+    evidence.push(`Effect is statistically significant (ATE: ${fmt(simulation.simulated_ate)})`);
+  }
+  if (simulation.effect_size_cohens_d != null) {
+    evidence.push(`Effect size (Cohen's d): ${simulation.effect_size_cohens_d.toFixed(2)}`);
+  }
+  if (simulation.statistical_power != null) {
+    evidence.push(`Statistical power: ${(simulation.statistical_power * 100).toFixed(0)}%`);
+  }
+  evidence.push(`95% CI: [${fmt(simulation.simulated_ci_lower)}, ${fmt(simulation.simulated_ci_upper)}]`);
+
   return (
     <div className="space-y-6">
       {/* Title — identifies WHAT this simulation is (intervention · brand), so an
@@ -412,43 +429,23 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
         </div>
       </div>
 
-      {/* Supporting evidence — plain-English summary of the signals behind the
-          recommendation (ported from the retired Intervention Impact page, T10). */}
-      {(() => {
-        const evidence: string[] = [];
-        if (simulation.is_significant) {
-          evidence.push(
-            `Effect is statistically significant (ATE: ${simulation.simulated_ate.toFixed(3)})`,
-          );
-        }
-        if (simulation.effect_size_cohens_d != null) {
-          evidence.push(`Effect size (Cohen's d): ${simulation.effect_size_cohens_d.toFixed(2)}`);
-        }
-        if (simulation.statistical_power != null) {
-          evidence.push(`Statistical power: ${(simulation.statistical_power * 100).toFixed(0)}%`);
-        }
-        evidence.push(
-          `95% CI: [${simulation.simulated_ci_lower.toFixed(3)}, ${simulation.simulated_ci_upper.toFixed(3)}]`,
-        );
-        return (
-          <div>
-            <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2">
-              Supporting Evidence
-            </h4>
-            <ul className="space-y-1">
-              {evidence.map((point, idx) => (
-                <li
-                  key={idx}
-                  className="flex items-start gap-2 text-sm text-[var(--color-text-primary)]"
-                >
-                  <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 flex-shrink-0" />
-                  <span>{point}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        );
-      })()}
+      {/* Supporting evidence (derived above from the simulation fields). */}
+      <div>
+        <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2">
+          Supporting Evidence
+        </h4>
+        <ul className="space-y-1">
+          {evidence.map((point) => (
+            <li
+              key={point}
+              className="flex items-start gap-2 text-sm text-[var(--color-text-primary)]"
+            >
+              <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 flex-shrink-0" />
+              <span>{point}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
 
       {/* Fidelity warning (only when the backend flags one) */}
       {simulation.fidelity_warning && (
