@@ -180,6 +180,9 @@ function interventionTypesResult(
 }
 
 // Markers that ONLY appear in the old fabricated shape — must never render.
+// NOTE: 'Supporting Evidence' was removed from this list — it is now a real,
+// data-driven section derived from backend fields (T10 port from Intervention
+// Impact page). It renders only when a completed simulation is present.
 const FABRICATED_MARKERS = [
   'TRx Lift',
   'NRx Lift',
@@ -187,7 +190,6 @@ const FABRICATED_MARKERS = [
   'Calibration',
   'Temporal Alignment',
   'Feature Completeness',
-  'Supporting Evidence',
   'Risk Factors',
   'Simulation indicates strong positive ATE', // SAMPLE_SIMULATION rationale
 ];
@@ -405,9 +407,11 @@ describe('DigitalTwin', () => {
     render(<DigitalTwin />, { wrapper: createWrapper() });
 
     // Real ATE point estimate + CI bounds from the flat SimulationResponse.
-    expect(screen.getByText(/0\.085/)).toBeInTheDocument();
-    expect(screen.getByText(/0\.052/)).toBeInTheDocument();
-    expect(screen.getByText(/0\.118/)).toBeInTheDocument();
+    // Use getAllByText because the Supporting Evidence section also surfaces these
+    // values — two occurrences are now expected and both are correct.
+    expect(screen.getAllByText(/0\.085/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/0\.052/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/0\.118/).length).toBeGreaterThanOrEqual(1);
     // Real recommendation + rationale (not the sample text).
     expect(screen.getByText('Deploy')).toBeInTheDocument();
     expect(
@@ -415,6 +419,24 @@ describe('DigitalTwin', () => {
     ).toBeInTheDocument();
     // Real execution time.
     expect(screen.getByText(/1840\s*ms/i)).toBeInTheDocument();
+  });
+
+  it('renders a Supporting Evidence list for a completed simulation', async () => {
+    // Reuse the exact mockRunResult fixture (is_significant: true,
+    // statistical_power: 0.86) — no fixture extension needed.
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: mockRunResult,
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText(/Supporting Evidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/statistically significant/i)).toBeInTheDocument();
+    // mockRunResult has statistical_power: 0.86 — the power line must render.
+    expect(screen.getByText(/Statistical power:/i)).toBeInTheDocument();
   });
 
   it('shows a SYNTHETIC badge when the result data_provenance is synthetic', () => {
@@ -507,7 +529,8 @@ describe('DigitalTwin', () => {
         screen.getByText(/Historical detail rationale for sim-001/i)
       ).toBeInTheDocument();
     });
-    expect(screen.getByText(/0\.067/)).toBeInTheDocument();
+    // The Supporting Evidence section also shows "ATE: 0.067"; use getAllByText.
+    expect(screen.getAllByText(/0\.067/).length).toBeGreaterThanOrEqual(1);
     expect(useSimulation as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       'real-sim-001',
       expect.anything()

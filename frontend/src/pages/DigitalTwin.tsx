@@ -23,6 +23,7 @@ import {
   History,
   AlertTriangle,
   CheckCircle,
+  CheckCircle2,
   XCircle,
   RefreshCw,
   BarChart3,
@@ -410,6 +411,44 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
           )}
         </div>
       </div>
+
+      {/* Supporting evidence — plain-English summary of the signals behind the
+          recommendation (ported from the retired Intervention Impact page, T10). */}
+      {(() => {
+        const evidence: string[] = [];
+        if (simulation.is_significant) {
+          evidence.push(
+            `Effect is statistically significant (ATE: ${simulation.simulated_ate.toFixed(3)})`,
+          );
+        }
+        if (simulation.effect_size_cohens_d != null) {
+          evidence.push(`Effect size (Cohen's d): ${simulation.effect_size_cohens_d.toFixed(2)}`);
+        }
+        if (simulation.statistical_power != null) {
+          evidence.push(`Statistical power: ${(simulation.statistical_power * 100).toFixed(0)}%`);
+        }
+        evidence.push(
+          `95% CI: [${simulation.simulated_ci_lower.toFixed(3)}, ${simulation.simulated_ci_upper.toFixed(3)}]`,
+        );
+        return (
+          <div>
+            <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2">
+              Supporting Evidence
+            </h4>
+            <ul className="space-y-1">
+              {evidence.map((point, idx) => (
+                <li
+                  key={idx}
+                  className="flex items-start gap-2 text-sm text-[var(--color-text-primary)]"
+                >
+                  <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 flex-shrink-0" />
+                  <span>{point}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })()}
 
       {/* Fidelity warning (only when the backend flags one) */}
       {simulation.fidelity_warning && (
