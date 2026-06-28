@@ -2,16 +2,11 @@
  * Digital Twin Components Index
  * =============================
  *
- * Components for digital twin simulation visualization.
+ * The dedicated /digital-twin page (pages/DigitalTwin.tsx) implements its
+ * simulation UI inline. The standalone SimulationPanel/ScenarioResults/
+ * RecommendationCards components were removed with the /intervention-impact
+ * retirement (T10) — this barrel is intentionally empty.
  *
  * @module components/digital-twin
  */
-
-export { SimulationPanel } from './SimulationPanel';
-export type { SimulationPanelProps } from './SimulationPanel';
-
-export { ScenarioResults } from './ScenarioResults';
-export type { ScenarioResultsProps } from './ScenarioResults';
-
-export { RecommendationCards } from './RecommendationCards';
-export type { RecommendationCardsProps } from './RecommendationCards';
+export {};
