@@ -45,7 +45,7 @@ export const InterventionTypeEnum = z.enum([
 
 /**
  * Digital twin simulation request schema
- * Used by SimulationPanel and DigitalTwin page
+ * Used by the DigitalTwin page
  */
 export const SimulationRequestSchema = z.object({
   intervention_type: InterventionTypeEnum,

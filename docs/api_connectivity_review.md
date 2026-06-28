@@ -144,7 +144,7 @@ Result: 405 Method Not Allowed at runtime. Either change the frontend verb or ad
 
 ```
 Live (backend-backed):  Home, Analytics, KnowledgeGraph, MemoryArchitecture,
-                        KPIDictionary, SystemHealth, InterventionImpact
+                        KPIDictionary, SystemHealth
 
 Health-only + samples:  CausalAnalysis, SegmentAnalysis, GapAnalysis,
                         FeedbackLearning, AuditChain
@@ -169,7 +169,7 @@ Mock-only (no API):     Monitoring, AIAgentInsights*, CausalDiscovery,
 | `MemoryArchitecture.tsx` | `useMemoryStats`, `useEpisodicMemories` | `/api/memory/stats`, `/api/memory/episodic` | **Partly broken** — `useEpisodicMemories` is GET to an endpoint that's only POST on the backend (see §4.4) |
 | `KPIDictionary.tsx` | `useKPIList`, `useWorkstreams`, `useKPIHealth` | `/api/kpis*` | Live | |
 | `SystemHealth.tsx` | `useAlerts`, `useMonitoringRuns` | `/api/monitoring/alerts`, `/api/monitoring/runs` | Live | |
-| `InterventionImpact.tsx` | `useRunSimulation` | `POST /api/digital-twin/simulate` | Live | |
+| `DigitalTwin.tsx` (dedicated page) | `useRunSimulation` | `POST /api/digital-twin/simulate` | Live | `/intervention-impact` retired — redirects to `/causal-analysis`; simulate call now served exclusively by `DigitalTwin.tsx` |
 | `CausalAnalysis.tsx` | `useCausalHealth`, `useRunHierarchicalAnalysis` | `/api/causal/health` only (mutation imported but result never bound to charts) | Sample data | L243 health probe; L59+ sample tables |
 | `SegmentAnalysis.tsx` | `useSegmentHealth`, `useRunSegmentAnalysis`, `usePolicies` | `/api/segments/health`, `/api/segments/policies` | Sample data | `sampleAnalysisResult` at L59 |
 | `GapAnalysis.tsx` | `useGapHealth` | `/api/gaps/health` | Sample data | L275 health probe; L278 fallback to SAMPLE_GAPS |
