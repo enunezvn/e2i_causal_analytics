@@ -9,7 +9,7 @@ import { ROUTES } from '../fixtures/test-data'
  * moved to the agent-led `/causal-analysis` page; its other tabs duplicated
  * `/causal-analysis` (History), the Segment Analysis page, and `/digital-twin`.
  * The old route is now a client-side redirect. This POM only asserts the
- * redirect; Treatment Effects behavior is covered by causal-analysis.spec.ts.
+ * redirect; Treatment Effects behavior is covered by CausalAnalysis.test.tsx.
  */
 export class InterventionImpactPage extends BasePage {
   readonly url = ROUTES.INTERVENTION_IMPACT
