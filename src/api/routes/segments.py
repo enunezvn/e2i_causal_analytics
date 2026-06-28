@@ -1677,7 +1677,10 @@ async def _execute_segment_analysis(
             # #27: echo the level the CATE CIs were computed at (alpha=significance_level).
             confidence_level=1.0 - request.significance_level,
             heterogeneity_score=result.get("heterogeneity_score"),
-            feature_importance=result.get("feature_importance"),
+            # _to_native: coerce numpy scalars in the Dict/Any-typed fields below so
+            # the durable store's model_dump_json() can serialize them (numpy.int64
+            # is not JSON/Pydantic-serializable and otherwise fails the analysis).
+            feature_importance=_to_native(result.get("feature_importance")),
             uplift_metrics=_convert_uplift_metrics(result),
             high_responders=_convert_segment_profiles(result.get("high_responders", [])),
             # mid_responders (responder_type="average") — the converter already
@@ -1691,7 +1694,7 @@ async def _execute_segment_analysis(
             # Clinical-HTE rebuild: map the fields that were previously dropped at
             # the route (codex LOW-2 — read from the final graph state directly).
             strategic_interpretation=result.get("strategic_interpretation"),
-            segment_comparison=result.get("segment_comparison"),
+            segment_comparison=_to_native(result.get("segment_comparison")),
             # NOTE: the hierarchical node emits the key 'segment_heterogeneity'
             # (NOT 'segment_heterogeneity_score', which is the TypedDict field).
             segment_heterogeneity=result.get("segment_heterogeneity"),
@@ -1701,8 +1704,8 @@ async def _execute_segment_analysis(
             # read the key actually emitted, else this is always None.
             segmentation_method_used=result.get("segmentation_method"),
             overall_hierarchical_ate=result.get("overall_hierarchical_ate"),
-            hierarchical_segment_results=result.get("hierarchical_segment_results"),
-            uplift_by_segment=result.get("uplift_by_segment"),
+            hierarchical_segment_results=_to_native(result.get("hierarchical_segment_results")),
+            uplift_by_segment=_to_native(result.get("uplift_by_segment")),
             key_insights=result.get("key_insights", []),
             libraries_used=result.get("libraries_executed"),
             library_agreement_score=result.get("library_agreement_score"),
@@ -1725,6 +1728,33 @@ async def _execute_segment_analysis(
     except Exception as e:
         logger.error(f"Segment analysis execution failed: {e}")
         raise
+
+
+def _to_native(obj: Any) -> Any:
+    """Recursively coerce numpy scalars / arrays to native python types.
+
+    The agent's pandas/numpy pipeline emits numpy scalars (e.g. per-segment sizes
+    and counts from ``groupby``/``value_counts``). ``numpy.int64`` is NOT a python
+    ``int`` subclass, so it leaks un-coerced through the response's
+    ``Dict[str, Any]`` / ``List[Dict[str, Any]]`` fields (segment_comparison,
+    hierarchical_segment_results, uplift_by_segment) and breaks the durable store's
+    ``response.model_dump_json()`` with
+    ``Unable to serialize unknown type: <class 'numpy.int64'>`` — failing the whole
+    background analysis. Coerce at the route boundary so the response serializes.
+    (``numpy.float64`` IS a python ``float`` subclass and serializes fine, but we
+    normalise it too for consistency.)
+    """
+    import numpy as np
+
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return [_to_native(v) for v in obj.tolist()]
+    if isinstance(obj, np.generic):  # numpy scalar: int64 / float64 / bool_ / ...
+        return obj.item()
+    return obj
 
 
 def _convert_cate_results(
