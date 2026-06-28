@@ -23,6 +23,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
   AlertTriangle,
+  Beaker,
   CheckCircle,
   ChevronRight,
   GitBranch,
@@ -73,9 +74,10 @@ import {
   useRunCausalAgentAnalysis,
   useEstimators,
   useClinicalContext,
+  useTreatmentEffects,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
-import type { DiscoveredEffect } from '@/types/causal';
+import type { DiscoveredEffect, CohortName } from '@/types/causal';
 
 // =============================================================================
 // CONSTANTS
@@ -139,6 +141,20 @@ const DEFAULT_HEALTH = {
 function formatEffect(ate: number | null | undefined): string {
   if (ate === null || ate === undefined || Number.isNaN(ate)) return 'N/A';
   return ate.toFixed(4);
+}
+
+// Treatment Effects selector options (the 12 cells = 4 cohorts x 3 brands).
+const TE_COHORT_OPTIONS: { value: CohortName; label: string }[] = [
+  { value: 'initiation', label: 'Initiation (patient)' },
+  { value: 'persistence', label: 'Persistence 180d (patient)' },
+  { value: 'discontinuation', label: 'Discontinuation 180d (patient)' },
+  { value: 'hcp_adoption', label: 'HCP adoption' },
+];
+const TE_BRAND_OPTIONS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
+
+// 4-digit numeric formatter for the treatment-effect readouts ('—' for null).
+function fmt(value: number | null | undefined, digits = 4): string {
+  return value === null || value === undefined ? '—' : value.toFixed(digits);
 }
 
 function formatCI(lower?: number | null, upper?: number | null): string {
@@ -281,6 +297,19 @@ export default function CausalAnalysis() {
     }
   };
 
+  // Treatment Effects tab: per cohort × brand ATE / CI / p-value via the real
+  // DoWhy+EconML pipeline. Gated behind an explicit Run (teRun) because each fit
+  // takes ~5-30s — do not fire on every dropdown change.
+  const [teCohort, setTeCohort] = useState<CohortName>('persistence');
+  const [teBrand, setTeBrand] = useState<string>('Remibrutinib');
+  const [teRun, setTeRun] = useState(false);
+  const {
+    data: teData,
+    isFetching: teFetching,
+    isError: teIsError,
+    error: teError,
+  } = useTreatmentEffects(teCohort, teBrand, { enabled: teRun });
+
   // ── Estimators + History tabs ──────────────────────────────────────────────
   const { data: healthData } = useCausalHealth();
   const {
@@ -323,8 +352,9 @@ export default function CausalAnalysis() {
           </h1>
           <p className="text-muted-foreground">
             The agent proposes the causal questions from the gold-standard data, validates each
-            (DAG + estimator + refutation gate), and ranks them by confidence and impact. No empty
-            form — the agent decides; you read the ranked, validated results.
+            (DAG + estimator + refutation gate), and ranks them by confidence and impact. Power
+            users can also pose a custom question or estimate a specific cohort&rsquo;s treatment
+            effect on demand.
           </p>
         </div>
         <Badge variant="outline" className="flex items-center gap-1 self-start">
@@ -378,10 +408,11 @@ export default function CausalAnalysis() {
       </div>
 
       <Tabs defaultValue="leaderboard" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="leaderboard">Validated effects</TabsTrigger>
           <TabsTrigger value="estimators">Estimators</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
+          <TabsTrigger value="treatment-effects">Treatment effects</TabsTrigger>
         </TabsList>
 
         {/* Leaderboard Tab (landing) */}
@@ -885,6 +916,173 @@ export default function CausalAnalysis() {
                 <EmptyState
                   title="No analyses recorded yet"
                   description="Completed causal analyses will appear here as they are run."
+                />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Treatment Effects Tab — REAL DoWhy+EconML ATE per (cohort, brand) */}
+        <TabsContent value="treatment-effects" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Beaker className="h-5 w-5" />
+                Treatment Effect by Cohort &amp; Brand
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Selectors + Run. The query is gated on Run so the heavy
+                  DoWhy+EconML fit is not fired on every dropdown change. */}
+              <div className="flex flex-wrap items-end gap-4">
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="te-cohort" className="text-sm font-medium">
+                    Cohort
+                  </label>
+                  <select
+                    id="te-cohort"
+                    value={teCohort}
+                    onChange={(e) => {
+                      setTeCohort(e.target.value as CohortName);
+                      setTeRun(false);
+                    }}
+                    className="p-2 border rounded-md text-sm bg-background"
+                  >
+                    {TE_COHORT_OPTIONS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="te-brand" className="text-sm font-medium">
+                    Brand
+                  </label>
+                  <select
+                    id="te-brand"
+                    value={teBrand}
+                    onChange={(e) => {
+                      setTeBrand(e.target.value);
+                      setTeRun(false);
+                    }}
+                    className="p-2 border rounded-md text-sm bg-background"
+                  >
+                    {TE_BRAND_OPTIONS.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Button onClick={() => setTeRun(true)} disabled={teFetching}>
+                  {teFetching ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Estimating…
+                    </>
+                  ) : (
+                    'Run estimate'
+                  )}
+                </Button>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Runs the live DoWhy + EconML pipeline over the confounded cohort
+                (de-confounded backdoor adjustment). A single fit takes ~5-30s.
+              </p>
+
+              {/* States: loading / error (503/408/etc.) / result / prompt */}
+              {teFetching && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Computing the treatment effect — this runs a real causal fit…
+                </div>
+              )}
+
+              {!teFetching && teIsError && (
+                <EmptyState
+                  title="Estimate unavailable"
+                  description={
+                    teError?.message ??
+                    'The estimate could not be computed (the cohort data was unavailable, the compute slot was saturated, or the request timed out). Try again shortly.'
+                  }
+                />
+              )}
+
+              {!teFetching && !teIsError && teData && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="rounded-lg border p-4">
+                      <div className="text-xs text-muted-foreground">ATE</div>
+                      <div className="text-2xl font-bold">{fmt(teData.ate)}</div>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                      <div className="text-xs text-muted-foreground">95% CI</div>
+                      <div className="text-lg font-semibold">
+                        {teData.ci_lower === null || teData.ci_lower === undefined
+                          ? '—'
+                          : `[${fmt(teData.ci_lower)}, ${fmt(teData.ci_upper)}]`}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                      <div className="text-xs text-muted-foreground">p-value</div>
+                      <div className="text-lg font-semibold">
+                        {teData.p_value === null || teData.p_value === undefined
+                          ? '—'
+                          : teData.p_value < 0.001
+                            ? '< 0.001'
+                            : fmt(teData.p_value, 3)}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border p-4">
+                      <div className="text-xs text-muted-foreground">n</div>
+                      <div className="text-2xl font-bold">{teData.n.toLocaleString()}</div>
+                    </div>
+                  </div>
+
+                  <div className="text-sm text-muted-foreground space-y-1">
+                    <div>
+                      <span className="font-medium text-foreground">Estimator:</span>{' '}
+                      {teData.estimator ?? '—'} · <span className="font-medium text-foreground">Method:</span>{' '}
+                      {teData.method}
+                    </div>
+                    <div>
+                      <span className="font-medium text-foreground">Treatment:</span>{' '}
+                      {teData.treatment_var} → <span className="font-medium text-foreground">Outcome:</span>{' '}
+                      {teData.outcome_var}
+                    </div>
+                    <div>
+                      <span className="font-medium text-foreground">Adjusted for:</span>{' '}
+                      {teData.confounders.join(', ') || '—'}
+                    </div>
+                    <div>
+                      <span className="font-medium text-foreground">Std. error:</span>{' '}
+                      {fmt(teData.std_error)} · <span className="font-medium text-foreground">Latency:</span>{' '}
+                      {teData.latency_ms.toLocaleString()} ms
+                    </div>
+                  </div>
+
+                  {teData.is_synthetic && (
+                    <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-800 dark:text-amber-300">
+                      Synthetic-gold showcase substrate — values are real estimates over synthetic data.
+                    </div>
+                  )}
+
+                  {teData.warnings.length > 0 && (
+                    <ul className="list-disc pl-5 text-xs text-muted-foreground space-y-1">
+                      {teData.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {!teFetching && !teIsError && !teData && (
+                <EmptyState
+                  title="Select a cohort and brand, then Run"
+                  description="Pick one of the 4 cohorts and 3 brands and click Run estimate to compute a real, de-confounded average treatment effect."
                 />
               )}
             </CardContent>

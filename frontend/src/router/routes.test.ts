@@ -40,7 +40,6 @@ describe('navigation sections (IA grouping)', () => {
     expect(causal?.routes.map((r) => r.title)).toEqual([
       'Knowledge Graph',
       'Causal Analysis',
-      'Intervention Impact',
       'Segment Analysis',
       'Expert Reviews',
     ]);

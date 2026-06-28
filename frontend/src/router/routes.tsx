@@ -13,7 +13,6 @@ const KnowledgeGraph = lazy(() => import('@/pages/KnowledgeGraph'));
 const ModelPerformance = lazy(() => import('@/pages/ModelPerformance'));
 const FeatureImportance = lazy(() => import('@/pages/FeatureImportance'));
 const TimeSeries = lazy(() => import('@/pages/TimeSeries'));
-const InterventionImpact = lazy(() => import('@/pages/InterventionImpact'));
 const PredictiveAnalytics = lazy(() => import('@/pages/PredictiveAnalytics'));
 const DataQuality = lazy(() => import('@/pages/DataQuality'));
 const SystemHealth = lazy(() => import('@/pages/SystemHealth'));
@@ -87,14 +86,6 @@ export const routeConfigs: RouteConfig[] = [
     title: 'Causal Analysis',
     description: 'Multi-library causal inference with hierarchical CATE estimation',
     icon: 'git-branch',
-    section: 'causal',
-    showInNav: true,
-  },
-  {
-    path: '/intervention-impact',
-    title: 'Intervention Impact',
-    description: 'Treatment effects and intervention analysis',
-    icon: 'target',
     section: 'causal',
     showInNav: true,
   },
@@ -363,15 +354,13 @@ export const routes: RouteObject[] = [
       </ProtectedRoute>
     ),
   },
+  // /intervention-impact retired (T10) — its unique Treatment Effects view moved
+  // to /causal-analysis; the other tabs duplicated /causal-analysis, the Segment
+  // Analysis page, and /digital-twin. Kept as a redirect so bookmarks + the e2e
+  // spec resolve (not a 404).
   {
     path: '/intervention-impact',
-    element: (
-      <ProtectedRoute>
-        <LazyPage>
-          <InterventionImpact />
-        </LazyPage>
-      </ProtectedRoute>
-    ),
+    element: <Navigate to="/causal-analysis" replace />,
   },
   {
     path: '/predictive-analytics',
