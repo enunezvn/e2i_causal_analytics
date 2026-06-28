@@ -169,7 +169,6 @@ Mock-only (no API):     Monitoring, AIAgentInsights*, CausalDiscovery,
 | `MemoryArchitecture.tsx` | `useMemoryStats`, `useEpisodicMemories` | `/api/memory/stats`, `/api/memory/episodic` | **Partly broken** — `useEpisodicMemories` is GET to an endpoint that's only POST on the backend (see §4.4) |
 | `KPIDictionary.tsx` | `useKPIList`, `useWorkstreams`, `useKPIHealth` | `/api/kpis*` | Live | |
 | `SystemHealth.tsx` | `useAlerts`, `useMonitoringRuns` | `/api/monitoring/alerts`, `/api/monitoring/runs` | Live | |
-| `DigitalTwin.tsx` (dedicated page) | `useRunSimulation` | `POST /api/digital-twin/simulate` | Live | `/intervention-impact` retired — redirects to `/causal-analysis`; simulate call now served exclusively by `DigitalTwin.tsx` |
 | `CausalAnalysis.tsx` | `useCausalHealth`, `useRunHierarchicalAnalysis` | `/api/causal/health` only (mutation imported but result never bound to charts) | Sample data | L243 health probe; L59+ sample tables |
 | `SegmentAnalysis.tsx` | `useSegmentHealth`, `useRunSegmentAnalysis`, `usePolicies` | `/api/segments/health`, `/api/segments/policies` | Sample data | `sampleAnalysisResult` at L59 |
 | `GapAnalysis.tsx` | `useGapHealth` | `/api/gaps/health` | Sample data | L275 health probe; L278 fallback to SAMPLE_GAPS |
@@ -177,7 +176,7 @@ Mock-only (no API):     Monitoring, AIAgentInsights*, CausalDiscovery,
 | `AuditChain.tsx` | `useRecentWorkflows` | `/api/audit/recent` | Live + sample fallback | Renders `<AuditHistory/>` separately, which fetches workflow details inline (`components/audit/AuditHistory.tsx:136-162`). **AuditHistory is not imported by AuditChain.tsx** — it's a dead component. |
 | `ResourceOptimization.tsx` | `useResourceHealth`, `useScenarios`, `useRunOptimization` | `/api/resources/health`, `/api/resources/scenarios`, `POST /api/resources/optimize` | **Dead wiring** | L403-431: mutation runs but L406 `optimizationResult = sampleOptimizationResult` hard-codes the displayed value |
 | `Experiments.tsx` | `useTriggerMonitoring` | `POST /api/experiments/monitor` | Live with sample fallback | L285 fires monitor sweep; L289 derives experiments from result, else SAMPLE_EXPERIMENTS |
-| `DigitalTwin.tsx` | `useDigitalTwinHealth`, `useSimulationHistory`, `useRunSimulation` | `/api/digital-twin/{health,simulations,simulate}` | Live with sample fallback | L319 `selectedSimulation = SAMPLE_SIMULATION` |
+| `DigitalTwin.tsx` | `useDigitalTwinHealth`, `useSimulationHistory`, `useRunSimulation` | `/api/digital-twin/{health,simulations,simulate}` | Live with sample fallback | L319 `selectedSimulation = SAMPLE_SIMULATION`; `/intervention-impact` retired (T10) — redirects to `/causal-analysis`, simulate served only here |
 | `AgentOrchestration.tsx` | _none — inline `useQuery`_ | `GET /api/agents/status` | Live | Bypasses the hook layer; should be refactored into `frontend/src/api/agents.ts` + a `use-agents.ts` hook for consistency |
 | `Monitoring.tsx` | — | — | Mock | Defines `ApiMetric`, `EndpointStats`, `UserActivity`, `ErrorLog` types locally; populates with hard-coded arrays |
 | `AIAgentInsights.tsx` | — | — | Composite | Only renders insight components, which themselves use hooks. Inherits the broken explain call (§4.3) |
