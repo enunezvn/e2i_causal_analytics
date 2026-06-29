@@ -805,13 +805,22 @@ def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
 # (verified against the live table: academic_hcp, egfr, proteinuria_g_day,
 # ldh_ratio, urticaria_severity_uas7, ecog_performance_status) so the analyst has
 # a richer adjustment set. Columns that LOOK like confounders but are 100% NULL
-# (risk_score, adherence_rate, refill_count, gap_days) are deliberately NOT
-# offered — they would fail-close every run. treatment/outcome stay the curated
-# causal columns (the synthetic gold-standard only wires those relationships).
+# (risk_score, refill_count) are deliberately NOT offered — they would
+# fail-close every run. Phase 0 of the commercial-arms enrichment (T11) now
+# populates adherence_rate and gap_days (raw proxies, offered as covariates)
+# and the binary outcomes adherent_180d / low_gap_180d; they are included below.
+# treatment/outcome stay the curated causal columns (the synthetic gold-standard
+# only wires those relationships).
 _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     "patient_journeys": {
         "treatment": ["treatment_arm", "treatment_initiated"],
-        "outcome": ["persistent_180d", "discontinued_180d", "treatment_initiated"],
+        "outcome": [
+            "persistent_180d",
+            "discontinued_180d",
+            "treatment_initiated",
+            "adherent_180d",
+            "low_gap_180d",
+        ],
         "covariate": [
             "disease_severity",
             "engagement_score",
@@ -823,6 +832,8 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "ldh_ratio",
             "urticaria_severity_uas7",
             "ecog_performance_status",
+            "adherence_rate",
+            "gap_days",
         ],
     },
     # HCP grain: hcp_brand_adoption (treatment_arm, adopted, brand) JOIN
@@ -875,6 +886,10 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "ldh_ratio",
         "urticaria_severity_uas7",
         "ecog_performance_status",
+        "adherent_180d",
+        "low_gap_180d",
+        "adherence_rate",
+        "gap_days",
     },
     "hcp_adoption": {
         "peer_influence_score",

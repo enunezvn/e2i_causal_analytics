@@ -2156,3 +2156,18 @@ class TestTTLPruneDoesNotDropLiveUpdatedRecord:
         assert "seg_fresh" in indexed
         listed = [v.analysis_id for v in await store.values()]
         assert listed == ["seg_fresh"]
+
+
+@pytest.mark.unit
+def test_patient_journeys_allowlist_exposes_adherence_outcomes():
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _CAUSAL_NUMERIC_COLUMNS
+
+    spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
+    assert "adherent_180d" in spec["outcome"]
+    assert "low_gap_180d" in spec["outcome"]
+    assert "adherence_rate" in spec["covariate"]
+    assert "gap_days" in spec["covariate"]
+
+    numeric = _CAUSAL_NUMERIC_COLUMNS["patient_journeys"]
+    for col in ("adherent_180d", "low_gap_180d", "adherence_rate", "gap_days"):
+        assert col in numeric, f"{col} must coerce to float for the executors"
