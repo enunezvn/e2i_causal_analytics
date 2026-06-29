@@ -18,7 +18,7 @@ Agreement is 100% by construction (exact), not approximate.
 """
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, TypedDict
 
 import numpy as np
 
@@ -72,6 +72,19 @@ _LOW_GAP_PREVALENCE = 0.30
 _ADH_LATENT_CATE_BOOST = 1.40
 
 
+class AdherenceOutcomes(TypedDict):
+    """Return shape of :func:`generate_adherence_outcomes`. The two binaries +
+    two continuous proxies are per-unit np.ndarrays; the two ``*_rd_by_segment``
+    maps are the per-segment recoverable RD ground truth consumed by the probe."""
+
+    adherent_180d: np.ndarray
+    low_gap_180d: np.ndarray
+    adherence_rate: np.ndarray
+    gap_days: np.ndarray
+    adherent_rd_by_segment: Dict[str, float]
+    low_gap_rd_by_segment: Dict[str, float]
+
+
 def generate_adherence_outcomes(
     *,
     treatment_arm: np.ndarray,
@@ -80,7 +93,7 @@ def generate_adherence_outcomes(
     segment: np.ndarray,
     cate_map: Dict[str, float],
     rng: np.random.Generator,
-) -> Dict[str, object]:
+) -> AdherenceOutcomes:
     """Return adherent_180d / low_gap_180d (recoverable binaries) + adherence_rate
     / gap_days (raw proxies) + the per-segment RD ground-truth map for BOTH binaries.
 
