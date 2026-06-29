@@ -806,7 +806,7 @@ def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
 # ldh_ratio, urticaria_severity_uas7, ecog_performance_status) so the analyst has
 # a richer adjustment set. Columns that LOOK like confounders but are 100% NULL
 # (risk_score, refill_count) are deliberately NOT offered — they would
-# fail-close every run. Phase 0 of the commercial-arms enrichment (T11) now
+# fail-close every run. Phase 0 of the commercial-arms enrichment now
 # populates adherence_rate and gap_days (raw proxies, offered as covariates)
 # and the binary outcomes adherent_180d / low_gap_180d; they are included below.
 # treatment/outcome stay the curated causal columns (the synthetic gold-standard
