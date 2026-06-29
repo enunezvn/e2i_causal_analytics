@@ -26,13 +26,25 @@ _SEGMENTS = ("high_severity", "medium_severity", "low_severity")
 _COVARS = list(ARM_CONFOUNDERS)
 
 
-def recover_ate_and_cate(df: pd.DataFrame) -> Dict[str, Any]:
+def recover_ate_and_cate(
+    df: pd.DataFrame,
+    *,
+    treatment_col: str = "treatment_arm",
+    outcome_col: str = "treatment_initiated",
+    confounders: list | None = None,
+    segment_col: str = "segment_assignment",
+    true_ate: float | None = None,
+    cate_map: Dict[str, float] | None = None,
+) -> Dict[str, Any]:
     """Recover ATE (LinearDML) + per-segment CATE (CausalForestDML) from a
-    synthetic patient frame produced by PatientGenerator (Task 03.4)."""
-    Y = df["treatment_initiated"].to_numpy(dtype=float)
-    T = df["treatment_arm"].to_numpy(dtype=int)
-    X = df[_COVARS].to_numpy(dtype=float)
-    seg = df["segment_assignment"].to_numpy()
+    synthetic patient frame. Defaults reproduce the original treatment_arm ->
+    treatment_initiated probe; pass the keyword args to validate any other arm/
+    outcome/confounder/segment tuple (commercial-arms enrichment)."""
+    covars = list(confounders) if confounders is not None else _COVARS
+    Y = df[outcome_col].to_numpy(dtype=float)
+    T = df[treatment_col].to_numpy(dtype=int)
+    X = df[covars].to_numpy(dtype=float)
+    seg = df[segment_col].to_numpy()
 
     n_treated, n_control = int(T.sum()), int(len(T) - T.sum())
     propensity_auc = float(
@@ -66,7 +78,7 @@ def recover_ate_and_cate(df: pd.DataFrame) -> Dict[str, Any]:
     }
 
     return {
-        "true_ate": float(df.attrs.get("true_ate", np.mean(eff))),
+        "true_ate": float(true_ate) if true_ate is not None else float(df.attrs.get("true_ate", np.mean(eff))),
         "linear_dml_ate": linear_dml_ate,
         "cate_by_segment_estimate": cate_by_segment_estimate,
         "propensity_auc": propensity_auc,

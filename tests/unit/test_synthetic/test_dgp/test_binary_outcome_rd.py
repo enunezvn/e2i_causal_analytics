@@ -28,3 +28,16 @@ def test_binary_outcome_rd_three_distinct_ordered_tau_in_band():
     lo = tau_i[segment == "low_severity"][0]
     assert hi > md > lo > 0
     assert 0.20 <= y.mean() <= 0.50
+
+
+@pytest.mark.unit
+def test_recovery_probe_accepts_explicit_tuple_signature():
+    # Signature-only smoke (no econml fit): the function must accept the new
+    # keyword args without TypeError.
+    import inspect
+    from src.ml.synthetic.dgp import recovery_probe
+
+    sig = inspect.signature(recovery_probe.recover_ate_and_cate)
+    for p in ("treatment_col", "outcome_col", "confounders", "segment_col",
+              "true_ate", "cate_map"):
+        assert p in sig.parameters, f"{p} missing from recover_ate_and_cate signature"
