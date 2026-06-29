@@ -87,7 +87,9 @@ def test_adherent_recoverable_under_causal_route_default_adjustment_set():
     # can call .to_numpy(dtype=float) on the adjustment columns without raising.
     default_adj = [c for c in default_adj if c != "geographic_region"]
 
-    cfg = GeneratorConfig(seed=21, n_records=3000, brand=Brand.REMIBRUTINIB, dgp_type=DGPType.HETEROGENEOUS)
+    cfg = GeneratorConfig(
+        seed=21, n_records=3000, brand=Brand.REMIBRUTINIB, dgp_type=DGPType.HETEROGENEOUS
+    )
     df = PatientGenerator(cfg).generate()
     truth = df.attrs["true_ate_by_arm"]["treatment_arm"]["adherent_180d"]
     out = recover_ate_and_cate(

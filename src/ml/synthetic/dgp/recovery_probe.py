@@ -78,7 +78,9 @@ def recover_ate_and_cate(
     }
 
     return {
-        "true_ate": float(true_ate) if true_ate is not None else float(df.attrs.get("true_ate", np.mean(eff))),
+        "true_ate": float(true_ate)
+        if true_ate is not None
+        else float(df.attrs.get("true_ate", np.mean(eff))),
         "linear_dml_ate": linear_dml_ate,
         "cate_by_segment_estimate": cate_by_segment_estimate,
         "propensity_auc": propensity_auc,

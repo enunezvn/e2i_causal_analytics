@@ -1,4 +1,5 @@
 """Phase 0: PatientGenerator emits adherence columns + true_ate_by_arm."""
+
 import numpy as np
 import pytest
 
@@ -8,8 +9,9 @@ from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
 
 @pytest.mark.unit
 def test_generator_emits_adherence_columns_and_true_ate_by_arm():
-    cfg = GeneratorConfig(seed=21, n_records=2000, brand=Brand.REMIBRUTINIB,
-                          dgp_type=DGPType.HETEROGENEOUS)
+    cfg = GeneratorConfig(
+        seed=21, n_records=2000, brand=Brand.REMIBRUTINIB, dgp_type=DGPType.HETEROGENEOUS
+    )
     df = PatientGenerator(cfg).generate()
 
     for col in ("adherent_180d", "low_gap_180d", "adherence_rate", "gap_days"):
@@ -28,5 +30,7 @@ def test_generator_emits_adherence_columns_and_true_ate_by_arm():
     assert "adherent_180d" in tba["treatment_arm"]
     assert tba["treatment_arm"]["adherent_180d"]["ate"] > 0
     assert set(tba["treatment_arm"]["adherent_180d"]["cate_by_segment"]) == {
-        "high_severity", "medium_severity", "low_severity"
+        "high_severity",
+        "medium_severity",
+        "low_severity",
     }

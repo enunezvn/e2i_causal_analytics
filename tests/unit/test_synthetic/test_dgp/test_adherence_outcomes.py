@@ -1,4 +1,5 @@
 """Phase 0: adherence outcomes — recoverable binaries + EXACTLY consistent proxies."""
+
 import numpy as np
 import pytest
 
@@ -11,8 +12,9 @@ def test_adherence_outcomes_recoverable_and_proxy_consistent():
     n = 5000
     severity = rng.uniform(0, 10, n)
     academic = (rng.random(n) < 0.3).astype(int)
-    segment = np.where(severity > 7, "high_severity",
-                       np.where(severity > 4, "medium_severity", "low_severity"))
+    segment = np.where(
+        severity > 7, "high_severity", np.where(severity > 4, "medium_severity", "low_severity")
+    )
     arm = (rng.random(n) < 0.5).astype(int)
     cate_map = {"high_severity": 0.9, "medium_severity": 0.5, "low_severity": 0.2}
 

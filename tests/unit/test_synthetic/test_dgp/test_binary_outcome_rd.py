@@ -1,4 +1,5 @@
 """Phase 0: the general binary-outcome-with-recoverable-RD core."""
+
 import numpy as np
 import pytest
 
@@ -10,15 +11,21 @@ def test_binary_outcome_rd_three_distinct_ordered_tau_in_band():
     rng = np.random.default_rng(7)
     n = 4000
     severity = rng.uniform(0, 10, n)
-    segment = np.where(severity > 7, "high_severity",
-                       np.where(severity > 4, "medium_severity", "low_severity"))
+    segment = np.where(
+        severity > 7, "high_severity", np.where(severity > 4, "medium_severity", "low_severity")
+    )
     arm = (rng.random(n) < 0.5).astype(int)
     baseline = 0.10 * (severity - 5.0)
     cate_map = {"high_severity": 0.9, "medium_severity": 0.5, "low_severity": 0.2}
 
     y, tau_i = binary_outcome_rd(
-        arm, baseline, segment, cate_map, rng,
-        target_prevalence=0.35, noise_std=0.6,
+        arm,
+        baseline,
+        segment,
+        cate_map,
+        rng,
+        target_prevalence=0.35,
+        noise_std=0.6,
     )
 
     distinct = sorted(set(np.round(tau_i, 6)))
@@ -39,6 +46,5 @@ def test_recovery_probe_accepts_explicit_tuple_signature():
     from src.ml.synthetic.dgp import recovery_probe
 
     sig = inspect.signature(recovery_probe.recover_ate_and_cate)
-    for p in ("treatment_col", "outcome_col", "confounders", "segment_col",
-              "true_ate", "cate_map"):
+    for p in ("treatment_col", "outcome_col", "confounders", "segment_col", "true_ate", "cate_map"):
         assert p in sig.parameters, f"{p} missing from recover_ate_and_cate signature"

@@ -16,6 +16,7 @@ the STORED value can NEVER contradict the STORED binary:
   - round(gap_days, 1)       <= 30.0  <=>  low_gap_180d == 1
 Agreement is 100% by construction (exact), not approximate.
 """
+
 from __future__ import annotations
 
 from typing import Dict, TypedDict
@@ -112,19 +113,31 @@ def generate_adherence_outcomes(
     # Boost the latent CATE map BEFORE use (cf. initiation's boosted_map) so the boost
     # flows CONSISTENTLY into both the score (binary_outcome_rd) and the RD ground truth
     # (binarize_score's tau_latent). Uniform positive factor => ordering preserved.
-    boosted_map = {str(s): float(cate_map[str(s)]) * _ADH_LATENT_CATE_BOOST for s in np.unique(segs)}
+    boosted_map = {
+        str(s): float(cate_map[str(s)]) * _ADH_LATENT_CATE_BOOST for s in np.unique(segs)
+    }
     tau_latent = np.array([boosted_map[str(s)] for s in segs], dtype=float)
 
     # One shared recoverable latent score (single noise draw) + the adherent binary.
     adherent_180d, tau_adherent, score = binary_outcome_rd(
-        arm, baseline, segs, boosted_map, rng,
-        target_prevalence=_TARGET_PREVALENCE, noise_std=_ADH_NOISE_STD, return_score=True,
+        arm,
+        baseline,
+        segs,
+        boosted_map,
+        rng,
+        target_prevalence=_TARGET_PREVALENCE,
+        noise_std=_ADH_NOISE_STD,
+        return_score=True,
     )
     # Second recoverable binary on the SAME score, at its own (rarer) prevalence.
     # low_gap is the top _LOW_GAP_PREVALENCE by score -> a subset of adherent.
     low_gap_180d, tau_lowgap = binarize_score(
-        score, baseline, tau_latent, segs,
-        target_prevalence=_LOW_GAP_PREVALENCE, noise_std=_ADH_NOISE_STD,
+        score,
+        baseline,
+        tau_latent,
+        segs,
+        target_prevalence=_LOW_GAP_PREVALENCE,
+        noise_std=_ADH_NOISE_STD,
     )
 
     # PDC proxy: monotone-INCREASING transform of the same score, calibrated so its

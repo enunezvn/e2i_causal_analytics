@@ -1129,9 +1129,7 @@ async def list_causal_variables(
             return list(spec[role])
         return [c for c in spec[role] if c in present]
 
-    _offered = (
-        _available("treatment") + _available("outcome") + _available("covariate")
-    )
+    _offered = _available("treatment") + _available("outcome") + _available("covariate")
     labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
     return CausalVariablesResponse(
         dataset=dataset,

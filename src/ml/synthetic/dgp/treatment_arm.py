@@ -266,8 +266,12 @@ def binary_outcome_rd(
     noise = rng.normal(0.0, noise_std, len(arm))
     score = baseline + arm.astype(float) * tau_latent + noise
     y, tau_i = binarize_score(
-        score, baseline, tau_latent, segment,
-        target_prevalence=target_prevalence, noise_std=noise_std,
+        score,
+        baseline,
+        tau_latent,
+        segment,
+        target_prevalence=target_prevalence,
+        noise_std=noise_std,
     )
     if return_score:
         return y, tau_i, score
@@ -337,8 +341,13 @@ def binary_outcome_with_cate(
     # BEFORE delegation so the core stays boost-agnostic.
     boosted_map = {str(s): float(v) * _INIT_LATENT_CATE_BOOST for s, v in cate_map.items()}
     return binary_outcome_rd(
-        arm, baseline, segment, boosted_map, rng,
-        target_prevalence=target_prevalence, noise_std=noise_std,
+        arm,
+        baseline,
+        segment,
+        boosted_map,
+        rng,
+        target_prevalence=target_prevalence,
+        noise_std=noise_std,
     )
 
 

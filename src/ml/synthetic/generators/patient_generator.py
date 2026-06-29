@@ -325,7 +325,9 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                     "cate_by_segment": cate_map,
                 },
                 "adherent_180d": {
-                    "ate": float(np.mean([_adh["adherent_rd_by_segment"][str(s)] for s in segment])),
+                    "ate": float(
+                        np.mean([_adh["adherent_rd_by_segment"][str(s)] for s in segment])
+                    ),
                     "cate_by_segment": _adh["adherent_rd_by_segment"],
                 },
                 "low_gap_180d": {
