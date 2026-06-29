@@ -806,9 +806,20 @@ def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
 # ldh_ratio, urticaria_severity_uas7, ecog_performance_status) so the analyst has
 # a richer adjustment set. Columns that LOOK like confounders but are 100% NULL
 # (risk_score, refill_count) are deliberately NOT offered — they would
-# fail-close every run. Phase 0 of the commercial-arms enrichment now
-# populates adherence_rate and gap_days (raw proxies, offered as covariates)
-# and the binary outcomes adherent_180d / low_gap_180d; they are included below.
+# fail-close every run.
+#
+# Phase 0 of the commercial-arms enrichment POPULATES adherence_rate and gap_days
+# (raw continuous proxies) and the binary outcomes adherent_180d / low_gap_180d.
+# The binary outcomes ARE offered below (outcome list). However, adherence_rate
+# and gap_days are POST-TREATMENT DESCENDANTS of treatment_arm — they are
+# generated from a latent that includes arm * tau — and are near-deterministic
+# proxies of the outcomes (adherent_180d = 1{adherence_rate>=0.8}). Adjusting on
+# them as covariates would OVERCONTROL: they block the very causal path being
+# estimated, collapsing the treatment coefficient toward zero (measured: +0.228
+# with clinical confounders → +0.022 under default route adjustment set including
+# proxies — a fake "no effect"). They are therefore deliberately NOT offered as
+# covariate/adjustment candidates. They remain populated DB columns and
+# feature-store inputs. (Caught in adversarial review, 2026-06-29.)
 # treatment/outcome stay the curated causal columns (the synthetic gold-standard
 # only wires those relationships).
 _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
@@ -832,8 +843,11 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "ldh_ratio",
             "urticaria_severity_uas7",
             "ecog_performance_status",
-            "adherence_rate",
-            "gap_days",
+            # adherence_rate and gap_days are NOT listed here: they are
+            # post-treatment descendants of treatment_arm (near-deterministic
+            # proxies of adherent_180d / low_gap_180d). Adjusting on them
+            # overcontrols and blocks the causal path. They remain DB columns
+            # and feature-store inputs but are excluded from the adjustment set.
         ],
     },
     # HCP grain: hcp_brand_adoption (treatment_arm, adopted, brand) JOIN

@@ -2160,16 +2160,36 @@ class TestTTLPruneDoesNotDropLiveUpdatedRecord:
 
 @pytest.mark.unit
 def test_patient_journeys_allowlist_exposes_adherence_outcomes():
+    """Corrected contract (2026-06-29 adversarial review):
+    - adherent_180d / low_gap_180d ARE in outcome (they are the binarized outcomes).
+    - adherence_rate / gap_days are NOT in covariate — they are post-treatment
+      descendants of treatment_arm (near-deterministic proxies of the outcomes).
+      Adjusting on them overcontrols and blocks the causal path (measured: ATE
+      collapses +0.228 → +0.022 under default route adjustment set with proxies).
+    - adherent_180d / low_gap_180d ARE in _CAUSAL_NUMERIC_COLUMNS so the executors
+      can coerce them to float (they land in the frame as SMALLINT 0/1).
+    """
     from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _CAUSAL_NUMERIC_COLUMNS
 
     spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
+    # Binary outcomes are offered as outcome candidates.
     assert "adherent_180d" in spec["outcome"]
     assert "low_gap_180d" in spec["outcome"]
-    assert "adherence_rate" in spec["covariate"]
-    assert "gap_days" in spec["covariate"]
 
+    # Post-treatment proxies must NOT be in the adjustment/covariate allowlist.
+    assert "adherence_rate" not in spec["covariate"], (
+        "adherence_rate is a post-treatment proxy of adherent_180d — "
+        "adjusting on it overcontrols the causal path"
+    )
+    assert "gap_days" not in spec["covariate"], (
+        "gap_days is a post-treatment proxy of low_gap_180d — "
+        "adjusting on it overcontrols the causal path"
+    )
+
+    # The binary outcomes must still be in the numeric-coercion set so the
+    # executors can call .astype(float) on them (they land as SMALLINT 0/1).
     numeric = _CAUSAL_NUMERIC_COLUMNS["patient_journeys"]
-    for col in ("adherent_180d", "low_gap_180d", "adherence_rate", "gap_days"):
+    for col in ("adherent_180d", "low_gap_180d"):
         assert col in numeric, f"{col} must coerce to float for the executors"
 
 

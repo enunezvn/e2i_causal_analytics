@@ -31,7 +31,7 @@ the existing `treatment_arm` arm's tuned behaviour.
 
 - **Identification:** observational + confounding (each arm has a designed propensity on its own confounder
   set; the estimator must adjust to recover the honest effect). Not RCT-style.
-- **Outcome type:** binarize adherence to clinical thresholds (keep raw continuous columns as covariates).
+- **Outcome type:** binarize adherence to clinical thresholds (raw continuous columns remain populated DB columns / feature-store inputs but are NOT offered as covariate/adjustment candidates — see correction below).
 - **Rollout:** Approach A — additive independent arms, phased, with the binarized-adherence outcomes on the
   *existing* arm as **Phase 0**.
 
@@ -55,7 +55,7 @@ above):
 - `adherent_180d` = `1{adherence_rate ≥ 0.8}` (PDC threshold)
 - `low_gap_180d` = `1{gap_days ≤ 30}`
 
-The raw `adherence_rate` (PDC) and `gap_days` stay populated as covariates / feature-store inputs.
+The raw `adherence_rate` (PDC) and `gap_days` stay populated as DB columns and feature-store inputs, but are **NOT offered as covariate/adjustment candidates on the causal page**. They are post-treatment descendants of `treatment_arm` — generated from a latent that includes `arm * tau` — and are near-deterministic proxies of `adherent_180d` / `low_gap_180d`. Adjusting on them overcontrols: it blocks the causal path and collapses the treatment coefficient toward zero (measured: +0.228 with clinical confounders → +0.022 under the default route adjustment set including proxies — a fake "no effect" shown to the analyst). Caught and corrected in adversarial review, 2026-06-29.
 
 **Categorical confounders are confounded via a numeric proxy.** `copay_support`'s real-world confounder is
 insurance coverage (a categorical column the EconML/DoWhy executors cannot adjust on directly). The DGP
@@ -111,8 +111,9 @@ front-loading does not couple the phases.
 
 Each arm gets its **own** propensity column: each arm has a different confounder set and target population, so
 a shared propensity would not identify the per-arm backdoor. `adherence_rate` / `gap_days` (added NULL by
-migration 033) get **populated** by the generator so the binarized outcomes are derivable and the raw columns
-become usable covariates.
+migration 033) get **populated** by the generator so the binarized outcomes are derivable; the raw columns
+remain populated DB columns / feature-store inputs but are NOT offered as covariate/adjustment candidates
+(they are post-treatment proxies of the outcomes — see §2 correction, 2026-06-29).
 
 ### Ground-truth metadata
 
@@ -259,7 +260,10 @@ The `/segment-analysis` and `/causal-discovery` pages are fully data-driven from
 Per phase:
 
 - Extend `_CAUSAL_DATASET_SPECS["patient_journeys"]` — add the arm to `treatment`, the new outcomes to
-  `outcome`, and (once populated) `adherence_rate` / `gap_days` / `insurance_access_score` to `covariate`.
+  `outcome`, and (once populated) `insurance_access_score` to `covariate`. **`adherence_rate` and `gap_days`
+  are NOT added to `covariate`**: they are post-treatment descendants of `treatment_arm` and near-deterministic
+  proxies of `adherent_180d` / `low_gap_180d`; adjusting on them overcontrols and blocks the causal path
+  (corrected in adversarial review, 2026-06-29).
 - Extend `_CAUSAL_NUMERIC_COLUMNS["patient_journeys"]` so the new columns coerce to float for the executors.
 - The raw categorical `insurance_type` stays a brand-style cohort *filter*, **not** a covariate (matching the
   existing categorical-exclusion comment in `causal.py`). Its causal role is carried by the numeric
@@ -278,9 +282,10 @@ Migration `088` front-loads all DDL. Each phase then ships independently = gener
 gate + allowlist entry. A column that exists but is NULL and un-allowlisted is invisible and harmless, so
 phases do not couple.
 
-- **Phase 0** — binarized adherence outcomes (`adherent_180d`, `low_gap_180d`) + raw `adherence_rate` /
-  `gap_days` on the **existing** `treatment_arm`. Smallest increment; proves the binarize-and-recover
-  machinery end-to-end. Includes the display-label map.
+- **Phase 0** — binarized adherence outcomes (`adherent_180d`, `low_gap_180d`) on the **existing**
+  `treatment_arm`. Raw `adherence_rate` / `gap_days` are populated DB columns / feature-store inputs but are
+  NOT offered as adjustment candidates (post-treatment proxies — see §2 correction). Smallest increment;
+  proves the binarize-and-recover machinery end-to-end. Includes the display-label map.
 - **Phase 1** — `copay_support` → `persistent_180d` / `adherent_180d` / `low_gap_180d`.
 - **Phase 2** — `psp_enrolled` → `adherent_180d` / `persistent_180d`.
 - **Phase 3** — `rep_detailing_high` + `sample_dropped` → `treatment_initiated`.
