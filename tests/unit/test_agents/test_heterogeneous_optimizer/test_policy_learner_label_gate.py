@@ -53,6 +53,21 @@ def _cate(value, cate, n=500):
     }
 
 
+def _responder(value, cate, n=500):
+    """High-responder tier profile as segment_analyzer would emit it (both CATEs
+    here, 0.30 and 0.50, clear the strict 1.5x|ATE|=0.3 bar). The policy direction
+    follows this tier; without it every segment would maintain at 0.5 (0 lift)."""
+    return {
+        "segment_id": f"prior_antihistamine_therapy_{value}",
+        "responder_type": "high",
+        "cate_estimate": cate,
+        "defining_features": [{"variable": "prior_antihistamine_therapy", "value": value}],
+        "size": n,
+        "size_percentage": 50.0,
+        "recommendation": "increase",
+    }
+
+
 def _state(label_segmentation: bool):
     # "False" (treatment-naive) is the BEST raw responder (highest CATE -> highest lift).
     return {
@@ -66,7 +81,7 @@ def _state(label_segmentation: bool):
         "cate_by_segment": {
             "prior_antihistamine_therapy": [_cate("True", 0.30), _cate("False", 0.50)],
         },
-        "high_responders": [],
+        "high_responders": [_responder("True", 0.30), _responder("False", 0.50)],
         "low_responders": [],
         "estimation_latency_ms": 0,
         "analysis_latency_ms": 0,

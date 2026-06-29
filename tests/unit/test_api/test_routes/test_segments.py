@@ -183,6 +183,51 @@ def _patch_hte_loader():
 
 
 @pytest.mark.asyncio
+async def test_execute_segment_analysis_computes_confidence(curated_request, mock_agent_result):
+    """REGRESSION (user-reported "Confidence 0%"): the route invokes the graph
+    DIRECTLY (graph.ainvoke), which never writes 'confidence' into the state — so
+    result.get('confidence', 0.0) showed 0% on EVERY completed run. The response
+    must instead compute it from calculate_confidence(result)."""
+    from src.agents.heterogeneous_optimizer.agent import calculate_confidence
+
+    result = dict(mock_agent_result)
+    # Faithful to the real graph: it does NOT populate 'confidence'.
+    result["confidence"] = 0.0
+    # Populate BOTH responder tiers so the sample-size factor fires (this makes the
+    # computed value differ from the 0.0 sentinel — a real discriminator).
+    result["low_responders"] = [
+        {
+            "segment_id": "region_South",
+            "responder_type": "low",
+            "cate_estimate": 2.0,
+            "defining_features": [{"feature": "region", "value": "South"}],
+            "size": 800,
+            "size_percentage": 18.0,
+            "recommendation": "Maintain",
+        }
+    ]
+
+    expected = calculate_confidence(result)
+    assert expected > 0.7  # populated + significant + heterogeneous => high confidence
+
+    mock_graph = MagicMock()
+    mock_graph.ainvoke = AsyncMock(return_value=result)
+
+    with (
+        _patch_hte_loader(),
+        patch(
+            "src.agents.heterogeneous_optimizer.graph.create_heterogeneous_optimizer_graph",
+            return_value=mock_graph,
+        ),
+    ):
+        response = await _execute_segment_analysis(curated_request)
+
+    assert response.status == AnalysisStatus.COMPLETED
+    assert response.confidence == pytest.approx(expected)
+    assert response.confidence > 0.0  # the bug was a hard 0.0
+
+
+@pytest.mark.asyncio
 async def test_run_segment_analysis_async_mode(sample_request, mock_user):
     """Test run_segment_analysis in async mode returns immediately."""
     background_tasks = BackgroundTasks()

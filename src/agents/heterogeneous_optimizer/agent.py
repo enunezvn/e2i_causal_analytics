@@ -10,7 +10,7 @@ Latency: Up to 150s
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Literal, Mapping, Optional, cast
 
 from .graph import create_heterogeneous_optimizer_graph
 from .memory_hooks import (
@@ -24,6 +24,64 @@ if TYPE_CHECKING:
     from .opik_tracer import HeterogeneousOptimizerOpikTracer
 
 logger = logging.getLogger(__name__)
+
+
+def calculate_confidence(state: Mapping[str, Any]) -> float:
+    """Derive an analysis-reliability confidence (0.0-1.0) from a result/state map.
+
+    Module-level SSOT so BOTH callers compute confidence identically:
+    - ``HeterogeneousOptimizerAgent._build_output`` (the ``agent.run()`` path), and
+    - the FastAPI ``/segments`` route, which invokes the graph DIRECTLY
+      (``graph.ainvoke``) and so never runs ``_build_output``. Before this was
+      extracted, that route read ``result.get("confidence", 0.0)`` — but no graph
+      node ever writes ``confidence`` into the state, so EVERY completed run showed
+      Confidence 0% on the page. The signal lived only in this method, unreachable
+      from the production path.
+
+    Accepts any mapping carrying the keys below (a graph result dict or the agent
+    state); all are read with ``.get`` so a partial map degrades gracefully.
+    """
+    confidence = 0.7  # Base confidence
+
+    # Factor 1: Errors reduce confidence
+    if state.get("errors"):
+        confidence -= 0.3
+
+    # Factor 2: Sample size in segments
+    high_responders = state.get("high_responders") or []
+    low_responders = state.get("low_responders") or []
+    if high_responders and low_responders:
+        # .get(..., 0) so a malformed profile (missing "size") degrades to the
+        # "small sample" branch rather than raising — the route now passes the raw
+        # graph result dict straight in, widening the set of shapes reaching here.
+        min_size = min(
+            [h.get("size", 0) for h in high_responders]
+            + [low.get("size", 0) for low in low_responders]
+        )
+        if min_size >= 100:
+            confidence += 0.1
+        elif min_size < 30:
+            confidence -= 0.1
+
+    # Factor 3: Statistical significance of segment CATEs
+    cate_by_segment = state.get("cate_by_segment") or {}
+    if cate_by_segment:
+        total_results = sum(len(results) for results in cate_by_segment.values())
+        significant_results = sum(
+            1
+            for results in cate_by_segment.values()
+            for result in results
+            if result.get("statistical_significance")
+        )
+        if total_results > 0:
+            confidence += (significant_results / total_results) * 0.1
+
+    # Factor 4: Heterogeneity score (high heterogeneity => clearer signal)
+    heterogeneity = state.get("heterogeneity_score") or 0
+    if heterogeneity > 0.5:
+        confidence += 0.05
+
+    return max(0.0, min(1.0, confidence))
 
 
 class HeterogeneousOptimizerAgent:
@@ -430,55 +488,9 @@ class HeterogeneousOptimizerAgent:
         }
 
     def _calculate_confidence(self, state: HeterogeneousOptimizerState) -> float:
-        """Calculate confidence score.
-
-        Args:
-            state: Final state
-
-        Returns:
-            Confidence score (0.0-1.0)
-        """
-        confidence = 0.7  # Base confidence
-
-        # Factor 1: Errors reduce confidence
-        errors = state.get("errors", [])
-        if errors:
-            confidence -= 0.3
-
-        # Factor 2: Sample size in segments
-        high_responders = state.get("high_responders", [])
-        low_responders = state.get("low_responders", [])
-
-        if high_responders and low_responders:
-            # Check if segments have adequate sample size
-            min_size = min(
-                [h["size"] for h in high_responders] + [l["size"] for l in low_responders]
-            )
-            if min_size >= 100:
-                confidence += 0.1
-            elif min_size < 30:
-                confidence -= 0.1
-
-        # Factor 3: Statistical significance
-        cate_by_segment = state.get("cate_by_segment", {})
-        if cate_by_segment:
-            total_results = sum(len(results) for results in cate_by_segment.values())
-            significant_results = sum(
-                1
-                for results in cate_by_segment.values()
-                for result in results
-                if result.get("statistical_significance")
-            )
-            if total_results > 0:
-                sig_ratio = significant_results / total_results
-                confidence += sig_ratio * 0.1
-
-        # Factor 4: Heterogeneity score
-        heterogeneity = state.get("heterogeneity_score") or 0
-        if heterogeneity > 0.5:
-            confidence += 0.05  # High heterogeneity means clear signal
-
-        return max(0.0, min(1.0, confidence))
+        """Calculate confidence score. Delegates to the module-level SSOT
+        :func:`calculate_confidence` (shared with the ``/segments`` route)."""
+        return calculate_confidence(state)
 
     def _check_further_analysis(self, state: HeterogeneousOptimizerState) -> bool:
         """Check if further analysis is needed.

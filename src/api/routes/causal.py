@@ -885,7 +885,7 @@ _COLUMN_LABELS: Dict[str, str] = {
     "persistent_180d": "Persistent at 180d",
     "discontinued_180d": "Discontinued at 180d",
     "adherent_180d": "Adherent at 180d",
-    "low_gap_180d": "Low refill gap (<=30d)",
+    "low_gap_180d": "Low refill gap (≤30d)",
     "adherence_rate": "Adherence rate (PDC)",
     "gap_days": "Refill gap (days)",
 }

@@ -200,11 +200,21 @@ function FeatureImportanceChart({ importance }: FeatureImportanceChartProps) {
     }));
 
   return (
-    <ResponsiveContainer width="100%" height={Math.max(250, chartData.length * 32)}>
-      <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 120, bottom: 5 }}>
+    <ResponsiveContainer width="100%" height={Math.max(280, chartData.length * 36 + 40)}>
+      <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 16, bottom: 24 }}>
         <CartesianGrid strokeDasharray="3 3" />
         <XAxis type="number" domain={[0, 'dataMax']} label={{ value: 'Importance (%)', position: 'bottom' }} />
-        <YAxis type="category" dataKey="name" width={110} />
+        {/* interval={0} forces a tick+label for EVERY feature — recharts otherwise
+            auto-skips category ticks under limited height (the "8 bars, 4 labels"
+            bug). width=180 + a longer-name tickFormatter stop the left-edge clip. */}
+        <YAxis
+          type="category"
+          dataKey="name"
+          width={180}
+          interval={0}
+          tick={{ fontSize: 12 }}
+          tickFormatter={(v: string) => (v.length > 26 ? `${v.slice(0, 24)}…` : v)}
+        />
         <Tooltip formatter={(value) => [`${Number(value ?? 0).toFixed(1)}%`, 'Importance']} />
         <Bar dataKey="importance" fill={COLORS.secondary} />
       </BarChart>
@@ -558,6 +568,11 @@ export default function SegmentAnalysis() {
   const treatmentOptions = datasets?.treatments?.length ? datasets.treatments : [DEFAULT_TREATMENT];
   const outcomeOptions = datasets?.outcomes?.length ? datasets.outcomes : [DEFAULT_OUTCOME];
   const brandOptions = datasets?.brands ?? [];
+  // Render the backend's human-readable label (e.g. low_gap_180d -> "Low refill gap
+  // (≤30d)") when present; otherwise fall back to a title-cased column name. The
+  // dropdowns previously always title-cased the raw column, so the curated labels
+  // GET /segments/datasets returns never reached the user.
+  const labelFor = (col: string) => datasets?.labels?.[col] ?? titleCase(col);
 
   // Order CATE dimensions by within-segment heterogeneity (most heterogeneous
   // dimension first) so the most interesting breakdown leads.
@@ -759,7 +774,7 @@ export default function SegmentAnalysis() {
                 <SelectContent>
                   {treatmentOptions.map((t) => (
                     <SelectItem key={t} value={t}>
-                      {titleCase(t)}
+                      {labelFor(t)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -774,7 +789,7 @@ export default function SegmentAnalysis() {
                 <SelectContent>
                   {outcomeOptions.map((o) => (
                     <SelectItem key={o} value={o}>
-                      {titleCase(o)}
+                      {labelFor(o)}
                     </SelectItem>
                   ))}
                 </SelectContent>
