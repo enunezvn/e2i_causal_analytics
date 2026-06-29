@@ -398,3 +398,51 @@ def test_uplift_metrics_kept_when_auuc_is_zero():
     assert kept is not None and kept.overall_auuc == 0.0
     assert _convert_uplift_metrics({"overall_auuc": None}) is None
     assert _convert_uplift_metrics({}) is None
+
+
+# =============================================================================
+# Phase-0 DGP regression pin: adherent_180d accepted, unknown column rejected
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_segment_route_accepts_adherent_180d_outcome():
+    """adherent_180d is now an allowlisted outcome (Task 8, Phase-0 DGP enrichment):
+    the loader must pass the allowlist guard — no 400 'not permitted' rejection.
+    Unknown columns must still produce HTTPException 400.
+
+    Uses the same _load_segment_hte_frame pattern as
+    test_loader_rejects_disallowed_outcome_with_400 above.
+    """
+    # Positive case: adherent_180d must pass the allowlist check.  The loader
+    # will proceed to a Supabase query (which may raise in the unit-test context
+    # with no real DB), but it must NOT raise an HTTPException(400) from the
+    # 'not permitted' allowlist guard.
+    try:
+        await _load_segment_hte_frame(
+            brand=None,
+            treatment_var="treatment_arm",
+            outcome_var="adherent_180d",
+        )
+    except HTTPException as exc:
+        if exc.status_code == 400 and "not permitted" in str(exc.detail):
+            pytest.fail(
+                "adherent_180d was rejected by the allowlist guard (400 'not "
+                "permitted') — Task 8 Phase-0 DGP allowlist change is missing "
+                "or has been reverted."
+            )
+        # Any other HTTPException (e.g. 503 no-rows from Supabase) is fine.
+    except Exception:
+        # Non-HTTP exceptions (Supabase connection, missing env var, etc.) are
+        # expected in a unit-test context with no real DB — not an allowlist failure.
+        pass
+
+    # Negative case: an unknown column must still be rejected with 400.
+    with pytest.raises(HTTPException) as exc_info:
+        await _load_segment_hte_frame(
+            brand=None,
+            treatment_var="treatment_arm",
+            outcome_var="made_up_outcome",
+        )
+    assert exc_info.value.status_code == 400
+    assert "not permitted" in exc_info.value.detail
