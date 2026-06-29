@@ -198,22 +198,59 @@ try:
     import dspy
 
     class CATEInterpretationSignature(dspy.Signature):
+        """Interpret CATE (heterogeneous treatment effect) results for a
+        pharmaceutical analyst, STRICTLY grounded in the provided numbers.
+
+        RULES (critical — this feeds a clinical/commercial decision):
+        - Use ONLY the numbers provided in the inputs. NEVER invent or estimate
+          values, segment names, p-values, percentages, or counts not given.
+        - HONESTY ABOUT HOMOGENEITY: if expected_lift_pp is ~0 (no segment's CATE
+          confidence interval lies above the overall ATE), state plainly that the
+          effect is statistically uniform across segments, there is NO reliable
+          differential-targeting opportunity, and a uniform rollout is appropriate.
+          Do NOT manufacture a targeting story from segments that merely rank higher.
+        - RECONCILE the displayed tiers: nominal 'high/low responder' segments may be
+          listed for relative ranking even when none is statistically distinguishable
+          from the average effect — explain that distinction when it applies.
+        - Be specific and quantitative (cite the ATE, heterogeneity score,
+          expected_lift_pp, and named segments) but concise. Audience: a pharma
+          brand / medical analyst making a targeting decision.
         """
-        Interpret CATE results for business decision-making.
 
-        Given CATE estimates across segments, generate actionable
-        interpretation of treatment effect heterogeneity.
-        """
+        overall_ate: float = dspy.InputField(
+            desc="Overall average treatment effect (risk difference)"
+        )
+        cate_by_segment: str = dspy.InputField(
+            desc="Per-segment CATE with 95% CI, sample size, and whether the CI is "
+            "significantly ABOVE the overall ATE (the targeting bar)"
+        )
+        heterogeneity_score: float = dspy.InputField(desc="Heterogeneity measure 0-1 (0=uniform)")
+        feature_importance: str = dspy.InputField(desc="Effect-modifier importances")
+        expected_lift_pp: float = dspy.InputField(
+            desc="Best-axis targeting lift as a percentage-point change in the outcome "
+            "rate; ~0 means there is NO real differential-targeting opportunity"
+        )
+        targeting_summary: str = dspy.InputField(
+            desc="The significance-gated targeting recommendation already computed "
+            "(which segments, if any, qualify for a treatment-rate change)"
+        )
 
-        overall_ate: float = dspy.InputField(desc="Average treatment effect")
-        cate_by_segment: str = dspy.InputField(desc="CATE for each segment")
-        heterogeneity_score: float = dspy.InputField(desc="Heterogeneity measure (0-1)")
-        feature_importance: str = dspy.InputField(desc="Important effect modifiers")
-
-        interpretation: str = dspy.OutputField(desc="Business interpretation of heterogeneity")
-        high_responder_description: str = dspy.OutputField(desc="Who responds best")
-        low_responder_description: str = dspy.OutputField(desc="Who responds least")
-        actionable_segments: list = dspy.OutputField(desc="Segments to prioritize")
+        executive_summary: str = dspy.OutputField(
+            desc="2-4 sentence overview for an executive, grounded in the numbers"
+        )
+        interpretation: str = dspy.OutputField(
+            desc="Detailed interpretation of the heterogeneity and what it means for "
+            "targeting (or why uniform rollout is right)"
+        )
+        key_insights: list = dspy.OutputField(
+            desc="3-5 concise, specific, quantitative insights (each cites a number)"
+        )
+        high_responder_description: str = dspy.OutputField(
+            desc="Who responds best, or 'no segment significantly above average'"
+        )
+        low_responder_description: str = dspy.OutputField(
+            desc="Who responds least, or 'no segment significantly below average'"
+        )
 
     class PolicyRecommendationSignature(dspy.Signature):
         """
@@ -259,6 +296,78 @@ except ImportError:
     CATEInterpretationSignature = None  # type: ignore[assignment,misc]
     PolicyRecommendationSignature = None  # type: ignore[assignment,misc]
     SegmentProfileSignature = None  # type: ignore[assignment,misc]
+
+
+def generate_cate_interpretation(
+    *,
+    overall_ate: float,
+    cate_by_segment_text: str,
+    heterogeneity_score: float,
+    feature_importance_text: str,
+    expected_lift_pp: float,
+    targeting_summary: str,
+) -> Optional[Dict[str, Any]]:
+    """Run :class:`CATEInterpretationSignature` via DSPy + the configured OpenAI LM
+    to produce an LLM-reasoned, analysis-GROUNDED explanation of the segment
+    analysis.
+
+    Returns the output dict (executive_summary / interpretation / key_insights /
+    high_responder_description / low_responder_description), or ``None`` when DSPy or
+    the LM is unavailable (no API key) or the call fails — the caller then renders an
+    honest, factual, non-LLM fallback. There is NO fabricated content on this path:
+    every value comes from the model conditioned on the real inputs, and the inputs
+    carry only measured numbers.
+
+    BLOCKING (a synchronous LM call) — invoke from a worker thread
+    (``asyncio.to_thread``) inside an async node so the event loop is not stalled.
+    """
+    if not DSPY_AVAILABLE or CATEInterpretationSignature is None:
+        return None
+    try:
+        from src.optimization.dspy_lm import ensure_dspy_configured
+
+        if not ensure_dspy_configured():
+            logger.info("DSPy LM not configured (no API key); using factual fallback")
+            return None
+
+        import dspy
+
+        predictor = dspy.ChainOfThought(CATEInterpretationSignature)
+        pred = predictor(
+            overall_ate=float(overall_ate),
+            cate_by_segment=cate_by_segment_text,
+            heterogeneity_score=float(heterogeneity_score),
+            feature_importance=feature_importance_text,
+            expected_lift_pp=float(expected_lift_pp),
+            targeting_summary=targeting_summary,
+        )
+
+        insights = getattr(pred, "key_insights", None) or []
+        if isinstance(insights, str):
+            # DSPy list outputs can arrive as a newline/`-`-delimited string.
+            insights = [ln.strip(" -•\t") for ln in insights.splitlines() if ln.strip()]
+        insights = [str(i).strip() for i in insights if str(i).strip()][:5]
+
+        result = {
+            "executive_summary": str(getattr(pred, "executive_summary", "")).strip(),
+            "interpretation": str(getattr(pred, "interpretation", "")).strip(),
+            "key_insights": insights,
+            "high_responder_description": str(
+                getattr(pred, "high_responder_description", "")
+            ).strip(),
+            "low_responder_description": str(
+                getattr(pred, "low_responder_description", "")
+            ).strip(),
+        }
+        # Guard: a degenerate empty generation is treated as a failure so the caller
+        # falls back rather than surfacing blank narrative.
+        if not result["executive_summary"] and not result["interpretation"]:
+            logger.warning("CATE LLM interpretation returned empty; using fallback")
+            return None
+        return result
+    except Exception as e:  # noqa: BLE001 — LLM failure must NEVER break the run
+        logger.warning("CATE LLM interpretation failed (non-fatal): %s", e)
+        return None
 
 
 # =============================================================================

@@ -396,3 +396,119 @@ class TestProfileGeneratorEdgeCases:
         # Should still generate outputs
         assert result["cate_plot_data"] is not None
         assert len(result["cate_plot_data"]["segments"]) == 0
+
+
+class TestProfileGeneratorLLMInterpretation:
+    """The explanation is LLM-generated (CATEInterpretationSignature) when an LM is
+    configured, with an honest factual fallback otherwise."""
+
+    def _state(self) -> HeterogeneousOptimizerState:
+        return {  # type: ignore[return-value]
+            "overall_ate": 0.243,
+            "heterogeneity_score": 0.13,
+            "expected_lift_pp": 0.0,
+            "optimal_allocation_summary": "No segment responds significantly above average.",
+            "feature_importance": {"disease_severity": 0.35, "egfr": 0.18},
+            "cate_by_segment": {
+                "disease_severity_band": [
+                    {
+                        "segment_name": "disease_severity_band",
+                        "segment_value": "high",
+                        "cate_estimate": 0.295,
+                        "cate_ci_lower": 0.141,
+                        "cate_ci_upper": 0.448,
+                        "sample_size": 1354,
+                        "statistical_significance": True,
+                    }
+                ]
+            },
+            "high_responders": [],
+            "low_responders": [],
+            "errors": [],
+            "warnings": [],
+            "status": "optimizing",
+        }
+
+    @pytest.mark.asyncio
+    async def test_llm_output_is_used_when_available(self, monkeypatch):
+        """When the runner returns content, the executive_summary / strategic_
+        interpretation / key_insights come from the LLM, NOT the templates."""
+
+        def _fake_runner(**kwargs):
+            # Echo a couple of inputs to prove it was fed the real numbers.
+            assert kwargs["overall_ate"] == pytest.approx(0.243)
+            assert "disease_severity_band=high" in kwargs["cate_by_segment_text"]
+            assert "significantly ABOVE" not in kwargs["cate_by_segment_text"]  # CI overlaps ATE
+            return {
+                "executive_summary": "LLM-EXEC: uniform effect, no targeting edge.",
+                "interpretation": "LLM-INTERP: all segment CIs overlap the ATE.",
+                "key_insights": ["LLM-INSIGHT-1", "LLM-INSIGHT-2"],
+                "high_responder_description": "none significantly above average",
+                "low_responder_description": "none significantly below average",
+            }
+
+        monkeypatch.setattr(
+            "src.agents.heterogeneous_optimizer.dspy_integration.generate_cate_interpretation",
+            _fake_runner,
+        )
+
+        result = await ProfileGeneratorNode().execute(self._state())
+
+        assert result["executive_summary"] == "LLM-EXEC: uniform effect, no targeting edge."
+        assert result["strategic_interpretation"] == "LLM-INTERP: all segment CIs overlap the ATE."
+        assert result["key_insights"] == ["LLM-INSIGHT-1", "LLM-INSIGHT-2"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_factual_when_llm_unavailable(self, monkeypatch):
+        """When the runner returns None (no LM / failure), a factual, non-empty,
+        non-fabricated summary is produced — the run never blocks."""
+        monkeypatch.setattr(
+            "src.agents.heterogeneous_optimizer.dspy_integration.generate_cate_interpretation",
+            lambda **kwargs: None,
+        )
+
+        result = await ProfileGeneratorNode().execute(self._state())
+
+        assert isinstance(result["executive_summary"], str) and result["executive_summary"]
+        assert result["key_insights"] and isinstance(result["key_insights"], list)
+        # Factual fallback cites the real ATE; it is NOT the LLM sentinel.
+        assert "LLM-EXEC" not in result["executive_summary"]
+
+    def test_serialize_cate_flags_above_ate(self):
+        """The CATE serialization marks which segments clear the above-ATE bar so the
+        LLM can reconcile nominal tiers with significance-gated targeting."""
+        node = ProfileGeneratorNode()
+        state = {  # type: ignore[assignment]
+            "cate_by_segment": {
+                "d": [
+                    # CI lower (0.30) > ATE (0.20) -> above
+                    {
+                        "segment_value": "a",
+                        "cate_estimate": 0.40,
+                        "cate_ci_lower": 0.30,
+                        "cate_ci_upper": 0.50,
+                        "sample_size": 100,
+                    },
+                    # CI straddles ATE -> not distinguishable
+                    {
+                        "segment_value": "b",
+                        "cate_estimate": 0.22,
+                        "cate_ci_lower": 0.10,
+                        "cate_ci_upper": 0.34,
+                        "sample_size": 100,
+                    },
+                    # CI upper (-0.05) < 0 -> harmful
+                    {
+                        "segment_value": "c",
+                        "cate_estimate": -0.15,
+                        "cate_ci_lower": -0.25,
+                        "cate_ci_upper": -0.05,
+                        "sample_size": 100,
+                    },
+                ]
+            }
+        }
+        text = node._serialize_cate_for_llm(state, overall_ate=0.20)  # type: ignore[arg-type]
+        assert "d=a:" in text and "significantly ABOVE the ATE" in text
+        assert "d=b:" in text and "NOT statistically distinguishable" in text
+        assert "d=c:" in text and "significantly HARMFUL" in text

@@ -371,7 +371,20 @@ class SegmentAnalysisResponse(BaseModel):
         default_factory=list, description="Targeting recommendations"
     )
     expected_total_lift: Optional[float] = Field(
-        default=None, description="Expected lift from optimal allocation"
+        default=None,
+        description=(
+            "Expected lift from optimal targeting as a COUNT of incremental outcomes "
+            "on the best single segmentation axis (de-double-counted across "
+            "overlapping dimensions). Secondary to expected_lift_pp."
+        ),
+    )
+    expected_lift_pp: Optional[float] = Field(
+        default=None,
+        description=(
+            "HEADLINE lift metric: the best-axis expected lift as a percentage-point "
+            "change in the outcome rate (count / cohort size), a fraction in [0, 1]. "
+            "~0 for a homogeneous effect under the above-ATE significance gate."
+        ),
     )
     optimal_allocation_summary: Optional[str] = Field(
         default=None, description="Summary of optimal allocation"
@@ -794,6 +807,7 @@ class _DurableAnalysesStore:
         sanitized.uplift_metrics = None
         sanitized.library_agreement_score = None
         sanitized.expected_total_lift = None
+        sanitized.expected_lift_pp = None
         sanitized.confidence = 0.0
         if "non-finite" not in " ".join(sanitized.warnings).lower():
             sanitized.warnings.append(
@@ -1698,6 +1712,7 @@ async def _execute_segment_analysis(
             low_responders=_convert_segment_profiles(result.get("low_responders", [])),
             policy_recommendations=_convert_policies(result.get("policy_recommendations", [])),
             expected_total_lift=result.get("expected_total_lift"),
+            expected_lift_pp=result.get("expected_lift_pp"),
             optimal_allocation_summary=result.get("optimal_allocation_summary"),
             executive_summary=result.get("executive_summary"),
             # Clinical-HTE rebuild: map the fields that were previously dropped at

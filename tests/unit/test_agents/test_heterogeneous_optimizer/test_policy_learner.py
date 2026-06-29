@@ -197,97 +197,130 @@ class TestPolicyLearnerNode:
         assert rec["recommended_treatment_rate"] == rec["current_treatment_rate"]
 
     @pytest.mark.asyncio
-    async def test_relative_heterogeneity_yields_positive_lift(self):
-        """REGRESSION (user-reported): a beneficial, fairly-uniform effect where NO
-        segment crosses the strict 1.5x|ATE| bar must STILL produce positive
-        expected lift by targeting the relatively-high responders the page shows —
-        not a 0-lift "maintain everything" policy.
-
-        Mirrors the real adherent_180d run (ate~0.243, segments 0.199-0.295).
+    async def test_above_ate_gate_homogeneous_yields_zero_lift(self):
+        """ABOVE-ATE GATE (user-requested): a beneficial but UNIFORM effect — every
+        segment's CATE CI overlaps the overall ATE — has NO segment that responds
+        significantly above average, so the honest targeting lift is ~0 (count AND
+        pp). Mirrors the real adherent_180d run (ate~0.243, segments 0.199-0.295,
+        CIs ~±0.1 all straddling the ATE).
         """
         node = PolicyLearnerNode()
-        state = self._mild_heterogeneity_state()
-
-        result = await node.execute(state)
-
-        assert result["expected_total_lift"] > 0
-        increases = [
-            r
-            for r in result["policy_recommendations"]
-            if r["recommended_treatment_rate"] > r["current_treatment_rate"]
-        ]
-        # The relatively-high segments (not the low one) are the ones increased.
-        assert increases
-        assert all("low" not in r["segment"] for r in increases)
-
-    @pytest.mark.asyncio
-    async def test_expected_lift_not_double_counted_across_dimensions(self):
-        """REGRESSION (user-reported +1289): cate_by_segment carries MULTIPLE
-        segmentation dimensions that partition the SAME cohort. expected_total_lift
-        must be the best SINGLE-dimension total (no cross-dimension double-count),
-        NOT the sum across dimensions.
-        """
-        node = PolicyLearnerNode()
-        # Two dimensions, each with one significant high-responder segment.
-        # dim A lift = 0.2 * 0.30 * 1000 = 60 ; dim B lift = 0.2 * 0.40 * 1000 = 80
-        cate_by_segment = {
-            "disease_severity_band": [
-                self._create_cate_result("disease_severity_band", "high", 0.30, 1000, True),
-            ],
-            "age_band": [
-                self._create_cate_result("age_band", ">65", 0.40, 1000, True),
-            ],
-        }
-        high_responders = [
-            self._create_segment_profile("disease_severity_band_high", "high", 0.30, 1000),
-            self._create_segment_profile("age_band_>65", "high", 0.40, 1000),
-        ]
-        state = self._create_test_state(overall_ate=0.25)
-        state["cate_by_segment"] = cate_by_segment
-        state["high_responders"] = high_responders
-        state["low_responders"] = []
-
-        result = await node.execute(state)
-
-        per_dim = {"disease_severity_band": 60.0, "age_band": 80.0}
-        # Best single axis = 80, NOT the cross-dimension sum 140.
-        assert result["expected_total_lift"] == pytest.approx(max(per_dim.values()), abs=0.5)
-        assert result["expected_total_lift"] < sum(per_dim.values())
-
-    @pytest.mark.asyncio
-    async def test_insignificant_segments_not_targeted(self):
-        """SIGNIFICANCE GATE: high-responder-tier segments whose effect is NOT
-        statistically significant are not reallocated (no noise-driven targeting).
-        """
-        node = PolicyLearnerNode()
-        state = self._mild_heterogeneity_state()
-        for results in state["cate_by_segment"].values():
-            for r in results:
-                r["statistical_significance"] = False
+        state = self._mild_heterogeneity_state()  # ci_lower = cate-0.1 < ate for all
 
         result = await node.execute(state)
 
         assert result["expected_total_lift"] == 0.0
+        assert result["expected_lift_pp"] == 0.0
         assert all(
             r["recommended_treatment_rate"] == r["current_treatment_rate"]
             for r in result["policy_recommendations"]
         )
 
     @pytest.mark.asyncio
-    async def test_negative_cate_low_responder_is_decreased(self):
-        """A genuinely non-positive (harmful/no-benefit) low-tier responder IS
-        de-prioritised (decrease), yielding a positive lift from avoided harm."""
+    async def test_above_ate_gate_real_heterogeneity_yields_lift(self):
+        """A segment whose CATE CI lies ENTIRELY ABOVE the ATE is a genuine
+        differential responder -> increase -> positive lift. A below-average segment
+        (CI overlaps the ATE) is maintained.
+        """
         node = PolicyLearnerNode()
-        state = self._mild_heterogeneity_state()
-        # Flip the low segment to a harmful effect.
-        state["cate_by_segment"]["disease_severity_band"][2]["cate_estimate"] = -0.05
-        state["low_responders"][0]["cate_estimate"] = -0.05
+        # cate 0.50, ci_lower 0.40 > ate 0.25 -> significantly above average.
+        cate_by_segment = {
+            "disease_severity_band": [
+                self._create_cate_result("disease_severity_band", "high", 0.50, 1000, True),
+                self._create_cate_result("disease_severity_band", "low", 0.20, 1000, True),
+            ]
+        }
+        state = self._create_test_state(overall_ate=0.25)
+        state["cate_by_segment"] = cate_by_segment
+        state["high_responders"] = []
+        state["low_responders"] = []
 
         result = await node.execute(state)
 
-        low_recs = [r for r in result["policy_recommendations"] if "low" in r["segment"]]
-        assert low_recs
-        assert any(r["recommended_treatment_rate"] < r["current_treatment_rate"] for r in low_recs)
+        assert result["expected_total_lift"] == pytest.approx(0.2 * 0.50 * 1000, abs=0.5)
+        assert result["expected_lift_pp"] > 0
+        increases = [
+            r
+            for r in result["policy_recommendations"]
+            if r["recommended_treatment_rate"] > r["current_treatment_rate"]
+        ]
+        assert len(increases) == 1 and "high" in increases[0]["segment"]
+
+    @pytest.mark.asyncio
+    async def test_expected_lift_not_double_counted_across_dimensions(self):
+        """REGRESSION (user-reported +1289): cate_by_segment carries MULTIPLE
+        dimensions partitioning the SAME cohort. expected_total_lift must be the best
+        SINGLE-dimension total, NOT the cross-dimension sum.
+        """
+        node = PolicyLearnerNode()
+        # Both segments clear the above-ATE gate (ci_lower 0.40 > ate 0.25).
+        # Each dim lift = 0.2 * 0.50 * 1000 = 100.
+        cate_by_segment = {
+            "disease_severity_band": [
+                self._create_cate_result("disease_severity_band", "high", 0.50, 1000, True),
+            ],
+            "age_band": [
+                self._create_cate_result("age_band", ">65", 0.50, 1000, True),
+            ],
+        }
+        state = self._create_test_state(overall_ate=0.25)
+        state["cate_by_segment"] = cate_by_segment
+        state["high_responders"] = []
+        state["low_responders"] = []
+
+        result = await node.execute(state)
+
+        # Best single axis = 100, NOT the cross-dimension sum 200.
+        assert result["expected_total_lift"] == pytest.approx(100.0, abs=0.5)
+
+    @pytest.mark.asyncio
+    async def test_pp_lift_is_count_over_cohort(self):
+        """expected_lift_pp == best-axis count / cohort size (a percentage-point
+        change in the outcome rate). cohort = one dimension's total patients."""
+        node = PolicyLearnerNode()
+        cate_by_segment = {
+            "disease_severity_band": [
+                self._create_cate_result("disease_severity_band", "high", 0.50, 1000, True),
+                self._create_cate_result("disease_severity_band", "low", 0.20, 1000, True),
+            ]
+        }
+        state = self._create_test_state(overall_ate=0.25)
+        state["cate_by_segment"] = cate_by_segment
+        state["high_responders"] = []
+        state["low_responders"] = []
+
+        result = await node.execute(state)
+
+        cohort = 2000  # 1000 + 1000
+        assert result["expected_lift_pp"] == pytest.approx(
+            result["expected_total_lift"] / cohort, abs=1e-6
+        )
+
+    @pytest.mark.asyncio
+    async def test_significantly_harmful_segment_decreased(self):
+        """A segment whose CATE CI lies ENTIRELY BELOW zero is a genuinely harmful
+        subgroup -> decrease (minimise)."""
+        node = PolicyLearnerNode()
+        # cate -0.30, ci_upper = -0.20 < 0 -> significantly harmful.
+        cate_by_segment = {
+            "disease_severity_band": [
+                self._create_cate_result("disease_severity_band", "high", -0.30, 1000, True),
+            ]
+        }
+        state = self._create_test_state(overall_ate=0.25)
+        state["cate_by_segment"] = cate_by_segment
+        state["high_responders"] = []
+        state["low_responders"] = []
+
+        result = await node.execute(state)
+
+        recs = result["policy_recommendations"]
+        assert recs
+        assert recs[0]["recommended_treatment_rate"] < recs[0]["current_treatment_rate"]
+
+    # (Harmful-segment decrease is covered by test_significantly_harmful_segment_decreased,
+    # which sets a CATE whose CI lies entirely below 0 — the above-ATE gate's harmful
+    # branch. Overriding only cate_estimate is insufficient now that the gate reads CIs.)
 
     @pytest.mark.asyncio
     async def test_treatment_rate_bounds(self):
@@ -512,24 +545,13 @@ class TestPolicyLearnerEdgeCases:
 
     @pytest.mark.asyncio
     async def test_negative_cate(self):
-        """A HARMFUL (negative-CATE) segment in the low-responder tier is minimised."""
+        """A genuinely HARMFUL segment (CATE CI entirely below 0) is minimised."""
         node = PolicyLearnerNode()
 
-        cate_by_segment = {"segment1": [self._create_cate_result("segment1", "value1", -0.10)]}
+        # cate -0.20, ci_upper = -0.10 < 0 -> significantly harmful (above-ATE gate's
+        # harmful branch). A merely-noisy negative (CI straddling 0) would maintain.
+        cate_by_segment = {"segment1": [self._create_cate_result("segment1", "value1", -0.20)]}
         state = self._create_test_state(cate_by_segment)
-        # segment_analyzer would classify a |CATE|<=0.5|ATE| (or bottom-half) segment
-        # as a low responder; the policy direction follows that tier.
-        state["low_responders"] = [
-            {
-                "segment_id": "segment1_value1",
-                "responder_type": "low",
-                "cate_estimate": -0.10,
-                "defining_features": [{"variable": "segment1", "value": "value1"}],
-                "size": 100,
-                "size_percentage": 100.0,
-                "recommendation": "decrease",
-            }
-        ]
 
         result = await node.execute(state)
 
@@ -540,22 +562,12 @@ class TestPolicyLearnerEdgeCases:
 
     @pytest.mark.asyncio
     async def test_very_high_cate(self):
-        """A very-high-CATE segment in the high-responder tier is increased."""
+        """A segment whose CATE CI is far above the ATE is increased."""
         node = PolicyLearnerNode()
 
+        # cate 5.0, ci_lower 4.9 > ate 1.0 -> significantly above average.
         cate_by_segment = {"segment1": [self._create_cate_result("segment1", "value1", 5.0)]}
         state = self._create_test_state(cate_by_segment, overall_ate=1.0)
-        state["high_responders"] = [
-            {
-                "segment_id": "segment1_value1",
-                "responder_type": "high",
-                "cate_estimate": 5.0,
-                "defining_features": [{"variable": "segment1", "value": "value1"}],
-                "size": 100,
-                "size_percentage": 100.0,
-                "recommendation": "increase",
-            }
-        ]
 
         result = await node.execute(state)
 
