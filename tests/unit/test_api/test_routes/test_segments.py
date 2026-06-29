@@ -2171,3 +2171,16 @@ def test_patient_journeys_allowlist_exposes_adherence_outcomes():
     numeric = _CAUSAL_NUMERIC_COLUMNS["patient_journeys"]
     for col in ("adherent_180d", "low_gap_180d", "adherence_rate", "gap_days"):
         assert col in numeric, f"{col} must coerce to float for the executors"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_get_segment_datasets_returns_human_labels():
+    from src.api.routes.segments import get_segment_datasets
+
+    resp = await get_segment_datasets()
+    assert resp.labels.get("adherent_180d") == "Adherent at 180d"
+    assert resp.labels.get("treatment_arm") == "Treatment arm"
+    # every offered treatment/outcome has a label
+    for col in resp.treatments + resp.outcomes:
+        assert col in resp.labels, f"{col} has no display label"

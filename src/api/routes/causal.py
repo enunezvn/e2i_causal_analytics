@@ -862,6 +862,20 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
 
+# Human-readable display labels for the curated columns (data-driven FE; keeps
+# the frontend free of a humanizer). Columns absent here fall back to the raw
+# name title-cased by the caller.
+_COLUMN_LABELS: Dict[str, str] = {
+    "treatment_arm": "Treatment arm",
+    "treatment_initiated": "Treatment initiated",
+    "persistent_180d": "Persistent at 180d",
+    "discontinued_180d": "Discontinued at 180d",
+    "adherent_180d": "Adherent at 180d",
+    "low_gap_180d": "Low refill gap (<=30d)",
+    "adherence_rate": "Adherence rate (PDC)",
+    "gap_days": "Refill gap (days)",
+}
+
 # Datasets that are NOT a single physical table — built by a JOIN-aware loader
 # (e.g. hcp_adoption = hcp_brand_adoption ⋈ hcp_profiles, centrality_z derived).
 # Endpoints that issue a single-table client.table(dataset) read MUST special-case
