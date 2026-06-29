@@ -35,6 +35,10 @@ def test_adherence_outcomes_recoverable_and_proxy_consistent():
 
     assert out["adherence_rate"].min() >= 0.0 and out["adherence_rate"].max() <= 1.0
     assert out["gap_days"].min() >= 0.0
+    # gap_days persists to an INTEGER DB column (migration 033) — it MUST be whole
+    # days, or the loader 22P02-rejects every row. Lock that here.
+    assert np.issubdtype(np.asarray(out["gap_days"]).dtype, np.integer)
+    assert np.all(np.asarray(out["gap_days"]) == np.round(np.asarray(out["gap_days"])))
 
     # HIGH-3: the STORED proxy must NEVER contradict the STORED binary — exact, by
     # construction (snapped), over the SAME generated frame. Not approximate.

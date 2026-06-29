@@ -13,7 +13,7 @@ this module computes neither).
 The continuous proxies are monotone transforms of that same score, then SNAPPED so
 the STORED value can NEVER contradict the STORED binary:
   - round(adherence_rate, 4) >= 0.80  <=>  adherent_180d == 1
-  - round(gap_days, 1)       <= 30.0  <=>  low_gap_180d == 1
+  - gap_days (integer days)  <= 30    <=>  low_gap_180d == 1
 Agreement is 100% by construction (exact), not approximate.
 """
 
@@ -149,11 +149,15 @@ def generate_adherence_outcomes(
     pdc = np.where(adherent_180d == 1, np.maximum(pdc, 0.80), np.minimum(pdc, 0.7999))
     adherence_rate = np.round(np.clip(pdc, 0.0, 1.0), 4)
 
-    # gap_days proxy: monotone-DECREASING in score, SNAPPED so round(gap,1)<=30 <=>
-    # low_gap_180d==1. (low_gap rows are a subset of adherent, so pdc>=0.8 there.)
+    # gap_days proxy: monotone-DECREASING in score, SNAPPED so the STORED INTEGER
+    # gap can never contradict low_gap_180d. The DB column is INTEGER (migration
+    # 033), so gap_days is WHOLE refill-gap days: low_gap==1 -> gap<=30; low_gap==0
+    # -> gap>=31 (the non-low_gap floor is 31.0, NOT 30.1, so integer rounding keeps
+    # gap>30 and the (gap<=30)<=>low_gap binary stays exact). low_gap rows are a
+    # subset of adherent, so pdc>=0.8 there.
     gap = (1.0 - pdc) * _GAP_WINDOW_DAYS
-    gap = np.where(low_gap_180d == 1, np.minimum(gap, 30.0), np.maximum(gap, 30.1))
-    gap_days = np.round(np.clip(gap, 0.0, _GAP_WINDOW_DAYS), 1)
+    gap = np.where(low_gap_180d == 1, np.minimum(gap, 30.0), np.maximum(gap, 31.0))
+    gap_days = np.clip(np.round(gap), 0.0, _GAP_WINDOW_DAYS).astype(int)
 
     return {
         "adherent_180d": adherent_180d,
