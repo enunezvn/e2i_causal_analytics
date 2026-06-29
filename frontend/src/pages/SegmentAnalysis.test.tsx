@@ -429,13 +429,18 @@ describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
 
     render(<SegmentAnalysis />, { wrapper: createWrapper() });
 
+    // Outcome dropdown renders curated labels.
     await user.click(screen.getByRole('combobox', { name: 'Outcome variable' }));
-
     expect(
       await screen.findByRole('option', { name: 'Low refill gap (≤30d)' })
     ).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Adherent at 180d' })).toBeInTheDocument();
     // The raw title-cased form must NOT be what's shown.
     expect(screen.queryByRole('option', { name: 'Low Gap 180d' })).not.toBeInTheDocument();
+
+    // Close, then assert the Treatment dropdown uses the SAME labelFor path.
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('combobox', { name: 'Treatment variable' }));
+    expect(await screen.findByRole('option', { name: 'Treatment arm' })).toBeInTheDocument();
   });
 });

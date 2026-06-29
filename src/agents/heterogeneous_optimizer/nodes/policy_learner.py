@@ -16,10 +16,16 @@ logger = logging.getLogger(__name__)
 class PolicyLearnerNode:
     """Learn optimal treatment allocation policy.
 
-    Recommends treatment rate adjustments based on CATE estimates:
-    - High responders (CATE >= 1.5x ATE): Increase treatment
-    - Low responders (CATE <= 0.5x ATE): Decrease treatment
-    - Average responders: Maintain current rate
+    Recommends treatment rate adjustments, significance-gated:
+    - High-responder TIER (classified upstream by segment_analyzer — strict
+      1.5x|ATE| with a relative top-half fallback) with a positive CATE: increase.
+    - Genuinely HARMFUL subgroup (CATE < 0): minimise, regardless of tier.
+    - Everything else (average / below-average-but-beneficial / not significant):
+      maintain.
+
+    The decision boundary for the tiers lives in segment_analyzer; this node acts
+    on the tier it assigned (so the policy can never contradict the responder tiers
+    the page displays) plus the per-segment CATE sign. See _generate_recommendation.
     """
 
     def __init__(self, label_criteria_provider: Optional[object] = None):
@@ -92,16 +98,16 @@ class PolicyLearnerNode:
             # is enabled for this run. None => gating is a no-op (existing behaviour).
             population = self._resolve_population(state)
 
-            # Drive the policy DIRECTION off the SAME high/low responder tiers the
-            # segment_analyzer classified (strict 1.5x/0.5x|ATE| with a relative
-            # top/bottom-half fallback) — the tiers the page displays. The previous
-            # absolute-only rule re-derived direction from a strict 1.5x|ATE| bar and
-            # produced a 0-lift "maintain everything" policy whenever no segment
-            # crossed it, even while the page showed high responders (the reported
-            # contradiction). Match by segment_id == f"{segment_var}_{segment_value}",
-            # exactly how segment_analyzer builds it.
+            # Drive the INCREASE direction off the SAME high-responder tier the
+            # segment_analyzer classified (strict 1.5x|ATE| with a relative top-half
+            # fallback) — the tier the page displays. The previous absolute-only rule
+            # re-derived direction from a strict 1.5x|ATE| bar and produced a 0-lift
+            # "maintain everything" policy whenever no segment crossed it, even while
+            # the page showed high responders (the reported contradiction). Match by
+            # segment_id == f"{segment_var}_{segment_value}", exactly how
+            # segment_analyzer builds it. (DECREASE is sign-driven inside
+            # _generate_recommendation, not tier-driven — see its docstring.)
             high_ids = {p.get("segment_id") for p in high_responders}
-            low_ids = {p.get("segment_id") for p in low_responders}
 
             # Generate policy recommendations
             recommendations = []
@@ -113,7 +119,6 @@ class PolicyLearnerNode:
                         dict(result),  # type: ignore[arg-type]
                         ate,
                         is_high=sid in high_ids,
-                        is_low=sid in low_ids,
                     )
                     if rec:
                         if population is not None:
@@ -197,31 +202,34 @@ class PolicyLearnerNode:
         ate: float,
         *,
         is_high: bool = False,
-        is_low: bool = False,
     ) -> PolicyRecommendation:
         """Generate policy recommendation for a segment.
 
-        Significance-gated RELATIVE targeting. The DIRECTION follows the high/low
-        responder tier the segment_analyzer assigned (``is_high`` / ``is_low``) —
-        the SAME tiers the page displays — rather than re-deriving it from a strict
-        absolute 1.5x|ATE| bar. The old absolute-only rule recommended "maintain
-        0.5" for every segment whenever none crossed 1.5x|ATE| (a beneficial but
-        fairly-uniform effect), yielding expected_total_lift=0 while the page still
-        showed high responders.
+        Significance-gated targeting. Two independent, sign-correct rules:
 
-        Two guards keep it honest:
-        - We ACT only on a STATISTICALLY SIGNIFICANT segment effect — no
-          noise-driven reallocation of segments whose effect isn't distinguishable.
-        - We NEVER recommend pulling a beneficial drug: a DECREASE requires a
-          non-positive CATE (genuine no/negative benefit), not merely a
-          below-average positive one (those are MAINTAINED).
+        - INCREASE follows the RELATIVE high-responder tier the segment_analyzer
+          assigned (``is_high`` — strict 1.5x|ATE| with a top/bottom-half fallback),
+          the SAME tier the page displays, rather than re-deriving it from a strict
+          absolute 1.5x|ATE| bar. The old absolute-only rule recommended "maintain
+          0.5" for every segment whenever none crossed 1.5x|ATE| (a beneficial but
+          fairly-uniform effect), yielding expected_total_lift=0 while the page still
+          showed high responders. Increase requires a real POSITIVE effect.
+        - DECREASE is driven by the SIGN of the segment CATE, NOT the tier: a
+          genuinely HARMFUL subgroup (cate < 0) is minimised wherever it occurs.
+          This is intentionally tier-independent: for a net-HARMFUL treatment
+          (ATE < 0), segment_analyzer ranks the most-harmed segments as "high
+          responders" by |CATE|, so a tier-gated decrease would wrongly MAINTAIN
+          them. A below-average but still-POSITIVE segment is never decreased
+          (we never pull a beneficial drug); it is MAINTAINED.
+
+        We ACT only on a STATISTICALLY SIGNIFICANT segment effect — no noise-driven
+        reallocation of segments whose effect isn't distinguishable from zero.
 
         Args:
             result: CATE result dictionary
-            ate: Overall average treatment effect (kept for context/sign; the
-                threshold decision now comes from the tier classification)
+            ate: Overall average treatment effect (context only; direction now comes
+                from the tier classification + the segment CATE sign)
             is_high: Segment is in the high-responder tier (segment_analyzer)
-            is_low: Segment is in the low-responder tier (segment_analyzer)
 
         Returns:
             Policy recommendation
@@ -239,18 +247,16 @@ class PolicyLearnerNode:
         if significant and is_high and cate > 0:
             # Relatively high responder with a real positive effect — concentrate.
             recommended_rate = min(0.9, current_rate + 0.2)
-        elif significant and is_low and cate <= 0:
-            # Genuine no/negative benefit — de-prioritise. Minimise for a HARMFUL
-            # (negative) effect; step down for a zero/no-benefit one. (A below-
-            # average but still-POSITIVE low responder is MAINTAINED, not decreased.)
-            recommended_rate = 0.1 if cate < 0 else max(0.1, current_rate - 0.2)
+        elif significant and cate < 0:
+            # Genuinely HARMFUL subgroup — minimise, regardless of tier or ATE sign.
+            recommended_rate = 0.1
         else:
-            # Average / not-significant / below-average-but-beneficial — maintain.
+            # Average / not-significant / below-average-but-beneficial / zero — maintain.
             recommended_rate = current_rate
 
         # Calculate expected incremental outcome. Sign is correct in both action
         # branches: increasing a positive-CATE segment (+rate x +cate) and reducing
-        # a non-positive-CATE segment (-rate x <=0 cate) both yield a >=0 lift.
+        # a negative-CATE segment (-rate x -cate) both yield a positive lift.
         rate_change = recommended_rate - current_rate
         expected_lift = rate_change * cate * sample_size
 
@@ -364,7 +370,10 @@ class PolicyLearnerNode:
 
         total_lift = sum(r["expected_incremental_outcome"] for r in recommendations)
         summary_parts.append(
-            f"Expected total outcome lift from reallocation: {total_lift:.1f} units."
+            f"Expected total outcome lift from reallocation: {total_lift:.1f} units "
+            "(directional — aggregated across overlapping segmentation dimensions, so "
+            "a patient may be counted in more than one segment; read it as a relative "
+            "targeting magnitude, not a deduplicated patient count)."
         )
 
         return " ".join(summary_parts)

@@ -51,8 +51,12 @@ def calculate_confidence(state: Mapping[str, Any]) -> float:
     high_responders = state.get("high_responders") or []
     low_responders = state.get("low_responders") or []
     if high_responders and low_responders:
+        # .get(..., 0) so a malformed profile (missing "size") degrades to the
+        # "small sample" branch rather than raising — the route now passes the raw
+        # graph result dict straight in, widening the set of shapes reaching here.
         min_size = min(
-            [h["size"] for h in high_responders] + [low["size"] for low in low_responders]
+            [h.get("size", 0) for h in high_responders]
+            + [low.get("size", 0) for low in low_responders]
         )
         if min_size >= 100:
             confidence += 0.1

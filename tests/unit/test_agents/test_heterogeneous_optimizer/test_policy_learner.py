@@ -168,10 +168,10 @@ class TestPolicyLearnerNode:
         # Find Oncology recommendation (CATE=0.50, which is 2x ATE)
         oncology_rec = [r for r in result["policy_recommendations"] if "Oncology" in r["segment"]]
 
-        if oncology_rec:
-            rec = oncology_rec[0]
-            # High responder should have increased treatment rate
-            assert rec["recommended_treatment_rate"] > rec["current_treatment_rate"]
+        assert oncology_rec, "expected an Oncology recommendation"
+        rec = oncology_rec[0]
+        # High responder should have increased treatment rate
+        assert rec["recommended_treatment_rate"] > rec["current_treatment_rate"]
 
     @pytest.mark.asyncio
     async def test_low_responder_recommendation(self):
