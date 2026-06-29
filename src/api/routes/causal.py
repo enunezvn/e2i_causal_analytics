@@ -1095,12 +1095,15 @@ async def list_causal_variables(
     # on no table). Return them directly instead of 500-ing on a missing relation.
     if dataset in _JOIN_DATASETS:
         all_cols = sorted(set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"]))
+        _offered = list(spec["treatment"]) + list(spec["outcome"]) + list(spec["covariate"])
+        labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
         return CausalVariablesResponse(
             dataset=dataset,
             treatment_candidates=list(spec["treatment"]),
             outcome_candidates=list(spec["outcome"]),
             covariate_candidates=list(spec["covariate"]),
             columns=all_cols,
+            labels=labels,
         )
 
     from src.memory.services.factories import get_async_supabase_client
@@ -1126,12 +1129,17 @@ async def list_causal_variables(
             return list(spec[role])
         return [c for c in spec[role] if c in present]
 
+    _offered = (
+        _available("treatment") + _available("outcome") + _available("covariate")
+    )
+    labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
     return CausalVariablesResponse(
         dataset=dataset,
         treatment_candidates=_available("treatment"),
         outcome_candidates=_available("outcome"),
         covariate_candidates=_available("covariate"),
         columns=sorted(present),
+        labels=labels,
     )
 
 

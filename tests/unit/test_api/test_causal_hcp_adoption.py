@@ -279,3 +279,78 @@ async def test_get_causal_estimation_data_hcp_adoption_returns_400_not_500():
     assert exc_info.value.status_code == 400
     assert "hcp_adoption" in exc_info.value.detail
     assert "JOIN" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# HIGH-1 review finding: /causal/variables must expose human-readable labels
+# (parity with /segments/datasets which already has labels from Phase 0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_causal_variables_patient_journeys_includes_labels():
+    """list_causal_variables must return a 'labels' dict with human-readable
+    names for every offered candidate column (parity with /segments/datasets).
+
+    RED before the 'labels' field is added to CausalVariablesResponse and the
+    handler is updated to populate it from _COLUMN_LABELS.
+    """
+    from src.api.dependencies.auth import TEST_USER
+    from src.api.routes.causal import list_causal_variables
+
+    # Fake probe row: every patient_journeys candidate column is "present".
+    _pj_cols = [
+        "treatment_arm",
+        "treatment_initiated",
+        "persistent_180d",
+        "discontinued_180d",
+        "adherent_180d",
+        "low_gap_180d",
+        "disease_severity",
+        "engagement_score",
+        "age_at_diagnosis",
+        "academic_hcp",
+        "geographic_region",
+        "egfr",
+        "proteinuria_g_day",
+        "ldh_ratio",
+        "urticaria_severity_uas7",
+        "ecog_performance_status",
+    ]
+    fake_row = {c: None for c in _pj_cols}
+
+    class _FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def select(self, *a, **kw):
+            return self
+
+        def limit(self, *a, **kw):
+            return self
+
+        async def execute(self):
+            return type("_Result", (), {"data": self._rows})()
+
+    class _FakeClient:
+        def table(self, name: str) -> _FakeQuery:
+            return _FakeQuery([fake_row])
+
+    import src.memory.services.factories as factories
+
+    original = factories.get_async_supabase_client
+
+    async def _fake_factory():
+        return _FakeClient()
+
+    factories.get_async_supabase_client = _fake_factory
+    try:
+        resp = await list_causal_variables(dataset="patient_journeys", user=TEST_USER)
+    finally:
+        factories.get_async_supabase_client = original
+
+    # labels present + human-readable for the offered candidates
+    assert resp.labels.get("treatment_arm") == "Treatment arm"
+    assert resp.labels.get("adherent_180d") == "Adherent at 180d"
+    for col in resp.treatment_candidates + resp.outcome_candidates + resp.covariate_candidates:
+        assert col in resp.labels, f"{col} has no display label"

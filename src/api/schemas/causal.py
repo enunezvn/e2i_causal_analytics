@@ -387,6 +387,10 @@ class CausalVariablesResponse(BaseModel):
     columns: List[str] = Field(
         default_factory=list, description="All columns present in the dataset sample"
     )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Human-readable display labels keyed by column name",
+    )
 
 
 class CausalBrandsResponse(BaseModel):
