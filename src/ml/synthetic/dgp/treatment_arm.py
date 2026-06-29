@@ -8,7 +8,7 @@ trigger/cohort generators (Shards 05/06).
 
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Literal, Tuple, overload
 
 import numpy as np
 from scipy.special import expit
@@ -208,6 +208,30 @@ def binarize_score(
     return y, tau_i
 
 
+@overload
+def binary_outcome_rd(
+    arm: np.ndarray,
+    baseline: np.ndarray,
+    segment: np.ndarray,
+    cate_map: Dict[str, float],
+    rng: np.random.Generator,
+    *,
+    target_prevalence: float = ...,
+    noise_std: float = ...,
+    return_score: Literal[False] = ...,
+) -> Tuple[np.ndarray, np.ndarray]: ...
+@overload
+def binary_outcome_rd(
+    arm: np.ndarray,
+    baseline: np.ndarray,
+    segment: np.ndarray,
+    cate_map: Dict[str, float],
+    rng: np.random.Generator,
+    *,
+    target_prevalence: float = ...,
+    noise_std: float = ...,
+    return_score: Literal[True],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]: ...
 def binary_outcome_rd(
     arm: np.ndarray,
     baseline: np.ndarray,
