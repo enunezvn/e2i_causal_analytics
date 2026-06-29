@@ -9,6 +9,7 @@ import pytest
 
 from src.ml.synthetic.config import Brand, DGPType
 from src.ml.synthetic.dgp.recovery_probe import recover_ate_and_cate
+from src.ml.synthetic.dgp.treatment_arm import ARM_CONFOUNDERS
 from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
 
 pytestmark = pytest.mark.heavy_ml  # groups econml import on one worker (pyproject:214)
@@ -35,5 +36,31 @@ def test_estimators_recover_true_ate_and_cate_ordering(brand):
     assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
 
     # per-segment CATE ordering matches the DGP map high>medium>low
+    cate = out["cate_by_segment_estimate"]
+    assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"]
+
+
+@pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
+def test_adherence_outcome_recoverable_on_existing_arm(brand):
+    """Phase 0: treatment_arm -> adherent_180d must be recoverable (ATE within
+    tolerance + CATE ordering), proving the binarized adherence outcome carries
+    the planted effect BEFORE the allowlist exposes it."""
+    cfg = GeneratorConfig(seed=21, n_records=3000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
+    df = PatientGenerator(cfg).generate()
+    truth = df.attrs["true_ate_by_arm"]["treatment_arm"]["adherent_180d"]
+
+    out = recover_ate_and_cate(
+        df,
+        treatment_col="treatment_arm",
+        outcome_col="adherent_180d",
+        confounders=list(ARM_CONFOUNDERS),
+        segment_col="segment_assignment",
+        true_ate=truth["ate"],
+        cate_map=truth["cate_by_segment"],
+    )
+
+    assert out["propensity_auc"] > 0.5
+    assert out["n_treated"] >= 30 and out["n_control"] >= 100
+    assert abs(out["linear_dml_ate"] - out["true_ate"]) < 0.15, out
     cate = out["cate_by_segment_estimate"]
     assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"]
