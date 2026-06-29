@@ -297,6 +297,38 @@ class TestPolicyLearnerNode:
         )
 
     @pytest.mark.asyncio
+    async def test_pp_denominator_is_best_dim_cohort_not_first_dim(self):
+        """REGRESSION (review H1): the pp denominator must be the cohort of the dim
+        that total_lift comes from (best_dim), NOT the FIRST dim in the dict. With
+        real per-variable missingness, dimensions have DIFFERENT patient totals, so
+        dividing the best-dim count by the first-dim cohort yields a wrong headline
+        number. Here best_dim ('beta_band', second) has 2000 patients while the first
+        dim ('alpha_band') has only 500 — so pp must be 200/2000=0.10, not 200/500.
+        """
+        node = PolicyLearnerNode()
+        # Both clear the above-ATE gate (ci_lower 0.40 > ate 0.25).
+        # alpha (first): lift = 0.2*0.50*500  = 50,  cohort 500
+        # beta  (best) : lift = 0.2*0.50*2000 = 200, cohort 2000
+        cate_by_segment = {
+            "alpha_band": [
+                self._create_cate_result("alpha_band", "a", 0.50, 500, True),
+            ],
+            "beta_band": [
+                self._create_cate_result("beta_band", "b", 0.50, 2000, True),
+            ],
+        }
+        state = self._create_test_state(overall_ate=0.25)
+        state["cate_by_segment"] = cate_by_segment
+        state["high_responders"] = []
+        state["low_responders"] = []
+
+        result = await node.execute(state)
+
+        # best_dim = beta_band (200 > 50); denominator must be beta's 2000.
+        assert result["expected_total_lift"] == pytest.approx(200.0, abs=0.5)
+        assert result["expected_lift_pp"] == pytest.approx(0.10, abs=1e-6)
+
+    @pytest.mark.asyncio
     async def test_significantly_harmful_segment_decreased(self):
         """A segment whose CATE CI lies ENTIRELY BELOW zero is a genuinely harmful
         subgroup -> decrease (minimise)."""
@@ -317,6 +349,34 @@ class TestPolicyLearnerNode:
         recs = result["policy_recommendations"]
         assert recs
         assert recs[0]["recommended_treatment_rate"] < recs[0]["current_treatment_rate"]
+
+    @pytest.mark.asyncio
+    async def test_negative_ate_uncertain_benefit_not_increased(self):
+        """REGRESSION (review H2): under a net-harmful ATE (<0), a segment whose CI
+        lies above the ATE but STRADDLES zero has UNCONFIRMED benefit and must NOT be
+        increased. The INCREASE gate requires the CI above BOTH the ATE and zero.
+
+        ate=-0.10; segment cate=0.05, 95% CI [-0.05, 0.15]: above the ATE but the
+        CI crosses zero, so benefit is not statistically confirmed -> MAINTAIN.
+        """
+        node = PolicyLearnerNode()
+        cate_by_segment = {
+            "disease_severity_band": [
+                self._create_cate_result("disease_severity_band", "mid", 0.05, 1000, True),
+            ]
+        }
+        state = self._create_test_state(overall_ate=-0.10)
+        state["cate_by_segment"] = cate_by_segment
+        state["high_responders"] = []
+        state["low_responders"] = []
+
+        result = await node.execute(state)
+
+        recs = result["policy_recommendations"]
+        assert recs
+        # CI straddles zero -> benefit unconfirmed -> maintained, not increased.
+        assert recs[0]["recommended_treatment_rate"] == recs[0]["current_treatment_rate"]
+        assert result["expected_total_lift"] == 0.0
 
     # (Harmful-segment decrease is covered by test_significantly_harmful_segment_decreased,
     # which sets a CATE whose CI lies entirely below 0 — the above-ATE gate's harmful

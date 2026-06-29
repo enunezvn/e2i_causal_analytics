@@ -397,6 +397,39 @@ class TestProfileGeneratorEdgeCases:
         assert result["cate_plot_data"] is not None
         assert len(result["cate_plot_data"]["segments"]) == 0
 
+    def test_fallback_interpretation_honest_when_gate_finds_no_lift(self):
+        """REGRESSION (review M3): the FALLBACK strategic interpretation must not
+        contradict the above-ATE gate. With moderate heterogeneity_score (0.45) and
+        nominal display-tier high responders, but expected_total_lift == 0 (the gate
+        found NO segment significantly above the ATE), the old template said
+        'Prioritize N high-responder segments' — telling the analyst to reallocate
+        resources the gate just said offer no reliable lift. It must instead advise
+        UNIFORM deployment, keyed on the gate's zero-lift signal, not the het score.
+        """
+        node = ProfileGeneratorNode()
+        state = self._create_test_state(
+            heterogeneity_score=0.45,  # 'moderate' band -> old code took targeting path
+            expected_total_lift=0.0,  # but the above-ATE gate surfaced no opportunity
+            high_responders=[
+                {
+                    "segment_id": "disease_severity_band_high",
+                    "cate_estimate": 0.295,
+                    "size_percentage": 16.0,
+                    "responder_type": "high",
+                    "defining_features": [],
+                    "size": 1354,
+                    "recommendation": "test",
+                }
+            ],
+            low_responders=[],
+        )
+
+        interp = node._generate_strategic_interpretation(state)
+
+        assert "Prioritize" not in interp
+        assert "uniform" in interp.lower()
+        assert "NO RELIABLE DIFFERENTIAL-TARGETING OPPORTUNITY" in interp
+
 
 class TestProfileGeneratorLLMInterpretation:
     """The explanation is LLM-generated (CATEInterpretationSignature) when an LM is

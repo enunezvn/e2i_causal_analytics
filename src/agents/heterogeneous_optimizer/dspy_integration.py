@@ -57,7 +57,8 @@ class HeterogeneousOptimizationTrainingSignal:
 
     # === Policy Learning Phase ===
     policy_recommendations_count: int = 0
-    expected_total_lift: float = 0.0
+    expected_total_lift: float = 0.0  # best-axis COUNT of incremental outcomes
+    expected_lift_pp: float = 0.0  # headline lift as a percentage-point rate change
     actionable_policies: int = 0
 
     # === Output Quality ===
@@ -172,6 +173,7 @@ class HeterogeneousOptimizationTrainingSignal:
             "policy_learning": {
                 "policy_recommendations_count": self.policy_recommendations_count,
                 "expected_total_lift": self.expected_total_lift,
+                "expected_lift_pp": self.expected_lift_pp,
                 "actionable_policies": self.actionable_policies,
             },
             "output": {
@@ -455,10 +457,12 @@ class HeterogeneousOptimizerSignalCollector:
         visualization_data_complete: bool,
         total_latency_ms: float,
         confidence_score: float,
+        expected_lift_pp: float = 0.0,
     ) -> HeterogeneousOptimizationTrainingSignal:
         """Update signal with policy learning phase results."""
         signal.policy_recommendations_count = policy_recommendations_count
         signal.expected_total_lift = expected_total_lift
+        signal.expected_lift_pp = expected_lift_pp
         signal.actionable_policies = actionable_policies
         signal.executive_summary_length = executive_summary_length
         signal.key_insights_count = key_insights_count

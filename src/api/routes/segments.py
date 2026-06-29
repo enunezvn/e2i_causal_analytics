@@ -382,8 +382,10 @@ class SegmentAnalysisResponse(BaseModel):
         default=None,
         description=(
             "HEADLINE lift metric: the best-axis expected lift as a percentage-point "
-            "change in the outcome rate (count / cohort size), a fraction in [0, 1]. "
-            "~0 for a homogeneous effect under the above-ATE significance gate."
+            "change in the outcome rate (count / best-axis cohort size). For binary / "
+            "rate outcomes this lies in [0, 1]; it is only well-defined for such "
+            "outcomes (a continuous outcome makes a percentage-point rate change "
+            "ill-defined). ~0 for a homogeneous effect under the above-ATE gate."
         ),
     )
     optimal_allocation_summary: Optional[str] = Field(

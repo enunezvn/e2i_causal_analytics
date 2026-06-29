@@ -450,6 +450,27 @@ class ProfileGeneratorNode:
             "positive" if overall_ate > 0 else "negative" if overall_ate < 0 else "neutral"
         )
 
+        # When the above-ATE gate surfaced NO targeting opportunity (expected lift ~0),
+        # the honest interpretation is uniform deployment REGARDLESS of the nominal
+        # heterogeneity_score or how many display-tier "high responders" segment_analyzer
+        # listed. Branching on heterogeneity_score alone would otherwise tell the analyst
+        # to "prioritize high-responder segments" — reallocating resources the gate just
+        # said offer no reliable lift (review M3). The gate (CI-based) supersedes the
+        # point-estimate heterogeneity score as the targeting signal.
+        if abs(expected_total_lift) < 1e-9:
+            return f"""STRATEGIC INSIGHT: NO RELIABLE DIFFERENTIAL-TARGETING OPPORTUNITY
+
+Treatment Uniformity: No segment's effect is statistically distinguishable from the overall average (above-ATE significance gate). The {effect_direction} treatment effect (ATE: {overall_ate:.3f}) is effectively uniform across segments for targeting purposes, even though the spread-based heterogeneity score is {heterogeneity_score:.2f}.
+
+Business Implication:
+Concentrating treatment on the nominal top segments would be noise-driven — the expected lift from differential targeting is ~0. Any responder tiers shown are a relative ranking for context, not a statistically reliable targeting signal.
+
+Tactical Recommendation:
+- Deploy the treatment uniformly across all segments
+- Allocate budget proportionally to segment size
+- Focus operational resources on execution quality, not segment selection
+- Re-evaluate targeting only if a larger sample narrows the per-segment confidence intervals"""
+
         if heterogeneity_score < 0.3:
             # Low heterogeneity - uniform approach recommended
             interpretation = f"""STRATEGIC INSIGHT: UNIFORM TREATMENT EFFECTS
@@ -614,6 +635,7 @@ Tactical Recommendation:
                 signal=signal,
                 policy_recommendations_count=len(policy_recommendations),
                 expected_total_lift=state.get("expected_total_lift") or 0.0,
+                expected_lift_pp=float(state.get("expected_lift_pp") or 0.0),
                 actionable_policies=actionable_count,
                 executive_summary_length=len(executive_summary),
                 key_insights_count=len(key_insights),

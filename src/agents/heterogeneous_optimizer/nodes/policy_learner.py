@@ -17,16 +17,23 @@ logger = logging.getLogger(__name__)
 class PolicyLearnerNode:
     """Learn optimal treatment allocation policy.
 
-    Recommends treatment rate adjustments, significance-gated:
-    - High-responder TIER (classified upstream by segment_analyzer — strict
-      1.5x|ATE| with a relative top-half fallback) with a positive CATE: increase.
-    - Genuinely HARMFUL subgroup (CATE < 0): minimise, regardless of tier.
-    - Everything else (average / below-average-but-beneficial / not significant):
-      maintain.
+    Recommends treatment-rate adjustments using an ABOVE-ATE significance gate keyed
+    on each segment's CATE confidence interval (NOT segment_analyzer's display tiers):
 
-    The decision boundary for the tiers lives in segment_analyzer; this node acts
-    on the tier it assigned (so the policy can never contradict the responder tiers
-    the page displays) plus the per-segment CATE sign. See _generate_recommendation.
+    - INCREASE iff the CATE CI lies ENTIRELY ABOVE the overall ATE *and* above zero
+      (``cate_ci_lower > ate`` and ``> 0``) — a significantly above-average responder
+      with confirmed benefit.
+    - DECREASE iff the CATE CI lies ENTIRELY BELOW zero (``cate_ci_upper < 0``) — a
+      genuinely harmful subgroup, minimised wherever it occurs (sign-based,
+      tier-independent, correct even for a net-harmful ATE < 0).
+    - MAINTAIN otherwise (CI overlaps the ATE -> statistically average; targeting
+      there is noise-driven).
+
+    WHY this supersedes the old tier logic: a beneficial-but-UNIFORM effect makes
+    every band significantly positive yet none meaningfully ABOVE average, so the
+    honest targeting lift collapses to ~0 — even when segment_analyzer's relative
+    fallback still lists nominal high/low responders for display. See
+    _generate_recommendation.
     """
 
     def __init__(self, label_criteria_provider: Optional[object] = None):
@@ -131,18 +138,33 @@ class PolicyLearnerNode:
             # targeting opportunity, not the sum across overlapping dimensions.
             total_lift, best_dim = self._aggregate_total_lift(recommendations)
 
-            # Percentage-point lift = best-axis incremental outcomes / cohort size.
-            # cohort_size = total patients in any ONE dimension (each dimension
-            # partitions the same cohort). This is the HEADLINE metric: an absolute
-            # change in the outcome RATE (e.g. +4.9pp adherence), which is honest and
-            # interpretable, unlike a raw count that scales with cohort size. ~0 for a
+            # Percentage-point lift = best-axis incremental outcomes / that axis's
+            # cohort size. The numerator (total_lift) comes from best_dim, so the
+            # denominator MUST be best_dim's patient total — NOT the first dimension's.
+            # With real per-variable missingness, dimensions have DIFFERENT totals, so
+            # mixing best_dim's count with the first dim's cohort yields a wrong rate
+            # (review H1). This is the HEADLINE metric: an absolute change in the
+            # outcome RATE (e.g. +4.9pp adherence), honest and interpretable, ~0 for a
             # homogeneous effect under the above-ATE gate.
-            cohort_size = (
-                sum(r["sample_size"] for r in next(iter(cate_by_segment.values())))
-                if cate_by_segment
-                else 0
-            )
+            best_dim_segments = cate_by_segment.get(best_dim) if best_dim else None
+            if best_dim_segments is None:
+                # best_dim None (no qualifying lift) or not a known key: fall back to
+                # the first dimension. total_lift is 0 in the None case, so pp is 0
+                # regardless of denominator.
+                best_dim_segments = next(iter(cate_by_segment.values()), []) if cate_by_segment else []
+            cohort_size = sum(r["sample_size"] for r in best_dim_segments) if best_dim_segments else 0
             expected_lift_pp = (total_lift / cohort_size) if cohort_size > 0 else 0.0
+
+            # pp is only well-defined for binary/rate outcomes (then it lies in [0,1]).
+            # A continuous outcome (CATE in absolute units >> 1) makes pp meaningless;
+            # surface that rather than silently clamping a nonsense headline number.
+            if not 0.0 <= expected_lift_pp <= 1.0:
+                logger.warning(
+                    "expected_lift_pp outside [0,1] — the percentage-point lift is "
+                    "only meaningful for binary/rate outcomes; a continuous outcome "
+                    "makes this metric ill-defined",
+                    extra={"node": "policy_learner", "expected_lift_pp": expected_lift_pp},
+                )
 
             # Generate summary
             summary = self._generate_allocation_summary(
@@ -223,10 +245,12 @@ class PolicyLearnerNode:
         differential responder, not merely the top half of a near-uniform effect:
 
         - INCREASE iff the segment's CATE confidence interval lies ENTIRELY ABOVE
-          the ATE (``cate_ci_lower > ate``) AND the effect is positive — the segment
-          responds significantly MORE than average. (A segment whose CI overlaps the
-          ATE is statistically average; concentrating treatment there is noise-
-          driven, so it is MAINTAINED.)
+          the ATE *and* above zero (``cate_ci_lower > ate`` and ``cate_ci_lower > 0``)
+          — the segment responds significantly MORE than average with CONFIRMED
+          benefit. (A segment whose CI overlaps the ATE is statistically average;
+          concentrating treatment there is noise-driven, so it is MAINTAINED. The
+          ``> 0`` clause only bites when the ATE is negative: a CI above a net-harmful
+          ATE but straddling zero has unconfirmed benefit and is not escalated.)
         - DECREASE iff the CATE confidence interval lies ENTIRELY BELOW ZERO
           (``cate_ci_upper < 0``) — a genuinely HARMFUL subgroup, minimised wherever
           it occurs (sign-based, tier-independent, correct for a net-harmful ATE<0).
@@ -257,8 +281,13 @@ class PolicyLearnerNode:
         # Determine recommended treatment rate change
         current_rate = 0.5  # Assume current 50% coverage
 
-        if cate > 0 and ci_lower is not None and ci_lower > ate:
-            # CI lies entirely ABOVE the ATE -> significantly above-average responder.
+        if ci_lower is not None and ci_lower > ate and ci_lower > 0:
+            # CI lies entirely ABOVE the ATE *and* above zero -> a significantly
+            # above-average responder with CONFIRMED benefit. Requiring ci_lower > 0
+            # (not just > ate) matters when the ATE is negative (net-harmful): a CI
+            # above a negative ATE but straddling zero has UNCONFIRMED benefit and
+            # must not be escalated (review H2). On the common positive-ATE path
+            # ci_lower > ate > 0 already implies ci_lower > 0, so this is a no-op.
             recommended_rate = min(0.9, current_rate + 0.2)
         elif ci_upper is not None and ci_upper < 0:
             # CI lies entirely BELOW zero -> significantly harmful subgroup; minimise.
