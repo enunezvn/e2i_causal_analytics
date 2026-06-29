@@ -1221,6 +1221,10 @@ class SegmentDatasetsResponse(BaseModel):
         default_factory=list,
         description="Distinct brands present in the gold-standard cohort (filter)",
     )
+    labels: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Human-readable display labels keyed by column name",
+    )
 
 
 @router.get(
@@ -1240,7 +1244,7 @@ async def get_segment_datasets() -> SegmentDatasetsResponse:
     Brands are data-driven (distinct brands in the live cohort); fail-soft to an
     empty list (FE shows "All brands") if the store / import is unavailable.
     """
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _COLUMN_LABELS
 
     spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
 
@@ -1253,10 +1257,14 @@ async def get_segment_datasets() -> SegmentDatasetsResponse:
         logger.warning(f"Segment datasets: brand list unavailable, returning []: {e}")
         brands = []
 
+    offered = list(spec["treatment"]) + list(spec["outcome"])
+    labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in offered}
+
     return SegmentDatasetsResponse(
         treatments=list(spec["treatment"]),
         outcomes=list(spec["outcome"]),
         brands=brands,
+        labels=labels,
     )
 
 

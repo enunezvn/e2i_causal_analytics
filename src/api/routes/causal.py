@@ -805,13 +805,33 @@ def _recommended_mode_to_pipeline(mode: str) -> Optional[PipelineMode]:
 # (verified against the live table: academic_hcp, egfr, proteinuria_g_day,
 # ldh_ratio, urticaria_severity_uas7, ecog_performance_status) so the analyst has
 # a richer adjustment set. Columns that LOOK like confounders but are 100% NULL
-# (risk_score, adherence_rate, refill_count, gap_days) are deliberately NOT
-# offered — they would fail-close every run. treatment/outcome stay the curated
-# causal columns (the synthetic gold-standard only wires those relationships).
+# (risk_score, refill_count) are deliberately NOT offered — they would
+# fail-close every run.
+#
+# Phase 0 of the commercial-arms enrichment POPULATES adherence_rate and gap_days
+# (raw continuous proxies) and the binary outcomes adherent_180d / low_gap_180d.
+# The binary outcomes ARE offered below (outcome list). However, adherence_rate
+# and gap_days are POST-TREATMENT DESCENDANTS of treatment_arm — they are
+# generated from a latent that includes arm * tau — and are near-deterministic
+# proxies of the outcomes (adherent_180d = 1{adherence_rate>=0.8}). Adjusting on
+# them as covariates would OVERCONTROL: they block the very causal path being
+# estimated, collapsing the treatment coefficient toward zero (measured: +0.228
+# with clinical confounders → +0.022 under default route adjustment set including
+# proxies — a fake "no effect"). They are therefore deliberately NOT offered as
+# covariate/adjustment candidates. They remain populated DB columns and
+# feature-store inputs. (Caught in adversarial review, 2026-06-29.)
+# treatment/outcome stay the curated causal columns (the synthetic gold-standard
+# only wires those relationships).
 _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     "patient_journeys": {
         "treatment": ["treatment_arm", "treatment_initiated"],
-        "outcome": ["persistent_180d", "discontinued_180d", "treatment_initiated"],
+        "outcome": [
+            "persistent_180d",
+            "discontinued_180d",
+            "treatment_initiated",
+            "adherent_180d",
+            "low_gap_180d",
+        ],
         "covariate": [
             "disease_severity",
             "engagement_score",
@@ -823,6 +843,11 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "ldh_ratio",
             "urticaria_severity_uas7",
             "ecog_performance_status",
+            # adherence_rate and gap_days are NOT listed here: they are
+            # post-treatment descendants of treatment_arm (near-deterministic
+            # proxies of adherent_180d / low_gap_180d). Adjusting on them
+            # overcontrols and blocks the causal path. They remain DB columns
+            # and feature-store inputs but are excluded from the adjustment set.
         ],
     },
     # HCP grain: hcp_brand_adoption (treatment_arm, adopted, brand) JOIN
@@ -851,6 +876,20 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
 }
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
 
+# Human-readable display labels for the curated columns (data-driven FE; keeps
+# the frontend free of a humanizer). Columns absent here fall back to the raw
+# name title-cased by the caller.
+_COLUMN_LABELS: Dict[str, str] = {
+    "treatment_arm": "Treatment arm",
+    "treatment_initiated": "Treatment initiated",
+    "persistent_180d": "Persistent at 180d",
+    "discontinued_180d": "Discontinued at 180d",
+    "adherent_180d": "Adherent at 180d",
+    "low_gap_180d": "Low refill gap (<=30d)",
+    "adherence_rate": "Adherence rate (PDC)",
+    "gap_days": "Refill gap (days)",
+}
+
 # Datasets that are NOT a single physical table — built by a JOIN-aware loader
 # (e.g. hcp_adoption = hcp_brand_adoption ⋈ hcp_profiles, centrality_z derived).
 # Endpoints that issue a single-table client.table(dataset) read MUST special-case
@@ -875,6 +914,10 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "ldh_ratio",
         "urticaria_severity_uas7",
         "ecog_performance_status",
+        "adherent_180d",
+        "low_gap_180d",
+        "adherence_rate",
+        "gap_days",
     },
     "hcp_adoption": {
         "peer_influence_score",
@@ -1052,12 +1095,15 @@ async def list_causal_variables(
     # on no table). Return them directly instead of 500-ing on a missing relation.
     if dataset in _JOIN_DATASETS:
         all_cols = sorted(set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"]))
+        _offered = list(spec["treatment"]) + list(spec["outcome"]) + list(spec["covariate"])
+        labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
         return CausalVariablesResponse(
             dataset=dataset,
             treatment_candidates=list(spec["treatment"]),
             outcome_candidates=list(spec["outcome"]),
             covariate_candidates=list(spec["covariate"]),
             columns=all_cols,
+            labels=labels,
         )
 
     from src.memory.services.factories import get_async_supabase_client
@@ -1083,12 +1129,15 @@ async def list_causal_variables(
             return list(spec[role])
         return [c for c in spec[role] if c in present]
 
+    _offered = _available("treatment") + _available("outcome") + _available("covariate")
+    labels = {c: _COLUMN_LABELS.get(c, c.replace("_", " ").capitalize()) for c in _offered}
     return CausalVariablesResponse(
         dataset=dataset,
         treatment_candidates=_available("treatment"),
         outcome_candidates=_available("outcome"),
         covariate_candidates=_available("covariate"),
         columns=sorted(present),
+        labels=labels,
     )
 
 

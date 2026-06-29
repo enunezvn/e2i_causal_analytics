@@ -8,7 +8,7 @@ trigger/cohort generators (Shards 05/06).
 
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Literal, Tuple, overload
 
 import numpy as np
 from scipy.special import expit
@@ -180,6 +180,104 @@ def initiation_prognostic_offset(
     )
 
 
+def binarize_score(
+    score: np.ndarray,
+    baseline: np.ndarray,
+    tau_latent: np.ndarray,
+    segment: np.ndarray,
+    *,
+    target_prevalence: float = 0.35,
+    noise_std: float = 0.6,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Threshold an EXISTING latent score into a binary outcome + per-segment
+    RECOVERABLE RD CATE. Lets several outcomes be derived from ONE shared score
+    (e.g. adherent_180d and low_gap_180d at different prevalences) while keeping a
+    SINGLE SSOT for the quantile-threshold + analytic counterfactual-RD math.
+    Returns (y, tau_i); tau_i has exactly 3 distinct per-segment RD values.
+    """
+    if not (0.20 <= target_prevalence <= 0.50):
+        target_prevalence = float(np.clip(target_prevalence, 0.20, 0.50))
+    score = np.asarray(score, dtype=float)
+    baseline = np.asarray(baseline, dtype=float)
+    tau_latent = np.asarray(tau_latent, dtype=float)
+    q = float(np.quantile(score, 1.0 - target_prevalence))
+    y = (score >= q).astype(int)
+    rd_unit = _counterfactual_rd(baseline, tau_latent, q, noise_std)
+    rd_map = {str(s): float(np.mean(rd_unit[segment == s])) for s in np.unique(segment)}
+    tau_i = np.array([rd_map[str(s)] for s in segment], dtype=float)
+    return y, tau_i
+
+
+@overload
+def binary_outcome_rd(
+    arm: np.ndarray,
+    baseline: np.ndarray,
+    segment: np.ndarray,
+    cate_map: Dict[str, float],
+    rng: np.random.Generator,
+    *,
+    target_prevalence: float = ...,
+    noise_std: float = ...,
+    return_score: Literal[False] = ...,
+) -> Tuple[np.ndarray, np.ndarray]: ...
+@overload
+def binary_outcome_rd(
+    arm: np.ndarray,
+    baseline: np.ndarray,
+    segment: np.ndarray,
+    cate_map: Dict[str, float],
+    rng: np.random.Generator,
+    *,
+    target_prevalence: float = ...,
+    noise_std: float = ...,
+    return_score: Literal[True],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+def binary_outcome_rd(
+    arm: np.ndarray,
+    baseline: np.ndarray,
+    segment: np.ndarray,
+    cate_map: Dict[str, float],
+    rng: np.random.Generator,
+    *,
+    target_prevalence: float = 0.35,
+    noise_std: float = 0.6,
+    return_score: bool = False,
+) -> Tuple[np.ndarray, ...]:
+    """General binary outcome Y + per-unit RECOVERABLE segment RD-scale CATE.
+
+    latent = baseline(X) + arm * tau_latent(segment) + N(0, noise_std);
+    Y = 1{latent >= q}, q = (1 - target_prevalence) sample quantile (=> marginal
+    prevalence ~= target_prevalence, clamped to [0.20, 0.50]). Returns (y, tau_i)
+    where tau_i is the per-segment counterfactual risk difference (exactly 3
+    distinct values, de-confounded, RD scale) — the quantity LinearDML/
+    CausalForestDML recover. ``baseline`` is the caller-built latent baseline
+    (so callers own their own confounding / prognostic structure); ``cate_map``
+    is the brand-scaled segment CATE on the latent score scale.
+
+    When ``return_score`` is True, returns (y, tau_i, score) — the continuous
+    latent score Y was thresholded from — so a caller can build a noisy continuous
+    PROXY of Y from the SAME latent (shared noise), keeping the proxy consistent
+    with the authoritative binary; the default 2-tuple (y, tau_i) is unchanged.
+    """
+    if not (0.20 <= target_prevalence <= 0.50):
+        target_prevalence = float(np.clip(target_prevalence, 0.20, 0.50))
+    baseline = np.asarray(baseline, dtype=float)
+    tau_latent = np.array([cate_map[str(s)] for s in segment], dtype=float)
+    noise = rng.normal(0.0, noise_std, len(arm))
+    score = baseline + arm.astype(float) * tau_latent + noise
+    y, tau_i = binarize_score(
+        score,
+        baseline,
+        tau_latent,
+        segment,
+        target_prevalence=target_prevalence,
+        noise_std=noise_std,
+    )
+    if return_score:
+        return y, tau_i, score
+    return y, tau_i
+
+
 def binary_outcome_with_cate(
     arm: np.ndarray,
     covariates: Dict[str, np.ndarray],
@@ -236,36 +334,21 @@ def binary_outcome_with_cate(
 
     severity = np.asarray(covariates["disease_severity"], dtype=float)
     academic = np.asarray(covariates["academic_hcp"], dtype=float)
-
-    # latent per-unit CATE from the brand-scaled segment map (score scale). The T11
-    # _INIT_LATENT_CATE_BOOST offsets the binarization attenuation the prognostic-driver
-    # baseline introduces, restoring the RECOVERED RD-scale true_ate to ~the pre-T11
-    # band [0.15,0.50] without changing AUC (see note by the constant). Applied here, the
-    # single initiation outcome SSOT, so both the generator and the reseed inherit it.
-    tau_latent = (
-        np.array([cate_map[str(s)] for s in segment], dtype=float) * _INIT_LATENT_CATE_BOOST
-    )
-
     baseline = baseline_severity_coef * (severity - 5.0) + baseline_academic_coef * academic
     if prognostic_offset is not None:
-        # T11: prognostic drivers (⊥ arm) shift the latent baseline only — the
-        # arm·tau_latent term below is untouched, so E[tau] (latent ATE) and the
-        # segment CATE ordering are preserved; the RD-scale tau_i shifts only by the
-        # small binarization-attenuation the recovery gate re-validates with margin.
         baseline = baseline + np.asarray(prognostic_offset, dtype=float)
-    noise = rng.normal(0.0, noise_std, len(arm))
-    score = baseline + arm.astype(float) * tau_latent + noise
-
-    # threshold at the (1 - target_prevalence) quantile => P(Y=1)=target_prevalence
-    q = float(np.quantile(score, 1.0 - target_prevalence))
-    y = (score >= q).astype(int)
-
-    # per-unit counterfactual risk difference (RECOVERABLE, de-confounded, RD scale)
-    rd_unit = _counterfactual_rd(baseline, tau_latent, q, noise_std)
-    # collapse to the per-segment mean so tau_i takes exactly 3 distinct values
-    rd_map = {str(s): float(np.mean(rd_unit[segment == s])) for s in np.unique(segment)}
-    tau_i = np.array([rd_map[str(s)] for s in segment], dtype=float)
-    return y, tau_i
+    # initiation keeps its tuned latent-CATE boost (T11) — applied to the map
+    # BEFORE delegation so the core stays boost-agnostic.
+    boosted_map = {str(s): float(v) * _INIT_LATENT_CATE_BOOST for s, v in cate_map.items()}
+    return binary_outcome_rd(
+        arm,
+        baseline,
+        segment,
+        boosted_map,
+        rng,
+        target_prevalence=target_prevalence,
+        noise_std=noise_std,
+    )
 
 
 def _counterfactual_rd(
@@ -287,7 +370,7 @@ def rd_map_from_tau(segment: np.ndarray, tau_i: np.ndarray) -> Dict[str, float]:
     """Derive the {segment: RD-scale CATE} map from the per-unit tau_i.
 
     tau_i carries the per-segment counterfactual risk difference (3 distinct
-    values from binary_outcome_with_cate), so this is a lossless collapse — the
+    values from binary_outcome_rd / binarize_score), so this is a lossless collapse — the
     RD-scale ground-truth CATE map the generator persists to attrs + JSON sidecar.
     """
     return {str(s): float(tau_i[segment == s][0]) for s in np.unique(segment)}

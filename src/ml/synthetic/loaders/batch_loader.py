@@ -158,6 +158,22 @@ TABLE_COLUMNS = {
         "segment_assignment",
         "discontinued_180d",
         "persistent_180d",
+        # Commercial-arms enrichment (migration 088). Phase 0 fills the adherence
+        # columns; the arm + propensity + insurance_access_score columns load as
+        # NULL until their phase populates them (nullable in DB).
+        "adherent_180d",
+        "low_gap_180d",
+        "adherence_rate",
+        "gap_days",
+        "copay_support",
+        "psp_enrolled",
+        "rep_detailing_high",
+        "sample_dropped",
+        "copay_support_propensity",
+        "psp_enrolled_propensity",
+        "rep_detailing_high_propensity",
+        "sample_dropped_propensity",
+        "insurance_access_score",
         # Shard 09 Task 5b WS1-DQ-007: recent ingest lag (column exists on the DB,
         # integer; stamped on the synthetic frame by data_lag.stamp_data_lag_hours).
         "data_lag_hours",
