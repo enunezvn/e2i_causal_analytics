@@ -1,4 +1,4 @@
-"""Phase 0: adherence outcomes — recoverable binary + consistent raw proxies."""
+"""Phase 0: adherence outcomes — recoverable binaries + EXACTLY consistent proxies."""
 import numpy as np
 import pytest
 
@@ -25,15 +25,22 @@ def test_adherence_outcomes_recoverable_and_proxy_consistent():
         rng=rng,
     )
 
+    # Both curated binaries are in-band and 0/1.
     assert set(np.unique(out["adherent_180d"])) <= {0, 1}
     assert set(np.unique(out["low_gap_180d"])) <= {0, 1}
     assert 0.20 <= out["adherent_180d"].mean() <= 0.50
+    assert 0.20 <= out["low_gap_180d"].mean() <= 0.50
 
     assert out["adherence_rate"].min() >= 0.0 and out["adherence_rate"].max() <= 1.0
     assert out["gap_days"].min() >= 0.0
 
-    agree = np.mean((out["adherence_rate"] >= 0.8) == (out["adherent_180d"] == 1))
-    assert agree >= 0.80
+    # HIGH-3: the STORED proxy must NEVER contradict the STORED binary — exact, by
+    # construction (snapped), over the SAME generated frame. Not approximate.
+    assert np.all((out["adherence_rate"] >= 0.8) == (out["adherent_180d"] == 1))
+    assert np.all((out["gap_days"] <= 30.0) == (out["low_gap_180d"] == 1))
 
+    # Recoverable per-segment RD ground truth for BOTH curated outcomes.
     rd = out["adherent_rd_by_segment"]
     assert rd["high_severity"] > rd["medium_severity"] > rd["low_severity"] > 0
+    rd_lg = out["low_gap_rd_by_segment"]
+    assert rd_lg["high_severity"] > rd_lg["medium_severity"] > rd_lg["low_severity"] > 0

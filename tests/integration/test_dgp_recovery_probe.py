@@ -40,19 +40,21 @@ def test_estimators_recover_true_ate_and_cate_ordering(brand):
     assert cate["high_severity"] > cate["medium_severity"] > cate["low_severity"]
 
 
+@pytest.mark.parametrize("outcome", ["adherent_180d", "low_gap_180d"])
 @pytest.mark.parametrize("brand", [Brand.REMIBRUTINIB, Brand.FABHALTA, Brand.KISQALI])
-def test_adherence_outcome_recoverable_on_existing_arm(brand):
-    """Phase 0: treatment_arm -> adherent_180d must be recoverable (ATE within
-    tolerance + CATE ordering), proving the binarized adherence outcome carries
-    the planted effect BEFORE the allowlist exposes it."""
+def test_adherence_outcome_recoverable_on_existing_arm(brand, outcome):
+    """Phase 0: treatment_arm -> {adherent_180d, low_gap_180d} must BOTH be
+    recoverable (ATE within tolerance + CATE ordering), proving each curated
+    binarized adherence outcome carries the planted effect and is recovery-gated
+    (HIGH-2) BEFORE the allowlist exposes it."""
     cfg = GeneratorConfig(seed=21, n_records=3000, brand=brand, dgp_type=DGPType.HETEROGENEOUS)
     df = PatientGenerator(cfg).generate()
-    truth = df.attrs["true_ate_by_arm"]["treatment_arm"]["adherent_180d"]
+    truth = df.attrs["true_ate_by_arm"]["treatment_arm"][outcome]
 
     out = recover_ate_and_cate(
         df,
         treatment_col="treatment_arm",
-        outcome_col="adherent_180d",
+        outcome_col=outcome,
         confounders=list(ARM_CONFOUNDERS),
         segment_col="segment_assignment",
         true_ate=truth["ate"],
