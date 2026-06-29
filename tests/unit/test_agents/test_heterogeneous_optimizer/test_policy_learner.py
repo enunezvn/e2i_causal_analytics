@@ -221,6 +221,40 @@ class TestPolicyLearnerNode:
         assert all("low" not in r["segment"] for r in increases)
 
     @pytest.mark.asyncio
+    async def test_expected_lift_not_double_counted_across_dimensions(self):
+        """REGRESSION (user-reported +1289): cate_by_segment carries MULTIPLE
+        segmentation dimensions that partition the SAME cohort. expected_total_lift
+        must be the best SINGLE-dimension total (no cross-dimension double-count),
+        NOT the sum across dimensions.
+        """
+        node = PolicyLearnerNode()
+        # Two dimensions, each with one significant high-responder segment.
+        # dim A lift = 0.2 * 0.30 * 1000 = 60 ; dim B lift = 0.2 * 0.40 * 1000 = 80
+        cate_by_segment = {
+            "disease_severity_band": [
+                self._create_cate_result("disease_severity_band", "high", 0.30, 1000, True),
+            ],
+            "age_band": [
+                self._create_cate_result("age_band", ">65", 0.40, 1000, True),
+            ],
+        }
+        high_responders = [
+            self._create_segment_profile("disease_severity_band_high", "high", 0.30, 1000),
+            self._create_segment_profile("age_band_>65", "high", 0.40, 1000),
+        ]
+        state = self._create_test_state(overall_ate=0.25)
+        state["cate_by_segment"] = cate_by_segment
+        state["high_responders"] = high_responders
+        state["low_responders"] = []
+
+        result = await node.execute(state)
+
+        per_dim = {"disease_severity_band": 60.0, "age_band": 80.0}
+        # Best single axis = 80, NOT the cross-dimension sum 140.
+        assert result["expected_total_lift"] == pytest.approx(max(per_dim.values()), abs=0.5)
+        assert result["expected_total_lift"] < sum(per_dim.values())
+
+    @pytest.mark.asyncio
     async def test_insignificant_segments_not_targeted(self):
         """SIGNIFICANCE GATE: high-responder-tier segments whose effect is NOT
         statistically significant are not reallocated (no noise-driven targeting).
