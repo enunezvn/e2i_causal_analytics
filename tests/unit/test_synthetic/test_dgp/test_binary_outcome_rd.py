@@ -35,6 +35,7 @@ def test_recovery_probe_accepts_explicit_tuple_signature():
     # Signature-only smoke (no econml fit): the function must accept the new
     # keyword args without TypeError.
     import inspect
+
     from src.ml.synthetic.dgp import recovery_probe
 
     sig = inspect.signature(recovery_probe.recover_ate_and_cate)

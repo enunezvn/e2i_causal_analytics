@@ -317,7 +317,7 @@ async def test_list_causal_variables_patient_journeys_includes_labels():
         "urticaria_severity_uas7",
         "ecog_performance_status",
     ]
-    fake_row = {c: None for c in _pj_cols}
+    fake_row = dict.fromkeys(_pj_cols)
 
     class _FakeQuery:
         def __init__(self, rows):
