@@ -28,6 +28,8 @@ from ..dgp.treatment_arm import (
     initiation_prognostic_offset,
     rd_map_from_tau,
 )
+from src.ml.synthetic.dgp.adherence_outcomes import generate_adherence_outcomes
+
 from .base import BaseGenerator, GeneratorConfig
 from .cohort_outcomes import generate_discontinuation_outcomes
 
@@ -167,6 +169,18 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             brand_cate_scale=_BRAND_CATE_SCALE.get(brand_enum, 1.0),
         )
 
+        # Phase 0 (commercial-arms enrichment): binarized adherence outcomes of the
+        # EXISTING treatment_arm, on the SAME segment/CATE map (single SSOT). The
+        # binary is authoritative + recoverable; adherence_rate/gap_days are proxies.
+        _adh = generate_adherence_outcomes(
+            treatment_arm=np.asarray(treatment_arm, dtype=int),
+            disease_severity=confounders["disease_severity"],
+            academic_hcp=confounders["academic_hcp"],
+            segment=np.asarray(segment),
+            cate_map=latent_cate_map,
+            rng=self._rng,
+        )
+
         # days_to_treatment only for initiators (preserve prior shape)
         days_to_treatment: Any = np.where(
             treatment_initiated == 1,
@@ -272,6 +286,22 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
                 "treatment_effect_estimate": np.round(tau_i, 4),
                 "discontinued_180d": _coh["discontinued_180d"],
                 "persistent_180d": _coh["persistent_180d"],
+                # Phase 0 adherence outcomes + raw proxies (migration 088).
+                "adherent_180d": _adh["adherent_180d"],
+                "low_gap_180d": _adh["low_gap_180d"],
+                "adherence_rate": _adh["adherence_rate"],
+                "gap_days": _adh["gap_days"],
+                # Phases 1-3 commercial arms — NULL placeholders so the loader
+                # carries them; populated by their phase's generator wiring.
+                "copay_support": np.nan,
+                "psp_enrolled": np.nan,
+                "rep_detailing_high": np.nan,
+                "sample_dropped": np.nan,
+                "copay_support_propensity": np.nan,
+                "psp_enrolled_propensity": np.nan,
+                "rep_detailing_high_propensity": np.nan,
+                "sample_dropped_propensity": np.nan,
+                "insurance_access_score": np.nan,
                 "comorbidity_burden": comorbidity_burden,
                 "prior_therapy_lines": prior_therapy_lines,
             }
@@ -284,6 +314,22 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
         df.attrs["dgp_type"] = dgp_type.value
         df.attrs["prevalence"] = float(np.mean(treatment_initiated))
         df.attrs["confounders"] = dgp_config.confounders if dgp_config else []
+
+        # Per-arm/outcome recoverable ground truth (commercial-arms enrichment).
+        # Existing arm: treatment_initiated (scalar above) + the Phase 0 adherence
+        # outcomes. Later phases extend this dict with their arm keys.
+        df.attrs["true_ate_by_arm"] = {
+            "treatment_arm": {
+                "treatment_initiated": {
+                    "ate": float(np.mean(tau_i)),
+                    "cate_by_segment": cate_map,
+                },
+                "adherent_180d": {
+                    "ate": float(np.mean([_adh["adherent_rd_by_segment"][str(s)] for s in segment])),
+                    "cate_by_segment": _adh["adherent_rd_by_segment"],
+                },
+            }
+        }
 
         self._log(f"Generated {len(df)} patient journeys (TRUE_ATE={true_ate})")
         return df
