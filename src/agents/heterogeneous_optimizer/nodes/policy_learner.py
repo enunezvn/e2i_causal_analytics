@@ -6,7 +6,8 @@ Uses CATE to recommend allocation changes.
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..state import HeterogeneousOptimizerState, PolicyRecommendation
 
@@ -133,12 +134,14 @@ class PolicyLearnerNode:
                 key=lambda r: (r.get("off_label", False), -r["expected_incremental_outcome"])
             )
 
-            # Calculate total expected lift if policy is implemented
-            total_lift = sum(r["expected_incremental_outcome"] for r in recommendations)
+            # Expected lift WITHOUT cross-dimension double-counting (see
+            # _aggregate_total_lift). Reported as the best single-segmentation-axis
+            # targeting opportunity, not the sum across overlapping dimensions.
+            total_lift, best_dim = self._aggregate_total_lift(recommendations)
 
             # Generate summary
             summary = self._generate_allocation_summary(
-                recommendations, high_responders, low_responders, ate
+                recommendations, high_responders, low_responders, ate, total_lift, best_dim
             )
 
             total_time = (
@@ -321,12 +324,43 @@ class PolicyLearnerNode:
         if verdict.reason:
             rec["off_label_reason"] = verdict.reason
 
+    @staticmethod
+    def _aggregate_total_lift(
+        recommendations: List[PolicyRecommendation],
+    ) -> Tuple[float, Optional[str]]:
+        """Expected lift WITHOUT double-counting across overlapping segmentation
+        dimensions.
+
+        ``cate_by_segment`` carries SEVERAL segmentation dimensions
+        (disease_severity_band, age_band, geographic_region, …). Each dimension
+        is a DIFFERENT partition of the SAME cohort, so a patient appears once per
+        dimension. Summing ``expected_incremental_outcome`` across ALL
+        recommendations therefore counts each patient once per dimension (~Nx
+        inflation — the reported +1289 was ~5x too high). WITHIN a single dimension
+        the bands ARE disjoint, so that per-dimension sum is valid.
+
+        Report the best single-dimension policy: the maximum per-dimension total
+        ("optimal targeting on one segmentation axis"). Returns (lift, dimension).
+        Combining multiple axes for more lift would require patient-level joint
+        membership, which the aggregated segment state does not carry.
+        """
+        by_dim: Dict[str, float] = defaultdict(float)
+        for r in recommendations:
+            dim = str(r.get("segment", "")).split("=", 1)[0]
+            by_dim[dim] += r.get("expected_incremental_outcome", 0.0) or 0.0
+        if not by_dim:
+            return 0.0, None
+        best_dim = max(by_dim, key=lambda d: by_dim[d])
+        return by_dim[best_dim], best_dim
+
     def _generate_allocation_summary(
         self,
         recommendations: List[PolicyRecommendation],
         high_responders: List,
         low_responders: List,
         ate: float,
+        total_lift: float,
+        best_dim: Optional[str],
     ) -> str:
         """Generate natural language summary of optimal allocation.
 
@@ -335,6 +369,8 @@ class PolicyLearnerNode:
             high_responders: High responder segments
             low_responders: Low responder segments
             ate: Overall ATE
+            total_lift: De-double-counted expected lift (best single-axis total)
+            best_dim: The segmentation dimension that total_lift comes from
 
         Returns:
             Summary string
@@ -368,12 +404,11 @@ class PolicyLearnerNode:
                 f"Recommend decreasing treatment in {len(decrease_recs)} segments to optimize resource allocation."
             )
 
-        total_lift = sum(r["expected_incremental_outcome"] for r in recommendations)
+        axis = f" by targeting the {best_dim} axis" if best_dim else ""
         summary_parts.append(
-            f"Expected total outcome lift from reallocation: {total_lift:.1f} units "
-            "(directional — aggregated across overlapping segmentation dimensions, so "
-            "a patient may be counted in more than one segment; read it as a relative "
-            "targeting magnitude, not a deduplicated patient count)."
+            f"Expected outcome lift{axis}: ~{total_lift:.0f} incremental patients "
+            "(best single segmentation axis — NOT summed across overlapping "
+            "dimensions, which would double-count patients)."
         )
 
         return " ".join(summary_parts)

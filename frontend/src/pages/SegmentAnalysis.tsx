@@ -709,10 +709,10 @@ export default function SegmentAnalysis() {
             title="Expected Lift"
             value={
               analysisResult.expected_total_lift != null
-                ? `+${analysisResult.expected_total_lift.toFixed(3)}`
+                ? `+${Math.round(analysisResult.expected_total_lift).toLocaleString()}`
                 : 'N/A'
             }
-            description="from optimal targeting"
+            description="incremental patients (best single axis)"
           />
           <KPICard
             title="Confidence"
