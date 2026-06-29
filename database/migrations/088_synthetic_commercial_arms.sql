@@ -10,10 +10,12 @@
 -- Phase 0: binarized adherence outcomes + raw proxies
 ALTER TABLE patient_journeys ADD COLUMN IF NOT EXISTS adherent_180d   SMALLINT;
 ALTER TABLE patient_journeys ADD COLUMN IF NOT EXISTS low_gap_180d    SMALLINT;
--- adherence_rate / gap_days were added NULL by migration 033; ensure-exists here
--- so this migration is self-contained on a fresh DB.
-ALTER TABLE patient_journeys ADD COLUMN IF NOT EXISTS adherence_rate  DOUBLE PRECISION;
-ALTER TABLE patient_journeys ADD COLUMN IF NOT EXISTS gap_days        DOUBLE PRECISION;
+-- adherence_rate / gap_days were added by migration 033 (which always runs first),
+-- so these ADD-IF-NOT-EXISTS are no-ops on a real DB; declared here only for fresh-DB
+-- self-containment and typed to MATCH migration 033 (adherence_rate NUMERIC, gap_days
+-- INTEGER — whole refill-gap days; the generator emits integer days).
+ALTER TABLE patient_journeys ADD COLUMN IF NOT EXISTS adherence_rate  NUMERIC;
+ALTER TABLE patient_journeys ADD COLUMN IF NOT EXISTS gap_days        INTEGER;
 
 -- Phases 1-3: new arms + per-arm propensity + numeric insurance proxy (NULL now)
 ALTER TABLE patient_journeys ADD COLUMN IF NOT EXISTS copay_support                 SMALLINT;
