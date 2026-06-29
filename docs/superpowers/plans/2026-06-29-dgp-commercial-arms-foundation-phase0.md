@@ -93,7 +93,7 @@ NOTIFY pgrst, 'reload schema';
 - [ ] **Step 3: Verify it parses (psql dry-check or syntax read)**
 
 Run: `grep -c 'ADD COLUMN IF NOT EXISTS' database/migrations/088_synthetic_commercial_arms.sql`
-Expected: `15`
+Expected: `13` (4 Phase-0 columns + 4 arms + 4 per-arm propensity + insurance_access_score)
 
 - [ ] **Step 4: Commit**
 
