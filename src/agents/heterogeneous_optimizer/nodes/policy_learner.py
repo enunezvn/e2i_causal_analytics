@@ -151,8 +151,12 @@ class PolicyLearnerNode:
                 # best_dim None (no qualifying lift) or not a known key: fall back to
                 # the first dimension. total_lift is 0 in the None case, so pp is 0
                 # regardless of denominator.
-                best_dim_segments = next(iter(cate_by_segment.values()), []) if cate_by_segment else []
-            cohort_size = sum(r["sample_size"] for r in best_dim_segments) if best_dim_segments else 0
+                best_dim_segments = (
+                    next(iter(cate_by_segment.values()), []) if cate_by_segment else []
+                )
+            cohort_size = (
+                sum(r["sample_size"] for r in best_dim_segments) if best_dim_segments else 0
+            )
             expected_lift_pp = (total_lift / cohort_size) if cohort_size > 0 else 0.0
 
             # pp is only well-defined for binary/rate outcomes (then it lies in [0,1]).
