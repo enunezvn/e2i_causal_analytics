@@ -356,4 +356,10 @@ export interface SegmentDatasetsResponse {
   outcomes: string[];
   /** Distinct brands present in the gold-standard cohort (filter dropdown). */
   brands: string[];
+  /**
+   * Human-readable display labels keyed by column name (treatment + outcome), e.g.
+   * `low_gap_180d` -> "Low refill gap (≤30d)". The dropdowns must render these
+   * instead of a raw title-cased column name; absent keys fall back to titleCase.
+   */
+  labels?: Record<string, string>;
 }

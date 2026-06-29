@@ -23,7 +23,6 @@ class PolicyLearnerNode:
     """
 
     def __init__(self, label_criteria_provider: Optional[object] = None):
-        self.min_cate_for_treatment = 0.01  # Minimum CATE to recommend treatment
         # Injectable for tests; lazily defaulted (avoids import cost when the
         # label-gater is off, and network at construction time).
         self._label_provider = label_criteria_provider
@@ -93,12 +92,29 @@ class PolicyLearnerNode:
             # is enabled for this run. None => gating is a no-op (existing behaviour).
             population = self._resolve_population(state)
 
+            # Drive the policy DIRECTION off the SAME high/low responder tiers the
+            # segment_analyzer classified (strict 1.5x/0.5x|ATE| with a relative
+            # top/bottom-half fallback) — the tiers the page displays. The previous
+            # absolute-only rule re-derived direction from a strict 1.5x|ATE| bar and
+            # produced a 0-lift "maintain everything" policy whenever no segment
+            # crossed it, even while the page showed high responders (the reported
+            # contradiction). Match by segment_id == f"{segment_var}_{segment_value}",
+            # exactly how segment_analyzer builds it.
+            high_ids = {p.get("segment_id") for p in high_responders}
+            low_ids = {p.get("segment_id") for p in low_responders}
+
             # Generate policy recommendations
             recommendations = []
 
-            for _segment_var, results in cate_by_segment.items():
+            for segment_var, results in cate_by_segment.items():
                 for result in results:
-                    rec = self._generate_recommendation(dict(result), ate)  # type: ignore[arg-type]
+                    sid = f"{segment_var}_{result['segment_value']}"
+                    rec = self._generate_recommendation(
+                        dict(result),  # type: ignore[arg-type]
+                        ate,
+                        is_high=sid in high_ids,
+                        is_low=sid in low_ids,
+                    )
                     if rec:
                         if population is not None:
                             self._apply_label_gate(rec, dict(result), population)
@@ -175,12 +191,37 @@ class PolicyLearnerNode:
                 "status": "failed",
             }
 
-    def _generate_recommendation(self, result: Dict[str, Any], ate: float) -> PolicyRecommendation:
+    def _generate_recommendation(
+        self,
+        result: Dict[str, Any],
+        ate: float,
+        *,
+        is_high: bool = False,
+        is_low: bool = False,
+    ) -> PolicyRecommendation:
         """Generate policy recommendation for a segment.
+
+        Significance-gated RELATIVE targeting. The DIRECTION follows the high/low
+        responder tier the segment_analyzer assigned (``is_high`` / ``is_low``) —
+        the SAME tiers the page displays — rather than re-deriving it from a strict
+        absolute 1.5x|ATE| bar. The old absolute-only rule recommended "maintain
+        0.5" for every segment whenever none crossed 1.5x|ATE| (a beneficial but
+        fairly-uniform effect), yielding expected_total_lift=0 while the page still
+        showed high responders.
+
+        Two guards keep it honest:
+        - We ACT only on a STATISTICALLY SIGNIFICANT segment effect — no
+          noise-driven reallocation of segments whose effect isn't distinguishable.
+        - We NEVER recommend pulling a beneficial drug: a DECREASE requires a
+          non-positive CATE (genuine no/negative benefit), not merely a
+          below-average positive one (those are MAINTAINED).
 
         Args:
             result: CATE result dictionary
-            ate: Overall average treatment effect
+            ate: Overall average treatment effect (kept for context/sign; the
+                threshold decision now comes from the tier classification)
+            is_high: Segment is in the high-responder tier (segment_analyzer)
+            is_low: Segment is in the low-responder tier (segment_analyzer)
 
         Returns:
             Policy recommendation
@@ -190,24 +231,26 @@ class PolicyLearnerNode:
         segment_name = result["segment_name"]
         segment_value = result["segment_value"]
         sample_size = result["sample_size"]
+        significant = bool(result.get("statistical_significance"))
 
         # Determine recommended treatment rate change
         current_rate = 0.5  # Assume current 50% coverage
 
-        if cate <= 0 or cate < self.min_cate_for_treatment:
-            # Negative or very low responder - minimize treatment
-            recommended_rate = 0.1
-        elif cate >= ate * 1.5 and ate > 0:
-            # High responder - increase treatment (only if ate > 0)
+        if significant and is_high and cate > 0:
+            # Relatively high responder with a real positive effect — concentrate.
             recommended_rate = min(0.9, current_rate + 0.2)
-        elif cate <= ate * 0.5 and ate > 0:
-            # Low responder - decrease treatment (only if ate > 0)
-            recommended_rate = max(0.1, current_rate - 0.2)
+        elif significant and is_low and cate <= 0:
+            # Genuine no/negative benefit — de-prioritise. Minimise for a HARMFUL
+            # (negative) effect; step down for a zero/no-benefit one. (A below-
+            # average but still-POSITIVE low responder is MAINTAINED, not decreased.)
+            recommended_rate = 0.1 if cate < 0 else max(0.1, current_rate - 0.2)
         else:
-            # Average responder - maintain
-            recommended_rate = 0.5
+            # Average / not-significant / below-average-but-beneficial — maintain.
+            recommended_rate = current_rate
 
-        # Calculate expected incremental outcome
+        # Calculate expected incremental outcome. Sign is correct in both action
+        # branches: increasing a positive-CATE segment (+rate x +cate) and reducing
+        # a non-positive-CATE segment (-rate x <=0 cate) both yield a >=0 lift.
         rate_change = recommended_rate - current_rate
         expected_lift = rate_change * cate * sample_size
 

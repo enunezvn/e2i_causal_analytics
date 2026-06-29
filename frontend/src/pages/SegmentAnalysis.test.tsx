@@ -399,4 +399,43 @@ describe('SegmentAnalysis — T2: robust options + durable-run timeout', () => {
 
     expect(screen.getByTestId('datasets-degraded-notice')).toBeInTheDocument();
   });
+
+  it('renders backend display labels in the Outcome dropdown (not raw title-case)', async () => {
+    // REGRESSION: the dropdowns title-cased the raw column name, so the curated
+    // labels GET /segments/datasets returns (e.g. low_gap_180d -> "Low refill gap
+    // (≤30d)") never reached the user. They must render the label.
+    const user = userEvent.setup();
+    primeBaseHooks();
+    mockHook(useSegmentDatasets).mockReturnValue({
+      data: {
+        treatments: ['treatment_arm'],
+        outcomes: ['adherent_180d', 'low_gap_180d'],
+        brands: ['Kisqali'],
+        labels: {
+          treatment_arm: 'Treatment arm',
+          adherent_180d: 'Adherent at 180d',
+          low_gap_180d: 'Low refill gap (≤30d)',
+        },
+      },
+      isLoading: false,
+      error: null,
+    });
+    mockHook(useRunSegmentAnalysisAndWait).mockReturnValue({
+      data: undefined,
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+    });
+
+    render(<SegmentAnalysis />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('combobox', { name: 'Outcome variable' }));
+
+    expect(
+      await screen.findByRole('option', { name: 'Low refill gap (≤30d)' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Adherent at 180d' })).toBeInTheDocument();
+    // The raw title-cased form must NOT be what's shown.
+    expect(screen.queryByRole('option', { name: 'Low Gap 180d' })).not.toBeInTheDocument();
+  });
 });

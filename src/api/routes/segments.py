@@ -1613,6 +1613,7 @@ async def _execute_segment_analysis(
 
     try:
         # Try to use the actual Heterogeneous Optimizer agent
+        from src.agents.heterogeneous_optimizer.agent import calculate_confidence
         from src.agents.heterogeneous_optimizer.graph import (
             create_heterogeneous_optimizer_graph,
         )
@@ -1722,7 +1723,12 @@ async def _execute_segment_analysis(
             analysis_latency_ms=result.get("analysis_latency_ms", 0),
             total_latency_ms=total_latency,
             warnings=result.get("warnings", []),
-            confidence=result.get("confidence", 0.0),
+            # The route invokes the graph DIRECTLY (graph.ainvoke), bypassing
+            # agent._build_output — and no graph node writes "confidence" into the
+            # state, so result.get("confidence", 0.0) always yielded 0.0 (every
+            # completed run showed Confidence 0% on the page). Compute it here from
+            # the SAME SSOT the agent path uses.
+            confidence=calculate_confidence(result),
         )
 
     except ImportError as e:
