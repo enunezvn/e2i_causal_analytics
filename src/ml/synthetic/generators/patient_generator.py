@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
+from src.ml.synthetic.dgp.adherence_outcomes import generate_adherence_outcomes
+
 from ..clinical_codes import brand_codes
 from ..config import (
     DGP_CONFIGS,
@@ -28,8 +30,6 @@ from ..dgp.treatment_arm import (
     initiation_prognostic_offset,
     rd_map_from_tau,
 )
-from src.ml.synthetic.dgp.adherence_outcomes import generate_adherence_outcomes
-
 from .base import BaseGenerator, GeneratorConfig
 from .cohort_outcomes import generate_discontinuation_outcomes
 
