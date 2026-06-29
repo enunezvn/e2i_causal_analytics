@@ -189,7 +189,8 @@ def binary_outcome_rd(
     *,
     target_prevalence: float = 0.35,
     noise_std: float = 0.6,
-) -> Tuple[np.ndarray, np.ndarray]:
+    return_score: bool = False,
+) -> Tuple[np.ndarray, ...]:
     """General binary outcome Y + per-unit RECOVERABLE segment RD-scale CATE.
 
     latent = baseline(X) + arm * tau_latent(segment) + N(0, noise_std);
@@ -200,6 +201,11 @@ def binary_outcome_rd(
     CausalForestDML recover. ``baseline`` is the caller-built latent baseline
     (so callers own their own confounding / prognostic structure); ``cate_map``
     is the brand-scaled segment CATE on the latent score scale.
+
+    When ``return_score`` is True, returns (y, tau_i, score) — the continuous
+    latent score Y was thresholded from — so a caller can build a noisy continuous
+    PROXY of Y from the SAME latent (shared noise), keeping the proxy consistent
+    with the authoritative binary; the default 2-tuple (y, tau_i) is unchanged.
     """
     if not (0.20 <= target_prevalence <= 0.50):
         target_prevalence = float(np.clip(target_prevalence, 0.20, 0.50))
@@ -212,6 +218,8 @@ def binary_outcome_rd(
     rd_unit = _counterfactual_rd(baseline, tau_latent, q, noise_std)
     rd_map = {str(s): float(np.mean(rd_unit[segment == s])) for s in np.unique(segment)}
     tau_i = np.array([rd_map[str(s)] for s in segment], dtype=float)
+    if return_score:
+        return y, tau_i, score
     return y, tau_i
 
 
