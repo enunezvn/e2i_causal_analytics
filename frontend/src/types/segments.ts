@@ -253,8 +253,10 @@ export interface SegmentAnalysisResponse {
   // Policy recommendations
   /** Targeting recommendations */
   policy_recommendations: PolicyRecommendation[];
-  /** Expected lift from optimal allocation */
+  /** Expected lift as a COUNT of incremental outcomes on the best single axis (secondary). */
   expected_total_lift?: number;
+  /** HEADLINE: best-axis lift as a percentage-point change in the outcome rate (fraction 0..1). */
+  expected_lift_pp?: number;
   /** Summary of optimal allocation */
   optimal_allocation_summary?: string;
 

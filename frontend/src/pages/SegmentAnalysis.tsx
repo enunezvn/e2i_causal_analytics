@@ -708,11 +708,15 @@ export default function SegmentAnalysis() {
           <KPICard
             title="Expected Lift"
             value={
-              analysisResult.expected_total_lift != null
-                ? `+${Math.round(analysisResult.expected_total_lift).toLocaleString()}`
+              analysisResult.expected_lift_pp != null
+                ? `+${(analysisResult.expected_lift_pp * 100).toFixed(1)} pp`
                 : 'N/A'
             }
-            description="incremental patients (best single axis)"
+            description={
+              analysisResult.expected_total_lift != null
+                ? `outcome-rate lift, best axis (~${Math.round(analysisResult.expected_total_lift).toLocaleString()} patients)`
+                : 'outcome-rate lift from targeting'
+            }
           />
           <KPICard
             title="Confidence"
@@ -924,10 +928,13 @@ export default function SegmentAnalysis() {
                 {analysisResult.optimal_allocation_summary && (
                   <p className="text-lg whitespace-pre-line">{analysisResult.optimal_allocation_summary}</p>
                 )}
-                {analysisResult.expected_total_lift != null && (
+                {analysisResult.expected_lift_pp != null && (
                   <div className="mt-4 flex items-center gap-4">
                     <Badge variant="default" className="text-lg px-4 py-1">
-                      Expected Total Lift: +{analysisResult.expected_total_lift}
+                      Expected Lift: +{(analysisResult.expected_lift_pp * 100).toFixed(1)} pp
+                      {analysisResult.expected_total_lift != null
+                        ? ` (~${Math.round(analysisResult.expected_total_lift).toLocaleString()} patients, best axis)`
+                        : ''}
                     </Badge>
                   </div>
                 )}

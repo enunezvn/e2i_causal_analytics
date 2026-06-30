@@ -143,9 +143,13 @@ class HeterogeneousOptimizerState(TypedDict):
     low_responders: Optional[List[SegmentProfile]]
     segment_comparison: Optional[Dict[str, Any]]
 
-    # === POLICY OUTPUTS (3 fields) ===
+    # === POLICY OUTPUTS (4 fields) ===
     policy_recommendations: Optional[List[PolicyRecommendation]]
-    expected_total_lift: Optional[float]
+    expected_total_lift: Optional[float]  # best-axis COUNT of incremental outcomes
+    # HEADLINE metric: best-axis lift as a percentage-point change in the outcome rate
+    # (count / best_dim cohort). In [0,1] for binary/rate outcomes; ~0 for a
+    # homogeneous effect under the above-ATE gate. Set by policy_learner.
+    expected_lift_pp: Optional[float]
     optimal_allocation_summary: Optional[str]
 
     # === VISUALIZATION DATA (2 fields) ===
@@ -328,6 +332,9 @@ class HeterogeneousOptimizerOutput(TypedDict):
     # Policy recommendations
     policy_recommendations: Optional[List[PolicyRecommendation]]
     expected_total_lift: float  # Contract requires non-optional
+    # Headline percentage-point lift (count / best_dim cohort). NotRequired so existing
+    # Output constructors (error paths, _build_output) that omit it still type-check.
+    expected_lift_pp: NotRequired[Optional[float]]
     optimal_allocation_summary: Optional[str]
 
     # Summary
