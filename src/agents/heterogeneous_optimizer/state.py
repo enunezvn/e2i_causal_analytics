@@ -327,6 +327,10 @@ class HeterogeneousOptimizerOutput(TypedDict):
 
     # Segment analysis
     high_responders: Optional[List[SegmentProfile]]
+    # mid_responders surfaced so a homogeneous run (0 high, 0 harmful, all average)
+    # still reports its segment classification (else the quality gate reads it as
+    # "no classification produced"). NotRequired so existing constructors type-check.
+    mid_responders: NotRequired[Optional[List[SegmentProfile]]]
     low_responders: Optional[List[SegmentProfile]]
 
     # Policy recommendations

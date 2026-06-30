@@ -32,6 +32,27 @@ class TestHeterogeneousOptimizerAgent:
         assert "low_responders" in result
         assert "policy_recommendations" in result
 
+    def test_build_output_surfaces_mid_responders(self):
+        """REGRESSION (Tier 1-5 harness): _build_output MUST surface mid_responders.
+        Under the above-ATE gate a homogeneous/negative-ATE run has 0 high and 0
+        harmful responders with every segment in mid; if the agent output drops mid,
+        the quality gate reads 'no classification produced' and hard-fails the harness.
+        """
+        agent = HeterogeneousOptimizerAgent(data_connector=MockDataConnector())
+        mid = [{"segment_id": "seg_a", "responder_type": "average", "cate_estimate": -0.08}]
+        final_state = {
+            "overall_ate": -0.08,
+            "heterogeneity_score": 0.35,
+            "high_responders": [],
+            "mid_responders": mid,
+            "low_responders": [],
+            "cate_by_segment": {"seg": [{}]},
+        }
+        out = agent._build_output(final_state)  # type: ignore[arg-type]
+        assert out["mid_responders"] == mid
+        assert out["high_responders"] == []
+        assert out["low_responders"] == []
+
     @pytest.mark.asyncio
     async def test_input_validation_required_fields(self):
         """Test input validation for required fields."""
