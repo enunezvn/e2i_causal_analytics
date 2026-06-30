@@ -340,7 +340,7 @@ class ProfileGeneratorNode:
         if low_responders:
             top_low = low_responders[0]
             summary_parts.append(
-                f"Top low-responder: {top_low['segment_id']} "
+                f"Most harmful segment: {top_low['segment_id']} "
                 f"(CATE: {top_low['cate_estimate']:.3f}, "
                 f"{top_low['size_percentage']:.1f}% of population)."
             )
@@ -404,13 +404,16 @@ class ProfileGeneratorNode:
                 f"Effects are relatively uniform across segments."
             )
 
-        # Insight 3: High vs low responders
+        # Insight 3: above-average vs harmful contrast. effect_ratio is now a SIGNED
+        # CATE SPREAD (high_avg - low_avg), where "low" is the harmful set; a spread
+        # >= 0.3 is a strong, actionable contrast worth surfacing.
         if high_responders and low_responders:
-            effect_ratio = segment_comparison.get("effect_ratio", 1)
-            if effect_ratio > 3:
+            effect_spread = segment_comparison.get("effect_ratio", 0)
+            if effect_spread >= 0.3:
                 insights.append(
-                    f"High-responder segments show {effect_ratio:.1f}x stronger effects than low-responders. "
-                    f"Resource reallocation could significantly improve efficiency."
+                    f"Above-average and harmful segments are separated by a "
+                    f"{effect_spread:.3f} CATE spread. Reallocating away from harmful "
+                    f"toward above-average segments could significantly improve outcomes."
                 )
 
         # Insight 4: Feature importance
@@ -599,7 +602,11 @@ Tactical Recommendation:
             high_responders = state.get("high_responders") or []
             low_responders = state.get("low_responders") or []
 
-            # Calculate responder spread (difference between avg high and avg low CATE)
+            # Responder spread = CATE distance between the above-average set and the
+            # harmful set (under the significance gate "low" = harmful, avg_low < 0).
+            # A treatment that both helps and harms subgroups genuinely HAS large
+            # heterogeneity, so the larger spread (and the DSPy reward it earns) is the
+            # correct signal — this only fires when BOTH a high and a harmful set exist.
             responder_spread = 0.0
             if high_responders and low_responders:
                 avg_high = sum(h.get("cate_estimate", 0) for h in high_responders) / len(

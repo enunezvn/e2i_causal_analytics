@@ -114,6 +114,11 @@ DGP_CONFIGS: Dict[DGPType, DGPConfig] = {
             # the high band's 95% CI clear the ATE on 5/5 seeds (worst margin +0.054)
             # while keeping the true ATE realistic (~0.25, ≤0.35). Wider spread =>
             # EASIER recovery, so the per-outcome recovery probes still pass.
+            # SCOPE: this map feeds ``brand_scaled_cate`` -> treatment_initiated,
+            # adherent_180d and low_gap_180d. Discontinuation/persistence are NOT
+            # affected — they carry their own per-segment effect constants
+            # (``_DISC_TREATMENT_LOGIT`` in generators/cohort_outcomes.py), only
+            # brand-scaled, so this change does not touch their recovery.
             "high_severity": 0.70,
             "medium_severity": 0.30,
             "low_severity": 0.10,

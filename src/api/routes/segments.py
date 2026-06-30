@@ -1930,13 +1930,15 @@ def _generate_mock_response(
     mock_low_responder = SegmentProfile(
         segment_id=f"{primary_segment}_southeast",
         responder_type=ResponderType.LOW,
-        cate_estimate=3.1,
+        # LOW now means HARMFUL (CI entirely below 0) -> CATE must be negative to be
+        # consistent with the "Harmful Responder" tile the frontend renders.
+        cate_estimate=-3.1,
         defining_features=[
             {"feature": primary_segment, "value": "Southeast"},
         ],
         size=420,
         size_percentage=9.5,
-        recommendation="Consider reducing or reallocating resources",
+        recommendation="Treatment is net-harmful here; reduce or reallocate resources",
     )
 
     # Mock policy recommendation

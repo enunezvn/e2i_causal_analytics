@@ -285,7 +285,7 @@ class SegmentAnalyzerNode:
         Args:
             segment_var: Segment variable name
             result: CATE result for this segment
-            responder_type: 'high' or 'low'
+            responder_type: 'high', 'low' (harmful), or 'average'
 
         Returns:
             Action recommendation string
@@ -344,7 +344,12 @@ class SegmentAnalyzerNode:
             "high_responder_avg_cate": high_avg_cate,
             "mid_responder_avg_cate": mid_avg_cate,
             "low_responder_avg_cate": low_avg_cate,
-            "effect_ratio": high_avg_cate / low_avg_cate if low_avg_cate != 0 else float("inf"),
+            # SIGNED SPREAD (high_avg - low_avg), not a ratio: under the significance
+            # gate "low" is the HARMFUL set (avg CATE < 0), so a ratio would go
+            # negative and silently break the >0 contrast check downstream. The spread
+            # is always >= 0 and grows with a harmful low band, which is the correct
+            # "how far apart are the extremes" signal.
+            "effect_ratio": high_avg_cate - low_avg_cate,
             "high_responder_count": len(high_responders),
             "mid_responder_count": len(mid_responders),
             "low_responder_count": len(low_responders),

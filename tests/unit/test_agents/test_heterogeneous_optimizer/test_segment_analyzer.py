@@ -84,10 +84,13 @@ class TestSegmentAnalyzerNode:
         assert "high_responders" in result
         assert len(result["high_responders"]) > 0
 
-        # Check high responders meet threshold (>= 1.5x ATE)
+        # The defining property is the CI gate (ci_lower > ate AND > 0), NOT the raw
+        # CATE magnitude. With the default CI of cate±0.1 and ate=0.25, ci_lower > 0.25
+        # means cate > 0.35 — a segment at cate=0.36 (ci_lower=0.26) is HIGH here even
+        # though it fails the old 1.5x|ATE|=0.375 bar.
         for responder in result["high_responders"]:
             assert responder["responder_type"] == "high"
-            assert responder["cate_estimate"] >= 0.25 * 1.5
+            assert responder["cate_estimate"] - 0.1 > 0.25
 
     @pytest.mark.asyncio
     async def test_identify_low_responders(self):
@@ -157,9 +160,9 @@ class TestSegmentAnalyzerNode:
         high_avg = comparison["high_responder_avg_cate"]
         low_avg = comparison["low_responder_avg_cate"]
 
-        if low_avg != 0:
-            expected_ratio = high_avg / low_avg
-            assert abs(comparison["effect_ratio"] - expected_ratio) < 0.01
+        # effect_ratio is now a SIGNED SPREAD (high_avg - low_avg), >= 0 even when the
+        # "low" (harmful) average is negative.
+        assert abs(comparison["effect_ratio"] - (high_avg - low_avg)) < 0.01
 
     @pytest.mark.asyncio
     async def test_top_segments_limit(self):
@@ -384,9 +387,12 @@ class TestSegmentAnalyzerEdgeCases:
 
         result = await node.execute(state)
 
-        # With zero ATE, no segments should qualify
+        # ATE=0, segment CATE 0.10 with CI [0.00, 0.20]: ci_lower=0.00 is NOT > 0
+        # (strict) -> not high; ci_upper=0.20 not < 0 -> not harmful. The segment is
+        # still CLASSIFIED — as average/mid (not dropped).
         assert len(result["high_responders"]) == 0
         assert len(result["low_responders"]) == 0
+        assert len(result["mid_responders"]) == 1
 
     @pytest.mark.asyncio
     async def test_negative_ate(self):
