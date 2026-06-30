@@ -39,12 +39,14 @@ def _cate(value, segment_value, n=200):
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_mid_bucket_emitted_for_band_between_thresholds():
-    # ate=0.10 -> high>=0.15, low<=0.05, mid in (0.05, 0.15).
+    # Significance-gated (ate=0.10, CI ±0.02): a segment whose CI overlaps the ATE is
+    # the AVERAGE (mid) bucket — the band that was previously invisible. high = CI
+    # above ATE; harmful (low) = CI below 0.
     cbs = {
         "disease_severity_band": [
-            _cate(0.30, "high"),  # ratio 3.0 -> high
-            _cate(0.10, "medium"),  # ratio 1.0 -> mid (the bucket that was invisible)
-            _cate(0.02, "low"),  # ratio 0.2 -> low
+            _cate(0.30, "high"),  # CI [0.28,0.32] above ATE -> high
+            _cate(0.10, "medium"),  # CI [0.08,0.12] overlaps ATE -> mid/average
+            _cate(-0.10, "low"),  # CI [-0.12,-0.08] below 0 -> harmful (low)
         ]
     }
     out = await SegmentAnalyzerNode().execute(_state(cbs))
@@ -54,7 +56,7 @@ async def test_mid_bucket_emitted_for_band_between_thresholds():
     assert mids[0]["responder_type"] == "average"
     assert mids[0]["segment_id"] == "disease_severity_band_medium"
 
-    # High/low unchanged and disjoint from mid.
+    # High/harmful classified and disjoint from mid.
     high_ids = {h["segment_id"] for h in (out.get("high_responders") or [])}
     low_ids = {l["segment_id"] for l in (out.get("low_responders") or [])}
     mid_ids = {m["segment_id"] for m in mids}
@@ -69,11 +71,11 @@ async def test_mid_bucket_emitted_for_band_between_thresholds():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_mid_bucket_empty_when_nothing_qualifies():
-    # Only clear high and clear low -> mid is empty (not None-crashing).
+    # Only a clear high (CI above ATE) and a clear harmful (CI below 0) -> mid empty.
     cbs = {
         "disease_severity_band": [
-            _cate(0.40, "high"),
-            _cate(0.01, "low"),
+            _cate(0.40, "high"),  # CI [0.38,0.42] above ATE -> high
+            _cate(-0.20, "low"),  # CI [-0.22,-0.18] below 0 -> harmful
         ]
     }
     out = await SegmentAnalyzerNode().execute(_state(cbs))

@@ -222,12 +222,14 @@ describe('SegmentAnalysis — Mid responders column', () => {
     await user.click(screen.getByRole('tab', { name: /Responders/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/Mid Responders/i)).toBeInTheDocument();
+      // Exact match disambiguates the mid column title from the "Above-Average
+      // Responders" KPI/high-column titles that also contain "Average Responders".
+      expect(screen.getByText('Average Responders')).toBeInTheDocument();
     });
     // The mid card is present (its segment id is rendered in the card label).
     expect(screen.getByLabelText(/View details for mid-seg-A/i)).toBeInTheDocument();
-    // The "Mid Responder" badge is rendered on the card.
-    expect(screen.getByText('Mid Responder')).toBeInTheDocument();
+    // The "Average Responder" badge is rendered on the card.
+    expect(screen.getByText('Average Responder')).toBeInTheDocument();
   });
 
   it('renders an honest empty-state for the Mid column when no mid_responders', async () => {
@@ -244,7 +246,7 @@ describe('SegmentAnalysis — Mid responders column', () => {
     await user.click(screen.getByRole('tab', { name: /Responders/i }));
 
     await waitFor(() => {
-      expect(screen.getByText(/No mid-tier segments at the current thresholds/i)).toBeInTheDocument();
+      expect(screen.getByText(/No average-band segments for this run/i)).toBeInTheDocument();
     });
   });
 });
