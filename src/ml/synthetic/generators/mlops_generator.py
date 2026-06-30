@@ -9,6 +9,13 @@ read once their own code defects (out of scope) are fixed. is_synthetic=true.
 
 Enum-exact (22P02 landmine): model_stage_enum (stage) and deployment_status_enum
 (status). auc lands in the [0.62, 0.90] non-degenerate band.
+
+IDEMPOTENT (reseed-safe): all three ids are DETERMINISTIC uuid5 derived from the
+(model_name, model_version) natural key (see ``_mlops_id``), so a reseed UPDATES the
+prior rows in place instead of minting fresh-uuid rows that collide on
+``unique_model_version`` (23505) and orphan the children on a never-inserted
+``model_registry_id`` (23503). The registry/run/deployment ids are stable across runs
+given the same ``experiments_df``.
 """
 
 import uuid
@@ -20,6 +27,24 @@ import pandas as pd
 from .base import BaseGenerator, GeneratorConfig
 
 _ALGOS = ["xgboost", "lightgbm", "logistic_regression", "random_forest"]
+
+# Fixed namespace for DETERMINISTIC ids. uuid.uuid4() ignores the seed, so every run
+# minted fresh registry/run/deployment PKs; the loader upserts on the PK, so a reseed
+# could never UPDATE the prior row in place — it INSERTed and collided with the
+# secondary UNIQUE(model_name, model_version) (unique_model_version) -> 23505 -> 0
+# loaded -> ml_training_runs/ml_deployments orphaned on the never-inserted
+# model_registry_id -> 23503 cascade. Deriving each id by uuid5 from its NATURAL KEY
+# makes the whole MLOps sub-graph idempotent (upsert-on-PK UPDATES in place, like
+# patient_journeys) AND keeps the child FK (model_registry_id) pointing at the same
+# registry id across runs. Mirrors the #852 lesson ("fresh random UUIDs every run" was
+# the bug) at the source rather than patching the loader.
+_MLOPS_ID_NS = uuid.UUID("9f2c1e7a-3b4d-5e6f-8a90-1c2d3e4f5a6b")
+
+
+def _mlops_id(*parts: str) -> str:
+    """Deterministic uuid5 from a natural key (stable across runs given the same
+    experiments_df), e.g. _mlops_id(model_name, model_version)."""
+    return str(uuid.uuid5(_MLOPS_ID_NS, "|".join(parts)))
 
 
 class MLOpsGenerator(BaseGenerator[pd.DataFrame]):
@@ -45,15 +70,19 @@ class MLOpsGenerator(BaseGenerator[pd.DataFrame]):
         for _, exp in self.experiments_df.iterrows():
             for m in range(self.models_per_experiment):
                 algo = _ALGOS[m % len(_ALGOS)]
-                rid = str(uuid.uuid4())
+                model_name = f"{exp['experiment_name']}_model_{m}"
+                model_version = f"1.{m}"
+                # Deterministic PK from the (model_name, model_version) natural key so a
+                # reseed UPDATES in place instead of colliding on unique_model_version.
+                rid = _mlops_id(model_name, model_version)
                 auc = round(float(self._rng.uniform(0.62, 0.90)), 4)
                 is_champ = m == 0  # first model per experiment is champion
                 reg.append(
                     {
                         "id": rid,
                         "experiment_id": exp["id"],
-                        "model_name": f"{exp['experiment_name']}_model_{m}",
-                        "model_version": f"1.{m}",
+                        "model_name": model_name,
+                        "model_version": model_version,
                         "algorithm": algo,
                         "feature_count": int(self._rng.integers(8, 40)),
                         "training_samples": int(self._rng.integers(2000, 8000)),
@@ -72,7 +101,7 @@ class MLOpsGenerator(BaseGenerator[pd.DataFrame]):
                 )
                 runs.append(
                     {
-                        "id": str(uuid.uuid4()),
+                        "id": _mlops_id("run", model_name, model_version),
                         "experiment_id": exp["id"],
                         "model_registry_id": rid,
                         "run_name": f"run_{rid[:8]}",
@@ -100,7 +129,7 @@ class MLOpsGenerator(BaseGenerator[pd.DataFrame]):
                 if is_champ:
                     dep.append(
                         {
-                            "id": str(uuid.uuid4()),
+                            "id": _mlops_id("deploy", model_name, model_version),
                             "model_registry_id": rid,
                             "deployment_name": f"deploy_{exp['experiment_name']}",
                             "environment": "production",

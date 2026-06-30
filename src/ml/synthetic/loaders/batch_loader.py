@@ -5,6 +5,7 @@ Loads synthetic data to Supabase in batches with validation and error handling.
 """
 
 import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -868,6 +869,40 @@ class BatchLoader:
 
         df_to_load = df_to_load.replace({np.nan: None, np.inf: None, -np.inf: None})
         df_to_load = df_to_load.where(pd.notnull(df_to_load), None)
+
+        # Drop intra-frame duplicate conflict keys for natural-key-conflict tables.
+        # PostgREST issues one `INSERT ... ON CONFLICT (<key>) DO UPDATE` per batch;
+        # Postgres rejects the whole statement with 21000 ("ON CONFLICT DO UPDATE
+        # command cannot affect row a second time") if two rows in the batch share the
+        # conflict key. feature_values hits this because low-cardinality entity_values
+        # (brand/region: 3-4 distinct) collide on (feature_id, entity_values,
+        # event_timestamp) -> ~1 batch in 7 fails -> ~9% silent loss. Drop dups here
+        # (keep="last" mirrors DO UPDATE's last-write-wins) so every batch is conflict-
+        # free. No-op for tables without an on_conflict target (the bulk fact tables).
+        on_conflict = TABLE_ON_CONFLICT.get(table_name)
+        if on_conflict:
+            conflict_cols = [c for c in on_conflict.split(",") if c in df_to_load.columns]
+            if conflict_cols:
+                # entity_values is jsonb (unhashable dict). Serialize for the dedup key;
+                # sort_keys makes it key-order-independent, matching Postgres jsonb equality.
+                dedup_key = df_to_load[conflict_cols].apply(
+                    lambda col: col.map(
+                        lambda v: json.dumps(v, sort_keys=True, default=str)
+                        if isinstance(v, (dict, list))
+                        else v
+                    )
+                )
+                dup_mask = dedup_key.duplicated(keep="last")
+                n_dup = int(dup_mask.sum())
+                if n_dup:
+                    df_to_load = df_to_load[~dup_mask]
+                    logger.info(
+                        "%s: dropped %d intra-frame duplicate (%s) conflict-key rows "
+                        "before upsert (avoids PostgREST 21000)",
+                        table_name,
+                        n_dup,
+                        on_conflict,
+                    )
 
         # Calculate batches
         total_records = len(df_to_load)

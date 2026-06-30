@@ -41,3 +41,25 @@ def test_mlops_requires_non_empty_experiments():
 
     with pytest.raises(ValueError):
         MLOpsGenerator(GeneratorConfig(seed=1), experiments_df=pd.DataFrame())
+
+
+def test_mlops_ids_are_deterministic_across_runs():
+    """Reseed idempotency: with the same experiments_df, two generations must mint the
+    SAME registry/run/deployment ids so the loader's upsert-on-PK UPDATES in place
+    instead of INSERTing a fresh-uuid row that collides with the prior run's
+    unique_model_version(model_name,model_version) -> 23505 -> 0 loaded -> FK cascade.
+    (uuid.uuid4() ignores the seed, which is the bug.)"""
+    exp = ExperimentGenerator(GeneratorConfig(seed=1, n_records=2, brand=Brand.KISQALI)).generate()
+    g1 = MLOpsGenerator(
+        GeneratorConfig(seed=2), experiments_df=exp, models_per_experiment=2
+    ).generate()
+    g2 = MLOpsGenerator(
+        GeneratorConfig(seed=2), experiments_df=exp, models_per_experiment=2
+    ).generate()
+    for key in ("ml_model_registry", "ml_training_runs", "ml_deployments"):
+        assert list(g1[key]["id"]) == list(g2[key]["id"]), f"{key} ids not stable across runs"
+        assert g1[key]["id"].is_unique, f"{key} ids must be unique within a run"
+    # The deterministic id must be a function of the natural key, so the child FK
+    # (model_registry_id) still resolves to the registry id it is generated against.
+    assert g1["ml_training_runs"]["model_registry_id"].isin(g1["ml_model_registry"]["id"]).all()
+    assert g1["ml_deployments"]["model_registry_id"].isin(g1["ml_model_registry"]["id"]).all()
