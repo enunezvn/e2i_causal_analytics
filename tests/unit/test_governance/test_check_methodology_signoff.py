@@ -3690,8 +3690,12 @@ class TestKeyringImportWorkflow:
     The caller workflow must:
 
     5. Pass strict_gpg: '1' to the reusable workflow.
-    6. Use ``secrets: inherit`` so the reusable workflow can see the
-       GPG_REVIEWER_KEYS_ARMOR_BASE64 secret.
+    6. Pass ONLY the GPG_REVIEWER_KEYS_ARMOR_BASE64 secret explicitly
+       (least privilege) so the reusable workflow can see it — NOT
+       ``secrets: inherit`` (which leaks all repo secrets and trips
+       Semgrep yaml.github-actions.security.secrets-inherit). The
+       reusable workflow must DECLARE that secret under
+       on.workflow_call.secrets so the explicit pass resolves.
     """
 
     REUSABLE_PATH = PROJECT_ROOT / ".github" / "workflows" / "methodology-signoff-validator.yml"
@@ -3807,13 +3811,41 @@ class TestKeyringImportWorkflow:
         text = self.CALLER_PATH.read_text(encoding="utf-8")
         assert "strict_gpg: '1'" in text, "issue #226: caller must pass strict_gpg: '1'"
 
-    def test_caller_uses_secrets_inherit(self):
-        """``secrets: inherit`` is required for the reusable workflow to see secrets."""
+    def test_caller_passes_gpg_secret_explicitly(self):
+        """Least privilege (supersedes the old issue #226 H1 ``secrets: inherit``):
 
-        text = self.CALLER_PATH.read_text(encoding="utf-8")
-        assert "secrets: inherit" in text, (
-            "issue #226 H1: caller must use `secrets: inherit` so the reusable "
-            "workflow can read GPG_REVIEWER_KEYS_ARMOR_BASE64"
+        the caller must pass ONLY the GPG_REVIEWER_KEYS_ARMOR_BASE64 secret to the
+        reusable workflow explicitly, NOT ``secrets: inherit`` (which would forward all
+        repo secrets — Semgrep yaml.github-actions.security.secrets-inherit). The reusable
+        workflow must DECLARE that secret under on.workflow_call.secrets so the explicit
+        pass resolves. The keyring step still reads it via env: (test above), so the GPG
+        verification behaviour is unchanged.
+        """
+
+        # Least privilege: must NOT forward all secrets.
+        caller_text = self.CALLER_PATH.read_text(encoding="utf-8")
+        assert "secrets: inherit" not in caller_text, (
+            "least privilege: caller must not use `secrets: inherit`; pass only the "
+            "GPG_REVIEWER_KEYS_ARMOR_BASE64 secret explicitly"
+        )
+
+        # Caller must pass the GPG secret explicitly so the reusable workflow can read it.
+        caller = self._parse(self.CALLER_PATH)
+        validate_secrets = caller["jobs"]["validate"].get("secrets") or {}
+        assert validate_secrets.get("GPG_REVIEWER_KEYS_ARMOR_BASE64") == (
+            "${{ secrets.GPG_REVIEWER_KEYS_ARMOR_BASE64 }}"
+        ), (
+            "issue #226 H1: caller must pass GPG_REVIEWER_KEYS_ARMOR_BASE64 explicitly to "
+            "the reusable workflow"
+        )
+
+        # Reusable workflow must DECLARE the secret so the explicit pass resolves.
+        reusable = self._parse(self.REUSABLE_PATH)
+        on_block = reusable.get("on") or reusable.get(True)
+        declared = on_block["workflow_call"].get("secrets") or {}
+        assert "GPG_REVIEWER_KEYS_ARMOR_BASE64" in declared, (
+            "issue #226 H1: reusable workflow must declare GPG_REVIEWER_KEYS_ARMOR_BASE64 "
+            "under on.workflow_call.secrets for the least-privilege explicit pass to resolve"
         )
 
     def test_workflow_documents_secret_name(self):
