@@ -194,4 +194,8 @@ jobs:
       # GPG_REVIEWER_KEYS_ARMOR_BASE64 secret. See
       # docs/governance/operator_gpg_keyring_setup.md.
       strict_gpg: '1'
-    secrets: inherit
+    # Least privilege (Semgrep secrets-inherit rule): pass ONLY the secret the
+    # reusable validator declares, rather than inheriting all repo secrets.
+    # GITHUB_TOKEN is provided to reusable workflows automatically.
+    secrets:
+      GPG_REVIEWER_KEYS_ARMOR_BASE64: ${{ secrets.GPG_REVIEWER_KEYS_ARMOR_BASE64 }}

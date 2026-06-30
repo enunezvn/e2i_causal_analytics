@@ -92,6 +92,10 @@ on:
         required: false
         type: string
         default: '1'
+    secrets:
+      GPG_REVIEWER_KEYS_ARMOR_BASE64:
+        description: 'Base64 (-w0) armored reviewer GPG public-key bundle for the verification keyring. Optional; STRICT_GPG=1 fails closed when unset, STRICT_GPG=0 degrades to advisory. Explicitly declared so the caller passes only this secret (least privilege) instead of secrets inherit.'
+        required: false
 
 # Codex pass-2 LOW-1 fix: hardcode the protected validator ref. Caller
 # workflows can no longer override this via input. If the protected
