@@ -12,6 +12,12 @@ Enum-exact values (22P02 landmine): brand_type (Remibrutinib/Kisqali/Fabhalta),
 region_type, ab_unit_type, randomization_method, ab_analysis_type/method,
 enrollment_status, and the ml_experiments status CHECK (running). minimum_auc and
 minimum_precision_at_k respect the valid_auc / valid_precision CHECKs.
+
+IDEMPOTENT (reseed-safe): all ids are DETERMINISTIC uuid5 from their natural keys
+(see ``_exp_id``) — experiment id from experiment_name; assignment id from
+(experiment_id, unit_id) (the DB UNIQUE); enrollment id from assignment_id; result id
+from (experiment_id, analysis_type). So a reseed UPDATES the prior rows in place
+instead of accumulating fresh-uuid rows every run.
 """
 
 import uuid
@@ -23,6 +29,24 @@ import pandas as pd
 
 from ..config import Brand
 from .base import BaseGenerator, GeneratorConfig
+
+# Fixed namespace for DETERMINISTIC ids (cf. mlops_generator._MLOPS_ID_NS). uuid.uuid4()
+# ignored the seed, so every reseed INSERTed fresh-id rows that the loader's upsert-on-PK
+# could never match -> the entity substrate ACCUMULATED (ml_experiments 6x the intended
+# 360; ab_experiment_assignments 864k). On an include-synthetic showcase instance that
+# inflated the read-side counts (e.g. the "Active Campaigns" tile). Deriving each id by
+# uuid5 from its NATURAL KEY makes the upsert UPDATE in place (idempotent) and keeps the
+# FK chain (experiment_id / assignment_id) stable across runs. ab_experiment_assignments
+# additionally carries UNIQUE(experiment_id, unit_id): once experiment_id is deterministic
+# that key is stable, so the assignment id MUST key on the same natural key or the upsert
+# would collide (23505) instead of updating.
+_EXP_ID_NS = uuid.UUID("5d3a8c14-6e2b-4f70-9a18-2b7c4e9f01a3")
+
+
+def _exp_id(*parts: str) -> str:
+    """Deterministic uuid5 from a natural key (stable across runs)."""
+    return str(uuid.uuid5(_EXP_ID_NS, "|".join(str(p) for p in parts)))
+
 
 _REGIONS = ["northeast", "south", "midwest", "west"]
 _TARGETS = {
@@ -43,10 +67,13 @@ class ExperimentGenerator(BaseGenerator[pd.DataFrame]):
         now = datetime.now(timezone.utc)
         rows = []
         for i in range(n):
+            experiment_name = f"synth_{brand.value.lower()}_exp_{i:04d}"
             rows.append(
                 {
-                    "id": str(uuid.uuid4()),
-                    "experiment_name": f"synth_{brand.value.lower()}_exp_{i:04d}",
+                    # Deterministic PK from the experiment_name natural key -> reseed
+                    # UPDATES in place instead of accumulating a fresh-uuid row.
+                    "id": _exp_id(experiment_name),
+                    "experiment_name": experiment_name,
                     "description": "Synthetic causal-validation experiment (Shard 09).",
                     "prediction_target": _TARGETS[brand],
                     "observation_window_days": int(self._rng.choice([90, 180, 365])),
@@ -97,7 +124,10 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
             treatment_outcomes: list[float] = []
             for u in range(self.units_per_experiment):
                 variant = "treatment" if u % 2 == 0 else "control"
-                aid = str(uuid.uuid4())
+                unit_id = f"hcp_{u:05d}"
+                # Deterministic id from the UNIQUE(experiment_id, unit_id) natural key so a
+                # reseed UPDATES in place (eid is itself deterministic, so this is stable).
+                aid = _exp_id("asn", eid, unit_id)
                 p = base_rate + (self.true_uplift if variant == "treatment" else 0.0)
                 y = float(self._rng.binomial(1, min(0.99, max(0.01, p))))
                 (treatment_outcomes if variant == "treatment" else control_outcomes).append(y)
@@ -105,7 +135,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                     {
                         "id": aid,
                         "experiment_id": eid,
-                        "unit_id": f"hcp_{u:05d}",
+                        "unit_id": unit_id,
                         "unit_type": "hcp",
                         "variant": variant,
                         "assigned_at": now.isoformat(),
@@ -118,7 +148,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                 )
                 enr_rows.append(
                     {
-                        "id": str(uuid.uuid4()),
+                        "id": _exp_id("enr", aid),
                         "assignment_id": aid,
                         "enrolled_at": now.isoformat(),
                         "enrollment_status": "active",
@@ -131,7 +161,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
             effect = float(t.mean() - c.mean())
             res_rows.append(
                 {
-                    "id": str(uuid.uuid4()),
+                    "id": _exp_id("res", eid, "final"),
                     "experiment_id": eid,
                     "analysis_type": "final",
                     "analysis_method": "itt",
