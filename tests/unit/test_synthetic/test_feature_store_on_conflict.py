@@ -20,6 +20,8 @@ These unit tests lock the loader contract WITHOUT a DB (the faithful >0 proof li
 in tests/integration/test_issue_852_feature_store_load_realdb.py).
 """
 
+import json
+
 import pandas as pd
 
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
@@ -301,3 +303,123 @@ class TestReconcileFeatureStoreIds:
         )
         with pytest.raises(RuntimeError, match="simulated read failure"):
             loader.reconcile_feature_store_ids(datasets)
+
+
+class _DupDetectingClient:
+    """Fake client that reproduces PostgREST's 21000 (cardinality_violation): an
+    ``INSERT ... ON CONFLICT (...) DO UPDATE`` raises when a single batch contains two
+    rows with the SAME conflict-target key ("cannot affect row a second time"). This is
+    the live feature_values failure mode (low-cardinality entity_values collide on the
+    (feature_id, entity_values, event_timestamp) natural key within a batch)."""
+
+    def __init__(self):
+        self.upsert_calls = []  # list of (table, on_conflict, n_records)
+
+    def table(self, name):
+        return _DupDetectingTable(self, name)
+
+
+class _DupDetectingTable:
+    def __init__(self, client, name):
+        self._client = client
+        self._name = name
+        self._records = None
+        self._on_conflict = None
+
+    def upsert(self, records, on_conflict=None):
+        self._records = records
+        self._on_conflict = on_conflict
+        return self
+
+    def execute(self):
+        if self._on_conflict:
+            keys = self._on_conflict.split(",")
+            seen = set()
+            for rec in self._records:
+                k = tuple(json.dumps(rec.get(c), sort_keys=True, default=str) for c in keys)
+                if k in seen:
+                    raise RuntimeError(
+                        "ON CONFLICT DO UPDATE command cannot affect row a second time (code 21000)"
+                    )
+                seen.add(k)
+        self._client.upsert_calls.append((self._name, self._on_conflict, len(self._records)))
+
+        class _Resp:
+            data = []
+
+        return _Resp()
+
+
+class TestIntraBatchConflictKeyDedup:
+    """For natural-key-conflict tables, the loader must drop intra-frame duplicate
+    conflict keys BEFORE batching, or PostgREST raises 21000 and the whole batch (and
+    its ~500 good rows) fails. Mirrors the live feature_values ~9% loss."""
+
+    def _loader(self):
+        loader = BatchLoader(LoaderConfig(batch_size=100, dry_run=False, max_retries=1))
+        loader._client = _DupDetectingClient()
+        return loader
+
+    def test_feature_values_duplicate_natural_keys_are_deduped(self):
+        """v1 and v2 share (feature_id, entity_values, event_timestamp). Without dedup
+        the upsert raises 21000 -> batch fails. With dedup -> last wins, 2 rows load."""
+        df = pd.DataFrame(
+            {
+                "id": ["v1", "v2", "v3"],
+                "feature_id": ["f1", "f1", "f1"],
+                "entity_values": [
+                    {"brand": "Kisqali"},
+                    {"brand": "Kisqali"},
+                    {"brand": "Fabhalta"},
+                ],
+                "value": [{"value": 1}, {"value": 2}, {"value": 3}],
+                "event_timestamp": [
+                    "2026-01-01T00:00:00",
+                    "2026-01-01T00:00:00",
+                    "2026-01-01T00:00:00",
+                ],
+                "freshness_status": ["fresh", "fresh", "fresh"],
+                "is_synthetic": [True, True, True],
+            }
+        )
+        loader = self._loader()
+        result = loader.load_table("feature_values", df)
+        assert result.records_failed == 0, f"dup natural keys must be deduped, got {result.errors}"
+        assert result.records_loaded == 2  # one of the two colliding rows dropped
+        assert loader._client.upsert_calls[0][2] == 2  # the batch the client saw was deduped
+
+    def test_jsonb_key_order_does_not_defeat_dedup(self):
+        """entity_values is jsonb (order-independent equality in PG). Two dicts with the
+        same content but different key order must be treated as ONE conflict key."""
+        df = pd.DataFrame(
+            {
+                "id": ["v1", "v2"],
+                "feature_id": ["f1", "f1"],
+                "entity_values": [
+                    {"brand": "Kisqali", "region": "west"},
+                    {"region": "west", "brand": "Kisqali"},
+                ],
+                "value": [{"value": 1}, {"value": 2}],
+                "event_timestamp": ["2026-01-01T00:00:00", "2026-01-01T00:00:00"],
+                "freshness_status": ["fresh", "fresh"],
+                "is_synthetic": [True, True],
+            }
+        )
+        loader = self._loader()
+        result = loader.load_table("feature_values", df)
+        assert result.records_failed == 0
+        assert result.records_loaded == 1
+
+    def test_non_conflict_table_is_not_deduped(self):
+        """Tables with no on_conflict target must NOT be de-duplicated (no behavior
+        change for the bulk fact tables)."""
+        df = pd.DataFrame(
+            {
+                "hcp_id": ["hcp_1", "hcp_1"],  # same id twice; PK upsert handles it
+                "is_synthetic": [True, True],
+            }
+        )
+        loader = self._loader()
+        result = loader.load_table("hcp_profiles", df)
+        assert result.records_loaded == 2  # both rows kept (no dedup)
+        assert loader._client.upsert_calls[0][2] == 2
