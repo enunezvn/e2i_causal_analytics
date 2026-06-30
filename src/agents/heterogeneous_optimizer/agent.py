@@ -458,8 +458,13 @@ class HeterogeneousOptimizerAgent:
             # Core results
             "overall_ate": final_state.get("overall_ate", 0.0),
             "heterogeneity_score": final_state.get("heterogeneity_score", 0.0),
-            # Segment analysis
+            # Segment analysis. mid_responders MUST be surfaced (not just high/low):
+            # under the above-ATE gate a homogeneous effect legitimately has 0 high
+            # and 0 harmful responders with EVERY segment in mid — dropping mid here
+            # made the quality gate read "no classification produced" and hard-fail
+            # the Tier 1-5 harness on a uniform run.
             "high_responders": final_state.get("high_responders", []),
+            "mid_responders": final_state.get("mid_responders", []),
             "low_responders": final_state.get("low_responders", []),
             "cate_by_segment": final_state.get("cate_by_segment", {}),
             # Policy recommendations

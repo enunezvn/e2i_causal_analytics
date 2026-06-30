@@ -486,18 +486,26 @@ def _validate_heterogeneous_optimizer(output: dict[str, Any]) -> tuple[bool, str
                 f"Has ATE={overall_ate} and heterogeneity={heterogeneity_score} but no strategic interpretation",
             )
 
-    # Completed optimization must identify at least some responder segments
+    # Completed optimization must have CLASSIFIED the segments. Under the above-ATE
+    # significance gate a HOMOGENEOUS effect legitimately yields zero high AND zero
+    # harmful ("low") responders — every segment lands in mid_responders (average).
+    # That is the honest "no targeting opportunity" outcome, NOT a failure, so the
+    # gate passes as long as SOME bucket (incl. mid) is populated. It only fails when
+    # the node produced no responder classification at all while claiming success.
     het_status = _safe_get(output, "status", "")
     if het_status in ("completed", "success"):
         high_responders = _safe_get(output, "high_responders", None)
         low_responders = _safe_get(output, "low_responders", None)
-        if (high_responders is not None and not high_responders) and (
-            low_responders is not None and not low_responders
+        mid_responders = _safe_get(output, "mid_responders", None)
+        if (
+            (high_responders is not None and not high_responders)
+            and (low_responders is not None and not low_responders)
+            and not mid_responders
         ):
             return (
                 False,
-                "Both high_responders and low_responders are empty - "
-                "no segment differentiation found",
+                "high_responders, low_responders AND mid_responders are all empty - "
+                "no segment classification produced",
             )
 
     return (True, "Passed semantic validation")

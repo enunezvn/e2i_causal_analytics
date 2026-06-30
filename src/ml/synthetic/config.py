@@ -105,9 +105,23 @@ DGP_CONFIGS: Dict[DGPType, DGPConfig] = {
         tolerance=0.05,
         confounders=["disease_severity", "academic_hcp"],
         cate_by_segment={
-            "high_severity": 0.50,
+            # Enriched 2026-06-30 (0.50/0.30/0.15 -> 0.70/0.30/0.10): the old spread
+            # sat at CausalForestDML's resolution floor, so on the pooled Segment
+            # Analysis cohort NO disease-severity band's CI cleared the overall ATE
+            # (heterogeneity recovered only directionally by the brand-stratified probe;
+            # the page honestly showed 0 targeting). A faithful sim (real DGP + the
+            # page's exact CausalForestDML config, n=8328) showed 0.70/0.30/0.10 makes
+            # the high band's 95% CI clear the ATE on 5/5 seeds (worst margin +0.054)
+            # while keeping the true ATE realistic (~0.25, ≤0.35). Wider spread =>
+            # EASIER recovery, so the per-outcome recovery probes still pass.
+            # SCOPE: this map feeds ``brand_scaled_cate`` -> treatment_initiated,
+            # adherent_180d and low_gap_180d. Discontinuation/persistence are NOT
+            # affected — they carry their own per-segment effect constants
+            # (``_DISC_TREATMENT_LOGIT`` in generators/cohort_outcomes.py), only
+            # brand-scaled, so this change does not touch their recovery.
+            "high_severity": 0.70,
             "medium_severity": 0.30,
-            "low_severity": 0.15,
+            "low_severity": 0.10,
         },
         description="Heterogeneous treatment effects (CATE by segment)",
     ),

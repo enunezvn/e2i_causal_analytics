@@ -494,14 +494,30 @@ class TestHeterogeneousOptimizerValidator:
         assert is_valid is False
 
     def test_no_responder_segments(self):
-        """Test validation fails when no segments identified."""
+        """Fails only when NO classification at all (high, low AND mid all empty)."""
         output = {
             "status": "completed",
             "high_responders": [],
             "low_responders": [],
+            "mid_responders": [],
         }
         is_valid, reason = _validate_heterogeneous_optimizer(output)
         assert is_valid is False
+
+    def test_homogeneous_effect_all_average_passes(self):
+        """REGRESSION: under the above-ATE gate a HOMOGENEOUS effect legitimately has
+        0 high and 0 harmful responders — every segment is average (mid). That is the
+        honest 'no targeting opportunity' outcome and must PASS the gate (it was
+        failing because the gate predated the removal of the relative fallback)."""
+        output = {
+            "status": "completed",
+            "high_responders": [],
+            "low_responders": [],
+            "mid_responders": [{"segment_id": "disease_severity_band_high", "cate_estimate": 0.28}],
+            "strategic_interpretation": "Uniform effect; no reliable targeting opportunity.",
+        }
+        is_valid, reason = _validate_heterogeneous_optimizer(output)
+        assert is_valid is True, reason
 
 
 @pytest.mark.unit

@@ -134,11 +134,11 @@ class HeterogeneousOptimizerState(TypedDict):
 
     # === SEGMENT DISCOVERY OUTPUTS (4 fields) ===
     high_responders: Optional[List[SegmentProfile]]
-    # mid_responders: segments whose |CATE| sits strictly between the low and
-    # high thresholds (responder_type="average"). Previously this band was
-    # computed-then-discarded — only high/low were surfaced — so a near-average
-    # segment was invisible on the page. Optional/NotRequired by convention: when
-    # no segment qualifies the node emits [] (legacy two-bucket callers unaffected).
+    # mid_responders: segments whose CATE CI OVERLAPS the overall ATE — statistically
+    # indistinguishable from the average effect (responder_type="average"), the band
+    # between the above-ATE high set and the harmful (CI<0) set. A homogeneous effect
+    # puts EVERY segment here. Emits [] when nothing qualifies (legacy callers
+    # unaffected).
     mid_responders: Optional[List[SegmentProfile]]
     low_responders: Optional[List[SegmentProfile]]
     segment_comparison: Optional[Dict[str, Any]]
@@ -327,6 +327,10 @@ class HeterogeneousOptimizerOutput(TypedDict):
 
     # Segment analysis
     high_responders: Optional[List[SegmentProfile]]
+    # mid_responders surfaced so a homogeneous run (0 high, 0 harmful, all average)
+    # still reports its segment classification (else the quality gate reads it as
+    # "no classification produced"). NotRequired so existing constructors type-check.
+    mid_responders: NotRequired[Optional[List[SegmentProfile]]]
     low_responders: Optional[List[SegmentProfile]]
 
     # Policy recommendations

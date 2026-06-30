@@ -19,15 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 class SegmentAnalyzerNode:
-    """Analyze segments to identify high/low responders.
+    """Analyze segments to identify genuine differential responders.
 
-    High responders: CATE >= 1.5x ATE
-    Low responders: CATE <= 0.5x ATE
+    Classification is significance-gated against the overall ATE (the SSOT shared
+    with the policy learner's expected-lift gate), so the responder tiles can never
+    contradict the lift the page reports:
+
+    - High (above-average) responder: CATE CI entirely above the ATE *and* above 0.
+    - Harmful responder: CATE CI entirely below 0.
+    - Average responder: CI overlaps the ATE (statistically indistinguishable).
+
+    A homogeneous effect honestly yields zero high/harmful responders. See
+    ``_classify_by_significance``.
     """
-
-    def __init__(self):
-        self.high_responder_threshold = 1.5  # 1.5x ATE
-        self.low_responder_threshold = 0.5  # 0.5x ATE
 
     async def execute(self, state: HeterogeneousOptimizerState) -> HeterogeneousOptimizerState:
         """Execute segment analysis."""
@@ -126,33 +130,19 @@ class SegmentAnalyzerNode:
                     dag_validation_warnings,
                 ) = self._validate_segment_effects(all_segments, state)
 
-            # Identify high responders
-            high_responders = self._identify_responders(
-                all_segments, ate, total_size, "high", self.high_responder_threshold
-            )[:top_count]
-
-            # Identify low responders
-            low_responders = self._identify_responders(
-                all_segments, ate, total_size, "low", self.low_responder_threshold
-            )[:top_count]
-
-            # Mid responders: the band STRICTLY between the low and high
-            # thresholds (0.5x|ATE| < |CATE| < 1.5x|ATE|). Computed only in the
-            # NORMAL path below; when the fallback fires (no strict high/low),
-            # every segment is in-band and the fallback splits them into high/low
-            # halves, so emitting them as mid too would double-count.
-            mid_responders: List[SegmentProfile] = []
-
-            # Fallback: if strict thresholds yield empty responders, use
-            # percentile-based classification (top/bottom by effect ratio).
-            if not high_responders and not low_responders and all_segments and abs(ate) > 1e-6:
-                high_responders, low_responders = self._fallback_classify(
-                    all_segments, ate, total_size, top_count
-                )
-            else:
-                mid_responders = self._identify_mid_responders(all_segments, ate, total_size)[
-                    :top_count
-                ]
+            # Classify by the SAME above-ATE significance gate the policy/lift uses
+            # (SSOT for "is this a genuine differential responder"), so the responder
+            # TILES can never contradict the expected lift the page reports. A
+            # homogeneous effect honestly yields ZERO high/harmful responders (matching
+            # ~0 lift) instead of a relative top/bottom-half fallback that always
+            # fabricated responders. The full effect-size ranking is still available on
+            # the CATE plot for exploration.
+            high_responders, low_responders, mid_responders = self._classify_by_significance(
+                all_segments, ate, total_size
+            )
+            high_responders = high_responders[:top_count]
+            low_responders = low_responders[:top_count]
+            mid_responders = mid_responders[:top_count]
 
             # Create segment comparison
             comparison = self._create_comparison(
@@ -221,192 +211,71 @@ class SegmentAnalyzerNode:
                 "status": "failed",
             }
 
-    def _identify_responders(
+    def _classify_by_significance(
         self,
         all_segments: List[Dict],
         ate: float,
         total_size: int,
-        responder_type: str,
-        threshold: float,
-    ) -> List[SegmentProfile]:
-        """Identify high or low responder segments.
+    ) -> Tuple[List[SegmentProfile], List[SegmentProfile], List[SegmentProfile]]:
+        """Classify every segment by the SAME above-ATE significance gate the policy
+        learner uses for the expected lift (the SSOT for "is this a genuine
+        differential responder"), so the responder tiles can NEVER contradict the lift:
 
-        Args:
-            all_segments: All segment results
-            ate: Overall average treatment effect
-            total_size: Total sample size
-            responder_type: 'high' or 'low'
-            threshold: Multiplier for ATE threshold
+        - HIGH (above-average): CATE CI lies ENTIRELY above the ATE *and* above zero
+          (``cate_ci_lower > ate`` and ``> 0``) -> exactly the policy's INCREASE set.
+        - HARMFUL (low): CATE CI lies ENTIRELY below zero (``cate_ci_upper < 0``) ->
+          exactly the policy's DECREASE set.
+        - AVERAGE (mid): CI overlaps the ATE -> statistically indistinguishable from
+          the average effect; maintained.
 
-        Returns:
-            List of segment profiles matching criteria
+        There is NO relative top/bottom-half fallback: a homogeneous effect honestly
+        yields ZERO high/harmful responders (matching ~0 expected lift) instead of a
+        fabricated top-half. The full effect-size ranking remains on the CATE plot.
+
+        Returns (high, harmful, average) profile lists, each sorted for display.
         """
-
-        profiles = []
-
+        high: List[SegmentProfile] = []
+        harmful: List[SegmentProfile] = []
+        average: List[SegmentProfile] = []
         for seg in all_segments:
             result = seg["result"]
-            cate = result["cate_estimate"]
-
-            # Determine if segment qualifies using absolute magnitude comparison.
-            # This handles both positive and negative ATE correctly:
-            # - Positive ATE: high responders have large positive CATE
-            # - Negative ATE: high responders have large negative CATE (strong effect)
-            # Require a minimum ATE magnitude to avoid noise-driven classification.
-            if abs(ate) < 1e-6:
-                continue
-
-            if responder_type == "high":
-                qualifies = abs(cate) >= abs(ate) * threshold
+            ci_lower = result.get("cate_ci_lower")
+            ci_upper = result.get("cate_ci_upper")
+            if ci_lower is not None and ci_lower > ate and ci_lower > 0:
+                high.append(self._build_profile(seg, ate, total_size, "high"))
+            elif ci_upper is not None and ci_upper < 0:
+                harmful.append(self._build_profile(seg, ate, total_size, "low"))
             else:
-                qualifies = abs(cate) <= abs(ate) * threshold
+                average.append(self._build_profile(seg, ate, total_size, "average"))
+        high.sort(key=lambda x: x["cate_estimate"], reverse=True)
+        harmful.sort(key=lambda x: x["cate_estimate"])
+        average.sort(key=lambda x: abs(x["cate_estimate"] - ate))
+        return high, harmful, average
 
-            if not qualifies:
-                continue
-
-            profile = SegmentProfile(
-                segment_id=f"{seg['segment_var']}_{result['segment_value']}",
-                responder_type=responder_type,  # type: ignore[typeddict-item]
-                cate_estimate=cate,
-                defining_features=[
-                    {
-                        "variable": seg["segment_var"],
-                        "value": result["segment_value"],
-                        "effect_size": cate / ate if ate != 0 else 0,
-                    }
-                ],
-                size=result["sample_size"],
-                size_percentage=result["sample_size"] / total_size * 100 if total_size > 0 else 0,
-                recommendation=self._generate_recommendation(
-                    seg["segment_var"], result, responder_type
-                ),
-            )
-            profiles.append(profile)
-
-        # Sort by CATE (descending for high, ascending for low)
-        reverse = responder_type == "high"
-        profiles.sort(key=lambda x: x["cate_estimate"], reverse=reverse)
-
-        return profiles
-
-    def _identify_mid_responders(
-        self,
-        all_segments: List[Dict],
-        ate: float,
-        total_size: int,
-    ) -> List[SegmentProfile]:
-        """Identify mid ("average") responder segments.
-
-        A mid responder is a segment whose effect magnitude sits STRICTLY between
-        the low and high thresholds: 0.5x|ATE| < |CATE| < 1.5x|ATE|. This is the
-        band the page never surfaced — segments that are neither clear high nor
-        clear low responders, but are still real, near-average segments worth
-        showing (and worth NOT reallocating). responder_type="average".
-
-        Mirrors ``_identify_responders`` (same profile shape, |ATE|>1e-6 guard,
-        size-percentage), differing only in the two-sided band test.
-        """
-        profiles = []
-
-        for seg in all_segments:
-            result = seg["result"]
-            cate = result["cate_estimate"]
-
-            if abs(ate) < 1e-6:
-                continue
-
-            qualifies = (
-                abs(ate) * self.low_responder_threshold
-                < abs(cate)
-                < abs(ate) * self.high_responder_threshold
-            )
-            if not qualifies:
-                continue
-
-            profile = SegmentProfile(
-                segment_id=f"{seg['segment_var']}_{result['segment_value']}",
-                responder_type="average",  # type: ignore[typeddict-item]
-                cate_estimate=cate,
-                defining_features=[
-                    {
-                        "variable": seg["segment_var"],
-                        "value": result["segment_value"],
-                        "effect_size": cate / ate if ate != 0 else 0,
-                    }
-                ],
-                size=result["sample_size"],
-                size_percentage=result["sample_size"] / total_size * 100 if total_size > 0 else 0,
-                recommendation=self._generate_recommendation(seg["segment_var"], result, "average"),
-            )
-            profiles.append(profile)
-
-        # Closest-to-average first (smallest deviation of effect ratio from 1.0).
-        profiles.sort(key=lambda x: abs(abs(x["cate_estimate"] / ate) - 1.0) if ate != 0 else 0.0)
-
-        return profiles
-
-    def _fallback_classify(
-        self,
-        all_segments: List[Dict],
-        ate: float,
-        total_size: int,
-        top_count: int,
-    ) -> Tuple[List[SegmentProfile], List[SegmentProfile]]:
-        """Classify top/bottom segments when strict thresholds yield no results.
-
-        Falls back to ranking segments by their |CATE|/|ATE| effect ratio and
-        splitting into upper and lower halves. This ensures heterogeneity is
-        always reported when segment-level CATE estimates exist.
-
-        Args:
-            all_segments: All segment results
-            ate: Overall average treatment effect
-            total_size: Total sample size
-            top_count: Max segments per group
-
-        Returns:
-            (high_responders, low_responders) tuple
-        """
-        # Rank by effect ratio (|CATE| / |ATE|)
-        ranked = sorted(
-            all_segments,
-            key=lambda s: abs(s["result"]["cate_estimate"]) / abs(ate),
-            reverse=True,
+    def _build_profile(
+        self, seg: Dict, ate: float, total_size: int, responder_type: str
+    ) -> SegmentProfile:
+        """Build a SegmentProfile for a classified segment (one shared shape for the
+        high / harmful / average buckets)."""
+        result = seg["result"]
+        cate = result["cate_estimate"]
+        return SegmentProfile(
+            segment_id=f"{seg['segment_var']}_{result['segment_value']}",
+            responder_type=responder_type,  # type: ignore[typeddict-item]
+            cate_estimate=cate,
+            defining_features=[
+                {
+                    "variable": seg["segment_var"],
+                    "value": result["segment_value"],
+                    "effect_size": cate / ate if ate != 0 else 0,
+                }
+            ],
+            size=result["sample_size"],
+            size_percentage=result["sample_size"] / total_size * 100 if total_size > 0 else 0,
+            recommendation=self._generate_recommendation(
+                seg["segment_var"], result, responder_type
+            ),
         )
-
-        mid = max(1, len(ranked) // 2)
-        high_segs = ranked[:mid]
-        low_segs = ranked[mid:]
-
-        def _build(segs: List[Dict], rtype: str) -> List[SegmentProfile]:
-            profiles = []
-            for seg in segs:
-                result = seg["result"]
-                cate = result["cate_estimate"]
-                profiles.append(
-                    SegmentProfile(
-                        segment_id=f"{seg['segment_var']}_{result['segment_value']}",
-                        responder_type=rtype,  # type: ignore[typeddict-item]
-                        cate_estimate=cate,
-                        defining_features=[
-                            {
-                                "variable": seg["segment_var"],
-                                "value": result["segment_value"],
-                                "effect_size": cate / ate if ate != 0 else 0,
-                            }
-                        ],
-                        size=result["sample_size"],
-                        size_percentage=(
-                            result["sample_size"] / total_size * 100 if total_size > 0 else 0
-                        ),
-                        recommendation=self._generate_recommendation(
-                            seg["segment_var"], result, rtype
-                        ),
-                    )
-                )
-            return profiles[:top_count]
-
-        return _build(high_segs, "high"), _build(low_segs, "low")
 
     def _generate_recommendation(
         self, segment_var: str, result: CATEResult, responder_type: str
@@ -416,7 +285,7 @@ class SegmentAnalyzerNode:
         Args:
             segment_var: Segment variable name
             result: CATE result for this segment
-            responder_type: 'high' or 'low'
+            responder_type: 'high', 'low' (harmful), or 'average'
 
         Returns:
             Action recommendation string
@@ -475,7 +344,12 @@ class SegmentAnalyzerNode:
             "high_responder_avg_cate": high_avg_cate,
             "mid_responder_avg_cate": mid_avg_cate,
             "low_responder_avg_cate": low_avg_cate,
-            "effect_ratio": high_avg_cate / low_avg_cate if low_avg_cate != 0 else float("inf"),
+            # SIGNED SPREAD (high_avg - low_avg), not a ratio: under the significance
+            # gate "low" is the HARMFUL set (avg CATE < 0), so a ratio would go
+            # negative and silently break the >0 contrast check downstream. The spread
+            # is always >= 0 and grows with a harmful low band, which is the correct
+            # "how far apart are the extremes" signal.
+            "effect_ratio": high_avg_cate - low_avg_cate,
             "high_responder_count": len(high_responders),
             "mid_responder_count": len(mid_responders),
             "low_responder_count": len(low_responders),

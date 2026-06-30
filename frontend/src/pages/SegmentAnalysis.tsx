@@ -348,9 +348,9 @@ function PolicyScatterChart({ policies }: PolicyChartProps) {
 type ResponderTier = 'high' | 'mid' | 'low';
 
 const TIER_STYLES: Record<ResponderTier, { border: string; badgeVariant: 'default' | 'secondary' | 'destructive'; label: string }> = {
-  high: { border: 'border-green-200 bg-green-50/50 hover:bg-green-50', badgeVariant: 'default', label: 'High Responder' },
-  mid: { border: 'border-amber-200 bg-amber-50/50 hover:bg-amber-50', badgeVariant: 'secondary', label: 'Mid Responder' },
-  low: { border: 'border-red-200 bg-red-50/50 hover:bg-red-50', badgeVariant: 'destructive', label: 'Low Responder' },
+  high: { border: 'border-green-200 bg-green-50/50 hover:bg-green-50', badgeVariant: 'default', label: 'Above-Average Responder' },
+  mid: { border: 'border-amber-200 bg-amber-50/50 hover:bg-amber-50', badgeVariant: 'secondary', label: 'Average Responder' },
+  low: { border: 'border-red-200 bg-red-50/50 hover:bg-red-50', badgeVariant: 'destructive', label: 'Harmful Responder' },
 };
 
 function tierForProfile(profile: SegmentProfile): ResponderTier {
@@ -701,9 +701,9 @@ export default function SegmentAnalysis() {
             description="Effect variation across segments"
           />
           <KPICard
-            title="High Responders"
+            title="Above-Average Responders"
             value={highResponders.length.toString()}
-            description="segments identified"
+            description="segments significantly above the ATE (the targetable set)"
           />
           <KPICard
             title="Expected Lift"
@@ -889,26 +889,26 @@ export default function SegmentAnalysis() {
         <TabsContent value="responders" className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <ResponderColumn
-              title="High Responders"
+              title="Above-Average Responders"
               titleClass="text-green-700"
-              description="Segments with above-average treatment response"
-              emptyText="No high-responder segments at the current thresholds"
+              description="CI lies entirely above the overall ATE — significantly above average (the targetable set)"
+              emptyText="No segment is statistically above the average effect — a uniform effect has no targeting opportunity"
               profiles={highResponders}
               onSelect={setSelectedProfile}
             />
             <ResponderColumn
-              title="Mid Responders"
+              title="Average Responders"
               titleClass="text-amber-700"
-              description="Segments with near-average treatment response"
-              emptyText="No mid-tier segments at the current thresholds"
+              description="CI overlaps the ATE — statistically indistinguishable from the average effect"
+              emptyText="No average-band segments for this run"
               profiles={midResponders}
               onSelect={setSelectedProfile}
             />
             <ResponderColumn
-              title="Low Responders"
+              title="Harmful Responders"
               titleClass="text-red-700"
-              description="Segments with below-average treatment response"
-              emptyText="No low-responder segments at the current thresholds"
+              description="CI lies entirely below zero — treatment is significantly harmful for this segment"
+              emptyText="No segment is statistically harmful"
               profiles={lowResponders}
               onSelect={setSelectedProfile}
             />

@@ -311,7 +311,14 @@ class TestSyntheticDataConsolidation:
             "HETEROGENEOUS DGP should have CATE by segment"
         )
         assert "high_severity" in hetero_config.cate_by_segment
-        assert hetero_config.cate_by_segment["high_severity"] == 0.50
+        # Enriched 2026-06-30 (0.50 -> 0.70) so the Segment Analysis high band's CI
+        # clears the ATE; ordering high > medium > low preserved.
+        assert hetero_config.cate_by_segment["high_severity"] == 0.70
+        assert (
+            hetero_config.cate_by_segment["high_severity"]
+            > hetero_config.cate_by_segment["medium_severity"]
+            > hetero_config.cate_by_segment["low_severity"]
+        )
 
     # =========================================================================
     # Test 4: Ground Truth Store Persistence
