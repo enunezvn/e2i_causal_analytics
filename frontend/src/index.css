@@ -36,7 +36,9 @@
   --color-background: #ffffff;
   --color-foreground: #0f172a;
   --color-muted: #64748b;
-  --color-muted-foreground: #94a3b8;
+  /* slate-500 (was slate-400 #94a3b8 → only 2.56:1 on white, failed WCAG AA);
+     #64748b is ~4.6:1 on white. */
+  --color-muted-foreground: #5b6473;
   --color-border: #e2e8f0;
   --color-input: #e2e8f0;
   --color-ring: #3b82f6;
@@ -108,9 +110,9 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Dark theme */
-@media (prefers-color-scheme: dark) {
-  :root {
+/* Dark palette — preserved but inert: applies only when a `.dark` class is set
+   on <html>. No theme toggle is wired yet, so the app now defaults to light (:root). */
+.dark {
     color-scheme: dark;
 
     /* Dark theme colors */
@@ -153,12 +155,17 @@
     --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
     --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
     --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.3);
-  }
 }
 
 /* ============================================
    Base Element Styles
    ============================================ */
+
+/* Wrapped in @layer base so Tailwind utility classes (utilities layer) can
+   override these element defaults. Unlayered, the `a` / `button` color rules
+   beat component utilities and force every link and button to the primary
+   color (low-contrast nav links, indistinguishable tabs). */
+@layer base {
 
 html {
   scroll-behavior: smooth;
@@ -223,16 +230,14 @@ button {
   font-size: 0.875rem;
   font-weight: 500;
   font-family: inherit;
-  background-color: var(--color-primary);
-  color: var(--color-primary-foreground);
+  /* No default background/color: bare <button>s inherit, and the Button
+     component sets its own per-variant styling. A primary fill here would
+     override unstyled buttons (inactive tabs, disclosure toggles) and break
+     contrast. */
   cursor: pointer;
   transition: background-color var(--transition-fast),
               border-color var(--transition-fast),
               box-shadow var(--transition-fast);
-}
-
-button:hover:not(:disabled) {
-  background-color: var(--color-primary-hover);
 }
 
 button:focus-visible {
@@ -268,6 +273,8 @@ input:focus, textarea:focus, select:focus {
 input::placeholder, textarea::placeholder {
   color: var(--color-muted-foreground);
 }
+
+} /* end @layer base */
 
 /* ============================================
    Utility Classes

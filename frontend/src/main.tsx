@@ -6,6 +6,7 @@ import { AuthProvider } from './providers'
 import { AppRouter } from './router'
 import { AppErrorBoundary } from './components/ui/error-boundary'
 import { MSWBanner } from './mocks/MSWBanner'
+import { ThemeManager } from './components/theme/ThemeManager'
 import './index.css'
 
 /**
@@ -34,6 +35,8 @@ async function initApp() {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <AppErrorBoundary>
+        {/* Applies the persisted light/dark/system theme to <html> on every route */}
+        <ThemeManager />
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <AppRouter />

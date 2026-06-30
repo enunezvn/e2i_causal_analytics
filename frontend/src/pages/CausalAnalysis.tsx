@@ -666,7 +666,7 @@ export default function CausalAnalysis() {
               <button
                 type="button"
                 onClick={() => setManualOpen((o) => !o)}
-                className="flex w-full items-center justify-between text-left"
+                className="flex w-full items-center justify-between text-left bg-transparent hover:bg-transparent text-foreground p-0"
                 aria-expanded={manualOpen}
               >
                 <div>

@@ -14,6 +14,7 @@ import { useLocation, Link } from 'react-router-dom';
 import { useSidebarState } from '@/stores/ui-store';
 import { getRouteConfig } from '@/router/routes';
 import { UserMenu } from '@/components/auth';
+import { ThemeToggle } from '@/components/theme/ThemeToggle';
 
 /**
  * Header props interface
@@ -186,6 +187,9 @@ export function Header({ className = '' }: HeaderProps) {
 
       {/* Right section: Actions */}
       <div className="flex items-center gap-2">
+        {/* Light / dark theme toggle */}
+        <ThemeToggle />
+
         {/* Notifications button */}
         <button
           type="button"
