@@ -134,7 +134,8 @@ const initialState: UIState = {
   // always visible via `lg:translate-x-0`, so this default has no effect there.
   sidebarOpen: false,
   sidebarCollapsed: false,
-  theme: 'system',
+  // Light is the product default; users opt into dark/system via the header toggle.
+  theme: 'light',
   globalLoading: false,
   loadingMessage: null,
   notifications: [],
@@ -280,7 +281,7 @@ export const useUIStore = create<UIStore>()(
             sidebarCollapsed?: boolean;
           };
           return {
-            theme: prev.theme ?? 'system',
+            theme: prev.theme ?? 'light',
             sidebarCollapsed: prev.sidebarCollapsed ?? false,
           };
         },
