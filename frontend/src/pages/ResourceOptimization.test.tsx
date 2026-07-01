@@ -13,10 +13,16 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 vi.mock('@/hooks/api', () => ({
   useResourceHealth: vi.fn(),
   useRunOptimizationAndWait: vi.fn(),
+  useResourceOptimizationInsight: vi.fn(),
   useScenarios: vi.fn(),
 }));
 
-import { useResourceHealth, useRunOptimizationAndWait, useScenarios } from '@/hooks/api';
+import {
+  useResourceHealth,
+  useRunOptimizationAndWait,
+  useResourceOptimizationInsight,
+  useScenarios,
+} from '@/hooks/api';
 import ResourceOptimization from './ResourceOptimization';
 
 function createWrapper() {
@@ -71,6 +77,12 @@ beforeEach(() => {
     isLoading: false,
   });
   (useScenarios as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+  (useResourceOptimizationInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+    data: undefined,
+  });
   mockRun();
 });
 
@@ -85,6 +97,11 @@ describe('ResourceOptimization', () => {
   it('always surfaces the illustrative / synthetic-data badge', () => {
     render(<ResourceOptimization />, { wrapper: createWrapper() });
     expect(screen.getByText(/Illustrative · synthetic data/i)).toBeInTheDocument();
+  });
+
+  it('always renders the Strategic Interpretation insight card header (even pre-run)', async () => {
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    expect(await screen.findByText(/strategic interpretation/i)).toBeInTheDocument();
   });
 
   it('runs via run-and-wait: sends empty targets + polling options (no chicken-and-egg seed)', () => {
