@@ -1026,7 +1026,7 @@ export default function CausalAnalysis() {
 
               <p className="text-xs text-muted-foreground">
                 Runs the live DoWhy + EconML pipeline over the confounded cohort
-                (de-confounded backdoor adjustment). A single fit takes ~5-30s.
+                (de-confounded backdoor adjustment). A single fit takes ~10-90s.
               </p>
 
               {/* States: loading / error (503/408/etc.) / result / prompt */}

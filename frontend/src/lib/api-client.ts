@@ -336,6 +336,7 @@ export async function get<T>(
     ...(options?.repeatArrayParams
       ? { paramsSerializer: REPEAT_ARRAY_PARAMS_SERIALIZER }
       : {}),
+    ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
   });
   return maybeValidate(response.data, endpoint, options) as T;
 }
@@ -475,6 +476,13 @@ export interface ValidatedRequestConfig {
    * `List[str]` query params, which ignore the bracketed form. (GET only.)
    */
   repeatArrayParams?: boolean;
+  /**
+   * Per-request timeout in milliseconds, overriding the client default (30s).
+   * Use for endpoints that run a heavy synchronous compute the backend budgets
+   * beyond 30s (e.g. the DoWhy+EconML treatment-effect fit — ~40s, backend cap
+   * 90s, nginx 120s). Leave unset for the 30s default. (GET only.)
+   */
+  timeout?: number;
 }
 
 /**
