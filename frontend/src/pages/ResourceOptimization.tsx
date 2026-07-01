@@ -39,9 +39,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { KPICard } from '@/components/visualizations';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { WarningBanner } from '@/components/ui/WarningBanner';
+import { StrategicInsightCard } from '@/components/insights';
 import {
   useResourceHealth,
   useRunOptimizationAndWait,
+  useResourceOptimizationInsight,
   useScenarios,
 } from '@/hooks/api';
 import type {
@@ -293,6 +295,11 @@ export default function ResourceOptimization() {
   const runOptimization = useRunOptimizationAndWait();
   const runError = runOptimization.error;
 
+  // Strategic Interpretation: surfaces the existing optimization_summary +
+  // recommendations through the shared StrategicInsightCard (the backend
+  // adapter passes the agent's output through — this is NOT a second narrative).
+  const resInsight = useResourceOptimizationInsight();
+
   // Live optimization output (undefined until the user runs one). The
   // Scenarios tab additionally consumes the standalone scenarios feed.
   const optimizationResult = runOptimization.data;
@@ -411,6 +418,32 @@ export default function ResourceOptimization() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Strategic Interpretation — agentic read of the optimization result.
+          Rendered always (not gated on a completed run) so the header is
+          present on mount; onGenerate feeds the REAL optimization output
+          (existing optimization_summary + recommendations) into the shared card. */}
+      <StrategicInsightCard
+        isLoading={resInsight.isPending}
+        error={resInsight.error?.message ?? null}
+        insight={resInsight.data?.insight}
+        keyTakeaways={resInsight.data?.key_takeaways}
+        grounding={resInsight.data?.grounding}
+        isFallback={resInsight.data?.is_fallback}
+        provenance={resInsight.data?.provenance}
+        generatedAt={resInsight.data?.generated_at}
+        onGenerate={() =>
+          resInsight.mutate({
+            optimization_summary: optimizationResult?.optimization_summary ?? '',
+            recommendations: optimizationResult?.recommendations ?? [],
+            projected_lift_pct:
+              optimizationResult?.projected_roi != null
+                ? optimizationResult.projected_roi * 100
+                : null,
+            solver_status: optimizationResult?.solver_status ?? null,
+          })
+        }
+      />
 
       {/* Running indicator while the async optimization computes + is polled */}
       {runOptimization.isPending && (

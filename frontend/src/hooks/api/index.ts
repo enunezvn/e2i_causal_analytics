@@ -173,3 +173,15 @@ export type { FeedbackStatusData, FeedbackDashboardData } from './use-feedback';
 
 // Re-export composite types
 export type { ComprehensiveHealthData, DashboardHealthData } from './use-health-score';
+
+// =============================================================================
+// STRATEGIC INSIGHTS (per-page agentic interpretation)
+// =============================================================================
+
+export {
+  useKnowledgeGraphInsight,
+  useModelPerformanceInsight,
+  useCausalDiscoveryInsight,
+  usePredictiveCohortInsight,
+  useResourceOptimizationInsight,
+} from './use-insights';

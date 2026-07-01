@@ -107,6 +107,7 @@ def _build_full_app() -> FastAPI:
     from src.api.routes.gaps import router as gaps_router
     from src.api.routes.graph import router as graph_router
     from src.api.routes.health_score import router as health_score_router
+    from src.api.routes.insights_strategic import router as insights_strategic_router
     from src.api.routes.kpi import router as kpi_router
     from src.api.routes.memory import router as memory_router
     from src.api.routes.metrics import router as metrics_router
@@ -141,6 +142,7 @@ def _build_full_app() -> FastAPI:
         agents_router,
         sentinels_router,
         executive_insights_router,
+        insights_strategic_router,
         staleness_alerts_router,
     ):
         app.include_router(r, prefix="/api")
@@ -355,6 +357,7 @@ def test_slim_app_includes_all_routers_from_src_api_main() -> None:
         "gaps": "/gaps",
         "graph": "/graph",
         "health_score": "/health-score",
+        "insights_strategic": "/insights",
         "kpi": "/kpis",
         "memory": "/memory",
         "metrics": "/metrics",
@@ -522,6 +525,7 @@ def test_include_router_prefixes_match_expected_drift_table() -> None:
         "agents_router": "/api",
         "sentinels_router": "/api",
         "executive_insights_router": "/api",
+        "insights_strategic_router": "/api",
         "staleness_alerts_router": "/api",
         # metrics_router declares its own prefix (or no prefix needed)
         "metrics_router": None,

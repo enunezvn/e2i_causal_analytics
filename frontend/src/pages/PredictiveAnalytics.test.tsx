@@ -30,6 +30,17 @@ vi.mock('@/hooks/api/use-predictions', () => ({
   usePollCohortScore: vi.fn(),
 }));
 
+// The Strategic Interpretation card's hook comes from the `@/hooks/api` barrel;
+// mock it so the card renders its idle "generate" state deterministically.
+vi.mock('@/hooks/api', () => ({
+  usePredictiveCohortInsight: vi.fn(() => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+    data: undefined,
+  })),
+}));
+
 import {
   useModelsStatus,
   useModelInfo,
@@ -301,6 +312,11 @@ describe('PredictiveAnalytics (cohort scoring)', () => {
     render(<PredictiveAnalytics />, { wrapper: createWrapper() });
     expect(screen.getByText(/cohort scoring failed/i)).toBeInTheDocument();
     expect(screen.getByText(/incomplete features/i)).toBeInTheDocument();
+  });
+
+  it('always renders the Strategic Interpretation card', async () => {
+    render(<PredictiveAnalytics />, { wrapper: createWrapper() });
+    expect(await screen.findByText(/strategic interpretation/i)).toBeInTheDocument();
   });
 
   it('renders gracefully when the models list is empty', () => {

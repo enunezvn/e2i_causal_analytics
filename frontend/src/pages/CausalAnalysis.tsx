@@ -65,12 +65,14 @@ import {
 } from '@/components/ui/table';
 import { KPICard } from '@/components/visualizations';
 import { CausalAnalysisDetail } from '@/components/causal/CausalAnalysisDetail';
+import { StrategicInsightCard } from '@/components/insights';
 import {
   useCausalHealth,
   useCausalAnalysisHistory,
   useCausalVariables,
   useCausalBrands,
   useDiscoverEffects,
+  useCausalDiscoveryInsight,
   useRunCausalAgentAnalysis,
   useEstimators,
   useClinicalContext,
@@ -210,6 +212,10 @@ export default function CausalAnalysis() {
   const detailResult = detail.data;
   const effects: DiscoveredEffect[] = useMemo(() => job?.effects ?? [], [job]);
   const running = !!job && job.status !== 'completed';
+
+  // Agentic strategic read of the discovered-effects leaderboard (on-demand LLM
+  // interpretation grounded in the real ranked effects).
+  const causalInsight = useCausalDiscoveryInsight();
 
   // ── Manual "Pose your own question" panel ──────────────────────────────────
   const [manualOpen, setManualOpen] = useState(false);
@@ -499,6 +505,37 @@ export default function CausalAnalysis() {
               )}
             </CardContent>
           </Card>
+
+          {/* Agentic strategic interpretation of the ranked effects (always
+              available; grounds an on-demand LLM read in the real discovered
+              effects). */}
+          <StrategicInsightCard
+            isLoading={causalInsight.isPending}
+            error={causalInsight.error?.message ?? null}
+            insight={causalInsight.data?.insight}
+            keyTakeaways={causalInsight.data?.key_takeaways}
+            grounding={causalInsight.data?.grounding}
+            isFallback={causalInsight.data?.is_fallback}
+            provenance={causalInsight.data?.provenance}
+            generatedAt={causalInsight.data?.generated_at}
+            onGenerate={() =>
+              causalInsight.mutate({
+                brand: brandArg ?? 'All brands',
+                grain,
+                effects: (effects ?? [])
+                  .filter((e): e is DiscoveredEffect & { ate: number } => e.ate != null)
+                  .map((e) => ({
+                    treatment: e.treatment,
+                    outcome: e.outcome,
+                    ate: e.ate,
+                    ate_ci_lower: e.ate_ci_lower ?? undefined,
+                    ate_ci_upper: e.ate_ci_upper ?? undefined,
+                    status: e.status,
+                    selected_estimator: e.selected_estimator ?? undefined,
+                  })),
+              })
+            }
+          />
 
           {/* Leaderboard */}
           {!job ? (

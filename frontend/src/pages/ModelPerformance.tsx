@@ -44,6 +44,7 @@ import {
   type MetricDataPoint,
 } from '@/components/visualizations';
 import { KPICard } from '@/components/visualizations/dashboard';
+import { StrategicInsightCard } from '@/components/insights';
 import {
   LineChart,
   Line,
@@ -62,6 +63,7 @@ import {
   useRocCurve,
 } from '@/hooks/api/use-monitoring';
 import { useModelsStatus } from '@/hooks/api/use-predictions';
+import { useModelPerformanceInsight } from '@/hooks/api';
 import type { ModelEndpointHealth } from '@/types/predictions';
 import type {
   ConfusionMatrixResponse,
@@ -337,6 +339,10 @@ function ModelPerformance() {
   });
   const rocQuery = useRocCurve(effectiveModelId, { enabled: !!effectiveModelId });
 
+  // Agentic strategic interpretation of the current model's performance
+  // (on-demand mutation; grounded in the selected model version).
+  const perfInsight = useModelPerformanceInsight();
+
   const accuracyHistory = useMemo(
     () => toMetricDataPoints(trendQuery.data?.history),
     [trendQuery.data?.history]
@@ -495,6 +501,23 @@ function ModelPerformance() {
           />
         </div>
       )}
+
+      {/* Strategic Interpretation — always rendered above the metric KPI cards */}
+      <div className="mb-6">
+        <StrategicInsightCard
+          onGenerate={() => {
+            if (effectiveModelId) perfInsight.mutate({ model_version: effectiveModelId });
+          }}
+          isLoading={perfInsight.isPending}
+          error={perfInsight.error?.message ?? null}
+          insight={perfInsight.data?.insight}
+          keyTakeaways={perfInsight.data?.key_takeaways}
+          grounding={perfInsight.data?.grounding}
+          isFallback={perfInsight.data?.is_fallback}
+          provenance={perfInsight.data?.provenance}
+          generatedAt={perfInsight.data?.generated_at}
+        />
+      </div>
 
       {/* Trend loading skeleton (KPI block) */}
       {isTrendLoading && (

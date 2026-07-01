@@ -367,6 +367,18 @@ describe('Home', () => {
       expect(screen.getByText('(PNH)')).toBeInTheDocument();
       expect(screen.getByText('(HR+/HER2- BC)')).toBeInTheDocument();
     });
+
+    it('shows the All brand without a "Combined Portfolio" indication', async () => {
+      renderWithAllProviders(<Home />);
+
+      const brandSelector = screen.getAllByRole('combobox')[0];
+      fireEvent.click(brandSelector);
+
+      // Dropdown open (specific-brand indications still render)...
+      expect(await screen.findByText('(CSU)')).toBeInTheDocument();
+      // ...but the All option carries no parenthetical indication.
+      expect(screen.queryAllByText('(Combined Portfolio)')).toHaveLength(0);
+    });
   });
 
   // =========================================================================

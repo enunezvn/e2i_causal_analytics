@@ -81,6 +81,7 @@ from src.api.routes.feedback import router as feedback_router
 from src.api.routes.gaps import router as gaps_router
 from src.api.routes.graph import router as graph_router
 from src.api.routes.health_score import router as health_score_router
+from src.api.routes.insights_strategic import router as insights_strategic_router
 from src.api.routes.kpi import router as kpi_router
 from src.api.routes.memory import router as memory_router
 from src.api.routes.metrics import router as metrics_router
@@ -567,6 +568,10 @@ openapi_tags = [
     {
         "name": "Alerts",
         "description": "Real-time SSE stream of sentinel-detected staleness alerts. Per-brand filter at the subscriber layer; drop-oldest backpressure at MAX_QUEUE_DEPTH=100.",
+    },
+    {
+        "name": "Strategic Insights",
+        "description": "Per-page agentic strategic interpretations, each grounded in real data with an honest deterministic fallback when the LLM is unavailable (never fabricated).",
     },
 ]
 
@@ -1101,6 +1106,7 @@ app.include_router(sentinels_router, prefix="/api")
 # Executive insights — crystallized cross-agent narratives (/api/executive-insights/*)
 # JIT provenance verification middleware (registered below) intercepts GETs.
 app.include_router(executive_insights_router, prefix="/api")
+app.include_router(insights_strategic_router, prefix="/api")
 
 # Staleness alerts SSE bridge — Redis pub/sub → CopilotKit (/api/alerts/stream)
 # Subscribes to the ``e2i:alerts`` channel populated by sentinel actions.
