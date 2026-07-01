@@ -18,6 +18,7 @@ from src.insights import (
     model_performance,
     predictive_cohort,
     resource_optimization,
+    treatment_effect,
 )
 from src.insights.common import cache_get, cache_key, cache_set
 
@@ -99,6 +100,20 @@ class ResourceInsightRequest(BaseModel):
     recommendations: list[str] = Field(default_factory=list)
     projected_lift_pct: float | None = None
     solver_status: str | None = None
+
+
+class TreatmentEffectInsightRequest(BaseModel):
+    cohort: str
+    brand: str
+    treatment_var: str
+    outcome_var: str
+    confounders: list[str] = Field(default_factory=list)
+    ate: float
+    ci_lower: float | None = None
+    ci_upper: float | None = None
+    p_value: float | None = None
+    n: int
+    estimator: str | None = None
 
 
 # ---- Endpoints ----------------------------------------------------------------
@@ -213,6 +228,38 @@ async def causal_discovery_insight(
         payload = await asyncio.to_thread(causal_discovery.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Agent-validated discovered effects")
+
+
+@router.post("/treatment-effect", response_model=StrategicInsightResponse)
+async def treatment_effect_insight(
+    req: TreatmentEffectInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Interpret a single de-confounded (cohort, brand) treatment-effect estimate."""
+    g = treatment_effect.build_grounding(
+        req.cohort,
+        req.brand,
+        req.treatment_var,
+        req.outcome_var,
+        list(req.confounders),
+        req.ate,
+        req.ci_lower,
+        req.ci_upper,
+        req.p_value,
+        req.n,
+        req.estimator,
+    )
+    key = cache_key(
+        "treatment-effect",
+        f"{req.cohort}/{req.brand}",
+        {"ate": round(req.ate, 4), "n": req.n},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(treatment_effect.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Live DoWhy+EconML treatment-effect fit")
 
 
 @router.post("/predictive-cohort", response_model=StrategicInsightResponse)

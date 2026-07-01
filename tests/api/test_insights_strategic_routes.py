@@ -108,3 +108,48 @@ def test_knowledge_graph_insight_degrades_on_backend_error(test_client, monkeypa
     data = r.json()
     assert data["is_fallback"] is True
     assert "unavailable" in data["insight"].lower()
+
+
+def test_treatment_effect_insight_fallback(test_client):
+    body = {
+        "cohort": "hcp_adoption",
+        "brand": "Remibrutinib",
+        "treatment_var": "treatment_arm",
+        "outcome_var": "adopted",
+        "confounders": ["peer_influence_score", "influence_network_size"],
+        "ate": 0.1448,
+        "ci_lower": 0.1426,
+        "ci_upper": 0.1470,
+        "p_value": 0.0004,
+        "n": 5000,
+        "estimator": "linear_dml",
+    }
+    r = test_client.post("/api/insights/treatment-effect", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "hcp_adoption" in data["insight"]
+    assert "refutation tests were not run" in data["insight"]
+    assert any(c["label"] == "ATE" for c in data["grounding"])
+    assert data["provenance"]
+    assert data["generated_at"]
+
+
+def test_treatment_effect_insight_ci_straddles_zero(test_client):
+    body = {
+        "cohort": "initiation",
+        "brand": "Fabhalta",
+        "treatment_var": "treatment_arm",
+        "outcome_var": "initiated_180d",
+        "confounders": ["disease_severity"],
+        "ate": 0.01,
+        "ci_lower": -0.02,
+        "ci_upper": 0.04,
+        "p_value": 0.5,
+        "n": 1200,
+        "estimator": "linear_dml",
+    }
+    r = test_client.post("/api/insights/treatment-effect", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "not distinguishable from no effect" in data["insight"]
