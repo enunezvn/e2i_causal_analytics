@@ -6,6 +6,7 @@ import type {
   CausalInsightRequest,
   PredictiveInsightRequest,
   ResourceInsightRequest,
+  TreatmentEffectInsightRequest,
 } from '@/types/insights';
 
 const BASE = '/insights';
@@ -24,3 +25,6 @@ export const getPredictiveCohortInsight = (r: PredictiveInsightRequest) =>
 
 export const getResourceOptimizationInsight = (r: ResourceInsightRequest) =>
   post<StrategicInsightResponse, ResourceInsightRequest>(`${BASE}/resource-optimization`, r);
+
+export const getTreatmentEffectInsight = (r: TreatmentEffectInsightRequest) =>
+  post<StrategicInsightResponse, TreatmentEffectInsightRequest>(`${BASE}/treatment-effect`, r);

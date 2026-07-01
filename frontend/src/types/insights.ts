@@ -49,3 +49,17 @@ export interface ResourceInsightRequest {
   projected_lift_pct?: number | null;
   solver_status?: string | null;
 }
+
+export interface TreatmentEffectInsightRequest {
+  cohort: string;
+  brand: string;
+  treatment_var: string;
+  outcome_var: string;
+  confounders: string[];
+  ate: number;
+  ci_lower?: number | null;
+  ci_upper?: number | null;
+  p_value?: number | null;
+  n: number;
+  estimator?: string | null;
+}
