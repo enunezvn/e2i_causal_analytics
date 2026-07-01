@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from src.insights.common import normalize_list, run_signature
@@ -42,9 +43,12 @@ except ImportError:
 
 def _fmt_num(v: Any, places: int = 4) -> str:
     try:
-        return f"{float(v):+.{places}f}"
+        f = float(v)
     except (TypeError, ValueError):
         return "—"
+    if not math.isfinite(f):
+        return "—"
+    return f"{f:+.{places}f}"
 
 
 def _ci_str(lo: Any, hi: Any) -> str:
@@ -60,6 +64,8 @@ def _p_str(p: Any) -> str:
         pv = float(p)
     except (TypeError, ValueError):
         return "—"
+    if not math.isfinite(pv):
+        return "—"
     return "< 0.001" if pv < 0.001 else f"{pv:.3f}"
 
 
@@ -67,9 +73,12 @@ def _ci_excludes_zero(lo: Any, hi: Any) -> bool | None:
     if lo is None or hi is None:
         return None
     try:
-        return float(lo) > 0.0 or float(hi) < 0.0
+        lo_f, hi_f = float(lo), float(hi)
     except (TypeError, ValueError):
         return None
+    if not (math.isfinite(lo_f) and math.isfinite(hi_f)):
+        return None
+    return lo_f > 0.0 or hi_f < 0.0
 
 
 def build_grounding(
