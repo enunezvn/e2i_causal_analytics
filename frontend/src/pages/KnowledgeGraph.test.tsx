@@ -533,6 +533,23 @@ describe('KnowledgeGraphPage', () => {
   });
 
   // =========================================================================
+  // STRATEGIC INTERPRETATION TESTS
+  // =========================================================================
+  // The shared StrategicInsightCard is wired below the stats cards and above the
+  // graph visualization. It ALWAYS renders its "Strategic Interpretation" header
+  // (the agentic insight is generated lazily via the card's Generate button).
+
+  describe('Strategic Interpretation', () => {
+    it('renders the strategic insight card', async () => {
+      render(<KnowledgeGraphPage />, { wrapper: createWrapper() });
+
+      expect(
+        await screen.findByText(/strategic interpretation/i)
+      ).toBeInTheDocument();
+    });
+  });
+
+  // =========================================================================
   // EMPTY STATE TESTS
   // =========================================================================
 
