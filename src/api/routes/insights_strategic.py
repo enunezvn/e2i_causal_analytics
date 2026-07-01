@@ -106,6 +106,7 @@ class ResourceInsightRequest(BaseModel):
 async def knowledge_graph_insight(
     req: KGInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
+    """Strategic interpretation of the curated knowledge graph for a brand (server-derived grounding)."""
     from src.memory.semantic_memory import get_semantic_memory
 
     brand = None if req.brand == "All" else req.brand
@@ -150,6 +151,7 @@ async def knowledge_graph_insight(
 async def model_performance_insight(
     req: ModelPerfInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
+    """Strategic health diagnosis of a deployed model from live performance metrics."""
     from src.services.performance_tracking import get_performance_tracker
 
     tracker = get_performance_tracker()
@@ -195,6 +197,7 @@ async def model_performance_insight(
 async def causal_discovery_insight(
     req: CausalInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
+    """Portfolio-level interpretation of the discovered-effects leaderboard."""
     g = causal_discovery.build_grounding(
         req.brand, req.grain, [e.model_dump() for e in req.effects]
     )
@@ -210,6 +213,7 @@ async def causal_discovery_insight(
 async def predictive_cohort_insight(
     req: PredictiveInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
+    """Targeting interpretation of a scored cohort (distribution, top targets, SHAP drivers)."""
     g = predictive_cohort.build_grounding(
         req.model_version,
         req.n_scored,
@@ -233,6 +237,7 @@ async def predictive_cohort_insight(
 async def resource_optimization_insight(
     req: ResourceInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
+    """Surface the resource-optimizer agent's existing summary/recommendations."""
     payload = resource_optimization.to_insight(
         req.optimization_summary,
         req.recommendations,

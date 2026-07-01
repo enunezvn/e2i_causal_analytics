@@ -569,6 +569,10 @@ openapi_tags = [
         "name": "Alerts",
         "description": "Real-time SSE stream of sentinel-detected staleness alerts. Per-brand filter at the subscriber layer; drop-oldest backpressure at MAX_QUEUE_DEPTH=100.",
     },
+    {
+        "name": "Strategic Insights",
+        "description": "Per-page agentic strategic interpretations, each grounded in real data with an honest deterministic fallback when the LLM is unavailable (never fabricated).",
+    },
 ]
 
 # =============================================================================
