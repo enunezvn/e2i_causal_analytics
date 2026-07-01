@@ -489,6 +489,12 @@ describe('ModelPerformance', () => {
     expect(screen.getByRole('button', { name: /Export/i })).toBeInTheDocument();
   });
 
+  it('renders the StrategicInsightCard (Strategic Interpretation) above the metrics', async () => {
+    render(<ModelPerformance />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText(/strategic interpretation/i)).toBeInTheDocument();
+  });
+
   it('renders confusion interpretation verdict and ROC band after clicking tabs', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
