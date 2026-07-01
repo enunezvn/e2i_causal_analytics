@@ -579,7 +579,7 @@ export async function getCausalAnalysisHistory(
  *
  * Loads a confounded cohort frame from the DB and runs the live DoWhy+EconML
  * sequential pipeline to recover a de-confounded ATE + CI + p_value + n. This is
- * a HEAVY synchronous compute (~5-30s); call it only when both cohort and brand
+ * a HEAVY synchronous compute (~10-90s); call it only when both cohort and brand
  * are chosen (ideally behind an explicit Run affordance).
  *
  * @param cohort - initiation | persistence | discontinuation | hcp_adoption
@@ -596,10 +596,16 @@ export async function getTreatmentEffects(
   cohort: string,
   brand: string
 ): Promise<TreatmentEffectResponse> {
-  return get<TreatmentEffectResponse>(`${CAUSAL_BASE}/treatment-effects`, {
-    cohort,
-    brand,
-  });
+  return get<TreatmentEffectResponse>(
+    `${CAUSAL_BASE}/treatment-effects`,
+    { cohort, brand },
+    // The DoWhy+EconML fit is a heavy synchronous compute (~40s measured for
+    // hcp_adoption/Remibrutinib; backend budgets 90s via _TE_TIMEOUT_SECONDS,
+    // nginx allows 120s). Override the 30s client default so we wait for the
+    // real estimate instead of aborting mid-fit. A genuine 90s-cap hit still
+    // returns the backend's clean 408, which the UI renders as "unavailable".
+    { timeout: 95000 }
+  );
 }
 
 // =============================================================================

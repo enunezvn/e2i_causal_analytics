@@ -18,7 +18,7 @@
  * @module pages/CausalAnalysis
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -77,9 +77,11 @@ import {
   useEstimators,
   useClinicalContext,
   useTreatmentEffects,
+  useTreatmentEffectInsight,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
-import type { DiscoveredEffect, CohortName } from '@/types/causal';
+import type { DiscoveredEffect, CohortName, TreatmentEffectResponse } from '@/types/causal';
+import type { TreatmentEffectInsightRequest } from '@/types/insights';
 
 // =============================================================================
 // CONSTANTS
@@ -157,6 +159,25 @@ const TE_BRAND_OPTIONS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
 // 4-digit numeric formatter for the treatment-effect readouts ('—' for null).
 function fmt(value: number | null | undefined, digits = 4): string {
   return value === null || value === undefined ? '—' : value.toFixed(digits);
+}
+
+// The grounded strategic-insight request body for a treatment-effect estimate.
+// Built in one place so both the auto-generate effect and the card's manual
+// re-generate stay in sync (module-scope → stable identity, no dep-array churn).
+function buildTeInsightPayload(d: TreatmentEffectResponse): TreatmentEffectInsightRequest {
+  return {
+    cohort: d.cohort,
+    brand: d.brand,
+    treatment_var: d.treatment_var,
+    outcome_var: d.outcome_var,
+    confounders: d.confounders,
+    ate: d.ate,
+    ci_lower: d.ci_lower ?? undefined,
+    ci_upper: d.ci_upper ?? undefined,
+    p_value: d.p_value ?? undefined,
+    n: d.n,
+    estimator: d.estimator ?? undefined,
+  };
 }
 
 function formatCI(lower?: number | null, upper?: number | null): string {
@@ -315,6 +336,20 @@ export default function CausalAnalysis() {
     isError: teIsError,
     error: teError,
   } = useTreatmentEffects(teCohort, teBrand, { enabled: teRun });
+
+  // Agentic strategic read of THIS estimate. Auto-generate once a fresh result
+  // lands (keyed on the estimate identity so it fires once per distinct result,
+  // not on every re-render). Manual re-generate stays available on the card.
+  const teInsight = useTreatmentEffectInsight();
+  const { mutate: generateTeInsight } = teInsight;
+  const teInsightKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!teData) return;
+    const key = `${teData.cohort}-${teData.brand}-${teData.ate}`;
+    if (teInsightKeyRef.current === key) return;
+    teInsightKeyRef.current = key;
+    generateTeInsight(buildTeInsightPayload(teData));
+  }, [teData, generateTeInsight]);
 
   // ── Estimators + History tabs ──────────────────────────────────────────────
   const { data: healthData } = useCausalHealth();
@@ -1026,7 +1061,7 @@ export default function CausalAnalysis() {
 
               <p className="text-xs text-muted-foreground">
                 Runs the live DoWhy + EconML pipeline over the confounded cohort
-                (de-confounded backdoor adjustment). A single fit takes ~5-30s.
+                (de-confounded backdoor adjustment). A single fit takes ~10-90s.
               </p>
 
               {/* States: loading / error (503/408/etc.) / result / prompt */}
@@ -1113,6 +1148,22 @@ export default function CausalAnalysis() {
                       ))}
                     </ul>
                   )}
+
+                  {/* Agentic strategic read of THIS estimate (auto-generated
+                      when the result lands; grounded in the returned ATE/CI/p/n). */}
+                  <StrategicInsightCard
+                    title="Strategic insight"
+                    description="Agentic interpretation of this treatment-effect estimate, grounded in the returned ATE, CI, p-value, and n."
+                    isLoading={teInsight.isPending}
+                    error={teInsight.error?.message ?? null}
+                    insight={teInsight.data?.insight}
+                    keyTakeaways={teInsight.data?.key_takeaways}
+                    grounding={teInsight.data?.grounding}
+                    isFallback={teInsight.data?.is_fallback}
+                    provenance={teInsight.data?.provenance}
+                    generatedAt={teInsight.data?.generated_at}
+                    onGenerate={() => generateTeInsight(buildTeInsightPayload(teData))}
+                  />
                 </div>
               )}
 

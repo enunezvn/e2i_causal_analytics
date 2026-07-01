@@ -37,6 +37,7 @@ vi.mock('@/hooks/api', () => ({
   useEstimators: vi.fn(),
   useClinicalContext: vi.fn(),
   useTreatmentEffects: vi.fn(),
+  useTreatmentEffectInsight: vi.fn(),
 }));
 
 vi.mock('@/api/causal', () => ({
@@ -54,6 +55,7 @@ import {
   useEstimators,
   useClinicalContext,
   useTreatmentEffects,
+  useTreatmentEffectInsight,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 
@@ -172,6 +174,12 @@ describe('CausalAnalysis — unified agent-led page', () => {
       isFetching: false,
       isError: false,
       error: null,
+    });
+    (useTreatmentEffectInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+      data: undefined,
     });
     (getCausalAgentAnalysis as ReturnType<typeof vi.fn>).mockResolvedValue(DETAIL);
     mockDiscover();
@@ -421,5 +429,54 @@ describe('CausalAnalysis — unified agent-led page', () => {
     expect(screen.getByLabelText(/^Cohort$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Brand$/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /run estimate/i })).toBeInTheDocument();
+  }, 20000);
+
+  it('auto-generates the treatment-effect strategic insight once a result lands', async () => {
+    const mutate = vi.fn();
+    (useTreatmentEffectInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate,
+      isPending: false,
+      error: null,
+      data: undefined,
+    });
+    (useTreatmentEffects as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        cohort: 'hcp_adoption',
+        brand: 'Remibrutinib',
+        treatment_var: 'treatment_arm',
+        outcome_var: 'adopted',
+        confounders: ['peer_influence_score', 'influence_network_size'],
+        ate: 0.1448,
+        ci_lower: 0.1426,
+        ci_upper: 0.147,
+        p_value: 0.0004,
+        std_error: 0.001,
+        n: 5000,
+        estimator: 'linear_dml',
+        method: 'dowhy+econml sequential',
+        confidence_level: 0.95,
+        latency_ms: 40000,
+        is_synthetic: true,
+        warnings: ['robustness not validated'],
+      },
+      isFetching: false,
+      isError: false,
+      error: null,
+    });
+    const { rerender } = render(<CausalAnalysis />, { wrapper: createWrapper() });
+    await userEvent.click(screen.getByRole('tab', { name: /Treatment effects/i }));
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cohort: 'hcp_adoption',
+        brand: 'Remibrutinib',
+        ate: 0.1448,
+        n: 5000,
+      })
+    );
+    // teData is pre-loaded, so the effect fires on mount; re-rendering with the
+    // same estimate must NOT re-fire the mutation (ref-guard keyed on cohort-brand-ate).
+    rerender(<CausalAnalysis />);
+    expect(mutate).toHaveBeenCalledTimes(1);
   }, 20000);
 });

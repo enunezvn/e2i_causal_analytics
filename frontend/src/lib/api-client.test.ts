@@ -411,6 +411,21 @@ describe('Request Helpers', () => {
         paramsSerializer: { indexes: null },
       });
     });
+
+    it('forwards a per-call timeout into the axios config', async () => {
+      vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { ok: true } } as never);
+      await get('/heavy', { a: 1 }, { timeout: 95000 });
+      expect(apiClient.get).toHaveBeenCalledWith('/heavy', {
+        params: { a: 1 },
+        timeout: 95000,
+      });
+    });
+
+    it('omits timeout from the axios config when not provided', async () => {
+      vi.mocked(apiClient.get).mockResolvedValueOnce({ data: { ok: true } } as never);
+      await get('/light', { a: 1 });
+      expect(apiClient.get).toHaveBeenCalledWith('/light', { params: { a: 1 } });
+    });
   });
 
   describe('post', () => {

@@ -184,4 +184,5 @@ export {
   useCausalDiscoveryInsight,
   usePredictiveCohortInsight,
   useResourceOptimizationInsight,
+  useTreatmentEffectInsight,
 } from './use-insights';
