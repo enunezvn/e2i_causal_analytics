@@ -32,6 +32,7 @@ vi.mock('@/hooks/api', () => ({
   useCausalVariables: vi.fn(),
   useCausalBrands: vi.fn(),
   useDiscoverEffects: vi.fn(),
+  useCausalDiscoveryInsight: vi.fn(),
   useRunCausalAgentAnalysis: vi.fn(),
   useEstimators: vi.fn(),
   useClinicalContext: vi.fn(),
@@ -48,6 +49,7 @@ import {
   useCausalVariables,
   useCausalBrands,
   useDiscoverEffects,
+  useCausalDiscoveryInsight,
   useRunCausalAgentAnalysis,
   useEstimators,
   useClinicalContext,
@@ -158,6 +160,12 @@ describe('CausalAnalysis — unified agent-led page', () => {
       isError: false,
       error: null,
     });
+    (useCausalDiscoveryInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+      error: null,
+      data: undefined,
+    });
     (useClinicalContext as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
     (useTreatmentEffects as ReturnType<typeof vi.fn>).mockReturnValue({
       data: undefined,
@@ -172,6 +180,13 @@ describe('CausalAnalysis — unified agent-led page', () => {
   it('lands on the leaderboard with an honest empty state before any run', () => {
     render(<CausalAnalysis />, { wrapper: createWrapper() });
     expect(screen.getByText(/No discovery run yet/i)).toBeInTheDocument();
+  }, 20000);
+
+  it('renders the strategic interpretation card on the (default) leaderboard tab', async () => {
+    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    // The shared StrategicInsightCard always renders its "Strategic Interpretation"
+    // header on the landing (Leaderboard) tab, even before a discovery run.
+    expect(await screen.findByText(/strategic interpretation/i)).toBeInTheDocument();
   }, 20000);
 
   it('offers grain + brand facets; brand defaults to all (null) for the patient grain', () => {
