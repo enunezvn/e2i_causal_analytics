@@ -112,7 +112,7 @@ interface AgentInsight {
 // =============================================================================
 
 const BRANDS: { value: Brand; label: string; indication: string; color: string }[] = [
-  { value: 'All', label: 'All Brands', indication: 'Combined Portfolio', color: 'bg-slate-500' },
+  { value: 'All', label: 'All Brands', indication: '', color: 'bg-slate-500' },
   { value: 'Remibrutinib', label: 'Remibrutinib', indication: 'CSU', color: 'bg-blue-500' },
   { value: 'Fabhalta', label: 'Fabhalta', indication: 'PNH', color: 'bg-purple-500' },
   { value: 'Kisqali', label: 'Kisqali', indication: 'HR+/HER2- BC', color: 'bg-rose-500' },
@@ -886,10 +886,14 @@ function Home() {
             <SelectContent>
               {BRANDS.map((brand) => (
                 <SelectItem key={brand.value} value={brand.value}>
-                  <div className="flex items-center gap-2">
-                    <div className={cn('w-2 h-2 rounded-full', brand.color)} />
-                    <span>{brand.label}</span>
-                    <span className="text-xs text-muted-foreground">({brand.indication})</span>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div className={cn('w-2 h-2 rounded-full shrink-0', brand.color)} />
+                    <span className="truncate">{brand.label}</span>
+                    {brand.indication && (
+                      <span className="text-xs text-muted-foreground truncate">
+                        ({brand.indication})
+                      </span>
+                    )}
                   </div>
                 </SelectItem>
               ))}
