@@ -141,8 +141,10 @@ async def knowledge_graph_insight(
         )
     key = cache_key("knowledge-graph", req.brand, {"n": g["node_summary"], "e": g["edge_summary"]})
     cached = await cache_get(key)
-    payload = cached or await asyncio.to_thread(knowledge_graph.generate_insight, g)
-    if not cached:
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(knowledge_graph.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Curated knowledge graph (server-derived)")
 
@@ -187,8 +189,10 @@ async def model_performance_insight(
         {"a": g["accuracy_summary"], "c": g["confusion_summary"]},
     )
     cached = await cache_get(key)
-    payload = cached or await asyncio.to_thread(model_performance.generate_insight, g)
-    if not cached:
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(model_performance.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Live model-performance metrics (server-derived)")
 
@@ -203,8 +207,10 @@ async def causal_discovery_insight(
     )
     key = cache_key("causal-discovery", req.brand, {"t": g["effects_table"]})
     cached = await cache_get(key)
-    payload = cached or await asyncio.to_thread(causal_discovery.generate_insight, g)
-    if not cached:
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(causal_discovery.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Agent-validated discovered effects")
 
@@ -227,8 +233,10 @@ async def predictive_cohort_insight(
         {"d": g["distribution_summary"], "t": g["top_targets_summary"]},
     )
     cached = await cache_get(key)
-    payload = cached or await asyncio.to_thread(predictive_cohort.generate_insight, g)
-    if not cached:
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(predictive_cohort.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Out-of-sample scored cohort + SHAP")
 
