@@ -463,7 +463,7 @@ describe('CausalAnalysis — unified agent-led page', () => {
       isError: false,
       error: null,
     });
-    render(<CausalAnalysis />, { wrapper: createWrapper() });
+    const { rerender } = render(<CausalAnalysis />, { wrapper: createWrapper() });
     await userEvent.click(screen.getByRole('tab', { name: /Treatment effects/i }));
     expect(mutate).toHaveBeenCalledTimes(1);
     expect(mutate).toHaveBeenCalledWith(
@@ -474,5 +474,9 @@ describe('CausalAnalysis — unified agent-led page', () => {
         n: 5000,
       })
     );
+    // teData is pre-loaded, so the effect fires on mount; re-rendering with the
+    // same estimate must NOT re-fire the mutation (ref-guard keyed on cohort-brand-ate).
+    rerender(<CausalAnalysis />);
+    expect(mutate).toHaveBeenCalledTimes(1);
   }, 20000);
 });

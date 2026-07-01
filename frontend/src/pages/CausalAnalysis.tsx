@@ -80,7 +80,8 @@ import {
   useTreatmentEffectInsight,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
-import type { DiscoveredEffect, CohortName } from '@/types/causal';
+import type { DiscoveredEffect, CohortName, TreatmentEffectResponse } from '@/types/causal';
+import type { TreatmentEffectInsightRequest } from '@/types/insights';
 
 // =============================================================================
 // CONSTANTS
@@ -158,6 +159,25 @@ const TE_BRAND_OPTIONS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
 // 4-digit numeric formatter for the treatment-effect readouts ('—' for null).
 function fmt(value: number | null | undefined, digits = 4): string {
   return value === null || value === undefined ? '—' : value.toFixed(digits);
+}
+
+// The grounded strategic-insight request body for a treatment-effect estimate.
+// Built in one place so both the auto-generate effect and the card's manual
+// re-generate stay in sync (module-scope → stable identity, no dep-array churn).
+function buildTeInsightPayload(d: TreatmentEffectResponse): TreatmentEffectInsightRequest {
+  return {
+    cohort: d.cohort,
+    brand: d.brand,
+    treatment_var: d.treatment_var,
+    outcome_var: d.outcome_var,
+    confounders: d.confounders,
+    ate: d.ate,
+    ci_lower: d.ci_lower ?? undefined,
+    ci_upper: d.ci_upper ?? undefined,
+    p_value: d.p_value ?? undefined,
+    n: d.n,
+    estimator: d.estimator ?? undefined,
+  };
 }
 
 function formatCI(lower?: number | null, upper?: number | null): string {
@@ -328,19 +348,7 @@ export default function CausalAnalysis() {
     const key = `${teData.cohort}-${teData.brand}-${teData.ate}`;
     if (teInsightKeyRef.current === key) return;
     teInsightKeyRef.current = key;
-    generateTeInsight({
-      cohort: teData.cohort,
-      brand: teData.brand,
-      treatment_var: teData.treatment_var,
-      outcome_var: teData.outcome_var,
-      confounders: teData.confounders,
-      ate: teData.ate,
-      ci_lower: teData.ci_lower ?? undefined,
-      ci_upper: teData.ci_upper ?? undefined,
-      p_value: teData.p_value ?? undefined,
-      n: teData.n,
-      estimator: teData.estimator ?? undefined,
-    });
+    generateTeInsight(buildTeInsightPayload(teData));
   }, [teData, generateTeInsight]);
 
   // ── Estimators + History tabs ──────────────────────────────────────────────
@@ -1154,21 +1162,7 @@ export default function CausalAnalysis() {
                     isFallback={teInsight.data?.is_fallback}
                     provenance={teInsight.data?.provenance}
                     generatedAt={teInsight.data?.generated_at}
-                    onGenerate={() =>
-                      generateTeInsight({
-                        cohort: teData.cohort,
-                        brand: teData.brand,
-                        treatment_var: teData.treatment_var,
-                        outcome_var: teData.outcome_var,
-                        confounders: teData.confounders,
-                        ate: teData.ate,
-                        ci_lower: teData.ci_lower ?? undefined,
-                        ci_upper: teData.ci_upper ?? undefined,
-                        p_value: teData.p_value ?? undefined,
-                        n: teData.n,
-                        estimator: teData.estimator ?? undefined,
-                      })
-                    }
+                    onGenerate={() => generateTeInsight(buildTeInsightPayload(teData))}
                   />
                 </div>
               )}
