@@ -8,8 +8,8 @@ manually on the droplet (plan Task 12).
 """
 import pytest
 
-from src.api.main import app
 from src.api.dependencies.auth import require_analyst
+from src.api.main import app
 
 
 @pytest.fixture(autouse=True)
