@@ -44,7 +44,17 @@ def build_grounding(
     rel_count: int,
 ) -> dict[str, Any]:
     node_types: Counter = Counter(n.get("type", "Unknown") for n in nodes)
-    node_summary = f"{node_count} nodes total: " + ", ".join(
+    # The type breakdown is computed over the fetched `nodes` (a bounded sample);
+    # label it as "analyzed" so the sum stays consistent, and note the true taxonomy
+    # total separately when it is larger (never present a breakdown that sums to a
+    # different number than the headline — that reads as fabricated).
+    analyzed = len(nodes)
+    total_note = (
+        f" (of {node_count} in the shared node taxonomy)"
+        if isinstance(node_count, int) and node_count > analyzed
+        else ""
+    )
+    node_summary = f"{analyzed} nodes analyzed{total_note}: " + ", ".join(
         f"{t}={c}" for t, c in node_types.most_common()
     )
     degree: Counter = Counter()
@@ -65,7 +75,10 @@ def build_grounding(
     ) or "none"
     edge_types: Counter = Counter(r.get("type", "?") for r in relationships)
     confs = [float(r.get("confidence") or 0) for r in relationships if r.get("confidence")]
-    edge_summary = f"{rel_count} relationships: " + ", ".join(
+    # Edges are scoped (the route filters relationships to the brand when one is
+    # selected) while nodes are the shared/global taxonomy — make that explicit so a
+    # brand view with few edges is not misread as a globally sparse graph.
+    edge_summary = f"{rel_count} relationships in scope ({scope}): " + ", ".join(
         f"{t}={c}" for t, c in edge_types.most_common()
     )
     if confs:
@@ -77,7 +90,7 @@ def build_grounding(
         "key_paths": key_paths,
         "edge_summary": edge_summary,
         "grounding": [
-            {"label": "Nodes", "value": str(node_count)},
+            {"label": "Nodes", "value": str(analyzed)},
             {"label": "Relationships", "value": str(rel_count)},
             {"label": "Node types", "value": str(len(node_types))},
         ],

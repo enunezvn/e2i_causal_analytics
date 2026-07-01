@@ -68,3 +68,31 @@ def test_resource_optimization_insight_surfaces_summary(test_client):
     assert data["is_fallback"] is False
     assert "high-ROI" in data["insight"]
     assert any(c["label"] == "Projected lift" for c in data["grounding"])
+
+
+def test_model_performance_insight_degrades_on_backend_error(test_client, monkeypatch):
+    """Backend unreachable -> honest is_fallback response, NOT a 500 (codex BUG 1)."""
+    async def _boom(*a, **k):
+        raise RuntimeError("supabase unreachable")
+
+    monkeypatch.setattr(
+        "src.services.performance_tracking.PerformanceTracker.get_performance_trend", _boom
+    )
+    r = test_client.post("/api/insights/model-performance", json={"model_version": "m1"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "unavailable" in data["insight"].lower()
+
+
+def test_knowledge_graph_insight_degrades_on_backend_error(test_client, monkeypatch):
+    """FalkorDB/semantic-memory unreachable -> honest is_fallback response, NOT a 500."""
+    def _boom(*a, **k):
+        raise RuntimeError("falkordb unreachable")
+
+    monkeypatch.setattr("src.memory.semantic_memory.get_semantic_memory", _boom)
+    r = test_client.post("/api/insights/knowledge-graph", json={"brand": "All"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "unavailable" in data["insight"].lower()

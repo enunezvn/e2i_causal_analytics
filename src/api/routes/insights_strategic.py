@@ -107,10 +107,10 @@ async def knowledge_graph_insight(
 ) -> StrategicInsightResponse:
     from src.memory.semantic_memory import get_semantic_memory
 
-    sm = get_semantic_memory()
     brand = None if req.brand == "All" else req.brand
 
     def _load() -> dict[str, Any]:
+        sm = get_semantic_memory()
         nodes = sm.list_nodes(limit=500, curated_only=req.curated_only)
         rels = sm.list_relationships(limit=500, curated_only=req.curated_only)
         if brand:  # scope edges to the brand when the property is present
@@ -124,7 +124,20 @@ async def knowledge_graph_insight(
             rel_count=len(rels),
         )
 
-    g = await asyncio.to_thread(_load)
+    try:
+        g = await asyncio.to_thread(_load)
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("KG insight grounding unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": "The knowledge graph is currently unavailable, so no "
+                "grounded interpretation can be produced right now.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Curated knowledge graph (unavailable)",
+        )
     key = cache_key("knowledge-graph", req.brand,
                     {"n": g["node_summary"], "e": g["edge_summary"]})
     cached = await cache_get(key)
@@ -141,19 +154,32 @@ async def model_performance_insight(
     from src.services.performance_tracking import get_performance_tracker
 
     tracker = get_performance_tracker()
-    trend = await tracker.get_performance_trend(req.model_version, "accuracy")
-    confusion = await tracker.get_confusion_matrix(req.model_version)
-    roc = await tracker.get_roc_curve(req.model_version)
-    alerts = await tracker.check_performance_alerts(req.model_version)
-    g = model_performance.build_grounding(
-        model_version=req.model_version,
-        current_accuracy=float(getattr(trend, "current_value", 0.0) or 0.0),
-        baseline_accuracy=float(getattr(trend, "baseline_value", 0.0) or 0.0),
-        trend=str(getattr(trend, "trend", "stable")),
-        confusion=confusion,
-        auc=(float(roc["auc"]) if roc and roc.get("auc") is not None else None),
-        alerts=alerts,
-    )
+    try:
+        trend = await tracker.get_performance_trend(req.model_version, "accuracy")
+        confusion = await tracker.get_confusion_matrix(req.model_version)
+        roc = await tracker.get_roc_curve(req.model_version)
+        alerts = await tracker.check_performance_alerts(req.model_version)
+        g = model_performance.build_grounding(
+            model_version=req.model_version,
+            current_accuracy=float(getattr(trend, "current_value", 0.0) or 0.0),
+            baseline_accuracy=float(getattr(trend, "baseline_value", 0.0) or 0.0),
+            trend=str(getattr(trend, "trend", "stable")),
+            confusion=confusion,
+            auc=(float(roc["auc"]) if roc and roc.get("auc") is not None else None),
+            alerts=alerts,
+        )
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("model-performance insight metrics unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": f"Performance metrics for {req.model_version} are currently "
+                "unavailable, so no grounded interpretation can be produced.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Live model-performance metrics (unavailable)",
+        )
     key = cache_key("model-performance", req.model_version,
                     {"a": g["accuracy_summary"], "c": g["confusion_summary"]})
     cached = await cache_get(key)

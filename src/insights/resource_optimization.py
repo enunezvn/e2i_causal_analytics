@@ -13,6 +13,13 @@ def to_insight(
     projected_lift_pct: float | None,
     solver_status: str | None,
 ) -> dict[str, Any]:
+    # NOTE on is_fallback semantics (intentional, differs from the LLM endpoints):
+    # this endpoint never calls an LLM — it surfaces the resource-optimizer agent's
+    # EXISTING summary/recommendations. So is_fallback=False when a real summary is
+    # present (it is genuine agent output, NOT a degraded LLM fallback — the card must
+    # not show a "LLM unavailable" badge over real agent text), and is_fallback=True
+    # only when there is no summary yet (no optimization run). The provenance label
+    # ("Resource optimizer (existing agent output)") disambiguates on the client.
     summary = (optimization_summary or "").strip()
     recs = normalize_list(recommendations or [])
     grounding: list[dict[str, str]] = [{"label": "Solver", "value": str(solver_status or "unknown")}]
