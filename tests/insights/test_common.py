@@ -1,4 +1,8 @@
-from src.insights.common import normalize_list, run_signature, cache_key
+import asyncio
+
+import pytest
+
+from src.insights.common import cache_get, cache_key, cache_set, normalize_list, run_signature
 
 
 def test_normalize_list_from_str_splits_lines():
@@ -25,3 +29,25 @@ def test_cache_key_is_stable_and_input_sensitive():
     k3 = cache_key("knowledge-graph", "Kisqali", {"n": 11})
     assert k1 == k2 and k1 != k3
     assert k1.startswith("insight:knowledge-graph:")
+
+
+def test_cache_roundtrip_when_redis_available():
+    """Prove cache_set/cache_get actually round-trip against a LIVE redis (async
+    client). Skips when redis is unavailable (e.g. CI) — no mocking."""
+    async def _run():
+        import src.memory.services.factories as fac
+
+        # Force a fresh client bound to THIS event loop (redis.asyncio is loop-bound).
+        fac._redis_client = None
+        try:
+            await fac.get_redis_client().ping()
+        except Exception:
+            return "UNAVAILABLE"
+        key = cache_key("test", "roundtrip", {"x": 1})
+        await cache_set(key, {"insight": "hi", "is_fallback": True}, ttl_seconds=30)
+        return await cache_get(key)
+
+    got = asyncio.run(_run())
+    if got == "UNAVAILABLE":
+        pytest.skip("redis unavailable")
+    assert got is not None and got["insight"] == "hi" and got["is_fallback"] is True

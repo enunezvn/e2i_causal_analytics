@@ -75,6 +75,7 @@ from src.api.routes.copilotkit import router as copilotkit_router
 from src.api.routes.digital_twin import router as digital_twin_router
 from src.api.routes.executive_insights import router as executive_insights_router
 from src.api.routes.experiments import router as experiments_router
+from src.api.routes.insights_strategic import router as insights_strategic_router
 from src.api.routes.expert_review import router as expert_review_router
 from src.api.routes.explain import router as explain_router
 from src.api.routes.feedback import router as feedback_router
@@ -1101,6 +1102,7 @@ app.include_router(sentinels_router, prefix="/api")
 # Executive insights — crystallized cross-agent narratives (/api/executive-insights/*)
 # JIT provenance verification middleware (registered below) intercepts GETs.
 app.include_router(executive_insights_router, prefix="/api")
+app.include_router(insights_strategic_router, prefix="/api")
 
 # Staleness alerts SSE bridge — Redis pub/sub → CopilotKit (/api/alerts/stream)
 # Subscribes to the ``e2i:alerts`` channel populated by sentinel actions.

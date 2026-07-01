@@ -57,21 +57,22 @@ def cache_key(page: str, scope: str, inputs: dict[str, Any]) -> str:
     return f"insight:{page}:{scope}:{digest}"
 
 
-def cache_get(key: str) -> Optional[dict]:
+async def cache_get(key: str) -> Optional[dict]:
+    # get_redis_client() returns an async client (redis.asyncio.Redis).
     try:
         from src.memory.services.factories import get_redis_client
 
-        raw = get_redis_client().get(key)
+        raw = await get_redis_client().get(key)
         return json.loads(raw) if raw else None
     except Exception as e:  # noqa: BLE001 — cache is best-effort
         logger.debug("insight cache_get miss/error: %s", e)
         return None
 
 
-def cache_set(key: str, value: dict, ttl_seconds: int = 3600) -> None:
+async def cache_set(key: str, value: dict, ttl_seconds: int = 3600) -> None:
     try:
         from src.memory.services.factories import get_redis_client
 
-        get_redis_client().setex(key, ttl_seconds, json.dumps(value, default=str))
+        await get_redis_client().setex(key, ttl_seconds, json.dumps(value, default=str))
     except Exception as e:  # noqa: BLE001 — cache is best-effort
         logger.debug("insight cache_set skipped: %s", e)
