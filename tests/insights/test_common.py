@@ -34,6 +34,7 @@ def test_cache_key_is_stable_and_input_sensitive():
 def test_cache_roundtrip_when_redis_available():
     """Prove cache_set/cache_get actually round-trip against a LIVE redis (async
     client). Skips when redis is unavailable (e.g. CI) — no mocking."""
+
     async def _run():
         import src.memory.services.factories as fac
 

@@ -1,4 +1,5 @@
 """Model-performance strategic insight: diagnose a model's health + next action."""
+
 from __future__ import annotations
 
 import logging
@@ -20,9 +21,7 @@ try:
 
         model_version: str = dspy.InputField(desc="Model version/identifier")
         accuracy_summary: str = dspy.InputField(desc="Current vs baseline accuracy + trend")
-        confusion_summary: str = dspy.InputField(
-            desc="Precision, recall, specificity, F1 + counts"
-        )
+        confusion_summary: str = dspy.InputField(desc="Precision, recall, specificity, F1 + counts")
         auc_summary: str = dspy.InputField(desc="ROC AUC")
         alerts_summary: str = dspy.InputField(desc="Active performance alerts (or none)")
 
@@ -82,7 +81,8 @@ def build_grounding(
     alerts = alerts or []
     alerts_summary = (
         "; ".join(f"{a.get('metric_name')} ({a.get('severity')})" for a in alerts)
-        if alerts else "no active alerts"
+        if alerts
+        else "no active alerts"
     )
     return {
         "model_version": model_version,

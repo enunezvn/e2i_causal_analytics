@@ -1,4 +1,5 @@
 """Knowledge-graph strategic insight: interpret the curated KG for a brand."""
+
 from __future__ import annotations
 
 import logging
@@ -63,16 +64,22 @@ def build_grounding(
     for r in relationships:
         degree[r.get("source_id")] += 1
         degree[r.get("target_id")] += 1
-    top_hubs = "; ".join(
-        f"{name_by_id.get(nid, nid)} ({type_by_id.get(nid, '?')}, degree {d})"
-        for nid, d in degree.most_common(5)
-    ) or "none"
-    key_paths = "; ".join(
-        f"{name_by_id.get(r.get('source_id'), r.get('source_id'))} -{r.get('type')}-> "
-        f"{name_by_id.get(r.get('target_id'), r.get('target_id'))} "
-        f"(conf {float(r.get('confidence') or 0):.2f})"
-        for r in relationships[:6]
-    ) or "none"
+    top_hubs = (
+        "; ".join(
+            f"{name_by_id.get(nid, nid)} ({type_by_id.get(nid, '?')}, degree {d})"
+            for nid, d in degree.most_common(5)
+        )
+        or "none"
+    )
+    key_paths = (
+        "; ".join(
+            f"{name_by_id.get(r.get('source_id'), r.get('source_id'))} -{r.get('type')}-> "
+            f"{name_by_id.get(r.get('target_id'), r.get('target_id'))} "
+            f"(conf {float(r.get('confidence') or 0):.2f})"
+            for r in relationships[:6]
+        )
+        or "none"
+    )
     edge_types: Counter = Counter(r.get("type", "?") for r in relationships)
     confs = [float(r.get("confidence") or 0) for r in relationships if r.get("confidence")]
     # Edges are scoped (the route filters relationships to the brand when one is

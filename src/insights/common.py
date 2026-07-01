@@ -4,6 +4,7 @@ Every insight is grounded in real, caller-provided numbers. When DSPy/the LM is
 unavailable (e.g. no OPENAI_API_KEY in CI) run_signature returns None and the
 caller renders a deterministic factual fallback — never fabricated content.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -51,9 +52,9 @@ def run_signature(signature_cls: Any, **inputs: Any):
 
 
 def cache_key(page: str, scope: str, inputs: dict[str, Any]) -> str:
-    digest = hashlib.sha256(
-        json.dumps(inputs, sort_keys=True, default=str).encode()
-    ).hexdigest()[:16]
+    digest = hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[
+        :16
+    ]
     return f"insight:{page}:{scope}:{digest}"
 
 

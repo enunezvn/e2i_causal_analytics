@@ -16,7 +16,9 @@ def test_to_insight_surfaces_existing_summary():
 
 def test_to_insight_empty_summary_is_fallback():
     out = to_insight(
-        optimization_summary="", recommendations=[], projected_lift_pct=None,
+        optimization_summary="",
+        recommendations=[],
+        projected_lift_pct=None,
         solver_status="infeasible",
     )
     assert out["is_fallback"] is True

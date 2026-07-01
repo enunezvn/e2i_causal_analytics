@@ -1,5 +1,6 @@
 """Per-page strategic-insight endpoints. Each grounds an LLM interpretation in REAL
 data with an honest deterministic fallback (no OPENAI_API_KEY -> is_fallback=True)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -114,12 +115,11 @@ async def knowledge_graph_insight(
         nodes = sm.list_nodes(limit=500, curated_only=req.curated_only)
         rels = sm.list_relationships(limit=500, curated_only=req.curated_only)
         if brand:  # scope edges to the brand when the property is present
-            rels = [
-                r for r in rels
-                if (r.get("properties") or {}).get("brand") in (None, brand)
-            ]
+            rels = [r for r in rels if (r.get("properties") or {}).get("brand") in (None, brand)]
         return knowledge_graph.build_grounding(
-            req.brand, nodes, rels,
+            req.brand,
+            nodes,
+            rels,
             node_count=sm.count_nodes(curated_only=req.curated_only),
             rel_count=len(rels),
         )
@@ -138,8 +138,7 @@ async def knowledge_graph_insight(
             },
             provenance="Curated knowledge graph (unavailable)",
         )
-    key = cache_key("knowledge-graph", req.brand,
-                    {"n": g["node_summary"], "e": g["edge_summary"]})
+    key = cache_key("knowledge-graph", req.brand, {"n": g["node_summary"], "e": g["edge_summary"]})
     cached = await cache_get(key)
     payload = cached or await asyncio.to_thread(knowledge_graph.generate_insight, g)
     if not cached:
@@ -180,8 +179,11 @@ async def model_performance_insight(
             },
             provenance="Live model-performance metrics (unavailable)",
         )
-    key = cache_key("model-performance", req.model_version,
-                    {"a": g["accuracy_summary"], "c": g["confusion_summary"]})
+    key = cache_key(
+        "model-performance",
+        req.model_version,
+        {"a": g["accuracy_summary"], "c": g["confusion_summary"]},
+    )
     cached = await cache_get(key)
     payload = cached or await asyncio.to_thread(model_performance.generate_insight, g)
     if not cached:
@@ -209,12 +211,17 @@ async def predictive_cohort_insight(
     req: PredictiveInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
     g = predictive_cohort.build_grounding(
-        req.model_version, req.n_scored, req.mean_prob,
+        req.model_version,
+        req.n_scored,
+        req.mean_prob,
         [t.model_dump() for t in req.top_targets],
         [d.model_dump() for d in req.top_drivers],
     )
-    key = cache_key("predictive-cohort", req.model_version,
-                    {"d": g["distribution_summary"], "t": g["top_targets_summary"]})
+    key = cache_key(
+        "predictive-cohort",
+        req.model_version,
+        {"d": g["distribution_summary"], "t": g["top_targets_summary"]},
+    )
     cached = await cache_get(key)
     payload = cached or await asyncio.to_thread(predictive_cohort.generate_insight, g)
     if not cached:
@@ -227,7 +234,9 @@ async def resource_optimization_insight(
     req: ResourceInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
     payload = resource_optimization.to_insight(
-        req.optimization_summary, req.recommendations,
-        req.projected_lift_pct, req.solver_status,
+        req.optimization_summary,
+        req.recommendations,
+        req.projected_lift_pct,
+        req.solver_status,
     )
     return _finalize(payload, provenance="Resource optimizer (existing agent output)")

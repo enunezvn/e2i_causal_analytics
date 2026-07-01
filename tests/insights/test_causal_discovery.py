@@ -1,12 +1,24 @@
 from src.insights.causal_discovery import build_grounding, generate_insight
 
 EFFECTS = [
-    {"treatment": "copay_card", "outcome": "adherence_180d", "ate": 0.043,
-     "ate_ci_lower": 0.02, "ate_ci_upper": 0.066, "status": "proceed",
-     "selected_estimator": "CausalForestDML"},
-    {"treatment": "nurse_call", "outcome": "adherence_180d", "ate": 0.011,
-     "ate_ci_lower": -0.01, "ate_ci_upper": 0.03, "status": "review",
-     "selected_estimator": "LinearDML"},
+    {
+        "treatment": "copay_card",
+        "outcome": "adherence_180d",
+        "ate": 0.043,
+        "ate_ci_lower": 0.02,
+        "ate_ci_upper": 0.066,
+        "status": "proceed",
+        "selected_estimator": "CausalForestDML",
+    },
+    {
+        "treatment": "nurse_call",
+        "outcome": "adherence_180d",
+        "ate": 0.011,
+        "ate_ci_lower": -0.01,
+        "ate_ci_upper": 0.03,
+        "status": "review",
+        "selected_estimator": "LinearDML",
+    },
 ]
 
 

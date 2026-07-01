@@ -1,5 +1,6 @@
 """Adapt the resource-optimizer's existing summary/recommendations to the uniform
 strategic-insight payload (no new LLM call — surfaces what the agent already made)."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -22,7 +23,9 @@ def to_insight(
     # ("Resource optimizer (existing agent output)") disambiguates on the client.
     summary = (optimization_summary or "").strip()
     recs = normalize_list(recommendations or [])
-    grounding: list[dict[str, str]] = [{"label": "Solver", "value": str(solver_status or "unknown")}]
+    grounding: list[dict[str, str]] = [
+        {"label": "Solver", "value": str(solver_status or "unknown")}
+    ]
     if projected_lift_pct is not None:
         grounding.insert(0, {"label": "Projected lift", "value": f"{projected_lift_pct:+.1f}%"})
     if not summary:

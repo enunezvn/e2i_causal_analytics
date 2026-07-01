@@ -7,6 +7,7 @@ deterministic. It is NOT mocking insight values: the fallback computes real grou
 text from the real inputs. The live LLM path is verified manually (plan Task 12),
 outside pytest.
 """
+
 import pytest
 
 

@@ -1,4 +1,5 @@
 """Predictive-cohort strategic insight: who to target and why (cohort + SHAP)."""
+
 from __future__ import annotations
 
 import logging
@@ -40,12 +41,19 @@ def build_grounding(
     top_drivers: list[dict[str, Any]],
 ) -> dict[str, Any]:
     distribution_summary = f"{n_scored} entities scored, mean probability {mean_prob:.3f}"
-    top_targets_summary = "; ".join(
-        f"{t.get('entity_id')} ({float(t.get('probability') or 0):.2f})" for t in top_targets[:5]
-    ) or "none"
-    drivers_summary = "; ".join(
-        f"{d.get('feature')} ({float(d.get('importance') or 0):.2f})" for d in top_drivers[:5]
-    ) or "none"
+    top_targets_summary = (
+        "; ".join(
+            f"{t.get('entity_id')} ({float(t.get('probability') or 0):.2f})"
+            for t in top_targets[:5]
+        )
+        or "none"
+    )
+    drivers_summary = (
+        "; ".join(
+            f"{d.get('feature')} ({float(d.get('importance') or 0):.2f})" for d in top_drivers[:5]
+        )
+        or "none"
+    )
     return {
         "model_version": model_version,
         "distribution_summary": distribution_summary,

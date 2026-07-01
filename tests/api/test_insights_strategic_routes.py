@@ -6,6 +6,7 @@ computes real grounded text from the request payload. The live LLM path and the 
 externally-grounded endpoints (knowledge-graph, model-performance) are verified
 manually on the droplet (plan Task 12).
 """
+
 import pytest
 
 from src.api.dependencies.auth import require_analyst
@@ -27,11 +28,17 @@ def test_causal_discovery_insight_fallback(test_client):
     body = {
         "brand": "Kisqali",
         "grain": "patient",
-        "effects": [{
-            "treatment": "copay_card", "outcome": "adherence_180d", "ate": 0.043,
-            "ate_ci_lower": 0.02, "ate_ci_upper": 0.066, "status": "proceed",
-            "selected_estimator": "CausalForestDML",
-        }],
+        "effects": [
+            {
+                "treatment": "copay_card",
+                "outcome": "adherence_180d",
+                "ate": 0.043,
+                "ate_ci_lower": 0.02,
+                "ate_ci_upper": 0.066,
+                "status": "proceed",
+                "selected_estimator": "CausalForestDML",
+            }
+        ],
     }
     r = test_client.post("/api/insights/causal-discovery", json=body)
     assert r.status_code == 200, r.text
@@ -45,7 +52,9 @@ def test_causal_discovery_insight_fallback(test_client):
 
 def test_predictive_cohort_insight_fallback(test_client):
     body = {
-        "model_version": "csu_adherence_v3", "n_scored": 250, "mean_prob": 0.34,
+        "model_version": "csu_adherence_v3",
+        "n_scored": 250,
+        "mean_prob": 0.34,
         "top_targets": [{"entity_id": "HCP7", "probability": 0.91}],
         "top_drivers": [{"feature": "prior_adherence", "importance": 0.4}],
     }
@@ -60,7 +69,8 @@ def test_resource_optimization_insight_surfaces_summary(test_client):
     body = {
         "optimization_summary": "Reallocating to high-ROI HCPs lifts projected outcome 6%.",
         "recommendations": ["Shift 12% budget to segment A"],
-        "projected_lift_pct": 6.0, "solver_status": "optimal",
+        "projected_lift_pct": 6.0,
+        "solver_status": "optimal",
     }
     r = test_client.post("/api/insights/resource-optimization", json=body)
     assert r.status_code == 200, r.text
@@ -72,6 +82,7 @@ def test_resource_optimization_insight_surfaces_summary(test_client):
 
 def test_model_performance_insight_degrades_on_backend_error(test_client, monkeypatch):
     """Backend unreachable -> honest is_fallback response, NOT a 500 (codex BUG 1)."""
+
     async def _boom(*a, **k):
         raise RuntimeError("supabase unreachable")
 
@@ -87,6 +98,7 @@ def test_model_performance_insight_degrades_on_backend_error(test_client, monkey
 
 def test_knowledge_graph_insight_degrades_on_backend_error(test_client, monkeypatch):
     """FalkorDB/semantic-memory unreachable -> honest is_fallback response, NOT a 500."""
+
     def _boom(*a, **k):
         raise RuntimeError("falkordb unreachable")
 
