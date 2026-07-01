@@ -18,7 +18,7 @@
  * @module pages/CausalAnalysis
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -77,6 +77,7 @@ import {
   useEstimators,
   useClinicalContext,
   useTreatmentEffects,
+  useTreatmentEffectInsight,
 } from '@/hooks/api';
 import { getCausalAgentAnalysis } from '@/api/causal';
 import type { DiscoveredEffect, CohortName } from '@/types/causal';
@@ -315,6 +316,32 @@ export default function CausalAnalysis() {
     isError: teIsError,
     error: teError,
   } = useTreatmentEffects(teCohort, teBrand, { enabled: teRun });
+
+  // Agentic strategic read of THIS estimate. Auto-generate once a fresh result
+  // lands (keyed on the estimate identity so it fires once per distinct result,
+  // not on every re-render). Manual re-generate stays available on the card.
+  const teInsight = useTreatmentEffectInsight();
+  const { mutate: generateTeInsight } = teInsight;
+  const teInsightKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!teData) return;
+    const key = `${teData.cohort}-${teData.brand}-${teData.ate}`;
+    if (teInsightKeyRef.current === key) return;
+    teInsightKeyRef.current = key;
+    generateTeInsight({
+      cohort: teData.cohort,
+      brand: teData.brand,
+      treatment_var: teData.treatment_var,
+      outcome_var: teData.outcome_var,
+      confounders: teData.confounders,
+      ate: teData.ate,
+      ci_lower: teData.ci_lower ?? undefined,
+      ci_upper: teData.ci_upper ?? undefined,
+      p_value: teData.p_value ?? undefined,
+      n: teData.n,
+      estimator: teData.estimator ?? undefined,
+    });
+  }, [teData, generateTeInsight]);
 
   // ── Estimators + History tabs ──────────────────────────────────────────────
   const { data: healthData } = useCausalHealth();
@@ -1113,6 +1140,36 @@ export default function CausalAnalysis() {
                       ))}
                     </ul>
                   )}
+
+                  {/* Agentic strategic read of THIS estimate (auto-generated
+                      when the result lands; grounded in the returned ATE/CI/p/n). */}
+                  <StrategicInsightCard
+                    title="Strategic insight"
+                    description="Agentic interpretation of this treatment-effect estimate, grounded in the returned ATE, CI, p-value, and n."
+                    isLoading={teInsight.isPending}
+                    error={teInsight.error?.message ?? null}
+                    insight={teInsight.data?.insight}
+                    keyTakeaways={teInsight.data?.key_takeaways}
+                    grounding={teInsight.data?.grounding}
+                    isFallback={teInsight.data?.is_fallback}
+                    provenance={teInsight.data?.provenance}
+                    generatedAt={teInsight.data?.generated_at}
+                    onGenerate={() =>
+                      generateTeInsight({
+                        cohort: teData.cohort,
+                        brand: teData.brand,
+                        treatment_var: teData.treatment_var,
+                        outcome_var: teData.outcome_var,
+                        confounders: teData.confounders,
+                        ate: teData.ate,
+                        ci_lower: teData.ci_lower ?? undefined,
+                        ci_upper: teData.ci_upper ?? undefined,
+                        p_value: teData.p_value ?? undefined,
+                        n: teData.n,
+                        estimator: teData.estimator ?? undefined,
+                      })
+                    }
+                  />
                 </div>
               )}
 
