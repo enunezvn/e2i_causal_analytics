@@ -248,10 +248,13 @@ async def treatment_effect_insight(
         req.n,
         req.estimator,
     )
+    # Key on the derived grounding strings (which encode ate, CI, p, n, estimator,
+    # treatment/outcome, confounders) so two estimates that differ only in CI — and
+    # thus in the actionability verdict — never collide on {ate, n} alone.
     key = cache_key(
         "treatment-effect",
         f"{req.cohort}/{req.brand}",
-        {"ate": round(req.ate, 4), "n": req.n},
+        {"e": g["estimate"], "d": g["design"]},
     )
     cached = await cache_get(key)
     if cached is not None:
@@ -259,7 +262,10 @@ async def treatment_effect_insight(
     else:
         payload = await asyncio.to_thread(treatment_effect.generate_insight, g)
         await cache_set(key, payload)
-    return _finalize(payload, provenance="Live DoWhy+EconML treatment-effect fit")
+    return _finalize(
+        payload,
+        provenance="Interpretation of the DoWhy+EconML treatment-effect estimate",
+    )
 
 
 @router.post("/predictive-cohort", response_model=StrategicInsightResponse)

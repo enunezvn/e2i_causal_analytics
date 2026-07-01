@@ -130,6 +130,7 @@ def test_treatment_effect_insight_fallback(test_client):
     assert data["is_fallback"] is True
     assert "hcp_adoption" in data["insight"]
     assert "refutation tests were not run" in data["insight"]
+    assert "excludes 0" in data["insight"]
     assert any(c["label"] == "ATE" for c in data["grounding"])
     assert data["provenance"]
     assert data["generated_at"]
@@ -153,3 +154,5 @@ def test_treatment_effect_insight_ci_straddles_zero(test_client):
     assert r.status_code == 200, r.text
     data = r.json()
     assert "not distinguishable from no effect" in data["insight"]
+    assert data["is_fallback"] is True
+    assert "straddles 0" in data["insight"]
