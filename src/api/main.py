@@ -75,13 +75,13 @@ from src.api.routes.copilotkit import router as copilotkit_router
 from src.api.routes.digital_twin import router as digital_twin_router
 from src.api.routes.executive_insights import router as executive_insights_router
 from src.api.routes.experiments import router as experiments_router
-from src.api.routes.insights_strategic import router as insights_strategic_router
 from src.api.routes.expert_review import router as expert_review_router
 from src.api.routes.explain import router as explain_router
 from src.api.routes.feedback import router as feedback_router
 from src.api.routes.gaps import router as gaps_router
 from src.api.routes.graph import router as graph_router
 from src.api.routes.health_score import router as health_score_router
+from src.api.routes.insights_strategic import router as insights_strategic_router
 from src.api.routes.kpi import router as kpi_router
 from src.api.routes.memory import router as memory_router
 from src.api.routes.metrics import router as metrics_router
