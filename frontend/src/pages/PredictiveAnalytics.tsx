@@ -33,6 +33,7 @@ import {
 import { Progress } from '@/components/ui/progress';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import { StatusBadge } from '@/components/visualizations/dashboard/StatusBadge';
+import { StrategicInsightCard } from '@/components/insights';
 import {
   useModelsStatus,
   useModelInfo,
@@ -40,6 +41,7 @@ import {
   useScoreCohort,
   usePollCohortScore,
 } from '@/hooks/api/use-predictions';
+import { usePredictiveCohortInsight } from '@/hooks/api';
 import type {
   CohortScoredRow,
   ModelEndpointHealth,
@@ -271,6 +273,9 @@ function PredictiveAnalytics() {
   const [selectedRow, setSelectedRow] = React.useState<CohortScoredRow | null>(null);
   const predictMutation = usePredict();
 
+  // Strategic interpretation (agentic read of the scored cohort).
+  const predInsight = usePredictiveCohortInsight();
+
   // Advanced what-if (manual row — preserved for hypotheticals)
   const [showAdvanced, setShowAdvanced] = React.useState(false);
   const [featureValues, setFeatureValues] = React.useState<Record<string, string>>({});
@@ -295,6 +300,31 @@ function PredictiveAnalytics() {
       { modelName: selectedModel, topN: 100 },
       { onSuccess: (data) => setCohortJobId(data.job_id) }
     );
+  };
+
+  // Generate the strategic interpretation from the REAL scored cohort.
+  // Grounded only in data already on the page — top targets, distribution mean,
+  // and (when a row has been drilled into) that entity's SHAP contributions.
+  // No drivers are fabricated when SHAP is unavailable.
+  const handleGenerateInsight = () => {
+    const rows = cohort?.top_rows;
+    if (!rows?.length) return;
+    const importance = predictMutation.data?.feature_importance;
+    const topDrivers = importance
+      ? Object.entries(importance).map(([feature, value]) => ({
+          feature,
+          importance: value,
+        }))
+      : [];
+    predInsight.mutate({
+      model_version: selectedModel,
+      n_scored: cohort?.n_scored ?? rows.length,
+      mean_prob: cohort?.distribution?.mean ?? 0,
+      top_targets: rows
+        .slice(0, 5)
+        .map((row) => ({ entity_id: row.entity_id, probability: row.probability })),
+      top_drivers: topDrivers,
+    });
   };
 
   // Drill into a ranked row: re-score that real entity to surface SHAP.
@@ -517,6 +547,22 @@ function PredictiveAnalytics() {
           </CardContent>
         </Card>
       )}
+
+      {/* Strategic interpretation (agentic read of the scored cohort) */}
+      <div className="mb-6">
+        <StrategicInsightCard
+          description="Agentic read of the scored holdout cohort, grounded in the ranked targets and probability distribution"
+          insight={predInsight.data?.insight}
+          keyTakeaways={predInsight.data?.key_takeaways}
+          grounding={predInsight.data?.grounding}
+          isLoading={predInsight.isPending}
+          error={predInsight.error?.message ?? null}
+          onGenerate={handleGenerateInsight}
+          isFallback={predInsight.data?.is_fallback}
+          provenance={predInsight.data?.provenance}
+          generatedAt={predInsight.data?.generated_at}
+        />
+      </div>
 
       {/* Results: ranked targets + distribution + drill-down */}
       {selectedModel && (
