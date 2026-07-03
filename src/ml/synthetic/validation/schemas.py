@@ -62,7 +62,11 @@ DELIVERY_CHANNELS = ["email", "call", "in_person", "portal"]
 
 # Status enums
 DELIVERY_STATUS_VALUES = ["pending", "sent", "delivered", "failed"]
-ACCEPTANCE_STATUS_VALUES = ["pending", "accepted", "rejected", "expired"]
+# 'overridden' (#1119 WS2-TR-006): rep actively overrode the recommendation —
+# emitted by TriggerGenerator; without it here the Check.isin below rejects
+# every overridden row at validation time and the Override Rate numerator is
+# structurally impossible.
+ACCEPTANCE_STATUS_VALUES = ["pending", "accepted", "rejected", "expired", "overridden"]
 
 
 # =============================================================================

@@ -27,8 +27,8 @@ def _patient_frame(n=400):
 
 
 def test_accepted_minus_rejected_lift_matches_design():
-    cfg = GeneratorConfig(seed=7, n_records=800)
-    gen = TriggerGenerator(cfg, patient_df=_patient_frame(), hcp_df=None)
+    cfg = GeneratorConfig(seed=7, n_records=4000)
+    gen = TriggerGenerator(cfg, patient_df=_patient_frame(2000), hcp_df=None)
     triggers = gen.generate()
     rx = gen.injected_prescriptions  # treatment_events rows the generator appended
 
@@ -39,15 +39,20 @@ def test_accepted_minus_rejected_lift_matches_design():
     lift = triggers.loc[acc, "converted"].mean() - triggers.loc[rej, "converted"].mean()
 
     # MECHANISM check: the injection must produce a CLEAR, sign-stable accepted>rejected
-    # lift. This is the injected-prescriptions-ONLY lift; with ~2 triggers/patient and
-    # the patient-level EXISTS conversion, an accepted trigger's rx bleeds into the same
-    # patient's other windows, so the injected-only lift over-states DESIGNED_CONVERSION_LIFT.
-    # The faithful in-band (+10-20pp) check — where arm-NEUTRAL baseline prescriptions
-    # dilute the lift back down — is the Task 5 DB gate, not this unit test.
-    # Mechanism lower bound anchored to the fixed-seed injected-only lift (~0.30), so a
-    # mechanism regression (e.g. 0.30 -> 0.10) FAILS rather than slipping past a loose 0.08.
-    assert lift > 0.20, lift  # strong sign-stable injected-only lift
-    assert lift < 0.40, lift  # bounded — not a degenerate all-accepted artifact
+    # lift. This is the injected-prescriptions-ONLY lift. The faithful in-band (+10-20pp)
+    # check — where arm-NEUTRAL baseline prescriptions dilute the lift back down — is the
+    # Task 5 DB gate, not this unit test.
+    #
+    # #1118/#1119 recalibration (evidence-driven): the previous bound (>0.20 at
+    # seed=7, n=800) was anchored to a TAIL draw of the old RNG stream — measured
+    # across seeds 1-10 on the pre-change code the same statistic ranged
+    # +0.068..+0.303 (mean ~0.14, i.e. the small-n bound would have failed seed=3
+    # on unchanged code). At n_patients=2000 / n_records=4000 the statistic
+    # converges to +0.129..+0.150 across seeds (~DESIGNED_CONVERSION_LIFT, sd
+    # ~0.012), so the band below is a >4-sigma mechanism guard, not a noise lock:
+    # mechanism death (lift ~ 0) or a degenerate all-accepted artifact both FAIL.
+    assert lift > 0.08, lift  # sign-stable injected-only lift, ~5 sigma above 0
+    assert lift < 0.25, lift  # bounded — not a degenerate all-accepted artifact
     assert DESIGNED_CONVERSION_LIFT == 0.15  # the seed constant is the documented target
 
 
