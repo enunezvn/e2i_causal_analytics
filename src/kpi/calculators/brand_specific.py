@@ -162,13 +162,13 @@ class BrandSpecificCalculator(KPICalculatorBase):
         none tested) is a legitimate value.
 
         #1116: additionally fails loud when the numerator is STRUCTURALLY zero —
-        the registry SQL (migration 090) also returns ``pnh_events_total``, the
+        the registry SQL (migration 091) also returns ``pnh_events_total``, the
         table-wide count of ``pnh_flow_cytometry`` events. Zero table-wide means
         the concept has never been recorded in the substrate (a coverage/pipeline
         gap), so rendering 0.0 as a CRITICAL business reading would be a
         plausible-real fabrication. A genuine 0% (events exist in the table, just
         none for the eligible cohort) still returns 0.0. Registries that predate
-        migration 090 omit the column -> the guard degrades to legacy behaviour.
+        migration 091 omit the column -> the guard degrades to legacy behaviour.
         """
         result = self._execute_query("brand_specific_fabhalta_pnh_tested", [])
         if not result or result[0].get("tested_rate") is None:

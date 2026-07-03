@@ -270,8 +270,8 @@ def test_br003_genuine_zero_is_preserved_when_concept_exists_in_table():
     assert calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"}) == 0.0
 
 
-def test_br003_backward_compatible_with_pre_090_registry_sql():
-    """A registry that predates migration 090 returns no pnh_events_total column;
+def test_br003_backward_compatible_with_pre_091_registry_sql():
+    """A registry that predates migration 091 returns no pnh_events_total column;
     the guard must degrade gracefully to the legacy behaviour."""
     calc, _ = _brand_calc_returning([{"tested_rate": 0.0}])
     assert calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"}) == 0.0

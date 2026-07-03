@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 090: #1116 — BR-003 (Fabhalta % PNH Tested) structural-zero guard.
+-- Migration 091: #1116 — BR-003 (Fabhalta % PNH Tested) structural-zero guard.
 -- ----------------------------------------------------------------------------
 -- ROOT CAUSE (adversarially verified 2026-07-03, issue #1116): BR-003 rendered a
 -- plausible-real 0.0% -> CRITICAL, but the numerator was STRUCTURALLY zero — no
@@ -33,7 +33,7 @@
 --
 -- deploy.yml SKIPS migrations; the local self-contained supabase is the faithful
 -- target. Apply manually:
---   docker exec -i supabase-db psql -U postgres -d postgres < database/migrations/090_kpi_br003_structural_zero_guard.sql
+--   docker exec -i supabase-db psql -U postgres -d postgres < database/migrations/091_kpi_br003_structural_zero_guard.sql
 -- ----------------------------------------------------------------------------
 
 INSERT INTO public.kpi_query_registry (query_id, sql, max_params, note) VALUES
