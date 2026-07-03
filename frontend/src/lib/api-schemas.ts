@@ -177,6 +177,10 @@ export const KPIThresholdSchema = z.object({
   target: z.number().optional(),
   warning: z.number().optional(),
   critical: z.number().optional(),
+  // Band mode (#1117): deviation-from-ideal KPIs (e.g. WS1-MP-006).
+  ideal: z.number().optional(),
+  good_tolerance: z.number().optional(),
+  warning_tolerance: z.number().optional(),
 });
 
 /**
@@ -709,9 +713,13 @@ export const ChatResponseSchema = z.object({
 
 /** Faithful mirror of `KPIThreshold` (types/kpi.ts). */
 export const KPIThresholdWireSchema = z.object({
-  target: z.number().optional(),
-  warning: z.number().optional(),
-  critical: z.number().optional(),
+  target: z.number().nullable().optional(),
+  warning: z.number().nullable().optional(),
+  critical: z.number().nullable().optional(),
+  // Band mode (#1117): deviation-from-ideal KPIs (e.g. WS1-MP-006).
+  ideal: z.number().nullable().optional(),
+  good_tolerance: z.number().nullable().optional(),
+  warning_tolerance: z.number().nullable().optional(),
 });
 
 /** Faithful mirror of `KPIMetadata` (types/kpi.ts). */
