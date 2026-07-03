@@ -328,9 +328,13 @@ ws1_model_performance:
       - ml_predictions.calibration_score
     view: null
     threshold:
-      target: 1.0
-      warning: 0.8
-      critical: 0.6
+      # Band threshold (#1117): calibration slope is a deviation-from-1.0
+      # metric — ideal is exactly 1.0, both directions away are worse
+      # (<1 over-confident, >1 over-dispersed). Status derives from
+      # abs(slope - ideal): GOOD <= 0.05, WARNING <= 0.15, CRITICAL beyond.
+      ideal: 1.0
+      good_tolerance: 0.05
+      warning_tolerance: 0.15
     frequency: weekly
     workstream: WS1
     windowable: not_applicable

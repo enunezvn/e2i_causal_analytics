@@ -153,6 +153,9 @@ def _metadata_to_response(kpi: Any) -> KPIMetadataResponse:
             target=kpi.threshold.target,
             warning=kpi.threshold.warning,
             critical=kpi.threshold.critical,
+            ideal=kpi.threshold.ideal,
+            good_tolerance=kpi.threshold.good_tolerance,
+            warning_tolerance=kpi.threshold.warning_tolerance,
         )
 
     return KPIMetadataResponse(

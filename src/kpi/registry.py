@@ -106,6 +106,11 @@ class KPIRegistry:
                 target=data["threshold"].get("target"),
                 warning=data["threshold"].get("warning"),
                 critical=data["threshold"].get("critical"),
+                # Band mode (#1117): deviation-from-ideal metrics
+                # (e.g. WS1-MP-006 calibration slope, ideal exactly 1.0).
+                ideal=data["threshold"].get("ideal"),
+                good_tolerance=data["threshold"].get("good_tolerance"),
+                warning_tolerance=data["threshold"].get("warning_tolerance"),
             )
 
         # Parse calculation type

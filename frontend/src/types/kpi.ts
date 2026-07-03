@@ -133,12 +133,18 @@ export interface KPIListParams {
  * KPI threshold configuration
  */
 export interface KPIThreshold {
-  /** Target threshold value */
+  /** Target threshold value (monotone mode) */
   target?: number;
-  /** Warning threshold value */
+  /** Warning threshold value (monotone mode) */
   warning?: number;
-  /** Critical threshold value */
+  /** Critical threshold value (monotone mode) */
   critical?: number;
+  /** Ideal value for deviation-from-ideal KPIs (band mode, e.g. calibration slope) */
+  ideal?: number;
+  /** GOOD when abs(value - ideal) <= this (band mode) */
+  good_tolerance?: number;
+  /** WARNING when abs(value - ideal) <= this; CRITICAL beyond (band mode) */
+  warning_tolerance?: number;
 }
 
 /**

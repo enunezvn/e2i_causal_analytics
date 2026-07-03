@@ -79,6 +79,20 @@ const mockKPIs = [
     primary_causal_library: 'dowhy',
   },
   {
+    id: 'WS1-MP-006',
+    name: 'Calibration Slope',
+    definition: 'Slope of predicted vs actual probability regression',
+    formula: 'logistic_regression(y ~ predicted_prob).slope',
+    calculation_type: 'direct',
+    workstream: 'ws1_model_performance',
+    tables: ['ml_predictions'],
+    columns: ['calibration_score'],
+    // Band threshold (#1117): deviation-from-1.0 metric.
+    threshold: { ideal: 1.0, good_tolerance: 0.05, warning_tolerance: 0.15 },
+    frequency: 'weekly',
+    primary_causal_library: 'none',
+  },
+  {
     id: 'CM-001',
     name: 'Average Treatment Effect (ATE)',
     definition: 'Average causal effect of treatment on outcome',
@@ -193,6 +207,17 @@ describe('KPIDictionary', () => {
     expect(screen.getAllByText('Target:').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Warning:').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Critical:').length).toBeGreaterThan(0);
+  });
+
+  it('renders band thresholds as ideal ± tolerance (#1117)', () => {
+    render(<KPIDictionary />, { wrapper: createWrapper() });
+
+    // WS1-MP-006 carries a band threshold -> "Ideal: 1 ±0.05", not a
+    // misleading monotone "Target:" row.
+    expect(screen.getAllByText('Ideal:').length).toBeGreaterThan(0);
+    expect(screen.getByText(/1\s*±0\.05/)).toBeInTheDocument();
+    expect(screen.getByText('±0.15')).toBeInTheDocument();
+    expect(screen.getByText(/>\s*±0\.15/)).toBeInTheDocument();
   });
 
   it('labels threshold-less KPIs as Informational (no target by design)', () => {

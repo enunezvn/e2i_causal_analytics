@@ -96,6 +96,38 @@ const WORKSTREAM_DISPLAY: Record<string, { name: string; icon: React.ReactNode; 
 function ThresholdIndicator({ threshold }: { threshold?: KPIThreshold }) {
   if (!threshold) return null;
 
+  // Band threshold (#1117): deviation-from-ideal metric (e.g. calibration
+  // slope) — GOOD within ±good_tolerance of ideal, WARNING within
+  // ±warning_tolerance, CRITICAL beyond. Render as "ideal ±tolerance".
+  if (threshold.ideal !== undefined && threshold.ideal !== null) {
+    return (
+      <div className="flex items-center gap-4 text-xs">
+        <div className="flex items-center gap-1">
+          <Target className="h-3 w-3 text-emerald-500" />
+          <span className="text-[var(--color-muted-foreground)]">Ideal: </span>
+          <span className="font-medium text-emerald-600">
+            {threshold.ideal}
+            {threshold.good_tolerance != null && ` ±${threshold.good_tolerance}`}
+          </span>
+        </div>
+        {threshold.warning_tolerance != null && (
+          <>
+            <div className="flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3 text-amber-500" />
+              <span className="text-[var(--color-muted-foreground)]">Warning: </span>
+              <span className="font-medium text-amber-600">±{threshold.warning_tolerance}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <XCircle className="h-3 w-3 text-rose-500" />
+              <span className="text-[var(--color-muted-foreground)]">Critical: </span>
+              <span className="font-medium text-rose-600">&gt; ±{threshold.warning_tolerance}</span>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-center gap-4 text-xs">
       {threshold.target !== undefined && (

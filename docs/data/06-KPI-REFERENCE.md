@@ -473,17 +473,17 @@ These KPIs monitor the predictive quality, calibration, explainability, and fair
 | **Definition** | Slope of predicted versus actual probability regression (reliability diagram) |
 | **Formula** | `logistic_regression(y ~ predicted_prob).slope` |
 | **Calculation Type** | Direct |
-| **Direction** | Higher is better (target is 1.0) |
+| **Direction** | Band around ideal 1.0 (deviation-from-1.0 metric; both directions away are worse) |
 | **Unit** | Slope coefficient |
 | **Frequency** | Weekly |
 | **Source Tables** | `ml_predictions` |
 | **Source Columns** | `ml_predictions.calibration_score` |
 | **Helper View** | None |
-| **Target** | >= 1.0 |
-| **Warning** | < 1.0 and >= 0.8 |
-| **Critical** | < 0.6 |
+| **Good** | abs(slope - 1.0) <= 0.05 |
+| **Warning** | abs(slope - 1.0) <= 0.15 |
+| **Critical** | abs(slope - 1.0) > 0.15 |
 
-A slope of 1.0 indicates perfectly calibrated probability predictions. Values below 1.0 suggest overconfident predictions.
+A slope of 1.0 indicates perfectly calibrated probability predictions. Values below 1.0 suggest overconfident predictions; values above 1.0 suggest under-confident (over-dispersed) predictions. This KPI uses the band threshold mode (#1117): status derives from the absolute deviation from the ideal, not from a monotone comparison.
 
 **Calculator**: `ModelPerformanceCalculator._calc_calibration_slope`
 
