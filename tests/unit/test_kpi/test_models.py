@@ -1,5 +1,8 @@
 """Tests for KPI models."""
 
+import pytest
+from pydantic import ValidationError
+
 from src.kpi.models import (
     CalculationType,
     CausalLibrary,
@@ -43,6 +46,75 @@ class TestKPIThreshold:
         """No target defined -> INFORMATIONAL (tracked, no target by design)."""
         threshold = KPIThreshold()
         assert threshold.evaluate(0.85) == KPIStatus.INFORMATIONAL
+
+
+class TestKPIThresholdBand:
+    """Band mode (#1117): ideal value with symmetric tolerance bands.
+
+    For deviation-from-ideal metrics (e.g. WS1-MP-006 calibration slope,
+    ideal exactly 1.0) both directions away from ``ideal`` are worse, so
+    status derives from ``abs(value - ideal)`` — never from direction.
+    """
+
+    def _band(self) -> KPIThreshold:
+        return KPIThreshold(ideal=1.0, good_tolerance=0.05, warning_tolerance=0.15)
+
+    def test_within_good_tolerance_is_good(self):
+        band = self._band()
+        assert band.evaluate(1.0) == KPIStatus.GOOD
+        assert band.evaluate(0.9709) == KPIStatus.GOOD  # live WS1-MP-006 value
+        assert band.evaluate(1.05) == KPIStatus.GOOD  # inclusive boundary
+        assert band.evaluate(0.95) == KPIStatus.GOOD  # inclusive boundary (below)
+
+    def test_within_warning_tolerance_is_warning(self):
+        band = self._band()
+        assert band.evaluate(1.12) == KPIStatus.WARNING
+        assert band.evaluate(0.88) == KPIStatus.WARNING
+        assert band.evaluate(1.15) == KPIStatus.WARNING  # inclusive boundary
+
+    def test_beyond_warning_tolerance_is_critical_both_directions(self):
+        band = self._band()
+        assert band.evaluate(1.5) == KPIStatus.CRITICAL  # over-dispersed
+        assert band.evaluate(0.5) == KPIStatus.CRITICAL  # over-confident
+        assert band.evaluate(1.16) == KPIStatus.CRITICAL
+
+    def test_none_value_is_unknown_fail_closed(self):
+        """The #439/#1114 fail-closed primitive is preserved in band mode."""
+        assert self._band().evaluate(None) == KPIStatus.UNKNOWN
+
+    def test_lower_is_better_flag_ignored_in_band_mode(self):
+        """The band is direction-symmetric; the monotone flag must not apply."""
+        band = self._band()
+        assert band.evaluate(0.9709, lower_is_better=True) == KPIStatus.GOOD
+        assert band.evaluate(1.5, lower_is_better=True) == KPIStatus.CRITICAL
+
+    def test_missing_warning_tolerance_caps_at_warning(self):
+        """Mirrors monotone semantics: missing outer bound -> WARNING, never CRITICAL."""
+        band = KPIThreshold(ideal=1.0, good_tolerance=0.05)
+        assert band.evaluate(1.04) == KPIStatus.GOOD
+        assert band.evaluate(2.0) == KPIStatus.WARNING
+
+    # ---- config validation: a malformed band must fail loudly at load ----
+
+    def test_ideal_requires_good_tolerance(self):
+        with pytest.raises(ValidationError):
+            KPIThreshold(ideal=1.0)
+
+    def test_band_and_monotone_modes_are_mutually_exclusive(self):
+        with pytest.raises(ValidationError):
+            KPIThreshold(ideal=1.0, good_tolerance=0.05, target=1.0)
+
+    def test_tolerances_require_ideal(self):
+        with pytest.raises(ValidationError):
+            KPIThreshold(good_tolerance=0.05)
+
+    def test_negative_tolerance_rejected(self):
+        with pytest.raises(ValidationError):
+            KPIThreshold(ideal=1.0, good_tolerance=-0.05)
+
+    def test_warning_tolerance_must_contain_good_tolerance(self):
+        with pytest.raises(ValidationError):
+            KPIThreshold(ideal=1.0, good_tolerance=0.15, warning_tolerance=0.05)
 
 
 class TestKPIMetadata:

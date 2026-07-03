@@ -4,11 +4,12 @@ KPI Data Models
 Pydantic models for KPI results, metadata, and thresholds.
 """
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CausalLibrary(str, Enum):
@@ -57,14 +58,58 @@ class KPIStatus(str, Enum):
 
 
 class KPIThreshold(BaseModel):
-    """Threshold configuration for a KPI."""
+    """Threshold configuration for a KPI.
+
+    Two mutually exclusive modes:
+
+    - **Monotone** (``target``/``warning``/``critical``): the value is
+      compared directionally (higher- or lower-is-better).
+    - **Band** (``ideal``/``good_tolerance``/``warning_tolerance``, #1117):
+      the KPI is a deviation-from-ideal metric — e.g. WS1-MP-006 calibration
+      slope, where ideal is exactly 1.0 and BOTH directions away are worse.
+      Status derives from ``abs(value - ideal)``, never from direction.
+    """
 
     target: float | None = None
     warning: float | None = None
     critical: float | None = None
 
+    # Band mode (#1117): ideal value with symmetric tolerance bands.
+    ideal: float | None = None
+    good_tolerance: float | None = None
+    warning_tolerance: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_band_mode(self) -> "KPIThreshold":
+        """Fail loudly on malformed band configs instead of mis-evaluating."""
+        if self.ideal is not None:
+            if self.target is not None:
+                raise ValueError(
+                    "band mode (ideal) and monotone mode (target) are mutually exclusive"
+                )
+            if self.good_tolerance is None:
+                raise ValueError("band mode requires good_tolerance alongside ideal")
+        elif self.good_tolerance is not None or self.warning_tolerance is not None:
+            raise ValueError("good_tolerance/warning_tolerance require ideal (band mode)")
+        if self.good_tolerance is not None and self.good_tolerance < 0:
+            raise ValueError("good_tolerance must be >= 0")
+        if self.warning_tolerance is not None:
+            if self.warning_tolerance < 0:
+                raise ValueError("warning_tolerance must be >= 0")
+            if self.good_tolerance is not None and self.warning_tolerance < self.good_tolerance:
+                raise ValueError("warning_tolerance must be >= good_tolerance")
+        return self
+
     def evaluate(self, value: float | None, lower_is_better: bool = False) -> KPIStatus:
         """Evaluate a value against thresholds.
+
+        For band mode (``ideal`` set):
+            - abs(value - ideal) <= good_tolerance: GOOD
+            - abs(value - ideal) <= warning_tolerance: WARNING
+            - beyond warning_tolerance: CRITICAL
+              (warning_tolerance omitted -> WARNING, mirroring the monotone
+              missing-outer-bound behavior)
+            ``lower_is_better`` is ignored: the band is direction-symmetric.
 
         For higher-is-better (default):
             - value >= target: GOOD
@@ -78,13 +123,34 @@ class KPIThreshold(BaseModel):
 
         Args:
             value: The KPI value to evaluate
-            lower_is_better: If True, lower values are better (e.g., error rates)
+            lower_is_better: If True, lower values are better (e.g., error
+                rates). Ignored in band mode.
 
         Returns:
             KPIStatus indicating the health of this KPI
         """
         if value is None:
             return KPIStatus.UNKNOWN
+
+        if self.ideal is not None:
+            # Band mode (#1117): deviation-from-ideal, direction-symmetric.
+            # The subtraction introduces float error at exact boundaries
+            # (abs(1.05 - 1.0) > 0.05), so "within tolerance" is <= with an
+            # isclose guard to keep the documented inclusive semantics.
+            deviation = abs(value - self.ideal)
+
+            def _within(tolerance: float) -> bool:
+                return deviation <= tolerance or math.isclose(
+                    deviation, tolerance, rel_tol=1e-9, abs_tol=1e-12
+                )
+
+            # good_tolerance is guaranteed non-None by the model validator;
+            # the guard also narrows the Optional for the type checker.
+            if self.good_tolerance is not None and _within(self.good_tolerance):
+                return KPIStatus.GOOD
+            if self.warning_tolerance is None or _within(self.warning_tolerance):
+                return KPIStatus.WARNING
+            return KPIStatus.CRITICAL
 
         if self.target is None:
             # No target on the threshold = no-target-by-design KPI, not an
