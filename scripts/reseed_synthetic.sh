@@ -18,8 +18,10 @@
 # decays to CRITICAL (30 days for MAU). The reseed is idempotent
 # (deterministic PKs — PRs #1105/#1106/#1120) and takes ~3 min full-size.
 #
-# Crontab entry (weekly, Monday 3 AM):
-#   0 3 * * 1 /home/enunez/Projects/e2i_causal_analytics/scripts/reseed_synthetic.sh >> /var/log/e2i-reseed.log 2>&1
+# Crontab entry (weekly, Monday 3 AM). Log under $HOME — /var/log is NOT
+# writable by the cron user on this host (a root-owned dir kills the redirect
+# with Permission denied BEFORE the script runs, silently no-oping the job):
+#   0 3 * * 1 /home/enunez/Projects/e2i_causal_analytics/scripts/reseed_synthetic.sh >> /home/enunez/logs/e2i-reseed.log 2>&1
 #
 # Extra args are forwarded to load_synthetic_data.py (after --anchor-to-now).
 # =============================================================================
