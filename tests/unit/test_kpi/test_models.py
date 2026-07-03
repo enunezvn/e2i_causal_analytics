@@ -37,6 +37,26 @@ class TestKPIThreshold:
         assert threshold.evaluate(0.15, lower_is_better=True) == KPIStatus.WARNING
         assert threshold.evaluate(0.25, lower_is_better=True) == KPIStatus.CRITICAL
 
+    def test_lower_is_better_no_gap_between_warning_and_critical(self):
+        """WS2-TR-007-shaped thresholds: (warning, critical] is CRITICAL, not a gap.
+
+        Regression guard for #1126: the docs once left (21, 30] undefined for
+        Lead Time (target=14, warning=21, critical=30). In lower-is-better mode
+        the evaluator uses only ``target`` and ``warning`` — the configured
+        ``critical`` is a declared ceiling, never a distinct band — so any value
+        above the warning bound is CRITICAL.
+        """
+        threshold = KPIThreshold(target=14, warning=21, critical=30)
+
+        assert threshold.evaluate(3, lower_is_better=True) == KPIStatus.GOOD
+        assert threshold.evaluate(14, lower_is_better=True) == KPIStatus.GOOD
+        assert threshold.evaluate(16, lower_is_better=True) == KPIStatus.WARNING
+        assert threshold.evaluate(21, lower_is_better=True) == KPIStatus.WARNING
+        # The once-undocumented (21, 30] region: CRITICAL, not undefined.
+        assert threshold.evaluate(25, lower_is_better=True) == KPIStatus.CRITICAL
+        assert threshold.evaluate(30, lower_is_better=True) == KPIStatus.CRITICAL
+        assert threshold.evaluate(31, lower_is_better=True) == KPIStatus.CRITICAL
+
     def test_evaluate_none_value(self):
         """Test threshold evaluation with None value."""
         threshold = KPIThreshold(target=0.80, warning=0.70, critical=0.60)
