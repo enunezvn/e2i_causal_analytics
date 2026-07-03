@@ -286,6 +286,7 @@ class TestTriggerSchemaValueSetDrift:
             (TriggerGenerator.DELIVERY_STATUS_VALUES, "delivery_status"),
             (TriggerGenerator.ACCEPTANCE_STATUS_VALUES, "acceptance_status"),
             (TriggerGenerator.TRIGGER_TYPES, "trigger_type"),
+            (list(TriggerGenerator.PRIORITY_DIST), "priority"),
         ],
     )
     def test_generator_value_sets_within_schema_isin(self, generator_values, column_name):
@@ -310,4 +311,127 @@ class TestTriggerSchemaValueSetDrift:
             assert emitted <= allowed, (
                 f"#1125 drift: generated '{column_name}' contains "
                 f"{sorted(emitted - allowed)} which TriggerSchema would reject"
+            )
+
+
+# ---------------------------------------------------------------------------
+# #1125 (round 2) — generator/schema SHAPE drift tripwire + end-to-end proof
+# ---------------------------------------------------------------------------
+
+
+def _make_canonical_patient_df(n: int = 60, id_prefix: str = "") -> pd.DataFrame:
+    """Patient frame with CANONICAL generator-format ids ([tag]pt_NNNNNN /
+    [tag]hcp_NNNNN — what PatientGenerator/_generate_ids actually emit on the
+    load path), unlike _make_patient_df whose brand-lettered ids are a local
+    test fixture that no generator produces."""
+    return pd.DataFrame(
+        [
+            {
+                "patient_id": f"{id_prefix}pt_{i:06d}",
+                "hcp_id": f"{id_prefix}hcp_{i % 20:05d}",
+                "engagement_score": 3.0 + (i % 7),
+                "treatment_initiated": i % 2,
+                "journey_start_date": "2023-06-01",
+                "brand": BRANDS[i % len(BRANDS)],
+            }
+            for i in range(n)
+        ]
+    )
+
+
+class TestTriggerSchemaShapeDrift:
+    """#1125 round 2: beyond value sets, TriggerSchema's SHAPE contracts had
+    drifted — priority was typed int 1-5 (DB enum priority_type and the
+    generator both use critical/high/medium/low strings), trigger_id was
+    anchored ^trig_\\d+$ (generator emits [tag]trg_NNNNN; live rows are 100%
+    scvtrg_-prefixed via the load path's default --tag scv), and
+    trigger_timestamp only accepted bare dates (linked mode — the prod path —
+    emits 'YYYY-MM-DD HH:MM:SS'). These pin the reconciled contracts."""
+
+    @pytest.mark.parametrize(
+        ("column_name", "good_values"),
+        [
+            ("trigger_id", ["trg_00001", "scvtrg_00042"]),
+            ("patient_id", ["pt_000001", "scvpt_000123"]),
+            ("hcp_id", ["hcp_00001", "scvhcp_00007"]),
+            ("trigger_timestamp", ["2024-01-31", "2024-01-31 23:59:59"]),
+            ("priority", ["critical", "high", "medium", "low"]),
+        ],
+    )
+    def test_schema_accepts_canonical_generator_formats(self, column_name, good_values):
+        from src.ml.synthetic.validation.schemas import TriggerSchema
+
+        col = TriggerSchema.columns[column_name]
+        col.validate(pd.DataFrame({column_name: good_values}))  # must not raise
+
+    @pytest.mark.parametrize(
+        ("column_name", "bad_value"),
+        [
+            ("trigger_id", "TRG-1"),
+            ("patient_id", "patient_001"),
+            ("trigger_timestamp", "2024/01/31"),
+            ("priority", "urgent"),
+        ],
+    )
+    def test_schema_still_rejects_noncanonical(self, column_name, bad_value):
+        """The widened contracts must still constrain — not become accept-all."""
+        import pandera.pandas as pa
+
+        from src.ml.synthetic.validation.schemas import TriggerSchema
+
+        col = TriggerSchema.columns[column_name]
+        with pytest.raises(pa.errors.SchemaError):
+            col.validate(pd.DataFrame({column_name: [bad_value]}))
+
+
+class TestTriggerSchemaEndToEnd:
+    """#1125 end goal: TriggerSchema must validate REAL generator output
+    end-to-end — the definitive load-path-readiness proof. Covers both
+    emission modes and the prod-faithful id namespace (--tag scv is the
+    load_synthetic_data.py default; all live trigger ids carry it)."""
+
+    @pytest.mark.parametrize(
+        ("label", "make_df"),
+        [
+            (
+                "standalone-default",
+                lambda: TriggerGenerator(GeneratorConfig(seed=42, n_records=400)).generate(),
+            ),
+            (
+                "standalone-scv-prefix",
+                lambda: TriggerGenerator(
+                    GeneratorConfig(seed=42, n_records=400, id_prefix="scv")
+                ).generate(),
+            ),
+            (
+                "linked-default",
+                lambda: TriggerGenerator(
+                    GeneratorConfig(seed=7, n_records=200),
+                    patient_df=_make_canonical_patient_df(),
+                ).generate(),
+            ),
+            (
+                "linked-scv-prefix",
+                lambda: TriggerGenerator(
+                    GeneratorConfig(seed=7, n_records=200, id_prefix="scv"),
+                    patient_df=_make_canonical_patient_df(id_prefix="scv"),
+                ).generate(),
+            ),
+        ],
+    )
+    def test_full_frame_validates(self, label, make_df):
+        import pandera.pandas as pa
+
+        from src.ml.synthetic.validation.schemas import TriggerSchema
+
+        df = make_df()
+        try:
+            TriggerSchema.validate(df, lazy=True)
+        except pa.errors.SchemaErrors as e:
+            failing = sorted(
+                set(zip(e.failure_cases["column"], e.failure_cases["check"], strict=True))
+            )
+            pytest.fail(
+                f"#1125: TriggerSchema rejected real generator output ({label}); "
+                f"failing (column, check) pairs: {failing}"
             )

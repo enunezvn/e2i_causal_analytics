@@ -13,6 +13,7 @@ from ..config import (
     TRIGGER_ACCEPTANCE_STATUS_VALUES,
     TRIGGER_DELIVERY_CHANNELS,
     TRIGGER_DELIVERY_STATUS_VALUES,
+    TRIGGER_PRIORITY_VALUES,
     Brand,
 )
 from .base import BaseGenerator, GeneratorConfig
@@ -62,13 +63,12 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         "reactivation",
     ]
 
-    # Priority distribution (weighted toward actionable)
-    PRIORITY_DIST = {
-        "critical": 0.10,
-        "high": 0.30,
-        "medium": 0.40,
-        "low": 0.20,
-    }
+    # Priority distribution (weighted toward actionable). Keys are the shared
+    # TRIGGER_PRIORITY_VALUES (config.py — matches the DB enum priority_type,
+    # #1125); their ORDER is load-bearing for this and the positional
+    # probability vectors in _select_priority. zip preserves that order, so
+    # emission behavior is byte-identical to the previous dict literal.
+    PRIORITY_DIST = dict(zip(TRIGGER_PRIORITY_VALUES, [0.10, 0.30, 0.40, 0.20], strict=True))
 
     # Delivery channels (single source of truth in config.py, shared with the
     # pandera TriggerSchema — #1125)

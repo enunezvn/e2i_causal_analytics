@@ -14,6 +14,7 @@ from ..config import (
     TRIGGER_ACCEPTANCE_STATUS_VALUES,
     TRIGGER_DELIVERY_CHANNELS,
     TRIGGER_DELIVERY_STATUS_VALUES,
+    TRIGGER_PRIORITY_VALUES,
     Brand,
     DataSplit,
     EngagementTypeEnum,
@@ -422,29 +423,39 @@ MLPredictionSchema = DataFrameSchema(
 
 TriggerSchema = DataFrameSchema(
     columns={
+        # ID regexes tolerate the optional lowercase namespace tag the
+        # generator base prepends (GeneratorConfig.id_prefix — the prod load
+        # path defaults to --tag scv, scripts/load_synthetic_data.py:604).
+        # #1125 shape drift: the old anchored ^trig_\d+$ / ^pt_\d+$ /
+        # ^hcp_\d+$ matched ZERO live rows (all 37,541 are scvtrg_/scvpt_/
+        # scvhcp_-prefixed).
         "trigger_id": Column(
             str,
-            Check.str_matches(r"^trig_\d+$"),
+            Check.str_matches(r"^[a-z]*trg_\d+$"),
             unique=True,
-            description="Unique trigger identifier",
+            description="Unique trigger identifier ([tag]trg_NNNNN)",
         ),
         "patient_id": Column(
             str,
-            Check.str_matches(r"^pt_\d+$"),
+            Check.str_matches(r"^[a-z]*pt_\d+$"),
             nullable=False,
-            description="Target patient identifier",
+            description="Target patient identifier ([tag]pt_NNNNNN)",
         ),
         "hcp_id": Column(
             str,
-            Check.str_matches(r"^hcp_\d+$"),
+            Check.str_matches(r"^[a-z]*hcp_\d+$"),
             nullable=False,
-            description="Target HCP identifier",
+            description="Target HCP identifier ([tag]hcp_NNNNN)",
         ),
+        # Standalone mode emits date-only strings; linked mode (the prod
+        # load path) emits 'YYYY-MM-DD HH:MM:SS'. The DB column is
+        # timestamptz and accepts both (#1125 shape drift: the date-only
+        # regex rejected every linked-mode row).
         "trigger_timestamp": Column(
             str,
-            Check.str_matches(r"^\d{4}-\d{2}-\d{2}$"),
+            Check.str_matches(r"^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$"),
             nullable=False,
-            description="Trigger timestamp (YYYY-MM-DD)",
+            description="Trigger timestamp (YYYY-MM-DD[ HH:MM:SS])",
         ),
         "trigger_type": Column(
             str,
@@ -452,11 +463,14 @@ TriggerSchema = DataFrameSchema(
             nullable=False,
             description="Type of trigger",
         ),
+        # Priority is a STRING enum — the DB column is priority_type
+        # (critical|high|medium|low) and the generator emits these strings;
+        # the old int 1-5 contract matched neither side (#1125 shape drift).
         "priority": Column(
-            int,
-            Check.in_range(1, 5),
+            str,
+            Check.isin(TRIGGER_PRIORITY_VALUES),
             nullable=False,
-            description="Priority level (1=highest, 5=lowest)",
+            description="Priority level (critical/high/medium/low)",
         ),
         "confidence_score": Column(
             float,

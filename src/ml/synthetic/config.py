@@ -348,6 +348,13 @@ class EngagementTypeEnum(str, Enum):
 
 TRIGGER_DELIVERY_CHANNELS = ["email", "crm", "mobile", "portal", "rep_alert"]
 
+# Priority levels — must match the DB enum priority_type exactly (verified
+# 2026-07-03: SELECT unnest(enum_range(NULL::priority_type)) -> critical,
+# high, medium, low; all live rows carry these strings). ORDER IS
+# LOAD-BEARING: TriggerGenerator's probability vectors align positionally
+# with this list.
+TRIGGER_PRIORITY_VALUES = ["critical", "high", "medium", "low"]
+
 TRIGGER_DELIVERY_STATUS_VALUES = ["pending", "delivered", "viewed", "failed"]
 
 # 'overridden' (#1119 WS2-TR-006): rep actively overrode the recommendation
