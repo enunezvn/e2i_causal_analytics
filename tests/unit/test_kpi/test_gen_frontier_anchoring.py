@@ -92,8 +92,7 @@ def test_nbrx_include_synthetic_matches_design():
     sql = ROWS["business_impact_nbrx_include_synthetic"].sql
     anchor = ANCHORS["rx"][True]
     assert anchor == (
-        "SELECT MAX(event_date) FROM treatment_events "
-        "WHERE event_type::text = 'prescription'"
+        "SELECT MAX(event_date) FROM treatment_events WHERE event_type::text = 'prescription'"
     )
     # window now ends at the prescription frontier, not wall-clock now
     assert f"first_date >= ({anchor}) - INTERVAL '30 days'" in sql

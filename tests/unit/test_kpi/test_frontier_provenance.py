@@ -51,9 +51,7 @@ def _nbrx_kpi():
 
 @pytest.mark.unit
 def test_calculator_surfaces_data_through_into_metadata_context():
-    calc = BusinessImpactCalculator(
-        db_client=_FakeDB([{"nbrx": 9, "data_through": "2025-04-23"}])
-    )
+    calc = BusinessImpactCalculator(db_client=_FakeDB([{"nbrx": 9, "data_through": "2025-04-23"}]))
     result = calc.calculate(_nbrx_kpi(), {"brand": "Kisqali"})
     assert result.error is None
     assert result.value == 9.0

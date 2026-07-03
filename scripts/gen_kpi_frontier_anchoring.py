@@ -80,8 +80,7 @@ ANCHORS: dict[str, dict[bool, str]] = {
     # 2025-04-23; anchoring on all events would re-create the empty window.
     "rx": {
         True: (
-            "SELECT MAX(event_date) FROM treatment_events "
-            "WHERE event_type::text = 'prescription'"
+            "SELECT MAX(event_date) FROM treatment_events WHERE event_type::text = 'prescription'"
         ),
         False: (
             "SELECT MAX(event_date) FROM (SELECT * FROM treatment_events "
@@ -95,9 +94,7 @@ ANCHORS: dict[str, dict[bool, str]] = {
     # rows carry NO hcp_id (live-verified: reach degenerates to 0 for every
     # brand); the hcp_id IS NOT NULL filter is intrinsic to the metric.
     "treatment_events_hcp": {
-        True: (
-            "SELECT MAX(event_date) FROM treatment_events WHERE hcp_id IS NOT NULL"
-        ),
+        True: ("SELECT MAX(event_date) FROM treatment_events WHERE hcp_id IS NOT NULL"),
         False: (
             "SELECT MAX(event_date) FROM (SELECT * FROM treatment_events "
             "WHERE is_synthetic = false) treatment_events WHERE hcp_id IS NOT NULL"
@@ -193,9 +190,7 @@ TARGETS: dict[str, tuple[str, int]] = {
     **_expand("causal_metrics_ate", "ml_predictions_ts", 1, region=False),
     **_expand("causal_metrics_cate", "ml_predictions_ts", 1, region=False),
     **_expand("model_performance_shap_coverage", "ml_predictions_created", 1, region=False),
-    **_expand(
-        "data_quality_completeness_pass_rate", "patient_journeys_created", 1, region=True
-    ),
+    **_expand("data_quality_completeness_pass_rate", "patient_journeys_created", 1, region=True),
     # brand-specific probes
     **_expand("brand_specific_kisqali_oncologist_reach", "triggers", 1, region=False),
     **_expand("brand_specific_remi_intent_delta_fallback", "hcp_intent_surveys", 1, region=False),

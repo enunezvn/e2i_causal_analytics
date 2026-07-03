@@ -120,9 +120,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
     _region_variant = staticmethod(region_query_id)
 
     @staticmethod
-    def _stash_data_through(
-        context: dict[str, Any], result: list[dict[str, Any]] | None
-    ) -> None:
+    def _stash_data_through(context: dict[str, Any], result: list[dict[str, Any]] | None) -> None:
         """Surface the row's ``data_through`` provenance into the per-call context.
 
         The frontier-anchored registry rows (migration 089) report the as-of
