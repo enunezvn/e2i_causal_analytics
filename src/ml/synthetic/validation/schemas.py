@@ -11,6 +11,9 @@ import pandera.pandas as pa
 from pandera.pandas import Check, Column, DataFrameSchema
 
 from ..config import (
+    TRIGGER_ACCEPTANCE_STATUS_VALUES,
+    TRIGGER_DELIVERY_CHANNELS,
+    TRIGGER_DELIVERY_STATUS_VALUES,
     Brand,
     DataSplit,
     EngagementTypeEnum,
@@ -57,16 +60,17 @@ TRIGGER_TYPES = [
     "reactivation",
 ]
 
-# Delivery channels
-DELIVERY_CHANNELS = ["email", "call", "in_person", "portal"]
-
-# Status enums
-DELIVERY_STATUS_VALUES = ["pending", "sent", "delivered", "failed"]
-# 'overridden' (#1119 WS2-TR-006): rep actively overrode the recommendation —
-# emitted by TriggerGenerator; without it here the Check.isin below rejects
-# every overridden row at validation time and the Override Rate numerator is
-# structurally impossible.
-ACCEPTANCE_STATUS_VALUES = ["pending", "accepted", "rejected", "expired", "overridden"]
+# Trigger delivery/acceptance value sets — single source of truth in
+# config.py, shared with the emitting TriggerGenerator (#1125). These were
+# previously duplicated here and DRIFTED: this file rejected the generator's
+# 'viewed'/'crm'/'mobile'/'rep_alert' (all present in live data; migration
+# 090's TR-006 denominator counts 'viewed') while accepting never-emitted
+# 'sent'/'call'/'in_person'. Same failure mode #1119 hit for 'overridden':
+# without the value here, Check.isin rejects every such row at validation
+# time. Module-level aliases kept for existing importers.
+DELIVERY_CHANNELS = TRIGGER_DELIVERY_CHANNELS
+DELIVERY_STATUS_VALUES = TRIGGER_DELIVERY_STATUS_VALUES
+ACCEPTANCE_STATUS_VALUES = TRIGGER_ACCEPTANCE_STATUS_VALUES
 
 
 # =============================================================================

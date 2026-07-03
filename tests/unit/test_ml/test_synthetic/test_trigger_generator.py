@@ -251,3 +251,63 @@ class TestOverriddenAcceptanceStatus:
             f"accepted share of delivered {accepted_share:.3f} drifted from the "
             "designed 0.50 — this perturbs TR-001/TR-004 and the conversion lift"
         )
+
+
+# ---------------------------------------------------------------------------
+# #1125 — generator/schema value-set drift tripwire
+# ---------------------------------------------------------------------------
+
+
+def _schema_isin_allowed(column_name: str) -> set:
+    """The value set the pandera TriggerSchema actually ENFORCES, introspected
+    from the live Check.isin object (not a parallel constant, so a stale
+    schema cannot vouch for itself)."""
+    from src.ml.synthetic.validation.schemas import TriggerSchema
+
+    column = TriggerSchema.columns[column_name]
+    for check in column.checks:
+        if check.name == "isin":
+            return set(check.statistics["allowed_values"])
+    raise AssertionError(f"TriggerSchema.{column_name} has no Check.isin check")
+
+
+class TestTriggerSchemaValueSetDrift:
+    """#1125: TriggerSchema's Check.isin sets had drifted from the generator
+    (rejecting emitted 'viewed'/'crm'/'mobile'/'rep_alert', accepting
+    never-emitted 'sent'/'call'/'in_person'). Both sides now alias the shared
+    constants in src/ml/synthetic/config.py; these tests assert the emitted
+    value sets stay within the schema-enforced sets so any future divergence
+    fails CI instead of becoming a latent load-path booby trap."""
+
+    @pytest.mark.parametrize(
+        ("generator_values", "column_name"),
+        [
+            (TriggerGenerator.DELIVERY_CHANNELS, "delivery_channel"),
+            (TriggerGenerator.DELIVERY_STATUS_VALUES, "delivery_status"),
+            (TriggerGenerator.ACCEPTANCE_STATUS_VALUES, "acceptance_status"),
+            (TriggerGenerator.TRIGGER_TYPES, "trigger_type"),
+        ],
+    )
+    def test_generator_value_sets_within_schema_isin(self, generator_values, column_name):
+        allowed = _schema_isin_allowed(column_name)
+        drifted = set(generator_values) - allowed
+        assert not drifted, (
+            f"#1125 drift: TriggerGenerator emits {sorted(drifted)} for "
+            f"'{column_name}' but TriggerSchema Check.isin only allows "
+            f"{sorted(allowed)} — reconcile via the shared constants in "
+            "src/ml/synthetic/config.py"
+        )
+
+    @pytest.mark.parametrize("mode", ["standalone", "linked"])
+    def test_emitted_values_within_schema_isin(self, mode: str):
+        """End-to-end: values actually present in a generated frame must pass
+        the schema's isin checks (catches emission paths that bypass the
+        class constants)."""
+        df = _standalone_df(n=2000) if mode == "standalone" else _linked_df()
+        for column_name in ("delivery_channel", "delivery_status", "acceptance_status"):
+            allowed = _schema_isin_allowed(column_name)
+            emitted = set(df[column_name].astype(str))
+            assert emitted <= allowed, (
+                f"#1125 drift: generated '{column_name}' contains "
+                f"{sorted(emitted - allowed)} which TriggerSchema would reject"
+            )

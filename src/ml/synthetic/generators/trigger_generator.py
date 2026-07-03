@@ -9,7 +9,12 @@ from typing import Dict, Optional, cast
 import numpy as np
 import pandas as pd
 
-from ..config import Brand
+from ..config import (
+    TRIGGER_ACCEPTANCE_STATUS_VALUES,
+    TRIGGER_DELIVERY_CHANNELS,
+    TRIGGER_DELIVERY_STATUS_VALUES,
+    Brand,
+)
 from .base import BaseGenerator, GeneratorConfig
 
 # Known-ground-truth trigger->prescription conversion lift (accepted-arm minus
@@ -65,17 +70,19 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         "low": 0.20,
     }
 
-    # Delivery channels
-    DELIVERY_CHANNELS = ["email", "crm", "mobile", "portal", "rep_alert"]
+    # Delivery channels (single source of truth in config.py, shared with the
+    # pandera TriggerSchema — #1125)
+    DELIVERY_CHANNELS = TRIGGER_DELIVERY_CHANNELS
 
-    # Delivery status values
-    DELIVERY_STATUS_VALUES = ["pending", "delivered", "viewed", "failed"]
+    # Delivery status values (shared with TriggerSchema via config.py — #1125)
+    DELIVERY_STATUS_VALUES = TRIGGER_DELIVERY_STATUS_VALUES
 
-    # Acceptance status values. 'overridden' (#1119 WS2-TR-006): rep actively
-    # overrode the recommendation with their own judgment — distinct from
-    # 'rejected' (dismissed outright). Only delivered/viewed triggers can carry
-    # a non-pending disposition (delivery gates acceptance, see below).
-    ACCEPTANCE_STATUS_VALUES = ["pending", "accepted", "rejected", "expired", "overridden"]
+    # Acceptance status values (shared via config.py). 'overridden' (#1119
+    # WS2-TR-006): rep actively overrode the recommendation with their own
+    # judgment — distinct from 'rejected' (dismissed outright). Only
+    # delivered/viewed triggers can carry a non-pending disposition (delivery
+    # gates acceptance, see below).
+    ACCEPTANCE_STATUS_VALUES = TRIGGER_ACCEPTANCE_STATUS_VALUES
 
     # P(acceptance_status | delivered or viewed), aligned with
     # ACCEPTANCE_STATUS_VALUES order. The 'overridden' mass (0.14 — just under

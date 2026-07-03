@@ -33,6 +33,7 @@ except ImportError:
 
 from ..config import (
     DGP_CONFIGS,
+    TRIGGER_DELIVERY_CHANNELS,
     Brand,
     DGPType,
 )
@@ -261,10 +262,10 @@ def build_trigger_expectations(dataset: "PandasDataset") -> "PandasDataset":
         ],
     )
 
-    # Delivery channel distribution
-    dataset.expect_column_values_to_be_in_set(
-        "delivery_channel", ["email", "call", "in_person", "portal"]
-    )
+    # Delivery channel distribution (shared value set — config.py, #1125;
+    # the previous hardcoded list here had the same drift as TriggerSchema:
+    # it rejected the generator's 'crm'/'mobile'/'rep_alert')
+    dataset.expect_column_values_to_be_in_set("delivery_channel", TRIGGER_DELIVERY_CHANNELS)
 
     # Priority distribution (should have mix of priorities)
     dataset.expect_column_mean_to_be_between("priority", min_value=2.0, max_value=4.0)

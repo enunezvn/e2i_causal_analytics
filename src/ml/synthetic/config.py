@@ -333,6 +333,29 @@ class EngagementTypeEnum(str, Enum):
 
 
 # =============================================================================
+# TRIGGER VALUE SETS (single source of truth — #1125)
+# =============================================================================
+# TriggerGenerator EMITS these values; the pandera TriggerSchema
+# (validation/schemas.py) and the GE trigger suite (validation/expectations.py)
+# VALIDATE against the same objects. They were previously duplicated per file
+# and drifted: the schema rejected the generator's 'viewed'/'crm'/'mobile'/
+# 'rep_alert' while accepting never-emitted 'sent'/'call'/'in_person'. The
+# generator side is canonical — live data and migration 090's TR-006
+# delivered-denominator (delivery_status IN ('delivered', 'viewed')) both
+# match it. Change these only in lockstep with the DB substrate; the drift
+# tripwire in tests/unit/test_ml/test_synthetic/test_trigger_generator.py
+# asserts generator-emitted sets ⊆ schema-enforced sets.
+
+TRIGGER_DELIVERY_CHANNELS = ["email", "crm", "mobile", "portal", "rep_alert"]
+
+TRIGGER_DELIVERY_STATUS_VALUES = ["pending", "delivered", "viewed", "failed"]
+
+# 'overridden' (#1119 WS2-TR-006): rep actively overrode the recommendation
+# with their own judgment — distinct from 'rejected' (dismissed outright).
+TRIGGER_ACCEPTANCE_STATUS_VALUES = ["pending", "accepted", "rejected", "expired", "overridden"]
+
+
+# =============================================================================
 # DEFAULT CONFIG INSTANCE
 # =============================================================================
 
