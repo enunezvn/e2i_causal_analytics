@@ -324,6 +324,9 @@ def generate_datasets(
     # 5 view-backed tables anchored to the rolling window. hcp_intent_surveys
     # FK-references hcp_profiles.hcp_id, so the generator samples from this run's
     # real (namespaced) hcp ids — never hardcoded legacy-stub ids.
+    # #1115: n_records sizes the 4 index-keyed tables; user_sessions instead
+    # derives a heterogeneous ~n_records//4 user population (2500 at FULL sizes,
+    # ~33k sessions/90d) so MAU/WAU clear their production-scale targets.
     datasets.update(
         CoverageTablesGenerator(
             GeneratorConfig(
