@@ -40,9 +40,9 @@ class TestKPIThreshold:
         assert threshold.evaluate(None) == KPIStatus.UNKNOWN
 
     def test_evaluate_no_target(self):
-        """Test threshold evaluation with no target."""
+        """No target defined -> INFORMATIONAL (tracked, no target by design)."""
         threshold = KPIThreshold()
-        assert threshold.evaluate(0.85) == KPIStatus.UNKNOWN
+        assert threshold.evaluate(0.85) == KPIStatus.INFORMATIONAL
 
 
 class TestKPIMetadata:
@@ -184,3 +184,4 @@ class TestEnums:
         assert KPIStatus.WARNING.value == "warning"
         assert KPIStatus.CRITICAL.value == "critical"
         assert KPIStatus.UNKNOWN.value == "unknown"
+        assert KPIStatus.INFORMATIONAL.value == "informational"

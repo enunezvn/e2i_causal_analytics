@@ -144,8 +144,11 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         `KPIStatus.UNKNOWN` instead of fabricating GOOD/WARNING/CRITICAL
         from a plausible default.
         """
-        if value is None or kpi.threshold is None:
+        if value is None:
             return KPIStatus.UNKNOWN
+        if kpi.threshold is None:
+            # No threshold by design -> tracked for trend/context only.
+            return KPIStatus.INFORMATIONAL
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
     # ------------------------------------------------------------------ gold-standard helper

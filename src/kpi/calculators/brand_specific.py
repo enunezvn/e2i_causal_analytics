@@ -99,8 +99,11 @@ class BrandSpecificCalculator(KPICalculatorBase):
         self, kpi: KPIMetadata, value: float | None, lower_is_better: bool = False
     ) -> KPIStatus:
         """Evaluate KPI value against thresholds."""
-        if value is None or kpi.threshold is None:
+        if value is None:
             return KPIStatus.UNKNOWN
+        if kpi.threshold is None:
+            # No threshold by design -> tracked for trend/context only.
+            return KPIStatus.INFORMATIONAL
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
     def _calc_remi_ah_uncontrolled(self, context: dict[str, Any]) -> float:

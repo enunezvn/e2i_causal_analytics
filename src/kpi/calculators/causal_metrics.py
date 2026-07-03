@@ -98,7 +98,10 @@ class CausalMetricsCalculator(KPICalculatorBase):
             return KPIResult(  # type: ignore[call-arg]
                 kpi_id=kpi.id,
                 value=value,
-                status=KPIStatus.UNKNOWN,  # Causal metrics typically don't have thresholds
+                # Causal metrics carry CIs/p-values instead of fixed thresholds
+                # (by design) -> INFORMATIONAL when a value exists; UNKNOWN stays
+                # the fail-closed state for a missing value.
+                status=(KPIStatus.INFORMATIONAL if value is not None else KPIStatus.UNKNOWN),
                 metadata={**context, **metadata},
             )
         except Exception as e:

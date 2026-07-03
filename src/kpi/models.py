@@ -40,12 +40,20 @@ class CalculationType(str, Enum):
 
 
 class KPIStatus(str, Enum):
-    """Status of KPI against thresholds."""
+    """Status of KPI against thresholds.
+
+    INFORMATIONAL: the KPI carries no target BY DESIGN (volume metrics
+    tracked for trend/context; causal effect sizes that carry CIs/p-values
+    instead of fixed thresholds — see docs/data/06-KPI-REFERENCE.md,
+    "Volume and Causal Metrics (No Thresholds)"). UNKNOWN is reserved for
+    genuine could-not-evaluate (no value / calculation error).
+    """
 
     GOOD = "good"
     WARNING = "warning"
     CRITICAL = "critical"
     UNKNOWN = "unknown"
+    INFORMATIONAL = "informational"
 
 
 class KPIThreshold(BaseModel):
@@ -79,7 +87,9 @@ class KPIThreshold(BaseModel):
             return KPIStatus.UNKNOWN
 
         if self.target is None:
-            return KPIStatus.UNKNOWN
+            # No target on the threshold = no-target-by-design KPI, not an
+            # evaluation failure.
+            return KPIStatus.INFORMATIONAL
 
         if lower_is_better:
             # Lower values are better (e.g., error rates, Brier score)

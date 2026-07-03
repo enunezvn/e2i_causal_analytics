@@ -127,8 +127,11 @@ class DataQualityCalculator(KPICalculatorBase):
 
     def _evaluate_status(self, kpi: KPIMetadata, value: float | None) -> KPIStatus:
         """Evaluate KPI value against thresholds (direction-aware)."""
-        if value is None or kpi.threshold is None:
+        if value is None:
             return KPIStatus.UNKNOWN
+        if kpi.threshold is None:
+            # No threshold by design -> tracked for trend/context only.
+            return KPIStatus.INFORMATIONAL
         lower_is_better = kpi.id in self._LOWER_IS_BETTER_IDS
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
