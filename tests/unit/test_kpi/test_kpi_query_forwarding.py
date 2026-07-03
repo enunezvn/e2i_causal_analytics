@@ -253,6 +253,30 @@ def test_br003_fails_loud_on_empty_eligible_cohort():
         calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"})
 
 
+def test_br003_fails_loud_on_structurally_zero_numerator():
+    """#1116: 0.0 with ZERO pnh_flow_cytometry events anywhere in treatment_events is
+    a substrate coverage gap, not a business 0% -> fail loud (UNKNOWN), never a
+    plausible-real CRITICAL."""
+    calc, _ = _brand_calc_returning([{"tested_rate": 0.0, "pnh_events_total": 0}])
+    with pytest.raises(RuntimeError, match="structurally-zero"):
+        calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"})
+
+
+def test_br003_genuine_zero_is_preserved_when_concept_exists_in_table():
+    """#1116 guard must NOT mask a genuine 0%: PNH events exist in the table (the
+    concept is being recorded) but none belong to the eligible cohort -> 0.0 is a
+    legitimate CRITICAL reading."""
+    calc, _ = _brand_calc_returning([{"tested_rate": 0.0, "pnh_events_total": 37}])
+    assert calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"}) == 0.0
+
+
+def test_br003_backward_compatible_with_pre_090_registry_sql():
+    """A registry that predates migration 090 returns no pnh_events_total column;
+    the guard must degrade gracefully to the legacy behaviour."""
+    calc, _ = _brand_calc_returning([{"tested_rate": 0.0}])
+    assert calc._calc_fabhalta_pnh_tested({"brand": "Fabhalta"}) == 0.0
+
+
 # --- #577 WS3-BI-003: patient_touch_rate wired (code-anchored eligible + delivered touch) ----
 
 

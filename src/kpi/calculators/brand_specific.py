@@ -160,12 +160,31 @@ class BrandSpecificCalculator(KPICalculatorBase):
         is_eligible flag); the numerator counts genuine PNH-flow lab events. Fails
         loud if there is no D59.5-eligible cohort; a genuine 0.0 (cohort exists but
         none tested) is a legitimate value.
+
+        #1116: additionally fails loud when the numerator is STRUCTURALLY zero —
+        the registry SQL (migration 090) also returns ``pnh_events_total``, the
+        table-wide count of ``pnh_flow_cytometry`` events. Zero table-wide means
+        the concept has never been recorded in the substrate (a coverage/pipeline
+        gap), so rendering 0.0 as a CRITICAL business reading would be a
+        plausible-real fabrication. A genuine 0% (events exist in the table, just
+        none for the eligible cohort) still returns 0.0. Registries that predate
+        migration 090 omit the column -> the guard degrades to legacy behaviour.
         """
         result = self._execute_query("brand_specific_fabhalta_pnh_tested", [])
         if not result or result[0].get("tested_rate") is None:
             raise RuntimeError(
                 "KPI BR-003 unavailable: no PNH-eligible (D59.5) cohort "
                 "(apply the #577 brand-specific seed, migration 046)"
+            )
+        pnh_events_total = result[0].get("pnh_events_total")
+        if pnh_events_total is not None and int(pnh_events_total) == 0:
+            raise RuntimeError(
+                "KPI BR-003 unavailable: structurally-zero numerator - the D59.5 "
+                "cohort is populated but zero pnh_flow_cytometry events exist "
+                "anywhere in treatment_events, so 0.0 would render a substrate "
+                "coverage gap as a plausible-real 0% CRITICAL (issue #1116). "
+                "Reseed treatment_events with the PNH-aware generator "
+                "(scripts/load_synthetic_data.py) or restore the lab feed."
             )
         return float(result[0]["tested_rate"])
 
