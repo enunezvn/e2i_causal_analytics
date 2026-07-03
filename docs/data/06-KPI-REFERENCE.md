@@ -748,7 +748,9 @@ High override rates indicate triggers that do not align with rep judgment and ma
 | **Helper View** | None |
 | **Target** | <= 14 days |
 | **Warning** | > 14 days and <= 21 days |
-| **Critical** | > 30 days |
+| **Critical** | > 30 days (declared ceiling — see status-banding note) |
+
+**Status banding (lower-is-better)**: the direction-aware evaluator (`KPIThreshold.evaluate`) reports **GOOD** for `<= 14 days`, **WARNING** for `> 14 and <= 21 days`, and **CRITICAL** for `> 21 days`. The configured `critical: 30` is a declared ceiling but is **not** a distinct evaluator band — for lower-is-better KPIs the evaluator uses only the `target` and `warning` thresholds, so any value above the warning bound (21 days) is CRITICAL. There is no undefined `(21, 30]` gap: such values evaluate CRITICAL. Same convention as WS1-DQ-009 (#580). Evaluated monotone by design, not band-mode (#1126): the synthetic DGP draws `lead_time_days` uniformly on `[3, 29]` days (no near-zero regime exists), and unlike calibration slope there is no principled `ideal` lead time — within the plausible range, lower genuinely is better.
 
 **Calculator**: `TriggerPerformanceCalculator._calc_lead_time`
 
