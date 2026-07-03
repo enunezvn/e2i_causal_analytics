@@ -139,8 +139,12 @@ def test_per_family_anchor_columns():
     assert "MAX(metric_date)" in ROWS["business_impact_roi_business_metrics_include_synthetic"].sql
     assert "MAX(activity_timestamp)" in ROWS["business_impact_roi_agent_activities"].sql
     assert "MAX(survey_date)" in ROWS["brand_specific_remi_intent_delta_fallback"].sql
-    # hcp_reach counts engagement across ALL event types -> all-events frontier
-    assert ANCHORS["treatment_events"][True] in ROWS["business_impact_hcp_reach_include_synthetic"].sql
+    # hcp_reach counts DISTINCT hcp_id -> the frontier of HCP-ATTRIBUTABLE
+    # events (the 2026-06-20 consultation batch has no hcp_id; anchoring on
+    # the bare all-events frontier degenerated reach to 0, live-verified)
+    anchor = ANCHORS["treatment_events_hcp"][True]
+    assert "hcp_id IS NOT NULL" in anchor
+    assert anchor in ROWS["business_impact_hcp_reach_include_synthetic"].sql
 
 
 def test_multirow_grouped_query_keeps_shape():

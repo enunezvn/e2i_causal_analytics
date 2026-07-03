@@ -89,12 +89,18 @@ ANCHORS: dict[str, dict[bool, str]] = {
             "WHERE event_type::text = 'prescription'"
         ),
     },
-    # HCP reach counts engagement across ALL event types.
-    "treatment_events": {
-        True: "SELECT MAX(event_date) FROM treatment_events",
+    # HCP reach counts DISTINCT hcp_id across all event types -- its true
+    # domain is events ATTRIBUTABLE TO AN HCP. Anchoring on the bare
+    # all-events frontier lands on the 2026-06-20 consultation batch, whose
+    # rows carry NO hcp_id (live-verified: reach degenerates to 0 for every
+    # brand); the hcp_id IS NOT NULL filter is intrinsic to the metric.
+    "treatment_events_hcp": {
+        True: (
+            "SELECT MAX(event_date) FROM treatment_events WHERE hcp_id IS NOT NULL"
+        ),
         False: (
             "SELECT MAX(event_date) FROM (SELECT * FROM treatment_events "
-            "WHERE is_synthetic = false) treatment_events"
+            "WHERE is_synthetic = false) treatment_events WHERE hcp_id IS NOT NULL"
         ),
     },
     "triggers": {
@@ -171,7 +177,7 @@ TARGETS: dict[str, tuple[str, int]] = {
     **_expand("business_impact_nbrx", "rx", 1, region=True),
     **_expand("business_impact_trx_share", "rx", 2, region=True),
     **_expand("business_impact_conversion_rate", "triggers", 2, region=True),
-    **_expand("business_impact_hcp_reach", "treatment_events", 1, region=True),
+    **_expand("business_impact_hcp_reach", "treatment_events_hcp", 1, region=True),
     **_expand("business_impact_roi_business_metrics", "business_metrics", 1, region=False),
     **_expand("business_impact_roi_agent_activities", "agent_activities", 1, region=False),
     # WS2 trigger performance
