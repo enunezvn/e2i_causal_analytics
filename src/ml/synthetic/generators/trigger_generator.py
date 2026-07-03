@@ -21,6 +21,18 @@ _P_ACCEPTED = _P_REJECTED + DESIGNED_CONVERSION_LIFT  # 0.40
 # Per-priority lift scale (all > 0 => sign-stable CATE-by-priority heterogeneity).
 _PRIORITY_LIFT_FACTOR = {"critical": 1.3, "high": 1.3, "medium": 1.0, "low": 0.7}
 
+# #1118 WS2-TR-005 (False Alert Rate): P(field review marks a trigger as a
+# false alert | outcome tracked AND no positive outcome materialized). A false
+# positive can only be MARKED when the outcome was tracked and demonstrably
+# did not pan out (outcome_value NULL or <= 0 — the exact complement of the
+# TR-001 precision numerator `outcome_tracked AND outcome_value > 0`), and
+# field review catches most-but-not-all of those. Realized rate over ALL
+# triggers (the TR-005 denominator):
+#   P(tracked)=0.40 x P(no positive outcome | tracked)~=1-P(accepted)~0.575
+#   x 0.60 ~= 0.14  -> WARNING band (target 0.10 / warning 0.20), coherent
+# with TR-001 precision ~0.38-0.43 CRITICAL from the same table+window.
+_P_FALSE_POSITIVE_MARKED = 0.60
+
 
 class TriggerGenerator(BaseGenerator[pd.DataFrame]):
     """
@@ -59,8 +71,19 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
     # Delivery status values
     DELIVERY_STATUS_VALUES = ["pending", "delivered", "viewed", "failed"]
 
-    # Acceptance status values
-    ACCEPTANCE_STATUS_VALUES = ["pending", "accepted", "rejected", "expired"]
+    # Acceptance status values. 'overridden' (#1119 WS2-TR-006): rep actively
+    # overrode the recommendation with their own judgment — distinct from
+    # 'rejected' (dismissed outright). Only delivered/viewed triggers can carry
+    # a non-pending disposition (delivery gates acceptance, see below).
+    ACCEPTANCE_STATUS_VALUES = ["pending", "accepted", "rejected", "expired", "overridden"]
+
+    # P(acceptance_status | delivered or viewed), aligned with
+    # ACCEPTANCE_STATUS_VALUES order. The 'overridden' mass (0.14 — just under
+    # the TR-006 target 0.15: GOOD, but honestly earned and non-degenerate) is
+    # carved out of pending/rejected/expired; 'accepted' stays at 0.50 so
+    # TR-001 precision (~P(accepted)) and the designed trigger->prescription
+    # conversion lift substrate (accepted-vs-rest arms) are unperturbed.
+    ACCEPTANCE_STATUS_P = [0.12, 0.50, 0.15, 0.09, 0.14]
 
     @property
     def entity_type(self) -> str:
@@ -249,7 +272,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         if delivery_status in ["delivered", "viewed"]:
             acceptance_status = self._rng.choice(
                 self.ACCEPTANCE_STATUS_VALUES,
-                p=[0.15, 0.50, 0.20, 0.15],
+                p=self.ACCEPTANCE_STATUS_P,
             )
         else:
             acceptance_status = "pending"
@@ -260,6 +283,19 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         if outcome_tracked and acceptance_status == "accepted":
             # Positive outcome more likely with high engagement
             outcome_value = round(self._rng.beta(2 + engagement_score / 5, 3) * 1.0, 3)
+
+        # #1118 WS2-TR-005: false-positive marking. Only an outcome-tracked
+        # trigger whose outcome demonstrably failed to materialize (no value,
+        # or <= 0 — the complement of the TR-001 precision numerator) can be
+        # marked a false alert; field review marks _P_FALSE_POSITIVE_MARKED of
+        # those. Unconditional draw keeps the per-record RNG stream shape
+        # stable (deterministic/seeded => reseed-idempotent).
+        fp_draw = self._rng.random()
+        false_positive_flag = bool(
+            outcome_tracked
+            and (outcome_value is None or outcome_value <= 0)
+            and fp_draw < _P_FALSE_POSITIVE_MARKED
+        )
 
         # Generate causal chain and evidence
         causal_chain = self._generate_causal_chain(trigger_type, engagement_score)
@@ -297,6 +333,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             "acceptance_status": acceptance_status,
             "outcome_tracked": outcome_tracked,
             "outcome_value": outcome_value,
+            "false_positive_flag": false_positive_flag,
             "trigger_reason": self._generate_trigger_reason(trigger_type),
             "causal_chain": causal_chain,
             "supporting_evidence": supporting_evidence,
@@ -503,7 +540,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
         for ds in delivery_statuses:
             if ds in ["delivered", "viewed"]:
                 acceptance_statuses.append(
-                    self._rng.choice(self.ACCEPTANCE_STATUS_VALUES, p=[0.15, 0.50, 0.20, 0.15])
+                    self._rng.choice(self.ACCEPTANCE_STATUS_VALUES, p=self.ACCEPTANCE_STATUS_P)
                 )
             else:
                 acceptance_statuses.append("pending")
@@ -514,6 +551,18 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
             round(self._rng.beta(3, 3) * 1.0, 3) if tracked and acc == "accepted" else None
             for tracked, acc in zip(outcome_tracked, acceptance_statuses, strict=False)
         ]
+
+        # #1118 WS2-TR-005: false-positive marking (mirrors
+        # _generate_trigger_record — tracked AND no positive outcome AND field
+        # review marks it, all off the seeded RNG => reseed-idempotent).
+        unproductive = np.array(
+            [v is None or v <= 0 for v in outcome_values],
+            dtype=bool,
+        )
+        fp_draws = self._rng.random(n)
+        false_positive_flags = (
+            outcome_tracked & unproductive & (fp_draws < _P_FALSE_POSITIVE_MARKED)
+        )
 
         # Brands
         brands_list: list[str]
@@ -551,6 +600,7 @@ class TriggerGenerator(BaseGenerator[pd.DataFrame]):
                 "acceptance_status": acceptance_statuses,
                 "outcome_tracked": outcome_tracked,
                 "outcome_value": outcome_values,
+                "false_positive_flag": false_positive_flags.tolist(),
                 "trigger_reason": [self._generate_trigger_reason(tt) for tt in trigger_types],
                 "causal_chain": [
                     self._generate_causal_chain(tt, eng)

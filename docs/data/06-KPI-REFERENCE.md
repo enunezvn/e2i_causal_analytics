@@ -715,13 +715,15 @@ Uses the `control_group_flag` on the triggers table to compare treatment and con
 | **Unit** | Ratio (0.0 - 1.0) |
 | **Frequency** | Daily |
 | **Source Tables** | `triggers` |
-| **Source Columns** | `triggers.acceptance_status` |
+| **Source Columns** | `triggers.acceptance_status`, `triggers.delivery_status` |
 | **Helper View** | None |
 | **Target** | <= 0.15 |
 | **Warning** | > 0.15 and <= 0.25 |
 | **Critical** | > 0.40 |
 
 High override rates indicate triggers that do not align with rep judgment and may require model recalibration.
+
+"Delivered" in the denominator means `delivery_status IN ('delivered', 'viewed')` — a viewed trigger is strictly post-delivery, and only delivered triggers can carry a non-pending acceptance disposition (migration 090, #1119).
 
 **Calculator**: `TriggerPerformanceCalculator._calc_override_rate`
 

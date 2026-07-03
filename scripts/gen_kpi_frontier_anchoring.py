@@ -243,13 +243,16 @@ _UPDATE_RE = re.compile(
 def replay_registry(migrations_dir: Path = MIGRATIONS_DIR) -> dict[str, Row]:
     """Rebuild the registry state by replaying migrations in filename order.
 
-    Excludes this script's own output (089) so regeneration never re-transforms
-    already-transformed SQL -- the transform would fail loud anyway (no NOW()
-    left to replace), but excluding it keeps replay a faithful "pre-089" view.
+    Excludes this script's own output (089) AND everything after it, so the
+    replay stays a faithful "pre-089" view. Post-089 migrations re-register
+    rows that are ALREADY frontier-anchored (e.g. 090 rewrites the
+    override_rate denominator, #1119); replaying them would hand the transform
+    NOW()-free SQL and trip the exact-or-refuse tripwire. Filenames are
+    zero-padded NNN_ prefixed, so lexicographic order is migration order.
     """
     rows: dict[str, Row] = {}
     for path in sorted(migrations_dir.glob("*.sql")):
-        if path.name == MIGRATION_FILENAME:
+        if path.name >= MIGRATION_FILENAME:
             continue
         text = path.read_text()
         if "kpi_query_registry" not in text:

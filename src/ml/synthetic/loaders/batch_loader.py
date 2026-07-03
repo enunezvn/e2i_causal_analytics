@@ -259,6 +259,10 @@ TABLE_COLUMNS = {
         "control_group_flag",
         "outcome_tracked",
         "outcome_value",
+        # #1118 WS2-TR-005: false-positive marking emitted by TriggerGenerator.
+        # Must be registered or the loader strips it -> every row reverts to the
+        # schema default FALSE and False Alert Rate is vacuously GOOD again.
+        "false_positive_flag",
         "trigger_reason",
         "causal_chain",
         "supporting_evidence",

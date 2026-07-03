@@ -258,9 +258,12 @@ class TestTriggerGenerator:
             assert status in valid_statuses, f"Invalid status: {status}"
 
     def test_acceptance_status_valid(self, generator):
-        """Test that acceptance status values are valid."""
+        """Test that acceptance status values are valid.
+
+        'overridden' added by #1119 (WS2-TR-006 Override Rate numerator).
+        """
         df = generator.generate()
-        valid_statuses = {"pending", "accepted", "rejected", "expired"}
+        valid_statuses = {"pending", "accepted", "rejected", "expired", "overridden"}
 
         for status in df["acceptance_status"].unique():
             assert status in valid_statuses, f"Invalid status: {status}"

@@ -56,8 +56,8 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS2-TR-002 | Trigger Recall | `triggers`+`treatment_events` → `trigger_performance_recall` | MAPPED | recall=0.474 |
 | WS2-TR-003 | Action Rate Uplift | `triggers.action_taken/control_group_flag` → `trigger_performance_action_rate_uplift` (Shard 05) | MAPPED | uplift=0.257 |
 | WS2-TR-004 | Acceptance Rate | `triggers.acceptance_status` → `trigger_performance_acceptance_rate` | MAPPED | rate=0.401 |
-| WS2-TR-005 | False Alert Rate | `triggers.false_positive_flag` → `trigger_performance_false_alert_rate` | MAPPED | rate=0 (no false alerts — valid) |
-| WS2-TR-006 | Override Rate | `triggers.acceptance_status='overridden'` → `trigger_performance_override_rate` | MAPPED | rate=0 (no overrides — valid) |
+| WS2-TR-005 | False Alert Rate | `triggers.false_positive_flag` → `trigger_performance_false_alert_rate` (#1118: DGP marks ~60% of tracked-but-unproductive triggers) | MAPPED | rate≈0.13–0.15 (WARNING — coherent with TR-001 precision) |
+| WS2-TR-006 | Override Rate | `triggers.acceptance_status='overridden'` → `trigger_performance_override_rate` (#1119: DGP emits `overridden` at P=0.14 of delivered; migration 090 denominator = delivered) | MAPPED | rate≈0.14 of delivered |
 | WS2-TR-007 | Lead Time | `triggers.lead_time_days` → `trigger_performance_lead_time` | MAPPED | median=16 |
 | WS2-TR-008 | Change-Fail Rate (CFR) | `triggers.previous_trigger_id/change_failed` → `trigger_performance_cfr` — **stamped by `stamp_change_tracking`** | MAPPED | cfr=0.222 |
 | WS3-BI-001 | Monthly Active Users | `user_sessions.user_id/session_start` → `v_kpi_active_users` / mau fallback (Task 5) | MAPPED | mau=30 |

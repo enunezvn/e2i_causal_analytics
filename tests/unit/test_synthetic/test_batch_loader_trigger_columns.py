@@ -19,3 +19,11 @@ def test_triggers_is_synthetic_registered():
 def test_triggers_ws2tr003_arm_columns_registered():
     for c in ("action_taken", "control_group_flag", "outcome_tracked"):
         assert c in TABLE_COLUMNS["triggers"], f"{c} stripped -> action_rate_uplift breaks"
+
+
+def test_triggers_false_positive_flag_registered():
+    # #1118 WS2-TR-005: if the loader strips false_positive_flag, every row
+    # reverts to the schema default FALSE and False Alert Rate is vacuously GOOD.
+    assert "false_positive_flag" in TABLE_COLUMNS["triggers"], (
+        "false_positive_flag stripped -> TR-005 stays vacuous after reseed"
+    )
