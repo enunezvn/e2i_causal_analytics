@@ -242,7 +242,10 @@ TreatmentEventSchema = DataFrameSchema(
     columns={
         "treatment_event_id": Column(
             str,
-            Check.str_matches(r"^trx_\d+$"),
+            # trx_<seq> = drug/consult events; trxc_<seq> = injected conversion
+            # prescriptions (trigger_generator); pnh_<patient_id> = deterministic
+            # per-patient PNH flow-cytometry lab events (#1116, BR-003 numerator).
+            Check.str_matches(r"^(trx_\d+|trxc_\d+|pnh_.+)$"),
             unique=True,
             description="Unique treatment event identifier",
         ),
@@ -282,29 +285,32 @@ TreatmentEventSchema = DataFrameSchema(
             nullable=False,
             description="Type of treatment event",
         ),
+        # Dispensing/adherence fields are NULL on diagnostic lab rows (#1116 —
+        # pnh_flow_cytometry events carry no drug semantics), hence nullable with
+        # range checks applying to the populated (drug-event) rows only.
         "duration_days": Column(
-            int,
+            "Int64",
             Check.in_range(1, 365),
-            nullable=False,
-            description="Duration in days",
+            nullable=True,
+            description="Duration in days (NULL on diagnostic lab rows)",
         ),
         "refill_number": Column(
-            int,
+            "Int64",
             Check.in_range(0, 50),
-            nullable=False,
-            description="Refill sequence number",
+            nullable=True,
+            description="Refill sequence number (NULL on diagnostic lab rows)",
         ),
         "adherence_score": Column(
             float,
             Check.in_range(0.0, 1.0),
-            nullable=False,
-            description="Adherence score (0-1)",
+            nullable=True,
+            description="Adherence score (0-1; NULL on diagnostic lab rows)",
         ),
         "efficacy_score": Column(
             float,
             Check.in_range(0.0, 1.0),
-            nullable=False,
-            description="Efficacy score (0-1)",
+            nullable=True,
+            description="Efficacy score (0-1; NULL on diagnostic lab rows)",
         ),
         "data_split": Column(
             str,

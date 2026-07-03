@@ -810,10 +810,16 @@ brand_specific:
     calculation_type: derived
     brand: Fabhalta
     tables:
+      - patient_journeys
       - treatment_events
+    # #1116: reconciled to the REAL columns the registry SQL reads. The previous
+    # treatment_events.test_type does not exist on the table; the numerator keys on
+    # event_subtype='pnh_flow_cytometry' + a real PNH LOINC in loinc_codes, and the
+    # denominator on the D59.5 dx carried by patient_journeys.
     columns:
-      - treatment_events.event_type
-      - treatment_events.test_type
+      - patient_journeys.primary_diagnosis_code
+      - treatment_events.event_subtype
+      - treatment_events.loinc_codes
     view: null
     threshold:
       target: 0.60

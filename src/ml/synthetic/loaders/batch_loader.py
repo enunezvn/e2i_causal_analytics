@@ -198,6 +198,12 @@ TABLE_COLUMNS = {
         "drug_class",
         "event_subtype",
         "icd_codes",
+        # #1116 (BR-003): PNH flow-cytometry lab events carry a real PNH LOINC in
+        # loinc_codes (text[]; the registry SQL matches with &&) and the clone-size
+        # reading in lab_values (jsonb). Unregistered columns are gated out at load
+        # -> the BR-003 numerator would silently stay zero.
+        "loinc_codes",
+        "lab_values",
         # Shard 09 WS3-BI-006 (NRx): per-(patient,brand) chronological prescription
         # index. NRx counts sequence_number=1 prescriptions; stamped by
         # sequence_number.stamp_sequence_number in the load script.
@@ -614,6 +620,11 @@ OPTIONAL_COLUMNS = frozenset(
     {
         "data_lag_hours",  # patient_journeys (Shard 09 WS1-DQ-007 enrichment stamp)
         "sequence_number",  # treatment_events (NRx ordering enrichment stamp)
+        # treatment_events PNH lab columns (#1116 BR-003): populated only on
+        # pnh_flow_cytometry rows; other treatment_events producers (e.g. the
+        # injected conversion prescriptions) legitimately omit them.
+        "loinc_codes",
+        "lab_values",
         # ml_predictions model-quality metrics (nullable; only on evaluated predictions)
         "model_auc",
         "model_pr_auc",
