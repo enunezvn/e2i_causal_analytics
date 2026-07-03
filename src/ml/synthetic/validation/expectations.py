@@ -33,6 +33,8 @@ except ImportError:
 
 from ..config import (
     DGP_CONFIGS,
+    TRIGGER_DELIVERY_CHANNELS,
+    TRIGGER_PRIORITY_VALUES,
     Brand,
     DGPType,
 )
@@ -241,8 +243,10 @@ def build_trigger_expectations(dataset: "PandasDataset") -> "PandasDataset":
     dataset.expect_column_values_to_not_be_null("trigger_type")
     dataset.expect_column_values_to_not_be_null("priority")
 
-    # Value ranges
-    dataset.expect_column_values_to_be_between("priority", min_value=1, max_value=5)
+    # Value ranges. Priority is a STRING enum (DB priority_type:
+    # critical|high|medium|low) — the old numeric 1-5 range check matched
+    # neither the generator nor the DB (#1125 shape drift).
+    dataset.expect_column_values_to_be_in_set("priority", TRIGGER_PRIORITY_VALUES)
     dataset.expect_column_values_to_be_between("confidence_score", min_value=0, max_value=1)
     dataset.expect_column_values_to_be_between("lead_time_days", min_value=0, max_value=365)
 
@@ -261,13 +265,14 @@ def build_trigger_expectations(dataset: "PandasDataset") -> "PandasDataset":
         ],
     )
 
-    # Delivery channel distribution
-    dataset.expect_column_values_to_be_in_set(
-        "delivery_channel", ["email", "call", "in_person", "portal"]
-    )
+    # Delivery channel distribution (shared value set — config.py, #1125;
+    # the previous hardcoded list here had the same drift as TriggerSchema:
+    # it rejected the generator's 'crm'/'mobile'/'rep_alert')
+    dataset.expect_column_values_to_be_in_set("delivery_channel", TRIGGER_DELIVERY_CHANNELS)
 
-    # Priority distribution (should have mix of priorities)
-    dataset.expect_column_mean_to_be_between("priority", min_value=2.0, max_value=4.0)
+    # (The former expect_column_mean_to_be_between("priority", 2.0, 4.0) is
+    # dropped with the numeric-priority contract — a mean over the string
+    # enum is undefined; the in-set check above covers the column.)
 
     return dataset
 
