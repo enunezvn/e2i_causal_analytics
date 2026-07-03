@@ -98,17 +98,29 @@ class TestTreatmentGenerator:
         assert df["days_supply"].max() <= 90
 
     def test_linked_generation_referential_integrity(self, linked_generator):
-        """Test that linked generation maintains referential integrity."""
+        """Test that linked generation maintains referential integrity.
+
+        #1116: PNH flow-cytometry diagnostic rows (event_subtype
+        'pnh_flow_cytometry') are exempt from the initiated-patients invariant —
+        the BR-003 test precedes and is independent of treatment initiation, so
+        they cover the full D59.5 Fabhalta cohort. They must still reference
+        real patients from the linked frame.
+        """
         treatment_gen, patient_df = linked_generator
         treatment_df = treatment_gen.generate()
 
         if len(treatment_df) > 0:
-            # All treatment patient IDs should be from initiated patients
+            is_pnh = treatment_df["event_subtype"] == "pnh_flow_cytometry"
+            # Drug/consult rows: only for patients who initiated treatment
             initiated_patients = set(
                 patient_df[patient_df["treatment_initiated"] == 1]["patient_id"]
             )
-            for patient_id in treatment_df["patient_id"].unique():
+            for patient_id in treatment_df.loc[~is_pnh, "patient_id"].unique():
                 assert patient_id in initiated_patients
+            # PNH diagnostic rows: any real patient from the linked frame
+            all_patients = set(patient_df["patient_id"])
+            for patient_id in treatment_df.loc[is_pnh, "patient_id"].unique():
+                assert patient_id in all_patients
 
 
 class TestEngagementGenerator:
@@ -330,9 +342,15 @@ class TestEventGeneratorIntegration:
         assert len(full_pipeline_data["engagements"]) > 0
 
     def test_referential_integrity_chain(self, full_pipeline_data):
-        """Test referential integrity across all entities."""
+        """Test referential integrity across all entities.
+
+        #1116: PNH flow-cytometry diagnostic rows are exempt from the
+        initiated-patients invariant (the BR-003 test covers the full D59.5
+        Fabhalta cohort, independent of initiation) but must still reference
+        real patients.
+        """
         hcp_ids = set(full_pipeline_data["hcps"]["hcp_id"])
-        set(full_pipeline_data["patients"]["patient_id"])
+        all_patient_ids = set(full_pipeline_data["patients"]["patient_id"])
         initiated_ids = set(
             full_pipeline_data["patients"][
                 full_pipeline_data["patients"]["treatment_initiated"] == 1
@@ -343,10 +361,15 @@ class TestEventGeneratorIntegration:
         for hcp_id in full_pipeline_data["engagements"]["hcp_id"].unique():
             assert hcp_id in hcp_ids
 
-        # Treatments reference valid initiated patients
+        # Drug/consult treatments reference valid initiated patients; PNH
+        # diagnostic rows reference any valid patient.
         if len(full_pipeline_data["treatments"]) > 0:
-            for patient_id in full_pipeline_data["treatments"]["patient_id"].unique():
+            treatments = full_pipeline_data["treatments"]
+            is_pnh = treatments["event_subtype"] == "pnh_flow_cytometry"
+            for patient_id in treatments.loc[~is_pnh, "patient_id"].unique():
                 assert patient_id in initiated_ids
+            for patient_id in treatments.loc[is_pnh, "patient_id"].unique():
+                assert patient_id in all_patient_ids
 
         # Outcomes reference valid initiated patients
         if len(full_pipeline_data["outcomes"]) > 0:

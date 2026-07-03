@@ -4,12 +4,18 @@ Treatment Event Generator.
 Generates synthetic treatment events linked to patient journeys.
 """
 
-from typing import List, Optional, cast
+import hashlib
+from typing import Any, List, Optional, cast
 
 import numpy as np
 import pandas as pd
 
-from ..clinical_codes import brand_codes
+from ..clinical_codes import (
+    PNH_FLOW_EVENT_SUBTYPE,
+    PNH_FLOW_LOINC,
+    PNH_TESTED_PREVALENCE,
+    brand_codes,
+)
 from ..config import Brand
 from .base import BaseGenerator, GeneratorConfig
 
@@ -92,7 +98,10 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
 
             if len(eligible_patients) == 0:
                 self._log("Warning: No eligible patients for treatment events")
-                return pd.DataFrame()
+                # PNH diagnostic testing (#1116) is independent of treatment
+                # initiation, so the BR-003 numerator must still be emitted even
+                # when nobody initiated.
+                return self._generate_pnh_testing_events()
 
             # Calculate events per patient
             events_per_patient = max(1, n // len(eligible_patients))
@@ -194,8 +203,130 @@ class TreatmentGenerator(BaseGenerator[pd.DataFrame]):
             }
         )
 
+        # #1116 (BR-003): append the PNH flow-cytometry diagnostic events for the
+        # D59.5-eligible Fabhalta cohort. Emitted here (the ACTIVE generator) so a
+        # full reseed carries the BR-003 numerator durably — the legacy
+        # src/ml/data_generator.py PNH branch and migration 046 block C are NOT in
+        # the reseed path and their rows did not survive regenerates.
+        pnh_df = self._generate_pnh_testing_events()
+        if not pnh_df.empty:
+            df = pd.concat([df, pnh_df], ignore_index=True)
+            self._log(f"Appended {len(pnh_df)} pnh_flow_cytometry lab events (BR-003)")
+
         self._log(f"Generated {len(df)} treatment events")
         return df
+
+    @staticmethod
+    def _stable_bucket(key: str, salt: str, modulus: int = 100) -> int:
+        """Deterministic per-key bucket in ``[0, modulus)``.
+
+        md5 of the salted key — NOT the seeded RNG — so PNH-tested membership is
+        a stable property of the patient id: invariant to row order, dataset
+        size, and generator seed. Mirrors migration 046's ``hashtext()``
+        determinism and keeps reseeds idempotent (same patient -> same tested
+        flag -> same deterministic PK -> the loader's PK upsert overwrites
+        instead of accumulating; the uuid4-PK non-idempotency lesson).
+        """
+        digest = hashlib.md5(f"{key}|{salt}".encode(), usedforsecurity=False).hexdigest()
+        return int(digest, 16) % modulus
+
+    def _generate_pnh_testing_events(self) -> pd.DataFrame:
+        """Emit one ``pnh_flow_cytometry`` lab_test per ~PNH_TESTED_PREVALENCE of
+        D59.5-eligible Fabhalta patients (#1116, BR-003 numerator).
+
+        Eligibility is DERIVED from the real D59.5 diagnosis — the same anchor the
+        BR-003 registry SQL uses for its denominator — and deliberately IGNORES
+        ``treatment_initiated``: the diagnostic test precedes and is independent of
+        Fabhalta initiation, and BR-003's denominator is every D59.5 journey. The
+        untested ~35% get no row, so tested/eligible computes as a real ratio.
+
+        Rows are ``event_type='lab_test'`` with NO drug coding, keeping them inert
+        for every prescription-counting KPI (TRx/NRx/NBRx) — the migration-086
+        contamination lesson.
+        """
+        if self.patient_df is None or len(self.patient_df) == 0:
+            return pd.DataFrame()
+        required = {"patient_id", "patient_journey_id", "brand", "journey_start_date"}
+        missing = required - set(self.patient_df.columns)
+        if missing:
+            self._log(f"PNH testing skipped: patient_df missing {sorted(missing)}")
+            return pd.DataFrame()
+        if "primary_diagnosis_code" not in self.patient_df.columns:
+            # Without the dx column the eligible cohort is underivable; never
+            # guess eligibility from brand alone (fail-empty, not fail-plausible).
+            self._log("PNH testing skipped: patient_df has no primary_diagnosis_code")
+            return pd.DataFrame()
+
+        fab_codes = brand_codes(Brand.FABHALTA.value)
+        eligible_dx = set(cast("list[str]", fab_codes["icd10"]))  # {"D59.5"}
+        pdf = self.patient_df
+        eligible = pdf[
+            (pdf["brand"] == Brand.FABHALTA.value)
+            & pdf["primary_diagnosis_code"].isin(eligible_dx)
+            & pdf["journey_start_date"].notna()
+        ].drop_duplicates(subset="patient_id")
+        if len(eligible) == 0:
+            return pd.DataFrame()
+
+        tested_cutoff = int(round(PNH_TESTED_PREVALENCE * 100))
+        tested = eligible[
+            eligible["patient_id"].map(
+                lambda pid: self._stable_bucket(str(pid), "pnh_tested") < tested_cutoff
+            )
+        ]
+        if len(tested) == 0:
+            return pd.DataFrame()
+
+        patient_ids = [str(p) for p in tested["patient_id"].tolist()]
+        # Deterministic per-patient LOINC (all real PNH-flow codes) + clone size %
+        # (0-95.00, matching the legacy generator's uniform(0, 95) span).
+        loincs = [
+            PNH_FLOW_LOINC[self._stable_bucket(pid, "pnh_loinc", len(PNH_FLOW_LOINC))]
+            for pid in patient_ids
+        ]
+        clone_pcts = [
+            round(self._stable_bucket(pid, "pnh_clone", 9501) / 100.0, 2) for pid in patient_ids
+        ]
+        # Test lands on the journey (diagnosis) date; cap onto the rolling window
+        # when anchoring is on so no derived date is in the future.
+        event_dates = self._shift_dates_to_window(
+            [str(d)[:10] for d in tested["journey_start_date"].tolist()]
+        )
+        hcp_ids: List[Any] = (
+            tested["hcp_id"].tolist() if "hcp_id" in tested.columns else [None] * len(tested)
+        )
+        dx0 = str(cast("list[str]", fab_codes["icd10"])[0])
+
+        return pd.DataFrame(
+            {
+                # Deterministic PK derived from the (already id_prefix-namespaced)
+                # patient id; <= 30 chars (treatment_events PK is VARCHAR(30)).
+                "treatment_event_id": [f"pnh_{pid}" for pid in patient_ids],
+                "patient_journey_id": tested["patient_journey_id"].tolist(),
+                "patient_id": patient_ids,
+                "hcp_id": hcp_ids,
+                "brand": Brand.FABHALTA.value,
+                "treatment_date": event_dates,
+                "treatment_type": "lab_test",
+                "event_subtype": PNH_FLOW_EVENT_SUBTYPE,
+                "loinc_codes": [[lo] for lo in loincs],
+                "lab_values": [{"assay": "PNH_clone", "value": v, "unit": "%"} for v in clone_pcts],
+                # dx context: real text[] DB column + the frame-only scalar the
+                # Shard 05/06 joins read (gated out by the loader).
+                "icd_codes": [[dx0]] * len(patient_ids),
+                "primary_diagnosis_code": dx0,
+                # Diagnostic lab rows carry no dispensing/adherence semantics ->
+                # NULL (never plausible-fake scores on a non-drug event).
+                "drug_ndc": None,
+                "drug_name": None,
+                "drug_class": None,
+                "days_supply": np.nan,
+                "refill_number": np.nan,
+                "adherence_score": np.nan,
+                "efficacy_score": np.nan,
+                "data_split": self._assign_splits(event_dates),
+            }
+        )
 
     def _generate_treatment_types(self, brands: List[str]) -> List[str]:
         """Generate treatment types based on brand."""
