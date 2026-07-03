@@ -1303,7 +1303,7 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
     if brand not in valid_brands:
         return {
             "brand": brand,
-            "period": "Last 30 days",
+            "period": "Last 30 days of data",
             "metrics": dict.fromkeys(metric_fields),
             "data_source": "unavailable",
             "data_through": None,
@@ -1349,7 +1349,9 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
 
     return {
         "brand": brand,
-        "period": "Last 30 days",
+        # Frontier-anchored (migration 089): the window ends at data_through,
+        # not wall-clock now — "of data" keeps the tile label honest.
+        "period": "Last 30 days of data",
         "metrics": metrics,
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather

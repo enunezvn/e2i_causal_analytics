@@ -10,6 +10,8 @@
 
 **Reference sections**: [Threshold Interpretation](#threshold-interpretation-guide) | [Helper Views](#helper-views) | [KPI Data Flow](#kpi-data-flow)
 
+> **Reporting windows (migration 089)**: KPIs described as covering a "30-day" / "trailing" window are anchored at the **data frontier** — the window ends at `MAX(<domain timestamp>)` of the query's own domain (e.g. latest prescription for TRx/NRx/NBRx), **not** wall-clock `NOW()`. The synthetic gold-standard substrate is calendar-fixed by design (journeys 2022-01-01..2024-12-31), so `NOW()`-anchored windows silently decayed to empty sets as time passed the seed date. Each answer carries a `data_through` as-of date. Exception: MAU/WAU stay `NOW()`-anchored — `user_sessions` is real accruing app usage.
+
 ---
 
 ## Summary Table
@@ -209,7 +211,7 @@ SELECT lift_score FROM v_kpi_stacking_lift LIMIT 1
 
 **Calculator**: `DataQualityCalculator._calc_completeness_pass_rate`
 
-Critical fields checked: `patient_id`, `brand`, `event_date`. Records from the last 30 days are evaluated.
+Critical fields checked: `patient_id`, `brand`, `event_date`. Records from the most recent 30 days of data are evaluated (frontier-anchored on `patient_journeys.created_at`, migration 089).
 
 ---
 
@@ -515,7 +517,7 @@ SELECT
     COUNT(CASE WHEN shap_values IS NOT NULL THEN 1 END)::float /
     NULLIF(COUNT(*), 0) AS coverage
 FROM predictions p
-WHERE p.created_at >= NOW() - INTERVAL '30 days'
+WHERE p.created_at >= (SELECT MAX(created_at) FROM ml_predictions) - INTERVAL '30 days'  -- frontier-anchored (089)
 ```
 
 ---

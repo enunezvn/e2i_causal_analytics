@@ -1349,26 +1349,32 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Time window, e.g. 'last 3 months', 'Q1 2025', or "
-            "'2025-01-01 to 2025-03-31'. Omit for the engine's default rolling window."
+            "'2025-01-01 to 2025-03-31'. Omit for the engine's default window "
+            "(the most recent 30 days of available data)."
         ),
     )
 
 
 # Reporting window per KPI id, MIRRORED from the vetted SQL in the kpi_query
-# allowlist registry (database/migrations/044_kpi_query_allowlist.sql and 066).
-# The WS3 volume KPIs count prescriptions over a ROLLING 30-day window
-# (`... WHERE first_date >= NOW() - INTERVAL '30 days'`). The engine does NOT
-# accept a caller-supplied date range: params bind positionally to the
-# immutable vetted statement ($1=brand, $2=region), so there is nowhere to
-# inject a custom period without a new migration. Surfacing the real window
-# lets the chatbot CITE it instead of silently presenting, say, a 30-day NBRx
-# as a user-requested "past 3 months". Only KPIs whose window we have verified
-# against the registry are listed; for any other KPI the field is omitted
-# (honest absence over a guessed period). KEEP IN SYNC with those migrations.
+# allowlist registry (database/migrations/044/066, re-anchored by 089).
+# The WS3 KPIs count over a 30-day window that ends at the DATA FRONTIER
+# (`MAX(<domain ts>)` -- migration 089), NOT wall-clock NOW(): the synthetic
+# gold-standard substrate is calendar-fixed by design, so a NOW()-anchored
+# window silently decays to an empty set (the 2026-07-03 "NBRx = 0.0"
+# incident). The engine surfaces the concrete as-of date per answer as
+# `data_through`; this static note names the window SEMANTICS and the domain
+# the frontier belongs to. Surfacing the real window lets the chatbot CITE it
+# instead of presenting the figure as "the last 30 calendar days". Only KPIs
+# whose window we have verified against the registry are listed; for any other
+# KPI the field is omitted (honest absence over a guessed period -- ROI stays
+# out: its two source probes' frontiers diverge). KEEP IN SYNC with those
+# migrations.
 KPI_REPORTING_WINDOWS = {
-    "WS3-BI-005": "rolling last 30 days",  # TRx
-    "WS3-BI-006": "rolling last 30 days",  # NRx
-    "WS3-BI-007": "rolling last 30 days",  # NBRx
+    "WS3-BI-005": "most recent 30 days of prescription data",  # TRx
+    "WS3-BI-006": "most recent 30 days of prescription data",  # NRx
+    "WS3-BI-007": "most recent 30 days of prescription data",  # NBRx
+    "WS3-BI-008": "most recent 30 days of prescription data",  # TRx share
+    "WS3-BI-009": "most recent 30 days of trigger data",  # Conversion rate
 }
 
 
@@ -1387,7 +1393,14 @@ def _kpi_result_to_response(
     state exactly which period the figure covers. The static ``reporting_window``
     note is included ONLY when ``window_status == 'default'`` (no custom window was
     applied); when a custom window was honored or was not applicable, the stale
-    "rolling last 30 days" note would contradict the real answer.
+    default-window note would contradict the real answer.
+
+    ``data_through`` (migration 089): the frontier-anchored default windows end
+    at the domain's latest data date, not wall-clock now -- the substrate is
+    calendar-fixed by design. When the engine surfaced that as-of date (stashed
+    into metadata context by the calculator), copy it up so the chatbot cites
+    e.g. "30 days ending 2025-04-23" instead of implying recency. Honest
+    absence when the engine did not report one.
     """
     if getattr(result, "error", None):
         return {
@@ -1397,7 +1410,8 @@ def _kpi_result_to_response(
             "kpi_name": kpi.name,
             "error": result.error,
         }
-    include_synthetic = bool((getattr(result, "metadata", None) or {}).get("include_synthetic"))
+    metadata = getattr(result, "metadata", None) or {}
+    include_synthetic = bool(metadata.get("include_synthetic"))
     window_status = getattr(result, "window_status", "default")
     response: Dict[str, Any] = {
         "success": True,
@@ -1413,6 +1427,9 @@ def _kpi_result_to_response(
         "window_applied": getattr(result, "window_applied", None),
         "window_status": window_status,
     }
+    data_through = (metadata.get("context") or {}).get("data_through")
+    if data_through is not None:
+        response["data_through"] = data_through
     if window_status == "default":
         window = KPI_REPORTING_WINDOWS.get(kpi.id)
         if window:
@@ -1441,22 +1458,25 @@ async def kpi_calculate_tool(
     that period. The engine reports back ``window_status`` ("applied" when the
     requested window was honored, "not_applicable" when the KPI has no time
     dimension, "default" when no window was requested), plus ``window_requested``
-    and ``window_applied``. When no custom window applies, the engine's fixed
-    rolling window is disclosed via ``reporting_window``. State the brand and the
-    period your answer actually covers — do NOT imply a figure covers a period it
-    does not.
+    and ``window_applied``. When no custom window applies, the engine's default
+    window is disclosed via ``reporting_window`` — it is FRONTIER-ANCHORED
+    (migration 089): "the most recent 30 days of data", ending at the domain's
+    latest data date (``data_through``), NOT the last 30 calendar days. State
+    the brand and the period your answer actually covers — cite ``data_through``
+    when present, and do NOT imply a figure covers a period it does not.
 
     Args:
         kpi_name: the KPI to compute (resolved against the defined KPI registry).
         brand: optional brand filter (case-insensitive).
         region: optional region/territory filter.
         window: optional time window (rolling or absolute); omit for the
-            engine's default rolling window.
+            engine's default window (most recent 30 days of data).
 
     Returns:
         Dict with success, kpi_id, kpi_name, value, status, data_source, brand,
-        region, the window provenance fields, and (when no custom window applies)
-        reporting_window.
+        region, the window provenance fields, data_through (the as-of date the
+        default window ends at, when the engine reports one), and (when no
+        custom window applies) reporting_window.
     """
     kpi = kpi_resolution.recognize_kpi(kpi_name)
     if kpi is None:
