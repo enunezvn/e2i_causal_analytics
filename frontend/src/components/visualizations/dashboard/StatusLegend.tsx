@@ -53,6 +53,17 @@ const STATUS_COLORS: ColorLegendItem[] = [
     label: 'Red - Critical',
     criteria: 'Below acceptable threshold, requires action',
   },
+  {
+    color: '#bae6fd',
+    label: 'Blue - Informational',
+    criteria:
+      'No fixed target by design (volume and causal metrics) — tracked for trend and context only',
+  },
+  {
+    color: '#e2e8f0',
+    label: 'Gray - Unknown',
+    criteria: 'Status could not be evaluated (missing data or calculation error)',
+  },
 ];
 
 const DATA_QUALITY_THRESHOLDS: ThresholdItem[] = [

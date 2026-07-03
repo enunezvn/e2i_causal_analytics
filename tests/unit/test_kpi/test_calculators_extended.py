@@ -256,13 +256,13 @@ class TestBusinessImpactCalculator:
         assert result.status == KPIStatus.CRITICAL
 
     def test_calculate_trx_no_threshold(self, calculator, trx_kpi):
-        """Test TRx returns UNKNOWN status (volume metric)."""
+        """TRx has no target by design (volume metric) -> INFORMATIONAL."""
         calculator._execute_query = Mock(return_value=[{"trx": 15000}])
 
         result = calculator.calculate(trx_kpi)
 
         assert result.value == 15000.0
-        assert result.status == KPIStatus.UNKNOWN
+        assert result.status == KPIStatus.INFORMATIONAL
 
     def test_calculate_conversion_rate_good(self, calculator, conversion_kpi):
         """Test conversion rate with good result."""
@@ -433,7 +433,7 @@ class TestCausalMetricsCalculator:
         result = calculator.calculate(ate_kpi)
 
         assert result.value == 0.15
-        assert result.status == KPIStatus.UNKNOWN  # No threshold for causal
+        assert result.status == KPIStatus.INFORMATIONAL  # No threshold for causal, by design
         assert result.metadata.get("ate_std") == 0.05
         assert "ci_lower" in result.metadata
         assert "ci_upper" in result.metadata

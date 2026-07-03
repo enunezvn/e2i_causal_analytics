@@ -130,8 +130,11 @@ class KPIResultResponse(BaseModel):
     value: float | None = Field(None, description="Calculated KPI value")
     status: str = Field(
         default="unknown",
-        description="Status against thresholds",
-        examples=["good", "warning", "critical", "unknown"],
+        description=(
+            "Status against thresholds; 'informational' = no target by design "
+            "(volume/causal metrics), 'unknown' = could not evaluate"
+        ),
+        examples=["good", "warning", "critical", "informational", "unknown"],
     )
     calculated_at: datetime = Field(..., description="Calculation timestamp")
     cached: bool = Field(False, description="Whether result was from cache")
@@ -397,7 +400,10 @@ class KPIHistoryPoint(BaseModel):
 
     metric_date: str = Field(..., description="Month (YYYY-MM-DD, first of month)")
     value: float = Field(..., description="KPI value for that month")
-    status: str | None = Field(None, description="on/warning/critical/unknown vs threshold")
+    status: str | None = Field(
+        None,
+        description="good/warning/critical vs threshold; informational = no target by design",
+    )
 
 
 class KPIHistoryResponse(BaseModel):

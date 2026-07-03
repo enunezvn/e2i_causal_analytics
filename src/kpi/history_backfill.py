@@ -25,6 +25,8 @@ import logging
 from collections import defaultdict
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from src.kpi.models import KPIStatus
+
 logger = logging.getLogger(__name__)
 
 # A handler returns a list of point dicts ready for kpi_history upsert.
@@ -39,7 +41,8 @@ def _status_for(kpi_meta: Any, value: float, lower_is_better: bool = False) -> O
     """
     threshold = getattr(kpi_meta, "threshold", None)
     if threshold is None:
-        return None
+        # No threshold by design -> the point is tracked for trend/context only.
+        return str(KPIStatus.INFORMATIONAL.value)
     try:
         # `.value` on the status enum is typed Any → coerce to str so the
         # declared Optional[str] return is honoured (mypy no-any-return).

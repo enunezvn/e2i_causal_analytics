@@ -9,7 +9,7 @@
  */
 
 import * as React from 'react';
-import { CheckCircle2, AlertCircle, XCircle, Clock, Loader2, HelpCircle, Pause, Play } from 'lucide-react';
+import { CheckCircle2, AlertCircle, XCircle, Clock, Loader2, HelpCircle, Info, Pause, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // =============================================================================
@@ -27,6 +27,7 @@ export type StatusType =
   | 'paused'
   | 'active'
   | 'inactive'
+  | 'informational'
   | 'unknown';
 
 export interface StatusBadgeProps {
@@ -136,6 +137,16 @@ function getStatusConfig(status: StatusType): StatusConfig {
         textColor: 'text-gray-700 dark:text-gray-400',
         borderColor: 'border-gray-300 dark:border-gray-700',
         dotColor: 'bg-gray-400',
+      };
+    case 'informational':
+      // Tracked for trend/context; no fixed target by design (volume/causal KPIs).
+      return {
+        icon: Info,
+        label: 'Informational',
+        bgColor: 'bg-sky-100 dark:bg-sky-900/30',
+        textColor: 'text-sky-700 dark:text-sky-400',
+        borderColor: 'border-sky-300 dark:border-sky-700',
+        dotColor: 'bg-sky-500',
       };
     case 'unknown':
     default:

@@ -261,6 +261,7 @@ function mapKpiStatus(
     case 'critical':
     case 'unhealthy':
       return 'critical';
+    case 'informational': // no target by design — neutral, not a health state
     default:
       return 'neutral';
   }

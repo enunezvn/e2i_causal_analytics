@@ -1477,6 +1477,13 @@ async def kpi_calculate_tool(
         region, the window provenance fields, data_through (the as-of date the
         default window ends at, when the engine reports one), and (when no
         custom window applies) reporting_window.
+
+    STATUS SEMANTICS: "good"/"warning"/"critical" = value vs the KPI's defined
+    thresholds; "informational" = the KPI has NO target BY DESIGN (volume
+    metrics like TRx/NRx/NBRx and causal effect sizes are tracked for
+    trend/context, not scored) — the value is real, do not call it a problem;
+    "unknown" = the status could not be evaluated (missing data or calculation
+    error) — do not speculate about causes beyond any error field present.
     """
     kpi = kpi_resolution.recognize_kpi(kpi_name)
     if kpi is None:

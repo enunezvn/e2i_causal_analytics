@@ -677,14 +677,17 @@ class TestNoPlausibleDefaultLeakage:
 class TestEvaluateStatusUnchanged:
     """`_evaluate_status` is the existing fail-close primitive: value=None -> UNKNOWN.
 
-    This PR must NOT change that behavior. Test it directly to lock the contract.
+    The fail-closed lock is on the VALUE branch: a missing value must never
+    fabricate a health status. A missing THRESHOLD with a real value is not a
+    failure — it is a no-target-by-design KPI and reads INFORMATIONAL (still
+    never GOOD/WARNING/CRITICAL, so the anti-fabrication contract holds).
     """
 
     def test_none_value_returns_unknown(self, calculator_with_mlflow, roc_auc_kpi):
         status = calculator_with_mlflow._evaluate_status(roc_auc_kpi, None, lower_is_better=False)
         assert status == KPIStatus.UNKNOWN
 
-    def test_none_threshold_returns_unknown(self, calculator_with_mlflow):
+    def test_none_threshold_returns_informational(self, calculator_with_mlflow):
         kpi = KPIMetadata(
             id="WS1-MP-001",
             name="ROC-AUC",
@@ -695,7 +698,7 @@ class TestEvaluateStatusUnchanged:
             threshold=None,
         )
         status = calculator_with_mlflow._evaluate_status(kpi, 0.85, lower_is_better=False)
-        assert status == KPIStatus.UNKNOWN
+        assert status == KPIStatus.INFORMATIONAL
 
     def test_real_value_evaluated_against_threshold(self, calculator_with_mlflow, roc_auc_kpi):
         status = calculator_with_mlflow._evaluate_status(roc_auc_kpi, 0.85, lower_is_better=False)

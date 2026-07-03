@@ -1340,6 +1340,10 @@ The following KPIs do not have thresholds. They are tracked for trend analysis, 
 - **Volume metrics**: WS3-BI-005 (TRx), WS3-BI-006 (NRx), WS3-BI-007 (NBRx)
 - **Causal metrics**: CM-001 (ATE), CM-002 (CATE), CM-003 (Causal Impact), CM-004 (Counterfactual), CM-005 (Mediation)
 
+These KPIs report status `informational` when a value is available: "no target
+by design" is a deliberate product decision, distinct from `unknown` (which is
+reserved for genuine could-not-evaluate: missing data or a calculation error).
+
 ### Threshold Evaluation in Code
 
 Threshold evaluation is implemented in `src/kpi/models.py` via `KPIThreshold.evaluate()`:
@@ -1349,7 +1353,9 @@ def evaluate(self, value: float | None, lower_is_better: bool = False) -> KPISta
     if value is None:
         return KPIStatus.UNKNOWN
     if self.target is None:
-        return KPIStatus.UNKNOWN
+        # No target on the threshold = no-target-by-design KPI, not an
+        # evaluation failure.
+        return KPIStatus.INFORMATIONAL
 
     if lower_is_better:
         if value <= self.target:

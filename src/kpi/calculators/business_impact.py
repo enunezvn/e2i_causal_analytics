@@ -85,11 +85,9 @@ class BusinessImpactCalculator(KPICalculatorBase):
 
         try:
             value = calc_func(context)
-            # Volume metrics (TRx, NRx, NBRx) don't have thresholds
-            if kpi.id in {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}:
-                status = KPIStatus.UNKNOWN
-            else:
-                status = self._evaluate_status(kpi, value)
+            # Volume metrics (TRx, NRx, NBRx) carry threshold: null in the YAML,
+            # so _evaluate_status routes them to INFORMATIONAL (no special case).
+            status = self._evaluate_status(kpi, value)
             return KPIResult(
                 kpi_id=kpi.id,
                 value=value,
@@ -111,8 +109,11 @@ class BusinessImpactCalculator(KPICalculatorBase):
         self, kpi: KPIMetadata, value: float | None, lower_is_better: bool = False
     ) -> KPIStatus:
         """Evaluate KPI value against thresholds."""
-        if value is None or kpi.threshold is None:
+        if value is None:
             return KPIStatus.UNKNOWN
+        if kpi.threshold is None:
+            # No threshold by design -> tracked for trend/context only.
+            return KPIStatus.INFORMATIONAL
         return kpi.threshold.evaluate(value, lower_is_better=lower_is_better)
 
     # Region-scoped query id helper shared across calculators (migrations
