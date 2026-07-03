@@ -44,7 +44,10 @@ export enum KPIStatus {
   GOOD = 'good',
   WARNING = 'warning',
   CRITICAL = 'critical',
+  /** Could not evaluate (missing data or calculation error) */
   UNKNOWN = 'unknown',
+  /** No target by design — volume/causal metrics tracked for trend/context only */
+  INFORMATIONAL = 'informational',
 }
 
 // =============================================================================

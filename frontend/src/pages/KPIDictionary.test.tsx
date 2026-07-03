@@ -195,6 +195,17 @@ describe('KPIDictionary', () => {
     expect(screen.getAllByText('Critical:').length).toBeGreaterThan(0);
   });
 
+  it('labels threshold-less KPIs as Informational (no target by design)', () => {
+    render(<KPIDictionary />, { wrapper: createWrapper() });
+
+    // CM-001 has no threshold in the fixtures -> honest informational label,
+    // not a blank card.
+    expect(screen.getAllByText('Informational').length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/no fixed target by design/i).length
+    ).toBeGreaterThan(0);
+  });
+
   it('filters KPIs by search query', async () => {
     const user = userEvent.setup();
     render(<KPIDictionary />, { wrapper: createWrapper() });

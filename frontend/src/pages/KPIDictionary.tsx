@@ -173,9 +173,17 @@ function KPICardDetailed({ kpi }: KPICardDetailedProps) {
       </div>
 
       {/* Thresholds */}
-      {kpi.threshold && (
+      {kpi.threshold ? (
         <div className="mb-3">
           <ThresholdIndicator threshold={kpi.threshold} />
+        </div>
+      ) : (
+        <div className="mb-3 flex items-center gap-1 text-xs">
+          <Info className="h-3 w-3 text-sky-500" />
+          <span className="font-medium text-sky-600">Informational</span>
+          <span className="text-[var(--color-muted-foreground)]">
+            — tracked for trend/context; no fixed target by design
+          </span>
         </div>
       )}
 
