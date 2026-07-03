@@ -49,11 +49,13 @@ def test_kpi_result_to_response_value_badges_synthetic():
         "window_requested": None,
         "window_applied": None,
         "window_status": "default",
-        # NBRx counts first-brand Rx over the registry's fixed rolling 30-day
-        # window (migrations 044/066); disclosing it stops the chatbot from
-        # presenting a 30-day figure as a user-requested "past 3 months".
-        # Included ONLY because window_status == "default".
-        "reporting_window": "rolling last 30 days",
+        # NBRx counts first-brand Rx over the registry's frontier-anchored
+        # 30-day window (migration 089: ends at the latest prescription date,
+        # NOT wall-clock now -- the substrate is calendar-fixed by design).
+        # Disclosing it stops the chatbot from presenting the figure as
+        # "the last 30 calendar days". Included ONLY because
+        # window_status == "default".
+        "reporting_window": "most recent 30 days of prescription data",
     }
 
 
@@ -67,15 +69,16 @@ def test_kpi_result_to_response_database_when_not_synthetic():
     resp = _kpi_result_to_response(kpi, result)
     assert resp["success"] is True
     assert resp["data_source"] == "database"
-    # Volume KPIs disclose the real (fixed) reporting window.
-    assert resp["reporting_window"] == "rolling last 30 days"
+    # Volume KPIs disclose the real (frontier-anchored) reporting window.
+    assert resp["reporting_window"] == "most recent 30 days of prescription data"
 
 
 @pytest.mark.unit
 def test_kpi_result_to_response_omits_window_for_unverified_kpi():
     """A KPI whose window we have NOT verified against the registry must NOT
     carry a fabricated ``reporting_window`` -- honest absence over a guessed
-    period. ROI (WS3-BI-010) is not in the verified-window map."""
+    period. ROI (WS3-BI-010) is a two-source probe (business_metrics /
+    agent_activities frontiers diverge) so it stays out of the map."""
     from src.api.routes.chatbot_tools import _kpi_result_to_response
 
     kpi = get_registry().get("WS3-BI-010")  # ROI
@@ -83,6 +86,63 @@ def test_kpi_result_to_response_omits_window_for_unverified_kpi():
     result = KPIResult(kpi_id="WS3-BI-010", value=1.5, status=KPIStatus.UNKNOWN, metadata={})
     resp = _kpi_result_to_response(kpi, result)
     assert "reporting_window" not in resp
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_surfaces_data_through():
+    """The frontier-anchored rows (089) return a ``data_through`` column; the
+    calculator stashes it in metadata context and the chatbot response must
+    surface it so the answer cites the real as-of date."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-007")
+    assert kpi is not None
+    result = KPIResult(
+        kpi_id="WS3-BI-007",
+        value=9.0,
+        status=KPIStatus.UNKNOWN,
+        metadata={
+            "include_synthetic": True,
+            "context": {"brand": "Kisqali", "data_through": "2025-04-23"},
+        },
+    )
+    resp = _kpi_result_to_response(kpi, result, brand="Kisqali")
+    assert resp["data_through"] == "2025-04-23"
+
+
+@pytest.mark.unit
+def test_kpi_result_to_response_omits_data_through_when_absent():
+    """No data_through in the engine metadata (windowed variants, pre-089
+    rows) -> no key. Honest absence, never a fabricated date."""
+    from src.api.routes.chatbot_tools import _kpi_result_to_response
+
+    kpi = get_registry().get("WS3-BI-007")
+    assert kpi is not None
+    result = KPIResult(
+        kpi_id="WS3-BI-007",
+        value=9.0,
+        status=KPIStatus.UNKNOWN,
+        metadata={"context": {"brand": "Kisqali"}},
+    )
+    resp = _kpi_result_to_response(kpi, result, brand="Kisqali")
+    assert "data_through" not in resp
+
+
+@pytest.mark.unit
+def test_reporting_window_covers_frontier_anchored_ws3_family():
+    """TRx share and conversion rate were frontier-anchored by 089 alongside
+    the volumes, so their windows are now verified and must be disclosed --
+    with the DOMAIN the frontier belongs to (share: prescriptions; conversion:
+    triggers)."""
+    from src.api.routes.chatbot_tools import KPI_REPORTING_WINDOWS
+
+    assert KPI_REPORTING_WINDOWS == {
+        "WS3-BI-005": "most recent 30 days of prescription data",
+        "WS3-BI-006": "most recent 30 days of prescription data",
+        "WS3-BI-007": "most recent 30 days of prescription data",
+        "WS3-BI-008": "most recent 30 days of prescription data",
+        "WS3-BI-009": "most recent 30 days of trigger data",
+    }
 
 
 @pytest.mark.unit

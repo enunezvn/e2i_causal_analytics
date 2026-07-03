@@ -119,6 +119,24 @@ class BusinessImpactCalculator(KPICalculatorBase):
     # 077/078). Kept as a thin alias so the call sites below stay readable.
     _region_variant = staticmethod(region_query_id)
 
+    @staticmethod
+    def _stash_data_through(
+        context: dict[str, Any], result: list[dict[str, Any]] | None
+    ) -> None:
+        """Surface the row's ``data_through`` provenance into the per-call context.
+
+        The frontier-anchored registry rows (migration 089) report the as-of
+        date their window ends at (``MAX(<domain ts>)`` -- the substrate is
+        calendar-fixed, so windows anchor to the data frontier, not NOW()).
+        ``calculate()`` embeds the context in ``KPIResult.metadata``, which lets
+        the chatbot cite the real period instead of implying wall-clock
+        recency. Rows without the column (explicit ``*_windowed*`` variants,
+        pre-089 deployments) leave the key absent -- honest absence, never a
+        fabricated date.
+        """
+        if result and isinstance(result[0], dict) and result[0].get("data_through") is not None:
+            context["data_through"] = result[0]["data_through"]
+
     def _resolve_windowed_call(
         self,
         base_query_id: str,
@@ -230,6 +248,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             window=context.get("window"),
         )
         result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
         if result and result[0].get("trx") is not None:
             return float(result[0]["trx"])
         raise RuntimeError("KPI WS3-BI-005 unavailable: no data for total prescriptions (TRx)")
@@ -250,6 +269,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             window=context.get("window"),
         )
         result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
         if result and result[0].get("nrx") is not None:
             return float(result[0]["nrx"])
         raise RuntimeError("KPI WS3-BI-006 unavailable: no data for new prescriptions (NRx)")
@@ -275,6 +295,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             window=context.get("window"),
         )
         result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
         if result and result[0].get("nbrx") is not None:
             return float(result[0]["nbrx"])
         raise RuntimeError(
@@ -299,6 +320,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             )
         else:
             result = self._execute_query("business_impact_trx_share", [brand])
+        self._stash_data_through(context, result)
         if result and result[0].get("share") is not None:
             return float(result[0]["share"])
         raise RuntimeError("KPI WS3-BI-008 unavailable: no data for TRx share")
@@ -317,6 +339,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             )
         else:
             result = self._execute_query("business_impact_conversion_rate", [])
+        self._stash_data_through(context, result)
         if result and result[0].get("conversion_rate") is not None:
             return float(result[0]["conversion_rate"])
         raise RuntimeError("KPI WS3-BI-009 unavailable: no data for conversion rate")
@@ -329,11 +352,16 @@ class BusinessImpactCalculator(KPICalculatorBase):
         # Try business_metrics table first
         result = self._execute_query("business_impact_roi_business_metrics", [])
         if result and result[0].get("avg_roi") is not None:
+            # Provenance reflects whichever source actually answered (the two
+            # probes' frontiers diverge; that is why ROI has no static
+            # reporting_window note in the chatbot map).
+            self._stash_data_through(context, result)
             return float(result[0]["avg_roi"])
 
         # Try agent_activities table
         result = self._execute_query("business_impact_roi_agent_activities", [])
         if result and result[0].get("avg_roi") is not None:
+            self._stash_data_through(context, result)
             return float(result[0]["avg_roi"])
 
         raise RuntimeError("KPI WS3-BI-010 unavailable: no data for return on investment (ROI)")
