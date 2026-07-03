@@ -489,6 +489,8 @@ ws2_triggers:
       - triggers
     columns:
       - triggers.acceptance_status
+      # delivered = delivery_status IN ('delivered','viewed') (migration 090, #1119)
+      - triggers.delivery_status
     view: null
     threshold:
       target: 0.15
