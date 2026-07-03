@@ -209,11 +209,25 @@ class BatchKPICalculationResponse(BaseModel):
 
 
 class KPIThresholdResponse(BaseModel):
-    """Response schema for KPI thresholds."""
+    """Response schema for KPI thresholds.
 
-    target: float | None = Field(None, description="Target threshold value")
-    warning: float | None = Field(None, description="Warning threshold value")
-    critical: float | None = Field(None, description="Critical threshold value")
+    Monotone mode uses target/warning/critical; band mode (#1117, e.g.
+    WS1-MP-006 calibration slope) uses ideal/good_tolerance/warning_tolerance —
+    status derives from abs(value - ideal), both directions away are worse.
+    """
+
+    target: float | None = Field(None, description="Target threshold value (monotone mode)")
+    warning: float | None = Field(None, description="Warning threshold value (monotone mode)")
+    critical: float | None = Field(None, description="Critical threshold value (monotone mode)")
+    ideal: float | None = Field(
+        None, description="Ideal value for deviation-from-ideal KPIs (band mode)"
+    )
+    good_tolerance: float | None = Field(
+        None, description="GOOD when abs(value - ideal) <= this (band mode)"
+    )
+    warning_tolerance: float | None = Field(
+        None, description="WARNING when abs(value - ideal) <= this; CRITICAL beyond (band mode)"
+    )
 
     model_config = ConfigDict(
         json_schema_extra={"example": {"target": 0.90, "warning": 0.75, "critical": 0.60}}
