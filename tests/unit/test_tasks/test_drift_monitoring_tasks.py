@@ -881,3 +881,50 @@ class TestTaskWorkflows:
         )
 
         assert result is not None
+
+
+class TestDriftWindowSubstratePower:
+    """Pin the 28d detection window to the post-frontier-cutover substrate.
+
+    The weekly frontier append carries ~321 feature_values rows/week across 15
+    features (~21 samples/feature/week) and the drift nodes silently skip any
+    feature below min_samples=30 per window. A 7d window therefore goes
+    PERMANENTLY and silently dark once the rolling windows slide past the
+    frozen bulk; 28d = exactly 4 weekly cohorts -> ~84 samples/feature/window.
+    See config/drift_monitoring.yaml for the full arithmetic.
+    """
+
+    def test_yaml_and_default_agree_on_28d(self):
+        import yaml as _yaml
+
+        from src.tasks.drift_monitoring_tasks import CONFIG_PATH, DEFAULT_CONFIG
+
+        assert DEFAULT_CONFIG["detection"]["time_window"] == "28d"
+        with open(CONFIG_PATH) as f:
+            on_disk = _yaml.safe_load(f)
+        assert on_disk["detection"]["time_window"] == "28d"
+
+    def test_load_config_resolves_28d(self):
+        from src.tasks.drift_monitoring_tasks import load_config
+
+        config = load_config()
+        assert config["detection"]["time_window"] == "28d"
+
+    def test_window_clears_min_samples_on_weekly_dribble(self):
+        """The load-bearing arithmetic: window_weeks * samples/feature/week
+        must clear the nodes' min-sample gate, else detection silently skips
+        every feature (the failure mode 7d would have hit ~2026-07-18)."""
+        from src.agents.drift_monitor.nodes.data_drift import DataDriftNode
+        from src.tasks.drift_monitoring_tasks import load_config
+
+        window_days = int(load_config()["detection"]["time_window"].replace("d", ""))
+        # frontier_append WEEKLY_SIZES: 321 feature_values rows/week over the
+        # 15 live features (deterministic cohorts, so no variance margin needed).
+        samples_per_feature_per_week = 321 / 15
+        samples_per_window = (window_days / 7) * samples_per_feature_per_week
+        min_samples = DataDriftNode(connector=MagicMock())._min_samples
+        assert samples_per_window >= min_samples, (
+            f"time_window={window_days}d yields ~{samples_per_window:.0f} samples/"
+            f"feature/window on the weekly dribble — below the {min_samples}-sample "
+            "gate; data drift detection would go silently dark"
+        )

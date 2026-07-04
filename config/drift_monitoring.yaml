@@ -5,8 +5,25 @@
 
 # Detection settings
 detection:
-  # Time window for comparing baseline vs current distributions
-  time_window: "7d"
+  # Time window for comparing baseline vs current distributions:
+  # baseline = [now-2w .. now-w], current = [now-w .. now].
+  #
+  # 28d — sized to the POST-FRONTIER-CUTOVER substrate (2026-07-04). The scv
+  # substrate is frozen at its 2026-07-03 anchor; from EPOCH 2026-07-06 the
+  # weekly Monday cron appends deterministic cohorts carrying ~321
+  # feature_values rows/week across 15 features (~21 samples/feature/week).
+  # The drift nodes silently skip any feature with < min_samples (30) per
+  # window, so a 7d window (~21 samples/feature) would have gone PERMANENTLY
+  # and silently dark once the rolling windows slid past the frozen bulk
+  # (~2026-07-18). 28d = exactly 4 weekly cohorts regardless of sweep
+  # day-of-week -> ~84 samples/feature/window, stable and above the gate.
+  #
+  # Consequence for reseed churn: after a destructive --full reseed the
+  # windows honestly straddle the rewrite for ~2 window-lengths (~8 weeks) and
+  # the transition alerts persist until then; auto_resolve_cleared() retires
+  # them as the discontinuity ages out. That transient red IS the honest
+  # reading — do not "fix" it by shrinking this window below the sample gate.
+  time_window: "28d"
 
   # Statistical significance level for tests
   significance_level: 0.05

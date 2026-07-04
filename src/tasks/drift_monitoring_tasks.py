@@ -15,6 +15,23 @@ Scheduling:
 
 Configuration:
 - config/drift_monitoring.yaml for thresholds and schedules
+
+Reseed / baseline semantics (investigated 2026-07-04):
+- There is NO persisted drift baseline to reset. Every run recomputes both
+  windows from the live rows: baseline = [now-2w .. now-w], current =
+  [now-w .. now] (built inside each detection node). The "reseed-aware
+  baseline reset" is therefore already emergent behavior: after a substrate
+  rewrite the windows straddle the discontinuity for ~2 window-lengths, the
+  transition alerts fire honestly, and ``auto_resolve_cleared()`` retires
+  them run-by-run as the discontinuity ages out of the windows. An epoch
+  marker table + window clipping was designed and REJECTED: on this
+  frozen-plus-weekly-dribble substrate it would blank the baseline window
+  for weeks after a recovery reseed, silencing real drift detection — a
+  worse failure mode than transient honest red.
+- The window length is load-bearing for statistical power: the weekly
+  frontier append carries ~21 feature_values samples/feature/week and the
+  nodes silently skip features below min_samples=30 per window. See the
+  time_window comment in config/drift_monitoring.yaml before changing it.
 """
 
 import asyncio
@@ -33,10 +50,11 @@ logger = logging.getLogger(__name__)
 # Configuration path
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "drift_monitoring.yaml"
 
-# Default configuration
+# Default configuration (time_window mirrors config/drift_monitoring.yaml —
+# 28d is load-bearing for post-frontier-cutover sample power, see the yaml).
 DEFAULT_CONFIG = {
     "detection": {
-        "time_window": "7d",
+        "time_window": "28d",
         "significance_level": 0.05,
         "psi_threshold": 0.1,
         "features_to_monitor": [],
