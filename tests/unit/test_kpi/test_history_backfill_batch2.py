@@ -7,6 +7,8 @@ Covers the brief's locked behaviors:
   regress to all-non-null acceptance_status)
 - replace semantics: (kpi_id, source) rows are deleted BEFORE the fresh upsert
 - lower-is-better status wiring (TR-005/006/007/008, BR-001/004)
+- BR-002 (Batch 3): monthly mean intent-to-prescribe change over quality
+  Remibrutinib surveys (NULL deltas / other brands / low-quality excluded)
 - registry-coherence smoke (YAML-only; the live-DB comparison stays a manual
   post-deploy probe because kpi_query_registry rows live in the database)
 
@@ -454,6 +456,35 @@ class TestBrandSpecific:
         assert len(points) == 1
         assert points[0]["value"] == pytest.approx(2 / 4)  # p1 + p3 of p1,p2,p3,p5
         assert points[0]["brand"] == ""  # single-brand KPI lives in the global scope
+
+    def test_br002_monthly_mean_intent_change(self):
+        def survey(sid, day, change, brand="Remibrutinib", quality=True):
+            return {
+                "survey_id": sid,
+                "brand": brand,
+                "response_quality_flag": quality,
+                "survey_date": day,
+                "intent_to_prescribe_change": change,
+            }
+
+        rows = [
+            survey("s1", "2026-01-01", 2),  # completes January's leading edge
+            survey("s2", "2026-01-10", 0),
+            survey("s3", "2026-01-15", None),  # baseline survey: no delta -> excluded
+            survey("s4", "2026-01-20", 5, brand="Kisqali"),  # other brand excluded
+            survey("s5", "2026-01-25", 5, quality=False),  # low-quality excluded
+            survey("s6", "2026-01-31", 1),  # completes January's trailing edge
+            survey("s7", "2026-02-05", 3),  # February is partial -> dropped
+        ]
+        threshold = KPIThreshold(target=0.5, warning=0.3, critical=0.0)
+        client = _FakeClient({"hcp_intent_surveys": rows})
+        points = _run(hb._backfill_br002_intent_delta(client, _meta("BR-002", threshold)))
+        assert len(points) == 1
+        assert points[0]["metric_date"] == "2026-01-01"
+        assert points[0]["value"] == pytest.approx(1.0)  # mean of [2, 0, 1]
+        assert points[0]["status"] == "good"  # 1.0 >= target 0.5, higher-is-better
+        assert points[0]["brand"] == ""  # single-brand KPI lives in the global scope
+        assert points[0]["source"] == "hcp_intent_surveys.survey_date"
 
     def test_br003_asof_cumulative_rate(self):
         journeys = [
