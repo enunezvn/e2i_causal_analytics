@@ -44,6 +44,35 @@ class KPIHistoryRepository(BaseRepository):
             logger.error(f"Failed to upsert {len(points)} kpi_history points: {e}", exc_info=True)
             return 0
 
+    async def delete_source(self, kpi_id: str, source: str) -> int:
+        """Delete all history rows for one (kpi_id, source) pair.
+
+        Replace semantics for the backfill: the weekly synthetic reseed
+        (``--anchor-to-now``) shifts every substrate timestamp, so the fresh
+        month set no longer aligns with the previous seed's — upsert alone
+        would let stale months accumulate. The backfill deletes the pair
+        before upserting the recomputed set.
+
+        Returns the number of rows deleted (best-effort; 0 on error).
+        """
+        if not self.client:
+            return 0
+        try:
+            result_or_coro = (
+                self.client.table(self.table_name)
+                .delete()
+                .eq("kpi_id", kpi_id)
+                .eq("source", source)
+                .execute()
+            )
+            result = await result_or_coro if inspect.isawaitable(result_or_coro) else result_or_coro
+            return len(result.data) if getattr(result, "data", None) else 0
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                f"Failed to delete kpi_history rows for ({kpi_id}, {source}): {e}", exc_info=True
+            )
+            return 0
+
     async def get_history(
         self,
         kpi_id: str,

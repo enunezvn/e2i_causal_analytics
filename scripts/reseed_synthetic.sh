@@ -44,4 +44,17 @@ PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 \
     .venv/bin/dotenv -f .env run -- \
     .venv/bin/python scripts/load_synthetic_data.py --anchor-to-now "$@"
 
+# Rebuild kpi_history from the fresh substrate. --anchor-to-now SHIFTS every
+# domain timestamp, so the previous seed's monthly points no longer align with
+# the new timeline; the backfill uses replace semantics (delete per
+# (kpi_id, source), then upsert) to keep the Time-Series KPI-history view
+# consistent with what the live calculators read.
+echo "=== kpi_history backfill start $(date -Is) ==="
+
+PYTHONPATH="$PROJECT_ROOT" \
+    .venv/bin/dotenv -f .env run -- \
+    .venv/bin/python -m src.kpi.history_backfill
+
+echo "=== kpi_history backfill done $(date -Is) ==="
+
 echo "=== reseed_synthetic done $(date -Is) ==="
