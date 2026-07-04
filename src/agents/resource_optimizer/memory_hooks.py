@@ -441,12 +441,12 @@ class ResourceOptimizerMemoryHooks:
             allocations = result.get("optimal_allocations", [])
             adjustments = []
             for alloc in allocations[:5]:  # Top 5 adjustments
-                if abs(alloc.get("change_percentage", 0)) > 10:
+                if abs(alloc.get("change_percentage") or 0) > 10:
                     adjustments.append(
                         {
                             "entity_type": alloc.get("entity_type", "unknown"),
                             "direction": "increase" if alloc.get("change", 0) > 0 else "decrease",
-                            "magnitude": abs(alloc.get("change_percentage", 0)),
+                            "magnitude": abs(alloc.get("change_percentage") or 0),
                         }
                     )
 

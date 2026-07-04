@@ -121,7 +121,9 @@ export interface RunOptimizationRequest {
   constraints?: Constraint[];
   /** Optimization objective */
   objective?: OptimizationObjective;
-  /** Solver type */
+  /** Brand scope for synthetic seeding (null/undefined = all brands) */
+  brand?: string | null;
+  /** Solver type (omit for the default concave/SLSQP formulation) */
   solver_type?: SolverType;
   /** Solver time limit (1-300 seconds) */
   time_limit_seconds?: number;
@@ -161,8 +163,9 @@ export interface AllocationResult {
   optimized_allocation: number;
   /** Change from current */
   change: number;
-  /** Change percentage */
-  change_percentage: number;
+  /** Change percentage; null when current allocation is 0 and the optimizer
+   *  allocated money (a percentage of zero is undefined — render as "New") */
+  change_percentage: number | null;
   /** Expected outcome impact */
   expected_impact: number;
 }

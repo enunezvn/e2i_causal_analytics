@@ -147,9 +147,24 @@ class RunOptimizationRequest(BaseModel):
         default=OptimizationObjective.MAXIMIZE_OUTCOME,
         description="Optimization objective",
     )
+    brand: Optional[str] = Field(
+        default=None,
+        description=(
+            "Scope the synthetic seeding to one brand's territory activity "
+            "(None = all brands). Only affects runs with empty allocation_targets."
+        ),
+    )
 
     # Configuration
-    solver_type: SolverType = Field(default=SolverType.LINEAR, description="Solver type")
+    solver_type: Optional[SolverType] = Field(
+        default=None,
+        description=(
+            "Solver type. None (default) lets the formulator choose: a concave "
+            "diminishing-returns response solved with SLSQP. Pass 'linear' "
+            "explicitly for classic LP semantics (linear response, bang-bang "
+            "solutions at the bounds)."
+        ),
+    )
     time_limit_seconds: int = Field(default=60, description="Solver time limit", ge=1, le=300)
     gap_tolerance: float = Field(default=0.01, description="MILP gap tolerance", gt=0.0, lt=1.0)
     run_scenarios: bool = Field(default=False, description="Run what-if scenarios")
@@ -190,7 +205,14 @@ class AllocationResult(BaseModel):
     current_allocation: float = Field(..., description="Current allocation")
     optimized_allocation: float = Field(..., description="Optimized allocation")
     change: float = Field(..., description="Change from current")
-    change_percentage: float = Field(..., description="Change percentage")
+    change_percentage: Optional[float] = Field(
+        None,
+        description=(
+            "Change percentage; None when current allocation is 0 and the "
+            "optimizer allocated money (a percentage of zero is undefined — "
+            "the UI renders this as a new allocation, not 0%)"
+        ),
+    )
     expected_impact: float = Field(..., description="Expected outcome impact")
 
 
@@ -793,16 +815,60 @@ _optimizations_store: _DurableOptimizationsStore = _DurableOptimizationsStore()
 
 SYNTHETIC_PROVENANCE_PREFIX = "SYNTHETIC DATA:"
 NOTIONAL_BUDGET_PER_HCP = 1500.0  # USD/period — documented notional field cost per HCP
-SYNTHETIC_TERRITORY_LIMIT = 10  # top-N territories by activity (keeps LP + UI readable)
+# Cap on seeded territories. The platform's DGP has 40; the cap only guards
+# against a future substrate with hundreds (an unreadable UI + slow SLSQP).
+SYNTHETIC_TERRITORY_LIMIT = 60
 _SYNTHETIC_MIN_FACTOR = 0.5  # solver may cut a territory to 50% of current
 _SYNTHETIC_MAX_FACTOR = 1.5  # ...or grow it to 150%
 
 
+def _seed_targets_from_rows(
+    rows: List[Dict[str, Any]],
+    activity_key: str,
+) -> List[AllocationTarget]:
+    """Convert per-territory (hcp_count, activity) rows into allocation targets.
+
+    current_allocation = active HCPs x notional $/HCP; expected_response is
+    activity per notional DOLLAR (outcome units per $), so every downstream
+    projection (impact, totals, sensitivity) is in honest outcome units
+    (TRx-equivalents) rather than the dimensionless products a per-HCP
+    coefficient times dollars used to produce.
+    """
+    targets: List[AllocationTarget] = []
+    for r in rows:
+        hcp = float(r.get("active_hcp_count") or 0)
+        activity = float(r.get(activity_key) or 0)
+        if hcp <= 0 or activity <= 0:
+            continue
+        current = round(hcp * NOTIONAL_BUDGET_PER_HCP, 2)
+        targets.append(
+            AllocationTarget(
+                entity_id=str(r["territory_id"]),
+                entity_type="territory",
+                current_allocation=current,
+                min_allocation=round(current * _SYNTHETIC_MIN_FACTOR, 2),
+                max_allocation=round(current * _SYNTHETIC_MAX_FACTOR, 2),
+                expected_response=round(activity / current, 8),
+            )
+        )
+    return targets
+
+
 async def _build_synthetic_allocation_inputs(
     resource_type: ResourceType,
+    brand: Optional[str] = None,
     limit: int = SYNTHETIC_TERRITORY_LIMIT,
 ) -> tuple[List[AllocationTarget], Optional[Constraint], List[str]]:
-    """Seed a SYNTHETIC, clearly-labelled allocation problem from territory_metrics.
+    """Seed a SYNTHETIC, clearly-labelled allocation problem across ALL territories.
+
+    All-brands: latest territory_metrics snapshot per territory (TRx activity).
+    Brand-scoped: v_brand_territory_activity (treatment events joined to HCP
+    territories) filtered to the brand.
+
+    Every usable territory is included (capped at ``limit`` by activity) — a
+    previous top-10-by-TRx cut silently selected ONLY the south region, whose
+    territories dominate the synthetic DGP's TRx distribution, leaving users
+    wondering why the optimizer ignored 30 of 40 territories.
 
     Returns ``(targets, budget_constraint, provenance_warnings)``. On any failure
     or missing data returns ``([], None, [warning])`` so the caller still responds
@@ -822,17 +888,41 @@ async def _build_synthetic_allocation_inputs(
                 ],
             )
 
-        # Latest snapshot first, then highest activity. Over-fetch recent rows so
-        # we can dedupe to one (latest) row per territory below.
-        resp = (
-            await client.table("territory_metrics")
-            .select("territory_id, total_trx, active_hcp_count, covered_lives, metric_date")
-            .order("metric_date", desc=True)
-            .order("total_trx", desc=True)
-            .limit(max(limit * 6, 60))
-            .execute()
-        )
-        rows = resp.data or []
+        if brand:
+            resp = (
+                await client.table("v_brand_territory_activity")
+                .select("territory_id, active_hcp_count, treatment_event_count")
+                .eq("brand", brand)
+                .order("treatment_event_count", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            rows = resp.data or []
+            activity_key = "treatment_event_count"
+            source_desc = f"brand-filtered treatment events ({brand})"
+        else:
+            # Latest snapshot first, then highest activity. Over-fetch recent
+            # rows so we can dedupe to one (latest) row per territory below.
+            resp = (
+                await client.table("territory_metrics")
+                .select("territory_id, total_trx, active_hcp_count, covered_lives, metric_date")
+                .order("metric_date", desc=True)
+                .order("total_trx", desc=True)
+                .limit(max(limit * 8, 480))
+                .execute()
+            )
+            seen: set = set()
+            rows = []
+            for r in resp.data or []:
+                tid = r.get("territory_id")
+                if not tid or tid in seen:
+                    continue
+                seen.add(tid)
+                rows.append(r)
+                if len(rows) >= limit:
+                    break
+            activity_key = "total_trx"
+            source_desc = "territory_metrics (all brands)"
     except Exception as e:  # pragma: no cover - defensive
         logger.warning(f"Synthetic target seeding failed: {e}")
         return (
@@ -844,45 +934,17 @@ async def _build_synthetic_allocation_inputs(
             ],
         )
 
-    # Dedupe to one (latest) row per territory; take the top-N usable by TRx.
-    seen: set = set()
-    picked: List[Dict[str, Any]] = []
-    for r in rows:
-        tid = r.get("territory_id")
-        hcp = r.get("active_hcp_count") or 0
-        trx = r.get("total_trx") or 0
-        if not tid or tid in seen or hcp <= 0 or trx <= 0:
-            continue
-        seen.add(tid)
-        picked.append(r)
-        if len(picked) >= limit:
-            break
+    targets = _seed_targets_from_rows(rows, activity_key)
 
-    if not picked:
+    if not targets:
+        scope = f" for brand '{brand}'" if brand else ""
         return (
             [],
             None,
             [
-                f"{SYNTHETIC_PROVENANCE_PREFIX} no usable territory rows found; "
+                f"{SYNTHETIC_PROVENANCE_PREFIX} no usable territory rows found{scope}; "
                 "no allocation targets seeded."
             ],
-        )
-
-    targets: List[AllocationTarget] = []
-    for r in picked:
-        hcp = float(r["active_hcp_count"])
-        trx = float(r["total_trx"])
-        current = round(hcp * NOTIONAL_BUDGET_PER_HCP, 2)
-        targets.append(
-            AllocationTarget(
-                entity_id=str(r["territory_id"]),
-                entity_type="territory",
-                current_allocation=current,
-                min_allocation=round(current * _SYNTHETIC_MIN_FACTOR, 2),
-                max_allocation=round(current * _SYNTHETIC_MAX_FACTOR, 2),
-                # Real-shaped productivity: outcome (TRx) per unit of allocation (HCP).
-                expected_response=round(trx / hcp, 4),
-            )
         )
 
     total_budget = round(sum(t.current_allocation for t in targets), 2)
@@ -893,9 +955,10 @@ async def _build_synthetic_allocation_inputs(
     )
     warning = (
         f"{SYNTHETIC_PROVENANCE_PREFIX} no real per-entity budget source is wired, so this "
-        f"optimization ran on {len(targets)} territories seeded from synthetic territory_metrics. "
-        f"current_allocation is a NOTIONAL budget (${NOTIONAL_BUDGET_PER_HCP:,.0f}/HCP) and "
-        f"expected_response is TRx-per-HCP; total budget ${total_budget:,.0f} "
+        f"optimization ran on {len(targets)} territories seeded from {source_desc}. "
+        f"current_allocation is a NOTIONAL budget (${NOTIONAL_BUDGET_PER_HCP:,.0f}/HCP), "
+        f"expected_response is activity per notional dollar, and projected outcomes are in "
+        f"activity units (TRx-equivalents); total budget ${total_budget:,.0f} "
         f"({resource_type.value}). The optimization math is real but the dollar values are "
         "illustrative."
     )
@@ -942,7 +1005,7 @@ async def run_optimization(
     provenance_warnings: List[str] = []
     if not request.allocation_targets:
         targets, budget, provenance_warnings = await _build_synthetic_allocation_inputs(
-            request.resource_type
+            request.resource_type, brand=request.brand
         )
         if targets:
             request.allocation_targets = targets
@@ -1226,7 +1289,6 @@ async def _execute_optimization(
             "allocation_targets": allocation_targets,  # type: ignore[typeddict-item]
             "constraints": constraints,  # type: ignore[typeddict-item]
             "objective": request.objective.value,
-            "solver_type": request.solver_type.value,
             "time_limit_seconds": request.time_limit_seconds,
             "gap_tolerance": request.gap_tolerance,
             "run_scenarios": request.run_scenarios,
@@ -1241,6 +1303,10 @@ async def _execute_optimization(
             "optimization_latency_ms": 0,
             "total_latency_ms": 0,
         }
+        # Only pin the solver when the caller explicitly picked one; otherwise
+        # the formulator selects (concave response -> SLSQP by default).
+        if request.solver_type is not None:
+            initial_state["solver_type"] = request.solver_type.value
 
         # Create and run graph
         graph = create_resource_optimizer_graph()
@@ -1394,7 +1460,7 @@ def _generate_mock_response(
                 change=round(change, 2),
                 change_percentage=round(change / target.current_allocation * 100, 1)
                 if target.current_allocation > 0
-                else 0.0,
+                else (None if optimized > 0 else 0.0),
                 expected_impact=round(optimized * target.expected_response, 2),
             )
         )

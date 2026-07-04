@@ -68,7 +68,7 @@ class TestImpactProjectorRecipientEmit:
         summary = result["optimization_summary"]
         assert isinstance(summary, str)
         assert "Optimization complete" in summary
-        assert "ROI" in summary
+        assert "outcome lift vs current" in summary
         recommendations = result["recommendations"]
         assert isinstance(recommendations, list)
         assert any("Increase" in r for r in recommendations)

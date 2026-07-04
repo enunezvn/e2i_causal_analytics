@@ -76,7 +76,10 @@ class AllocationResult(TypedDict):
     current_allocation: float
     optimized_allocation: float
     change: float
-    change_percentage: float
+    # None when current_allocation is 0 but the optimizer allocated money — a
+    # percentage of zero is undefined, and reporting 0% would hide a material
+    # new allocation as "no move".
+    change_percentage: Optional[float]
     expected_impact: float
 
 

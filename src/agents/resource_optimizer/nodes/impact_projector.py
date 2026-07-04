@@ -7,15 +7,22 @@ Purpose: Project impact of optimized resource allocation
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Mapping
 
 from src.agents.feedback_learner.recipient_emit import emit_recipient_signal
 
 from ..dspy_integration import get_resource_optimizer_dspy_integration
+from ..response_model import problem_gamma, target_response_value
 from ..state import ResourceOptimizerState
 
 logger = logging.getLogger(__name__)
+
+# Territory ids in this platform follow "<region>-T<nn>" (e.g. "south-T02");
+# when they do, impact shares are grouped by region — a segmentation with more
+# than one slice. Anything else falls back to grouping by entity_type.
+_REGION_ID_RE = re.compile(r"^([A-Za-z]+)-T\d+$")
 
 
 def _signal_reward(output: str, inputs: Dict[str, Any]) -> float:
@@ -74,57 +81,39 @@ class ImpactProjectorNode:
                     "status": "failed",
                 }
 
-            # Calculate total projected outcome
+            # Projected outcome at the optimized allocation. expected_impact is
+            # already the shared-response-model outcome per entity (same curve
+            # the solver optimized), so the total is a straight sum.
             total_outcome = sum(a.get("expected_impact", 0) for a in allocations)
 
-            # Calculate current vs optimized allocation
-            current_total = sum(a.get("current_allocation", 0) for a in allocations)
-            optimized_total = sum(a.get("optimized_allocation", 0) for a in allocations)
-
-            # Calculate ROI using original expected_response values when available.
-            # The optimizer's expected_impact uses normalized coefficients (c[i] * x[i])
-            # which for maximize_roi already divides by current_allocation, making
-            # total_outcome / optimized_total produce near-zero values.
-            # Instead, compute ROI from raw response coefficients.
+            # Baseline: outcome of the CURRENT allocation under the same curve
+            # (the curve is anchored at current, so this equals
+            # expected_response * current_allocation for every gamma).
+            gamma = problem_gamma(state.get("_problem"))
             allocation_targets = state.get("allocation_targets", [])
-            response_by_entity = (
-                {t.get("entity_id"): t.get("expected_response", 0) for t in allocation_targets}
-                if allocation_targets
-                else {}
+            current_outcome = sum(
+                target_response_value(t, t.get("current_allocation", 0) or 0.0, gamma)
+                for t in allocation_targets
             )
 
-            if response_by_entity:
-                # Use original expected_response to compute meaningful projected outcome
-                projected_outcome = sum(
-                    response_by_entity.get(a.get("entity_id"), 0) * a.get("optimized_allocation", 0)
-                    for a in allocations
-                )
-                current_outcome = sum(
-                    t.get("expected_response", 0) * t.get("current_allocation", 0)
-                    for t in allocation_targets
-                )
-                roi = (
-                    (projected_outcome - current_outcome) / optimized_total
-                    if optimized_total > 0
-                    else 0
-                )
-                total_outcome = projected_outcome
-            else:
-                roi = total_outcome / optimized_total if optimized_total > 0 else 0
+            # "projected_roi" is the RELATIVE OUTCOME LIFT of the optimized
+            # allocation vs the current one (0.083 = +8.3%). The previous
+            # definition — outcome delta divided by total SPEND — mixed outcome
+            # units with dollars and produced numbers with no readable meaning.
+            roi = (
+                (total_outcome - current_outcome) / current_outcome if current_outcome > 0 else 0.0
+            )
 
-            # Calculate projected savings (efficiency gains)
-            # Savings = outcome improvement per unit of investment compared to baseline
-            baseline_outcome: float = float(
-                state.get("baseline_outcome", current_total * 0.5)  # type: ignore[arg-type]
-            )  # Assume 50% baseline conversion
-            outcome_improvement = total_outcome - baseline_outcome
+            # Efficiency block: improvements vs the honest baseline (current
+            # allocation's outcome), not vs an invented 50%-conversion floor.
+            outcome_improvement = total_outcome - current_outcome
             savings_pct = (
-                (outcome_improvement / baseline_outcome * 100) if baseline_outcome > 0 else 0
+                (outcome_improvement / current_outcome * 100) if current_outcome > 0 else 0
             )
             projected_savings = {
                 "outcome_improvement": outcome_improvement,
                 "savings_percentage": savings_pct,
-                "efficiency_gain": roi - 0.5 if roi > 0.5 else 0,  # vs baseline 0.5 ROI
+                "efficiency_gain": roi,
                 "reallocation_value": sum(
                     abs(a.get("change", 0)) for a in allocations if a.get("change", 0) > 0
                 ),
@@ -182,16 +171,25 @@ class ImpactProjectorNode:
             }
 
     def _calculate_segment_impact(self, allocations: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Calculate impact by segment/entity type."""
-        impact_by_type: Dict[str, float] = {}
+        """Percentage share of the projected outcome by segment (sums to ~100).
+
+        Segments are regions when entity ids follow "<region>-T<nn>", falling
+        back to entity_type otherwise. The previous version summed RAW
+        expected_impact keyed by entity_type — with territory-only inputs that
+        was a single "territory" slice whose value was a dimensionless solver
+        number, which the UI then rendered with a % suffix.
+        """
+        totals: Dict[str, float] = {}
 
         for alloc in allocations:
-            entity_type = alloc.get("entity_type", "unknown")
-            if entity_type not in impact_by_type:
-                impact_by_type[entity_type] = 0
-            impact_by_type[entity_type] += alloc.get("expected_impact", 0)
+            m = _REGION_ID_RE.match(str(alloc.get("entity_id", "")))
+            segment = m.group(1) if m else alloc.get("entity_type", "unknown")
+            totals[segment] = totals.get(segment, 0.0) + alloc.get("expected_impact", 0)
 
-        return impact_by_type
+        grand_total = sum(totals.values())
+        if grand_total <= 0:
+            return {}
+        return {k: round(v / grand_total * 100, 1) for k, v in totals.items()}
 
     def _generate_summary(
         self,
@@ -214,7 +212,7 @@ class ImpactProjectorNode:
 
         inline_summary = (
             "Optimization complete. "
-            f"Projected outcome: {total_outcome:.0f} (ROI: {roi:.2f}). "
+            f"Projected outcome: {total_outcome:.0f} (outcome lift vs current: {roi:+.1%}). "
             f"Recommended changes: {len(increases)} increases, {len(decreases)} decreases."
         )
 
@@ -250,6 +248,11 @@ class ImpactProjectorNode:
         to the user); falls back to ``inline`` if the getter/format fails.
         """
         if integration is None:
+            return inline
+        # A None change_percentage means "new allocation from zero current" —
+        # the template requires a float and would render it as +0%, hiding the
+        # move, so the inline (which spells out "new allocation") wins.
+        if alloc.get("change_percentage") is None:
             return inline
         try:
             return str(
@@ -290,10 +293,12 @@ class ImpactProjectorNode:
         )[:3]
 
         for alloc in increases:
+            pct = alloc.get("change_percentage")
+            pct_str = f"+{pct:.0f}%" if pct is not None else "new allocation"
             inline = (
-                f"Increase allocation to {alloc['entity_id']} by {alloc['change']:.1f} "
-                f"(+{alloc['change_percentage']:.0f}%) - Expected impact: "
-                f"{alloc['expected_impact']:.0f}"
+                f"Increase allocation to {alloc['entity_id']} by {alloc['change']:,.0f} "
+                f"({pct_str}) - Projected outcome at new "
+                f"allocation: {alloc['expected_impact']:,.0f}"
             )
             recommendations.append(self._recommendation_line(integration, alloc, inline))
 
@@ -306,8 +311,9 @@ class ImpactProjectorNode:
 
         for alloc in decreases:
             inline = (
-                f"Reduce allocation from {alloc['entity_id']} by {abs(alloc['change']):.1f} "
-                f"({alloc['change_percentage']:.0f}%) - Reallocate to higher-impact targets"
+                f"Reduce allocation from {alloc['entity_id']} by {abs(alloc['change']):,.0f} "
+                f"({(alloc.get('change_percentage') or 0.0):.0f}%) - Reallocate to "
+                f"higher-impact targets"
             )
             recommendations.append(self._recommendation_line(integration, alloc, inline))
 
@@ -344,7 +350,7 @@ class ImpactProjectorNode:
         try:
             allocation_changes = "; ".join(
                 f"{a.get('entity_id', '')}:{a.get('change', 0):+.1f}"
-                f"({a.get('change_percentage', 0):+.0f}%)"
+                f"({(a.get('change_percentage') or 0):+.0f}%)"
                 for a in alloc_dicts
             )
             constraints = state.get("constraints") or []
@@ -365,7 +371,8 @@ class ImpactProjectorNode:
             }
             summary_output = (
                 f"Optimization complete. Projected outcome: {total_outcome:.0f} "
-                f"(ROI: {roi:.2f}). Recommended changes: {len(increases)} increases, "
+                f"(outcome lift vs current: {roi:+.1%}). "
+                f"Recommended changes: {len(increases)} increases, "
                 f"{len(decreases)} decreases."
             )
             # Guard only mandatory fields. ``constraints_used`` (empty on an

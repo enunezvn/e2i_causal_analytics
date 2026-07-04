@@ -46,7 +46,8 @@ class ResourceOptimizationPrompts:
     # projected outcome value (what the node calls ``total_outcome``).
     summary_template: str = (
         "Optimization complete. Projected outcome: {objective_value:.0f} "
-        "(ROI: {projected_roi:.2f}). Recommended changes: {increase_count} increases, "
+        "(outcome lift vs current: {projected_roi:+.1%}). "
+        "Recommended changes: {increase_count} increases, "
         "{decrease_count} decreases. "
         "[{resource_type} | objective={objective} | solver={solver_type} | "
         "{entity_count} entities]"
@@ -62,7 +63,7 @@ class ResourceOptimizationPrompts:
     # keeping the node output substring-compatible with the historical strings.
     recommendation_template: str = (
         "{direction} allocation {preposition} {entity_id} ({entity_type}) by "
-        "{change_abs:.1f} ({change_pct:.0f}%): {current:.0f} -> {optimized:.0f}. "
+        "{change_abs:,.0f} ({change_pct:+.0f}%): {current:,.0f} -> {optimized:,.0f}. "
         "{impact_clause}"
     )
 
@@ -258,7 +259,7 @@ class ResourceOptimizerDSPyIntegration:
         if optimized >= current:
             direction = "Increase"
             preposition = "to"
-            impact_clause = f"Expected impact: {expected_impact:.0f}."
+            impact_clause = f"Projected outcome at new allocation: {expected_impact:,.0f}."
         else:
             direction = "Reduce"
             preposition = "from"

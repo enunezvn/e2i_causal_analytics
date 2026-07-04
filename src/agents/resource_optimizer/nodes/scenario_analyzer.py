@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any, Dict, List
 
+from ..response_model import problem_gamma, target_response_marginal, target_response_value
 from ..state import ResourceOptimizerState, ScenarioResult
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,9 @@ class ScenarioAnalyzerNode:
             targets = state.get("allocation_targets", [])
             constraints = state.get("constraints", [])
             scenario_count = state.get("scenario_count", 3)
+            # Same response curve the solver optimized — scenario outcomes and
+            # marginals must come from the same model or they aren't comparable.
+            gamma = problem_gamma(state.get("_problem"))
 
             # Generate scenarios (cast typed objects to dicts for internal methods)
             scenarios = self._generate_scenarios(
@@ -44,12 +48,14 @@ class ScenarioAnalyzerNode:
                 targets,  # type: ignore[arg-type]
                 constraints,  # type: ignore[arg-type]
                 scenario_count,
+                gamma,
             )
 
             # Perform sensitivity analysis
             sensitivity = self._analyze_sensitivity(
                 allocations,  # type: ignore[arg-type]
                 targets,  # type: ignore[arg-type]
+                gamma,
             )
 
             logger.info(f"Scenario analysis complete: {len(scenarios)} scenarios analyzed")
@@ -75,8 +81,15 @@ class ScenarioAnalyzerNode:
         targets: List[Dict[str, Any]],
         constraints: List[Dict[str, Any]],
         count: int,
+        gamma: float | None = None,
     ) -> List[ScenarioResult]:
-        """Generate what-if scenarios."""
+        """Generate what-if scenarios.
+
+        Every scenario's outcome is computed with the SAME response curve the
+        solver optimized (``gamma``); mixing curves would make the comparison
+        meaningless (e.g. a linear "Focus Top Performers" would beat the
+        concave optimum by ignoring saturation).
+        """
         scenarios = []
 
         # Get budget from constraints
@@ -92,7 +105,7 @@ class ScenarioAnalyzerNode:
         # Scenario 1: Current allocation (baseline)
         current_total = sum(t.get("current_allocation", 0) for t in targets)
         current_outcome = sum(
-            t.get("current_allocation", 0) * t.get("expected_response", 1.0) for t in targets
+            target_response_value(t, t.get("current_allocation", 0) or 0.0, gamma) for t in targets
         )
         scenarios.append(
             ScenarioResult(
@@ -120,7 +133,7 @@ class ScenarioAnalyzerNode:
         # Scenario 3: Equal distribution
         if targets:
             equal_alloc = budget / len(targets)
-            equal_outcome = sum(equal_alloc * t.get("expected_response", 1.0) for t in targets)
+            equal_outcome = sum(target_response_value(t, equal_alloc, gamma) for t in targets)
             scenarios.append(
                 ScenarioResult(
                     scenario_name="Equal Distribution",
@@ -138,7 +151,7 @@ class ScenarioAnalyzerNode:
             )
             top_half = sorted_targets[: len(sorted_targets) // 2]
             focus_alloc = budget / len(top_half) if top_half else 0
-            focus_outcome = sum(focus_alloc * t.get("expected_response", 1.0) for t in top_half)
+            focus_outcome = sum(target_response_value(t, focus_alloc, gamma) for t in top_half)
             scenarios.append(
                 ScenarioResult(
                     scenario_name="Focus Top Performers",
@@ -155,15 +168,23 @@ class ScenarioAnalyzerNode:
         self,
         allocations: List[Dict[str, Any]],
         targets: List[Dict[str, Any]],
+        gamma: float | None = None,
     ) -> Dict[str, float]:
-        """Analyze sensitivity of allocation to changes."""
-        sensitivity = {}
+        """Marginal return per entity at the OPTIMIZED allocation.
 
+        d(outcome)/d(allocation) evaluated where the solver landed — the honest
+        "what would one more unit here buy" figure. (This previously returned
+        the raw ``expected_response`` coefficient relabeled as "sensitivity",
+        which the UI then dressed up as a constraint-relaxation percentage.)
+        """
+        optimized_by_entity = {
+            a.get("entity_id"): a.get("optimized_allocation", 0) for a in allocations
+        }
+
+        sensitivity = {}
         for i, target in enumerate(targets):
             entity_id = target.get("entity_id", f"entity_{i}")
-            response = target.get("expected_response", 1.0)
-
-            # Sensitivity = marginal impact of 1 unit change
-            sensitivity[entity_id] = response
+            x_opt = optimized_by_entity.get(entity_id, target.get("current_allocation", 0) or 0.0)
+            sensitivity[entity_id] = target_response_marginal(target, x_opt, gamma)
 
         return sensitivity

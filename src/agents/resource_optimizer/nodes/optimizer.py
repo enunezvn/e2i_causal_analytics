@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+from ..response_model import problem_gamma, target_response_value
 from ..state import AllocationResult, ResourceOptimizerState
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ class OptimizerNode:
             allocations = self._build_allocations(
                 result["x"],
                 problem["targets"],
-                problem["c"],
+                problem,
             )
 
             optimization_time = int((time.time() - start_time) * 1000)
@@ -70,6 +71,11 @@ class OptimizerNode:
                 f"objective={result['objective']:.2f}, time={optimization_time}ms"
             )
 
+            warnings = list(state.get("warnings") or [])
+            underspend_note = self._underspend_note(problem, result["x"])
+            if underspend_note:
+                warnings.append(underspend_note)
+
             return {
                 **state,
                 "optimal_allocations": allocations,
@@ -77,6 +83,7 @@ class OptimizerNode:
                 "solver_status": "optimal",
                 "solve_time_ms": result.get("solve_time_ms", 0),
                 "optimization_latency_ms": optimization_time,
+                "warnings": warnings,
                 "status": "analyzing" if state.get("run_scenarios") else "projecting",
             }
 
@@ -301,48 +308,181 @@ class OptimizerNode:
             }
 
     def _solve_nonlinear(self, problem: Dict[str, Any]) -> Dict[str, Any]:
-        """Solve nonlinear optimization."""
+        """Solve the (possibly concave) allocation problem with SLSQP.
+
+        The objective routes through the shared response model
+        (``response_model.py``): with a concave power curve the optimum is
+        interior — marginal returns get equalized across entities — instead
+        of the bang-bang all-at-bounds solution a linear objective produces.
+
+        Per-objective shapes (all in outcome units from the same curve):
+        - maximize_outcome: max sum_i f_i(x_i)
+        - maximize_roi:     max sum_i f_i(x_i) − hurdle * sum_i x_i, with the
+                            hurdle priced at the portfolio's CURRENT average
+                            marginal return. This is classic ROI equalization:
+                            each territory is funded until its marginal return
+                            meets the hurdle, so above-average-productivity
+                            territories grow and below-average ones shrink.
+                            (A literal outcome/spend ratio is NOT used: any
+                            concave response has monotonically decreasing
+                            average product, so ratio-max always collapses to
+                            the minimum allowed spend — a wall of at-the-bound
+                            cuts, not an allocation strategy.)
+        - minimize_cost:    min sum_i x_i  s.t. outcome(x) >= outcome(current)
+                            (cheapest allocation that keeps today's outcome)
+        - balance:          max outcome ratio − penalty on large relative
+                            reallocations (prefers smaller moves unless the
+                            outcome gain justifies them)
+        """
         start = time.time()
 
         try:
             import numpy as np
             from scipy.optimize import minimize
 
-            c = np.array(problem["c"])
+            targets = problem["targets"]
+            gamma = problem_gamma(problem)
+            objective_name = problem.get("objective", "maximize_outcome")
+            n = problem["n"]
 
-            def objective(x):
-                return -np.dot(c, x)  # Negate for maximization
+            # --- Scaling ----------------------------------------------------
+            # Allocations are O(1e5-1e6) while outcome coefficients can be
+            # O(1e-3): unscaled, the objective's gradient entries fall below
+            # SLSQP's termination tolerance and the solver "converges" at the
+            # starting point without moving. Solve in z = x / scale (z ~ 1 at
+            # the current allocation) with an O(1)-normalized objective.
+            cur = np.array([t.get("current_allocation", 0.0) or 0.0 for t in targets])
+            scale = np.where(cur > 0, cur, 1.0)
 
-            bounds = list(zip(problem["lb"], problem["ub"], strict=False))
-            x0 = [t.get("current_allocation", 1.0) for t in problem["targets"]]
+            def to_x(z: Any) -> Any:
+                return np.asarray(z) * scale
 
-            # Build constraints
+            def outcome(x: Any) -> float:
+                return float(
+                    sum(
+                        target_response_value(t, xi, gamma)
+                        for t, xi in zip(targets, x, strict=False)
+                    )
+                )
+
+            current_outcome = outcome(cur)
+            outcome_norm = current_outcome if current_outcome > 0 else 1.0
+            total_scale = float(np.sum(scale))
+
+            if objective_name == "maximize_roi":
+                # ROI equalization: net value with capital priced at the
+                # portfolio's current average MARGINAL return. For the power
+                # curve the current marginal in territory i is gamma * r_i, so
+                # the allocation-weighted average marginal is
+                # gamma * outcome(cur) / spend(cur).
+                marginal_gamma = gamma if gamma is not None else 1.0
+                hurdle = marginal_gamma * outcome_norm / total_scale
+
+                def objective(z: Any) -> float:
+                    x = to_x(z)
+                    return -(outcome(x) - hurdle * float(np.sum(x))) / outcome_norm
+
+            elif objective_name == "minimize_cost":
+
+                def objective(z: Any) -> float:
+                    return float(np.sum(to_x(z))) / total_scale
+
+            elif objective_name == "balance":
+                # Outcome ratio minus a mean-squared relative-change penalty:
+                # dimensionless on both sides so the trade-off is scale-free.
+                safe_cur = np.where(cur > 0, cur, 1.0)
+                balance_lambda = 0.5
+
+                def objective(z: Any) -> float:
+                    x = to_x(z)
+                    rel_change = (x - cur) / safe_cur
+                    penalty = balance_lambda * float(np.mean(rel_change**2))
+                    return -(outcome(x) / outcome_norm) + penalty
+
+            else:  # maximize_outcome
+
+                def objective(z: Any) -> float:
+                    return -outcome(to_x(z)) / outcome_norm
+
+            lb = np.asarray(problem["lb"], dtype=float) / scale
+            ub_raw = np.asarray(
+                [u if u != float("inf") else np.inf for u in problem["ub"]], dtype=float
+            )
+            ub = ub_raw / scale
+            bounds = list(zip(lb.tolist(), ub.tolist(), strict=False))
+
+            # Build constraints (rows stay linear in z: row . (scale * z))
             constraints = []
             if problem["a_ub"]:
-                a_ub = np.array(problem["a_ub"])
+                a_ub = np.array(problem["a_ub"]) * scale
                 b_ub = np.array(problem["b_ub"])
                 for i in range(len(b_ub)):
+                    norm = max(abs(b_ub[i]), 1.0)
                     constraints.append(
                         {
                             "type": "ineq",
-                            "fun": lambda x, i=i, a=a_ub, b=b_ub: b[i] - np.dot(a[i], x),
+                            "fun": lambda z, i=i, a=a_ub, b=b_ub, nrm=norm: (b[i] - np.dot(a[i], z))
+                            / nrm,
                         }
                     )
+            if problem.get("a_eq"):
+                a_eq = np.array(problem["a_eq"]) * scale
+                b_eq = np.array(problem["b_eq"])
+                for i in range(len(b_eq)):
+                    norm = max(abs(b_eq[i]), 1.0)
+                    constraints.append(
+                        {
+                            "type": "eq",
+                            "fun": lambda z, i=i, a=a_eq, b=b_eq, nrm=norm: (b[i] - np.dot(a[i], z))
+                            / nrm,
+                        }
+                    )
+            if objective_name == "minimize_cost":
+                # Keep (at least) the current outcome while cutting spend.
+                constraints.append(
+                    {
+                        "type": "ineq",
+                        "fun": lambda z: (outcome(to_x(z)) - current_outcome) / outcome_norm,
+                    }
+                )
+
+            # Start from the current allocation clipped into bounds; scale down
+            # first if the budget row is violated so SLSQP starts near-feasible.
+            z0 = np.clip(np.ones(n), lb, ub)
+            if problem["a_ub"]:
+                for row, b in zip(problem["a_ub"], problem["b_ub"], strict=False):
+                    used = float(np.dot(np.asarray(row) * scale, z0))
+                    if used > b > 0:
+                        z0 = np.clip(z0 * (b / used), lb, ub)
 
             result = minimize(
                 objective,
-                x0,
+                z0,
                 method="SLSQP",
                 bounds=bounds,
                 constraints=constraints,
+                options={"maxiter": 500, "ftol": 1e-10},
             )
 
             solve_time = int((time.time() - start) * 1000)
 
+            if not result.success:
+                return {
+                    "status": "failed",
+                    "x": None,
+                    "objective": None,
+                    "solve_time_ms": solve_time,
+                }
+
+            x_opt = to_x(result.x).tolist()
+            # Report the projected outcome as the objective value regardless of
+            # the internal objective shape (ratio/penalized forms are solver
+            # internals; the outcome is the number every downstream consumer
+            # reads).
             return {
-                "status": "optimal" if result.success else "failed",
-                "x": result.x.tolist() if result.success else None,
-                "objective": -result.fun if result.success else None,
+                "status": "optimal",
+                "x": x_opt,
+                "objective": outcome(x_opt),
                 "solve_time_ms": solve_time,
             }
 
@@ -389,14 +529,48 @@ class OptimizerNode:
             "solve_time_ms": solve_time,
         }
 
+    @staticmethod
+    def _underspend_note(problem: Dict[str, Any], x: List[float]) -> Optional[str]:
+        """Honest note when maximize_roi intentionally leaves budget unallocated.
+
+        The hurdle objective declines to spend dollars whose marginal return is
+        below the current-average marginal — economically correct, but a silent
+        underspend lets downstream narratives claim the full budget is "under
+        optimization" when it isn't. minimize_cost underspends BY DESIGN (that
+        is its objective), so no note is emitted for it.
+        """
+        if problem.get("objective") != "maximize_roi":
+            return None
+        if not problem.get("b_ub"):
+            return None
+        budget = float(problem["b_ub"][0])
+        spend = float(sum(x))
+        if budget <= 0 or spend >= budget * 0.995:
+            return None
+        return (
+            f"maximize_roi deployed ${spend:,.0f} of the ${budget:,.0f} budget; "
+            f"${budget - spend:,.0f} was intentionally left unallocated because its "
+            f"marginal return falls below the hurdle rate (the portfolio's current "
+            f"average marginal return) — spending it would reduce ROI."
+        )
+
     def _build_allocations(
         self,
         x: List[float],
         targets: List[Dict[str, Any]],
-        c: List[float],
+        problem: Dict[str, Any],
     ) -> List[AllocationResult]:
-        """Build allocation results from solution."""
+        """Build allocation results from solution.
+
+        ``expected_impact`` is the projected OUTCOME at the optimized
+        allocation, computed from the shared response model — the same units
+        for every objective. (It was previously ``c[i] * x[i]``, which for
+        maximize_roi used current-allocation-normalized coefficients and
+        produced dimensionless solver internals that the UI then displayed
+        as if they meant something.)
+        """
         allocations = []
+        gamma = problem_gamma(problem)
 
         for i, target in enumerate(targets):
             current = target.get("current_allocation", 0)
@@ -410,8 +584,12 @@ class OptimizerNode:
                     current_allocation=current,
                     optimized_allocation=optimized,
                     change=change,
-                    change_percentage=(change / current * 100) if current > 0 else 0,
-                    expected_impact=float(c[i] * optimized),
+                    change_percentage=(
+                        (change / current * 100)
+                        if current > 0
+                        else (None if optimized > 0 else 0.0)
+                    ),
+                    expected_impact=float(target_response_value(target, optimized, gamma)),
                 )
             )
 
