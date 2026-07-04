@@ -166,6 +166,111 @@ describe('ActiveCausalChains — no SAMPLE_ELEMENTS graph', () => {
     expect(edge?.data.weight).toBeUndefined();
   });
 
+  it('emits UNIQUE edge ids when several chains share the same start node', () => {
+    // Live regression: chains 8-12 of the deployed payload all start at
+    // var:treatment_arm; the old id template `edge-${chain.nodes[0].id}-${idx}`
+    // collided across chains and Cytoscape throws on duplicate ids just like
+    // empty ones ('Can not create second element with ID ...').
+    mockChains({
+      data: {
+        chains: [
+          {
+            nodes: [
+              { id: 'shared', name: 'Shared Start', type: 'Action' },
+              { id: 'mid1', name: 'Mid 1', type: 'HCP' },
+            ],
+            relationships: [
+              { type: 'CAUSES', source_id: 'shared', target_id: 'mid1', confidence: 0.8 },
+            ],
+            path_length: 1,
+            total_confidence: 0.8,
+          },
+          {
+            nodes: [
+              { id: 'shared', name: 'Shared Start', type: 'Action' },
+              { id: 'mid2', name: 'Mid 2', type: 'HCP' },
+            ],
+            relationships: [
+              { type: 'CAUSES', source_id: 'shared', target_id: 'mid2', confidence: 0.7 },
+            ],
+            path_length: 1,
+            total_confidence: 0.7,
+          },
+        ],
+        total_chains: 2,
+        query_latency_ms: 25,
+      } as unknown as CausalChainResponse,
+    } as unknown as Partial<ChainsMutation>);
+
+    render(<ActiveCausalChains />);
+
+    const calls = cytoscapeApi.setElements.mock.calls;
+    const elements = calls[calls.length - 1][0] as Array<{ data: { id?: string } }>;
+    const ids = elements.map((e) => e.data.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    // Both distinct edges must survive the uniqueness scheme.
+    expect(elements.filter((e) => e.data.id?.startsWith('edge-'))).toHaveLength(2);
+  });
+
+  it('skips empty-id nodes and their incident edges instead of crashing the card', () => {
+    // Live regression: id-less seeded KPI nodes serialized as id:"" and the
+    // bridge edge's target_id:"" — Cytoscape threw 'Can not create element
+    // with invalid string ID ``' and the ErrorBoundary killed the whole card.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockChains({
+      data: {
+        chains: [
+          {
+            nodes: [
+              { id: 'var:persistent_180d', name: 'persistent_180d', type: 'Variable' },
+              { id: '', name: 'Patient_Retention', type: 'KPI' },
+            ],
+            relationships: [
+              {
+                type: 'CAUSES',
+                source_id: 'var:persistent_180d',
+                target_id: '',
+                confidence: 0.7,
+              },
+            ],
+            path_length: 1,
+            total_confidence: 0.7,
+          },
+          {
+            nodes: [
+              { id: 'ok1', name: 'OK 1', type: 'Action' },
+              { id: 'ok2', name: 'OK 2', type: 'KPI' },
+            ],
+            relationships: [
+              { type: 'CAUSES', source_id: 'ok1', target_id: 'ok2', confidence: 0.9 },
+            ],
+            path_length: 1,
+            total_confidence: 0.9,
+          },
+        ],
+        total_chains: 2,
+        query_latency_ms: 25,
+      } as unknown as CausalChainResponse,
+    } as unknown as Partial<ChainsMutation>);
+
+    render(<ActiveCausalChains />);
+
+    const calls = cytoscapeApi.setElements.mock.calls;
+    const elements = calls[calls.length - 1][0] as Array<{
+      data: { id?: string; source?: string; target?: string };
+    }>;
+    // No element may carry an empty id, and no edge may reference one.
+    expect(elements.every((e) => e.data.id)).toBe(true);
+    expect(elements.every((e) => e.data.target !== '')).toBe(true);
+    // The healthy chain still renders fully.
+    const ids = elements.map((e) => e.data.id);
+    expect(ids).toContain('ok1');
+    expect(ids).toContain('ok2');
+    // Skips are observable, not silent.
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('clears previously rendered elements when a later response has zero chains', () => {
     mockChains({
       data: {
