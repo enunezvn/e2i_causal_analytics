@@ -159,7 +159,7 @@ export function AIAgentInsights() {
         {/* Heterogeneous Treatment Effects */}
         <div className="lg:col-span-1">
           <ErrorBoundary sectionName="Heterogeneous Treatment Effects">
-            <HeterogeneousTreatmentEffects />
+            <HeterogeneousTreatmentEffects brand={brand} />
           </ErrorBoundary>
         </div>
 
