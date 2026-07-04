@@ -95,11 +95,25 @@ class PredictiveInsightRequest(BaseModel):
     top_drivers: list[DriverRow] = Field(default_factory=list)
 
 
+class AllocationMove(BaseModel):
+    entity_id: str
+    change_percentage: float | None = None
+    change: float | None = None
+
+
 class ResourceInsightRequest(BaseModel):
     optimization_summary: str = ""
     recommendations: list[str] = Field(default_factory=list)
     projected_lift_pct: float | None = None
     solver_status: str | None = None
+    objective: str | None = None
+    brand: str | None = None
+    resource_type: str | None = None
+    entity_count: int | None = None
+    total_budget: float | None = None
+    top_increases: list[AllocationMove] = Field(default_factory=list)
+    top_decreases: list[AllocationMove] = Field(default_factory=list)
+    synthetic: bool = True
 
 
 class TreatmentEffectInsightRequest(BaseModel):
@@ -298,11 +312,32 @@ async def predictive_cohort_insight(
 async def resource_optimization_insight(
     req: ResourceInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
-    """Surface the resource-optimizer agent's existing summary/recommendations."""
-    payload = resource_optimization.to_insight(
-        req.optimization_summary,
-        req.recommendations,
-        req.projected_lift_pct,
-        req.solver_status,
+    """Business interpretation (DSPy) of a resource-optimization run's allocation moves."""
+    g = resource_optimization.build_grounding(
+        objective=req.objective or "",
+        brand=req.brand,
+        resource_type=req.resource_type,
+        solver_status=req.solver_status,
+        entity_count=req.entity_count,
+        total_budget=req.total_budget,
+        projected_lift_pct=req.projected_lift_pct,
+        top_increases=[m.model_dump() for m in req.top_increases],
+        top_decreases=[m.model_dump() for m in req.top_decreases],
+        synthetic=req.synthetic,
+        optimization_summary=req.optimization_summary,
+        recommendations=req.recommendations,
     )
-    return _finalize(payload, provenance="Resource optimizer (existing agent output)")
+    # Key on the derived grounding strings (scope + moves + outcome) so two runs
+    # that differ in any move or in the projected lift never collide.
+    key = cache_key(
+        "resource-optimization",
+        f"{req.brand or 'All'}/{req.objective or ''}",
+        {"s": g["scope"], "m": g["moves"], "o": g["outcome"]},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(resource_optimization.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Resource optimizer solver result (LLM interpretation)")
