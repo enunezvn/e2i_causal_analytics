@@ -511,7 +511,11 @@ export default function ResourceOptimization() {
             resource_type: optimizationResult?.resource_type ?? selectedResourceType,
             entity_count: optimizationResult?.optimal_allocations?.length ?? null,
             total_budget: totalBudget > 0 ? totalBudget : null,
-            total_spend: deployedSpend > 0 ? deployedSpend : null,
+            // null only when there is no result to read spend from — a genuine
+            // $0 spend over a real result must reach the insight as 0, not null
+            total_spend: optimizationResult?.optimal_allocations?.length
+              ? deployedSpend
+              : null,
             top_increases: topIncreases,
             top_decreases: topDecreases,
             synthetic: resultWarnings.some((w) => w.startsWith('SYNTHETIC DATA:')),

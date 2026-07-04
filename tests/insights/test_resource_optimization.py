@@ -76,6 +76,15 @@ def test_underspend_is_narrated_not_hidden():
     assert any(c["label"] == "Deployed" and c["value"] == "$250" for c in g["grounding"])
 
 
+def test_zero_spend_is_narrated_not_treated_as_missing():
+    # A genuine $0 recommendation over a nonzero budget is the most extreme
+    # underspend — it must not be confused with "no spend info sent".
+    g = _grounding(total_budget=300.0, total_spend=0.0)
+    assert "deploying $0 of the $300 budget" in g["outcome"]
+    assert "total budget under optimization" not in g["outcome"]
+    assert any(c["label"] == "Deployed" and c["value"] == "$0" for c in g["grounding"])
+
+
 def test_minimize_cost_underspend_is_savings_not_hurdle():
     # minimize_cost underspends BY DESIGN — narrating it with maximize_roi's
     # hurdle-rate rationale would be the wrong business story (codex round 2).

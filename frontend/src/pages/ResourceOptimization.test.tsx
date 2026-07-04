@@ -305,6 +305,42 @@ describe('ResourceOptimization', () => {
     expect(payload.total_spend).toBe(80000);
   });
 
+  it('sends a genuine $0 deployed spend as 0, not null (insight must narrate it)', async () => {
+    const insightMutate = vi.fn();
+    (useResourceOptimizationInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: insightMutate,
+      isPending: false,
+      error: null,
+      data: undefined,
+    });
+    // Extreme underspend: the optimizer recommends deploying nothing of a
+    // nonzero budget. Dropping this to null would flip the insight back to
+    // "total budget under optimization" and hide the Deployed $0 chip.
+    mockRun({
+      data: completedResult({
+        optimal_allocations: [
+          {
+            entity_id: 'south-T01',
+            entity_type: 'territory',
+            current_allocation: 60000,
+            optimized_allocation: 0,
+            change: -60000,
+            change_percentage: -100,
+            expected_impact: 0,
+          },
+        ],
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    await userEvent.click(
+      screen.getByRole('button', { name: /Generate strategic insight/i })
+    );
+
+    const payload = insightMutate.mock.calls[0][0];
+    expect(payload.total_budget).toBe(60000);
+    expect(payload.total_spend).toBe(0);
+  });
+
   it('renders impact shares as rounded percentages by region', () => {
     mockRun({
       data: completedResult({
