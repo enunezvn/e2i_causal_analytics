@@ -29,13 +29,18 @@ Usage (in order)::
     # 1) re-materialize the 12 bundles + print the next steps
     python -m scripts.sync_goldstd_serving
 
-    # 2) Feast FULL materialize (e2i_feast sidecar — NOT incremental):
+    # 2) Feast FULL materialize (e2i_feast sidecar — NOT incremental).
+    #    NOTE: --views is a REPEATABLE flag, one view per flag — a
+    #    space-separated list dies with "Got unexpected extra argument"
+    #    AND still exits 0 through a pipe (live-caught 2026-07-04):
     docker exec e2i_feast feast --chdir /feast materialize \\
         2020-01-01T00:00:00 "$(date -u +%Y-%m-%dT%H:%M:%S)" \\
-        --views goldstd_cohort_features goldstd_hcp_cohort_features
+        --views goldstd_cohort_features --views goldstd_hcp_cohort_features
 
-    # 3) reload the re-materialized bundles:
-    docker restart e2i_bentoml_dev
+    # 3) reload the re-materialized bundles. The container is e2i_bentoml
+    #    (plain compose) or e2i_bentoml_dev (dev overlay) — resolve with
+    #    `docker ps --format '{{.Names}}' | grep bentoml` first:
+    docker restart e2i_bentoml
 
     # 4) ONLY NOW repopulate the SHAP global-importance cache:
     python -m scripts.sync_goldstd_serving --refresh-only
@@ -117,8 +122,8 @@ def _serving_ready(api_base: str, token: str) -> bool:
 
     Reads ``/explain/models`` and checks the patient cohorts' ``keep_columns``
     (sourced from the live bentoml model_info) carry the 4 new drivers. If they
-    still show the base 3, the bundle re-materialize + ``docker restart
-    e2i_bentoml_dev`` have NOT taken effect — refreshing now would recompute the
+    still show the base 3, the bundle re-materialize + bentoml container
+    restart have NOT taken effect — refreshing now would recompute the
     cache over stale serving and DURABLY persist it (codex round-2 HIGH). Abort.
     """
     status, body = _get_json(f"{api_base}/explain/models", token, timeout=60)
@@ -134,7 +139,8 @@ def _serving_ready(api_base: str, token: str) -> bool:
             logger.error(
                 "serving-ready pre-check FAILED: %s keep_columns=%s lacks the new "
                 "drivers %s — run the bundle re-materialize + Feast FULL materialize "
-                "+ `docker restart e2i_bentoml_dev` FIRST.",
+                "+ the bentoml restart (`docker restart e2i_bentoml`; _dev suffix "
+                "under the dev overlay) FIRST.",
                 cohort,
                 sorted(served),
                 sorted(_NEW_PATIENT_DRIVERS - served),
@@ -228,8 +234,9 @@ def main() -> int:
         if not _serving_ready(args.api_base, token):
             logger.error(
                 "ABORT: serving layer is not on the enriched 7-cov bundles. Run "
-                "the bundle re-materialize + Feast FULL materialize + "
-                "`docker restart e2i_bentoml_dev`, THEN re-run --refresh-only."
+                "the bundle re-materialize + Feast FULL materialize + the bentoml "
+                "restart (`docker restart e2i_bentoml`; _dev suffix under the dev "
+                "overlay), THEN re-run --refresh-only."
             )
             return 2
         logger.info("Serving layer verified enriched. Refreshing the cache (12 slots)...")
@@ -268,12 +275,14 @@ def main() -> int:
 
     logger.info(
         "Bundles done. Now run, IN ORDER, then the terminal cache refresh:\n"
-        "  1) Feast FULL materialize (e2i_feast sidecar — NOT incremental):\n"
+        "  1) Feast FULL materialize (e2i_feast sidecar — NOT incremental;\n"
+        "     --views is REPEATABLE, one view per flag):\n"
         "       docker exec e2i_feast feast --chdir /feast materialize "
         '2020-01-01T00:00:00 "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%S)" '
-        "--views goldstd_cohort_features goldstd_hcp_cohort_features\n"
-        "  2) Reload the re-materialized bundles:\n"
-        "       docker restart e2i_bentoml_dev\n"
+        "--views goldstd_cohort_features --views goldstd_hcp_cohort_features\n"
+        "  2) Reload the re-materialized bundles (container is e2i_bentoml, or\n"
+        "     e2i_bentoml_dev under the dev overlay — check docker ps):\n"
+        "       docker restart e2i_bentoml\n"
         "  3) Repopulate the SHAP cache (ONLY after 1+2):\n"
         "       python -m scripts.sync_goldstd_serving --refresh-only"
     )
