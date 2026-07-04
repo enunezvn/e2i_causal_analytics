@@ -1077,6 +1077,61 @@ class TestPathToChainRealFalkorPath:
         # No known edge confidence -> no combined confidence (honest null).
         assert chain.get("confidence") is None
 
+    def test_id_less_node_falls_back_to_name(self, graphiti_service):
+        """A node without an ``id`` property must serialize with its name as id.
+
+        The seeded gold-standard KPI nodes (e.g. Patient_Retention, bridged by
+        sync_causal_paths_to_falkordb's variable->KPI edges) carry no ``id``
+        property. The read path emitted ``id: ""`` for them — and resolved the
+        bridge edge's endpoint to "" through the same map — which the Active
+        Causal Chains card fed straight into Cytoscape: 'Can not create element
+        with invalid string ID ``'. The id must fall back to name (matching
+        semantic_memory.list_nodes, i.e. what /api/graph/nodes reports for the
+        same node), never empty.
+        """
+        from falkordb.edge import Edge
+        from falkordb.node import Node
+        from falkordb.path import Path
+
+        var = Node(
+            node_id=30,
+            labels=["Variable"],
+            properties={"id": "var:persistent_180d", "name": "persistent_180d"},
+        )
+        # Faithful to the live seed: KPI node has name/category/... but NO id.
+        kpi = Node(
+            node_id=31,
+            labels=["KPI"],
+            properties={"name": "Patient_Retention", "category": "retention"},
+        )
+        bridge = Edge(30, "CAUSES", 31, edge_id=9, properties={"confidence": 0.7})
+
+        chain = graphiti_service._path_to_chain(Path([var, kpi], [bridge]))
+
+        assert chain["nodes"][0]["id"] == "var:persistent_180d"
+        assert chain["nodes"][1]["id"] == "Patient_Retention", (
+            "id-less KPI node must fall back to its name, not serialize as ''"
+        )
+        assert chain["edges"][0]["source_id"] == "var:persistent_180d"
+        assert chain["edges"][0]["target_id"] == "Patient_Retention", (
+            "edge endpoint must resolve through the same fallback, not ''"
+        )
+
+    def test_node_with_neither_id_nor_name_uses_internal_id(self, graphiti_service):
+        """Last-resort identity: the internal integer id, stringified."""
+        from falkordb.edge import Edge
+        from falkordb.node import Node
+        from falkordb.path import Path
+
+        a = Node(node_id=40, labels=["Variable"], properties={"id": "a", "name": "a"})
+        anon = Node(node_id=41, labels=["Unknown"], properties={})
+        e = Edge(40, "CAUSES", 41, edge_id=11, properties={"confidence": 0.5})
+
+        chain = graphiti_service._path_to_chain(Path([a, anon], [e]))
+
+        assert chain["nodes"][1]["id"] == "41"
+        assert chain["edges"][0]["target_id"] == "41"
+
 
 # ============================================================================
 # Shared-graph grouping (#890)

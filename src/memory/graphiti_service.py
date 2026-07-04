@@ -757,7 +757,17 @@ class E2IGraphitiService:
 
         if hasattr(path, "nodes"):
             for node in path.nodes():
-                external_id = node.properties.get("id", "")
+                # Seeded gold-standard nodes (e.g. the KPI nodes bridged by
+                # sync_causal_paths_to_falkordb) carry no ``id`` property; fall
+                # back to name, then the internal id — the same identity rule
+                # as semantic_memory.list_nodes — so the chain id matches what
+                # /api/graph/nodes reports for the node and edge endpoints
+                # never serialize as "" (Cytoscape throws on empty ids).
+                external_id = (
+                    node.properties.get("id")
+                    or node.properties.get("name")
+                    or str(getattr(node, "id", ""))
+                )
                 internal_id = getattr(node, "id", None)
                 if internal_id is not None:
                     internal_id_to_external[internal_id] = external_id

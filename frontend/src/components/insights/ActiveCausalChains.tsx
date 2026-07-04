@@ -187,9 +187,18 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
 
     const elements: ElementDefinition[] = [];
     const nodeIds = new Set<string>();
+    const edgeIds = new Set<string>();
+    let skipped = 0;
 
     chainsResponse.chains.forEach((chain) => {
       chain.nodes.forEach((node) => {
+        // Cytoscape throws on an empty-string id; skip the node and let the
+        // endpoint check below drop its incident edges instead of killing
+        // the whole card.
+        if (!node.id) {
+          skipped += 1;
+          return;
+        }
         if (!nodeIds.has(node.id)) {
           nodeIds.add(node.id);
           const apiType = node.type || 'entity';
@@ -204,12 +213,30 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
         }
       });
 
-      chain.relationships.forEach((rel, idx) => {
+      chain.relationships.forEach((rel) => {
+        // Both endpoints must be non-empty AND refer to collected nodes —
+        // Cytoscape also throws on edges referencing missing elements.
+        if (
+          !rel.source_id ||
+          !rel.target_id ||
+          !nodeIds.has(rel.source_id) ||
+          !nodeIds.has(rel.target_id)
+        ) {
+          skipped += 1;
+          return;
+        }
+        // Distinct chains can share hops (several chains start from the same
+        // node), so key the edge on type + endpoints: the same causal edge
+        // renders once and ids stay unique across chains (duplicate ids throw
+        // just like empty ones).
+        const edgeId = `edge-${rel.type}-${rel.source_id}->${rel.target_id}`;
+        if (edgeIds.has(edgeId)) return;
+        edgeIds.add(edgeId);
         // confidence is optional on the wire: when absent it stays absent
         // (rendered as a thin dashed unknown-strength edge), never invented.
         elements.push({
           data: {
-            id: `edge-${chain.nodes[0]?.id}-${idx}`,
+            id: edgeId,
             source: rel.source_id,
             target: rel.target_id,
             ...(typeof rel.confidence === 'number'
@@ -219,6 +246,12 @@ export function ActiveCausalChains({ className }: ActiveCausalChainsProps) {
         });
       });
     });
+
+    if (skipped > 0) {
+      console.warn(
+        `ActiveCausalChains: skipped ${skipped} element(s) with missing ids or unresolved endpoints from /api/graph/causal-chains`
+      );
+    }
 
     setElements(elements);
     runLayout('cose');

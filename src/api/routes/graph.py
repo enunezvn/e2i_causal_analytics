@@ -727,10 +727,15 @@ def _is_simple_chain(path: GraphPath) -> bool:
     The underlying graph walk can emit non-simple paths that revisit a node
     (e.g. ``A -> B -> A``); these render as nonsensical loops in the Active
     Causal Chains viz. Also reject empty / single-node paths that carry no
-    causal information.
+    causal information, and chains with an empty node id or edge endpoint —
+    the client keys Cytoscape elements on these ids and throws on "".
     """
     node_ids = [n.id for n in path.nodes]
     if len(node_ids) < 2 or not path.relationships:
+        return False
+    if not all(node_ids):
+        return False
+    if not all(r.source_id and r.target_id for r in path.relationships):
         return False
     return len(set(node_ids)) == len(node_ids)
 

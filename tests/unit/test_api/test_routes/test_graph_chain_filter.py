@@ -50,6 +50,20 @@ def test_is_simple_chain_accepts_simple_path():
     assert _is_simple_chain(_path(["a", "b", "c"], 0.8)) is True
 
 
+def test_is_simple_chain_rejects_empty_node_id():
+    # A node that lost its external id (e.g. an id-less seeded KPI node before
+    # the read-path fallback) cannot be keyed by Cytoscape — the card died with
+    # 'Can not create element with invalid string ID ``'. Guard server-side so
+    # a malformed chain is dropped rather than shipped.
+    assert _is_simple_chain(_path(["a", ""], 0.7)) is False
+
+
+def test_is_simple_chain_rejects_empty_relationship_endpoint():
+    chain = _path(["a", "b"], 0.7)
+    chain.relationships[0].target_id = ""
+    assert _is_simple_chain(chain) is False
+
+
 def test_clean_drops_cyclic_chains():
     cleaned = _clean_causal_chains([_path(["a", "b", "c"], 0.9), _path(["x", "y", "x"], 0.7)])
     assert len(cleaned) == 1
