@@ -8,6 +8,8 @@
  * Features:
  * - Live model selector populated from useModelsStatus (/api/predictions/models/status)
  * - Live performance trend via usePerformanceTrend (/api/monitoring/performance/{id}/trend)
+ *   with metric + time-range selectors and an optional all-brands overlay for
+ *   gold-standard models (ported from the Time Series page)
  * - Live performance alerts via usePerformanceAlerts (/api/monitoring/performance/{id}/alerts)
  * - Live A/B comparison via useModelComparison (/api/monitoring/performance/{id}/compare/{other})
  * - Loading skeletons and QueryErrorState for failures
@@ -28,6 +30,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { QueryErrorState } from '@/components/ui/query-error-state';
 import {
@@ -51,6 +54,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
+  Legend,
   ReferenceLine,
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
@@ -76,10 +80,68 @@ import {
   interpretConfusion,
   interpretRoc,
 } from '@/lib/model-performance/interpret';
+import { mergeBrandSeries } from '@/lib/timeseries-brands';
+
+// =============================================================================
+// CONSTANTS (trend controls — ported from the Time Series page)
+// =============================================================================
+
+const DEFAULT_TREND_METRIC = 'accuracy';
+
+const METRIC_OPTIONS: { value: string; label: string }[] = [
+  { value: 'accuracy', label: 'Accuracy' },
+  { value: 'precision', label: 'Precision' },
+  { value: 'recall', label: 'Recall' },
+  { value: 'f1', label: 'F1 Score' },
+  { value: 'auc_roc', label: 'AUC-ROC' },
+];
+
+// Performance metrics are recorded ~monthly (backtest sweep), so a 30-day
+// window catches only ~1-2 points and the trend chart renders degenerate /
+// empty. Default to a 1-year window to surface the full metric-over-time
+// history (the backend's own default is also 365). Cards (current/baseline/
+// trend) come from the tracker independently of this window.
+const DEFAULT_TREND_RANGE = '365d';
+
+const TIME_RANGES: { value: string; label: string; days: number }[] = [
+  { value: '30d', label: '30 Days', days: 30 },
+  { value: '60d', label: '60 Days', days: 60 },
+  { value: '90d', label: '90 Days', days: 90 },
+  { value: '180d', label: '6 Months', days: 180 },
+  { value: '365d', label: '1 Year', days: 365 },
+  { value: '1825d', label: '5 Years', days: 1825 },
+];
+
+// Gold-standard per-brand model handles follow the convention
+// `{cohort}_{brand_lower}_goldstd_lr_v1`. When the selected model matches,
+// the "Compare all brands" toggle overlays its two sibling-brand models.
+const GOLDSTD_MODEL_RE =
+  /^(initiation|persistence|discontinuation|hcp_adoption)_(remibrutinib|fabhalta|kisqali)_goldstd_lr_v1$/;
+
+const GOLDSTD_BRANDS = ['Remibrutinib', 'Fabhalta', 'Kisqali'] as const;
+type GoldstdBrand = (typeof GOLDSTD_BRANDS)[number];
+
+// Per-brand line colors for the overlay chart (matches TimeSeries).
+const BRAND_COLORS: Record<GoldstdBrand, string> = {
+  Remibrutinib: 'var(--color-chart-1)',
+  Fabhalta: 'var(--color-chart-2)',
+  Kisqali: 'var(--color-chart-3)',
+};
 
 // =============================================================================
 // HELPERS
 // =============================================================================
+
+function rangeToDays(range: string): number {
+  return TIME_RANGES.find((r) => r.value === range)?.days ?? 365;
+}
+
+function formatTrendDate(dateStr: string | undefined): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return dateStr;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
 /**
  * Inline loading skeleton — a small div w/ `animate-pulse` rather than a
@@ -277,6 +339,12 @@ function ModelPerformance() {
   const [selectedModelId, setSelectedModelId] = useState<string>('');
   const [compareModelId, setCompareModelId] = useState<string>('');
 
+  // Trend controls (ported from TimeSeries): metric + time-range selectors
+  // and the gold-standard all-brands overlay toggle.
+  const [trendMetric, setTrendMetric] = useState<string>(DEFAULT_TREND_METRIC);
+  const [trendRange, setTrendRange] = useState<string>(DEFAULT_TREND_RANGE);
+  const [compareAllBrands, setCompareAllBrands] = useState<boolean>(false);
+
   // -- Live data ----------------------------------------------------------
   const modelsQuery = useModelsStatus();
   // Stabilise `models` reference so memo deps don't change on every render.
@@ -301,14 +369,46 @@ function ModelPerformance() {
     [models, effectiveModelId]
   );
 
-  // Performance metrics are recorded ~monthly (backtest sweep), so a 30-day
-  // window catches only ~1-2 points and the trend chart renders degenerate /
-  // empty. Use a 1-year window to surface the full accuracy-over-time history
-  // (the backend's own default is also 365). Cards (current/baseline/trend)
-  // come from the tracker independently of this window.
+  // Gold-standard model detection for the all-brands overlay. When the
+  // selected model matches `{cohort}_{brand}_goldstd_lr_v1`, the "Compare all
+  // brands" toggle overlays the two sibling-brand models of the same cohort.
+  const goldstdMatch = useMemo(
+    () => GOLDSTD_MODEL_RE.exec(effectiveModelId),
+    [effectiveModelId]
+  );
+  const goldstdCohort = goldstdMatch?.[1] ?? '';
+  const goldstdBrand = useMemo<GoldstdBrand | null>(
+    () =>
+      goldstdMatch
+        ? GOLDSTD_BRANDS.find((b) => b.toLowerCase() === goldstdMatch[2]) ?? null
+        : null,
+    [goldstdMatch]
+  );
+  const siblingBrands = useMemo<GoldstdBrand[]>(
+    () => (goldstdBrand ? GOLDSTD_BRANDS.filter((b) => b !== goldstdBrand) : []),
+    [goldstdBrand]
+  );
+  const overlayActive = !!goldstdBrand && compareAllBrands;
+  const siblingHandle = (brand: GoldstdBrand | undefined) =>
+    brand && goldstdCohort ? `${goldstdCohort}_${brand.toLowerCase()}_goldstd_lr_v1` : '';
+
+  const trendDays = rangeToDays(trendRange);
+
+  // Rules-of-hooks pattern (PR #1045): all three usePerformanceTrend hooks are
+  // called UNCONDITIONALLY in a stable order — never in a loop/condition —
+  // varying only `enabled`. The selected model's query is the one enabled by
+  // default; the two sibling-brand queries only run while the overlay is on.
   const trendQuery = usePerformanceTrend(
-    { model_id: effectiveModelId, metric_name: 'accuracy', days: 365 },
+    { model_id: effectiveModelId, metric_name: trendMetric, days: trendDays },
     { enabled: !!effectiveModelId }
+  );
+  const siblingTrendA = usePerformanceTrend(
+    { model_id: siblingHandle(siblingBrands[0]), metric_name: trendMetric, days: trendDays },
+    { enabled: overlayActive && !!siblingHandle(siblingBrands[0]) }
+  );
+  const siblingTrendB = usePerformanceTrend(
+    { model_id: siblingHandle(siblingBrands[1]), metric_name: trendMetric, days: trendDays },
+    { enabled: overlayActive && !!siblingHandle(siblingBrands[1]) }
   );
 
   const alertsQuery = usePerformanceAlerts(effectiveModelId, {
@@ -343,10 +443,46 @@ function ModelPerformance() {
   // (on-demand mutation; grounded in the selected model version).
   const perfInsight = useModelPerformanceInsight();
 
-  const accuracyHistory = useMemo(
+  const trendHistory = useMemo(
     () => toMetricDataPoints(trendQuery.data?.history),
     [trendQuery.data?.history]
   );
+
+  // Overlay rows ({ date, <brand>: value }) — one line per gold-standard brand.
+  // mergeBrandSeries is shared with TimeSeries (imported, not copied).
+  const overlayRows = useMemo(() => {
+    if (!overlayActive || !goldstdBrand) return [];
+    const toSeries = (history: PerformanceMetricItem[] | undefined) =>
+      (history ?? []).map((item) => ({ date: item.recorded_at, value: item.metric_value }));
+    const perBrand: Record<string, { date: string; value: number }[]> = {
+      [goldstdBrand]: toSeries(trendQuery.data?.history),
+    };
+    if (siblingBrands[0]) perBrand[siblingBrands[0]] = toSeries(siblingTrendA.data?.history);
+    if (siblingBrands[1]) perBrand[siblingBrands[1]] = toSeries(siblingTrendB.data?.history);
+    return mergeBrandSeries(perBrand, GOLDSTD_BRANDS);
+  }, [
+    overlayActive,
+    goldstdBrand,
+    siblingBrands,
+    trendQuery.data?.history,
+    siblingTrendA.data?.history,
+    siblingTrendB.data?.history,
+  ]);
+
+  // #970: recorded_at is the DATA boundary (latest holdout journey_start_date),
+  // NOT wall-clock now. Surface the latest covered date so the x-axis is read
+  // as data coverage, not "today".
+  const latestDataDate = useMemo<string | null>(() => {
+    const history = trendQuery.data?.history ?? [];
+    if (history.length === 0) return null;
+    return history.reduce(
+      (max, h) => (Date.parse(h.recorded_at) > Date.parse(max) ? h.recorded_at : max),
+      history[0].recorded_at
+    );
+  }, [trendQuery.data?.history]);
+
+  const trendMetricLabel =
+    METRIC_OPTIONS.find((m) => m.value === trendMetric)?.label ?? trendMetric;
 
   // -- Handlers -----------------------------------------------------------
   const handleRefresh = async () => {
@@ -356,6 +492,9 @@ function ModelPerformance() {
       alertsQuery.refetch?.(),
       // Comparison may not be enabled — refetch only if effective second model exists
       effectiveCompareModelId ? comparisonQuery.refetch?.() : Promise.resolve(),
+      // Sibling-brand trends only participate while the overlay is on.
+      overlayActive ? siblingTrendA.refetch?.() : Promise.resolve(),
+      overlayActive ? siblingTrendB.refetch?.() : Promise.resolve(),
     ]);
   };
 
@@ -381,12 +520,18 @@ function ModelPerformance() {
   const isModelsError = modelsQuery.isError;
   const isTrendLoading = trendQuery.isLoading && !!effectiveModelId;
   const isTrendError = trendQuery.isError && !!effectiveModelId;
+  // Sibling queries are disabled unless the overlay is on, so this only ever
+  // gates the chart while the overlay is actually fetching.
+  const isOverlayLoading =
+    overlayActive && (siblingTrendA.isLoading || siblingTrendB.isLoading);
 
   const isRefetching =
     modelsQuery.isRefetching ||
     trendQuery.isRefetching ||
     alertsQuery.isRefetching ||
-    comparisonQuery.isRefetching;
+    comparisonQuery.isRefetching ||
+    siblingTrendA.isRefetching ||
+    siblingTrendB.isRefetching;
 
   // =============================================================================
   // RENDER
@@ -570,18 +715,126 @@ function ModelPerformance() {
         <TabsContent value="trend">
           <Card>
             <CardHeader>
-              <CardTitle>Performance Trend</CardTitle>
-              <CardDescription>
-                {trendQuery.data?.metric_name ?? 'Accuracy'} over time, with baseline + alert thresholds.
-              </CardDescription>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <CardTitle>Performance Trend</CardTitle>
+                  <CardDescription>
+                    {trendMetricLabel} over the last {trendDays} days, with baseline + alert
+                    thresholds.
+                  </CardDescription>
+                  {/* #969 + #970 (ported from TimeSeries): be honest about what
+                      this trend is. It is a per-month walk-forward backtest
+                      (source='backtest_wf'), an UNCALIBRATED LogisticRegression
+                      refit each month — not the served CalibratedClassifierCV
+                      champion. AUC-ROC is calibration-invariant (exact), but
+                      threshold metrics differ. And recorded_at is the data
+                      boundary, not wall-clock. */}
+                  <p
+                    data-testid="perf-trend-provenance-note"
+                    className="mt-1 max-w-prose text-xs text-muted-foreground"
+                  >
+                    Per-month walk-forward backtest (uncalibrated): AUC-ROC matches the
+                    served champion, but threshold metrics (accuracy / precision / recall /
+                    F1) are a diagnostic, not the calibrated champion.
+                    {latestDataDate
+                      ? ` Dates reflect data coverage through ${formatTrendDate(latestDataDate)}, not wall-clock.`
+                      : ''}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Select value={trendMetric} onValueChange={setTrendMetric}>
+                    <SelectTrigger className="w-[150px]" aria-label="metric">
+                      <SelectValue placeholder="Select metric" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {METRIC_OPTIONS.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={trendRange} onValueChange={setTrendRange}>
+                    <SelectTrigger className="w-[120px]" aria-label="time range">
+                      <SelectValue placeholder="Time range" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TIME_RANGES.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>
+                          {r.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {/* Overlay toggle only offered for gold-standard per-brand models
+                      (the sibling handles are derivable from the selected one). */}
+                  {goldstdBrand && (
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="mp-compare-brands"
+                        checked={compareAllBrands}
+                        onCheckedChange={(checked) => setCompareAllBrands(checked === true)}
+                      />
+                      <label
+                        htmlFor="mp-compare-brands"
+                        className="text-sm font-medium cursor-pointer"
+                      >
+                        Compare all brands
+                      </label>
+                    </div>
+                  )}
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
-              {isTrendLoading ? (
+              {isTrendLoading || isOverlayLoading ? (
                 <LoadingPulse className="h-[350px] w-full" />
-              ) : accuracyHistory.length > 0 ? (
+              ) : overlayActive ? (
+                overlayRows.length === 0 ? (
+                  <div className="py-12 text-center text-sm text-muted-foreground">
+                    No performance history available for these models yet.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={350}>
+                    <LineChart
+                      data={overlayRows}
+                      margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                      <XAxis
+                        dataKey="date"
+                        tickFormatter={formatTrendDate}
+                        fontSize={12}
+                        tickLine={false}
+                      />
+                      <YAxis fontSize={12} tickLine={false} axisLine={false} />
+                      <RechartsTooltip
+                        formatter={(value) =>
+                          typeof value === 'number' ? value.toFixed(4) : value
+                        }
+                        labelFormatter={formatTrendDate}
+                      />
+                      <Legend />
+                      {/* One line per gold-standard brand, colored like TimeSeries. */}
+                      {GOLDSTD_BRANDS.map((b) => (
+                        <Line
+                          key={b}
+                          type="monotone"
+                          dataKey={b}
+                          stroke={BRAND_COLORS[b]}
+                          strokeWidth={2}
+                          dot={false}
+                          connectNulls
+                          name={b}
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                )
+              ) : trendHistory.length > 0 ? (
                 <MetricTrend
-                  name={trendQuery.data?.metric_name ?? 'accuracy'}
-                  data={accuracyHistory}
+                  name={trendQuery.data?.metric_name ?? trendMetric}
+                  data={trendHistory}
                   unit=""
                   height={350}
                   showHeader={false}

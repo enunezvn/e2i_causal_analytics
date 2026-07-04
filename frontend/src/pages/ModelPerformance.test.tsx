@@ -12,10 +12,16 @@
  * - Loading/error states via QueryErrorState
  *
  * Hard-coded SAMPLE_MODELS / SAMPLE_METRICS arrays must be removed.
+ *
+ * Trend-enhancement port (from TimeSeries): the page calls usePerformanceTrend
+ * THREE times unconditionally (selected model + two gold-standard sibling
+ * brands), varying only `{ enabled }`. Tests must therefore identify the
+ * SELECTED model's query via `mock.calls.filter((c) => c[1]?.enabled)` — the
+ * "last call" is a sibling query, not the selected model.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -467,12 +473,14 @@ describe('ModelPerformance', () => {
 
     render(<ModelPerformance />, { wrapper: createWrapper() });
 
-    // With empty models, trend hook should be invoked but disabled
+    // With empty models, every trend query (selected + both sibling-brand
+    // overlay queries) must be invoked with an empty id and disabled.
     const trendCalls = (usePerformanceTrend as ReturnType<typeof vi.fn>).mock.calls;
-    const trendCall = trendCalls[trendCalls.length - 1] ?? [];
-    const [trendParams, trendOpts] = trendCall;
-    expect(trendParams?.model_id).toBe('');
-    expect(trendOpts?.enabled).toBe(false);
+    expect(trendCalls.length).toBeGreaterThan(0);
+    for (const [trendParams, trendOpts] of trendCalls) {
+      expect(trendParams?.model_id).toBe('');
+      expect(trendOpts?.enabled).toBe(false);
+    }
   });
 
   it('displays visualization tabs', () => {
@@ -567,5 +575,132 @@ describe('ModelPerformance', () => {
     // Click the ROC Curve tab and assert AUC band sentence
     await user.click(screen.getByRole('tab', { name: /ROC Curve/i }));
     expect(await screen.findByText(/AUC 0\.671 \(weak\)/i)).toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // Trend enhancements ported from TimeSeries (metric select, range select,
+  // gold-standard all-brands overlay, provenance note)
+  // ===========================================================================
+
+  describe('trend enhancements (ported from TimeSeries)', () => {
+    /** The selected model's trend query is the ENABLED usePerformanceTrend call. */
+    function enabledTrendCalls() {
+      return (usePerformanceTrend as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => c[1]?.enabled
+      );
+    }
+
+    /** Swap the models list for a single gold-standard per-brand model. */
+    function setGoldstdModel(modelName = 'initiation_remibrutinib_goldstd_lr_v1') {
+      (useModelsStatus as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          total_models: 1,
+          healthy_count: 1,
+          unhealthy_count: 0,
+          models: [
+            {
+              model_name: modelName,
+              status: 'healthy',
+              endpoint: `/predict/${modelName}`,
+              last_check: '2026-07-04T10:00:00Z',
+            },
+          ],
+          timestamp: '2026-07-04T10:00:00Z',
+        },
+        isLoading: false,
+        isError: false,
+        error: null,
+        refetch: vi.fn(),
+      });
+    }
+
+    it('defaults: enabled trend query uses metric=accuracy and days=365 (unchanged behavior)', () => {
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      const enabled = enabledTrendCalls();
+      expect(enabled.length).toBeGreaterThan(0);
+      for (const [params] of enabled) {
+        expect(params.model_id).toBe('propensity_v2.1.0');
+        expect(params.metric_name).toBe('accuracy');
+        expect(params.days).toBe(365);
+      }
+      // Sibling-brand overlay queries stay disabled for non-goldstd models.
+      const disabled = (usePerformanceTrend as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => !c[1]?.enabled
+      );
+      expect(disabled.length).toBeGreaterThan(0);
+      for (const [params] of disabled) {
+        expect(params.model_id).toBe('');
+      }
+    });
+
+    it('metric selector drives the enabled trend query metric_name', async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      await user.click(screen.getByRole('combobox', { name: 'metric' }));
+      await user.click(await screen.findByRole('option', { name: 'Precision' }));
+
+      await waitFor(() => {
+        const enabled = enabledTrendCalls();
+        const last = enabled[enabled.length - 1];
+        expect(last?.[0]?.metric_name).toBe('precision');
+        expect(last?.[0]?.model_id).toBe('propensity_v2.1.0');
+      });
+    });
+
+    it('time-range selector drives the enabled trend query days', async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      await user.click(screen.getByRole('combobox', { name: 'time range' }));
+      await user.click(await screen.findByRole('option', { name: '90 Days' }));
+
+      await waitFor(() => {
+        const enabled = enabledTrendCalls();
+        const last = enabled[enabled.length - 1];
+        expect(last?.[0]?.days).toBe(90);
+        expect(last?.[0]?.model_id).toBe('propensity_v2.1.0');
+      });
+    });
+
+    it('does NOT offer the "Compare all brands" toggle for non-goldstd models', () => {
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      expect(
+        screen.queryByRole('checkbox', { name: /compare all brands/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it('offers the toggle for goldstd models; enabling it enables both sibling-brand queries', async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      setGoldstdModel('initiation_remibrutinib_goldstd_lr_v1');
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      const toggle = screen.getByRole('checkbox', { name: /compare all brands/i });
+      await user.click(toggle);
+
+      await waitFor(() => {
+        const enabledIds = new Set(enabledTrendCalls().map((c) => c[0].model_id));
+        expect(enabledIds.has('initiation_remibrutinib_goldstd_lr_v1')).toBe(true);
+        expect(enabledIds.has('initiation_fabhalta_goldstd_lr_v1')).toBe(true);
+        expect(enabledIds.has('initiation_kisqali_goldstd_lr_v1')).toBe(true);
+      });
+      // Sibling queries inherit the same metric + window as the selected model.
+      for (const [params] of enabledTrendCalls().slice(-3)) {
+        expect(params.metric_name).toBe('accuracy');
+        expect(params.days).toBe(365);
+      }
+    });
+
+    it('renders the walk-forward provenance note on the trend card', () => {
+      render(<ModelPerformance />, { wrapper: createWrapper() });
+
+      const note = screen.getByTestId('perf-trend-provenance-note');
+      expect(note).toHaveTextContent(/walk-forward backtest/i);
+      expect(note).toHaveTextContent(/not the calibrated champion/i);
+      // mockTrend's latest history point is 2026-05-17 — the data boundary.
+      expect(note).toHaveTextContent(/data coverage through May 17/i);
+    });
   });
 });
