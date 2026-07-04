@@ -85,6 +85,7 @@ def build_grounding(
     synthetic: bool,
     optimization_summary: str = "",
     recommendations: list[str] | None = None,
+    total_spend: float | None = None,
 ) -> dict[str, Any]:
     brand_label = brand or "All brands"
     scope = (
@@ -96,10 +97,25 @@ def build_grounding(
     moves = f"Increases: {inc}. Decreases: {dec}."
     lift_str = f"{projected_lift_pct:+.1f}%" if projected_lift_pct is not None else "—"
     budget_str = f"${total_budget:,.0f}" if total_budget else "—"
-    outcome = (
-        f"Projected outcome lift vs current allocation: {lift_str}; "
-        f"total budget under optimization: {budget_str}."
-    )
+    # maximize_roi's hurdle objective can intentionally leave budget
+    # unallocated (marginal return below the hurdle). Saying "total budget
+    # under optimization" in that case would narrate money as deployed that
+    # the optimizer explicitly declined to spend.
+    spend_f = float(total_spend) if total_spend is not None else 0.0
+    budget_f = float(total_budget) if total_budget is not None else 0.0
+    underspend = total_spend is not None and budget_f > 0 and spend_f < budget_f * 0.995
+    if underspend:
+        outcome = (
+            f"Projected outcome lift vs current allocation: {lift_str}; "
+            f"recommends deploying ${spend_f:,.0f} of the ${budget_f:,.0f} "
+            f"budget (${budget_f - spend_f:,.0f} intentionally unallocated — "
+            f"its marginal return falls below the hurdle rate)."
+        )
+    else:
+        outcome = (
+            f"Projected outcome lift vs current allocation: {lift_str}; "
+            f"total budget under optimization: {budget_str}."
+        )
     if synthetic:
         caveats = (
             "This run used a clearly-labelled SYNTHETIC allocation problem (notional "
@@ -120,6 +136,8 @@ def build_grounding(
         {"label": "Budget", "value": budget_str},
         {"label": "Solver", "value": str(solver_status or "unknown")},
     ]
+    if underspend:
+        grounding.insert(4, {"label": "Deployed", "value": f"${spend_f:,.0f}"})
     return {
         "scope": scope,
         "moves": moves,

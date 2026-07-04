@@ -111,6 +111,10 @@ class ResourceInsightRequest(BaseModel):
     resource_type: str | None = None
     entity_count: int | None = None
     total_budget: float | None = None
+    # Actual optimized spend (sum of optimized allocations). maximize_roi can
+    # intentionally deploy less than the budget; the narrative must not claim
+    # the full budget is "under optimization" when it isn't.
+    total_spend: float | None = None
     top_increases: list[AllocationMove] = Field(default_factory=list)
     top_decreases: list[AllocationMove] = Field(default_factory=list)
     synthetic: bool = True
@@ -326,6 +330,7 @@ async def resource_optimization_insight(
         synthetic=req.synthetic,
         optimization_summary=req.optimization_summary,
         recommendations=req.recommendations,
+        total_spend=req.total_spend,
     )
     # Key on the derived grounding strings (scope + moves + outcome) so two runs
     # that differ in any move or in the projected lift never collide.

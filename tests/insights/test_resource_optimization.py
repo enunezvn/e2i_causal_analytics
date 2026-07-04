@@ -63,3 +63,27 @@ def test_fallback_without_summary_asks_for_a_run():
     out = _fallback(g)
     assert out["is_fallback"] is True
     assert "run an optimization" in out["insight"].lower()
+
+
+def test_underspend_is_narrated_not_hidden():
+    # maximize_roi can intentionally deploy less than the budget (marginal
+    # return below the hurdle); the outcome must say so instead of claiming
+    # the full budget is "under optimization".
+    g = _grounding(total_budget=300.0, total_spend=250.0)
+    assert "deploying $250" in g["outcome"]
+    assert "$50 intentionally unallocated" in g["outcome"]
+    assert "total budget under optimization" not in g["outcome"]
+    assert any(c["label"] == "Deployed" and c["value"] == "$250" for c in g["grounding"])
+
+
+def test_full_deployment_keeps_budget_phrase():
+    g = _grounding(total_budget=300.0, total_spend=300.0)
+    assert "total budget under optimization: $300" in g["outcome"]
+    assert not any(c["label"] == "Deployed" for c in g["grounding"])
+
+
+def test_no_spend_info_keeps_budget_phrase():
+    # Callers that don't send total_spend (older clients) keep the old text.
+    g = _grounding()
+    assert "total budget under optimization" in g["outcome"]
+    assert not any(c["label"] == "Deployed" for c in g["grounding"])

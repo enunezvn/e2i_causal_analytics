@@ -228,6 +228,83 @@ describe('ResourceOptimization', () => {
     expect(mutate.mock.calls[1][0].request.brand).toBe('Remibrutinib');
   });
 
+  it('renders a null change_percentage as "New" (never 0%) for zero-current allocations', async () => {
+    mockRun({
+      data: completedResult({
+        optimal_allocations: [
+          {
+            entity_id: 'south-T09',
+            entity_type: 'territory',
+            current_allocation: 0,
+            optimized_allocation: 50000,
+            change: 50000,
+            change_percentage: null,
+            expected_impact: 320,
+          },
+          {
+            entity_id: 'south-T01',
+            entity_type: 'territory',
+            current_allocation: 50000,
+            optimized_allocation: 60000,
+            change: 10000,
+            change_percentage: 20,
+            expected_impact: 320,
+          },
+        ],
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    await userEvent.click(screen.getByRole('tab', { name: /Allocations/i }));
+
+    // The new allocation must read as a move, not "0.0%".
+    expect(screen.getByText('New')).toBeInTheDocument();
+    expect(screen.getByText('+20.0%')).toBeInTheDocument();
+    expect(screen.queryByText('0.0%')).not.toBeInTheDocument();
+  });
+
+  it('sends the actual deployed spend alongside the budget in the insight request', async () => {
+    const insightMutate = vi.fn();
+    (useResourceOptimizationInsight as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: insightMutate,
+      isPending: false,
+      error: null,
+      data: undefined,
+    });
+    // maximize_roi underspend: budget (current) 100K, deployed only 80K.
+    mockRun({
+      data: completedResult({
+        optimal_allocations: [
+          {
+            entity_id: 'south-T01',
+            entity_type: 'territory',
+            current_allocation: 60000,
+            optimized_allocation: 50000,
+            change: -10000,
+            change_percentage: -16.7,
+            expected_impact: 320,
+          },
+          {
+            entity_id: 'west-T01',
+            entity_type: 'territory',
+            current_allocation: 40000,
+            optimized_allocation: 30000,
+            change: -10000,
+            change_percentage: -25,
+            expected_impact: 120,
+          },
+        ],
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    await userEvent.click(
+      screen.getByRole('button', { name: /Generate strategic insight/i })
+    );
+
+    const payload = insightMutate.mock.calls[0][0];
+    expect(payload.total_budget).toBe(100000);
+    expect(payload.total_spend).toBe(80000);
+  });
+
   it('renders impact shares as rounded percentages by region', () => {
     mockRun({
       data: completedResult({

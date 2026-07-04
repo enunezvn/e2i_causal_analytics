@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..response_model import problem_gamma, target_response_value
 from ..state import AllocationResult, ResourceOptimizerState
@@ -71,6 +71,11 @@ class OptimizerNode:
                 f"objective={result['objective']:.2f}, time={optimization_time}ms"
             )
 
+            warnings = list(state.get("warnings") or [])
+            underspend_note = self._underspend_note(problem, result["x"])
+            if underspend_note:
+                warnings.append(underspend_note)
+
             return {
                 **state,
                 "optimal_allocations": allocations,
@@ -78,6 +83,7 @@ class OptimizerNode:
                 "solver_status": "optimal",
                 "solve_time_ms": result.get("solve_time_ms", 0),
                 "optimization_latency_ms": optimization_time,
+                "warnings": warnings,
                 "status": "analyzing" if state.get("run_scenarios") else "projecting",
             }
 
@@ -523,6 +529,31 @@ class OptimizerNode:
             "solve_time_ms": solve_time,
         }
 
+    @staticmethod
+    def _underspend_note(problem: Dict[str, Any], x: List[float]) -> Optional[str]:
+        """Honest note when maximize_roi intentionally leaves budget unallocated.
+
+        The hurdle objective declines to spend dollars whose marginal return is
+        below the current-average marginal — economically correct, but a silent
+        underspend lets downstream narratives claim the full budget is "under
+        optimization" when it isn't. minimize_cost underspends BY DESIGN (that
+        is its objective), so no note is emitted for it.
+        """
+        if problem.get("objective") != "maximize_roi":
+            return None
+        if not problem.get("b_ub"):
+            return None
+        budget = float(problem["b_ub"][0])
+        spend = float(sum(x))
+        if budget <= 0 or spend >= budget * 0.995:
+            return None
+        return (
+            f"maximize_roi deployed ${spend:,.0f} of the ${budget:,.0f} budget; "
+            f"${budget - spend:,.0f} was intentionally left unallocated because its "
+            f"marginal return falls below the hurdle rate (the portfolio's current "
+            f"average marginal return) — spending it would reduce ROI."
+        )
+
     def _build_allocations(
         self,
         x: List[float],
@@ -553,7 +584,11 @@ class OptimizerNode:
                     current_allocation=current,
                     optimized_allocation=optimized,
                     change=change,
-                    change_percentage=(change / current * 100) if current > 0 else 0,
+                    change_percentage=(
+                        (change / current * 100)
+                        if current > 0
+                        else (None if optimized > 0 else 0.0)
+                    ),
                     expected_impact=float(target_response_value(target, optimized, gamma)),
                 )
             )

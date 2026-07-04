@@ -205,7 +205,14 @@ class AllocationResult(BaseModel):
     current_allocation: float = Field(..., description="Current allocation")
     optimized_allocation: float = Field(..., description="Optimized allocation")
     change: float = Field(..., description="Change from current")
-    change_percentage: float = Field(..., description="Change percentage")
+    change_percentage: Optional[float] = Field(
+        None,
+        description=(
+            "Change percentage; None when current allocation is 0 and the "
+            "optimizer allocated money (a percentage of zero is undefined — "
+            "the UI renders this as a new allocation, not 0%)"
+        ),
+    )
     expected_impact: float = Field(..., description="Expected outcome impact")
 
 
@@ -1453,7 +1460,7 @@ def _generate_mock_response(
                 change=round(change, 2),
                 change_percentage=round(change / target.current_allocation * 100, 1)
                 if target.current_allocation > 0
-                else 0.0,
+                else (None if optimized > 0 else 0.0),
                 expected_impact=round(optimized * target.expected_response, 2),
             )
         )

@@ -189,3 +189,124 @@ class TestInteriorOptimum:
             # Within ±50% allocation moves, the concave outcome stays within
             # ~±30% of the anchored (current) outcome.
             assert 0.6 * real_trx < a["expected_impact"] < 1.4 * real_trx
+
+
+def _skewed_targets():
+    """One highly productive territory + two duds (codex review repro):
+    the star hits its 1.5x cap, and the hurdle objective declines to redeploy
+    the freed-up money into below-hurdle territories."""
+    targets = []
+    for tid, r in [("south-T01", 10.0), ("west-T01", 1.0), ("west-T02", 1.0)]:
+        targets.append(
+            {
+                "entity_id": tid,
+                "entity_type": "territory",
+                "current_allocation": 100.0,
+                "min_allocation": 50.0,
+                "max_allocation": 150.0,
+                "expected_response": r,
+            }
+        )
+    return targets
+
+
+class TestUnderspendHonesty:
+    """maximize_roi may intentionally leave budget unallocated (marginal return
+    below the hurdle). That is economically correct — but the run must SAY so,
+    or downstream narratives claim the full budget was deployed."""
+
+    def _formulate(self, targets, budget, objective="maximize_roi"):
+        return ProblemFormulatorNode()._build_problem(
+            targets,
+            [{"constraint_type": "budget", "value": budget}],
+            objective,
+            requested_solver=None,
+        )
+
+    def test_skewed_inputs_underspend_and_emit_note(self):
+        problem = self._formulate(_skewed_targets(), 300.0)
+        node = OptimizerNode()
+        result = node._solve_nonlinear(problem)
+        assert result["status"] == "optimal"
+        spend = sum(result["x"])
+        assert spend < 300.0 * 0.995  # the skew genuinely produces underspend
+        note = node._underspend_note(problem, result["x"])
+        assert note is not None
+        assert "unallocated" in note
+        assert f"${300.0 - spend:,.0f}" in note
+
+    def test_realistic_inputs_deploy_full_budget_no_note(self):
+        targets = _targets()
+        budget = sum(t["current_allocation"] for t in targets)
+        problem = self._formulate(targets, budget)
+        node = OptimizerNode()
+        result = node._solve_nonlinear(problem)
+        assert result["status"] == "optimal"
+        assert sum(result["x"]) == pytest.approx(budget, rel=5e-3)
+        assert node._underspend_note(problem, result["x"]) is None
+
+    def test_note_is_roi_only(self):
+        # minimize_cost underspends BY DESIGN — no note for it.
+        assert (
+            OptimizerNode._underspend_note({"objective": "minimize_cost", "b_ub": [300.0]}, [100.0])
+            is None
+        )
+        assert (
+            OptimizerNode._underspend_note(
+                {"objective": "maximize_roi", "b_ub": [300.0]}, [100.0, 100.0]
+            )
+            is not None
+        )
+        # Within 0.5% of budget counts as fully deployed (solver tolerance).
+        assert (
+            OptimizerNode._underspend_note(
+                {"objective": "maximize_roi", "b_ub": [300.0]}, [150.0, 149.5]
+            )
+            is None
+        )
+
+
+class TestZeroCurrentAllocation:
+    """A new allocation funded from zero current must not render as a 0%
+    change — a percentage of zero is undefined, and 0% reads as 'no move'."""
+
+    def test_new_allocation_reports_null_percentage(self):
+        targets = [
+            {
+                "entity_id": "new-T01",
+                "entity_type": "territory",
+                "current_allocation": 0.0,
+                "min_allocation": 0.0,
+                "max_allocation": 100.0,
+                "expected_response": 1.0,
+            },
+            {
+                "entity_id": "old-T01",
+                "entity_type": "territory",
+                "current_allocation": 100.0,
+                "min_allocation": 50.0,
+                "max_allocation": 150.0,
+                "expected_response": 1.0,
+            },
+        ]
+        allocations = OptimizerNode()._build_allocations(
+            [50.0, 50.0], targets, {"objective": "maximize_roi"}
+        )
+        by_id = {a["entity_id"]: a for a in allocations}
+        assert by_id["new-T01"]["change_percentage"] is None
+        assert by_id["new-T01"]["change"] == pytest.approx(50.0)
+        assert by_id["old-T01"]["change_percentage"] == pytest.approx(-50.0)
+
+    def test_zero_current_zero_optimized_is_honest_zero(self):
+        targets = [
+            {
+                "entity_id": "empty-T01",
+                "entity_type": "territory",
+                "current_allocation": 0.0,
+                "min_allocation": 0.0,
+                "max_allocation": 10.0,
+                "expected_response": 1.0,
+            }
+        ]
+        allocations = OptimizerNode()._build_allocations([0.0], targets, {})
+        assert allocations[0]["change_percentage"] == 0.0

@@ -91,7 +91,9 @@ function AllocationComparisonChart({ allocations }: AllocationChartProps) {
     name: a.entity_id.replace('territory_', '').replace(/_/g, ' '),
     current: a.current_allocation / 1000,
     optimized: a.optimized_allocation / 1000,
-    change: a.change_percentage,
+    // null = new allocation from zero current (no percentage exists); the
+    // current/optimized bars still carry the move.
+    change: a.change_percentage ?? 0,
   }));
   const hiddenCount = allocations.length - shown.length;
 
@@ -352,11 +354,13 @@ export default function ResourceOptimization() {
   };
 
   // Grounding for the strategic interpretation: top movers from the live result.
+  // Sorted/filtered by dollar change (not percentage) so a new allocation from
+  // zero current — whose change_percentage is null — still counts as a mover.
   const sortedByChange = [...(optimizationResult?.optimal_allocations ?? [])].sort(
-    (a, b) => b.change_percentage - a.change_percentage
+    (a, b) => b.change - a.change
   );
   const topIncreases = sortedByChange
-    .filter((a) => a.change_percentage > 0)
+    .filter((a) => a.change > 0)
     .slice(0, 5)
     .map((a) => ({
       entity_id: a.entity_id,
@@ -364,7 +368,7 @@ export default function ResourceOptimization() {
       change: a.change,
     }));
   const topDecreases = sortedByChange
-    .filter((a) => a.change_percentage < 0)
+    .filter((a) => a.change < 0)
     .slice(-5)
     .reverse()
     .map((a) => ({
@@ -374,6 +378,12 @@ export default function ResourceOptimization() {
     }));
   const totalBudget = (optimizationResult?.optimal_allocations ?? []).reduce(
     (sum, a) => sum + a.current_allocation,
+    0
+  );
+  // Actual recommended spend — maximize_roi can intentionally deploy less than
+  // the budget (marginal return below hurdle); the insight must know both.
+  const deployedSpend = (optimizationResult?.optimal_allocations ?? []).reduce(
+    (sum, a) => sum + a.optimized_allocation,
     0
   );
 
@@ -501,6 +511,7 @@ export default function ResourceOptimization() {
             resource_type: optimizationResult?.resource_type ?? selectedResourceType,
             entity_count: optimizationResult?.optimal_allocations?.length ?? null,
             total_budget: totalBudget > 0 ? totalBudget : null,
+            total_spend: deployedSpend > 0 ? deployedSpend : null,
             top_increases: topIncreases,
             top_decreases: topDecreases,
             synthetic: resultWarnings.some((w) => w.startsWith('SYNTHETIC DATA:')),
@@ -647,16 +658,22 @@ export default function ResourceOptimization() {
                           ${(alloc.optimized_allocation / 1000).toFixed(0)}K
                         </td>
                         <td className="p-2 text-right">
-                          <span
-                            className={
-                              alloc.change_percentage >= 0
-                                ? 'text-green-600'
-                                : 'text-red-600'
-                            }
-                          >
-                            {alloc.change_percentage >= 0 ? '+' : ''}
-                            {alloc.change_percentage.toFixed(1)}%
-                          </span>
+                          {alloc.change_percentage == null ? (
+                            /* New allocation from zero current — a percentage
+                               of zero is undefined; 0% would hide the move. */
+                            <span className="text-green-600">New</span>
+                          ) : (
+                            <span
+                              className={
+                                alloc.change_percentage >= 0
+                                  ? 'text-green-600'
+                                  : 'text-red-600'
+                              }
+                            >
+                              {alloc.change_percentage >= 0 ? '+' : ''}
+                              {alloc.change_percentage.toFixed(1)}%
+                            </span>
+                          )}
                         </td>
                         <td className="p-2 text-right">
                           {alloc.expected_impact.toLocaleString(undefined, {

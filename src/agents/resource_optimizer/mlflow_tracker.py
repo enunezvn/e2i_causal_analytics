@@ -347,7 +347,7 @@ class ResourceOptimizerMLflowTracker:
             metrics.entities_unchanged = sum(1 for a in allocations if a.get("change", 0) == 0)
             metrics.total_allocation_change = sum(abs(a.get("change", 0)) for a in allocations)
 
-            change_percentages = [abs(a.get("change_percentage", 0)) for a in allocations]
+            change_percentages = [abs(a.get("change_percentage") or 0) for a in allocations]
             if change_percentages:
                 metrics.avg_change_percentage = sum(change_percentages) / len(change_percentages)
 

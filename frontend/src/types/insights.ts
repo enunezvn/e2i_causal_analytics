@@ -59,6 +59,9 @@ export interface ResourceInsightRequest {
   resource_type?: string | null;
   entity_count?: number | null;
   total_budget?: number | null;
+  /** Actual optimized spend — maximize_roi can intentionally deploy less than
+   *  the budget (marginal return below hurdle) */
+  total_spend?: number | null;
   top_increases?: AllocationMove[];
   top_decreases?: AllocationMove[];
   synthetic?: boolean;

@@ -249,6 +249,11 @@ class ImpactProjectorNode:
         """
         if integration is None:
             return inline
+        # A None change_percentage means "new allocation from zero current" —
+        # the template requires a float and would render it as +0%, hiding the
+        # move, so the inline (which spells out "new allocation") wins.
+        if alloc.get("change_percentage") is None:
+            return inline
         try:
             return str(
                 integration.get_recommendation_prompt(
@@ -288,9 +293,11 @@ class ImpactProjectorNode:
         )[:3]
 
         for alloc in increases:
+            pct = alloc.get("change_percentage")
+            pct_str = f"+{pct:.0f}%" if pct is not None else "new allocation"
             inline = (
                 f"Increase allocation to {alloc['entity_id']} by {alloc['change']:,.0f} "
-                f"(+{alloc['change_percentage']:.0f}%) - Projected outcome at new "
+                f"({pct_str}) - Projected outcome at new "
                 f"allocation: {alloc['expected_impact']:,.0f}"
             )
             recommendations.append(self._recommendation_line(integration, alloc, inline))
@@ -305,7 +312,8 @@ class ImpactProjectorNode:
         for alloc in decreases:
             inline = (
                 f"Reduce allocation from {alloc['entity_id']} by {abs(alloc['change']):,.0f} "
-                f"({alloc['change_percentage']:.0f}%) - Reallocate to higher-impact targets"
+                f"({(alloc.get('change_percentage') or 0.0):.0f}%) - Reallocate to "
+                f"higher-impact targets"
             )
             recommendations.append(self._recommendation_line(integration, alloc, inline))
 
@@ -342,7 +350,7 @@ class ImpactProjectorNode:
         try:
             allocation_changes = "; ".join(
                 f"{a.get('entity_id', '')}:{a.get('change', 0):+.1f}"
-                f"({a.get('change_percentage', 0):+.0f}%)"
+                f"({(a.get('change_percentage') or 0):+.0f}%)"
                 for a in alloc_dicts
             )
             constraints = state.get("constraints") or []
