@@ -1334,6 +1334,7 @@ def _mock_async_supabase_with_rows(rows):
     resp = MagicMock(data=rows)
     table = MagicMock()
     table.select.return_value = table
+    table.eq.return_value = table
     table.order.return_value = table
     table.limit.return_value = table
     table.execute = AsyncMock(return_value=resp)
@@ -1344,8 +1345,9 @@ def _mock_async_supabase_with_rows(rows):
 
 @pytest.mark.asyncio
 async def test_build_synthetic_allocation_inputs_maps_territories():
-    """current_allocation = HCP * notional rate; expected_response = TRx/HCP;
-    budget = sum(current); response is real-shaped and the warning is tagged."""
+    """current_allocation = HCP * notional rate; expected_response = TRx per
+    notional DOLLAR (honest outcome units); budget = sum(current); the warning
+    is tagged."""
     from src.api.routes.resource_optimizer import (
         NOTIONAL_BUDGET_PER_HCP,
         SYNTHETIC_PROVENANCE_PREFIX,
@@ -1395,7 +1397,8 @@ async def test_build_synthetic_allocation_inputs_maps_territories():
     assert t0.current_allocation == round(200 * NOTIONAL_BUDGET_PER_HCP, 2)
     assert t0.min_allocation == round(t0.current_allocation * 0.5, 2)
     assert t0.max_allocation == round(t0.current_allocation * 1.5, 2)
-    assert t0.expected_response == round(535 / 200, 4)  # TRx per HCP
+    # TRx per notional dollar -> projections are in TRx-equivalent units.
+    assert t0.expected_response == round(535 / (200 * NOTIONAL_BUDGET_PER_HCP), 8)
     assert budget is not None
     assert budget.constraint_type == ConstraintType.BUDGET
     assert budget.value == round(sum(t.current_allocation for t in targets), 2)
@@ -1425,6 +1428,69 @@ async def test_build_synthetic_allocation_inputs_fail_soft_no_client():
     assert targets == []
     assert budget is None
     assert warnings and warnings[0].startswith(SYNTHETIC_PROVENANCE_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_build_synthetic_allocation_inputs_includes_all_territories():
+    """Every usable territory is seeded — the old top-10-by-TRx cut silently
+    selected only the south region (which dominates the DGP's TRx)."""
+    from src.api.routes.resource_optimizer import _build_synthetic_allocation_inputs
+
+    rows = [
+        {
+            "territory_id": f"{region}-T{i:02d}",
+            "total_trx": 200 + i,
+            "active_hcp_count": 80 + i,
+            "metric_date": "2026-06-10",
+        }
+        for region in ("south", "west", "midwest", "northeast")
+        for i in range(10)
+    ]
+    client = _mock_async_supabase_with_rows(rows)
+
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        AsyncMock(return_value=client),
+    ):
+        targets, budget, warnings = await _build_synthetic_allocation_inputs(ResourceType.BUDGET)
+
+    assert len(targets) == 40
+    regions = {t.entity_id.split("-")[0] for t in targets}
+    assert regions == {"south", "west", "midwest", "northeast"}
+    assert warnings and "40 territories" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_build_synthetic_allocation_inputs_brand_scoped():
+    """A brand routes seeding to v_brand_territory_activity, filters on the
+    brand, and names the brand in the provenance warning."""
+    from src.api.routes.resource_optimizer import (
+        NOTIONAL_BUDGET_PER_HCP,
+        _build_synthetic_allocation_inputs,
+    )
+
+    rows = [
+        {"territory_id": "south-T02", "active_hcp_count": 120, "treatment_event_count": 900},
+        {"territory_id": "west-T01", "active_hcp_count": 90, "treatment_event_count": 610},
+    ]
+    client = _mock_async_supabase_with_rows(rows)
+
+    with patch(
+        "src.memory.services.factories.get_async_supabase_client",
+        AsyncMock(return_value=client),
+    ):
+        targets, budget, warnings = await _build_synthetic_allocation_inputs(
+            ResourceType.BUDGET, brand="Remibrutinib"
+        )
+
+    client.table.assert_called_with("v_brand_territory_activity")
+    client.table.return_value.eq.assert_called_once_with("brand", "Remibrutinib")
+    assert [t.entity_id for t in targets] == ["south-T02", "west-T01"]
+    t0 = targets[0]
+    assert t0.current_allocation == round(120 * NOTIONAL_BUDGET_PER_HCP, 2)
+    assert t0.expected_response == round(900 / (120 * NOTIONAL_BUDGET_PER_HCP), 8)
+    assert budget is not None
+    assert warnings and "Remibrutinib" in warnings[0]
 
 
 @pytest.mark.asyncio
