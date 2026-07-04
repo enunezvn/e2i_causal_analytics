@@ -25,6 +25,7 @@ class _RecordingQuery:
 
     def __init__(self) -> None:
         self.eq_calls: list[tuple[Any, ...]] = []
+        self.in_calls: list[tuple[Any, ...]] = []
         # ``.not_.is_(...)`` access in query_labeled_predictions.
         self.not_ = self
 
@@ -33,6 +34,10 @@ class _RecordingQuery:
 
     def eq(self, *a: Any, **k: Any) -> "_RecordingQuery":
         self.eq_calls.append(a)
+        return self
+
+    def in_(self, *a: Any, **k: Any) -> "_RecordingQuery":
+        self.in_calls.append(a)
         return self
 
     def or_(self, *a: Any, **k: Any) -> "_RecordingQuery":
@@ -74,7 +79,11 @@ _TW = TimeWindow(
 
 
 @pytest.mark.asyncio
-async def test_query_predictions_excludes_synthetic() -> None:
+async def test_query_predictions_excludes_synthetic(monkeypatch: pytest.MonkeyPatch) -> None:
+    # conftest load_dotenv() imports the host .env — on showcase boxes that
+    # sets E2I_INCLUDE_SYNTHETIC=true, which legitimately no-ops the filter
+    # under test. Pin the strict-mode behavior deterministically.
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
     conn, query = _connector_with_recording_query()
     await conn.query_predictions(model_id="risk_score_v1", time_window=_TW)
     assert ("is_synthetic", False) in query.eq_calls, (
@@ -92,7 +101,10 @@ async def test_query_predictions_opt_in() -> None:
 
 
 @pytest.mark.asyncio
-async def test_query_labeled_predictions_excludes_synthetic() -> None:
+async def test_query_labeled_predictions_excludes_synthetic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)  # see strict-mode note above
     conn, query = _connector_with_recording_query()
     await conn.query_labeled_predictions(model_id="risk_score_v1", time_window=_TW)
     assert ("is_synthetic", False) in query.eq_calls, (
@@ -109,3 +121,33 @@ async def test_query_labeled_predictions_opt_in() -> None:
     assert ("is_synthetic", False) not in query.eq_calls, (
         f"include_synthetic=True still applied the predicate: {query.eq_calls}"
     )
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_hard_excludes_synthetic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Storm regression (2026-07-04): the sweep's model enumeration must
+    exclude planted registry rows EVEN on showcase instances where
+    E2I_INCLUDE_SYNTHETIC=true turns the shared provenance filter into a
+    no-op. That no-op put 360 planted stage='production' models into the
+    6-hourly sweep — 10,080 alerts in one morning."""
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    conn, query = _connector_with_recording_query()
+    await conn.get_available_models(stage="production")
+    assert ("is_synthetic", False) in query.eq_calls, (
+        "get_available_models must hard-exclude is_synthetic rows regardless "
+        f"of E2I_INCLUDE_SYNTHETIC: {query.eq_calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_stages_filter() -> None:
+    """The sweep enumerates production AND staging (goldstd models live at
+    'staging' by design — cohort_deployer.py refuses 'production')."""
+    conn, query = _connector_with_recording_query()
+    await conn.get_available_models(stages=["production", "staging"])
+    assert ("stage", ["production", "staging"]) in query.in_calls, (
+        f"stages filter not applied via .in_: {query.in_calls}"
+    )
+    assert ("is_synthetic", False) in query.eq_calls

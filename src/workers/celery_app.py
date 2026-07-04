@@ -205,10 +205,24 @@ celery_app.conf.beat_schedule = {
     # real per-model drift sweep in src/tasks/drift_monitoring_tasks.py); the
     # prior "src.tasks.monitor_model_drift" was a dangling ref to a task that
     # never existed and would crash the scheduler when this entry fired.
+    # This is the ONLY schedule entry for the sweep. A second entry
+    # ("drift-detection-sweep", added via on_after_finalize in
+    # drift_monitoring_tasks.py) used to double-fire the whole sweep every
+    # cycle; that hook is gone — keep sweep scheduling here only.
     "monitor-drift": {
         "task": "src.tasks.check_all_production_models",
         "schedule": 21600.0,  # 6 hours
         "options": {"queue": "analytics"},
+    },
+    # Daily drift-monitoring retention: prunes old ml_drift_history rows,
+    # resolved ml_monitoring_alerts, and old ml_monitoring_runs. Moved here
+    # from drift_monitoring_tasks.py's removed on_after_finalize hook so all
+    # beat scheduling lives in this one dict (see guard test
+    # test_beat_schedule_registration.py).
+    "drift-history-cleanup": {
+        "task": "src.tasks.cleanup_old_drift_history",
+        "schedule": 86400.0,  # 24 hours
+        "options": {"queue": "quick"},
     },
     # NOTE (#897): the scaffolded "health-check" -> src.tasks.health_check and
     # "cache-cleanup" -> src.tasks.cleanup_old_cache entries were removed.

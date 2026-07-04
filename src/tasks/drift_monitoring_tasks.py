@@ -69,6 +69,40 @@ def load_config() -> Dict[str, Any]:
     return DEFAULT_CONFIG
 
 
+def _justified_alert_titles(all_results: List[Dict[str, Any]]) -> set:
+    """Alert titles the given drift results still justify.
+
+    Mirrors BOTH alert writers so auto-resolve never kills a live alert:
+    the per-feature titles minted by the ``trigger_create_drift_alert`` DB
+    trigger on ml_drift_history (migration 093 keeps these templates) and the
+    aggregated titles minted by
+    ``MonitoringAlertRepository.create_alerts_from_drift``. Active alerts for
+    a model whose title is NOT in this set are considered cleared.
+    """
+    titles: set = set()
+    alerting = {"medium", "high", "critical"}
+    for result in all_results:
+        if not result.get("drift_detected"):
+            continue
+        severity = result.get("severity", "none")
+        drift_type = result.get("drift_type", "data")
+        if severity in alerting:
+            # DB-trigger per-feature titles
+            if drift_type == "data":
+                feature = result.get("feature") or result.get("feature_name")
+                titles.add(f"Data Drift Detected: {feature or 'Multiple Features'}")
+            elif drift_type == "model":
+                titles.add("Model Prediction Drift Detected")
+            elif drift_type == "concept":
+                titles.add("Concept Drift Detected: Feature-Target Relationship Changed")
+        # Aggregated python-side titles
+        if severity == "critical":
+            titles.add(f"CRITICAL {drift_type} drift")
+        elif severity == "high":
+            titles.add(f"HIGH {drift_type} drift")
+    return titles
+
+
 def run_async(coro):
     """Helper to run async coroutine in sync context.
 
@@ -255,6 +289,15 @@ def run_drift_detection(
                 drift_results=all_results,
             )
 
+            # Lifecycle: an alert is a STATE ("this model is drifting"), not an
+            # event log. Auto-resolve this model's active alerts that the
+            # current run no longer justifies — otherwise alerts only ever
+            # accumulate (nothing else in the platform resolves them).
+            auto_resolved = await alert_repo.auto_resolve_cleared(
+                model_version=model_id,
+                keep_titles=sorted(_justified_alert_titles(all_results)),
+            )
+
             # Route alerts to notification channels
             if alerts:
                 from src.services.alert_routing import route_drift_alerts
@@ -285,6 +328,7 @@ def run_drift_detection(
                 "features_checked": len(state.get("features_to_monitor", [])),
                 "features_with_drift": state.get("features_with_drift", []),
                 "alerts_generated": len(alerts),
+                "alerts_auto_resolved": auto_resolved,
                 "drift_summary": state.get("drift_summary", ""),
                 "recommended_actions": state.get("recommended_actions", []),
                 "detection_latency_ms": duration_ms,
@@ -335,8 +379,14 @@ def check_all_production_models(
     async def run_sweep():
         connector = get_connector()
 
-        # Get all production models
-        models = await connector.get_available_models(stage="production")
+        # Real serving models only. The gold-standard cohort models are
+        # deliberately registered at stage='staging' — cohort_deployer.py
+        # REFUSES 'production' because a production goldstd row would collide
+        # with the prediction resolver's serving ensemble — so a
+        # production-only sweep monitors nothing real. The connector itself
+        # hard-excludes planted (is_synthetic) models regardless of the
+        # showcase env flag (#894).
+        models = await connector.get_available_models(stages=["production", "staging"])
 
         if not models:
             logger.warning("No production models found to monitor")
@@ -929,8 +979,10 @@ def check_retraining_for_all_models(
     async def run_check():
         connector = get_connector()
 
-        # Get all production models
-        models = await connector.get_available_models(stage="production")
+        # Real serving models only — same scoping rationale as the drift
+        # sweep in check_all_production_models (goldstd models live at
+        # 'staging' by design; planted models are connector-excluded).
+        models = await connector.get_available_models(stages=["production", "staging"])
 
         if not models:
             logger.warning("No production models found")
@@ -979,24 +1031,12 @@ def check_retraining_for_all_models(
     return run_async(run_check())  # type: ignore[no-any-return]
 
 
-# Celery Beat schedule configuration
-@celery_app.on_after_finalize.connect
-def setup_periodic_tasks(sender, **kwargs):
-    """Set up periodic drift monitoring tasks."""
-    config = load_config()
-    schedule_config = config.get("schedule", {})
-
-    # Drift detection every 6 hours
-    detection_interval = schedule_config.get("detection_interval_hours", 6)
-    sender.add_periodic_task(
-        detection_interval * 3600,
-        check_all_production_models.s(),
-        name="drift-detection-sweep",
-    )
-
-    # Daily cleanup at 2 AM
-    sender.add_periodic_task(
-        86400,  # 24 hours
-        cleanup_old_drift_history.s(),
-        name="drift-history-cleanup",
-    )
+# NOTE: no on_after_finalize/add_periodic_task scheduling here. The former
+# setup_periodic_tasks hook registered a second 6-hourly sweep entry
+# ("drift-detection-sweep") alongside celery_app.conf.beat_schedule's
+# "monitor-drift" — same task, two schedules — so every cycle ran the whole
+# sweep TWICE (2026-07-04: 720 monitoring runs for 360 models, 10,080
+# duplicate alerts in one morning). All drift-monitoring scheduling now lives
+# in src/workers/celery_app.py beat_schedule ("monitor-drift" +
+# "drift-history-cleanup"), the single source of truth the
+# test_beat_schedule_registration guard covers.

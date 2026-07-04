@@ -701,6 +701,16 @@ function Home() {
       }));
   }, [alertsData, dismissedAlerts]);
 
+  // Honest header count: the server-side total of ACTIVE alerts (the list
+  // below is a page capped at the API's `limit`, so `visibleAlerts.length`
+  // said "50" while thousands were active). Locally-dismissed alerts are a
+  // view preference, not a server state change — subtract them so the header
+  // matches what the user sees, floored at the rendered list length.
+  const activeAlertTotal = useMemo(() => {
+    if (alertsData?.active_count == null) return visibleAlerts.length;
+    return Math.max(alertsData.active_count - dismissedAlerts.length, visibleAlerts.length);
+  }, [alertsData, dismissedAlerts, visibleAlerts]);
+
   // Derive per-tier agent counts from the real roster (never hardcoded 15/21).
   const agentTierStats = useMemo(() => {
     const agents = agentStatus?.agents ?? [];
@@ -1361,7 +1371,7 @@ function Home() {
       <div className="space-y-2">
         <h3 className="text-sm font-medium text-[var(--color-muted-foreground)] flex items-center gap-2">
           <AlertCircle className="h-4 w-4" />
-          Active Alerts ({visibleAlerts.length})
+          Active Alerts ({activeAlertTotal})
         </h3>
         {alertsError ? (
           <div
@@ -1429,6 +1439,12 @@ function Home() {
                 </Button>
               </div>
             ))}
+            {activeAlertTotal > visibleAlerts.length && (
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                Showing the {visibleAlerts.length} most recent of {activeAlertTotal} active
+                alerts.
+              </p>
+            )}
           </div>
         )}
       </div>
