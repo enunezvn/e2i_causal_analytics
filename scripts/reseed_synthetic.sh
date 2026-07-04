@@ -29,7 +29,9 @@
 # runs, silently no-oping the job):
 #   0 3 * * 1 /home/enunez/Projects/e2i_causal_analytics/scripts/reseed_synthetic.sh >> /home/enunez/logs/e2i-reseed.log 2>&1
 #
-# Extra args are forwarded to load_synthetic_data.py.
+# Extra args are forwarded to load_synthetic_data.py, EXCEPT --skip-retrain,
+# which this wrapper consumes to opt out of the gold-standard model retrain
+# stage (scripts/retrain_goldstd.sh) that runs last.
 # =============================================================================
 
 set -euo pipefail
@@ -43,6 +45,19 @@ if [[ ! -x .venv/bin/dotenv || ! -x .venv/bin/python ]]; then
     echo "ERROR: .venv/bin/dotenv or .venv/bin/python missing — run from a checkout with the project venv installed" >&2
     exit 1
 fi
+
+# Consume --skip-retrain (anywhere in the args) before mode detection so it is
+# never forwarded to load_synthetic_data.py.
+RETRAIN=1
+ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--skip-retrain" ]]; then
+        RETRAIN=0
+    else
+        ARGS+=("$arg")
+    fi
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 MODE="--append-frontier"
 if [[ "${1:-}" == "--full" ]]; then
@@ -70,5 +85,16 @@ PYTHONPATH="$PROJECT_ROOT" \
     .venv/bin/python -m src.kpi.history_backfill
 
 echo "=== kpi_history backfill done $(date -Is) ==="
+
+# Retrain the 12 gold-standard staging models on the substrate that just grew
+# (or, in --full recovery mode, was rewritten — after which the old fits
+# describe data that no longer exists, so retraining is not optional in
+# spirit). Idempotent; see scripts/retrain_goldstd.sh. Opt out with
+# --skip-retrain.
+if [[ "$RETRAIN" == "1" ]]; then
+    "$SCRIPT_DIR/retrain_goldstd.sh"
+else
+    echo "=== goldstd retrain SKIPPED (--skip-retrain) $(date -Is) ==="
+fi
 
 echo "=== reseed_synthetic done $(date -Is) ==="
