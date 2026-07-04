@@ -224,11 +224,13 @@ class MockDataConnector(BaseDataConnector):
     async def get_available_models(
         self,
         stage: str | None = None,
+        stages: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Return mock available models.
 
         Args:
-            stage: Optional stage filter
+            stage: Optional single-stage filter
+            stages: Optional multi-stage filter; takes precedence over ``stage``
 
         Returns:
             List of mock model metadata
@@ -254,7 +256,9 @@ class MockDataConnector(BaseDataConnector):
             },
         ]
 
-        if stage:
+        if stages:
+            models = [m for m in models if m["stage"] in stages]
+        elif stage:
             models = [m for m in models if m["stage"] == stage]
 
         return models

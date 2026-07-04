@@ -653,10 +653,24 @@ async def list_alerts(
             for r in filtered[:limit]
         ]
 
-        active_count = sum(1 for item in items if item.status == AlertStatus.ACTIVE)
+        # Honest totals: count in the database, never over the returned page.
+        # The page-derived counts capped every answer at `limit` (the Home
+        # tile said "50 active alerts" while 10k+ were active). The endpoint
+        # only ever serves active alerts (get_active_alerts), so total_count
+        # counts active rows matching the severity filter.
+        active_count = await repo.count_alerts(status="active", model_version=model_id)
+        total_count = (
+            await repo.count_alerts(
+                status="active",
+                severity=severity.value if severity else None,
+                model_version=model_id,
+            )
+            if severity
+            else active_count
+        )
 
         return AlertListResponse(
-            total_count=len(items),
+            total_count=total_count,
             active_count=active_count,
             alerts=items,
         )

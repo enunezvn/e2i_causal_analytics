@@ -75,3 +75,31 @@ def test_every_beat_entry_references_a_registered_task() -> None:
         "registered in production via another autodiscovered package, add "
         "that module to this file's imports instead."
     )
+
+
+def test_no_task_is_beat_scheduled_twice() -> None:
+    """Regression (2026-07-04 alert storm): check_all_production_models was
+    scheduled under TWO entries — "monitor-drift" in conf.beat_schedule and
+    "drift-detection-sweep" via an on_after_finalize/add_periodic_task hook in
+    drift_monitoring_tasks.py — so every cycle ran the full drift sweep twice
+    (720 monitoring runs for 360 models, 10,080 duplicate alerts in one
+    morning). Guard the whole class: no task name may appear in more than one
+    beat entry, and hook-added entries land in conf.beat_schedule too once the
+    app is finalized, so this catches a reintroduced add_periodic_task."""
+    celery_app.finalize()  # flush any pending add_periodic_task registrations
+
+    by_task: dict[str, list[str]] = {}
+    for beat_key, entry in celery_app.conf.beat_schedule.items():
+        by_task.setdefault(entry["task"], []).append(beat_key)
+
+    duplicated = {task: keys for task, keys in by_task.items() if len(keys) > 1}
+    assert not duplicated, (
+        f"tasks scheduled by more than one beat entry (double-fire): {duplicated}"
+    )
+
+    # The two drift-monitoring schedules live in celery_app.py's beat_schedule
+    # (single source of truth) — pin their presence so a refactor that moves
+    # them back to a runtime hook (invisible to this dict before finalize)
+    # fails loudly.
+    assert by_task.get("src.tasks.check_all_production_models") == ["monitor-drift"]
+    assert by_task.get("src.tasks.cleanup_old_drift_history") == ["drift-history-cleanup"]

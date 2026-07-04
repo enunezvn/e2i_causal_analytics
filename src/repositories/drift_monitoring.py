@@ -33,6 +33,7 @@ fabricated: an unresolved/empty model yields NULL + a recoverable handle, and a
 hard query failure surfaces honestly to the caller.
 """
 
+import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -41,6 +42,8 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from src.repositories.base import BaseRepository
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +777,26 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
             )
 
         if alerts:
+            # Dedup-on-write: an active alert with the same (model, title) means
+            # this condition is already flagged — re-inserting it every 6-hourly
+            # sweep turns the alert list into an append-only event log (the
+            # 2026-07-04 storm). Mirrors the NOT EXISTS guard migration 093 adds
+            # to the trigger-side writer.
+            try:
+                existing_query = (
+                    self.client.table(self.table_name).select("title").eq("status", "active")
+                )
+                if model_id is not None:
+                    existing_query = existing_query.eq("model_id", model_id)
+                else:
+                    existing_query = existing_query.is_("model_id", "null")
+                existing_result = await existing_query.execute()
+                existing_titles = {row["title"] for row in (existing_result.data or [])}
+                alerts = [a for a in alerts if a.title not in existing_titles]
+            except Exception as e:  # noqa: BLE001 — dedup is best-effort
+                logger.warning(f"Alert dedup lookup failed; inserting without dedup: {e}")
+
+        if alerts:
             data = [a.to_db_row() for a in alerts]
             await self.client.table(self.table_name).insert(data).execute()
 
@@ -802,6 +825,82 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
 
         result = await query.execute()
         return [self._to_model(row) for row in (result.data or [])]
+
+    async def auto_resolve_cleared(
+        self,
+        model_version: str,
+        keep_titles: Optional[List[str]] = None,
+    ) -> int:
+        """Resolve a model's active alerts the latest drift run no longer justifies.
+
+        ``keep_titles`` is the set of alert titles the current run's results
+        still support (see ``_justified_alert_titles`` in
+        drift_monitoring_tasks.py); every OTHER active alert for the model is
+        marked resolved. An empty ``keep_titles`` means the run found no drift
+        — all of the model's active alerts are cleared. ``acknowledged``
+        alerts are left alone (a human owns those).
+
+        Returns the number of alerts resolved (best-effort; 0 on error).
+        """
+        if not self.client:
+            return 0
+        try:
+            model_id = await _resolve_model_id(self.client, model_version)
+            query = (
+                self.client.table(self.table_name)
+                .update(
+                    {
+                        "status": "resolved",
+                        "resolved_at": datetime.now(timezone.utc).isoformat(),
+                        "resolved_by": "drift_monitor_auto",
+                        "resolution_action": "auto_cleared",
+                        "resolution_notes": (
+                            "Auto-resolved: the latest drift run for this model "
+                            "no longer reports this condition."
+                        ),
+                    }
+                )
+                .eq("status", "active")
+            )
+            query = _apply_model_filter(query, model_id, model_version, "metadata")
+            if keep_titles:
+                query = query.not_.in_("title", keep_titles)
+            result = await query.execute()
+            return len(result.data or [])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Failed to auto-resolve cleared alerts for {model_version}: {e}")
+            return 0
+
+    async def count_alerts(
+        self,
+        status: Optional[str] = None,
+        severity: Optional[str] = None,
+        model_version: Optional[str] = None,
+    ) -> int:
+        """Exact alert count for the given filters — NOT capped by a page limit.
+
+        The /monitoring/alerts endpoint previously reported ``active_count``
+        over the returned page (max 50/200), so the Home tile said "50" while
+        10k+ alerts were active. Counts must come from the database, not the
+        page.
+        """
+        if not self.client:
+            return 0
+        try:
+            query = self.client.table(self.table_name).select("id", count="exact")
+            if status:
+                query = query.eq("status", status)
+            if severity:
+                query = query.eq("severity", severity)
+            if model_version:
+                model_id = await _resolve_model_id(self.client, model_version)
+                query = _apply_model_filter(query, model_id, model_version, "metadata")
+            result = await query.limit(1).execute()
+            count = getattr(result, "count", None)
+            return int(count) if count is not None else len(result.data or [])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Failed to count alerts: {e}")
+            return 0
 
     async def acknowledge_alert(
         self,

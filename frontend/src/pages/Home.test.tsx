@@ -880,6 +880,29 @@ describe('Home', () => {
         screen.getByText('Performance degradation in churn model')
       ).toBeInTheDocument();
     });
+
+    it('header count is the SERVER total, not the page size (2026-07-04 storm)', () => {
+      // The API caps the returned list (limit=50) but reports the database
+      // truth in active_count. The header must show the truth, plus an
+      // explicit truncation note — "Active Alerts (50)" while 10,080 were
+      // active was the storm's user-visible symptom.
+      (useAlerts as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          total_count: 10080,
+          active_count: 10080,
+          alerts: [REAL_ALERTS.alerts[0]], // page of 1
+        },
+        isLoading: false,
+        error: null,
+      });
+
+      renderWithAllProviders(<Home />);
+
+      expect(screen.getByText(/Active Alerts \(10080\)/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Showing the 1 most recent of 10080 active/)
+      ).toBeInTheDocument();
+    });
   });
 
   // =========================================================================

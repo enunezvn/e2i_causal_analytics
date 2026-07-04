@@ -447,11 +447,13 @@ class SupabaseDataConnector(BaseDataConnector):
     async def get_available_models(
         self,
         stage: str | None = None,
+        stages: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Get list of available models from model registry.
 
         Args:
-            stage: Optional stage filter ("production", "staging", etc.)
+            stage: Optional single-stage filter ("production", "staging", etc.)
+            stages: Optional multi-stage filter; takes precedence over ``stage``
 
         Returns:
             List of model metadata dictionaries
@@ -459,8 +461,6 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
-            from src.repositories.provenance import apply_provenance_filter
-
             # #894: ml_model_registry is is_synthetic-tagged and the synthetic
             # generator stamps stage='production' — the drift sweep must never
             # enumerate planted models. Codex R1 also surfaced that the old
@@ -470,13 +470,24 @@ class SupabaseDataConnector(BaseDataConnector):
             # database/ml/mlops_tables.sql), so every call 42703'd into the
             # except-branch [] and the 6-hourly production sweep reported
             # "No production models found" forever. Realigned to live columns.
-            query = self._client.table("ml_model_registry").select(
-                "id, model_name, model_version, stage, registered_at"
+            #
+            # The predicate is a hard `.eq("is_synthetic", False)`, NOT
+            # apply_provenance_filter: on showcase instances
+            # E2I_INCLUDE_SYNTHETIC=true turns the shared filter into a global
+            # no-op, which put 360 planted `synth_*_exp_*` models into the
+            # 6-hourly sweep (2026-07-04: 10,080 alerts in one morning). Drift
+            # monitoring is about the operational health of REAL models; the
+            # showcase env flag must not widen its scope.
+            query = (
+                self._client.table("ml_model_registry")
+                .select("id, model_name, model_version, stage, registered_at")
+                .eq("is_synthetic", False)
             )
 
-            if stage:
+            if stages:
+                query = query.in_("stage", stages)
+            elif stage:
                 query = query.eq("stage", stage)
-            query = apply_provenance_filter(query)
 
             response = query.order("registered_at", desc=True).execute()
 

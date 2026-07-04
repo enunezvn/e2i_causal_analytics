@@ -198,11 +198,13 @@ class BaseDataConnector(ABC):
     async def get_available_models(
         self,
         stage: str | None = None,
+        stages: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Get list of available models for drift monitoring.
 
         Args:
-            stage: Optional stage filter (e.g., "production", "staging")
+            stage: Optional single-stage filter (e.g., "production", "staging")
+            stages: Optional multi-stage filter; takes precedence over ``stage``
 
         Returns:
             List of model metadata dictionaries

@@ -149,6 +149,7 @@ class TestRunDriftDetectionTask:
         mock_run_repo.return_value.complete_run = AsyncMock()
         mock_drift_repo.return_value.record_drift_results = AsyncMock()
         mock_alert_repo.return_value.create_alerts_from_drift = AsyncMock(return_value=[])
+        mock_alert_repo.return_value.auto_resolve_cleared = AsyncMock(return_value=0)
 
         # Execute task synchronously
         result = run_drift_detection(
@@ -201,6 +202,7 @@ class TestRunDriftDetectionTask:
         mock_run_repo.return_value.complete_run = AsyncMock()
         mock_drift_repo.return_value.record_drift_results = AsyncMock()
         mock_alert_repo.return_value.create_alerts_from_drift = AsyncMock(return_value=[])
+        mock_alert_repo.return_value.auto_resolve_cleared = AsyncMock(return_value=0)
 
         result = run_drift_detection(
             model_id="test_v1.0",
@@ -252,6 +254,85 @@ class TestCheckAllProductionModelsTask:
 
         assert result is not None
         assert isinstance(result, dict)
+
+    @patch("src.tasks.drift_monitoring_tasks.run_drift_detection")
+    @patch("src.agents.drift_monitor.connectors.get_connector")
+    def test_sweep_enumerates_real_serving_stages(self, mock_get_connector, mock_run_drift):
+        """Regression (2026-07-04 storm): the sweep must enumerate real models
+        across production AND staging — the gold-standard cohort models are
+        deliberately registered at 'staging' (cohort_deployer.py refuses
+        'production'), so a production-only sweep monitored nothing real while
+        360 planted stage='production' models flooded the alert table."""
+        from src.tasks.drift_monitoring_tasks import check_all_production_models
+
+        mock_connector = MagicMock()
+        mock_connector.get_available_models = AsyncMock(return_value=[])
+        mock_get_connector.return_value = mock_connector
+        mock_run_drift.delay = MagicMock(return_value=MagicMock(id="task-123"))
+
+        check_all_production_models(time_window="7d")
+
+        mock_connector.get_available_models.assert_called_once_with(
+            stages=["production", "staging"]
+        )
+
+
+class TestJustifiedAlertTitles:
+    """_justified_alert_titles mirrors BOTH alert writers' title templates
+    (the migration-093 DB trigger and create_alerts_from_drift) so
+    auto-resolve never kills an alert the current run still justifies."""
+
+    def test_no_drift_means_no_titles(self):
+        from src.tasks.drift_monitoring_tasks import _justified_alert_titles
+
+        results = [
+            {"drift_detected": False, "severity": "critical", "drift_type": "data"},
+            {"drift_detected": True, "severity": "none", "drift_type": "data"},
+        ]
+        assert _justified_alert_titles(results) == set()
+
+    def test_data_drift_titles_mirror_both_writers(self):
+        from src.tasks.drift_monitoring_tasks import _justified_alert_titles
+
+        results = [
+            {
+                "drift_detected": True,
+                "severity": "critical",
+                "drift_type": "data",
+                "feature": "disease_severity",
+            },
+            {
+                "drift_detected": True,
+                "severity": "high",
+                "drift_type": "data",
+                "feature_name": "trx_30d",
+            },
+            {"drift_detected": True, "severity": "medium", "drift_type": "data"},
+        ]
+        titles = _justified_alert_titles(results)
+        assert titles == {
+            # DB-trigger per-feature titles
+            "Data Drift Detected: disease_severity",
+            "Data Drift Detected: trx_30d",
+            "Data Drift Detected: Multiple Features",
+            # Python-side aggregated titles (medium has no aggregate)
+            "CRITICAL data drift",
+            "HIGH data drift",
+        }
+
+    def test_model_and_concept_titles(self):
+        from src.tasks.drift_monitoring_tasks import _justified_alert_titles
+
+        results = [
+            {"drift_detected": True, "severity": "high", "drift_type": "model"},
+            {"drift_detected": True, "severity": "medium", "drift_type": "concept"},
+        ]
+        titles = _justified_alert_titles(results)
+        assert titles == {
+            "Model Prediction Drift Detected",
+            "HIGH model drift",
+            "Concept Drift Detected: Feature-Target Relationship Changed",
+        }
 
 
 # =============================================================================
@@ -770,6 +851,7 @@ class TestTaskWorkflows:
         mock_alert_repo.return_value.create_alerts_from_drift = AsyncMock(
             return_value=[MagicMock(id="alert-123")]
         )
+        mock_alert_repo.return_value.auto_resolve_cleared = AsyncMock(return_value=0)
 
         result = run_drift_detection(
             model_id="test_v1.0",

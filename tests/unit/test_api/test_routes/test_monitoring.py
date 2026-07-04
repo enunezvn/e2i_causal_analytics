@@ -382,6 +382,7 @@ class TestListAlerts:
         with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = [mock_alert_record]
+            mock_repo.count_alerts.return_value = 1
             MockRepo.return_value = mock_repo
 
             response = client.get("/monitoring/alerts")
@@ -398,6 +399,7 @@ class TestListAlerts:
         with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = [mock_alert_record]
+            mock_repo.count_alerts.return_value = 1
             MockRepo.return_value = mock_repo
 
             response = client.get(
@@ -407,12 +409,17 @@ class TestListAlerts:
 
         assert response.status_code == 200
         mock_repo.get_active_alerts.assert_called_with("propensity_v2.1.0", limit=50)
+        # The count must be scoped to the same model as the page.
+        mock_repo.count_alerts.assert_called_with(
+            status="active", model_version="propensity_v2.1.0"
+        )
 
     def test_list_alerts_with_status_filter(self, client, mock_alert_record):
         """Test listing alerts filtered by status."""
         with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = [mock_alert_record]
+            mock_repo.count_alerts.return_value = 1
             MockRepo.return_value = mock_repo
 
             response = client.get(
@@ -429,6 +436,7 @@ class TestListAlerts:
         with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
             mock_repo = AsyncMock()
             mock_repo.get_active_alerts.return_value = []
+            mock_repo.count_alerts.return_value = 0
             MockRepo.return_value = mock_repo
 
             response = client.get("/monitoring/alerts")
@@ -438,6 +446,24 @@ class TestListAlerts:
         assert data["total_count"] == 0
         assert data["active_count"] == 0
         assert data["alerts"] == []
+
+    def test_list_alerts_counts_are_not_page_capped(self, client, mock_alert_record):
+        """Regression (2026-07-04 storm): active_count must be the DATABASE
+        total, not the size of the returned page. The page-derived count made
+        the Home tile say "50 active alerts" while 10,080 were active."""
+        with patch("src.repositories.drift_monitoring.MonitoringAlertRepository") as MockRepo:
+            mock_repo = AsyncMock()
+            mock_repo.get_active_alerts.return_value = [mock_alert_record]  # page of 1
+            mock_repo.count_alerts.return_value = 10080  # database truth
+            MockRepo.return_value = mock_repo
+
+            response = client.get("/monitoring/alerts")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["alerts"]) == 1
+        assert data["active_count"] == 10080
+        assert data["total_count"] == 10080
 
 
 class TestGetAlert:
