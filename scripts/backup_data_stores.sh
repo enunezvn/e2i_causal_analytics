@@ -45,23 +45,48 @@ mkdir -p "$BACKUP_DIR"
 
 echo -e "${GREEN}=== Data Store Backup - $TIMESTAMP ===${NC}"
 
+# Container names differ between the prod compose (docker/docker-compose.yml:
+# e2i_redis, e2i_falkordb) and the dev compose actually running on this
+# droplet (docker/docker-compose.dev.yml: e2i_redis_dev, e2i_falkordb_dev).
+# Resolve at runtime so the script works against either.
+resolve_container() {
+  local name
+  for name in "$@"; do
+    if docker ps --format '{{.Names}}' | grep -qx "$name"; then
+      echo "$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Snapshot one redis-protocol store: BGSAVE, then copy the RDB out of the
+# container from wherever the server says it lives (redis uses /data,
+# falkordb /var/lib/falkordb/data — ask CONFIG GET dir instead of guessing).
+snapshot_rdb() {
+  local container="$1" password="$2" dest="$3" rdb_dir
+  if docker exec "$container" redis-cli -a "$password" --no-auth-warning BGSAVE; then
+    echo "BGSAVE triggered, waiting for completion..."
+    sleep 5
+    rdb_dir=$(docker exec "$container" redis-cli -a "$password" --no-auth-warning CONFIG GET dir | tail -1)
+    if docker cp "$container:$rdb_dir/dump.rdb" "$dest"; then
+      echo -e "${GREEN}Backup saved: $dest${NC}"
+    else
+      echo -e "${YELLOW}WARNING: Could not copy RDB file from $container:$rdb_dir${NC}"
+    fi
+  else
+    echo -e "${YELLOW}WARNING: BGSAVE failed on $container${NC}"
+  fi
+}
+
 # --- Redis Backup ---
 echo ""
 echo "--- Redis RDB Snapshot ---"
-if [ -n "${REDIS_PASSWORD:-}" ]; then
-  # Trigger BGSAVE
-  if docker exec e2i_redis redis-cli -a "$REDIS_PASSWORD" BGSAVE 2>/dev/null; then
-    echo "BGSAVE triggered, waiting for completion..."
-    sleep 5
-    # Copy RDB from volume
-    if docker cp e2i_redis:/data/dump.rdb "$BACKUP_DIR/redis_dump.rdb" 2>/dev/null; then
-      echo -e "${GREEN}Redis backup saved: $BACKUP_DIR/redis_dump.rdb${NC}"
-    else
-      echo -e "${YELLOW}WARNING: Could not copy Redis RDB file${NC}"
-    fi
-  else
-    echo -e "${YELLOW}WARNING: Redis BGSAVE failed (container may not be running)${NC}"
-  fi
+REDIS_CONTAINER="$(resolve_container e2i_redis e2i_redis_dev || true)"
+if [ -z "$REDIS_CONTAINER" ]; then
+  echo -e "${YELLOW}WARNING: no Redis container running (e2i_redis / e2i_redis_dev), skipping${NC}"
+elif [ -n "${REDIS_PASSWORD:-}" ]; then
+  snapshot_rdb "$REDIS_CONTAINER" "$REDIS_PASSWORD" "$BACKUP_DIR/redis_dump.rdb"
 else
   echo -e "${YELLOW}WARNING: REDIS_PASSWORD not set, skipping Redis backup${NC}"
 fi
@@ -69,20 +94,11 @@ fi
 # --- FalkorDB Backup ---
 echo ""
 echo "--- FalkorDB RDB Snapshot ---"
-if [ -n "${FALKORDB_PASSWORD:-}" ]; then
-  # Trigger BGSAVE
-  if docker exec e2i_falkordb redis-cli -a "$FALKORDB_PASSWORD" BGSAVE 2>/dev/null; then
-    echo "BGSAVE triggered, waiting for completion..."
-    sleep 5
-    # Copy RDB from volume
-    if docker cp e2i_falkordb:/data/dump.rdb "$BACKUP_DIR/falkordb_dump.rdb" 2>/dev/null; then
-      echo -e "${GREEN}FalkorDB backup saved: $BACKUP_DIR/falkordb_dump.rdb${NC}"
-    else
-      echo -e "${YELLOW}WARNING: Could not copy FalkorDB RDB file${NC}"
-    fi
-  else
-    echo -e "${YELLOW}WARNING: FalkorDB BGSAVE failed (container may not be running)${NC}"
-  fi
+FALKORDB_CONTAINER="$(resolve_container e2i_falkordb e2i_falkordb_dev || true)"
+if [ -z "$FALKORDB_CONTAINER" ]; then
+  echo -e "${YELLOW}WARNING: no FalkorDB container running (e2i_falkordb / e2i_falkordb_dev), skipping${NC}"
+elif [ -n "${FALKORDB_PASSWORD:-}" ]; then
+  snapshot_rdb "$FALKORDB_CONTAINER" "$FALKORDB_PASSWORD" "$BACKUP_DIR/falkordb_dump.rdb"
 else
   echo -e "${YELLOW}WARNING: FALKORDB_PASSWORD not set, skipping FalkorDB backup${NC}"
 fi
