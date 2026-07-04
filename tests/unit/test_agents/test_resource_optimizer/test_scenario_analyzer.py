@@ -90,6 +90,40 @@ class TestScenarioAnalyzerNode:
         assert len(result["sensitivity_analysis"]) == len(sample_targets)
 
     @pytest.mark.asyncio
+    async def test_sensitivity_is_marginal_at_optimum(self, optimized_state, sample_targets):
+        """Sensitivity = d(outcome)/d(allocation) at the OPTIMIZED allocation.
+
+        With a linear response (no response_model in the problem) the marginal
+        is the raw coefficient; with a concave power curve it must be the
+        curve's derivative at the optimized point — NOT the raw coefficient.
+        """
+        from src.agents.resource_optimizer.response_model import response_marginal
+
+        optimized_state["run_scenarios"] = True
+        optimized_state["allocation_targets"] = sample_targets
+        gamma = 0.6
+        optimized_state["_problem"] = {
+            **(optimized_state.get("_problem") or {}),
+            "response_model": {"type": "power", "gamma": gamma},
+        }
+        node = ScenarioAnalyzerNode()
+        result = await node.execute(optimized_state)
+
+        sens = result["sensitivity_analysis"]
+        opt_by_id = {
+            a["entity_id"]: a["optimized_allocation"]
+            for a in optimized_state["optimal_allocations"]
+        }
+        for t in sample_targets:
+            tid = t["entity_id"] if isinstance(t, dict) else t.entity_id
+            r = t["expected_response"] if isinstance(t, dict) else t.expected_response
+            cur = t["current_allocation"] if isinstance(t, dict) else t.current_allocation
+            x_opt = opt_by_id.get(tid, cur)
+            assert sens[tid] == pytest.approx(response_marginal(r, cur, x_opt, gamma))
+            if x_opt != cur:
+                assert sens[tid] != pytest.approx(r)
+
+    @pytest.mark.asyncio
     async def test_analyze_skip_if_not_requested(self, optimized_state):
         """Test skipping scenario analysis when not requested."""
         optimized_state["run_scenarios"] = False

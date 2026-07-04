@@ -170,7 +170,8 @@ class TestResourceOptimizerDSPyIntegration:
         assert "maximize_roi" in prompt
         assert "linear" in prompt
         assert "450000" in prompt
-        assert "2.25" in prompt
+        # projected_roi renders as a signed percent lift now
+        assert "+225.0%" in prompt
         assert "10" in prompt
 
     def test_get_recommendation_prompt(self):
@@ -192,8 +193,9 @@ class TestResourceOptimizerDSPyIntegration:
 
         assert "territory_northeast" in prompt
         assert "territory" in prompt
-        assert "50000" in prompt
-        assert "65000" in prompt
+        # amounts render thousands-separated now
+        assert "50,000" in prompt
+        assert "65,000" in prompt
         assert "30" in prompt
 
     def test_get_scenario_comparison_prompt(self):

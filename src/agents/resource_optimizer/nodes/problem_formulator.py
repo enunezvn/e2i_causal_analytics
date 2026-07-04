@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any, Dict, List, Literal, Optional, cast
 
+from ..response_model import DEFAULT_GAMMA
 from ..state import AllocationTarget, Constraint, ResourceOptimizerState
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,9 @@ class ProblemFormulatorNode:
                 }
 
             # Build optimization problem representation
-            problem = self._build_problem(targets, constraints, objective)
+            problem = self._build_problem(
+                targets, constraints, objective, requested_solver=state.get("solver_type")
+            )
 
             # Determine appropriate solver
             solver_type = self._select_solver(problem, state.get("solver_type"))
@@ -105,6 +108,7 @@ class ProblemFormulatorNode:
         targets: List[AllocationTarget],
         constraints: List[Constraint],
         objective: str,
+        requested_solver: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build optimization problem representation."""
         n = len(targets)
@@ -119,6 +123,18 @@ class ProblemFormulatorNode:
             ]
         else:  # minimize_cost
             c = [-1.0] * n
+
+        # Response model: concave (diminishing returns) by default; linear ONLY
+        # when the caller explicitly asks for an LP/MILP solver or the problem
+        # carries integer/binary variables (those solvers need a linear
+        # objective). A linear response + box bounds + one budget row always
+        # yields a bang-bang optimum (every entity at a bound), which is
+        # neither realistic nor readable — see response_model.py.
+        has_discrete_vars = any(t.get("is_binary") or t.get("is_integer") for t in targets)
+        if requested_solver in ("linear", "milp") or has_discrete_vars:
+            response_model: Dict[str, Any] = {"type": "linear"}
+        else:
+            response_model = {"type": "power", "gamma": DEFAULT_GAMMA}
 
         # Variable bounds
         lb = [t.get("min_allocation", 0) or 0 for t in targets]
@@ -184,6 +200,7 @@ class ProblemFormulatorNode:
             "n": n,
             "targets": targets,
             "objective": objective,
+            "response_model": response_model,
             # MILP extensions
             "var_types": var_types,
             "fixed_costs": fixed_costs,
@@ -205,5 +222,8 @@ class ProblemFormulatorNode:
             return "milp"
         elif requested:
             return requested
+        elif (problem.get("response_model") or {}).get("type") == "power":
+            # Concave response needs the nonlinear (SLSQP) solver.
+            return "nonlinear"
         else:
             return "linear"

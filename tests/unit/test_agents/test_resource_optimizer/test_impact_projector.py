@@ -35,43 +35,27 @@ class TestImpactProjectorNode:
 
     @pytest.mark.asyncio
     async def test_project_roi(self, optimized_state):
-        """Test ROI calculation."""
+        """projected_roi is the RELATIVE OUTCOME LIFT vs the current allocation."""
         node = ImpactProjectorNode()
         result = await node.execute(optimized_state)
 
-        # The implementation calculates incremental ROI when allocation_targets are present:
-        # ROI = (projected_outcome - current_outcome) / optimized_total
-        allocation_targets = optimized_state.get("allocation_targets", [])
-
-        # Build response map - handle both AllocationTarget objects and dicts
-        response_by_entity = {}
-        for t in allocation_targets:
-            if hasattr(t, "entity_id"):
-                # AllocationTarget object
-                response_by_entity[t.entity_id] = t.expected_response
-            else:
-                # Dictionary
-                response_by_entity[t.get("entity_id")] = t.get("expected_response", 0)
-
+        # projected outcome = sum of the allocations' expected_impact (already
+        # computed from the shared response model by the optimizer node).
         projected_outcome = sum(
-            response_by_entity.get(a["entity_id"], 0) * a["optimized_allocation"]
-            for a in optimized_state["optimal_allocations"]
+            a["expected_impact"] for a in optimized_state["optimal_allocations"]
         )
 
-        # Calculate current outcome
+        # current outcome under the same (linear, no response_model) curve.
         current_outcome = 0
-        for t in allocation_targets:
+        for t in optimized_state.get("allocation_targets", []):
             if hasattr(t, "entity_id"):
                 current_outcome += t.expected_response * t.current_allocation
             else:
                 current_outcome += t.get("expected_response", 0) * t.get("current_allocation", 0)
 
-        total_allocation = sum(
-            a["optimized_allocation"] for a in optimized_state["optimal_allocations"]
-        )
-        expected_roi = (projected_outcome - current_outcome) / total_allocation
+        expected_lift = (projected_outcome - current_outcome) / current_outcome
 
-        assert result["projected_roi"] == pytest.approx(expected_roi, rel=0.01)
+        assert result["projected_roi"] == pytest.approx(expected_lift, rel=0.01)
 
     @pytest.mark.asyncio
     async def test_project_impact_by_segment(self, optimized_state):
@@ -79,8 +63,34 @@ class TestImpactProjectorNode:
         node = ImpactProjectorNode()
         result = await node.execute(optimized_state)
 
-        assert result["impact_by_segment"] is not None
-        assert "territory" in result["impact_by_segment"]
+        # Fixture ids ("territory_northeast") don't match the "<region>-T<nn>"
+        # pattern, so segmentation falls back to entity_type — and values are
+        # % SHARES of the projected outcome, summing to ~100.
+        seg = result["impact_by_segment"]
+        assert seg is not None
+        assert "territory" in seg
+        assert sum(seg.values()) == pytest.approx(100.0, abs=0.5)
+
+    @pytest.mark.asyncio
+    async def test_project_impact_shares_grouped_by_region(self, optimized_state):
+        """Region-style entity ids group into per-region % shares (sum ~100)."""
+        node = ImpactProjectorNode()
+        state = dict(optimized_state)
+        state["optimal_allocations"] = [
+            {**a, "entity_id": eid}
+            for a, eid in zip(
+                optimized_state["optimal_allocations"],
+                ["south-T01", "south-T02", "west-T01", "midwest-T03"],
+                strict=False,
+            )
+        ]
+        result = await node.execute(state)
+
+        seg = result["impact_by_segment"]
+        assert set(seg) == {"south", "west", "midwest"}
+        assert sum(seg.values()) == pytest.approx(100.0, abs=0.5)
+        # south holds the two largest expected_impact rows (300000 + 75000 of 410000)
+        assert seg["south"] == pytest.approx(375000 / 410000 * 100, abs=0.5)
 
     @pytest.mark.asyncio
     async def test_project_summary_generation(self, optimized_state):
@@ -90,7 +100,7 @@ class TestImpactProjectorNode:
 
         summary = result["optimization_summary"]
         assert "Optimization complete" in summary
-        assert "ROI" in summary
+        assert "outcome lift vs current" in summary
 
     @pytest.mark.asyncio
     async def test_project_recommendations(self, optimized_state):
