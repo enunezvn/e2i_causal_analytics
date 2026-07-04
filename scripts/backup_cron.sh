@@ -2,14 +2,15 @@
 # =============================================================================
 # E2I Causal Analytics - Automated Backup (Cron Wrapper)
 # =============================================================================
-# Wraps the Supabase export script with retention and logging.
-# Also invokes data store backups (Redis + FalkorDB).
+# Dumps the local Supabase Postgres (supabase-db container) with retention
+# and logging. Also invokes data store backups (Redis + FalkorDB).
 #
-# Crontab entry (daily at 2 AM):
-#   0 2 * * * /home/enunez/Projects/e2i_causal_analytics/scripts/backup_cron.sh >> /var/log/e2i-backup.log 2>&1
+# Crontab entry (daily at 2 AM). Log under $HOME — /var/log is NOT writable
+# by the cron user on this host (a root-owned dir kills the redirect with
+# Permission denied BEFORE the script runs, silently no-oping the job):
+#   0 2 * * * /home/enunez/Projects/e2i_causal_analytics/scripts/backup_cron.sh >> /home/enunez/logs/e2i-backup.log 2>&1
 #
 # Environment (set in crontab or sourced from .env):
-#   SUPABASE_DB_URL       - PostgreSQL connection string (for DB backup)
 #   REDIS_PASSWORD        - Redis auth password
 #   FALKORDB_PASSWORD     - FalkorDB auth password
 # =============================================================================
@@ -37,18 +38,28 @@ fi
 mkdir -p "$BACKUP_BASE"
 
 # --- Supabase Database Backup ---
+# Prod Postgres is the LOCAL supabase-db container (this droplet is prod);
+# dump in-container so pg_dump always matches the server version. The old
+# path via scripts/supabase/export_cloud_db.sh is a one-time cloud->self-hosted
+# migration tool that requires the Supabase CLI (not installed here) and
+# never produced a backup on this host.
 echo ""
 echo "--- Supabase Database Backup ---"
-EXPORT_SCRIPT="$SCRIPT_DIR/supabase/export_cloud_db.sh"
-if [ -x "$EXPORT_SCRIPT" ]; then
+DB_CONTAINER="supabase-db"
+if docker ps --format '{{.Names}}' | grep -qx "$DB_CONTAINER"; then
   BACKUP_DIR="$BACKUP_BASE/supabase_export_$TIMESTAMP"
-  if "$EXPORT_SCRIPT" "$BACKUP_DIR"; then
-    echo "Database backup succeeded: $BACKUP_DIR"
+  mkdir -p "$BACKUP_DIR"
+  if docker exec "$DB_CONTAINER" pg_dump -U postgres -d postgres --format=custom \
+       > "$BACKUP_DIR/full_backup.dump" \
+     && docker exec "$DB_CONTAINER" pg_dumpall -U postgres --globals-only \
+       > "$BACKUP_DIR/roles.sql"; then
+    echo "Database backup succeeded: $BACKUP_DIR ($(du -sh "$BACKUP_DIR" | cut -f1))"
   else
-    echo "ERROR: Database backup failed (exit code $?)"
+    echo "ERROR: Database backup failed — removing partial $BACKUP_DIR"
+    rm -rf "$BACKUP_DIR"
   fi
 else
-  echo "WARNING: Export script not found or not executable: $EXPORT_SCRIPT"
+  echo "ERROR: $DB_CONTAINER container not running — skipping database backup"
 fi
 
 # --- Data Store Backups (Redis + FalkorDB) ---
