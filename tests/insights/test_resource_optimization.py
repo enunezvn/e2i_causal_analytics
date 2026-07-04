@@ -76,6 +76,26 @@ def test_underspend_is_narrated_not_hidden():
     assert any(c["label"] == "Deployed" and c["value"] == "$250" for c in g["grounding"])
 
 
+def test_minimize_cost_underspend_is_savings_not_hurdle():
+    # minimize_cost underspends BY DESIGN — narrating it with maximize_roi's
+    # hurdle-rate rationale would be the wrong business story (codex round 2).
+    g = _grounding(objective="minimize_cost", total_budget=300.0, total_spend=250.0)
+    assert "deploying $250" in g["outcome"]
+    assert "$50 in savings while preserving the current outcome level" in g["outcome"]
+    assert "hurdle" not in g["outcome"]
+    assert "intentionally unallocated" not in g["outcome"]
+    assert any(c["label"] == "Deployed" and c["value"] == "$250" for c in g["grounding"])
+
+
+def test_other_objective_underspend_is_neutral():
+    # No invented rationale for objectives without a designed underspend story.
+    g = _grounding(objective="maximize_outcome", total_budget=300.0, total_spend=250.0)
+    assert "deploying $250" in g["outcome"]
+    assert "$50 left unallocated" in g["outcome"]
+    assert "hurdle" not in g["outcome"]
+    assert "savings" not in g["outcome"]
+
+
 def test_full_deployment_keeps_budget_phrase():
     g = _grounding(total_budget=300.0, total_spend=300.0)
     assert "total budget under optimization: $300" in g["outcome"]

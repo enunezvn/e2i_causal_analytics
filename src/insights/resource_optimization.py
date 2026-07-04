@@ -97,19 +97,31 @@ def build_grounding(
     moves = f"Increases: {inc}. Decreases: {dec}."
     lift_str = f"{projected_lift_pct:+.1f}%" if projected_lift_pct is not None else "—"
     budget_str = f"${total_budget:,.0f}" if total_budget else "—"
-    # maximize_roi's hurdle objective can intentionally leave budget
-    # unallocated (marginal return below the hurdle). Saying "total budget
-    # under optimization" in that case would narrate money as deployed that
-    # the optimizer explicitly declined to spend.
+    # Underspend narration must match the objective's economics: maximize_roi
+    # leaves money unallocated when its marginal return falls below the hurdle,
+    # minimize_cost underspends BY DESIGN (savings while preserving outcome),
+    # and any other objective gets the honest deployed-vs-budget fact with no
+    # invented rationale. Saying "total budget under optimization" when the
+    # optimizer declined to spend part of it would narrate money as deployed.
     spend_f = float(total_spend) if total_spend is not None else 0.0
     budget_f = float(total_budget) if total_budget is not None else 0.0
     underspend = total_spend is not None and budget_f > 0 and spend_f < budget_f * 0.995
     if underspend:
+        deploy_str = f"recommends deploying ${spend_f:,.0f} of the ${budget_f:,.0f} budget"
+        unspent_f = budget_f - spend_f
+        if objective == "maximize_roi":
+            rationale = (
+                f" (${unspent_f:,.0f} intentionally unallocated — "
+                f"its marginal return falls below the hurdle rate)"
+            )
+        elif objective == "minimize_cost":
+            rationale = (
+                f" (${unspent_f:,.0f} in savings while preserving the current outcome level)"
+            )
+        else:
+            rationale = f" (${unspent_f:,.0f} left unallocated)"
         outcome = (
-            f"Projected outcome lift vs current allocation: {lift_str}; "
-            f"recommends deploying ${spend_f:,.0f} of the ${budget_f:,.0f} "
-            f"budget (${budget_f - spend_f:,.0f} intentionally unallocated — "
-            f"its marginal return falls below the hurdle rate)."
+            f"Projected outcome lift vs current allocation: {lift_str}; {deploy_str}{rationale}."
         )
     else:
         outcome = (
