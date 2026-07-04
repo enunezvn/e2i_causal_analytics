@@ -66,12 +66,29 @@ interface FlatSegment extends CATEResult {
 // =============================================================================
 
 /**
- * Format a CATE on a binary outcome as percentage points (pp), the same
- * headline unit /segment-analysis uses. A raw effect of 0.017 on
- * persistent_180d is +1.7 pp of persistence probability — NOT "+1.7%".
+ * Binary outcomes on the patient_journeys clinical contract — the backend's
+ * curated outcome list (src/api/routes/causal.py `_CAUSAL_DATASET_SPECS`).
+ * A CATE on these is a probability delta, displayed in percentage points (pp),
+ * the same headline unit /segment-analysis uses: 0.017 on persistent_180d is
+ * +1.7 pp of persistence probability — NOT "+1.7%".
  */
-function fmtPp(value: number | undefined | null, digits = 1): string {
+const BINARY_OUTCOMES = new Set([
+  'persistent_180d',
+  'discontinued_180d',
+  'treatment_initiated',
+  'adherent_180d',
+  'low_gap_180d',
+]);
+
+/**
+ * Format a treatment effect honestly for the outcome's scale: percentage
+ * points for binary outcomes, the raw effect size otherwise. The backend
+ * validator also accepts covariates (e.g. engagement_score) as outcome_var,
+ * so an effect on a non-binary outcome must never be labeled "pp".
+ */
+function fmtEffect(value: number | undefined | null, binaryOutcome: boolean, digits = 1): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+  if (!binaryOutcome) return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
   const pp = value * 100;
   return `${pp >= 0 ? '+' : ''}${pp.toFixed(digits)} pp`;
 }
@@ -93,7 +110,13 @@ function flattenCATE(bySegment: Record<string, CATEResult[]> | undefined): FlatS
 // SUB-COMPONENTS
 // =============================================================================
 
-function SegmentCard({ segment }: { segment: FlatSegment }) {
+function SegmentCard({
+  segment,
+  binaryOutcome,
+}: {
+  segment: FlatSegment;
+  binaryOutcome: boolean;
+}) {
   const significant = segment.statistical_significance;
   const isPositive = (segment.cate_estimate ?? 0) >= 0;
 
@@ -142,13 +165,14 @@ function SegmentCard({ segment }: { segment: FlatSegment }) {
             ) : (
               <TrendingDown className="h-4 w-4" />
             )}
-            {fmtPp(segment.cate_estimate)}
+            {fmtEffect(segment.cate_estimate, binaryOutcome)}
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
           <div className="text-xs text-[var(--color-muted-foreground)]">CI</div>
           <div className="text-sm font-medium text-[var(--color-foreground)] pt-1">
-            [{fmtPp(segment.cate_ci_lower)}, {fmtPp(segment.cate_ci_upper)}]
+            [{fmtEffect(segment.cate_ci_lower, binaryOutcome)},{' '}
+            {fmtEffect(segment.cate_ci_upper, binaryOutcome)}]
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
@@ -196,6 +220,9 @@ export function HeterogeneousTreatmentEffects({
   const segments: FlatSegment[] = failed ? [] : flattenCATE(analysis?.cate_by_segment);
   const hasResults = segments.length > 0;
   const significantCount = segments.filter((s) => s.statistical_significance).length;
+  // pp labeling is only honest for probability outcomes; a continuous outcome
+  // (allowed by the backend's union allowlist) renders the raw effect size.
+  const binaryOutcome = BINARY_OUTCOMES.has(outcomeVar);
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -284,7 +311,7 @@ export function HeterogeneousTreatmentEffects({
                   <span className="text-xs text-[var(--color-muted-foreground)]">Overall ATE</span>
                 </div>
                 <div className="text-xl font-bold text-[var(--color-foreground)]">
-                  {fmtPp(analysis?.overall_ate)}
+                  {fmtEffect(analysis?.overall_ate, binaryOutcome)}
                 </div>
               </div>
               <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
@@ -302,7 +329,11 @@ export function HeterogeneousTreatmentEffects({
 
             <div className="grid gap-3">
               {segments.map((segment) => (
-                <SegmentCard key={`${segment.dimension}:${segment.segment_value}`} segment={segment} />
+                <SegmentCard
+                  key={`${segment.dimension}:${segment.segment_value}`}
+                  segment={segment}
+                  binaryOutcome={binaryOutcome}
+                />
               ))}
             </div>
 

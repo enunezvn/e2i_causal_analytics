@@ -132,6 +132,19 @@ describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
     expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
   });
 
+  it('never labels a non-binary outcome in percentage points (raw effect instead)', () => {
+    mockSegments({ data: COMPLETED } as unknown as Partial<Mutation>);
+    // engagement_score is a continuous covariate the backend's union allowlist
+    // accepts as outcome_var — pp would be a lie, so the card must fall back
+    // to the raw effect scale.
+    render(<HeterogeneousTreatmentEffects outcomeVar="engagement_score" />);
+
+    expect(screen.queryByText(/\+1\.7 pp/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\+1\.4 pp/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\+0\.017/)).toBeInTheDocument(); // severe CATE, raw
+    expect(screen.getByText(/\+0\.014/)).toBeInTheDocument(); // overall ATE, raw
+  });
+
   it('shows a loading state while the analysis is pending', () => {
     mockSegments({ isPending: true } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
