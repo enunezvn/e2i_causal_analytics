@@ -66,6 +66,16 @@ const COLORS = {
 
 const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444'];
 
+// The platform's three brands (synthetic DGP). "All Brands" seeds from
+// territory_metrics; a specific brand seeds from brand-filtered treatment
+// events — both clearly-labelled synthetic sources.
+const BRAND_OPTIONS = ['All Brands', 'Remibrutinib', 'Fabhalta', 'Kisqali'];
+
+// With every territory in the optimization universe (~40), the comparison
+// bar chart caps at the biggest movers to stay readable; the table below
+// lists everything.
+const CHART_TOP_MOVERS = 12;
+
 // =============================================================================
 // ALLOCATION COMPARISON CHART
 // =============================================================================
@@ -75,30 +85,41 @@ interface AllocationChartProps {
 }
 
 function AllocationComparisonChart({ allocations }: AllocationChartProps) {
-  const chartData = allocations.map((a) => ({
+  // Backend sorts by |change| descending — take the biggest movers.
+  const shown = allocations.slice(0, CHART_TOP_MOVERS);
+  const chartData = shown.map((a) => ({
     name: a.entity_id.replace('territory_', '').replace(/_/g, ' '),
     current: a.current_allocation / 1000,
     optimized: a.optimized_allocation / 1000,
     change: a.change_percentage,
   }));
+  const hiddenCount = allocations.length - shown.length;
 
   return (
-    <ResponsiveContainer width="100%" height={300}>
-      <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="name" />
-        <YAxis label={{ value: 'Allocation ($K)', angle: -90, position: 'insideLeft' }} />
-        <Tooltip
-          formatter={(value, name) => [
-            `$${(value as number)?.toFixed(0) ?? 0}K`,
-            name === 'current' ? 'Current' : 'Optimized',
-          ]}
-        />
-        <Legend />
-        <Bar dataKey="current" fill={COLORS.muted} name="Current" />
-        <Bar dataKey="optimized" fill={COLORS.primary} name="Optimized" />
-      </BarChart>
-    </ResponsiveContainer>
+    <>
+      <ResponsiveContainer width="100%" height={300}>
+        <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="name" />
+          <YAxis label={{ value: 'Allocation ($K)', angle: -90, position: 'insideLeft' }} />
+          <Tooltip
+            formatter={(value, name) => [
+              `$${(value as number)?.toFixed(0) ?? 0}K`,
+              name === 'current' ? 'Current' : 'Optimized',
+            ]}
+          />
+          <Legend />
+          <Bar dataKey="current" fill={COLORS.muted} name="Current" />
+          <Bar dataKey="optimized" fill={COLORS.primary} name="Optimized" />
+        </BarChart>
+      </ResponsiveContainer>
+      {hiddenCount > 0 && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Top {shown.length} territories by allocation change; {hiddenCount} more in the
+          table below.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -114,8 +135,8 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
   const chartData = scenarios.map((s) => ({
     name: s.scenario_name,
     allocation: s.total_allocation / 1000,
-    outcome: s.projected_outcome / 1000,
-    roi: s.roi,
+    outcome: s.projected_outcome,
+    returnPer1k: s.roi * 1000,
     hasViolations: s.constraint_violations.length > 0,
   }));
 
@@ -131,13 +152,13 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
         <YAxis
           dataKey="outcome"
           name="Outcome"
-          label={{ value: 'Projected Outcome ($K)', angle: -90, position: 'insideLeft' }}
+          label={{
+            value: 'Projected Outcome (units)',
+            angle: -90,
+            position: 'insideLeft',
+          }}
         />
         <Tooltip
-          formatter={(value, name) => [
-            name === 'ROI' ? `${(value as number)?.toFixed(2) ?? 0}x` : `$${(value as number)?.toFixed(0) ?? 0}K`,
-            name as string,
-          ]}
           content={({ payload }) => {
             if (!payload || payload.length === 0) return null;
             const data = payload[0].payload;
@@ -145,12 +166,14 @@ function ScenarioComparisonChart({ scenarios }: ScenarioChartProps) {
               <div className="bg-background border rounded-lg p-3 shadow-lg">
                 <p className="font-medium">{data.name}</p>
                 <p className="text-sm text-muted-foreground">
-                  Allocation: ${data.allocation}K
+                  Allocation: ${data.allocation.toFixed(0)}K
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Outcome: ${data.outcome}K
+                  Outcome: {data.outcome.toFixed(0)} units
                 </p>
-                <p className="text-sm text-muted-foreground">ROI: {data.roi.toFixed(2)}x</p>
+                <p className="text-sm text-muted-foreground">
+                  Return: {data.returnPer1k.toFixed(2)} units per $1K
+                </p>
                 {data.hasViolations && (
                   <p className="text-sm text-destructive">Has constraint violations</p>
                 )}
@@ -189,19 +212,31 @@ interface SensitivityChartProps {
 }
 
 function SensitivityAnalysisChart({ sensitivity }: SensitivityChartProps) {
+  // Backend values are marginal returns per +$1 at the optimized allocation;
+  // shown per +$1K for readable magnitudes. When the solver reached an
+  // interior optimum these bars are near-equal — equalized marginal returns
+  // are the signature of an optimal allocation, not a rendering bug.
   const chartData = Object.entries(sensitivity).map(([key, value]) => ({
     name: key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
-    sensitivity: value * 100,
+    marginal: value * 1000,
   }));
 
   return (
-    <ResponsiveContainer width="100%" height={200}>
+    <ResponsiveContainer width="100%" height={Math.max(200, chartData.length * 24)}>
       <BarChart data={chartData} layout="vertical" margin={{ top: 5, right: 30, left: 100, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" />
-        <XAxis type="number" label={{ value: 'Sensitivity (%)', position: 'bottom' }} />
-        <YAxis type="category" dataKey="name" />
-        <Tooltip formatter={(value) => [`${(value as number)?.toFixed(1) ?? 0}%`, 'Sensitivity']} />
-        <Bar dataKey="sensitivity" fill={COLORS.secondary} />
+        <XAxis
+          type="number"
+          label={{ value: 'Marginal return (outcome units per +$1K)', position: 'bottom' }}
+        />
+        <YAxis type="category" dataKey="name" width={110} />
+        <Tooltip
+          formatter={(value) => [
+            `${(value as number)?.toFixed(2) ?? 0} units per +$1K`,
+            'Marginal return',
+          ]}
+        />
+        <Bar dataKey="marginal" fill={COLORS.secondary} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -216,6 +251,7 @@ interface ImpactChartProps {
 }
 
 function ImpactBySegmentChart({ impactBySegment }: ImpactChartProps) {
+  // Backend values are % shares of the projected outcome by region (sum ~100).
   const chartData = Object.entries(impactBySegment).map(([key, value]) => ({
     name: key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
     value,
@@ -229,7 +265,7 @@ function ImpactBySegmentChart({ impactBySegment }: ImpactChartProps) {
           cx="50%"
           cy="50%"
           labelLine={false}
-          label={({ name, value }) => `${name}: ${value}%`}
+          label={({ name, value }) => `${name}: ${(value as number).toFixed(1)}%`}
           outerRadius={80}
           dataKey="value"
         >
@@ -237,44 +273,19 @@ function ImpactBySegmentChart({ impactBySegment }: ImpactChartProps) {
             <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
           ))}
         </Pie>
-        <Tooltip formatter={(value) => [`${value ?? 0}%`, 'Impact Share']} />
+        <Tooltip
+          formatter={(value) => [`${((value as number) ?? 0).toFixed(1)}%`, 'Share of outcome']}
+        />
       </PieChart>
     </ResponsiveContainer>
   );
 }
 
-// =============================================================================
-// ALLOCATION TREND CHART
-// =============================================================================
-//
-// The backend optimization result currently has no time-series / historical
-// allocation-trend field (OptimizationResponse exposes only the before/after
-// snapshot in `optimal_allocations`). The previous implementation FABRICATED a
-// "Q1/Q2/Q3/Q4" trend client-side from hardcoded 0.9/0.95 multipliers of the
-// current allocation — presenting invented quarters as "Historical and
-// projected allocation by territory". That is fabricated data and has been
-// removed (see PR: anti-fabrication discipline).
-//
-// Until the backend emits a real allocation trend, render an honest empty
-// state rather than inventing one. The `allocations` prop is retained so the
-// real series can be wired in here the moment the backend provides it.
-
-interface AllocationTrendProps {
-  allocations: AllocationResult[];
-}
-
-function AllocationTrendChart(_props: AllocationTrendProps) {
-  return (
-    <div className="flex h-[300px] flex-col items-center justify-center text-center">
-      <p className="text-sm font-medium text-muted-foreground">No allocation trend data</p>
-      <p className="mt-1 max-w-md text-xs text-muted-foreground">
-        Historical allocation trend is not available from the optimizer. Only the current
-        vs optimized snapshot above is real; a time-series trend will appear here once the
-        backend provides one.
-      </p>
-    </div>
-  );
-}
+// NOTE: an "Allocation Trend" card used to live on this page. The backend has
+// never produced a time-series (an earlier version FABRICATED quarters from
+// hardcoded multipliers, then it became a permanently-empty placeholder). A
+// card whose only state is "no data" is UI debt — removed until a real
+// allocation history exists server-side.
 
 // =============================================================================
 // MAIN PAGE COMPONENT
@@ -284,6 +295,7 @@ export default function ResourceOptimization() {
   const [activeTab, setActiveTab] = useState('allocations');
   const [selectedResourceType, setSelectedResourceType] = useState<string>('budget');
   const [selectedObjective, setSelectedObjective] = useState<string>('maximize_roi');
+  const [selectedBrand, setSelectedBrand] = useState<string>('All Brands');
 
   // API hooks
   const { data: healthData, isLoading: healthLoading } = useResourceHealth();
@@ -295,9 +307,9 @@ export default function ResourceOptimization() {
   const runOptimization = useRunOptimizationAndWait();
   const runError = runOptimization.error;
 
-  // Strategic Interpretation: surfaces the existing optimization_summary +
-  // recommendations through the shared StrategicInsightCard (the backend
-  // adapter passes the agent's output through — this is NOT a second narrative).
+  // Strategic Interpretation: DSPy/LLM business read of the solver result
+  // (allocation moves, lift, provenance) with a deterministic factual
+  // fallback when the LM is unavailable — same pattern as the other pages.
   const resInsight = useResourceOptimizationInsight();
 
   // Live optimization output (undefined until the user runs one). The
@@ -330,6 +342,7 @@ export default function ResourceOptimization() {
         // thereafter.)
         allocation_targets: [],
         objective: selectedObjective as never,
+        brand: selectedBrand === 'All Brands' ? null : selectedBrand,
         run_scenarios: true,
         scenario_count: 3,
       },
@@ -337,6 +350,32 @@ export default function ResourceOptimization() {
       maxWaitMs: 120000,
     });
   };
+
+  // Grounding for the strategic interpretation: top movers from the live result.
+  const sortedByChange = [...(optimizationResult?.optimal_allocations ?? [])].sort(
+    (a, b) => b.change_percentage - a.change_percentage
+  );
+  const topIncreases = sortedByChange
+    .filter((a) => a.change_percentage > 0)
+    .slice(0, 5)
+    .map((a) => ({
+      entity_id: a.entity_id,
+      change_percentage: a.change_percentage,
+      change: a.change,
+    }));
+  const topDecreases = sortedByChange
+    .filter((a) => a.change_percentage < 0)
+    .slice(-5)
+    .reverse()
+    .map((a) => ({
+      entity_id: a.entity_id,
+      change_percentage: a.change_percentage,
+      change: a.change,
+    }));
+  const totalBudget = (optimizationResult?.optimal_allocations ?? []).reduce(
+    (sum, a) => sum + a.current_allocation,
+    0
+  );
 
   return (
     <div className="container mx-auto py-6 space-y-6">
@@ -375,11 +414,27 @@ export default function ResourceOptimization() {
         <CardHeader>
           <CardTitle>Optimization Configuration</CardTitle>
           <CardDescription>
-            Select resource type and optimization objective
+            Optimizes across every active territory (~40, all regions). Activity source:
+            territory metrics for All Brands, brand-filtered treatment events for a
+            specific brand.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div>
+              <label className="text-sm font-medium mb-2 block">Brand</label>
+              <select
+                className="w-full p-2 border rounded-md"
+                value={selectedBrand}
+                onChange={(e) => setSelectedBrand(e.target.value)}
+              >
+                {BRAND_OPTIONS.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="text-sm font-medium mb-2 block">Resource Type</label>
               <select
@@ -441,6 +496,14 @@ export default function ResourceOptimization() {
                 ? optimizationResult.projected_roi * 100
                 : null,
             solver_status: optimizationResult?.solver_status ?? null,
+            objective: optimizationResult?.objective ?? selectedObjective,
+            brand: selectedBrand === 'All Brands' ? null : selectedBrand,
+            resource_type: optimizationResult?.resource_type ?? selectedResourceType,
+            entity_count: optimizationResult?.optimal_allocations?.length ?? null,
+            total_budget: totalBudget > 0 ? totalBudget : null,
+            top_increases: topIncreases,
+            top_decreases: topDecreases,
+            synthetic: resultWarnings.some((w) => w.startsWith('SYNTHETIC DATA:')),
           })
         }
       />
@@ -496,12 +559,15 @@ export default function ResourceOptimization() {
                     ).toFixed(1)}%`
                   : '—'
               }
-              description="optimal reallocation gain vs current"
+              description="outcome gain vs current allocation"
             />
             <KPICard
               title="Projected Outcome"
-              value={`$${((optimizationResult.projected_total_outcome || 0) / 1000).toFixed(0)}K`}
-              description="total projected value"
+              value={(optimizationResult.projected_total_outcome || 0).toLocaleString(
+                undefined,
+                { maximumFractionDigits: 0 }
+              )}
+              description="outcome units (TRx-equivalents, illustrative)"
             />
             <KPICard
               title="Solve Time"
@@ -539,8 +605,8 @@ export default function ResourceOptimization() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Impact by Segment</CardTitle>
-                <CardDescription>Expected impact distribution</CardDescription>
+                <CardTitle>Impact by Region</CardTitle>
+                <CardDescription>Share of projected outcome by region</CardDescription>
               </CardHeader>
               <CardContent>
                 {optimizationResult.impact_by_segment && (
@@ -549,16 +615,6 @@ export default function ResourceOptimization() {
               </CardContent>
             </Card>
           </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Allocation Trend</CardTitle>
-              <CardDescription>Allocation trend over time (when available from the optimizer)</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <AllocationTrendChart allocations={optimizationResult.optimal_allocations} />
-            </CardContent>
-          </Card>
 
           {/* Allocation Details Table */}
           <Card>
@@ -575,7 +631,7 @@ export default function ResourceOptimization() {
                       <th className="text-right p-2">Current</th>
                       <th className="text-right p-2">Optimized</th>
                       <th className="text-right p-2">Change</th>
-                      <th className="text-right p-2">Expected Impact</th>
+                      <th className="text-right p-2">Projected Outcome (units)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -603,17 +659,9 @@ export default function ResourceOptimization() {
                           </span>
                         </td>
                         <td className="p-2 text-right">
-                          <Badge
-                            variant={
-                              alloc.expected_impact >= 1.2
-                                ? 'default'
-                                : alloc.expected_impact >= 1.0
-                                ? 'secondary'
-                                : 'outline'
-                            }
-                          >
-                            {alloc.expected_impact.toFixed(2)}x
-                          </Badge>
+                          {alloc.expected_impact.toLocaleString(undefined, {
+                            maximumFractionDigits: 0,
+                          })}
                         </td>
                       </tr>
                     ))}
@@ -660,7 +708,7 @@ export default function ResourceOptimization() {
                               : 'default'
                           }
                         >
-                          {scenario.roi.toFixed(2)}x ROI
+                          {(scenario.roi * 1000).toFixed(2)} units/$1K
                         </Badge>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
@@ -668,7 +716,11 @@ export default function ResourceOptimization() {
                           Allocation: ${(scenario.total_allocation / 1000).toFixed(0)}K
                         </div>
                         <div>
-                          Outcome: ${(scenario.projected_outcome / 1000).toFixed(0)}K
+                          Outcome:{' '}
+                          {scenario.projected_outcome.toLocaleString(undefined, {
+                            maximumFractionDigits: 0,
+                          })}{' '}
+                          units
                         </div>
                       </div>
                       {scenario.constraint_violations.length > 0 && (
@@ -704,32 +756,41 @@ export default function ResourceOptimization() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Constraint Impact</CardTitle>
+              <CardTitle>Marginal Returns</CardTitle>
               <CardDescription>
-                Understanding the effect of relaxing constraints
+                What one more dollar buys in each territory at the optimized allocation.
+                Near-equal values mean the allocation is optimal — money has been moved
+                until no territory offers a better marginal return than another.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {optimizationResult.sensitivity_analysis &&
-                  Object.entries(optimizationResult.sensitivity_analysis).map(
-                    ([key, value]) => (
-                      <div key={key} className="flex items-center justify-between p-3 border rounded-lg">
+                  (() => {
+                    const entries = Object.entries(
+                      optimizationResult.sensitivity_analysis
+                    );
+                    const values = entries.map(([, v]) => v).sort((a, b) => a - b);
+                    const median = values[Math.floor(values.length / 2)] ?? 0;
+                    return entries.map(([key, value]) => (
+                      <div
+                        key={key}
+                        className="flex items-center justify-between p-3 border rounded-lg"
+                      >
                         <div>
                           <p className="font-medium">
                             {key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
                           </p>
                           <p className="text-sm text-muted-foreground">
-                            A 10% relaxation would improve objective by{' '}
-                            {(value * 10).toFixed(1)}%
+                            +{(value * 1000).toFixed(2)} outcome units per additional $1K
                           </p>
                         </div>
-                        <Badge variant={value > 0.1 ? 'default' : 'outline'}>
-                          {value > 0.1 ? 'High Impact' : 'Low Impact'}
+                        <Badge variant={value > median ? 'default' : 'outline'}>
+                          {value > median ? 'Above median' : 'At/below median'}
                         </Badge>
                       </div>
-                    )
-                  )}
+                    ));
+                  })()}
               </div>
             </CardContent>
           </Card>

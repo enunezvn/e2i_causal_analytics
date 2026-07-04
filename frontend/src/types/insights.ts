@@ -43,11 +43,25 @@ export interface PredictiveInsightRequest {
   top_drivers: Array<{ feature: string; importance: number }>;
 }
 
+export interface AllocationMove {
+  entity_id: string;
+  change_percentage?: number | null;
+  change?: number | null;
+}
+
 export interface ResourceInsightRequest {
   optimization_summary: string;
   recommendations: string[];
   projected_lift_pct?: number | null;
   solver_status?: string | null;
+  objective?: string | null;
+  brand?: string | null;
+  resource_type?: string | null;
+  entity_count?: number | null;
+  total_budget?: number | null;
+  top_increases?: AllocationMove[];
+  top_decreases?: AllocationMove[];
+  synthetic?: boolean;
 }
 
 export interface TreatmentEffectInsightRequest {

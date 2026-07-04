@@ -3,11 +3,13 @@
  * ================================
  * Covers: pre-run empty state, live result rendering, the async run-and-WAIT
  * wiring (empty synthetic targets + polling options), honest failure surface,
- * synthetic-data provenance banner, running indicator, and the no-fabricated-
- * trend guarantee.
+ * synthetic-data provenance banner, running indicator, brand selection, the
+ * removed allocation-trend card, honest outcome units, and marginal-return
+ * sensitivity copy.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('@/hooks/api', () => ({
@@ -181,36 +183,80 @@ describe('ResourceOptimization', () => {
     ).toHaveLength(1);
   });
 
-  it('does NOT fabricate an allocation trend; renders an honest empty state', () => {
+  it('renders NO allocation-trend card at all (no fabrication, no dead placeholder)', () => {
     mockRun({
       data: completedResult({
         optimization_id: 'opt_live_trend',
         optimal_allocations: [
           {
-            entity_id: 'territory_northeast',
+            entity_id: 'south-T01',
             entity_type: 'territory',
             current_allocation: 50000,
             optimized_allocation: 60000,
             change: 10000,
             change_percentage: 20,
-            expected_impact: 1.3,
+            expected_impact: 320,
           },
         ],
       }),
     });
     render(<ResourceOptimization />, { wrapper: createWrapper() });
 
-    // Honest empty state present.
-    expect(screen.getByText(/No allocation trend data/i)).toBeInTheDocument();
+    // The card (fabricated once, then a permanently-empty placeholder) is gone.
+    expect(screen.queryByText(/Allocation Trend/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No allocation trend data/i)).not.toBeInTheDocument();
 
     // The fabricated quarter series must NOT render anywhere on the page.
     expect(screen.queryByText('Q1')).not.toBeInTheDocument();
     expect(screen.queryByText('Q2')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Q3 \(Current\)/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Q4 \(Optimized\)/i)).not.toBeInTheDocument();
-
-    // The misleading "Historical and projected" card description is gone.
     expect(screen.queryByText(/Historical and projected/i)).not.toBeInTheDocument();
+  });
+
+  it('offers a brand selector and sends the selection (null for All Brands)', () => {
+    const mutate = vi.fn();
+    mockRun({ mutate });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+
+    // Default: All Brands -> brand: null in the request.
+    fireEvent.click(screen.getByRole('button', { name: /Run Optimization/i }));
+    expect(mutate.mock.calls[0][0].request.brand).toBeNull();
+
+    // Pick a brand -> its name goes to the backend seeder.
+    const brandSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(brandSelect, { target: { value: 'Remibrutinib' } });
+    fireEvent.click(screen.getByRole('button', { name: /Run Optimization/i }));
+    expect(mutate.mock.calls[1][0].request.brand).toBe('Remibrutinib');
+  });
+
+  it('renders impact shares as rounded percentages by region', () => {
+    mockRun({
+      data: completedResult({
+        impact_by_segment: { south: 38.1, northeast: 23.7, midwest: 20.3, west: 17.9 },
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Impact by Region/i)).toBeInTheDocument();
+    expect(screen.getByText(/Share of projected outcome by region/i)).toBeInTheDocument();
+  });
+
+  it('shows outcome units (not $K) and marginal-return copy on the sensitivity tab', async () => {
+    mockRun({
+      data: completedResult({
+        projected_total_outcome: 12345,
+        sensitivity_analysis: { 'south-T01': 0.0011, 'west-T03': 0.0009 },
+      }),
+    });
+    render(<ResourceOptimization />, { wrapper: createWrapper() });
+
+    // KPI shows plain outcome units (12,345), not a dollar figure ($12K).
+    expect(screen.getByText('12,345')).toBeInTheDocument();
+    expect(screen.queryByText('$12K')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /Sensitivity/i }));
+    expect(screen.getByText(/Marginal Returns/i)).toBeInTheDocument();
+    // The fabricated relaxation claim is gone.
+    expect(screen.queryByText(/A 10% relaxation would improve/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/\+1\.10 outcome units per additional \$1K/i)).toBeInTheDocument();
   });
 
   it('surfaces degraded storage honestly (cross-worker 404 risk)', () => {
