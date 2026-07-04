@@ -35,9 +35,12 @@
 --      registry models: alerts, drift history, and runs. These are sweep
 --      artifacts against showcase models — noise, not monitoring history.
 --      Idempotent: re-running deletes 0 rows once clean.
+--
+-- NOTE: no BEGIN/COMMIT here — scripts/run_migrations.sh applies migrations
+-- with psql --single-transaction; script-level transaction control would
+-- break that atomicity (guarded by test_migrations_no_inner_txn.py). Manual
+-- applies must pass -1/--single-transaction.
 -- ============================================================================
-
-BEGIN;
 
 -- ----------------------------------------------------------------------------
 -- 1. Trigger writer: dedup + honest PSI message
@@ -159,5 +162,3 @@ WHERE r.model_ids IS NOT NULL
       WHERE m.id = ANY (r.model_ids)
         AND m.is_synthetic
   );
-
-COMMIT;
