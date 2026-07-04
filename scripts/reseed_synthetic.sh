@@ -1,29 +1,35 @@
 #!/bin/bash
 # =============================================================================
-# E2I Causal Analytics - Synthetic Substrate Reseed (Cron-Ready Wrapper)
+# E2I Causal Analytics - Synthetic Substrate Maintenance (Cron-Ready Wrapper)
 # =============================================================================
-# Runs the full-size, frontier-anchored synthetic reseed with the exact
-# environment scripts/load_synthetic_data.py needs. Encodes the working
-# invocation so operators (and cron) never trip the known failure modes:
+# DEFAULT (no args): FRONTIER APPEND — grow the frozen substrate with the
+# trailing deterministic weekly cohorts (src/ml/synthetic/frontier_append.py).
+# Appends new-patient cohorts + downstream events at the calendar frontier and
+# refreshes user_sessions (MAU/WAU, #1127) WITHOUT rewriting history, so the
+# weekly run no longer re-fires drift alerts on the gold-standard models and
+# the dataset actually grows week over week.
 #
+# RECOVERY ONLY: `reseed_synthetic.sh --full` runs the legacy full-size
+# --anchor-to-now destructive reseed (rewrites every synthetic timestamp AND —
+# because the anchored/calendar paths consume different RNG draw counts —
+# every attribute value under the same PKs). This invalidates the frozen
+# substrate the gold-standard models were trained on and re-fires an honest
+# drift storm. Use only when the substrate is corrupt beyond appending.
+#
+# Environment gotchas this wrapper encodes (do not "simplify" away):
 #   - `dotenv` is NOT on the bare shell PATH — only .venv/bin/dotenv works
 #   - PYTHONPATH must be the repo root for src.* imports
 #   - LOKY_MAX_CPU_COUNT=1 keeps joblib from over-forking on the droplet
-#   - full size is REQUIRED for KPI targets: --small yields ~250 users and
-#     MAU/WAU (#1115, targets 2000/1200) can never reach GOOD
+#   - (--full) full size is REQUIRED for KPI targets: --small yields ~250
+#     users and MAU/WAU (#1115, targets 2000/1200) can never reach GOOD
 #
-# WHY a periodic reseed matters (#1127): MAU/WAU registry queries are
-# deliberately NOW()-anchored while user_sessions is a fixed 90-day history
-# ending at the last reseed — more than 7 days without a reseed and WAU
-# decays to CRITICAL (30 days for MAU). The reseed is idempotent
-# (deterministic PKs — PRs #1105/#1106/#1120) and takes ~3 min full-size.
-#
-# Crontab entry (weekly, Monday 3 AM). Log under $HOME — /var/log is NOT
-# writable by the cron user on this host (a root-owned dir kills the redirect
-# with Permission denied BEFORE the script runs, silently no-oping the job):
+# Crontab entry (weekly, Monday 3 AM — UNCHANGED across the append cutover).
+# Log under $HOME — /var/log is NOT writable by the cron user on this host (a
+# root-owned dir kills the redirect with Permission denied BEFORE the script
+# runs, silently no-oping the job):
 #   0 3 * * 1 /home/enunez/Projects/e2i_causal_analytics/scripts/reseed_synthetic.sh >> /home/enunez/logs/e2i-reseed.log 2>&1
 #
-# Extra args are forwarded to load_synthetic_data.py (after --anchor-to-now).
+# Extra args are forwarded to load_synthetic_data.py.
 # =============================================================================
 
 set -euo pipefail
@@ -38,17 +44,25 @@ if [[ ! -x .venv/bin/dotenv || ! -x .venv/bin/python ]]; then
     exit 1
 fi
 
-echo "=== reseed_synthetic start $(date -Is) (full-size, --anchor-to-now) ==="
+MODE="--append-frontier"
+if [[ "${1:-}" == "--full" ]]; then
+    shift
+    MODE="--anchor-to-now"
+    echo "=== reseed_synthetic start $(date -Is) (RECOVERY: full-size, --anchor-to-now) ==="
+else
+    echo "=== reseed_synthetic start $(date -Is) (frontier append) ==="
+fi
 
 PYTHONPATH="$PROJECT_ROOT" LOKY_MAX_CPU_COUNT=1 \
     .venv/bin/dotenv -f .env run -- \
-    .venv/bin/python scripts/load_synthetic_data.py --anchor-to-now "$@"
+    .venv/bin/python scripts/load_synthetic_data.py "$MODE" "$@"
 
-# Rebuild kpi_history from the fresh substrate. --anchor-to-now SHIFTS every
-# domain timestamp, so the previous seed's monthly points no longer align with
-# the new timeline; the backfill uses replace semantics (delete per
-# (kpi_id, source), then upsert) to keep the Time-Series KPI-history view
-# consistent with what the live calculators read.
+# Rebuild kpi_history from the substrate. Replace semantics (delete per
+# (kpi_id, source), then upsert) stay correct in BOTH modes: after an append,
+# history months recompute to the same values (source rows are frozen) and the
+# current month picks up the new frontier rows; after a --full reseed the
+# shifted timeline is rewritten wholesale, which is exactly what replace
+# semantics exist for.
 echo "=== kpi_history backfill start $(date -Is) ==="
 
 PYTHONPATH="$PROJECT_ROOT" \

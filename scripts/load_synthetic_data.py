@@ -620,6 +620,22 @@ def main():
         help="Reference date (YYYY-MM-DD) for --anchor-to-now. Falls back to "
         "$SYNTH_ANCHOR_REF, then today. Used to prove per-run regeneration.",
     )
+    parser.add_argument(
+        "--append-frontier",
+        action="store_true",
+        help="Frontier-append mode (src/ml/synthetic/frontier_append.py): "
+        "regenerate the trailing weekly cohorts + epoch monthly bm cohorts, "
+        "filter to occurrence-date <= frontier, and upsert. Grows the frozen "
+        "substrate instead of rewriting it; ignores --tag/--dgp/--small/"
+        "--anchor-to-now (cohort identity is fixed by the calendar).",
+    )
+    parser.add_argument(
+        "--frontier-ref",
+        type=str,
+        default=None,
+        help="Frontier date (YYYY-MM-DD) for --append-frontier; default today. "
+        "Rows dated after it are held back and append on later runs.",
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -650,14 +666,23 @@ def main():
 
     try:
         # Generate datasets
-        datasets = generate_datasets(
-            sizes,
-            dgp_type,
-            verbose=args.verbose,
-            id_prefix=args.tag,
-            anchor_to_now=args.anchor_to_now,
-            anchor_reference=anchor_reference,
-        )
+        if args.append_frontier:
+            from src.ml.synthetic.frontier_append import build_frontier_datasets
+
+            frontier = date.fromisoformat(args.frontier_ref) if args.frontier_ref else None
+            datasets = build_frontier_datasets(frontier=frontier)
+            if not datasets:
+                logger.info("append-frontier: nothing to load (frontier precedes epoch)")
+                return 0
+        else:
+            datasets = generate_datasets(
+                sizes,
+                dgp_type,
+                verbose=args.verbose,
+                id_prefix=args.tag,
+                anchor_to_now=args.anchor_to_now,
+                anchor_reference=anchor_reference,
+            )
 
         # Parquet dual-sink (optional). --parquet-only skips the DB load entirely
         # (pollution-free: no writes to shared prod tables, no DB creds needed).
