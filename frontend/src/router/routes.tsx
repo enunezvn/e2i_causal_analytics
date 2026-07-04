@@ -134,7 +134,7 @@ export const routeConfigs: RouteConfig[] = [
   {
     path: '/time-series',
     title: 'Time Series',
-    description: 'Time series analysis and forecasting',
+    description: 'KPI metric history over time',
     icon: 'trending-up',
     section: 'predictive',
     showInNav: true,
