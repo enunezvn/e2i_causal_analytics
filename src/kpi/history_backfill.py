@@ -38,6 +38,12 @@ Batch-2 coverage (each handler documents the registry query it mirrors):
 - ``BR-004`` <- first Kisqali Rx per patient x journey_start_date (monthly
   first-Rx cohorts, median days)
 
+Batch-3 coverage:
+
+- ``BR-002`` <- hcp_intent_surveys.survey_date (monthly mean
+  intent_to_prescribe_change over quality Remibrutinib surveys — the
+  ``survey_month`` series behind ``v_kpi_intent_to_prescribe``)
+
 Intentionally SKIPPED (no honest monthly recast of the CURRENT semantics):
 
 - ``CM-001..005`` — per-analysis causal estimates carrying CIs/p-values, not a
@@ -54,8 +60,6 @@ Intentionally SKIPPED (no honest monthly recast of the CURRENT semantics):
 - ``WS2-TR-003`` (uplift) — the live query is an ALL-TIME two-arm contrast with
   no time dimension; slicing it by month would be a different experiment
   reading, not this KPI's history.
-- ``BR-002`` — a clean monthly source EXISTS (v_kpi_intent_to_prescribe.
-  survey_month); natural Batch-3 candidate, not in Batch-2 scope.
 
 Reseed churn: the weekly synthetic reseed (``scripts/reseed_synthetic.sh``,
 ``--anchor-to-now``) SHIFTS every substrate timestamp, so months from a previous
@@ -114,6 +118,7 @@ HANDLER_SOURCES: Dict[str, str] = {
     "WS2-TR-007": "triggers.trigger_timestamp",
     "WS2-TR-008": "triggers.trigger_timestamp",
     "BR-001": "treatment_events.uas7_baseline",
+    "BR-002": "hcp_intent_surveys.survey_date",
     "BR-003": "patient_journeys+treatment_events.pnh",
     "BR-004": "treatment_events+patient_journeys",
 }
@@ -828,6 +833,50 @@ async def _backfill_br001_ah_uncontrolled(
     return points
 
 
+async def _backfill_br002_intent_delta(
+    client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """BR-002: mean intent-to-prescribe change across the month's quality
+    Remibrutinib surveys.
+
+    Mirrors the canonical semantics behind
+    ``brand_specific_remi_intent_delta_primary`` — ``v_kpi_intent_to_prescribe``'s
+    AVG(intent_to_prescribe_change) per survey month with
+    ``response_quality_flag = true`` — of which the live registry read is the
+    latest-month head, so the all-time recast IS the view's ``survey_month``
+    axis. Rows with NULL ``intent_to_prescribe_change`` are excluded (baseline
+    surveys carry no delta), matching both registry variants' ``IS NOT NULL``
+    guard.
+    """
+    rows = await _fetch_all(
+        client,
+        "hcp_intent_surveys",
+        "survey_id,survey_date,intent_to_prescribe_change",
+        "survey_id",
+        eq_filters={"brand": "Remibrutinib", "response_quality_flag": True},
+        cache=cache,
+        cache_key="br002_surveys",
+    )
+    by_month: Dict[date, List[float]] = defaultdict(list)
+    dates: List[date] = []
+    for r in rows:
+        change = r.get("intent_to_prescribe_change")
+        if change is None:
+            continue
+        d = _to_date(r.get("survey_date"))
+        if d is None:
+            continue
+        dates.append(d)
+        by_month[_month_start(d)].append(float(change))
+    points: List[Dict[str, Any]] = []
+    for m in _complete_months(dates):
+        values = by_month.get(m)
+        if not values:
+            continue
+        points.append(_point(kpi_meta, "", m, sum(values) / len(values)))
+    return points
+
+
 async def _backfill_br003_pnh_tested(
     client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
@@ -938,7 +987,8 @@ async def _backfill_br004_dx_adoption(
 
 
 # KPI_ID -> handler. Only honestly-backfillable KPIs are registered (Batch 1:
-# ROI. Batch 2: the as-of recompute family documented in the module docstring).
+# ROI. Batch 2: the as-of recompute family documented in the module docstring.
+# Batch 3: BR-002 monthly intent-delta).
 HANDLERS: Dict[str, Handler] = {
     "WS3-BI-010": _backfill_roi,
     "WS3-BI-005": _backfill_trx,
@@ -955,6 +1005,7 @@ HANDLERS: Dict[str, Handler] = {
     "WS2-TR-007": _backfill_tr007_lead_time,
     "WS2-TR-008": _backfill_tr008_cfr,
     "BR-001": _backfill_br001_ah_uncontrolled,
+    "BR-002": _backfill_br002_intent_delta,
     "BR-003": _backfill_br003_pnh_tested,
     "BR-004": _backfill_br004_dx_adoption,
 }
