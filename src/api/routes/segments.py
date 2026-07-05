@@ -315,6 +315,21 @@ class SegmentAnalysisResponse(BaseModel):
         default=None, description="Question type used for routing"
     )
 
+    # Run design — echoed so consumers reading the PERSISTED record alone
+    # (e.g. POST /insights/hte grounding) can state what was estimated without
+    # re-posting caller figures. Optional/None so records persisted before
+    # these fields existed still validate on read (the durable store fail-softs
+    # unreadable records into None).
+    brand: Optional[str] = Field(
+        default=None, description="Brand row-filter the run used (None = all brands)"
+    )
+    treatment_var: Optional[str] = Field(
+        default=None, description="Treatment variable the CATEs were estimated for"
+    )
+    outcome_var: Optional[str] = Field(
+        default=None, description="Outcome variable the CATEs were estimated for"
+    )
+
     # CATE results
     cate_by_segment: Dict[str, List[CATEResult]] = Field(
         default_factory=dict, description="CATE results grouped by segment variable"
@@ -996,6 +1011,16 @@ class _DurableAnalysesStore:
 
 
 _analyses_store: _DurableAnalysesStore = _DurableAnalysesStore()
+
+
+async def get_persisted_analysis(analysis_id: str) -> Optional[SegmentAnalysisResponse]:
+    """Public read accessor for the durable analyses store.
+
+    Used by POST /insights/hte to derive its grounding SERVER-SIDE from a
+    persisted run — the caller supplies only the analysis_id, never figures
+    (same trust boundary as /insights/executive-brief).
+    """
+    return await _analyses_store.get(analysis_id)
 
 
 # =============================================================================
@@ -1695,6 +1720,9 @@ async def _execute_segment_analysis(
             if result.get("status") == "completed"
             else AnalysisStatus.FAILED,
             question_type=request.question_type,
+            brand=request.brand,
+            treatment_var=treatment_var,
+            outcome_var=outcome_var,
             cate_by_segment=_convert_cate_results(result.get("cate_by_segment", {})),
             overall_ate=result.get("overall_ate"),
             # #27: echo the level the CATE CIs were computed at (alpha=significance_level).
@@ -1954,6 +1982,9 @@ def _generate_mock_response(
         analysis_id="",
         status=AnalysisStatus.COMPLETED,
         question_type=request.question_type,
+        brand=request.brand,
+        treatment_var=request.treatment_var or _SEGMENT_HTE_DEFAULT_TREATMENT,
+        outcome_var=request.outcome_var or _SEGMENT_HTE_DEFAULT_OUTCOME,
         cate_by_segment=mock_cate,
         overall_ate=10.5,
         confidence_level=1.0 - request.significance_level,

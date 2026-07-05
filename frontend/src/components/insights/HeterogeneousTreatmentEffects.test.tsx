@@ -15,10 +15,13 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HeterogeneousTreatmentEffects } from './HeterogeneousTreatmentEffects';
 import * as useSegments from '@/hooks/api/use-segments';
+import * as useInsights from '@/hooks/api/use-insights';
 
 vi.mock('@/hooks/api/use-segments');
+vi.mock('@/hooks/api/use-insights');
 
 type Mutation = ReturnType<typeof useSegments.useRunSegmentAnalysisAndWait>;
+type InsightMutation = ReturnType<typeof useInsights.useHTEInsight>;
 
 function mockSegments(overrides: Partial<Mutation> = {}) {
   vi.mocked(useSegments.useRunSegmentAnalysisAndWait).mockReturnValue({
@@ -28,6 +31,19 @@ function mockSegments(overrides: Partial<Mutation> = {}) {
     isPending: false,
     ...overrides,
   } as unknown as Mutation);
+}
+
+function mockInsight(overrides: Partial<InsightMutation> = {}) {
+  const mutate = vi.fn();
+  vi.mocked(useInsights.useHTEInsight).mockReturnValue({
+    mutate,
+    data: undefined,
+    error: null,
+    isPending: false,
+    variables: undefined,
+    ...overrides,
+  } as unknown as InsightMutation);
+  return mutate;
 }
 
 // Faithful to a real /api/segments/analyze completed response on the clinical
@@ -75,6 +91,7 @@ const COMPLETED = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSegments();
+  mockInsight();
 });
 
 describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
@@ -165,5 +182,70 @@ describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
     render(<HeterogeneousTreatmentEffects />);
     expect(screen.getByText(/cate analysis failed/i)).toBeInTheDocument();
     expect(screen.queryByText('severe')).not.toBeInTheDocument();
+  });
+
+  it('never claims significance alone is a targeting mandate (info banner honesty)', () => {
+    render(<HeterogeneousTreatmentEffects />);
+    expect(screen.getByText(/not by itself a targeting mandate/i)).toBeInTheDocument();
+    expect(screen.queryByText(/a reliable targeting opportunity/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('HeterogeneousTreatmentEffects — dedicated HTE strategic insight', () => {
+  it('auto-generates the insight with an analysis_id-ONLY payload on completion', () => {
+    const mutate = mockInsight();
+    mockSegments({ data: COMPLETED } as unknown as Partial<Mutation>);
+    render(<HeterogeneousTreatmentEffects />);
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+    // Server-derived trust boundary: the card must never post figures.
+    expect(mutate).toHaveBeenCalledWith({ analysis_id: 'seg_test_1' });
+  });
+
+  it('does not fire the insight for a failed run', () => {
+    const mutate = mockInsight();
+    mockSegments({
+      data: { ...COMPLETED, status: 'failed', cate_by_segment: {} },
+    } as unknown as Partial<Mutation>);
+    render(<HeterogeneousTreatmentEffects />);
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it('renders the insight generated for THIS run', () => {
+    mockInsight({
+      data: {
+        insight: 'Severe patients respond strongest; differential targeting is not warranted.',
+        key_takeaways: ['2 of 2 segments clear zero'],
+        grounding: [{ label: 'Overall ATE', value: '+1.4pp' }],
+        is_fallback: false,
+        provenance: 'Segment-level CATE analysis (server-derived)',
+        generated_at: '2026-07-05T00:00:00Z',
+      },
+      variables: { analysis_id: 'seg_test_1' },
+    } as unknown as Partial<InsightMutation>);
+    mockSegments({ data: COMPLETED } as unknown as Partial<Mutation>);
+    render(<HeterogeneousTreatmentEffects />);
+
+    expect(screen.getByText(/severe patients respond strongest/i)).toBeInTheDocument();
+    expect(screen.getByText('2 of 2 segments clear zero')).toBeInTheDocument();
+    expect(screen.getByText(/server-derived/)).toBeInTheDocument();
+  });
+
+  it('suppresses insight output attributed to a DIFFERENT run (late resolve)', () => {
+    mockInsight({
+      data: {
+        insight: 'Stale interpretation from a previous run.',
+        key_takeaways: [],
+        grounding: [],
+        is_fallback: false,
+        provenance: 'Segment-level CATE analysis (server-derived)',
+        generated_at: '2026-07-05T00:00:00Z',
+      },
+      variables: { analysis_id: 'seg_previous_run' },
+    } as unknown as Partial<InsightMutation>);
+    mockSegments({ data: COMPLETED } as unknown as Partial<Mutation>);
+    render(<HeterogeneousTreatmentEffects />);
+
+    expect(screen.queryByText(/stale interpretation/i)).not.toBeInTheDocument();
   });
 });

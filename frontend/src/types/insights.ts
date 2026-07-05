@@ -91,3 +91,12 @@ export interface ExecutiveBriefInsightRequest {
    */
   brand: string;
 }
+
+export interface HTEInsightRequest {
+  /**
+   * analysis_id only: the grounding figures are derived SERVER-SIDE from the
+   * persisted segment-analysis record (same trust boundary as
+   * ExecutiveBriefInsightRequest — caller-posted figures are not accepted).
+   */
+  analysis_id: string;
+}

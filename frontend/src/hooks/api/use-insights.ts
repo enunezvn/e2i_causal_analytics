@@ -8,6 +8,7 @@ import {
   getResourceOptimizationInsight,
   getTreatmentEffectInsight,
   getExecutiveBriefInsight,
+  getHTEInsight,
 } from '@/api/insights';
 import type {
   StrategicInsightResponse,
@@ -18,6 +19,7 @@ import type {
   ResourceInsightRequest,
   TreatmentEffectInsightRequest,
   ExecutiveBriefInsightRequest,
+  HTEInsightRequest,
 } from '@/types/insights';
 
 export const useKnowledgeGraphInsight = () =>
@@ -53,4 +55,9 @@ export const useTreatmentEffectInsight = () =>
 export const useExecutiveBriefInsight = () =>
   useMutation<StrategicInsightResponse, ApiError, ExecutiveBriefInsightRequest>({
     mutationFn: getExecutiveBriefInsight,
+  });
+
+export const useHTEInsight = () =>
+  useMutation<StrategicInsightResponse, ApiError, HTEInsightRequest>({
+    mutationFn: getHTEInsight,
   });
