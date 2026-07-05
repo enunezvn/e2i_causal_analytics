@@ -334,8 +334,19 @@ _SIG_PREDICATE_RE = re.compile(
     re.IGNORECASE,
 )
 # ... but "2 of 3 segments have CIs excluding zero" is exempt: the fraction
-# rule validates the numerator, so the denominator stays a total.
-_FRACTION_PRECEDER_RE = re.compile(r"\d\s*(?:of|out[-\s]+of|in|over|/)\s*$", re.IGNORECASE)
+# rule validates the numerator, so the denominator stays a total. Source
+# prepositions ("emerged from 3 tested segments") also mark the number as a
+# total drawn from, even after a word-number numerator ("Two ... from 3").
+_FRACTION_PRECEDER_RE = re.compile(
+    r"\d\s*(?:of|out[-\s]+of|in|over|/)\s*$|\b(?:from|among|across|out\s+of)\s+$",
+    re.IGNORECASE,
+)
+# The converse of the significance predicate: a count inside totality
+# wording ("2 total segments in the analysis") must be the true TOTAL.
+_TOTAL_PREDICATE_RE = re.compile(
+    r"\btotal\b|\bin\s+the\s+analysis\b|\banaly[sz]ed\b|\btested\b|\bexamined\b|\bevaluated\b",
+    re.IGNORECASE,
+)
 # Chip-style reversed form: "Significant segments: 3".
 _SIG_COUNT_LABEL_RE = re.compile(rf"significant\s+{_SEG_NOUNS}\s*[:=]\s*(\d[\d,]*)", re.IGNORECASE)
 
@@ -412,31 +423,49 @@ _LIFT_ANCHOR_RE = re.compile(
     r"(?:from|of)\s+(?:[\w-]+\s+){0,2}?targeting\b"
     r"|\btargeting\s+(?:offers?|yields?|delivers?|provides?|adds?|generates?|produces?"
     r"|improves?|boosts?|raises?|increases?|lifts?)\b"
-    r"|\b(?:differential[-\s])?targeting\s+opportunity\b",
+    r"|\b(?:differential[-\s])?targeting\s+"
+    r"(?:opportunity|benefit|gain|advantage|upside|value|impact)\b",
     re.IGNORECASE,
 )
 _ATE_ANCHOR_RE = re.compile(
     r"\bATE\b|\baverage\s+treatment\s+effect\b"
     r"|\b(?:overall|population-level|aggregate|average)\W{0,3}"
-    r"(?:the\s+)?(?:treatment\s+)?effect\b"
+    r"(?:the\s+)?(?:treatment\s+)?(?:effect|impact)\b"
     r"|\btreatment\s+effect\s+overall\b",
     re.IGNORECASE,
 )
-_METRIC_ANCHORS = (_LIFT_ANCHOR_RE, _ATE_ANCHOR_RE)
+# Role binding for the remaining grounded scalars: every number the
+# grounding renders has exactly one owner, so a figure tied to
+# heterogeneity or cohort-n wording must be THAT value.
+_HET_ANCHOR_RE = re.compile(r"\bheterogeneity(?:\s+score)?\b", re.IGNORECASE)
+_COHORT_N_ANCHOR_RE = re.compile(r"\bcohort\s+(?:n\b|size\b)|\btotal\s+n\b", re.IGNORECASE)
+_METRIC_ANCHORS = (_LIFT_ANCHOR_RE, _ATE_ANCHOR_RE, _HET_ANCHOR_RE, _COHORT_N_ANCHOR_RE)
 
 
-def _metric_value_claims(window: str) -> list[str]:
+# "0-1 scale"/"0-1 range" mentions are scale annotations, not values.
+_SCALE_RANGE_RE = re.compile(r"\b\d+\s*-\s*\d+\s*(?:scale|range)\b", re.IGNORECASE)
+
+
+def _metric_value_claims(window: str, include_ints: bool = False) -> list[str]:
     """pp/decimal figures in a window — the shapes a lift/ATE value takes.
-    %-unit figures are CI-level annotations ("95% CIs"), not effect values."""
+    %-unit figures are CI-level annotations ("95% CIs"), not effect values.
+    ``include_ints`` adds unitless integers for integer-valued metrics
+    (cohort n, scale endpoints), with scale-range annotations stripped."""
+    if include_ints:
+        window = _SCALE_RANGE_RE.sub(" ", window)
     return [
         num
         for _s, num, unit in _extract_claims(window)
-        if unit == "pp" or (not unit and "." in num)
+        if unit == "pp" or (not unit and ("." in num or include_ints))
     ]
 
 
 def _metric_misattributed(
-    text: str, anchor_re: re.Pattern[str], value_num: str | None, allowed: set[str]
+    text: str,
+    anchor_re: re.Pattern[str],
+    value_num: str | None,
+    allowed: set[str],
+    include_ints: bool = False,
 ) -> bool:
     """True iff a metric-shaped figure is tied to this metric's wording but
     is not the metric's rendered value ("expected lift is +17.7pp" when the
@@ -456,7 +485,7 @@ def _metric_misattributed(
                 o = other.search(after)
                 if o:
                     after = after[: o.start()]
-        after_claims = _metric_value_claims(after)
+        after_claims = _metric_value_claims(after, include_ints)
         if after_claims:
             # An explicit comparison ("overall ATE: +17.7pp versus +11.1pp")
             # names both sides — legal when the metric's value is one of them.
@@ -473,7 +502,7 @@ def _metric_misattributed(
             breaks = list(_WINDOW_BREAK_RE.finditer(before))
             if breaks:
                 before = before[breaks[-1].end() :]
-            before_claims = _metric_value_claims(before)
+            before_claims = _metric_value_claims(before, include_ints)
             if not before_claims:
                 continue
             bound = before_claims[-1]
@@ -528,6 +557,12 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
         return False
     if _metric_misattributed(norm, _ATE_ANCHOR_RE, metric_nums["ate"], het_ok):
         return False
+    if _metric_misattributed(norm, _HET_ANCHOR_RE, metric_nums["het"], set(), include_ints=True):
+        return False
+    if _metric_misattributed(
+        norm, _COHORT_N_ANCHOR_RE, metric_nums.get("cohort_n"), set(), include_ints=True
+    ):
+        return False
     if not _segment_attribution_ok(norm, g):
         return False
     text = _strip_phrases(norm, g["phrases"], g["ambiguous_phrases"])
@@ -542,11 +577,15 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
             clause_start = b.end()
         clause_end_m = _WINDOW_BREAK_RE.search(text, seg.end())
         clause = text[clause_start : clause_end_m.start() if clause_end_m else len(text)]
-        if (
-            num != str(g["sig_count"])
-            and _SIG_PREDICATE_RE.search(clause)
-            and not _FRACTION_PRECEDER_RE.search(text[: seg.start(1)])
-        ):
+        if _FRACTION_PRECEDER_RE.search(text[: seg.start(1)]):
+            continue
+        has_sig = _SIG_PREDICATE_RE.search(clause)
+        if num != str(g["sig_count"]) and has_sig:
+            return False
+        # Totality wording forces the true total — unless a significance
+        # predicate already claimed the count ("2 significant segments in
+        # the analysis" counts significant ones).
+        if num != str(g["total_count"]) and not has_sig and _TOTAL_PREDICATE_RE.search(clause):
             return False
     for label in _SIG_COUNT_LABEL_RE.finditer(text):
         if label.group(1).replace(",", "") != str(g["sig_count"]):
@@ -788,7 +827,12 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         "has_signal": has_signal,
         "sig_count": sig_count,
         "total_count": total_count,
-        "metric_nums": {"ate": _num_of(ate_pp), "lift": _num_of(lift_s), "het": _num_of(het_str)},
+        "metric_nums": {
+            "ate": _num_of(ate_pp),
+            "lift": _num_of(lift_s),
+            "het": _num_of(het_str),
+            "cohort_n": str(n_total) if n_total else None,
+        },
         "global_numbers": global_numbers,
         "sample_numbers": sample_numbers,
         "segment_rows": segment_rows,

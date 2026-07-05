@@ -571,6 +571,77 @@ class TestGuard:
             hte._is_grounded("The overall ATE is 11.1pp, indicating a positive effect.", g) is True
         )
 
+    def test_heterogeneity_and_cohort_n_role_bound(self):
+        # codex round-11 HIGH: role binding existed only for ATE/lift, so the
+        # scale endpoint could pose as the heterogeneity score and a segment
+        # n as the cohort n.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Heterogeneity score is 1 on a 0-1 scale.", g) is False
+        assert hte._is_grounded("Heterogeneity score is 0.26 on a 0-1 scale.", g) is True
+        assert hte._is_grounded("Heterogeneity (0-1 scale) is 0.26.", g) is True
+        assert (
+            hte._is_grounded(
+                "For treatment_arm -> persistent_180d, brand filter Remibrutinib, "
+                "cohort n=1,385 with 95% CIs, the overall ATE is +11.1pp.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "For treatment_arm -> persistent_180d, brand filter Remibrutinib, "
+                "cohort n=3,883 with 95% CIs, the overall ATE is +11.1pp.",
+                g,
+            )
+            is True
+        )
+
+    def test_totality_wording_forces_true_total(self):
+        # codex round-11 HIGH: the significant count (2) could pose as the
+        # total ("2 total segments in the analysis"). Sig-predicated counts
+        # and source prepositions ("from 3 tested segments") stay exempt.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded("Overall ATE is +11.1pp, with 2 total segments in the analysis.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "Overall ATE is +11.1pp, with 3 total segments in the analysis; 2 are significant.",
+                g,
+            )
+            is True
+        )
+        assert hte._is_grounded("There are 2 significant segments in the analysis.", g) is True
+        assert (
+            hte._is_grounded("Two significant segments emerged from 3 tested segments.", g) is True
+        )
+
+    def test_impact_and_targeting_benefit_anchors(self):
+        # codex round-11 HIGH: "Overall impact" and "differential-targeting
+        # benefit/gain" escaped the metric anchors.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Overall impact is +17.7pp across the cohort.", g) is False
+        assert hte._is_grounded("The differential-targeting benefit is +17.7pp.", g) is False
+        assert hte._is_grounded("The differential-targeting gain is +17.7pp.", g) is False
+        assert hte._is_grounded("Overall impact is +11.1pp across the cohort.", g) is True
+        assert (
+            hte._is_grounded("There is no reliable differential-targeting benefit (+0.0pp).", g)
+            is True
+        )
+
+    def test_round11_medium_faithful_interpretation_passes(self):
+        # codex round-11 MEDIUM over-rejection, fixed via the source-
+        # preposition exemption ("from 3 tested segments").
+        g = hte.build_grounding(_record())
+        text = (
+            "The analysis shows an 11.1 percentage-point positive effect overall. "
+            "Two significant segments emerged from 3 tested segments. age_band=50-65 "
+            "is +13.8pp [CI +8.0pp to +19.6pp], n=2,015, significant. No reliable "
+            "differential-targeting opportunity is shown (+0.0pp)."
+        )
+        assert hte._is_grounded(text, g) is True
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so
