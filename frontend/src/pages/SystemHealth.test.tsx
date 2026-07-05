@@ -533,6 +533,29 @@ describe('SystemHealth', () => {
     expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
   });
 
+  it('suppresses wrapper aggregates on a zero-row history — fabricated trend/average never fail open (codex PR-4 round 7)', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    // The real backend sends trend "unknown" / average null for empty history;
+    // this shape (zero checks with real-looking aggregates) can only come from
+    // a buggy or mocked source. A vacuously-true "all rows trusted" must not
+    // quote them.
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 0,
+        checks: [],
+        avg_health_score: 89.5,
+        trend: 'stable',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    expect(screen.queryByText('89.5')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stable')).not.toBeInTheDocument();
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+  });
+
   // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest

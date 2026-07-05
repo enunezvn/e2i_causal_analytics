@@ -334,10 +334,16 @@ function SystemHealth() {
   // not be replotted as historical truth (codex PR-4 round 5).
   const allHistoryChecks = healthHistoryData?.checks ?? [];
   const healthHistory = allHistoryChecks.filter((c) => isTrustedProvenance(c.data_provenance));
-  const historyFullyTrusted = healthHistory.length === allHistoryChecks.length;
-  // null = no history -> rendered as "Unknown", not a fabricated "stable". The
-  // backend computes trend over EVERY stored check, so it is only quotable
-  // when every stored check passed the trust gate.
+  // Wrapper-level aggregates (trend/average) are quotable only when at least
+  // one trusted row backs them AND no row was suppressed: the real backend
+  // sends trend "unknown" / average null for empty history, so a zero-row
+  // payload carrying non-null aggregates is a fabricated shape that must not
+  // fail open through a vacuously-true "all rows trusted" (codex PR-4 round 7).
+  const historyFullyTrusted =
+    healthHistory.length > 0 && healthHistory.length === allHistoryChecks.length;
+  // null = no quotable trend -> rendered as "Unknown", not a fabricated
+  // "stable". The backend computes trend over EVERY stored check, so it is
+  // only quotable when every stored check passed the trust gate.
   const healthTrend = historyFullyTrusted ? (healthHistoryData?.trend ?? null) : null;
   // Same rule for the average: recompute over the trusted rows whenever any
   // row was suppressed (matches the backend value exactly when none were).

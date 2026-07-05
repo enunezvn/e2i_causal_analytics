@@ -157,6 +157,23 @@ describe('AIAgentInsights', () => {
     });
   });
 
+  describe('Moved-capability bridge (codex PR-4 round 7)', () => {
+    it('points stale ?modelId= operator links at /monitoring instead of silently ignoring them', () => {
+      render(<AIAgentInsights />, {
+        wrapper: createWrapperWithUrl('/ai-insights?modelId=chatbot_v2'),
+      });
+      // The per-model health & drift card moved to /monitoring with this
+      // consolidation; a #304-era link must land the user one click from it.
+      const link = screen.getByRole('link', { name: /View chatbot_v2 in Monitoring/i });
+      expect(link).toHaveAttribute('href', '/monitoring?modelId=chatbot_v2');
+    });
+
+    it('shows no bridge note when the URL carries no modelId', () => {
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    });
+  });
+
   describe('Source-text forcing function (AC: no hard-coded literals in JSX)', () => {
     it('does not contain the stale brand/modelId literals or a hard-coded agent count', () => {
       const here = dirname(fileURLToPath(import.meta.url));
@@ -164,8 +181,8 @@ describe('AIAgentInsights', () => {
       // Forbid the JSX-attribute forms called out in issue #304 ...
       expect(src).not.toMatch(/brand=["']Remibrutinib["']/);
       // ... and forbid the stale modelId literal anywhere in the page (the
-      // modelId plumbing left with the System Health Score card, which now
-      // lives solely on /system-health).
+      // modelId-consuming card left with the consolidation; the only modelId
+      // read that remains is the bridge pointing stale links at /monitoring).
       expect(src).not.toMatch(/propensity_v2\.1\.0/);
       // The agents badge must be data-driven, never the old invented count.
       expect(src).not.toMatch(/21 Agents Active/);

@@ -22,7 +22,7 @@
 
 import { useState } from 'react';
 import { Brain, Sparkles } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   ExecutiveAIBrief,
   PriorityActionsROI,
@@ -86,6 +86,13 @@ export function AIAgentInsights() {
   const trustedAgentHealth =
     agentHealth && isTrustedProvenance(agentHealth.data_provenance) ? agentHealth : null;
 
+  // Compatibility bridge for #304's `/ai-insights?modelId=` operator links:
+  // the per-model health & drift card those links targeted moved to
+  // /monitoring?modelId= with this consolidation. A stale link must not be
+  // silently ignored — point it at the capability's new home (codex PR-4
+  // round 7).
+  const movedModelId = searchParams.get('modelId')?.trim();
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -125,6 +132,21 @@ export function AIAgentInsights() {
           )}
         </div>
       </div>
+
+      {movedModelId && (
+        <div
+          role="note"
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-muted)]/40 px-4 py-3 text-sm text-[var(--color-muted-foreground)]"
+        >
+          The per-model health &amp; drift view has moved to the Monitoring page.{' '}
+          <Link
+            to={`/monitoring?modelId=${encodeURIComponent(movedModelId)}`}
+            className="font-medium text-[var(--color-primary)] underline underline-offset-2"
+          >
+            View {movedModelId} in Monitoring
+          </Link>
+        </div>
+      )}
 
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

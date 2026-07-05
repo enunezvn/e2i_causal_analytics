@@ -79,14 +79,18 @@ async function mockSystemHealthRoutes(page: Page): Promise<void> {
     })
   })
 
+  // Faithful empty-history shape: the backend sends trend "unknown" and a
+  // null average when no checks are stored — a zero-row payload with real-
+  // looking aggregates is a shape it never emits, and the page's trust gate
+  // now suppresses such aggregates anyway (codex PR-4 round 7).
   await page.route('**/api/health-score/history**', async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         checks: [],
-        trend: 'stable',
-        avg_health_score: 89.5,
+        trend: 'unknown',
+        avg_health_score: null,
         total_checks: 0,
       }),
     })
