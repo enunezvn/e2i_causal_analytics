@@ -191,6 +191,59 @@ class TestGuard:
         assert hte._is_grounded("Patients 50 to 65 respond at +13.8pp.", g) is True
         assert hte._is_grounded("The 50 to 65 band responds strongest.", g) is True
 
+    def test_worded_or_spaced_sign_flip_rejected(self):
+        # codex round-3 HIGH: grounded "+11.1pp" must not vouch word-sign or
+        # word-preceded spaced-hyphen negations (nor "-2.8pp" a worded plus).
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Overall ATE is negative 11.1pp.", g) is False
+        assert hte._is_grounded("Overall ATE is minus 11.1pp.", g) is False
+        assert hte._is_grounded("Overall ATE is - 11.1pp.", g) is False
+        assert hte._is_grounded("The low band CI dips to positive 2.8pp.", g) is False
+        assert hte._is_grounded("A positive 11.1pp overall effect.", g) is True
+        assert hte._is_grounded("The low band CI dips to negative 2.8pp.", g) is True
+
+    def test_segment_count_synonyms_and_long_modifiers_rejected(self):
+        # codex round-3 HIGH: count-noun synonyms (subgroups/cohorts/bands)
+        # and 3+ modifier words bypassed the segment-count rule. Population
+        # words keep their own attribution and stay exempt.
+        g = hte.build_grounding(_record())
+        for wrong in (
+            "1,385 significant clinically relevant priority segments.",
+            "1,385 significant subgroups emerged.",
+            "1,385 significant cohorts emerged.",
+            "1,385 significant bands emerged.",
+        ):
+            assert hte._is_grounded(wrong, g) is False
+        assert hte._is_grounded("Analysis spans 3 cohorts.", g) is True
+        assert hte._is_grounded("The strongest segment holds 1,385 patients.", g) is True
+
+    def test_compact_range_reused_as_count_rejected(self):
+        # codex round-3 HIGH: compact dash forms of the age band ("50-65",
+        # en/em dash) were unconditionally stripped. Anchored name mentions
+        # (singular noun, aged/patients, dimension=value) keep passing.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("50-65 significant segments clear zero.", g) is False
+        assert hte._is_grounded("50–65 significant segments clear zero.", g) is False
+        assert hte._is_grounded("50—65 significant segments clear zero.", g) is False
+        assert hte._is_grounded("The 50-65 segment responds strongest.", g) is True
+        assert hte._is_grounded("Patients aged 50-65 respond at +13.8pp.", g) is True
+        assert hte._is_grounded("age_band=50-65 leads at +13.8pp.", g) is True
+
+    def test_anchor_word_cannot_launder_a_count_claim(self):
+        # codex round-3 HIGH: "Patients 50 to 65 significant segments ..."
+        # stripped the range via the Patients anchor, leaving no claim.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Patients 50 to 65 significant segments clear zero.", g) is False
+        assert hte._is_grounded("Groups 50 to 65 significant segments clear zero.", g) is False
+        assert hte._is_grounded("Patients 50 to 65 form the strongest segment.", g) is True
+
+    def test_unicode_dash_fraction_separators_checked(self):
+        # codex round-3 HIGH: "3–out–of–3" (en dashes) bypassed the fraction
+        # rule while both bare 3s were individually vouched.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Fully 3–out–of–3 segments are significant.", g) is False
+        assert hte._is_grounded("2–out–of–3 segments are significant.", g) is True
+
     def test_variable_name_digits_pass_only_in_context(self):
         # codex round-1 HIGH: "Treat 180 patients." re-used persistent_180d's
         # digits bare. In-context uses (the name itself, "180-day") stay fine.

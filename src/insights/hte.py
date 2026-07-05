@@ -4,9 +4,10 @@ Grounding contract (mirrors ``executive_brief``): the route derives EVERY figure
 SERVER-SIDE from the persisted segment-analysis record (``analysis_id`` is the
 only caller input), and the LM output passes a fail-closed numeric guard before
 it is served — any numeric claim the grounding cannot vouch for (including a
-flipped sign, a pp/% unit swap, a unit-bearing figure re-used bare, a name
-digit re-used out of context, or a vouched number misattributed as a segment
-count) downgrades the response to the deterministic factual fallback. Effects on the
+flipped or word-spelled sign, a pp/% unit swap, a unit-bearing figure re-used
+bare, a name digit re-used out of context, or a vouched number misattributed
+as a segment/subgroup count) downgrades the response to the deterministic
+factual fallback. Effects on the
 binary clinical outcomes are probability deltas presented in PERCENTAGE POINTS
 (pp), matching the /ai-insights HTE card's display unit.
 
@@ -115,29 +116,35 @@ def _phrase_variants(raw: Any) -> tuple[set[str], set[str]]:
     Returns ``(safe, ambiguous)``. Safe phrases are stripped from text BEFORE
     numeric-claim extraction, so their internal digits pass the guard only in
     context: "persistent_180d" and "180-day persistence" are fine, a bare
-    re-use like "Treat 180 patients" still trips it. Spelled-out range forms
-    of a band value ("50 to 65", "50 - 65") are AMBIGUOUS — identical to a
-    quantity range in running text — and are stripped only when anchored by
-    band context (see ``_strip_phrases``).
+    re-use like "Treat 180 patients" still trips it. EVERY rendering of a
+    pure numeric range (a band value like "50-65", any dash or "to" form) is
+    AMBIGUOUS — identical to a quantity range in running text ("50-65
+    significant segments") — and is stripped only when anchored by band
+    context (see ``_strip_phrases``).
     """
     s = str(raw or "").strip()
     if not s or not re.search(r"\d", s):
         return set(), set()
-    safe = {s}
-    ambiguous: set[str] = set()
-    for sep in (" ", "-", ""):
-        safe.add(s.replace("_", sep))
-    band = re.fullmatch(r"(\d+)\s*-\s*(\d+)", s)  # age bands like "50-65"
+    band = re.fullmatch(r"(\d+)\s*[-–—]\s*(\d+)", s)  # age bands like "50-65"
     if band:
         a, b = band.group(1), band.group(2)
-        safe.update({f"{a}-{b}", f"{a}–{b}", f"{a}—{b}"})
-        ambiguous.update({f"{a} - {b}", f"{a} to {b}"})
+        return set(), {
+            f"{a}-{b}",
+            f"{a}–{b}",
+            f"{a}—{b}",
+            f"{a} - {b}",
+            f"{a} – {b}",
+            f"{a} to {b}",
+        }
+    safe = {s}
+    for sep in (" ", "-", ""):
+        safe.add(s.replace("_", sep))
     for num, unit in re.findall(r"(\d+)([A-Za-z]+)", s):
         safe.update({f"{num}{unit}", f"{num} {unit}"})
         word = _UNIT_WORDS.get(unit.lower())
         if word:
             safe.update({f"{num}-{word}", f"{num} {word}", f"{num}-{word}s", f"{num} {word}s"})
-    return safe, ambiguous
+    return safe, set()
 
 
 # A vouched phrase immediately followed by a unit word is a numeric claim in
@@ -146,11 +153,22 @@ def _phrase_variants(raw: Any) -> tuple[set[str], set[str]]:
 _PHRASE_UNIT_LOOKAHEAD = r"(?!\s*(?:%|pp\b|percent\b|percentage\b|points?\b))"
 
 # Ambiguous range phrases are name mentions only in band context: preceded by
-# a band-ish noun ("patients 50 to 65", "band 50 to 65") or followed by one
-# ("the 50 to 65 age band"). Unanchored, "50 to 65 significant segments" is a
-# quantity claim and must face the guard.
-_AMBIG_BACK_ANCHOR = r"\b(aged?|ages|patients?|bands?|groups?|cohorts?)\s+"
-_AMBIG_FWD_ANCHOR = r"(?=\s+(?:age[\s-])?(?:bands?|groups?|cohorts?)\b)"
+# a band-ish noun ("patients 50 to 65", "aged 50-65"), followed by a SINGULAR
+# band noun ("the 50-65 band", "the 50-65 segment"), or directly attached to
+# a dimension name ("age_band=50-65"). Unanchored, "50 to 65 significant
+# segments" is a quantity claim and must face the guard. A back anchor cannot
+# LAUNDER a count claim either: when the range itself heads a plural
+# segment-count phrase ("Patients 50 to 65 significant segments clear zero"),
+# it stays in place and its digits face the guard.
+_AMBIG_BACK_ANCHOR = r"\b(aged?|ages|patients?|bands?|groups?|cohorts?)\s+\(?"
+_AMBIG_FWD_ANCHOR = (
+    r"(?=\)?\s+(?:age[\s-])?(?:band|group|cohort|segment|sub-?group|range|bracket)\b)"
+)
+_AMBIG_EQ_ANCHOR = r"(?<==)"
+_AMBIG_COUNT_LOOKAHEAD = (
+    r"(?!\s+(?:[\w-]+\s+){0,4}"
+    r"(?:segments|sub-?groups|cohorts|bands|groups|strata|dimensions|categories)\b)"
+)
 
 
 def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] = ()) -> str:
@@ -158,13 +176,15 @@ def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] =
     for p in ambiguous:
         if not p:
             continue
+        esc = re.escape(p) + _PHRASE_UNIT_LOOKAHEAD
+        text = re.sub(_AMBIG_EQ_ANCHOR + esc, " ", text, flags=re.IGNORECASE)
         text = re.sub(
-            _AMBIG_BACK_ANCHOR + re.escape(p) + _PHRASE_UNIT_LOOKAHEAD,
+            _AMBIG_BACK_ANCHOR + esc + _AMBIG_COUNT_LOOKAHEAD,
             r"\1 ",
             text,
             flags=re.IGNORECASE,
         )
-        text = re.sub(re.escape(p) + _AMBIG_FWD_ANCHOR, " ", text, flags=re.IGNORECASE)
+        text = re.sub(esc + _AMBIG_FWD_ANCHOR, " ", text, flags=re.IGNORECASE)
     for p in phrases:
         if p:
             text = re.sub(re.escape(p) + _PHRASE_UNIT_LOOKAHEAD, " ", text, flags=re.IGNORECASE)
@@ -175,39 +195,65 @@ def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] =
 # Fail-closed output guard
 # ---------------------------------------------------------------------------
 
-# A numeric claim is (sign, number, unit): "+11.1pp" / "-2.8" / "95%". The
-# sign counts only when directly attached to the number, so a markdown bullet
+# A numeric claim is (sign, number, unit): "+11.1pp" / "-2.8" / "95%". A sign
+# counts when directly attached to the number, spelled out in words
+# ("negative 11.1pp", "minus", "positive", "plus"), or a word-preceded spaced
+# hyphen/minus ("is - 11.1pp") — while a markdown bullet at line start
 # ("- 11.1pp") reads unsigned and "top-2" keeps its hyphen inside the word.
+# Direction VERBS ("declined by 11.1pp") are semantic paraphrase a lexical
+# guard cannot adjudicate ("reduced non-persistence by 11.1pp" would be the
+# same lexical shape as a true claim) — accepted boundary.
 _CLAIM_RE = re.compile(
-    r"(?:(?<![\w.\-])([+\-−]))?"
-    r"(\d[\d,]*(?:\.\d+)?)"
-    r"(?:\s*(pp\b|%|percentage[\s-]points?\b|percent\b))?",
+    r"(?:"
+    r"(?<![\w.\-])(?P<sym>[+\-−])"
+    r"|\b(?P<word>negative|minus|positive|plus)\s+"
+    r"|(?<=\w)\s(?P<spaced>[-−])\s+"
+    r")?"
+    r"(?P<num>\d[\d,]*(?:\.\d+)?)"
+    r"(?:\s*(?P<unit>pp\b|%|percentage[\s-]points?\b|percent\b))?",
     re.IGNORECASE,
 )
 # Count-fraction claims: "13/14", "13 of 14", "13 out of 14", "13-of-14",
-# "13-out-of-14" (any mix of spaces and hyphens around "of" / "out of").
+# "13–out–of–3" (any mix of spaces, hyphens, and unicode dashes around
+# "of" / "out of").
 _FRACTION_RE = re.compile(
-    r"\b(\d+)(?:\s*/\s*|[-\s]+(?:out[-\s]+of|of)[-\s]+)(\d+)\b", re.IGNORECASE
+    r"\b(\d+)(?:\s*/\s*|[-–—\s]+(?:out[-–—\s]+of|of)[-–—\s]+)(\d+)\b", re.IGNORECASE
 )
-# A number attributed to segments ("81 significant segments") is a
-# segment-count claim regardless of whether the number is vouched elsewhere —
-# it must be the true significant or total count.
-_SEG_COUNT_RE = re.compile(r"\b(\d(?:[\d,]*\d)?)\s+(?:[\w-]+\s+){0,2}segments?\b", re.IGNORECASE)
+# A number attributed to segments ("81 significant segments", "1,385
+# significant subgroups") is a segment-count claim regardless of whether the
+# number is vouched elsewhere — it must be the true significant or total
+# count. Population/time words keep their own attribution ("1,385 patients in
+# the strongest segment" counts patients, not segments) and are exempt.
+_SEG_NOUNS = r"(?:segments?|sub-?groups?|cohorts?|bands|groups|strata|dimensions?|categor(?:y|ies))"
+_SEG_COUNT_EXEMPT = (
+    r"(?:patients?|hcps?|physicians?|prescribers?|people|persons?|individuals?"
+    r"|respondents?|records?|rows?|days?|weeks?|months?|years?)"
+)
+_SEG_COUNT_RE = re.compile(
+    rf"\b(\d(?:[\d,]*\d)?)\s+(?:(?!{_SEG_COUNT_EXEMPT}\b)[\w-]+\s+){{0,4}}{_SEG_NOUNS}\b",
+    re.IGNORECASE,
+)
 
 
 def _extract_claims(text: str) -> list[tuple[str, str, str]]:
     """(sign, comma-stripped number, normalized unit) for every number."""
     claims: list[tuple[str, str, str]] = []
     for m in _CLAIM_RE.finditer(text):
-        sign = "-" if m.group(1) in ("-", "−") else (m.group(1) or "")
-        unit_raw = (m.group(3) or "").lower()
+        raw_sign = (m.group("sym") or m.group("word") or m.group("spaced") or "").lower()
+        if raw_sign in ("-", "−", "negative", "minus"):
+            sign = "-"
+        elif raw_sign in ("+", "positive", "plus"):
+            sign = "+"
+        else:
+            sign = ""
+        unit_raw = (m.group("unit") or "").lower()
         if unit_raw == "pp" or "point" in unit_raw:
             unit = "pp"
         elif unit_raw:
             unit = "%"
         else:
             unit = ""
-        claims.append((sign, m.group(2).replace(",", ""), unit))
+        claims.append((sign, m.group("num").replace(",", ""), unit))
     return claims
 
 
@@ -362,8 +408,12 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
     ambiguous_list = sorted(ambiguous, key=len, reverse=True)
 
     vouched: dict[str, set[tuple[str, str]]] = {}
+    # The grounding text is OURS, so ambiguous range forms in it are known
+    # name mentions ("age_band=50-65: ...") — strip them unconditionally here;
+    # only untrusted candidate text gets the anchored treatment.
     grounded_text = _strip_phrases(
-        "\n".join([scope, effect_summary, *seg_lines, targeting]), phrase_list, ambiguous_list
+        "\n".join([scope, effect_summary, *seg_lines, targeting]),
+        [*phrase_list, *ambiguous_list],
     )
     for sign, num, unit in _extract_claims(grounded_text):
         vouched.setdefault(num, set()).add((sign, unit))
