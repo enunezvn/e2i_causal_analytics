@@ -414,9 +414,11 @@ class CATEEstimatorNode:
                 random_state=42,
             )
 
-            # Fit with timeout
+            # Fit with timeout. cache_values=True keeps the cross-fitted DML
+            # residuals (Y_res, T_res) on the estimator — required by the
+            # honest segment-mean inference in _calculate_cate_by_segment.
             await asyncio.wait_for(
-                asyncio.to_thread(cf.fit, Y, T, X=X, W=W),
+                asyncio.to_thread(cf.fit, Y, T, X=X, W=W, cache_values=True),
                 timeout=self.timeout_seconds,
             )
 
@@ -720,6 +722,86 @@ class CATEEstimatorNode:
         # Normalize to 0-1 scale (CV/2, capped at 1.0)
         return cast(float, min(cv / 2, 1.0))
 
+    @staticmethod
+    def _extract_dml_residuals(cf, n_rows: int) -> "tuple[np.ndarray, np.ndarray] | None":
+        """Return the cross-fitted DML residuals ``(y_res, t_res)`` as 1-D arrays.
+
+        Available when the forest was fit with ``cache_values=True``. Returns
+        ``None`` (caller falls back to the forest's per-point intervals) when:
+
+        * the estimator does not expose ``residuals_`` (e.g. test doubles or a
+          fit without cached values),
+        * the treatment residual has more than one column (multi-valued
+          discrete treatment — the single-θ GATE moment below does not apply;
+          note the node binarizes continuous treatments at the median upstream,
+          so this is a defensive guard rather than a live path),
+        * the residual length does not match the estimation frame (alignment
+          guard: the segment masks index ``df`` positionally).
+        """
+        try:
+            y_res, t_res, _, _ = cf.residuals_
+        except Exception:  # noqa: BLE001 — absence of cached residuals is expected on fallbacks
+            logger.warning(
+                "DML residuals unavailable; segment CIs fall back to per-point intervals",
+                extra={"node": "cate_estimator"},
+            )
+            return None
+        y_arr = np.asarray(y_res, dtype=float)
+        t_arr = np.asarray(t_res, dtype=float)
+        if t_arr.ndim > 1:
+            if t_arr.shape[1] != 1:
+                logger.warning(
+                    "Multi-column treatment residuals (%s); segment CIs fall back "
+                    "to per-point intervals",
+                    t_arr.shape,
+                    extra={"node": "cate_estimator"},
+                )
+                return None
+            t_arr = t_arr.ravel()
+        if y_arr.ndim > 1:
+            y_arr = y_arr.ravel()
+        if len(y_arr) != n_rows or len(t_arr) != n_rows:
+            logger.warning(
+                "Residual length mismatch (y=%d, t=%d, rows=%d); segment CIs fall "
+                "back to per-point intervals",
+                len(y_arr),
+                len(t_arr),
+                n_rows,
+                extra={"node": "cate_estimator"},
+            )
+            return None
+        return y_arr, t_arr
+
+    @staticmethod
+    def _gate_interval(
+        y_res: np.ndarray, t_res: np.ndarray, alpha: float
+    ) -> "tuple[float, float, float] | None":
+        """Segment-mean effect + CI from the partially-linear DML moment (GATE).
+
+        Within a segment S, the group average treatment effect is estimated by
+        the residual-on-residual projection
+
+            θ_S = Σ_{i∈S} T̃_i Ỹ_i / Σ_{i∈S} T̃_i²
+
+        with the heteroskedasticity-robust standard error from the orthogonal
+        score ψ_i = T̃_i (Ỹ_i − T̃_i θ_S):  se = sqrt(Σ ψ_i²) / Σ T̃_i².
+        This is the standard DoubleML GATE for the partially linear model and
+        shrinks ~1/√n, unlike the forest's per-point prediction intervals.
+
+        Returns ``None`` for degenerate segments (no treatment-residual
+        variance / non-finite inputs) so the caller can fall back.
+        """
+        denom = float(np.sum(t_res * t_res))
+        if not np.isfinite(denom) or denom <= 1e-12:
+            return None
+        theta = float(np.sum(t_res * y_res) / denom)
+        psi = t_res * (y_res - t_res * theta)
+        se = float(np.sqrt(np.sum(psi * psi)) / denom)
+        if not (np.isfinite(theta) and np.isfinite(se)):
+            return None
+        z = z_score_for_alpha(alpha)
+        return theta, theta - z * se, theta + z * se
+
     async def _calculate_cate_by_segment(
         self,
         df: pd.DataFrame,
@@ -728,9 +810,28 @@ class CATEEstimatorNode:
         effect_modifiers: List[str],
         alpha: float,
     ) -> Dict[str, List[CATEResult]]:
-        """Calculate CATE for each segment value."""
+        """Calculate the segment-mean CATE + CI for each segment value.
+
+        Honest-inference contract (2026-07-05): the point estimate and CI come
+        from the residual-based GATE (``_gate_interval``) computed on the DML
+        cross-fitted residuals, NOT from averaging the forest's per-individual
+        ``effect_interval`` bounds. Averaging individual bounds produces an
+        individual-level prediction interval whose width never shrinks with
+        segment size — on the live cohort every segment CI was ±17.7pp
+        regardless of n (1.4k–5.9k), so a +11pp segment-mean effect could
+        never test significant (the /ai-insights "0/14 significant" incident).
+        The forest still provides individual CATEs, heterogeneity, feature
+        importances and downstream personalization; the GATE answers the
+        narrower question "is this segment's AVERAGE effect nonzero?".
+
+        The forest per-point path is retained ONLY as a fallback (estimators
+        without cached residuals, multi-valued treatments, degenerate
+        segments) and is honestly conservative there.
+        """
 
         cate_by_segment = {}
+
+        residuals = self._extract_dml_residuals(cf, len(df))
 
         # Encode the effect modifiers ONCE over the FULL frame, identical to how the
         # forest's training matrix was built (``self._encode_features(df[effect_modifiers])``
@@ -762,27 +863,37 @@ class CATEEstimatorNode:
                 if len(segment_df) < 10:
                     continue
 
-                X_segment = X_all[mask]
-
-                # Get CATE for segment
-                cate = cf.effect(X_segment)
-                cate_mean = float(np.mean(cate))
-
-                # Get confidence interval
-                try:
-                    cate_interval = cf.effect_interval(X_segment, alpha=alpha)
-                    ci_lower = float(np.mean(cate_interval[0]))
-                    ci_upper = float(np.mean(cate_interval[1]))
-                except Exception:
-                    # #27: derive the fallback z-score from the requested
-                    # significance level (alpha) instead of a hardcoded 1.96, so
-                    # the fallback CI is at the SAME level as the primary
-                    # ``effect_interval(alpha=...)`` path. At the default
-                    # alpha=0.05 this is ~1.96 (legacy behavior unchanged); a
-                    # 90% request (alpha=0.10) now correctly yields ~1.645*sigma.
-                    z = z_score_for_alpha(alpha)
-                    ci_lower = cate_mean - z * float(np.std(cate))
-                    ci_upper = cate_mean + z * float(np.std(cate))
+                gate = (
+                    self._gate_interval(residuals[0][mask], residuals[1][mask], alpha)
+                    if residuals is not None
+                    else None
+                )
+                if gate is not None:
+                    # Primary path: residual-based GATE (segment-mean effect
+                    # with an honest ~1/sqrt(n) CI). See method docstring.
+                    cate_mean, ci_lower, ci_upper = gate
+                else:
+                    # Fallback path ONLY (no cached residuals / multi-valued
+                    # treatment / degenerate segment): the forest's per-point
+                    # intervals, averaged. This is an INDIVIDUAL-level interval
+                    # applied to a group mean — conservative by construction.
+                    X_segment = X_all[mask]
+                    cate = cf.effect(X_segment)
+                    cate_mean = float(np.mean(cate))
+                    try:
+                        cate_interval = cf.effect_interval(X_segment, alpha=alpha)
+                        ci_lower = float(np.mean(cate_interval[0]))
+                        ci_upper = float(np.mean(cate_interval[1]))
+                    except Exception:
+                        # #27: derive the fallback z-score from the requested
+                        # significance level (alpha) instead of a hardcoded 1.96,
+                        # so the fallback CI is at the SAME level as the primary
+                        # ``effect_interval(alpha=...)`` path. At the default
+                        # alpha=0.05 this is ~1.96 (legacy behavior unchanged); a
+                        # 90% request (alpha=0.10) now correctly yields ~1.645*sigma.
+                        z = z_score_for_alpha(alpha)
+                        ci_lower = cate_mean - z * float(np.std(cate))
+                        ci_upper = cate_mean + z * float(np.std(cate))
 
                 # Determine statistical significance
                 significant = (ci_lower > 0) or (ci_upper < 0)
