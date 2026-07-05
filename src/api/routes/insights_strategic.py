@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.api.dependencies.auth import require_analyst
 from src.insights import (
     causal_discovery,
+    executive_brief,
     knowledge_graph,
     model_performance,
     predictive_cohort,
@@ -118,6 +119,15 @@ class ResourceInsightRequest(BaseModel):
     top_increases: list[AllocationMove] = Field(default_factory=list)
     top_decreases: list[AllocationMove] = Field(default_factory=list)
     synthetic: bool = True
+
+
+class ExecutiveBriefInsightRequest(BaseModel):
+    # Brand only: the figures are derived SERVER-SIDE from the latest completed
+    # gap analysis (same read path as GET /gaps/opportunities). Accepting
+    # caller-posted figures would let any authenticated caller mint a
+    # grounded-looking brief from arbitrary numbers under gap-analyzer
+    # provenance (codex PR-5 round 3).
+    brand: str
 
 
 class TreatmentEffectInsightRequest(BaseModel):
@@ -310,6 +320,68 @@ async def predictive_cohort_insight(
         payload = await asyncio.to_thread(predictive_cohort.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Out-of-sample scored cohort + SHAP")
+
+
+@router.post("/executive-brief", response_model=StrategicInsightResponse)
+async def executive_brief_insight(
+    req: ExecutiveBriefInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Executive distillation (DSPy) of the brand's latest gap-analysis figures (server-derived)."""
+    # Same read path the dashboard's opportunities feed uses — the trust
+    # boundary is the API, so the grounding must come from the server's own
+    # gap-analysis data, never from caller-posted figures.
+    from src.api.routes.gaps import list_opportunities
+
+    try:
+        feed = await list_opportunities(brand=req.brand, min_roi=None, difficulty=None, limit=5)
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("executive-brief opportunities feed unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": f"The gap-analysis figures for {req.brand} are currently "
+                "unavailable, so no grounded executive brief can be produced — this "
+                "is a data-source failure, not an empty portfolio.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Gap-analyzer ROI opportunities (unavailable)",
+        )
+    g = executive_brief.build_grounding(
+        brand=req.brand,
+        total_addressable_value=feed.total_addressable_value,
+        quick_wins_count=feed.quick_wins_count,
+        steady_plays_count=feed.steady_plays_count,
+        strategic_bets_count=feed.strategic_bets_count,
+        suppressed_count=feed.suppressed_count or 0,
+        opportunities=[
+            {
+                "rank": o.rank,
+                "recommended_action": o.recommended_action,
+                "expected_roi": o.roi_estimate.expected_roi,
+                "revenue_impact": o.roi_estimate.estimated_revenue_impact,
+                "gap_metric": o.gap.metric,
+                "gap_percentage": o.gap.gap_percentage,
+                "segment_value": o.gap.segment_value,
+                "implementation_difficulty": o.implementation_difficulty.value,
+            }
+            for o in feed.opportunities
+        ],
+    )
+    # Key on the derived grounding strings (scope + opportunities + caveats) so
+    # two portfolios that differ in any figure never collide.
+    key = cache_key(
+        "executive-brief",
+        req.brand,
+        {"s": g["scope"], "o": g["opportunities"], "c": g["caveats"]},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(executive_brief.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Gap-analyzer ROI opportunities (server-derived)")
 
 
 @router.post("/resource-optimization", response_model=StrategicInsightResponse)

@@ -80,3 +80,14 @@ export interface TreatmentEffectInsightRequest {
   n: number;
   estimator?: string | null;
 }
+
+export interface ExecutiveBriefInsightRequest {
+  /**
+   * Brand only: the grounding figures are derived SERVER-SIDE from the latest
+   * completed gap analysis (same read path as GET /gaps/opportunities).
+   * Caller-posted figures are not accepted — they would let any authenticated
+   * caller mint a grounded-looking brief from arbitrary numbers (codex PR-5
+   * round 3).
+   */
+  brand: string;
+}

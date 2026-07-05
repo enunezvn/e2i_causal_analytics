@@ -2,33 +2,45 @@
  * Executive AI Brief Component
  * ============================
  *
- * Displays an AI-generated executive summary of key insights.
+ * Displays an AI-generated executive brief of key insights.
  *
  * Data sources, in order of preference (real data only):
  * 1. Crystallized executive insights for the brand
  *    (`GET /api/executive-insights`, M5 REWIRE).
- * 2. The live cognitive-RAG response (`POST /api/cognitive/rag`).
+ * 2. The DSPy strategic distillation (`POST /api/insights/executive-brief`).
+ *    The request carries ONLY the brand: the grounding figures are derived
+ *    SERVER-SIDE from the latest completed gap analysis (same read path as
+ *    `GET /gaps/opportunities`), so the endpoint can never be fed arbitrary
+ *    caller figures, and no-signal / feed-outage states are answered honestly
+ *    by the server itself (distinct labelled fallbacks; codex PR-5 rounds
+ *    2-3).
  *
- * Honest-state contract: real sections, an explicit empty state, or a
- * labeled error. SAMPLE_BRIEF (fabricated $2.3M / 847-HCP / beta=0.42
- * sections with invented confidence badges) was DELETED — its removal was
- * the deferred "SAMPLE_* phase" flagged in commit 9a6c9404. Confidence
- * badges render only when a real confidence value exists; none is invented.
+ * PR-5 rewire (review finding 1: the brief read as a *description*, not a
+ * strategic distillation): the previous fallback posted a client-assembled
+ * prompt to `POST /api/cognitive/rag`. That endpoint is intentionally KEPT —
+ * it is the cognitive engine's general query surface (chatbot / ad-hoc RAG) —
+ * but this card now uses the dedicated insights endpoint, which structures the
+ * output as a decision aid (highest-impact decision, quantified stakes, ranked
+ * action sequence, actionability judgment, suppression caveat) with an honest
+ * deterministic fallback whenever the LM is unavailable or its output fails
+ * the server's numeric grounding guard.
+ *
+ * Honest-state contract: real sections, an explicit empty state, or a labeled
+ * error. SAMPLE_BRIEF (fabricated $2.3M / 847-HCP sections) was deleted long
+ * ago and must never return.
  *
  * @module components/insights/ExecutiveAIBrief
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Brain, RefreshCw, Sparkles, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useCognitiveRAG } from '@/hooks/api/use-cognitive';
+import { useExecutiveBriefInsight } from '@/hooks/api/use-insights';
 import { useExecutiveInsights } from '@/hooks/api/use-executive-insights';
-import { useOpportunities } from '@/hooks/api';
-import { buildExecutiveBriefQuery } from '@/lib/insights/brief-query';
 
 // =============================================================================
 // TYPES
@@ -44,6 +56,8 @@ interface BriefSection {
   content: string;
   /** Real source metadata when available (e.g. crystallization source count). */
   sourceLabel?: string;
+  /** Grounded, decision-ready takeaways (DSPy path only). */
+  takeaways?: string[];
 }
 
 // =============================================================================
@@ -53,35 +67,30 @@ interface BriefSection {
 export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: ExecutiveAIBriefProps) {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // AI-powered brief via cognitive RAG (real backend response).
+  // Strategic distillation from the dedicated insights endpoint (real backend
+  // response; server-derived grounding + honest labelled fallbacks).
   const {
     mutate: generateBrief,
     reset: resetBrief,
     data: briefResponse,
-    error: briefError,
+    variables: briefVariables,
+    error: briefRawError,
     isPending: isGenerating,
-  } = useCognitiveRAG();
+  } = useExecutiveBriefInsight();
+
+  // Attribution guard (codex PR-5 round 1 HIGH): reset() does NOT cancel an
+  // in-flight mutation. If brand A's request resolves after a switch to brand
+  // B, the hook can still observe A's mutation and its late data/error would
+  // render under B. Only consume a result whose REQUEST brand matches the
+  // brand on screen.
+  const briefInsight =
+    briefResponse && briefVariables?.brand === brand ? briefResponse : null;
+  const briefError =
+    briefRawError && briefVariables?.brand === brand ? briefRawError : null;
 
   // Real crystallized insights for this brand (M5 REWIRE). When present,
-  // these take precedence over the cognitive-RAG path.
+  // these take precedence over the insights-endpoint path.
   const { data: crystallized } = useExecutiveInsights(brand);
-
-  // T7a: the cognitive-RAG fallback was STARVED of context — its query carried
-  // no KPI/ROI/gap numbers, so the brief read generic. Pull the brand's real
-  // gap-analysis figures (the same `/gaps/opportunities` feed the sibling
-  // Priority-Actions card uses) and ground the query in them. The RAG
-  // `user_query` is the primary synthesis input, so this materially enriches the
-  // brief with real data — no fabrication.
-  const { data: oppData, isLoading: oppLoading } = useOpportunities({
-    brand,
-    limit: 5,
-  });
-
-  // The grounded query (or the basic prompt when no real context is available).
-  const briefQuery = useMemo(
-    () => buildExecutiveBriefQuery(brand, oppData),
-    [brand, oppData]
-  );
 
   const crystallizedSections: BriefSection[] | null =
     crystallized && crystallized.length > 0
@@ -92,48 +101,30 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
         }))
       : null;
 
-  // The cognitive-RAG endpoint reports failures IN-BAND: an HTTP 200 whose
-  // payload carries a non-empty `error` (with `response` holding the error
-  // STRING, `hop_count === 0`, and `evidence === []`). Rendering that
-  // `response` as an insight would surface a backend error string to the user
-  // as if it were genuine AI content (the #932/#939 "error-as-data" class).
-  // Treat the error flag — and the zero-hop / zero-evidence degenerate shape —
-  // as "no real brief" so the honest error/empty states below take over.
-  const ragHasError = !!briefResponse?.error;
-  const ragIsDegenerate =
-    !!briefResponse &&
-    briefResponse.hop_count === 0 &&
-    (briefResponse.evidence?.length ?? 0) === 0;
-  const ragHasRealAnswer =
-    !!briefResponse?.response && !ragHasError && !ragIsDegenerate;
-
-  // The RAG response becomes a single real section — nothing is spliced in,
-  // and only when it is a genuine grounded answer (not an error payload and
-  // not a zero-hop / zero-evidence degenerate result).
-  const ragSections: BriefSection[] | null = ragHasRealAnswer
+  // The insights endpoint reports degradation IN-BAND but HONESTLY: a 200
+  // always carries a real, grounded `insight` (LLM distillation, or a
+  // labelled deterministic fallback covering no-LM, guard-rejected output,
+  // no-signal, and feed-outage cases) — never an error string dressed as
+  // content. `is_fallback` drives the source label so the user can tell them
+  // apart at a glance.
+  const briefSections: BriefSection[] | null = briefInsight?.insight
     ? [
         {
-          title: 'AI-Generated Insight',
-          content: briefResponse.response,
-          sourceLabel:
-            briefResponse.hop_count > 0
-              ? `${briefResponse.hop_count} retrieval hop${briefResponse.hop_count === 1 ? '' : 's'}`
-              : undefined,
+          title: 'Strategic Brief',
+          content: briefInsight.insight,
+          sourceLabel: briefInsight.is_fallback
+            ? 'Factual summary (no LLM distillation)'
+            : 'AI distillation of live gap-analysis figures',
+          takeaways: briefInsight.key_takeaways,
         },
       ]
     : null;
 
-  const sections: BriefSection[] = crystallizedSections ?? ragSections ?? [];
-
-  // An in-band error (HTTP 200 with `error` set) is a real failure even
-  // though TanStack's transport-level `briefError` is null. Fold it into the
-  // error state so the user sees an honest "unable to generate" message rather
-  // than the raw error string masquerading as an insight.
-  const ragErrorMessage = ragHasError ? briefResponse?.error ?? null : null;
+  const sections: BriefSection[] = crystallizedSections ?? briefSections ?? [];
 
   // Synchronous (render-time) detection of a brand switch. The reset below is a
-  // passive effect that runs AFTER paint, so on a CACHED-opportunities switch
-  // the prior brand's brief/footer would paint for one frame before it clears.
+  // passive effect that runs AFTER paint, so on a brand switch the prior
+  // brand's brief/footer would paint for one frame before it clears.
   // `brandChanged` folds into `isBusy` so that frame shows the busy state
   // instead of stale content (codex round-2 HIGH).
   const prevBrandRef = useRef(brand);
@@ -143,10 +134,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   }, [brand]);
 
   // On a brand CHANGE (not the initial mount — reset-on-mount is a no-op since
-  // no brief has been generated yet), clear the previous brand's RAG result AND
-  // its "last updated" stamp immediately so neither can be displayed under the
-  // new brand while it (re)generates (the grounded fire below is gated on the
-  // opportunities feed settling). Without this, brand A's brief + footer would
+  // no brief has been generated yet), clear the previous brand's brief AND its
+  // "last updated" stamp immediately so neither can be displayed under the new
+  // brand while it (re)generates. Without this, brand A's brief + footer would
   // linger on screen — a stale-attribution honest-state violation
   // (codex round-1 HIGH for the body, round-2 HIGH for the footer).
   const didMountRef = useRef(false);
@@ -159,43 +149,37 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     setLastUpdated(null);
   }, [brand, resetBrief]);
 
-  // Generate the brief once the opportunity context has SETTLED, so the first
-  // request is grounded in real figures rather than fired context-free. The
-  // effect re-runs whenever `briefQuery` changes (brand switch or the figures
-  // load), firing exactly one grounded request per distinct query. On an
-  // error/empty feed the query falls back to the basic prompt — honest
-  // degradation, never fabricated numbers.
+  // Generate the brief once per brand. The server owns the grounding, so
+  // there is nothing to wait for client-side; no-signal and outage cases come
+  // back as honest labelled fallbacks rather than being decided here.
   useEffect(() => {
-    if (oppLoading) return;
-    generateBrief({ query: briefQuery });
-  }, [briefQuery, oppLoading, generateBrief]);
+    generateBrief({ brand });
+  }, [brand, generateBrief]);
 
-  // Track when a real (non-error) response arrives. A 200 carrying an in-band
-  // error is NOT a successful update, so it must not stamp "Last updated".
-  // Depend on the response OBJECT (not just the derived boolean) so a SECOND
-  // real refresh after an earlier real answer still re-stamps the timestamp —
-  // the boolean alone would stay `true` across refreshes and skip the update.
+  // Track when a real response arrives. Depend on the response OBJECT (not a
+  // derived boolean) so a SECOND refresh after an earlier answer still
+  // re-stamps the timestamp.
   useEffect(() => {
-    if (ragHasRealAnswer) {
+    if (briefInsight?.insight) {
       setLastUpdated(new Date());
     }
-  }, [briefResponse, ragHasRealAnswer]);
+  }, [briefInsight]);
 
   const handleRefresh = () => {
-    generateBrief({ query: briefQuery });
+    generateBrief({ brand });
   };
 
-  // "Busy" covers the RAG call in flight, the opportunities feed still loading
-  // (grounded fire deferred), AND the single render after a brand switch before
-  // the reset effect clears the prior brief — in all three we show the loading
-  // state, never stale content or a premature empty/error state.
-  const isBusy = isGenerating || oppLoading || brandChanged;
+  // "Busy" covers the insight call in flight AND the single render after a
+  // brand switch before the reset effect clears the prior brief — in both we
+  // show the loading state, never stale content or a premature empty/error
+  // state.
+  const isBusy = isGenerating || brandChanged;
 
   // What the user actually sees. When busy, nothing real is shown yet, so the
   // body AND footer must not surface the prior brand's sections/count.
   const displaySections: BriefSection[] = isBusy ? [] : sections;
 
-  const hasAnyError = !!briefError || ragHasError;
+  const hasAnyError = !!briefError;
   const showError = !isBusy && displaySections.length === 0 && hasAnyError;
   const showEmpty = !isBusy && displaySections.length === 0 && !hasAnyError;
 
@@ -210,7 +194,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
             <div>
               <CardTitle className="text-base font-semibold">Executive AI Brief</CardTitle>
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                Powered by E2I Cognitive Engine
+                Strategic distillation grounded in live gap-analysis figures
               </p>
             </div>
           </div>
@@ -248,16 +232,16 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
             <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
             <div className="text-xs text-[var(--color-muted-foreground)]">
               <span className="font-medium text-rose-600">Unable to generate brief:</span>{' '}
-              {briefError?.message ?? ragErrorMessage ?? 'Cognitive engine unavailable'}
+              {briefError?.message ?? 'Insights service unavailable'}
             </div>
           </div>
         )}
 
-        {/* Honest empty state */}
+        {/* Honest empty state — nothing crystallized and no brief response yet. */}
         {showEmpty && (
           <EmptyState
             title="No executive brief available"
-            description={`No crystallized insights exist for ${brand} yet and the cognitive engine has not returned a brief. Use refresh to try again.`}
+            description={`No crystallized insights exist for ${brand} yet and the strategic brief has not been generated. Use refresh to try again.`}
           />
         )}
 
@@ -282,6 +266,19 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
                 <p className="text-sm text-[var(--color-muted-foreground)] leading-relaxed">
                   {section.content}
                 </p>
+                {section.takeaways && section.takeaways.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {section.takeaways.map((t, ti) => (
+                      <li
+                        key={ti}
+                        className="flex items-start gap-1.5 text-sm text-[var(--color-muted-foreground)]"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0 text-purple-500" />
+                        <span>{t}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             ))}
           </div>
