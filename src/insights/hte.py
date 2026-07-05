@@ -356,15 +356,39 @@ _TOTAL_PREDICATE_RE = re.compile(
 # An elided-subject significance count ("3 are significant", "3 have 95%
 # CIs excluding zero", "3 clear zero" — noun understood from the previous
 # clause) binds directly: the affirmative form must be the significant
-# count, the negated form the complement.
+# count, the negated form ("are not statistically significant", "do not
+# have CIs excluding zero", "have CIs that do not exclude zero") the
+# complement.
 _SIG_ELIDED_RE = re.compile(
     r"\b(\d[\d,]*)\s+(?:"
-    r"(?:are|is|were|was|remained?)\s+(?:statistically\s+)?(?P<neg>not\s+)?significant\b"
-    r"|(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+exclud\w*\s+zero"
-    r"|clears?\s+zero"
+    r"(?:are|is|were|was|remained?)(?P<span>(?:\s+(?:not|statistically))*)\s+significant\b"
+    r"|(?:(?P<negdo>do(?:es)?\s+not)\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
+    r"(?:(?P<negthat>that\s+do(?:es)?\s+not\s+)?exclud\w*)\s+zero"
+    r"|(?:(?P<negdo2>do(?:es)?\s+not)\s+)?clears?\s+zero"
     r")",
     re.IGNORECASE,
 )
+# Negated significance in a fraction's tail ("2 of 3 segments do not have
+# 95% CIs excluding zero") flips the expected numerator to the complement.
+_FRACTION_NEGATION_RE = re.compile(
+    r"\bnot\s+(?:statistically\s+)?significant\b|\bnon-?significant\b"
+    r"|\bdo(?:es)?\s+not\s+(?:have|clear|exclude|reach)\b"
+    r"|\bthat\s+do(?:es)?\s+not\s+exclud\w*\b"
+    r"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b",
+    re.IGNORECASE,
+)
+
+
+def _sig_elided_negated(m: re.Match[str]) -> bool:
+    span = m.group("span") or ""
+    return (
+        "not" in span.lower()
+        or bool(m.group("negdo"))
+        or bool(m.group("negthat"))
+        or bool(m.group("negdo2"))
+    )
+
+
 # Chip-style reversed form: "Significant segments: 3" / "... : 2/2".
 _SIG_COUNT_LABEL_RE = re.compile(
     rf"significant\s+{_SEG_NOUNS}\s*[:=]\s*(\d[\d,]*)(?:\s*/\s*(\d[\d,]*))?", re.IGNORECASE
@@ -544,11 +568,21 @@ def _metric_misattributed(
     return False
 
 
+# A significance status asserted of a named row (table-line ", significant"
+# or copular "is (not) (statistically) significant").
+_ROW_STATUS_RE = re.compile(
+    r"(?:,\s*|\b(?:is|was|are|were|remains?)\s+(?:statistically\s+)?)"
+    r"(?P<neg>not\s+)?(?:statistically\s+)?significant\b",
+    re.IGNORECASE,
+)
+
+
 def _segment_attribution_ok(norm_text: str, g: dict[str, Any]) -> bool:
     """A sentence naming exactly ONE segment may only carry that row's
     figures plus the global metrics — "the age_band=50-65 segment responds
-    at +17.7pp" with another row's effect rejects. Sentences naming several
-    segments (comparisons) or none fall back to global vouching."""
+    at +17.7pp" with another row's effect rejects — and its significance
+    label must match the row. Sentences naming several segments
+    (comparisons) or none fall back to global vouching."""
     rows: list[dict[str, Any]] = g.get("segment_rows") or []
     if not rows:
         return True
@@ -556,6 +590,9 @@ def _segment_attribution_ok(norm_text: str, g: dict[str, Any]) -> bool:
         mentioned = [r for r in rows if re.search(r["mention"], sentence, flags=re.IGNORECASE)]
         if len(mentioned) != 1:
             continue
+        status = _ROW_STATUS_RE.search(sentence)
+        if status is not None and bool(status.group("neg")) == mentioned[0]["significant"]:
+            return False
         allowed: set[str] = mentioned[0]["numbers"] | g["global_numbers"]
         stripped = _strip_phrases(sentence, g["phrases"], g["ambiguous_phrases"])
         for _s, num, unit in _extract_claims(stripped):
@@ -628,17 +665,15 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     for elided in _SIG_ELIDED_RE.finditer(text):
         if _FRACTION_PRECEDER_RE.search(text[: elided.start(1)]):
             continue
-        expected = g["total_count"] - g["sig_count"] if elided.group("neg") else g["sig_count"]
+        expected = (
+            g["total_count"] - g["sig_count"] if _sig_elided_negated(elided) else g["sig_count"]
+        )
         if elided.group(1).replace(",", "") != str(expected):
             return False
     for frac in _FRACTION_RE.finditer(text):
         m_str, k_str = frac.group(1), frac.group(2)
         # "1 of 3 segments is not significant" counts the COMPLEMENT.
-        negated = re.search(
-            r"\bnot\s+significant\b|\bnon-?significant\b",
-            text[frac.end() : frac.end() + 60],
-            re.IGNORECASE,
-        )
+        negated = _FRACTION_NEGATION_RE.search(text[frac.end() : frac.end() + 60])
         expected_m = str(g["total_count"] - g["sig_count"] if negated else g["sig_count"])
         if _FRACTION_SEG_CONTEXT_RE.match(text, frac.end()):
             # A fraction quantifying segments/significance claims BOTH sides:
@@ -868,7 +903,13 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
                 # uses ("confidence is high") cannot false-fire.
                 rf"|\b{v_esc}(?:\s+(?:is|was|equals?)|\s*[=:—–-])\s*(?:at\s+)?(?=[+\-−±(]?\s?\d)"
             )
-        segment_rows.append({"mention": mention, "numbers": row_numbers})
+        segment_rows.append(
+            {
+                "mention": mention,
+                "numbers": row_numbers,
+                "significant": bool(r.get("statistical_significance")),
+            }
+        )
 
     return {
         "scope": scope,

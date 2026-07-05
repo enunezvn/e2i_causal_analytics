@@ -746,6 +746,56 @@ class TestGuard:
         assert hte._is_grounded("1 of 3 segments is not significant.", g) is True
         assert hte._is_grounded("2 of 3 segments are not significant.", g) is False
 
+    def test_negation_paraphrases_flip_expected_counts(self):
+        # codex round-14 HIGH: "do not have CIs excluding zero", "CIs that do
+        # not exclude zero", and "not statistically significant" were not
+        # recognized as negation, so the significant count posed as the
+        # complement.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("2 of 3 segments do not have 95% CIs excluding zero.", g) is False
+        assert (
+            hte._is_grounded("2 of 3 segments have 95% CIs that do not exclude zero.", g) is False
+        )
+        assert hte._is_grounded("2 of 3 segments are not statistically significant.", g) is False
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 do not have 95% CIs excluding zero.", g) is False
+        )
+        assert hte._is_grounded("1 of 3 segments does not have 95% CIs excluding zero.", g) is True
+        assert hte._is_grounded("1 of 3 segments is not statistically significant.", g) is True
+
+    def test_row_significance_labels_bind_to_the_named_row(self):
+        # codex round-14 HIGH: a table-line echo could flip a row's
+        # significant/not-significant status while all numbers stayed vouched.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low: +3.4pp [CI -2.8pp to +9.6pp], n=2,498, significant.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=high: +17.7pp [CI +12.7pp to +22.8pp], n=1,385, "
+                "not significant.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded("The 50-65 band (+13.8pp) is not statistically significant.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low: +3.4pp [CI -2.8pp to +9.6pp], n=2,498, "
+                "not significant.",
+                g,
+            )
+            is True
+        )
+        assert hte._is_grounded("The 50-65 band (+13.8pp) is statistically significant.", g) is True
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so
