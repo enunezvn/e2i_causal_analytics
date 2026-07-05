@@ -9,7 +9,20 @@ decision making"). This module turns the brand's REAL gap-analysis figures
 into a decision aid: the single highest-impact decision, its quantified
 stakes, a ranked action sequence, an honest actionability judgment, and the
 suppression caveat. Falls back to a deterministic factual summary when the LM
-is unavailable (never fabricates)."""
+is unavailable (never fabricates).
+
+Figure integrity is enforced by SERVER-SIDE INJECTION, not by parsing the
+LM's English: the LM only ever sees placeholder tokens ({TOTAL}, {ROI_1},
+{SEG_1}, ...) — never a digit — and the server substitutes the real values
+after validating the tokens. Fabricating or swapping a figure is structurally
+impossible because the model has no numbers to garble; the only checks needed
+are exact set arithmetic over the server-defined token vocabulary. This
+replaced a per-sentence numeric-grounding guard that rejected 9/10 faithful
+samples (the LM habitually writes multi-opportunity comparison sentences the
+single-source-per-sentence rule forbade), pinning the page to the factual
+fallback; the placeholder contract measured 10/10 clean on the same live
+grounding.
+"""
 
 from __future__ import annotations
 
@@ -25,22 +38,17 @@ try:
     import dspy
 
     class ExecutiveBriefInsightSignature(dspy.Signature):
-        """Write an EXECUTIVE BRIEF for a pharma commercial leader, STRICTLY
-        grounded in the provided figures. Use ONLY the opportunity values, ROI
-        multiples, gap percentages, and mix counts given; NEVER invent dollar
-        amounts, segments, metrics, or trends. Structure the brief as a
-        decision aid, not a description: (1) LEAD with the single
-        HIGHEST-IMPACT DECISION the numbers support and its quantified stakes
-        (value at stake, expected ROI); (2) lay out the recommended ACTION
-        SEQUENCE across the ranked opportunities — what to do first and why,
-        trading ROI against implementation effort; (3) judge ACTIONABILITY
-        honestly — flag when the portfolio is thin, concentrated in a single
-        metric or segment, or when everything sits below break-even. When
-        citing figures, cite ONLY figures given above and keep each sentence's
-        figures to a SINGLE opportunity — never pair one opportunity's dollar
-        value with another's ROI, gap, or segment — and name a segment or gap
-        metric only in the sentence that cites that same opportunity's own
-        figures. ALWAYS close by stating the caveat given in `caveats`."""
+        """Write an EXECUTIVE BRIEF for a pharma commercial leader. Every
+        figure in the inputs is a placeholder token like {ROI_1} or {TOTAL};
+        the server will substitute the real values after you write. Rules:
+        (1) express EVERY figure using ONLY the placeholder tokens exactly as
+        given, curly braces included; (2) NEVER write digits or spelled-out
+        numbers — no counts, no percentages, no rankings written as numerals;
+        (3) opportunities are ranked best-first by ROI (rank 1 is highest).
+        Structure: lead with the single highest-impact decision and its
+        stakes; then the action sequence across the ranked opportunities;
+        then an honest actionability judgment; ALWAYS close with the caveat
+        given in `caveats`."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"
@@ -98,6 +106,32 @@ def _opportunity_line(o: dict[str, Any]) -> str:
     return (
         f"{rank}. {action} — {roi_str}, {rev} revenue impact, "
         f"closing a {gap_str} {metric} gap in {seg} ({effort} effort)."
+    )
+
+
+def _strip_segment_suffix(action: str, segment: str) -> str:
+    """Drop a trailing "in [the] <segment>" from the action prose.
+
+    The LM-facing opportunity line appends "in {SEG_n}" itself; leaving the
+    real segment name in the action would both read twice and hand the LM a
+    prose alias that bypasses the token-index attribution check.
+    """
+    if len(segment) < 3:
+        return action
+    return re.sub(rf"\s+in\s+(?:the\s+)?{re.escape(segment)}\s*$", "", action, flags=re.IGNORECASE)
+
+
+def _lm_opportunity_line(pos: int, o: dict[str, Any]) -> str:
+    """Placeholder-token variant of ``_opportunity_line`` (token index = pos)."""
+    seg = _truncate(str(o.get("segment_value", "")).strip() or "—", 60)
+    action = _truncate(str(o.get("recommended_action", "")).strip() or "(no action text)", 160)
+    action = _strip_segment_suffix(action, seg)
+    metric = str(o.get("gap_metric", "")).upper() or "—"
+    effort = str(o.get("implementation_difficulty") or "unknown")
+    return (
+        f"Rank {pos}: {action} in {{SEG_{pos}}} — {{ROI_{pos}}} ROI, "
+        f"{{IMPACT_{pos}}} revenue impact, closing a {{GAP_{pos}}} {metric} gap "
+        f"({effort} effort)."
     )
 
 
@@ -159,6 +193,45 @@ def build_grounding(
         )
     if suppressed_count > 0:
         grounding.append({"label": "Suppressed", "value": str(suppressed_count)})
+
+    # LM-facing variants: identical structure, every figure a placeholder
+    # token. The injection map is the server-owned token vocabulary — the LM
+    # cannot introduce a figure that isn't in it.
+    injection: dict[str, str] = {
+        "{TOTAL}": _money(total_addressable_value),
+        "{QUICK}": str(quick_wins_count),
+        "{STEADY}": str(steady_plays_count),
+        "{BETS}": str(strategic_bets_count),
+    }
+    lm_scope = (
+        f"{brand} / total addressable opportunity value {{TOTAL}} / mix: "
+        "{QUICK} quick win(s), {STEADY} steady play(s), {BETS} strategic bet(s)"
+    )
+    lm_opp_lines: list[str] = []
+    # Token index is the LIST position (1-based), not the feed's rank field:
+    # positions are unique by construction, so duplicate/missing ranks can
+    # never collide two opportunities onto one token.
+    for pos, o in enumerate(ranked, start=1):
+        roi = o.get("expected_roi")
+        gap_pct = o.get("gap_percentage")
+        injection[f"{{ROI_{pos}}}"] = f"{float(roi):.1f}x" if roi is not None else "—"
+        injection[f"{{IMPACT_{pos}}}"] = _money(o.get("revenue_impact"))
+        injection[f"{{GAP_{pos}}}"] = f"{float(gap_pct):.0f}%" if gap_pct is not None else "—"
+        injection[f"{{SEG_{pos}}}"] = _truncate(str(o.get("segment_value", "")).strip() or "—", 60)
+        lm_opp_lines.append(_lm_opportunity_line(pos, o))
+    lm_opportunities = " ".join(lm_opp_lines) if lm_opp_lines else opp_text
+    lm_caveat_parts: list[str] = []
+    if suppressed_count > 0:
+        injection["{SUPPRESSED}"] = str(suppressed_count)
+        noun = "opportunity was" if suppressed_count == 1 else "opportunities were"
+        lm_caveat_parts.append(
+            f"{{SUPPRESSED}} low-value {noun} suppressed (below break-even) "
+            "and excluded from these figures."
+        )
+    lm_caveat_parts.append(
+        "Figures come from the gap analyzer's ROI model on current data; "
+        "validate them before committing budget."
+    )
     return {
         "brand": brand,
         "scope": scope,
@@ -166,29 +239,10 @@ def build_grounding(
         "caveats": caveats,
         "grounding": grounding,
         "has_signal": bool(ranked) or suppressed_count > 0,
-        # Per-UNIT source strings for the grounding guard: each opportunity is
-        # its own unit so a sentence pairing one opportunity's dollar value
-        # with another's ROI/gap can be detected (codex PR-5 round 2) — a flat
-        # value set would accept any swapped combination.
-        "sources": [scope, caveats, *opp_lines],
-        # Structured attribute tokens per unit (segment, gap metric): a numeric
-        # sentence must not name ANOTHER unit's segment/metric even when its
-        # figures all trace to one unit — "field triggers in South for $1.2M at
-        # 3.2x" is a false attribution with fully-grounded numbers (codex PR-5
-        # round 3). Actions are free prose and stay prompt-governed: matching
-        # them mechanically would be a false sense of safety.
-        "source_tokens": [set(), set()]
-        + [
-            {
-                t.lower()
-                for t in (
-                    str(o.get("segment_value", "")).strip(),
-                    str(o.get("gap_metric", "")).strip(),
-                )
-                if len(t) >= 3
-            }
-            for o in ranked
-        ],
+        "lm_scope": lm_scope,
+        "lm_opportunities": lm_opportunities,
+        "lm_caveats": " ".join(lm_caveat_parts),
+        "injection": injection,
     }
 
 
@@ -216,199 +270,93 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ---- Numeric grounding guard ---------------------------------------------------
-# The signature TELLS the LM not to invent figures, but an executive brief is the
-# highest-stakes surface for plausible-wrong values, so the prompt is not the only
-# defense. Deterministic layers (each fails closed to the labelled fallback):
-#   1. money / percentage / ROI-multiple claims must appear in the grounding and
-#      bind per-SENTENCE to a single source unit (rounds 1-2);
-#   2. segment / gap-metric tokens named in a numeric sentence must belong to
-#      that same unit (round 3);
-#   3. labelled portfolio counts (quick wins / steady plays / strategic bets /
-#      suppressed) must match the grounded counts globally (round 4).
-# What stays prompt-governed — documented, not accidental: free-prose action
-# wording, spelled-out numbers ("two quick wins"), and count phrasings outside
-# the server-controlled vocabulary; matching those mechanically would be a
-# false sense of safety.
+# ---- Placeholder contract validation --------------------------------------------
+# The LM's inputs contain no figures, so its output must not either: every
+# number the user sees is injected server-side from the grounded feed. The
+# checks below are exact operations on the server-defined token vocabulary —
+# no parsing of the LM's English — and each fails closed to the labelled
+# factual fallback. What stays prompt-governed (documented, not accidental):
+# spelled-out numbers ("three opportunities") and segment names the LM echoes
+# from the free-prose action text; neither can mint a numeric figure.
 
-_MONEY_RE = re.compile(r"\$\s?([\d,]+(?:\.\d+)?)\s*(k|m|b|thousand|million|billion)?\b", re.I)
-_PCT_RE = re.compile(r"([\d,]+(?:\.\d+)?)\s*%")
-_MULT_RE = re.compile(r"\b([\d,]+(?:\.\d+)?)\s*[x×]\b", re.I)
-_SCALE = {"k": 1e3, "thousand": 1e3, "m": 1e6, "million": 1e6, "b": 1e9, "billion": 1e9}
+_PLACEHOLDER_RE = re.compile(r"\{[A-Z]+(?:_\d+)?\}")
+_SEG_TOKEN_RE = re.compile(r"\{SEG_(\d+)\}")
+_METRIC_TOKEN_RE = re.compile(r"\{(?:ROI|IMPACT|GAP)_(\d+)\}")
 
-
-def _numeric_claims(text: str) -> set[tuple[str, float]]:
-    """Extract (kind, canonical value) for every $-amount, percentage and multiple."""
-    claims: set[tuple[str, float]] = set()
-    for m in _MONEY_RE.finditer(text):
-        value = float(m.group(1).replace(",", ""))
-        value *= _SCALE.get((m.group(2) or "").lower(), 1.0)
-        claims.add(("money", round(value, 2)))
-    for m in _PCT_RE.finditer(text):
-        claims.add(("pct", round(float(m.group(1).replace(",", "")), 2)))
-    for m in _MULT_RE.finditer(text):
-        claims.add(("mult", round(float(m.group(1).replace(",", "")), 2)))
-    return claims
-
-
-# Server-controlled portfolio-count vocabulary (codex PR-5 round 4): the
-# signature hands the LM the mix/suppression counts, so an invented "99 quick
-# wins" is a fabricated portfolio-breadth claim the money/pct/multiple guard
-# never saw. Counts are PORTFOLIO-level facts — there is exactly one set, so a
-# count claim has no cross-opportunity pairing risk and validates against the
-# whole grounding (unlike money/pct/mult, which stay unit-bound). Count
-# phrasings outside this vocabulary ("the top 3 plays") and spelled-out
-# numbers ("two quick wins") remain prompt-governed — the same documented
-# boundary as free-prose actions.
-_COUNT_KEYWORDS = {
-    "quick_win": r"quick[- ]wins?",
-    "steady_play": r"steady[- ]plays?",
-    "strategic_bet": r"strategic[- ]bets?",
-    "suppressed": r"suppress\w*",
-}
-# Number-first: up to three letter-words may sit between the number and its
-# label ("3 low-value opportunities were suppressed"); digits act as barriers
-# so one count can never borrow another count's label across a list.
-_COUNT_GAP = r"(?:\W+[A-Za-z()-]+){0,3}?\W+"
-
-
-def _count_claims(text: str) -> set[tuple[str, float]]:
-    """Extract (count:<label>, value) claims for the server-controlled labels."""
-    claims: set[tuple[str, float]] = set()
-    for kind, kw in _COUNT_KEYWORDS.items():
-        for m in re.finditer(rf"\b(\d+)\b{_COUNT_GAP}{kw}", text, re.I):
-            claims.add((f"count:{kind}", float(m.group(1))))
-        # Label-first allows only space/colon/equals/dash between label and
-        # number ("suppressed 42", "quick wins: 2") — list punctuation would
-        # mint spurious claims from prose like "2 quick wins, 1 steady play"
-        # (the comma would hand quick_win the NEXT item's count).
-        for m in re.finditer(rf"{kw}[ \t:=-]+(\d+)\b", text, re.I):
-            claims.add((f"count:{kind}", float(m.group(1))))
-    return claims
-
-
-_DIGIT_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)*")
-_COUNT_LABEL_RE = re.compile("|".join(_COUNT_KEYWORDS.values()), re.I)
-
-
-def _claimed_digit_spans(text: str) -> list[tuple[int, int]]:
-    """Character spans of every digit group some extractor vouches for."""
-    spans: list[tuple[int, int]] = []
-    for pattern in (_MONEY_RE, _PCT_RE, _MULT_RE):
-        spans.extend(m.span(1) for m in pattern.finditer(text))
-    for kw in _COUNT_KEYWORDS.values():
-        spans.extend(m.span(1) for m in re.finditer(rf"\b(\d+)\b{_COUNT_GAP}{kw}", text, re.I))
-        spans.extend(m.span(1) for m in re.finditer(rf"{kw}[ \t:=-]+(\d+)\b", text, re.I))
-    return spans
-
-
-def _has_unvouched_count_context(sentence: str) -> bool:
-    """Fail closed on count phrasings the extractors cannot parse.
-
-    "The portfolio has a quick wins count of 99" carries a guarded label and a
-    fabricated number, but no extractor claims the 99 — so instead of
-    enumerating every count-noun phrasing, ANY digit sharing a sentence with a
-    guarded count label must be vouched for by SOME extractor (money, pct,
-    multiple, or count), else the sentence is an unparseable count claim and
-    the response falls back (codex PR-5 round 5).
-    """
-    if not _COUNT_LABEL_RE.search(sentence):
-        return False
-    spans = _claimed_digit_spans(sentence)
-    for m in _DIGIT_TOKEN_RE.finditer(sentence):
-        start, end = m.span()
-        if not any(cs <= start and end <= ce for cs, ce in spans):
-            return True
-    return False
-
-
-# Sentences (and semicolon clauses) are the pairing unit: a figure cited next
-# to another figure inside one sentence claims a RELATIONSHIP between them.
+# Sentences (and semicolon clauses) are the pairing unit: a metric token cited
+# next to a segment token inside one sentence claims a relationship between them.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+")
 
 
-def _is_grounded(
-    candidate: str,
-    sources: list[str],
-    source_tokens: list[set[str]] | None = None,
-) -> bool:
-    """True iff every numeric sentence binds to a SINGLE source unit.
+def _placeholder_violation(text: str, vocab: set[str]) -> str | None:
+    """First violation of the placeholder contract in ``text``, or None.
 
-    Global value-membership is not enough: an LM can pair opportunity A's
-    dollar value with opportunity B's ROI/gap and every number still "appears
-    somewhere" (codex PR-5 round 2). Each sentence's numeric claims must
-    therefore be a subset of ONE source unit's claims (scope, caveats, or one
-    opportunity line) — AND, when ``source_tokens`` is given, that same unit
-    must own every segment/metric token the sentence names, so grounded
-    figures cannot be re-attributed to another opportunity's segment or
-    metric (codex PR-5 round 3). Legitimate prose that mixes units inside a
-    single numeric sentence falls back — fail-closed by design; the signature
-    instructs the LM to keep each sentence's figures and segment/metric
-    mentions to a single opportunity.
-
-    Labelled portfolio COUNTS (quick wins / steady plays / strategic bets /
-    suppressed) are validated too, but globally: they are portfolio-level
-    facts with exactly one grounded set, so an invented "99 quick wins" is
-    rejected while a correct restatement passes regardless of which sentence
-    it shares with an opportunity's figures (codex PR-5 round 4).
+    Three checks: (1) every token used must exist in the server vocabulary;
+    (2) no numeric character may survive outside a token — str.isnumeric, not
+    just ``\\d``, so circled/superscript/Roman glyphs ("②x", "²", "Ⅲ") cannot
+    render as figures (codex PR-1153 round 1); this also traps malformed or
+    lowercased tokens, whose embedded index digits are left behind by the
+    strict token regex; (3) within a sentence that names segment tokens,
+    every metric token's index must be among that sentence's segment indices —
+    "{SEG_1} yields {ROI_2}" re-attributes rank 2's figure to rank 1's segment
+    even though both values are real.
     """
-    unit_claims = [_numeric_claims(s) for s in sources]
-    grounded_counts: set[tuple[str, float]] = set()
-    for s in sources:
-        grounded_counts |= _count_claims(s)
-    tokens = source_tokens if source_tokens is not None else [set() for _ in sources]
-    all_tokens: set[str] = set().union(*tokens) if tokens else set()
-    for sentence in _SENTENCE_SPLIT_RE.split(candidate):
-        if _has_unvouched_count_context(sentence):
-            return False
-        if not _count_claims(sentence) <= grounded_counts:
-            return False
-        claims = _numeric_claims(sentence)
-        if not claims:
-            continue
-        mentioned = {
-            t for t in all_tokens if re.search(rf"\b{re.escape(t)}\b", sentence, re.IGNORECASE)
-        }
-        if not any(
-            claims <= unit_claims[i] and mentioned <= tokens[i] for i in range(len(sources))
-        ):
-            return False
-    return True
+    used = set(_PLACEHOLDER_RE.findall(text))
+    unknown = used - vocab
+    if unknown:
+        return f"unknown placeholder(s): {sorted(unknown)}"
+    if any(ch.isnumeric() for ch in _PLACEHOLDER_RE.sub("", text)):
+        return "numeric characters outside placeholder tokens"
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        segs = {m.group(1) for m in _SEG_TOKEN_RE.finditer(sentence)}
+        metrics = {m.group(1) for m in _METRIC_TOKEN_RE.finditer(sentence)}
+        if segs and metrics and not metrics <= segs:
+            return "metric token paired with another opportunity's segment token"
+    return None
+
+
+def _inject(text: str, injection: dict[str, str]) -> str:
+    """Substitute real values for tokens in one pass (an injected value can
+    never itself be re-substituted)."""
+    return _PLACEHOLDER_RE.sub(lambda m: injection.get(m.group(0), m.group(0)), text)
 
 
 def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
     # No real signal -> the honest factual answer, never an LLM riff on nothing.
     if not g["has_signal"]:
         return _fallback(g)
-    pred = run_signature(
-        ExecutiveBriefInsightSignature,
-        scope=g["scope"],
-        opportunities=g["opportunities"],
-        caveats=g["caveats"],
-    )
-    if pred is None:
-        return _fallback(g)
-    interpretation = str(getattr(pred, "interpretation", "")).strip()
-    if not interpretation:
-        return _fallback(g)
-    takeaways = normalize_list(getattr(pred, "key_takeaways", []))
-    sources = g["sources"]
-    source_tokens = g.get("source_tokens")
-    ungrounded = [
-        t for t in [interpretation, *takeaways] if not _is_grounded(t, sources, source_tokens)
-    ]
-    if ungrounded:
-        # Fail closed: a single invented figure poisons trust in the whole
-        # brief, so the labelled deterministic fallback replaces it entirely.
-        logger.warning(
-            "executive-brief LM output carried %d ungrounded numeric claim(s); "
-            "using factual fallback",
-            len(ungrounded),
+    vocab = set(g["injection"])
+    # Two independent draws: lm_cache=False forces a fresh sample per attempt —
+    # the long-lived API process's in-memory DSPy cache would otherwise replay
+    # the identical rejected completion on every retry.
+    for attempt in (1, 2):
+        pred = run_signature(
+            ExecutiveBriefInsightSignature,
+            lm_cache=False,
+            scope=g["lm_scope"],
+            opportunities=g["lm_opportunities"],
+            caveats=g["lm_caveats"],
         )
-        return _fallback(g)
-    return {
-        "insight": interpretation,
-        "key_takeaways": takeaways,
-        "grounding": g["grounding"],
-        "is_fallback": False,
-    }
+        if pred is None:
+            # LM unavailable/errored (not a contract violation): retrying via
+            # run_signature is its caller's concern; fall back honestly.
+            return _fallback(g)
+        interpretation = str(getattr(pred, "interpretation", "")).strip()
+        takeaways = normalize_list(getattr(pred, "key_takeaways", []))
+        violations = [
+            v for v in (_placeholder_violation(u, vocab) for u in [interpretation, *takeaways]) if v
+        ]
+        if interpretation and not violations:
+            return {
+                "insight": _inject(interpretation, g["injection"]),
+                "key_takeaways": [_inject(t, g["injection"]) for t in takeaways],
+                "grounding": g["grounding"],
+                "is_fallback": False,
+            }
+        logger.warning(
+            "executive-brief sample %d violated the placeholder contract (%s); %s",
+            attempt,
+            "; ".join(violations) or "empty interpretation",
+            "retrying with a fresh sample" if attempt == 1 else "using factual fallback",
+        )
+    return _fallback(g)

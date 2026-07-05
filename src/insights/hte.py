@@ -1118,29 +1118,38 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
 def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
     if not g["has_signal"]:
         return _fallback(g)
-    pred = run_signature(
-        HTEInsightSignature,
-        scope=g["scope"],
-        effect_summary=g["effect_summary"],
-        segments=g["segments"],
-        targeting=g["targeting"],
-    )
-    if pred is None:
-        return _fallback(g)
-    interpretation = str(getattr(pred, "interpretation", "")).strip()
-    if not interpretation:
-        return _fallback(g)
-    takeaways = normalize_list(getattr(pred, "key_takeaways", []))
-    rejected = [t for t in [interpretation, *takeaways] if not _is_grounded(t, g)]
-    if rejected:
-        logger.warning(
-            "HTE insight LM output carried %d ungrounded numeric claim(s); using factual fallback",
-            len(rejected),
+    # Two independent draws: the fail-closed guard measures a ~7/10 live pass
+    # rate on faithful prose, and lm_cache=False forces a fresh sample per
+    # attempt — the long-lived API process's in-memory DSPy cache would
+    # otherwise replay the identical rejected completion on every request,
+    # pinning this grounding to the fallback until the process restarts.
+    for attempt in (1, 2):
+        pred = run_signature(
+            HTEInsightSignature,
+            lm_cache=False,
+            scope=g["scope"],
+            effect_summary=g["effect_summary"],
+            segments=g["segments"],
+            targeting=g["targeting"],
         )
-        return _fallback(g)
-    return {
-        "insight": interpretation,
-        "key_takeaways": takeaways,
-        "grounding": g["grounding"],
-        "is_fallback": False,
-    }
+        if pred is None:
+            # LM unavailable/errored (not a guard rejection): a second
+            # immediate call would fail the same way.
+            return _fallback(g)
+        interpretation = str(getattr(pred, "interpretation", "")).strip()
+        takeaways = normalize_list(getattr(pred, "key_takeaways", []))
+        rejected = [t for t in [interpretation, *takeaways] if not _is_grounded(t, g)]
+        if interpretation and not rejected:
+            return {
+                "insight": interpretation,
+                "key_takeaways": takeaways,
+                "grounding": g["grounding"],
+                "is_fallback": False,
+            }
+        logger.warning(
+            "HTE insight LM output carried %d ungrounded numeric claim(s) on attempt %d; %s",
+            len(rejected),
+            attempt,
+            "retrying with a fresh sample" if attempt == 1 else "using factual fallback",
+        )
+    return _fallback(g)

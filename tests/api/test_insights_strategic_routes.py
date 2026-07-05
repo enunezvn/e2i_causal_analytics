@@ -282,6 +282,45 @@ def test_executive_brief_insight_no_signal_is_honest(test_client, monkeypatch):
     assert data["key_takeaways"] == []
 
 
+def test_executive_brief_fallback_is_cached_briefly(test_client, monkeypatch):
+    # A fallback payload marks a transient state (LM outage / rejected sample):
+    # it must be cached for minutes, not pinned for the full hour like a real
+    # insight — the "Factual summary" stickiness behind the 2026-07-05 report.
+    async def _stub(**kwargs):
+        return _fake_opportunities_feed()
+
+    monkeypatch.setattr("src.api.routes.gaps.list_opportunities", _stub)
+    seen = {}
+
+    async def _cache_miss(key):
+        # The dev box runs a live redis: force a miss so the generate path
+        # (and its cache_set) runs regardless of what earlier tests cached.
+        return None
+
+    async def _capture_cache_set(key, value, ttl_seconds=3600):
+        seen["ttl"] = ttl_seconds
+        seen["is_fallback"] = value.get("is_fallback")
+
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_get", _cache_miss)
+    monkeypatch.setattr("src.api.routes.insights_strategic.cache_set", _capture_cache_set)
+    r = test_client.post("/api/insights/executive-brief", json={"brand": "Kisqali"})
+    assert r.status_code == 200, r.text
+    assert seen == {"ttl": 300, "is_fallback": True}
+
+    monkeypatch.setattr(
+        "src.insights.executive_brief.generate_insight",
+        lambda g: {
+            "insight": "Lead with Northeast at 3.2x.",
+            "key_takeaways": [],
+            "grounding": g["grounding"],
+            "is_fallback": False,
+        },
+    )
+    r = test_client.post("/api/insights/executive-brief", json={"brand": "Kisqali"})
+    assert r.status_code == 200, r.text
+    assert seen == {"ttl": 3600, "is_fallback": False}
+
+
 def test_executive_brief_feed_outage_degrades_honestly(test_client, monkeypatch):
     # A gaps read failure is a data-source outage, NOT "no signal": the
     # response must say so and never 500 (codex PR-5 rounds 2-3).

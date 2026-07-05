@@ -1344,6 +1344,58 @@ class TestGenerateInsight:
         out = hte.generate_insight(hte.build_grounding(_record()))
         assert out["is_fallback"] is True
 
+    def test_rejected_sample_retries_once_with_fresh_draw(self, monkeypatch):
+        # The guard's live pass rate is ~7/10 on faithful prose, so one
+        # rejection triggers exactly one fresh-sample retry; lm_cache must be
+        # False on every attempt or the in-process DSPy cache would replay the
+        # identical rejected completion.
+        calls = []
+
+        def _fake(sig, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    interpretation="Persistence improves 42.5pp in responders.",
+                    key_takeaways=[],
+                )
+            return SimpleNamespace(interpretation="Overall ATE is +11.1pp.", key_takeaways=[])
+
+        monkeypatch.setattr("src.insights.hte.run_signature", _fake)
+        out = hte.generate_insight(hte.build_grounding(_record()))
+        assert out["is_fallback"] is False
+        assert out["insight"] == "Overall ATE is +11.1pp."
+        assert len(calls) == 2
+        assert all(k["lm_cache"] is False for k in calls)
+
+    def test_two_rejected_samples_fall_back(self, monkeypatch):
+        calls = []
+
+        def _fake(sig, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                interpretation="Persistence improves 42.5pp in responders.",
+                key_takeaways=[],
+            )
+
+        monkeypatch.setattr("src.insights.hte.run_signature", _fake)
+        out = hte.generate_insight(hte.build_grounding(_record()))
+        assert out["is_fallback"] is True
+        assert len(calls) == 2
+
+    def test_lm_unavailable_does_not_retry(self, monkeypatch):
+        # None means the LM itself failed (no key / provider error) — a second
+        # immediate call would fail the same way.
+        calls = []
+
+        def _fake(sig, **kwargs):
+            calls.append(kwargs)
+            return None
+
+        monkeypatch.setattr("src.insights.hte.run_signature", _fake)
+        out = hte.generate_insight(hte.build_grounding(_record()))
+        assert out["is_fallback"] is True
+        assert len(calls) == 1
+
 
 @pytest.mark.parametrize(
     ("value", "expected"),

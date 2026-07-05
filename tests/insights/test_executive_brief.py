@@ -1,10 +1,10 @@
 from types import SimpleNamespace
 
 from src.insights.executive_brief import (
-    _count_claims,
     _fallback,
-    _is_grounded,
-    _numeric_claims,
+    _inject,
+    _placeholder_violation,
+    _strip_segment_suffix,
     build_grounding,
     generate_insight,
 )
@@ -112,220 +112,217 @@ def test_fallback_states_suppression_caveat():
     assert "1 low-value opportunity was suppressed" in out["insight"]
 
 
-def test_numeric_claims_canonicalize_across_formats():
-    # The guard compares VALUES, not spellings: $5.0M == $5,000,000 == $5 million.
-    assert _numeric_claims("$5.0M at 4.0x closing a 42% gap") == {
-        ("money", 5_000_000.0),
-        ("mult", 4.0),
-        ("pct", 42.0),
-    }
-    assert _numeric_claims("$5,000,000 and $5 million") == {("money", 5_000_000.0)}
-    # Plain counts are not money/pct/multiple claims — they are validated by
-    # the SEPARATE labelled-count extractor below (codex PR-5 round 4).
-    assert _numeric_claims("plain counts like 2 quick wins carry no unit") == set()
+# ---- Placeholder inputs + injection map ------------------------------------------
 
 
-def test_count_claims_extract_labelled_portfolio_counts():
-    assert _count_claims("2 quick wins, 1 steady play, 1 strategic bet") == {
-        ("count:quick_win", 2.0),
-        ("count:steady_play", 1.0),
-        ("count:strategic_bet", 1.0),
-    }
-    # Words may sit between the number and its label, in either direction.
-    assert _count_claims("3 low-value opportunities were suppressed") == {("count:suppressed", 3.0)}
-    assert _count_claims("we suppressed 42 opportunities") == {("count:suppressed", 42.0)}
-    # Digits act as barriers: one count never borrows another's label.
-    assert ("count:steady_play", 2.0) not in _count_claims("2 quick win(s), 1 steady play(s)")
-    # Unlabelled counts stay outside the vocabulary (prompt-governed).
-    assert _count_claims("the top 3 opportunities") == set()
+def test_lm_inputs_carry_tokens_not_figures():
+    # The LM must never see a real figure: every number in the LM-facing
+    # inputs is a placeholder token the server later substitutes.
+    g = _grounding()
+    lm_text = " ".join([g["lm_scope"], g["lm_opportunities"], g["lm_caveats"]])
+    for real in ("$5.0M", "3.2", "$1.2M", "42%", "2.1", "$300K", "18%"):
+        assert real not in lm_text
+    for token in ("{TOTAL}", "{QUICK}", "{ROI_1}", "{IMPACT_1}", "{GAP_1}", "{SEG_1}"):
+        assert token in lm_text
+    assert "42% TRX gap" not in g["lm_opportunities"]
+    assert "{GAP_1} TRX gap" in g["lm_opportunities"]
+    assert "{SUPPRESSED} low-value opportunities were suppressed" in g["lm_caveats"]
 
 
-def test_is_grounded_rejects_invented_portfolio_counts():
-    # codex PR-5 round 4 HIGH (its own repro): invented counts carried no
-    # money/pct/mult claim, so the guard skipped the sentence entirely.
-    sources = [
-        "Kisqali / $5.0M / mix: 2 quick win(s), 1 steady play(s), 1 strategic bet(s)",
-        "3 low-value opportunities were suppressed (below break-even).",
+def test_injection_map_binds_tokens_to_grounded_values():
+    g = _grounding()
+    inj = g["injection"]
+    assert inj["{TOTAL}"] == "$5.0M"
+    assert inj["{QUICK}"] == "2"
+    assert inj["{STEADY}"] == "1"
+    assert inj["{BETS}"] == "1"
+    assert inj["{SUPPRESSED}"] == "3"
+    assert inj["{ROI_1}"] == "3.2x"
+    assert inj["{IMPACT_1}"] == "$1.2M"
+    assert inj["{GAP_1}"] == "42%"
+    assert inj["{SEG_1}"] == "Northeast"
+    assert inj["{ROI_2}"] == "2.1x"
+    assert inj["{SEG_2}"] == "South"
+
+
+def test_injection_token_index_is_position_not_feed_rank():
+    # Duplicate feed ranks must not collide two opportunities onto one token.
+    opps = [
+        _opportunity(rank=7, segment_value="Alpha"),
+        _opportunity(rank=7, segment_value="Beta", expected_roi=1.5),
     ]
+    g = _grounding(opportunities=opps)
+    assert g["injection"]["{SEG_1}"] == "Alpha"
+    assert g["injection"]["{SEG_2}"] == "Beta"
+    assert "{ROI_2}" in g["lm_opportunities"]
+
+
+def test_suppressed_token_absent_when_nothing_suppressed():
+    g = _grounding(suppressed_count=0)
+    assert "{SUPPRESSED}" not in g["injection"]
+    assert "{SUPPRESSED}" not in g["lm_caveats"]
+
+
+def test_strip_segment_suffix_removes_trailing_segment_alias():
+    # The LM line appends "in {SEG_n}" itself; a real segment name left in the
+    # action prose would read twice and bypass the token-index check.
     assert (
-        _is_grounded("There are 99 quick wins and 42 suppressed opportunities.", sources) is False
+        _strip_segment_suffix("Boost the HCP engagement program in the west", "west")
+        == "Boost the HCP engagement program"
     )
-    # Correct restatements pass, even mixing scope-counts with the caveat
-    # count in one sentence (counts are one portfolio-level set, not
-    # per-opportunity pairings).
-    assert _is_grounded("The mix holds 2 quick wins with 3 suppressed.", sources) is True
+    assert _strip_segment_suffix("Boost engagement in West", "west") == "Boost engagement"
+    # Mid-sentence mentions and non-matching tails are left alone.
+    assert _strip_segment_suffix("Invest in west channels now", "west") == (
+        "Invest in west channels now"
+    )
+    assert _strip_segment_suffix("Deploy field triggers", "west") == "Deploy field triggers"
 
 
-def test_is_grounded_fails_closed_on_unparseable_count_phrasings():
-    # codex PR-5 round 5 HIGH (its own repro): "quick wins count of 99" carries
-    # the guarded label but no extractable claim — the guard must fail closed
-    # on ANY digit sharing a sentence with a count label that no extractor
-    # vouches for, instead of enumerating phrasings.
-    sources = [
-        "Kisqali / $5.0M / mix: 2 quick win(s), 1 steady play(s), 1 strategic bet(s)",
-        "3 low-value opportunities were suppressed (below break-even).",
-    ]
-    assert _is_grounded("The portfolio has a quick wins count of 99.", sources) is False
-    assert _is_grounded("The suppressed count is 42.", sources) is False
-    # A label sharing a sentence with FULLY-VOUCHED digits still passes: counts
-    # are claimed as counts, money/multiples as money/multiples.
+def test_lm_opportunity_line_places_segment_token():
+    g = _grounding(
+        opportunities=[
+            _opportunity(
+                recommended_action="Boost the HCP engagement program in the Northeast",
+            )
+        ]
+    )
+    line = g["lm_opportunities"]
+    assert "in the Northeast" not in line
+    assert "Boost the HCP engagement program in {SEG_1}" in line
+
+
+# ---- Placeholder contract validation ---------------------------------------------
+
+_VOCAB = {"{TOTAL}", "{QUICK}", "{ROI_1}", "{IMPACT_1}", "{SEG_1}", "{ROI_2}", "{SEG_2}"}
+
+
+def test_placeholder_violation_passes_clean_token_prose():
     assert (
-        _is_grounded(
-            "Take the 2 quick wins first: a $5.0M portfolio awaits.",
-            sources,
+        _placeholder_violation(
+            "Lead with {SEG_1}: {ROI_1} ROI on {IMPACT_1}, within a {TOTAL} portfolio.",
+            _VOCAB,
         )
-        is True
+        is None
     )
-    # Digit-free label prose stays free.
-    assert _is_grounded("Quick wins should lead the sequence.", sources) is True
+    # Multi-opportunity comparisons are the point of the design — segment
+    # tokens grouped in one sentence are fine, as are figure-free sentences.
+    assert _placeholder_violation("Then expand from {SEG_1} into {SEG_2}.", _VOCAB) is None
+    assert _placeholder_violation("No figures here at all.", _VOCAB) is None
+    # Metric tokens with no segment token in the sentence are unambiguous by
+    # construction (the token itself names the rank).
+    assert _placeholder_violation("Returns run from {ROI_2} up to {ROI_1}.", _VOCAB) is None
 
 
-def test_is_grounded_accepts_reformatted_and_rejects_invented_figures():
-    sources = ["Kisqali / total addressable opportunity value $5.0M", "3.2x ROI, 42% TRX gap"]
-    # Reformatted values from ONE unit pass; sentences with no figures pass.
-    assert _is_grounded("The $5,000,000 opportunity awaits.", sources) is True
-    assert _is_grounded("A 3.2x play on the 42% gap.", sources) is True
-    assert _is_grounded("No figures here at all.", sources) is True
-    # Invented values fail regardless of unit.
-    assert _is_grounded("Expect roughly $7.5M upside", sources) is False
-    assert _is_grounded("a 55% gap", sources) is False
-    assert _is_grounded("at 5x returns", sources) is False
+def test_placeholder_violation_rejects_leaked_digits():
+    assert _placeholder_violation("Expect a 6.2x return on {IMPACT_1}.", _VOCAB) is not None
+    assert _placeholder_violation("Roughly $500K of upside.", _VOCAB) is not None
+    # Malformed/lowercased tokens leave their index digits behind — trapped by
+    # the same digit check.
+    assert _placeholder_violation("Lead with {roi_1} returns.", _VOCAB) is not None
+    assert _placeholder_violation("Lead with {ROI_1 returns.", _VOCAB) is not None
 
 
-def test_is_grounded_rejects_cross_unit_pairing_within_a_sentence():
-    # codex PR-5 round 2 HIGH: global value-membership would accept an LM
-    # sentence that pairs unit A's dollar value with unit B's ROI — every
-    # number "appears somewhere". The pairing unit is the sentence: its claims
-    # must come from a SINGLE source unit.
-    sources = ["Kisqali / total addressable opportunity value $5.0M", "3.2x ROI, 42% TRX gap"]
-    assert _is_grounded("The $5,000,000 opportunity at 3.2x.", sources) is False
-    # The same figures split across sentences each trace to one unit — fine.
-    assert _is_grounded("The $5,000,000 opportunity awaits. It leads at 3.2x.", sources) is True
+def test_placeholder_violation_rejects_non_decimal_numeric_glyphs():
+    # codex PR-1153 round 1 HIGH: \d only matches Unicode DECIMAL digits, so
+    # circled/superscript/Roman/fraction glyphs would render as figures.
+    assert _placeholder_violation("Lead with {SEG_1} at ②x ROI on {IMPACT_1}.", _VOCAB) is not None
+    assert _placeholder_violation("A ²x return awaits.", _VOCAB) is not None
+    assert _placeholder_violation("Phase Ⅲ expansion follows.", _VOCAB) is not None
+    assert _placeholder_violation("Capture ½ the market.", _VOCAB) is not None
 
 
-def test_generate_insight_rejects_llm_output_with_ungrounded_figures(monkeypatch):
-    # codex PR-5 round 1 HIGH: the prompt alone must not be the only defense.
-    # An LM response inventing a dollar value falls back to the factual summary.
+def test_placeholder_violation_rejects_unknown_tokens():
+    assert _placeholder_violation("Expect {ROI_9} returns.", _VOCAB) is not None
+    assert _placeholder_violation("A {MADEUP} figure.", _VOCAB) is not None
+
+
+def test_placeholder_violation_rejects_cross_index_seg_metric_pairing():
+    # "{SEG_2} yields {ROI_1}" re-attributes rank 1's figure to rank 2's
+    # segment even though both values are real — exact index arithmetic, no
+    # English parsing.
+    assert _placeholder_violation("Then {SEG_2} yields {ROI_1}.", _VOCAB) is not None
+    assert _placeholder_violation("Then {SEG_2} yields {ROI_2}.", _VOCAB) is None
+    # The pairing unit is the sentence: the same tokens in separate sentences
+    # claim no relationship.
+    assert _placeholder_violation("Start with {SEG_2}. Best return is {ROI_1}.", _VOCAB) is None
+    # A comparison naming both segments may cite both figures.
+    assert _placeholder_violation("{SEG_1} at {ROI_1} outpaces {SEG_2} at {ROI_2}.", _VOCAB) is None
+
+
+def test_inject_substitutes_all_tokens_in_one_pass():
+    inj = {"{ROI_1}": "3.2x", "{SEG_1}": "Northeast", "{TOTAL}": "$5.0M"}
+    assert (
+        _inject("Lead with {SEG_1} at {ROI_1} inside {TOTAL}.", inj)
+        == "Lead with Northeast at 3.2x inside $5.0M."
+    )
+
+
+# ---- generate_insight: contract enforcement end-to-end ----------------------------
+
+
+def _pred(interpretation, takeaways=()):
+    return SimpleNamespace(interpretation=interpretation, key_takeaways=list(takeaways))
+
+
+def test_generate_insight_injects_real_values_into_compliant_output(monkeypatch):
     g = _grounding()
     monkeypatch.setattr(
         "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation="Invest now: the portfolio is worth $9.9M at 8x returns.",
-            key_takeaways=["Fund it"],
+        lambda *a, **k: _pred(
+            "Lead with {SEG_1}: {ROI_1} ROI on {IMPACT_1} closing a {GAP_1} gap. "
+            "Then {SEG_2} follows at {ROI_2}.",
+            ["{SEG_1} first ({IMPACT_1} at {ROI_1})", "Portfolio totals {TOTAL}"],
         ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is False
+    assert "Lead with Northeast: 3.2x ROI on $1.2M closing a 42% gap." in out["insight"]
+    assert "Then South follows at 2.1x." in out["insight"]
+    assert out["key_takeaways"] == ["Northeast first ($1.2M at 3.2x)", "Portfolio totals $5.0M"]
+    assert "{" not in out["insight"]
+
+
+def test_generate_insight_rejects_leaked_digits_and_falls_back(monkeypatch):
+    # A digit outside a token is by definition not server-injected — the exact
+    # fabrication class the old numeric guard patrolled with English parsing.
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: _pred("Invest now: the portfolio is worth $9.9M at 8x returns."),
     )
     out = generate_insight(g)
     assert out["is_fallback"] is True
     assert "$9.9M" not in out["insight"]
 
 
-def test_build_grounding_binds_segment_and_metric_tokens_per_unit():
-    g = _grounding()
-    # scope + caveats own no attribute tokens; each opportunity owns its own.
-    assert g["source_tokens"][0] == set()
-    assert g["source_tokens"][1] == set()
-    assert g["source_tokens"][2] == {"northeast", "trx"}
-    assert g["source_tokens"][3] == {"south", "nbrx"}
-
-
-def test_is_grounded_rejects_another_units_segment_in_a_numeric_sentence():
-    sources = ["A — 3.2x ROI, $1.2M impact in Northeast.", "B — 2.1x ROI, $300K impact in South."]
-    tokens = [{"northeast", "trx"}, {"south", "nbrx"}]
-    # Figures from unit A re-attributed to unit B's segment: reject.
-    assert _is_grounded("Capture $1.2M at 3.2x in South.", sources, tokens) is False
-    # Same figures with their OWN segment: pass.
-    assert _is_grounded("Capture $1.2M at 3.2x in Northeast.", sources, tokens) is True
-    # Non-numeric prose may name any segment freely.
-    assert _is_grounded("Both Northeast and South matter strategically.", sources, tokens) is True
-
-
-def test_generate_insight_rejects_count_noun_phrasing(monkeypatch):
-    # codex PR-5 round 5 HIGH end-to-end: the count-noun phrasing must fall
-    # back even though no count claim is extractable from it.
+def test_generate_insight_rejects_unknown_tokens(monkeypatch):
     g = _grounding()
     monkeypatch.setattr(
         "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation="The portfolio has a quick wins count of 99.",
-            key_takeaways=[],
-        ),
+        lambda *a, **k: _pred("Expect {ROI_9} returns on {IMPACT_1}."),
     )
     out = generate_insight(g)
     assert out["is_fallback"] is True
-    assert "99" not in out["insight"]
+    assert "{ROI_9}" not in out["insight"]
 
 
-def test_generate_insight_rejects_fabricated_portfolio_counts(monkeypatch):
-    # codex PR-5 round 4 HIGH: fabricated breadth ("99 quick wins") must fall
-    # back even though it carries no money/pct/multiple claim.
+def test_generate_insight_rejects_cross_index_attribution(monkeypatch):
     g = _grounding()
     monkeypatch.setattr(
         "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation="There are 99 quick wins and 42 suppressed opportunities.",
-            key_takeaways=[],
-        ),
-    )
-    out = generate_insight(g)
-    assert out["is_fallback"] is True
-    assert "99" not in out["insight"]
-
-
-def test_generate_insight_passes_correct_count_restatement(monkeypatch):
-    g = _grounding()
-    monkeypatch.setattr(
-        "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation=(
-                "The portfolio holds 2 quick wins, 1 steady play, and 1 strategic "
-                "bet, with 3 opportunities suppressed below break-even."
-            ),
-            key_takeaways=[],
-        ),
-    )
-    out = generate_insight(g)
-    assert out["is_fallback"] is False
-
-
-def test_generate_insight_rejects_segment_swapped_attribution(monkeypatch):
-    # codex PR-5 round 3 HIGH: fully-grounded figures re-attributed to another
-    # opportunity's segment is the same false-recommendation class as swapped
-    # numbers. Must fall back.
-    g = _grounding()
-    monkeypatch.setattr(
-        "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation="Deploy field triggers in South for $1.2M at 3.2x ROI.",
-            key_takeaways=[],
-        ),
+        lambda *a, **k: _pred("Capture {IMPACT_1} at {ROI_1} in {SEG_2}."),
     )
     out = generate_insight(g)
     assert out["is_fallback"] is True
 
 
-def test_generate_insight_rejects_swapped_figure_pairing(monkeypatch):
-    # codex PR-5 round 2 HIGH: attributing opportunity 2's $300K to
-    # opportunity 1's action/ROI is a FALSE quantified recommendation even
-    # though every number is individually grounded. Must fall back.
+def test_generate_insight_rejects_violating_takeaway_even_with_clean_body(monkeypatch):
     g = _grounding()
     monkeypatch.setattr(
         "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation="Deploy field triggers to capture $300K at 3.2x ROI.",
-            key_takeaways=[],
-        ),
-    )
-    out = generate_insight(g)
-    assert out["is_fallback"] is True
-
-
-def test_generate_insight_rejects_ungrounded_takeaway_even_with_grounded_body(monkeypatch):
-    g = _grounding()
-    monkeypatch.setattr(
-        "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation="Prioritize the $1.2M Northeast TRX gap at 3.2x ROI.",
-            key_takeaways=["Expect $4.4M incremental revenue"],
+        lambda *a, **k: _pred(
+            "Lead with {SEG_1} at {ROI_1}.",
+            ["Expect $4.4M incremental revenue"],
         ),
     )
     out = generate_insight(g)
@@ -333,24 +330,65 @@ def test_generate_insight_rejects_ungrounded_takeaway_even_with_grounded_body(mo
     assert all("$4.4M" not in t for t in out["key_takeaways"])
 
 
-def test_generate_insight_passes_grounded_llm_output_through(monkeypatch):
-    # Guardrail against over-gating: a faithful distillation (every figure
-    # present in the grounding, even reformatted) renders as the real insight.
+def test_generate_insight_retries_once_with_a_fresh_sample(monkeypatch):
+    # One rejected draw triggers exactly one fresh-sample retry; the compliant
+    # second draw renders. lm_cache must be False on every attempt or the
+    # in-memory DSPy cache would replay the rejected completion.
+    g = _grounding()
+    calls = []
+
+    def _fake(sig, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return _pred("A leaked 8x figure.")
+        return _pred("Lead with {SEG_1} at {ROI_1}.")
+
+    monkeypatch.setattr("src.insights.executive_brief.run_signature", _fake)
+    out = generate_insight(g)
+    assert out["is_fallback"] is False
+    assert out["insight"] == "Lead with Northeast at 3.2x."
+    assert len(calls) == 2
+    assert all(k["lm_cache"] is False for k in calls)
+
+
+def test_generate_insight_falls_back_after_two_bad_samples(monkeypatch):
+    g = _grounding()
+    calls = []
+
+    def _fake(sig, **kwargs):
+        calls.append(kwargs)
+        return _pred("Always an 8x leak.")
+
+    monkeypatch.setattr("src.insights.executive_brief.run_signature", _fake)
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+    assert len(calls) == 2
+
+
+def test_generate_insight_falls_back_without_retry_when_lm_unavailable(monkeypatch):
+    # None means the LM itself failed (no key / provider error) — a second
+    # immediate call would fail the same way.
+    g = _grounding()
+    calls = []
+
+    def _fake(sig, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr("src.insights.executive_brief.run_signature", _fake)
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+    assert len(calls) == 1
+
+
+def test_generate_insight_treats_empty_interpretation_as_violation(monkeypatch):
     g = _grounding()
     monkeypatch.setattr(
         "src.insights.executive_brief.run_signature",
-        lambda *a, **k: SimpleNamespace(
-            interpretation=(
-                "Deploy field triggers first: $1,200,000 at stake at 3.2x ROI "
-                "closing the 42% TRX gap; then the 18% NBRX gap at 2.1x."
-            ),
-            key_takeaways=["Northeast first ($1.2M, 3.2x)", "South second ($300K)"],
-        ),
+        lambda *a, **k: _pred(""),
     )
     out = generate_insight(g)
-    assert out["is_fallback"] is False
-    assert "$1,200,000" in out["insight"]
-    assert out["key_takeaways"] == ["Northeast first ($1.2M, 3.2x)", "South second ($300K)"]
+    assert out["is_fallback"] is True
 
 
 def test_verbose_free_text_is_bounded():
@@ -366,3 +404,5 @@ def test_verbose_free_text_is_bounded():
     # 160, segment at 60 (mirrors the frontend brief-request bounds).
     assert "x" * 161 not in g["opportunities"]
     assert "y" * 61 not in g["opportunities"]
+    assert "x" * 161 not in g["lm_opportunities"]
+    assert "y" * 61 not in g["injection"]["{SEG_1}"]

@@ -390,7 +390,10 @@ async def executive_brief_insight(
         payload = cached
     else:
         payload = await asyncio.to_thread(executive_brief.generate_insight, g)
-        await cache_set(key, payload)
+        # A fallback marks a transient state (LM outage or a rejected sample):
+        # cache it briefly so the page self-heals on the next visit instead of
+        # pinning the factual summary for the full hour.
+        await cache_set(key, payload, ttl_seconds=300 if payload.get("is_fallback") else 3600)
     return _finalize(payload, provenance="Gap-analyzer ROI opportunities (server-derived)")
 
 
@@ -449,7 +452,10 @@ async def hte_insight(
         payload = cached
     else:
         payload = await asyncio.to_thread(hte.generate_insight, g)
-        await cache_set(key, payload)
+        # Same fallback-TTL policy as /executive-brief: a fallback marks a
+        # transient state (LM outage or a guard-rejected sample) — cache it
+        # briefly so the page self-heals instead of pinning it for the hour.
+        await cache_set(key, payload, ttl_seconds=300 if payload.get("is_fallback") else 3600)
     return _finalize(payload, provenance="Segment-level CATE analysis (server-derived)")
 
 
