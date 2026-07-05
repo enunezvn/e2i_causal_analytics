@@ -342,6 +342,84 @@ class TestGuard:
         assert hte._is_grounded("Fully 3 among 3 segments are significant.", g) is False
         assert hte._is_grounded("2 in 3 segments are significant.", g) is True
 
+    def test_vouched_numbers_cannot_swap_segments(self):
+        # codex round-6 HIGH: vouching was global, so one segment's figures
+        # could be served under another segment's name. A sentence naming
+        # exactly one segment may only carry that row's figures plus globals;
+        # comparisons naming several segments fall back to global vouching.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "The age_band=50-65 segment responds strongest at +17.7pp "
+                "[CI +12.7pp to +22.8pp], n=1,385.",
+                g,
+            )
+            is False
+        )
+        assert hte._is_grounded("The low band responds at +17.7pp.", g) is False
+        assert hte._is_grounded("High severity responds at +13.8pp (n=2,015).", g) is False
+        assert (
+            hte._is_grounded("The 50-65 band responds at +13.8pp [CI +8.0pp to +19.6pp].", g)
+            is True
+        )
+        assert (
+            hte._is_grounded("High severity leads at +17.7pp while the 50-65 band adds +13.8pp.", g)
+            is True
+        )
+        assert hte._is_grounded("The 50-65 band nearly matches the +11.1pp overall ATE.", g) is True
+
+    def test_vouched_numbers_cannot_swap_metrics(self):
+        # codex round-6 HIGH: the ATE could be served as the expected lift
+        # (and any vouched pp figure as either metric).
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "Expected lift from differential targeting is +11.1pp, matching the overall ATE.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "The targeting verdict is no opportunity, with expected lift +17.7pp.", g
+            )
+            is False
+        )
+        assert hte._is_grounded("The overall ATE is +17.7pp.", g) is False
+        assert hte._is_grounded("Expected lift from differential targeting is +0.0pp.", g) is True
+        assert hte._is_grounded("The ATE of +11.1pp exceeds the +0.0pp lift.", g) is True
+        assert hte._is_grounded("The overall effect is +11.1pp with heterogeneity 0.26.", g) is True
+
+    def test_postpositive_sign_words_bind_to_unit_figures(self):
+        # codex round-6 HIGH: "an 11.1pp negative effect" read as unsigned.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The overall ATE is an 11.1pp negative effect.", g) is False
+        assert (
+            hte._is_grounded("The overall effect is an 11.1 percentage-point negative effect.", g)
+            is False
+        )
+        assert hte._is_grounded("An 11.1pp positive effect overall.", g) is True
+
+    def test_ascii_plus_minus_never_vouches(self):
+        # codex round-6 HIGH: "+/-2.8pp" parsed as a signed -2.8pp and passed.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The low band CI dips to +/-2.8pp.", g) is False
+        assert (
+            hte._is_grounded("The low band confidence interval is +/-2.8pp to +9.6pp.", g) is False
+        )
+
+    def test_segment_count_rule_cannot_start_mid_decimal(self):
+        # codex round-6 MEDIUM over-rejection: _SEG_COUNT_RE matched "1pp ..."
+        # inside "+11.1pp" and rejected faithful prose mentioning "cohort".
+        g = hte.build_grounding(_record())
+        text = (
+            "Overall ATE is +11.1pp for persistent_180d, with cohort n=3,883 and 95% CIs. "
+            "High severity responds strongest at +17.7pp, while low severity is weaker at "
+            "+3.4pp with CI -2.8pp to +9.6pp. These are model-based estimates from one "
+            "causal-forest analysis on an observational cohort."
+        )
+        assert hte._is_grounded(text, g) is True
+
     def test_variable_name_digits_pass_only_in_context(self):
         # codex round-1 HIGH: "Treat 180 patients." re-used persistent_180d's
         # digits bare. In-context uses (the name itself, "180-day") stay fine.

@@ -6,8 +6,8 @@ only caller input), and the LM output passes a fail-closed numeric guard before
 it is served — any numeric claim the grounding cannot vouch for (including a
 flipped or word-spelled sign, a pp/% unit swap, a unit-bearing figure re-used
 bare, a name digit re-used out of context, or a vouched number misattributed
-as a segment/subgroup count) downgrades the response to the deterministic
-factual fallback. Effects on the
+as a segment/subgroup count, to the wrong segment, or to the wrong metric)
+downgrades the response to the deterministic factual fallback. Effects on the
 binary clinical outcomes are probability deltas presented in PERCENTAGE POINTS
 (pp), matching the /ai-insights HTE card's display unit.
 
@@ -101,6 +101,14 @@ def _fmt_int(value: Any) -> str | None:
     return f"{i:,}"
 
 
+def _num_of(rendering: str | None) -> str | None:
+    """The comma-stripped digits of a rendered figure ("+11.1pp" -> "11.1")."""
+    if not rendering:
+        return None
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", rendering)
+    return m.group(0).replace(",", "") if m else None
+
+
 # ---------------------------------------------------------------------------
 # Vouched phrases — name digits are grounded only IN CONTEXT
 # ---------------------------------------------------------------------------
@@ -167,6 +175,9 @@ _DASH_RE = re.compile(rf"[{_DASH_CLASS}](?=\d)|(?<=\d)[{_DASH_CLASS}]")
 _SLASH_RE = re.compile(r"[⁄∕／]")
 # Unambiguous plus glyphs ("＋2.8", "➕2.8") become ASCII "+".
 _PLUS_RE = re.compile(r"[＋﹢➕]")
+# ASCII plus-minus ("+/-2.8pp") becomes "±" so it reads as the never-vouched
+# ± sign instead of a signed claim built from its "-" half.
+_PLUSMINUS_RE = re.compile(r"[+]\s*/\s*[-−]|[-−]\s*/\s*[+]")
 # Whitespace runs collapse to one space (newlines kept for the bullet rule).
 _WS_RE = re.compile(r"[^\S\n]+")
 
@@ -174,6 +185,7 @@ _WS_RE = re.compile(r"[^\S\n]+")
 def _normalize(text: str) -> str:
     """Canonicalize LM typography before any guard rule runs."""
     text = _BULLET_RE.sub("", text)
+    text = _PLUSMINUS_RE.sub("±", text)
     text = _DASH_RE.sub("-", text)
     text = _SLASH_RE.sub("/", text)
     text = _PLUS_RE.sub("+", text)
@@ -282,7 +294,7 @@ _CLAIM_RE = re.compile(
 # dashes and slashes are normalized to "-" and "/", word-adjacent dashes are
 # matched here directly.
 _FRACTION_RE = re.compile(
-    rf"\b(\d+)(?:\s*/\s*|[-{_DASH_CLASS}\s]+"
+    rf"\b(?<![.,])(\d+)(?:\s*/\s*|[-{_DASH_CLASS}\s]+"
     rf"(?:out[-{_DASH_CLASS}\s]+of|of|over|in|per|among|amongst|from)"
     rf"[-{_DASH_CLASS}\s]+)(\d+)\b",
     re.IGNORECASE,
@@ -304,13 +316,21 @@ _SEG_COUNT_EXEMPT = (
 # not START with a digit (another number ends the claim) or ")" (a closing
 # paren directly after the number means it was parenthetical — "(n=1,385),"
 # is not counting what follows). The tail glued to the number itself
-# ("1,385-significant") tolerates punctuation but not ")".
+# ("1,385-significant") tolerates punctuation but not ")". The number may
+# not start mid-decimal or mid-thousands ("1pp" inside "+11.1pp" is not a
+# count of anything).
 _SEG_COUNT_RE = re.compile(
-    rf"\b(\d(?:[\d,]*\d)?)[^\s.!?)]*\s+"
+    rf"\b(?<![.,])(\d(?:[\d,]*\d)?)[^\s.!?)]*\s+"
     rf"(?:(?!{_SEG_COUNT_EXEMPT}[^\w\s]*\s)(?![\d)])[^\s.!?]+\s+)*"
     rf"{_SEG_NOUNS}\b",
     re.IGNORECASE,
 )
+
+
+# A postpositive sign adjective right after a unit-bearing figure ("an
+# 11.1pp negative effect", "11.1pp net negative") signs the claim. Bounded to
+# one bridging word and never across punctuation.
+_POSTPOSITIVE_SIGN_RE = re.compile(r" (?:[a-z][\w-]* )?(negative|positive)\b", re.IGNORECASE)
 
 
 def _extract_claims(text: str) -> list[tuple[str, str, str]]:
@@ -318,6 +338,11 @@ def _extract_claims(text: str) -> list[tuple[str, str, str]]:
     claims: list[tuple[str, str, str]] = []
     for m in _CLAIM_RE.finditer(text):
         raw_sign = (m.group("sym") or m.group("word") or m.group("word2") or "").strip().lower()
+        unit_raw = (m.group("unit") or "").lower()
+        if not raw_sign and unit_raw:
+            post = _POSTPOSITIVE_SIGN_RE.match(text[m.end() :])
+            if post:
+                raw_sign = post.group(1).lower()
         if raw_sign in ("-", "−", "negative", "minus"):
             sign = "-"
         elif raw_sign in ("+", "positive", "plus"):
@@ -326,7 +351,6 @@ def _extract_claims(text: str) -> list[tuple[str, str, str]]:
             sign = "±"  # never rendered by any grounding -> never vouches
         else:
             sign = ""
-        unit_raw = (m.group("unit") or "").lower()
         if unit_raw == "pp" or "point" in unit_raw:
             unit = "pp"
         elif unit_raw:
@@ -350,6 +374,88 @@ def _claim_vouched(
     return False
 
 
+# ---------------------------------------------------------------------------
+# Attribution checks — a vouched number must belong to what it is claimed for
+# ---------------------------------------------------------------------------
+
+# Windows never cross sentence/semicolon boundaries; the sentence splitters
+# leave decimals intact ("." splits only before whitespace/end).
+_WINDOW_BREAK_RE = re.compile(r"[;\n]|[.!?](?=\s|$)")
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?=\s|$)|\n+")
+_LIFT_ANCHOR_RE = re.compile(r"\b(?:expected\s+)?(?:lift|uplift)\b", re.IGNORECASE)
+_ATE_ANCHOR_RE = re.compile(
+    r"\bATE\b|\baverage\s+treatment\s+effect\b|\boverall\s+(?:treatment\s+)?effect\b",
+    re.IGNORECASE,
+)
+_METRIC_ANCHORS = (_LIFT_ANCHOR_RE, _ATE_ANCHOR_RE)
+
+
+def _metric_value_claims(window: str) -> list[str]:
+    """pp/decimal figures in a window — the shapes a lift/ATE value takes.
+    %-unit figures are CI-level annotations ("95% CIs"), not effect values."""
+    return [
+        num
+        for _s, num, unit in _extract_claims(window)
+        if unit == "pp" or (not unit and "." in num)
+    ]
+
+
+def _metric_misattributed(
+    text: str, anchor_re: re.Pattern[str], value_num: str | None, allowed: set[str]
+) -> bool:
+    """True iff a metric-shaped figure is tied to this metric's wording but
+    is not the metric's rendered value ("expected lift is +17.7pp" when the
+    true lift is +0.0pp). Fail-closed: if the metric was never rendered, any
+    figure attributed to it rejects. Windows trim to whole tokens so a cut
+    never fabricates a number, and the other metric's anchor takes its own
+    preceding territory with it ("... exceeds the +0.0pp lift")."""
+    for m in anchor_re.finditer(text):
+        end = m.end() + 60
+        after = text[m.end() : end]
+        if end < len(text) and not text[end].isspace():
+            after = after.rsplit(" ", 1)[0] if " " in after else after
+        cut = _WINDOW_BREAK_RE.search(after)
+        if cut:
+            after = after[: cut.start()]
+        for other in _METRIC_ANCHORS:
+            if other is not anchor_re:
+                o = other.search(after)
+                if o:
+                    after = after[: max(0, o.start() - 25)]
+        start = max(0, m.start() - 25)
+        before = text[start : m.start()]
+        if start > 0 and not text[start - 1].isspace():
+            before = before.split(" ", 1)[-1] if " " in before else ""
+        breaks = list(_WINDOW_BREAK_RE.finditer(before))
+        if breaks:
+            before = before[breaks[-1].end() :]
+        for num in (*_metric_value_claims(before), *_metric_value_claims(after)):
+            if num != value_num and num not in allowed:
+                return True
+    return False
+
+
+def _segment_attribution_ok(norm_text: str, g: dict[str, Any]) -> bool:
+    """A sentence naming exactly ONE segment may only carry that row's
+    figures plus the global metrics — "the age_band=50-65 segment responds
+    at +17.7pp" with another row's effect rejects. Sentences naming several
+    segments (comparisons) or none fall back to global vouching."""
+    rows: list[dict[str, Any]] = g.get("segment_rows") or []
+    if not rows:
+        return True
+    for sentence in _SENTENCE_SPLIT_RE.split(norm_text):
+        mentioned = [r for r in rows if re.search(r["mention"], sentence, flags=re.IGNORECASE)]
+        if len(mentioned) != 1:
+            continue
+        allowed: set[str] = mentioned[0]["numbers"] | g["global_numbers"]
+        stripped = _strip_phrases(sentence, g["phrases"], g["ambiguous_phrases"])
+        for _s, num, unit in _extract_claims(stripped):
+            governed = bool(unit) or "." in num or len(num) >= 4
+            if governed and num not in allowed:
+                return False
+    return True
+
+
 def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     """True iff every numeric claim in ``candidate`` is vouched by the grounding.
 
@@ -357,10 +463,24 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     rounding, re-derived deltas, invented figures, flipped signs, swapped
     units, name digits re-used out of context) rejects the whole output.
     Count fractions whose denominator is the segment total must state the
-    true significant count, and any number attributed to segments must be
-    the true significant or total count.
+    true significant count; a number attributed to segments must be the true
+    significant or total count; a figure tied to the lift/ATE wording must be
+    that metric's value; and a sentence naming one segment may only carry
+    that segment's figures (plus globals).
     """
-    text = _strip_phrases(candidate, g["phrases"], g["ambiguous_phrases"])
+    norm = _normalize(candidate)
+    metric_nums: dict[str, str | None] = g["metric_nums"]
+    # The heterogeneity score is a legal annotation next to either metric
+    # ("+11.1pp overall, heterogeneity 0.26"); unit-strict vouching still
+    # rejects it re-used as a pp value.
+    het_ok = {n for n in (metric_nums.get("het"),) if n}
+    if _metric_misattributed(norm, _LIFT_ANCHOR_RE, metric_nums["lift"], het_ok):
+        return False
+    if _metric_misattributed(norm, _ATE_ANCHOR_RE, metric_nums["ate"], het_ok):
+        return False
+    if not _segment_attribution_ok(norm, g):
+        return False
+    text = _strip_phrases(norm, g["phrases"], g["ambiguous_phrases"])
     vouched: dict[str, set[tuple[str, str]]] = g["vouched"]
     seg_counts = {str(g["sig_count"]), str(g["total_count"])}
     for seg in _SEG_COUNT_RE.finditer(text):
@@ -498,6 +618,51 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
     for sign, num, unit in _extract_claims(grounded_text):
         vouched.setdefault(num, set()).add((sign, unit))
 
+    # Attribution vocabulary: which number belongs to which segment/metric.
+    # Global metrics are legal in any sentence; a sentence naming exactly one
+    # segment is additionally restricted to that row's figures.
+    global_numbers = {"0", "1"}  # the "(0-1 scale)" rendering
+    for rendering in (ate_pp, lift_s, het_str, ci_pct, str(sig_count), str(total_count)):
+        g_num = _num_of(rendering)
+        if g_num:
+            global_numbers.add(g_num)
+    if n_total:
+        global_numbers.add(str(n_total))
+
+    seg_ctx_words = {"severity", "band", "segment", "group", "cohort", "subgroup", "tier"}
+    for d in dims:
+        seg_ctx_words.update(w for w in re.split(r"[_\W]+", str(d).lower()) if len(w) >= 3)
+    ctx_pat = "(?:" + "|".join(sorted(seg_ctx_words)) + ")"
+    segment_rows: list[dict[str, Any]] = []
+    for r in ordered:
+        value = str(r.get("segment_value") or "").strip()
+        if not value:
+            continue
+        row_numbers: set[str] = set()
+        for rendering in (
+            _pp(r.get("cate_estimate")),
+            _pp(r.get("cate_ci_lower")),
+            _pp(r.get("cate_ci_upper")),
+            _fmt_int(r.get("sample_size")),
+        ):
+            r_num = _num_of(rendering)
+            if r_num:
+                row_numbers.add(r_num)
+        variants = {value, value.replace("_", " "), value.replace("_", "-")}
+        safe_v, ambig_v = _phrase_variants(value)
+        variants |= safe_v | ambig_v
+        if re.search(r"\d", value) or len(value) >= 5 or " " in value or "_" in value:
+            mention = "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True) if v)
+        else:
+            # Short common-word values ("high", "low") are segment mentions
+            # only next to segment context ("high severity", "band=high").
+            v_esc = re.escape(value)
+            mention = (
+                rf"\b{v_esc}[=\s-]+(?:[\w-]+[\s-]+)?{ctx_pat}\b"
+                rf"|\b{ctx_pat}[\w-]*[=\s-]+(?:[\w-]+[\s-]+)?{v_esc}\b"
+            )
+        segment_rows.append({"mention": mention, "numbers": row_numbers})
+
     return {
         "scope": scope,
         "effect_summary": effect_summary,
@@ -510,6 +675,9 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         "has_signal": has_signal,
         "sig_count": sig_count,
         "total_count": total_count,
+        "metric_nums": {"ate": _num_of(ate_pp), "lift": _num_of(lift_s), "het": _num_of(het_str)},
+        "global_numbers": global_numbers,
+        "segment_rows": segment_rows,
     }
 
 
