@@ -71,10 +71,21 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   const {
     mutate: generateBrief,
     reset: resetBrief,
-    data: briefInsight,
-    error: briefError,
+    data: briefResponse,
+    variables: briefVariables,
+    error: briefRawError,
     isPending: isGenerating,
   } = useExecutiveBriefInsight();
+
+  // Attribution guard (codex PR-5 round 1 HIGH): reset() does NOT cancel an
+  // in-flight mutation. If brand A's request resolves after a switch to brand
+  // B — and B never fires a new request (e.g. no signal) — the hook still
+  // observes A's mutation and its late data/error would render under B. Only
+  // consume a result whose REQUEST brand matches the brand on screen.
+  const briefInsight =
+    briefResponse && briefVariables?.brand === brand ? briefResponse : null;
+  const briefError =
+    briefRawError && briefVariables?.brand === brand ? briefRawError : null;
 
   // Real crystallized insights for this brand (M5 REWIRE). When present,
   // these take precedence over the insights-endpoint path.

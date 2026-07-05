@@ -149,7 +149,10 @@ describe('ExecutiveAIBrief — real crystallized insights', () => {
         },
       ],
     } as unknown as Partial<ExecQuery>);
-    mockBrief({ data: DISTILLATION } as unknown as Partial<BriefMutation>);
+    mockBrief({
+      data: DISTILLATION,
+      variables: { brand: 'Kisqali' },
+    } as unknown as Partial<BriefMutation>);
     mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
@@ -172,7 +175,10 @@ describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
   });
 
   it('renders ONLY the real distillation — no fake sections spliced in', () => {
-    mockBrief({ data: DISTILLATION } as unknown as Partial<BriefMutation>);
+    mockBrief({
+      data: DISTILLATION,
+      variables: { brand: 'Kisqali' },
+    } as unknown as Partial<BriefMutation>);
     mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
@@ -193,7 +199,10 @@ describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
   });
 
   it('reports the real generated-section count in the footer', () => {
-    mockBrief({ data: DISTILLATION } as unknown as Partial<BriefMutation>);
+    mockBrief({
+      data: DISTILLATION,
+      variables: { brand: 'Kisqali' },
+    } as unknown as Partial<BriefMutation>);
     mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
@@ -205,6 +214,7 @@ describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
   it('shows a labeled error state when the insight call fails and nothing else is available', () => {
     mockBrief({
       error: new Error('insights service unavailable'),
+      variables: { brand: 'Remibrutinib' },
     } as unknown as Partial<BriefMutation>);
     mockOpps({ data: OPP_CONTEXT });
 
@@ -224,6 +234,7 @@ describe('ExecutiveAIBrief — honest fallback labeling (PR-5)', () => {
         key_takeaways: [],
         is_fallback: true,
       },
+      variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
     mockOpps({ data: OPP_CONTEXT });
 
@@ -237,7 +248,10 @@ describe('ExecutiveAIBrief — honest fallback labeling (PR-5)', () => {
   });
 
   it('labels the real LLM distillation as such and stamps the footer timestamp', () => {
-    mockBrief({ data: DISTILLATION } as unknown as Partial<BriefMutation>);
+    mockBrief({
+      data: DISTILLATION,
+      variables: { brand: 'Kisqali' },
+    } as unknown as Partial<BriefMutation>);
     mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
@@ -328,6 +342,7 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
       mutate: vi.fn(),
       reset,
       data: briefData,
+      variables: { brand: 'Kisqali' },
       error: null,
       isPending: false,
     } as unknown as BriefMutation));
@@ -355,6 +370,7 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
     mockBrief({
       mutate: vi.fn(),
       data: DISTILLATION,
+      variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
     mockOpps({ data: OPP_CONTEXT });
 
@@ -366,5 +382,37 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
     rerender(<ExecutiveAIBrief brand="Fabhalta" />);
 
     expect(screen.queryByText(/Prioritize the Northeast TRX gap/)).not.toBeInTheDocument();
+  });
+
+  it('drops a LATE-resolving response from the previous brand (codex PR-5 round 1 HIGH)', () => {
+    // reset() does not cancel an in-flight mutation. Model the race: brand A's
+    // request resolves AFTER the switch to brand B, and B never fires a new
+    // request (its feed has no signal) — so the hook still surfaces A's data.
+    // The attribution guard must refuse to render it under B.
+    mockBrief({
+      mutate: vi.fn(),
+      data: DISTILLATION,
+      variables: { brand: 'Kisqali' },
+    } as unknown as Partial<BriefMutation>);
+    // Brand B settled with NO signal: request is null, endpoint never fired.
+    mockOpps({
+      data: {
+        ...OPP_CONTEXT,
+        opportunities: [],
+        total_count: 0,
+        quick_wins_count: 0,
+        total_addressable_value: 0,
+        suppressed_count: 0,
+      },
+    });
+
+    render(<ExecutiveAIBrief brand="Fabhalta" />);
+
+    // Brand A's brief must not be attributed to brand B.
+    expect(screen.queryByText(/Prioritize the Northeast TRX gap/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Last updated:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/0 insights generated/)).toBeInTheDocument();
+    // B's honest empty state renders instead.
+    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
   });
 });

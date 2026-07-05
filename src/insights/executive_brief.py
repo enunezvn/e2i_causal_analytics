@@ -14,6 +14,7 @@ is unavailable (never fabricates)."""
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from src.insights.common import normalize_list, run_signature
@@ -187,6 +188,44 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ---- Numeric grounding guard ---------------------------------------------------
+# The signature TELLS the LM not to invent figures, but an executive brief is the
+# highest-stakes surface for plausible-wrong values, so the prompt is not the only
+# defense: every high-risk numeric claim in the LM output (currency, percentage,
+# ROI multiple) must literally appear in the grounding strings it was given, or
+# the whole response is discarded for the deterministic fallback. This is a
+# DETERMINISTIC check on unit-classed numbers only — semantic claims (segment
+# names, actions) cannot be validated mechanically without a false sense of
+# safety, so those remain covered by the prompt contract.
+
+_MONEY_RE = re.compile(r"\$\s?([\d,]+(?:\.\d+)?)\s*(k|m|b|thousand|million|billion)?\b", re.I)
+_PCT_RE = re.compile(r"([\d,]+(?:\.\d+)?)\s*%")
+_MULT_RE = re.compile(r"\b([\d,]+(?:\.\d+)?)\s*[x×]\b", re.I)
+_SCALE = {"k": 1e3, "thousand": 1e3, "m": 1e6, "million": 1e6, "b": 1e9, "billion": 1e9}
+
+
+def _numeric_claims(text: str) -> set[tuple[str, float]]:
+    """Extract (kind, canonical value) for every $-amount, percentage and multiple."""
+    claims: set[tuple[str, float]] = set()
+    for m in _MONEY_RE.finditer(text):
+        value = float(m.group(1).replace(",", ""))
+        value *= _SCALE.get((m.group(2) or "").lower(), 1.0)
+        claims.add(("money", round(value, 2)))
+    for m in _PCT_RE.finditer(text):
+        claims.add(("pct", round(float(m.group(1).replace(",", "")), 2)))
+    for m in _MULT_RE.finditer(text):
+        claims.add(("mult", round(float(m.group(1).replace(",", "")), 2)))
+    return claims
+
+
+def _is_grounded(candidate: str, sources: list[str]) -> bool:
+    """True iff every numeric claim in ``candidate`` appears in the sources."""
+    grounded: set[tuple[str, float]] = set()
+    for s in sources:
+        grounded |= _numeric_claims(s)
+    return _numeric_claims(candidate) <= grounded
+
+
 def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
     # No real signal -> the honest factual answer, never an LLM riff on nothing.
     if not g["has_signal"]:
@@ -202,9 +241,21 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
     interpretation = str(getattr(pred, "interpretation", "")).strip()
     if not interpretation:
         return _fallback(g)
+    takeaways = normalize_list(getattr(pred, "key_takeaways", []))
+    sources = [g["scope"], g["opportunities"], g["caveats"]]
+    ungrounded = [t for t in [interpretation, *takeaways] if not _is_grounded(t, sources)]
+    if ungrounded:
+        # Fail closed: a single invented figure poisons trust in the whole
+        # brief, so the labelled deterministic fallback replaces it entirely.
+        logger.warning(
+            "executive-brief LM output carried %d ungrounded numeric claim(s); "
+            "using factual fallback",
+            len(ungrounded),
+        )
+        return _fallback(g)
     return {
         "insight": interpretation,
-        "key_takeaways": normalize_list(getattr(pred, "key_takeaways", [])),
+        "key_takeaways": takeaways,
         "grounding": g["grounding"],
         "is_fallback": False,
     }

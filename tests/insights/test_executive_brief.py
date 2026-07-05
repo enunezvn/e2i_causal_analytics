@@ -1,4 +1,12 @@
-from src.insights.executive_brief import _fallback, build_grounding, generate_insight
+from types import SimpleNamespace
+
+from src.insights.executive_brief import (
+    _fallback,
+    _is_grounded,
+    _numeric_claims,
+    build_grounding,
+    generate_insight,
+)
 
 
 def _opportunity(**overrides):
@@ -101,6 +109,75 @@ def test_generate_insight_fallback_surfaces_real_figures():
 def test_fallback_states_suppression_caveat():
     out = _fallback(_grounding(suppressed_count=1))
     assert "1 low-value opportunity was suppressed" in out["insight"]
+
+
+def test_numeric_claims_canonicalize_across_formats():
+    # The guard compares VALUES, not spellings: $5.0M == $5,000,000 == $5 million.
+    assert _numeric_claims("$5.0M at 4.0x closing a 42% gap") == {
+        ("money", 5_000_000.0),
+        ("mult", 4.0),
+        ("pct", 42.0),
+    }
+    assert _numeric_claims("$5,000,000 and $5 million") == {("money", 5_000_000.0)}
+    assert _numeric_claims("plain counts like 2 quick wins carry no unit") == set()
+
+
+def test_is_grounded_accepts_reformatted_and_rejects_invented_figures():
+    sources = ["Kisqali / total addressable opportunity value $5.0M", "3.2x ROI, 42% TRX gap"]
+    assert _is_grounded("The $5,000,000 opportunity at 3.2x", sources) is True
+    assert _is_grounded("Expect roughly $7.5M upside", sources) is False
+    assert _is_grounded("a 55% gap", sources) is False
+    assert _is_grounded("at 5x returns", sources) is False
+
+
+def test_generate_insight_rejects_llm_output_with_ungrounded_figures(monkeypatch):
+    # codex PR-5 round 1 HIGH: the prompt alone must not be the only defense.
+    # An LM response inventing a dollar value falls back to the factual summary.
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: SimpleNamespace(
+            interpretation="Invest now: the portfolio is worth $9.9M at 8x returns.",
+            key_takeaways=["Fund it"],
+        ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+    assert "$9.9M" not in out["insight"]
+
+
+def test_generate_insight_rejects_ungrounded_takeaway_even_with_grounded_body(monkeypatch):
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: SimpleNamespace(
+            interpretation="Prioritize the $1.2M Northeast TRX gap at 3.2x ROI.",
+            key_takeaways=["Expect $4.4M incremental revenue"],
+        ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+    assert all("$4.4M" not in t for t in out["key_takeaways"])
+
+
+def test_generate_insight_passes_grounded_llm_output_through(monkeypatch):
+    # Guardrail against over-gating: a faithful distillation (every figure
+    # present in the grounding, even reformatted) renders as the real insight.
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: SimpleNamespace(
+            interpretation=(
+                "Deploy field triggers first: $1,200,000 at stake at 3.2x ROI "
+                "closing the 42% TRX gap; then the 18% NBRX gap at 2.1x."
+            ),
+            key_takeaways=["Northeast first ($1.2M, 3.2x)", "South second ($300K)"],
+        ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is False
+    assert "$1,200,000" in out["insight"]
+    assert out["key_takeaways"] == ["Northeast first ($1.2M, 3.2x)", "South second ($300K)"]
 
 
 def test_verbose_free_text_is_bounded():
