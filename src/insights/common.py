@@ -26,12 +26,17 @@ def normalize_list(value: Any, cap: int = 5) -> list[str]:
     return [s.strip() for s in items if s and s.strip()][:cap]
 
 
-def run_signature(signature_cls: Any, **inputs: Any):
+def run_signature(signature_cls: Any, *, lm_cache: bool = True, **inputs: Any):
     """Run a DSPy ChainOfThought over ``signature_cls``, or return ``None``.
 
     Returns ``None`` when dspy is unavailable, no LM is configured (no API key),
     the signature is ``None``, or the call raises — the caller then uses its
     factual fallback. BLOCKING: call from a worker thread (``asyncio.to_thread``).
+
+    ``lm_cache=False`` bypasses DSPy's LM cache for this call so repeated calls
+    with identical inputs draw fresh samples. Required by callers that validate
+    the output and retry: the API process is long-lived, so the default
+    in-memory LM cache would replay the identical rejected completion forever.
     """
     if signature_cls is None:
         return None
@@ -40,12 +45,16 @@ def run_signature(signature_cls: Any, **inputs: Any):
     except ImportError:
         return None
     try:
-        from src.optimization.dspy_lm import ensure_dspy_configured
+        from src.optimization.dspy_lm import ensure_dspy_configured, get_default_dspy_model
 
         if not ensure_dspy_configured():
             logger.info("DSPy LM not configured (no API key); factual fallback")
             return None
-        return dspy.ChainOfThought(signature_cls)(**inputs)
+        program = dspy.ChainOfThought(signature_cls)
+        if lm_cache:
+            return program(**inputs)
+        with dspy.context(lm=dspy.LM(get_default_dspy_model(), cache=False)):
+            return program(**inputs)
     except Exception as e:  # noqa: BLE001 — LLM failure must never break the request
         logger.warning("Strategic-insight LLM call failed (non-fatal): %s", e)
         return None
