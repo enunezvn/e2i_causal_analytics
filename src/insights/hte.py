@@ -328,6 +328,18 @@ _SEG_COUNT_RE = re.compile(
     rf"{_SEG_NOUNS}\b",
     re.IGNORECASE,
 )
+# Negation vocabulary shared by the count/status binders. Modal negations
+# ("could not exclude", "cannot clear") and "unable to" are ordinary formal
+# realizations of the finite ones; an interposed -ly adverb ("not reliably
+# significant") keeps a negation a negation — except focusing adverbs
+# ("not only significant but also large"), which affirm.
+_MODAL_NOT = r"(?:(?:do(?:es)?|did|could|would|will)\s+not|can\s*not)"
+_LY_WORD = r"(?!(?:only|merely|simply|solely)\b)\w+ly"
+# Words that may sit between a (possibly negated) copula and "significant"
+# without changing the claim: adverbs plus evaluative participles ("is not
+# considered significant", "cannot be deemed significant").
+_STATUS_WORD = rf"(?:{_LY_WORD}|considered|deemed|called|regarded\s+as)"
+_STATUS_INTERPOSER = rf"(?:{_STATUS_WORD}[\s-]+)"
 # A segment count inside a clause asserting significance ("All 3 segments
 # have 95% CIs excluding zero") is a SIGNIFICANT-segment count — the true
 # total cannot vouch it. Negated significance ("not significant",
@@ -362,22 +374,25 @@ _TOTAL_PREDICATE_RE = re.compile(
 # An elided-subject significance count ("3 are significant", "3 have 95%
 # CIs excluding zero", "3 clear zero" — noun understood from the previous
 # clause) binds directly: the affirmative form must be the significant
-# count, the negated form ("are not statistically significant", "do/did
-# not have CIs excluding zero", "have CIs that do not exclude zero",
-# "have CIs not excluding zero", "did not reach statistical significance")
-# the complement.
+# count, the negated form ("are not statistically significant", "do/did/
+# could not have CIs excluding zero", "have CIs that cannot exclude zero",
+# "have CIs unable to exclude zero", "did not reach statistical
+# significance") the complement.
 _SIG_ELIDED_RE = re.compile(
-    r"\b(\d[\d,]*)\s+(?:"
-    r"(?:are|is|were|was|remained?)(?P<span>(?:\s+(?:not|statistically))*)\s+significant\b"
-    r"|(?:(?P<negdo>(?:do(?:es)?|did)\s+not)\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
-    r"(?:(?:(?P<negthat>(?:(?:that|which)\s+(?:(?:do(?:es)?|did)\s+not|fail\w*\s+to)"
-    r"|fail\w*\s+to|not|without)\s+)"
-    r"|(?:that|which)\s+)?(?:exclud|clear)\w*)\s+zero"
-    r"|(?:(?P<negdo2>(?:do(?:es)?|did)\s+not)\s+)?clear(?:s|ed)?\s+zero"
-    r"|(?P<fail>fail\w*)\s+to\s+(?:reach|clear|exclude)\b"
-    r"|(?:(?:do(?:es)?|did|are|is|were|was)\s+)?(?P<negreach>not\s+)?"
-    r"(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b"
-    r")",
+    rf"\b(\d[\d,]*)\s+(?:"
+    rf"(?:(?:are|is|were|was|remained?)|(?P<negbe>{_MODAL_NOT})\s+be\b)"
+    rf"(?P<span>(?:\s+(?:not|{_STATUS_WORD}))*)\s+significant\b"
+    rf"|(?:(?P<negdo>{_MODAL_NOT})\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
+    rf"(?:(?:(?P<negthat>(?:(?:that|which)\s+(?:{_MODAL_NOT}|fail\w*\s+to"
+    rf"|(?:are|is|were|was)\s+unable\s+to)"
+    rf"|fail\w*\s+to|not|without|unable\s+to)\s+)"
+    rf"|(?:that|which)\s+)?(?:exclud|clear)\w*)\s+zero"
+    rf"|(?:(?P<negdo2>{_MODAL_NOT})\s+)?clear(?:s|ed)?\s+zero"
+    rf"|(?P<fail>fail\w*)\s+to\s+(?:reach|clear|exclude)\b"
+    rf"|(?:(?:do(?:es)?|did|are|is|were|was|could|would|will|can)\s+)?"
+    rf"(?P<negreach>(?:not|cannot|unable\s+to)\s+)?"
+    rf"(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b"
+    rf")",
     re.IGNORECASE,
 )
 # Negated significance in a fraction's tail ("2 of 3 segments do not have
@@ -386,11 +401,13 @@ _SIG_ELIDED_RE = re.compile(
 # participial ("not excluding", "not reaching"), and prepositional
 # ("without excluding") negation.
 _FRACTION_NEGATION_RE = re.compile(
-    r"\bnot\s+(?:statistically\s+)?significant\b|\bnon-?significant\b"
-    r"|\b(?:do(?:es)?|did)\s+not\s+(?:have|clear|exclude|reach|achieve)\b"
-    r"|\b(?:that|which)\s+(?:do(?:es)?|did)\s+not\s+exclud\w*\b"
-    r"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b"
-    r"|\b(?:not|without)\s+(?:excluding|reaching|clearing|achieving)\b",
+    rf"\bnot\s+{_STATUS_INTERPOSER}{{0,2}}significant\b|\bnon-?significant\b"
+    rf"|\b{_MODAL_NOT}\s+be\s+{_STATUS_INTERPOSER}{{0,2}}significant\b"
+    rf"|\b{_MODAL_NOT}\s+(?:have|clear|exclude|reach|achieve)\b"
+    rf"|\b(?:that|which)\s+{_MODAL_NOT}\s+exclud\w*\b"
+    rf"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b"
+    rf"|\bunable\s+to\s+(?:have|clear|exclude|reach|achieve)\b"
+    rf"|\b(?:not|without)\s+(?:excluding|reaching|clearing|achieving)\b",
     re.IGNORECASE,
 )
 # Where a segment count's negated predicate may live: after the noun, up to
@@ -405,15 +422,17 @@ _SEG_POST_TRUNC_RE = re.compile(
 # ... or as a modifier between the number and the noun ("1 non-significant
 # segment remains").
 _SEG_MODIFIER_NEG_RE = re.compile(
-    r"\bnon-?significant\b|\bnot[\s-]+(?:statistically[\s-]+)?significant\b",
+    rf"\bnon-?significant\b|\bnot[\s-]+{_STATUS_INTERPOSER}{{0,2}}significant\b",
     re.IGNORECASE,
 )
 
 
 def _sig_elided_negated(m: re.Match[str]) -> bool:
     span = m.group("span") or ""
+    # \b-anchored: "notably significant" is an affirmation, not a negation.
     return (
-        "not" in span.lower()
+        bool(re.search(r"\bnot\b", span, flags=re.IGNORECASE))
+        or bool(m.group("negbe"))
         or bool(m.group("negdo"))
         or bool(m.group("negthat"))
         or bool(m.group("negdo2"))
@@ -603,11 +622,16 @@ def _metric_misattributed(
 
 
 # A significance status asserted of a named row (table-line ", significant"
-# or copular "is (not) (statistically) significant"; "non-significant" and
-# "nonsignificant" are negative statuses too).
+# or copular "is (not) (statistically) significant"; "non-significant",
+# "nonsignificant", and adverb-interposed forms like "not reliably
+# significant" are negative statuses too).
 _ROW_STATUS_RE = re.compile(
-    r"(?:,\s*|\b(?:is|was|are|were|remains?)\s+(?:statistically\s+)?)"
-    r"(?P<neg>not\s+|non[\s-]?)?(?:statistically\s+)?significant\b",
+    rf"(?:(?:,\s*|\b(?:is|was|are|were|remains?)\s+{_STATUS_INTERPOSER}{{0,2}}"
+    rf"|\b(?P<negbe>{_MODAL_NOT})\s+be\s+{_STATUS_INTERPOSER}{{0,2}})"
+    rf"(?P<neg>not\s+|non[\s-]?)?{_STATUS_INTERPOSER}{{0,2}}significant\b"
+    rf"|\b(?:(?P<negreach>{_MODAL_NOT}|fail\w*\s+to"
+    rf"|(?:is|are|was|were)\s+unable\s+to)\s+)?"
+    rf"(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b)",
     re.IGNORECASE,
 )
 
@@ -626,8 +650,12 @@ def _segment_attribution_ok(norm_text: str, g: dict[str, Any]) -> bool:
         if len(mentioned) != 1:
             continue
         status = _ROW_STATUS_RE.search(sentence)
-        if status is not None and bool(status.group("neg")) == mentioned[0]["significant"]:
-            return False
+        if status is not None:
+            negative = bool(
+                status.group("neg") or status.group("negbe") or status.group("negreach")
+            )
+            if negative == mentioned[0]["significant"]:
+                return False
         allowed: set[str] = mentioned[0]["numbers"] | g["global_numbers"]
         stripped = _strip_phrases(sentence, g["phrases"], g["ambiguous_phrases"])
         for _s, num, unit in _extract_claims(stripped):

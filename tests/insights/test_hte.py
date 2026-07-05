@@ -963,6 +963,128 @@ class TestGuard:
         assert hte._is_grounded("Of the 3 segments, 2 had 95% CIs that clear zero.", g) is True
         assert hte._is_grounded("Of the 3 segments, 3 had 95% CIs that clear zero.", g) is False
 
+    def test_modal_negations_and_adverbial_status_bind(self):
+        # codex round-19 HIGH x2: (1) modal negations ("could not"/"cannot"/
+        # "unable to" exclude zero) escaped complement binding everywhere the
+        # finite forms were enumerated; (2) an adverb interposed between
+        # "not" and "significant" ("not reliably significant") broke the
+        # named-row status match, leaving the claim unchecked.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 had 95% CIs that could not exclude zero.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 had 95% CIs that cannot exclude zero.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 had 95% CIs unable to exclude zero.", g) is False
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 1 had 95% CIs that could not exclude zero.", g)
+            is True
+        )
+        assert (
+            hte._is_grounded("2 of 3 segments have 95% CIs that could not exclude zero.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("1 of 3 segments has 95% CIs that could not exclude zero.", g) is True
+        )
+        assert hte._is_grounded("2 segments could not reach statistical significance.", g) is False
+        assert hte._is_grounded("1 segment could not reach statistical significance.", g) is True
+        assert hte._is_grounded("Of the 3 segments, 2 could not clear zero.", g) is False
+        assert (
+            hte._is_grounded(
+                "age_band=50-65 is not reliably significant at +13.8pp "
+                "[CI +8.0pp to +19.6pp] with n=2,015.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low is not reliably significant at +3.4pp "
+                "[CI -2.8pp to +9.6pp] with n=2,498.",
+                g,
+            )
+            is True
+        )
+        assert hte._is_grounded("3 are not reliably significant.", g) is False
+        assert hte._is_grounded("1 segment was not reliably significant.", g) is True
+        # Focusing adverbs affirm rather than negate, and "notably" is not
+        # "not": neither may flip a status or bind the wrong count.
+        assert (
+            hte._is_grounded(
+                "The high segment's effect is not merely significant but substantial, at +17.7pp.",
+                g,
+            )
+            is True
+        )
+        assert hte._is_grounded("3 are notably significant.", g) is False
+        assert hte._is_grounded("2 are notably significant.", g) is True
+
+    def test_reach_significance_rows_and_evaluative_participles(self):
+        # round-19 twin battery: named-row "did not reach statistical
+        # significance" escaped _ROW_STATUS_RE entirely, and evaluative
+        # participles ("cannot be considered significant", "are considered
+        # significant") were neither negations nor significance claims.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "age_band=50-65 did not reach statistical significance at +13.8pp "
+                "[CI +8.0pp to +19.6pp] with n=2,015.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low did not reach statistical significance "
+                "at +3.4pp [CI -2.8pp to +9.6pp] with n=2,498.",
+                g,
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low reached statistical significance at +3.4pp.", g
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=high reached statistical significance "
+                "at +17.7pp with n=1,385.",
+                g,
+            )
+            is True
+        )
+        assert hte._is_grounded("2 segments cannot be considered significant.", g) is False
+        assert hte._is_grounded("1 segment cannot be considered significant.", g) is True
+        assert hte._is_grounded("2 cannot be considered significant.", g) is False
+        assert (
+            hte._is_grounded(
+                "age_band=50-65 cannot be considered significant at +13.8pp "
+                "[CI +8.0pp to +19.6pp].",
+                g,
+            )
+            is False
+        )
+        assert hte._is_grounded("3 are considered significant.", g) is False
+        assert hte._is_grounded("2 are considered significant.", g) is True
+        assert hte._is_grounded("3 segments are deemed significant.", g) is False
+        assert hte._is_grounded("2 segments are not considered significant.", g) is False
+        assert hte._is_grounded("1 segment is not considered significant.", g) is True
+        assert (
+            hte._is_grounded(
+                "age_band=50-65 is not considered significant at +13.8pp [CI +8.0pp to +19.6pp].",
+                g,
+            )
+            is False
+        )
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so
