@@ -147,43 +147,90 @@ def _phrase_variants(raw: Any) -> tuple[set[str], set[str]]:
     return safe, set()
 
 
+# ---------------------------------------------------------------------------
+# Typography normalization — every guard rule sees ONE canonical spelling
+# ---------------------------------------------------------------------------
+
+# Line-leading list markers ("- 11.1pp", "• +2.8pp"): removed so a leading
+# hyphen stays a bullet, while any in-sentence "- 11.1pp" that survives reads
+# as a minus sign.
+_BULLET_RE = re.compile(r"(?m)^[ \t]*[-–—•*]\s+")
+# Digit-adjacent unicode dashes/minus signs ("50—65", "−2.8") become ASCII
+# "-"; spaced en/em dashes in prose ("the effect — strong") are punctuation
+# and stay untouched. Word-adjacent dashes ("out–of") survive normalization,
+# so _FRACTION_RE keeps the class in its separators.
+_DASH_CLASS = "‐‑‒–—―−﹣－"
+_DASH_RE = re.compile(rf"[{_DASH_CLASS}](?=\d)|(?<=\d)[{_DASH_CLASS}]")
+# Fraction/division slashes ("3⁄3") become ASCII "/".
+_SLASH_RE = re.compile(r"[⁄∕]")
+# Whitespace runs collapse to one space (newlines kept for the bullet rule).
+_WS_RE = re.compile(r"[^\S\n]+")
+
+
+def _normalize(text: str) -> str:
+    """Canonicalize LM typography before any guard rule runs."""
+    text = _BULLET_RE.sub("", text)
+    text = _DASH_RE.sub("-", text)
+    text = _SLASH_RE.sub("/", text)
+    return _WS_RE.sub(" ", text)
+
+
 # A vouched phrase immediately followed by a unit word is a numeric claim in
 # disguise ("50 to 65 percent" from the 50-65 age band), not a name mention —
 # leave it in place so its digits face the guard.
 _PHRASE_UNIT_LOOKAHEAD = r"(?!\s*(?:%|pp\b|percent\b|percentage\b|points?\b))"
 
+# Nouns a number can be (mis)attributed to as a segment count. Plural-only
+# forms (bands/groups) stay out of the singular set because their singulars
+# name ONE band in ordinary prose ("the 50-65 band").
+_SEG_NOUNS = (
+    r"(?:segments?|sub-?segments?|sub-?groups?|sub-?populations?|cohorts?"
+    r"|bands|groups|strata|dimensions?|categor(?:y|ies)|clusters?|buckets?|tiers?)"
+)
+_SEG_NOUNS_PLURAL = (
+    r"(?:segments|sub-?segments|sub-?groups|sub-?populations|cohorts"
+    r"|bands|groups|strata|dimensions|categories|clusters|buckets|tiers)"
+)
+# A run of modifier words between a number and a segment noun: any number of
+# non-digit tokens (optionally comma/semicolon-tailed), never crossing a
+# sentence boundary because "." is not in the token alphabet.
+_SEG_MODIFIER_TOKENS = r"(?:(?!\d)[\w-]+[,;]?\s+)*"
+
 # Ambiguous range phrases are name mentions only in band context: preceded by
-# a band-ish noun ("patients 50 to 65", "aged 50-65"), followed by a SINGULAR
-# band noun ("the 50-65 band", "the 50-65 segment"), or directly attached to
-# a dimension name ("age_band=50-65"). Unanchored, "50 to 65 significant
-# segments" is a quantity claim and must face the guard. A back anchor cannot
-# LAUNDER a count claim either: when the range itself heads a plural
-# segment-count phrase ("Patients 50 to 65 significant segments clear zero"),
-# it stays in place and its digits face the guard.
+# a band-ish noun ("patients 50 to 65", "aged 50-65", parenthesized forms),
+# followed by a SINGULAR band noun ("the 50-65 band", "the 50-65 segment"),
+# or directly attached to a dimension name ("age_band=50-65"). Unanchored,
+# "50 to 65 significant segments" is a quantity claim and must face the
+# guard. NO anchor may LAUNDER a count claim: whenever the range heads a
+# plural segment-count phrase ("Patients (50-65) significant segments clear
+# zero", "age_band=50-65 significant segments ..."), it stays in place and
+# its digits face the guard.
 _AMBIG_BACK_ANCHOR = r"\b(aged?|ages|patients?|bands?|groups?|cohorts?)\s+\(?"
 _AMBIG_FWD_ANCHOR = (
-    r"(?=\)?\s+(?:age[\s-])?(?:band|group|cohort|segment|sub-?group|range|bracket)\b)"
+    r"(?=\)?\s+(?:age[\s-])?(?:band|group|cohort|segment|sub-?group|range|bracket)\b"
+    rf"(?!\s+{_SEG_NOUNS_PLURAL}\b))"
 )
 _AMBIG_EQ_ANCHOR = r"(?<==)"
-_AMBIG_COUNT_LOOKAHEAD = (
-    r"(?!\s+(?:[\w-]+\s+){0,4}"
-    r"(?:segments|sub-?groups|cohorts|bands|groups|strata|dimensions|categories)\b)"
-)
+_AMBIG_COUNT_LOOKAHEAD = rf"(?!\)?[,;]?\s+{_SEG_MODIFIER_TOKENS}{_SEG_NOUNS_PLURAL}\b)"
 
 
 def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] = ()) -> str:
-    """Remove vouched phrases (longest first) so only bare numbers remain."""
+    """Normalize typography, then remove vouched phrases (longest first) so
+    only bare numbers remain."""
+    text = _normalize(text)
     for p in ambiguous:
         if not p:
             continue
         esc = re.escape(p) + _PHRASE_UNIT_LOOKAHEAD
-        text = re.sub(_AMBIG_EQ_ANCHOR + esc, " ", text, flags=re.IGNORECASE)
-        text = re.sub(
-            _AMBIG_BACK_ANCHOR + esc + _AMBIG_COUNT_LOOKAHEAD,
-            r"\1 ",
-            text,
-            flags=re.IGNORECASE,
-        )
+        # eq/back anchors precede the range, so the count reading survives to
+        # its right — refuse to strip when a plural segment-count phrase
+        # follows (fail-closed: a faithful anchored range followed later in
+        # the clause by a plural segment noun falls back rather than risk
+        # laundering). The fwd anchor's own singular noun sits immediately
+        # after the range, which defeats the count reading by itself.
+        guarded = esc + _AMBIG_COUNT_LOOKAHEAD
+        text = re.sub(_AMBIG_EQ_ANCHOR + guarded, " ", text, flags=re.IGNORECASE)
+        text = re.sub(_AMBIG_BACK_ANCHOR + guarded, r"\1 ", text, flags=re.IGNORECASE)
         text = re.sub(esc + _AMBIG_FWD_ANCHOR, " ", text, flags=re.IGNORECASE)
     for p in phrases:
         if p:
@@ -195,42 +242,50 @@ def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] =
 # Fail-closed output guard
 # ---------------------------------------------------------------------------
 
-# A numeric claim is (sign, number, unit): "+11.1pp" / "-2.8" / "95%". A sign
-# counts when directly attached to the number, spelled out in words
-# ("negative 11.1pp", "minus", "positive", "plus"), or a word-preceded spaced
-# hyphen/minus ("is - 11.1pp") — while a markdown bullet at line start
-# ("- 11.1pp") reads unsigned and "top-2" keeps its hyphen inside the word.
+# A numeric claim is (sign, number, unit): "+11.1pp" / "-2.8" / "95%". After
+# normalization (bullets removed, whitespace collapsed, digit-adjacent
+# dashes ASCII), a sign counts when attached or one space away from the
+# number ("is - 11.1pp", "ATE: + 2.8pp") or spelled out ("negative 11.1pp",
+# "minus-11.1pp") — while "top-2" keeps its hyphen inside the word.
 # Direction VERBS ("declined by 11.1pp") are semantic paraphrase a lexical
 # guard cannot adjudicate ("reduced non-persistence by 11.1pp" would be the
-# same lexical shape as a true claim) — accepted boundary.
+# same lexical shape as a true claim) — accepted boundary, as are
+# spelled-out word numbers ("three of three").
 _CLAIM_RE = re.compile(
     r"(?:"
-    r"(?<![\w.\-])(?P<sym>[+\-−])"
-    r"|\b(?P<word>negative|minus|positive|plus)\s+"
-    r"|(?<=\w)\s(?P<spaced>[-−])\s+"
+    r"(?<![\w.\-])(?P<sym>[+\-−]) ?"
+    r"|\b(?P<word>negative|minus|positive|plus)[\s-]+"
     r")?"
     r"(?P<num>\d[\d,]*(?:\.\d+)?)"
     r"(?:\s*(?P<unit>pp\b|%|percentage[\s-]points?\b|percent\b))?",
     re.IGNORECASE,
 )
 # Count-fraction claims: "13/14", "13 of 14", "13 out of 14", "13-of-14",
-# "13–out–of–3" (any mix of spaces, hyphens, and unicode dashes around
-# "of" / "out of").
+# "13 over 14", any dash flavour ("3‑out‑of‑3"): digit-adjacent dashes and
+# fraction slashes are normalized to "-" and "/", word-adjacent dashes are
+# matched here directly.
 _FRACTION_RE = re.compile(
-    r"\b(\d+)(?:\s*/\s*|[-–—\s]+(?:out[-–—\s]+of|of)[-–—\s]+)(\d+)\b", re.IGNORECASE
+    rf"\b(\d+)(?:\s*/\s*|[-{_DASH_CLASS}\s]+(?:out[-{_DASH_CLASS}\s]+of|of|over)"
+    rf"[-{_DASH_CLASS}\s]+)(\d+)\b",
+    re.IGNORECASE,
 )
 # A number attributed to segments ("81 significant segments", "1,385
-# significant subgroups") is a segment-count claim regardless of whether the
-# number is vouched elsewhere — it must be the true significant or total
-# count. Population/time words keep their own attribution ("1,385 patients in
-# the strongest segment" counts patients, not segments) and are exempt.
-_SEG_NOUNS = r"(?:segments?|sub-?groups?|cohorts?|bands|groups|strata|dimensions?|categor(?:y|ies))"
+# significant, clinically relevant subgroups") is a segment-count claim
+# regardless of whether the number is vouched elsewhere — it must be the true
+# significant or total count. The modifier run is unbounded but cannot cross
+# a sentence boundary or another number. Plural population/time words keep
+# their own attribution ("1,385 patients in the strongest segment" counts
+# patients, not segments) and end the match — plural-only, because singular
+# forms before a noun are adjectives ("1,385 patient segments" IS a
+# segment-count claim).
 _SEG_COUNT_EXEMPT = (
-    r"(?:patients?|hcps?|physicians?|prescribers?|people|persons?|individuals?"
-    r"|respondents?|records?|rows?|days?|weeks?|months?|years?)"
+    r"(?:patients|hcps|physicians|prescribers|people|persons|individuals"
+    r"|respondents|records|rows|days|weeks|months|years)"
 )
 _SEG_COUNT_RE = re.compile(
-    rf"\b(\d(?:[\d,]*\d)?)\s+(?:(?!{_SEG_COUNT_EXEMPT}\b)[\w-]+\s+){{0,4}}{_SEG_NOUNS}\b",
+    rf"\b(\d(?:[\d,]*\d)?)[,;]?\s+"
+    rf"(?:(?!{_SEG_COUNT_EXEMPT}[,;]?\s)(?!\d)[\w-]+[,;]?\s+)*"
+    rf"{_SEG_NOUNS}\b",
     re.IGNORECASE,
 )
 
@@ -239,7 +294,7 @@ def _extract_claims(text: str) -> list[tuple[str, str, str]]:
     """(sign, comma-stripped number, normalized unit) for every number."""
     claims: list[tuple[str, str, str]] = []
     for m in _CLAIM_RE.finditer(text):
-        raw_sign = (m.group("sym") or m.group("word") or m.group("spaced") or "").lower()
+        raw_sign = (m.group("sym") or m.group("word") or "").strip().lower()
         if raw_sign in ("-", "−", "negative", "minus"):
             sign = "-"
         elif raw_sign in ("+", "positive", "plus"):

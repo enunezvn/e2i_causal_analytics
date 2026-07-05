@@ -244,6 +244,50 @@ class TestGuard:
         assert hte._is_grounded("Fully 3–out–of–3 segments are significant.", g) is False
         assert hte._is_grounded("2–out–of–3 segments are significant.", g) is True
 
+    def test_typography_cannot_hide_a_sign_flip(self):
+        # codex round-4 HIGH: extra spaces, a colon, or a hyphen-attached word
+        # sign hid the flip; a spaced "+" hid the -2.8pp flip. Bulleted lists
+        # stay unsigned.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Overall ATE is  - 11.1pp.", g) is False
+        assert hte._is_grounded("Overall ATE: - 11.1pp.", g) is False
+        assert hte._is_grounded("Overall ATE is minus-11.1pp.", g) is False
+        assert hte._is_grounded("The low band CI dips to + 2.8pp.", g) is False
+        assert hte._is_grounded("- +17.7pp in high severity\n- 11.1pp overall", g) is True
+
+    def test_punctuated_or_adjectival_segment_counts_rejected(self):
+        # codex round-4 HIGH: 5+ modifiers, a comma inside the window, and
+        # exempt words used adjectivally ("patient segments") bypassed the
+        # fixed-width segment-count window.
+        g = hte.build_grounding(_record())
+        for wrong in (
+            "1,385 significant clinically relevant priority target segments emerged.",
+            "1,385 significant, clinically relevant segments emerged.",
+            "1,385 patient segments are significant.",
+            "1,385 patients-adjacent segments are significant.",
+        ):
+            assert hte._is_grounded(wrong, g) is False
+        assert hte._is_grounded("The strongest segment holds 1,385 patients.", g) is True
+
+    def test_parenthesized_or_attached_range_cannot_launder(self):
+        # codex round-4 HIGH: "(50-65)" and "age_band=50-65" were stripped
+        # before the count guard could see the plural count phrase they head.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Patients (50-65) significant segments clear zero.", g) is False
+        assert hte._is_grounded("Groups (50 to 65) significant segments clear zero.", g) is False
+        assert hte._is_grounded("age_band=50-65 significant segments clear zero.", g) is False
+        assert hte._is_grounded("Patients (50-65) respond at +13.8pp.", g) is True
+        assert hte._is_grounded("age_band=50-65 leads at +13.8pp.", g) is True
+
+    def test_exotic_fraction_separators_checked(self):
+        # codex round-4 HIGH: non-breaking hyphens, the fraction slash, and
+        # "over" all bypassed the fraction rule.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Fully 3‑out‑of‑3 segments are significant.", g) is False
+        assert hte._is_grounded("Fully 3⁄3 segments are significant.", g) is False
+        assert hte._is_grounded("Fully 3 over 3 segments are significant.", g) is False
+        assert hte._is_grounded("2 over 3 segments are significant.", g) is True
+
     def test_variable_name_digits_pass_only_in_context(self):
         # codex round-1 HIGH: "Treat 180 patients." re-used persistent_180d's
         # digits bare. In-context uses (the name itself, "180-day") stay fine.
