@@ -222,6 +222,15 @@ def test_placeholder_violation_rejects_leaked_digits():
     assert _placeholder_violation("Lead with {ROI_1 returns.", _VOCAB) is not None
 
 
+def test_placeholder_violation_rejects_non_decimal_numeric_glyphs():
+    # codex PR-1153 round 1 HIGH: \d only matches Unicode DECIMAL digits, so
+    # circled/superscript/Roman/fraction glyphs would render as figures.
+    assert _placeholder_violation("Lead with {SEG_1} at ②x ROI on {IMPACT_1}.", _VOCAB) is not None
+    assert _placeholder_violation("A ²x return awaits.", _VOCAB) is not None
+    assert _placeholder_violation("Phase Ⅲ expansion follows.", _VOCAB) is not None
+    assert _placeholder_violation("Capture ½ the market.", _VOCAB) is not None
+
+
 def test_placeholder_violation_rejects_unknown_tokens():
     assert _placeholder_violation("Expect {ROI_9} returns.", _VOCAB) is not None
     assert _placeholder_violation("A {MADEUP} figure.", _VOCAB) is not None

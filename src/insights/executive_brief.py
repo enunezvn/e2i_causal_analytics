@@ -282,7 +282,6 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
 _PLACEHOLDER_RE = re.compile(r"\{[A-Z]+(?:_\d+)?\}")
 _SEG_TOKEN_RE = re.compile(r"\{SEG_(\d+)\}")
 _METRIC_TOKEN_RE = re.compile(r"\{(?:ROI|IMPACT|GAP)_(\d+)\}")
-_DIGIT_RE = re.compile(r"\d")
 
 # Sentences (and semicolon clauses) are the pairing unit: a metric token cited
 # next to a segment token inside one sentence claims a relationship between them.
@@ -293,9 +292,11 @@ def _placeholder_violation(text: str, vocab: set[str]) -> str | None:
     """First violation of the placeholder contract in ``text``, or None.
 
     Three checks: (1) every token used must exist in the server vocabulary;
-    (2) no digit may survive outside a token (this also traps malformed or
+    (2) no numeric character may survive outside a token — str.isnumeric, not
+    just ``\\d``, so circled/superscript/Roman glyphs ("②x", "²", "Ⅲ") cannot
+    render as figures (codex PR-1153 round 1); this also traps malformed or
     lowercased tokens, whose embedded index digits are left behind by the
-    strict token regex); (3) within a sentence that names segment tokens,
+    strict token regex; (3) within a sentence that names segment tokens,
     every metric token's index must be among that sentence's segment indices —
     "{SEG_1} yields {ROI_2}" re-attributes rank 2's figure to rank 1's segment
     even though both values are real.
@@ -304,8 +305,8 @@ def _placeholder_violation(text: str, vocab: set[str]) -> str | None:
     unknown = used - vocab
     if unknown:
         return f"unknown placeholder(s): {sorted(unknown)}"
-    if _DIGIT_RE.search(_PLACEHOLDER_RE.sub("", text)):
-        return "digits outside placeholder tokens"
+    if any(ch.isnumeric() for ch in _PLACEHOLDER_RE.sub("", text)):
+        return "numeric characters outside placeholder tokens"
     for sentence in _SENTENCE_SPLIT_RE.split(text):
         segs = {m.group(1) for m in _SEG_TOKEN_RE.finditer(sentence)}
         metrics = {m.group(1) for m in _METRIC_TOKEN_RE.finditer(sentence)}
