@@ -320,7 +320,7 @@ _SEG_COUNT_EXEMPT = (
 # not start mid-decimal or mid-thousands ("1pp" inside "+11.1pp" is not a
 # count of anything).
 _SEG_COUNT_RE = re.compile(
-    rf"\b(?<![.,])(\d(?:[\d,]*\d)?)[^\s.!?)]*\s+"
+    rf"\b(?<![.,\-])(\d(?:[\d,]*\d)?)(?!-\d)[^\s.!?)]*\s+"
     rf"(?:(?!{_SEG_COUNT_EXEMPT}[^\w\s]*\s)(?![\d)])[^\s.!?]+\s+)*"
     rf"{_SEG_NOUNS}\b",
     re.IGNORECASE,
@@ -338,13 +338,26 @@ _SIG_PREDICATE_RE = re.compile(
 # prepositions ("emerged from 3 tested segments") also mark the number as a
 # total drawn from, even after a word-number numerator ("Two ... from 3").
 _FRACTION_PRECEDER_RE = re.compile(
-    r"\d\s*(?:of|out[-\s]+of|in|over|/)\s*$|\b(?:from|among|across|out\s+of)\s+$",
+    r"\d\s*(?:of|out[-\s]+of|in|over|/)\s*$"
+    r"|\b(?:from|among|across|out\s+of)\s+$"
+    r"|\bof\s+(?:the\s+|these\s+|those\s+|all\s+)?$",
     re.IGNORECASE,
 )
 # The converse of the significance predicate: a count inside totality
-# wording ("2 total segments in the analysis") must be the true TOTAL.
+# wording ("2 total segments in the analysis", "the analysis included 2
+# segments") must be the true TOTAL.
 _TOTAL_PREDICATE_RE = re.compile(
-    r"\btotal\b|\bin\s+the\s+analysis\b|\banaly[sz]ed\b|\btested\b|\bexamined\b|\bevaluated\b",
+    r"\btotal\b|\bin\s+the\s+analysis\b|\banaly[sz]ed\b|\btested\b|\bexamined\b"
+    r"|\bevaluated\b|\bincluded?\b|\bincludes\b|\bcovers?\b|\bcovered\b"
+    r"|\bcomprises?\b|\bcomprised\b|\bcontains?\b|\bcontained\b|\bspans?\b|\bspanned\b",
+    re.IGNORECASE,
+)
+# An elided-subject significance count ("3 are significant" with the noun
+# understood from the previous clause) binds directly: the affirmative form
+# must be the significant count, the negated form the complement.
+_SIG_ELIDED_RE = re.compile(
+    r"\b(\d[\d,]*)\s+(?:are|is|were|was|remained?)\s+"
+    r"(?:statistically\s+)?(?P<neg>not\s+)?significant\b",
     re.IGNORECASE,
 )
 # Chip-style reversed form: "Significant segments: 3".
@@ -438,7 +451,12 @@ _ATE_ANCHOR_RE = re.compile(
 # grounding renders has exactly one owner, so a figure tied to
 # heterogeneity or cohort-n wording must be THAT value.
 _HET_ANCHOR_RE = re.compile(r"\bheterogeneity(?:\s+score)?\b", re.IGNORECASE)
-_COHORT_N_ANCHOR_RE = re.compile(r"\bcohort\s+(?:n\b|size\b)|\btotal\s+n\b", re.IGNORECASE)
+_COHORT_N_ANCHOR_RE = re.compile(
+    r"\bcohort\s+(?:n\b|size\b|of\b|includes?\b|included\b|had\b|has\b|with\b"
+    r"|comprises?\b|comprising\b|contains?\b|covers?\b|spans?\b)"
+    r"|\btotal\s+n\b",
+    re.IGNORECASE,
+)
 _METRIC_ANCHORS = (_LIFT_ANCHOR_RE, _ATE_ANCHOR_RE, _HET_ANCHOR_RE, _COHORT_N_ANCHOR_RE)
 
 
@@ -589,6 +607,10 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
             return False
     for label in _SIG_COUNT_LABEL_RE.finditer(text):
         if label.group(1).replace(",", "") != str(g["sig_count"]):
+            return False
+    for elided in _SIG_ELIDED_RE.finditer(text):
+        expected = g["total_count"] - g["sig_count"] if elided.group("neg") else g["sig_count"]
+        if elided.group(1).replace(",", "") != str(expected):
             return False
     for frac in _FRACTION_RE.finditer(text):
         m_str, k_str = frac.group(1), frac.group(2)

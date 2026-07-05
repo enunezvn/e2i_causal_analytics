@@ -642,6 +642,63 @@ class TestGuard:
         )
         assert hte._is_grounded(text, g) is True
 
+    def test_elided_subject_significance_counts_bind(self):
+        # codex round-12 HIGH: "3 are significant" (subject elided) fell
+        # through as a vouched bare 3. Negated forms bind the complement.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "Overall ATE is +11.1pp, with 3 total segments in the analysis; 3 are significant.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "Overall ATE is +11.1pp, with 3 total segments in the analysis; 2 are significant.",
+                g,
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 are significant and 1 is not significant.", g)
+            is True
+        )
+        assert hte._is_grounded("All 3 are significant.", g) is False
+
+    def test_cohort_prose_and_analysis_included_bind(self):
+        # codex round-12 HIGH: "The cohort includes 1,385 patients" and "The
+        # analysis included 2 segments" escaped the cohort-n and totality
+        # bindings.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The cohort includes 1,385 patients, with 95% CIs.", g) is False
+        assert hte._is_grounded("This is an observational cohort of 1,385 patients.", g) is False
+        assert hte._is_grounded("The cohort includes 3,883 patients, with 95% CIs.", g) is True
+        assert hte._is_grounded("This is an observational cohort of 3,883 patients.", g) is True
+        assert (
+            hte._is_grounded(
+                "The analysis included 2 segments and reports an overall ATE of +11.1pp.", g
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "The analysis included 3 segments and reports an overall ATE of +11.1pp.", g
+            )
+            is True
+        )
+
+    def test_round12_medium_faithful_interpretation_passes(self):
+        # codex round-12 MEDIUM over-rejection: the "1" in "(0-1 scale)" was
+        # read as a segment count for the later "cohort" noun.
+        g = hte.build_grounding(_record())
+        text = (
+            "There are 2 significant segments in the analysis. Overall ATE is "
+            "+11.1pp, heterogeneity score 0.26 (0-1 scale), and cohort n=3,883. "
+            "Expected lift from differential targeting is +0.0pp."
+        )
+        assert hte._is_grounded(text, g) is True
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so
