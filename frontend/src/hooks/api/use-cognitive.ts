@@ -271,6 +271,12 @@ export function useDeleteSession(
 /**
  * Hook for DSPy-enhanced cognitive RAG search.
  *
+ * INTENTIONALLY KEPT with no in-app consumer since PR-5: ExecutiveAIBrief
+ * (its last UI consumer) moved to the dedicated `POST /insights/executive-brief`
+ * distillation endpoint. `/api/cognitive/rag` remains the cognitive engine's
+ * general ad-hoc query surface (chatbot / programmatic RAG) — do not delete on
+ * a zero-consumer grep without checking that backend surface first.
+ *
  * @param options - Additional TanStack Mutation options
  * @returns Mutation function and state
  *

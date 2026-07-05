@@ -7,6 +7,7 @@ import {
   getPredictiveCohortInsight,
   getResourceOptimizationInsight,
   getTreatmentEffectInsight,
+  getExecutiveBriefInsight,
 } from '@/api/insights';
 import type {
   StrategicInsightResponse,
@@ -16,6 +17,7 @@ import type {
   PredictiveInsightRequest,
   ResourceInsightRequest,
   TreatmentEffectInsightRequest,
+  ExecutiveBriefInsightRequest,
 } from '@/types/insights';
 
 export const useKnowledgeGraphInsight = () =>
@@ -46,4 +48,9 @@ export const useResourceOptimizationInsight = () =>
 export const useTreatmentEffectInsight = () =>
   useMutation<StrategicInsightResponse, ApiError, TreatmentEffectInsightRequest>({
     mutationFn: getTreatmentEffectInsight,
+  });
+
+export const useExecutiveBriefInsight = () =>
+  useMutation<StrategicInsightResponse, ApiError, ExecutiveBriefInsightRequest>({
+    mutationFn: getExecutiveBriefInsight,
   });

@@ -80,3 +80,26 @@ export interface TreatmentEffectInsightRequest {
   n: number;
   estimator?: string | null;
 }
+
+/** One ranked gap-analysis opportunity, flattened for the executive brief. */
+export interface BriefOpportunityInput {
+  rank: number;
+  recommended_action: string;
+  expected_roi?: number | null;
+  revenue_impact?: number | null;
+  gap_metric?: string;
+  gap_percentage?: number | null;
+  segment_value?: string;
+  implementation_difficulty?: string | null;
+}
+
+export interface ExecutiveBriefInsightRequest {
+  brand: string;
+  total_addressable_value?: number | null;
+  quick_wins_count?: number;
+  steady_plays_count?: number;
+  strategic_bets_count?: number;
+  /** Opportunities hidden below break-even — real "don't invest now" signal. */
+  suppressed_count?: number;
+  opportunities?: BriefOpportunityInput[];
+}

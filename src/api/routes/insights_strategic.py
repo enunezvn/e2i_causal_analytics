@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.api.dependencies.auth import require_analyst
 from src.insights import (
     causal_discovery,
+    executive_brief,
     knowledge_graph,
     model_performance,
     predictive_cohort,
@@ -118,6 +119,29 @@ class ResourceInsightRequest(BaseModel):
     top_increases: list[AllocationMove] = Field(default_factory=list)
     top_decreases: list[AllocationMove] = Field(default_factory=list)
     synthetic: bool = True
+
+
+class BriefOpportunity(BaseModel):
+    rank: int
+    recommended_action: str
+    expected_roi: float | None = None
+    revenue_impact: float | None = None
+    gap_metric: str = ""
+    gap_percentage: float | None = None
+    segment_value: str = ""
+    implementation_difficulty: str | None = None
+
+
+class ExecutiveBriefInsightRequest(BaseModel):
+    brand: str
+    total_addressable_value: float | None = None
+    quick_wins_count: int = 0
+    steady_plays_count: int = 0
+    strategic_bets_count: int = 0
+    # Opportunities hidden below break-even: real signal (the honest brief is
+    # "don't invest now"), so the count travels with the surfaced list.
+    suppressed_count: int = 0
+    opportunities: list[BriefOpportunity] = Field(default_factory=list)
 
 
 class TreatmentEffectInsightRequest(BaseModel):
@@ -310,6 +334,36 @@ async def predictive_cohort_insight(
         payload = await asyncio.to_thread(predictive_cohort.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Out-of-sample scored cohort + SHAP")
+
+
+@router.post("/executive-brief", response_model=StrategicInsightResponse)
+async def executive_brief_insight(
+    req: ExecutiveBriefInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Executive distillation (DSPy) of the brand's gap/ROI opportunity figures."""
+    g = executive_brief.build_grounding(
+        brand=req.brand,
+        total_addressable_value=req.total_addressable_value,
+        quick_wins_count=req.quick_wins_count,
+        steady_plays_count=req.steady_plays_count,
+        strategic_bets_count=req.strategic_bets_count,
+        suppressed_count=req.suppressed_count,
+        opportunities=[o.model_dump() for o in req.opportunities],
+    )
+    # Key on the derived grounding strings (scope + opportunities + caveats) so
+    # two portfolios that differ in any figure never collide.
+    key = cache_key(
+        "executive-brief",
+        req.brand,
+        {"s": g["scope"], "o": g["opportunities"], "c": g["caveats"]},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(executive_brief.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Gap-analyzer ROI opportunities (LLM distillation)")
 
 
 @router.post("/resource-optimization", response_model=StrategicInsightResponse)

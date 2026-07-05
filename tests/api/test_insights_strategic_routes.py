@@ -75,7 +75,10 @@ def test_resource_optimization_insight_surfaces_summary(test_client):
     r = test_client.post("/api/insights/resource-optimization", json=body)
     assert r.status_code == 200, r.text
     data = r.json()
-    assert data["is_fallback"] is False
+    # ace4e372 made the DSPy interpretation the primary content and reclassified
+    # the verbatim-summary path as the (honestly labelled) fallback; with no LM
+    # in tests, surfacing the agent's summary IS the fallback.
+    assert data["is_fallback"] is True
     assert "high-ROI" in data["insight"]
     assert any(c["label"] == "Projected lift" for c in data["grounding"])
 
@@ -156,3 +159,46 @@ def test_treatment_effect_insight_ci_straddles_zero(test_client):
     assert "not distinguishable from no effect" in data["insight"]
     assert data["is_fallback"] is True
     assert "straddles 0" in data["insight"]
+
+
+def test_executive_brief_insight_fallback(test_client):
+    body = {
+        "brand": "Kisqali",
+        "total_addressable_value": 5_000_000.0,
+        "quick_wins_count": 2,
+        "steady_plays_count": 1,
+        "strategic_bets_count": 0,
+        "suppressed_count": 3,
+        "opportunities": [
+            {
+                "rank": 1,
+                "recommended_action": "Deploy field triggers to lapsed writers",
+                "expected_roi": 3.2,
+                "revenue_impact": 1_200_000.0,
+                "gap_metric": "trx",
+                "gap_percentage": 42.0,
+                "segment_value": "Northeast",
+                "implementation_difficulty": "medium",
+            }
+        ],
+    }
+    r = test_client.post("/api/insights/executive-brief", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "3.2x ROI" in data["insight"]
+    assert "$5.0M" in data["insight"]
+    assert "3 low-value opportunities were suppressed" in data["insight"]
+    assert any(c["label"] == "Addressable value" for c in data["grounding"])
+    assert data["provenance"]
+    assert data["generated_at"]
+
+
+def test_executive_brief_insight_no_signal_is_honest(test_client):
+    body = {"brand": "Fabhalta"}
+    r = test_client.post("/api/insights/executive-brief", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "run a gap analysis" in data["insight"].lower()
+    assert data["key_takeaways"] == []
