@@ -161,28 +161,65 @@ def test_treatment_effect_insight_ci_straddles_zero(test_client):
     assert "straddles 0" in data["insight"]
 
 
-def test_executive_brief_insight_fallback(test_client):
-    body = {
-        "brand": "Kisqali",
-        "total_addressable_value": 5_000_000.0,
-        "quick_wins_count": 2,
-        "steady_plays_count": 1,
-        "strategic_bets_count": 0,
-        "suppressed_count": 3,
-        "opportunities": [
-            {
-                "rank": 1,
-                "recommended_action": "Deploy field triggers to lapsed writers",
-                "expected_roi": 3.2,
-                "revenue_impact": 1_200_000.0,
-                "gap_metric": "trx",
-                "gap_percentage": 42.0,
-                "segment_value": "Northeast",
-                "implementation_difficulty": "medium",
-            }
+def _fake_opportunities_feed():
+    """A real-shaped OpportunityListResponse for the server-derived brief."""
+    from src.api.routes.gaps import (
+        ImplementationDifficulty,
+        OpportunityListResponse,
+        PerformanceGap,
+        PrioritizedOpportunity,
+        ROIEstimate,
+    )
+
+    return OpportunityListResponse(
+        total_count=1,
+        quick_wins_count=2,
+        steady_plays_count=1,
+        strategic_bets_count=0,
+        suppressed_count=3,
+        total_addressable_value=5_000_000.0,
+        opportunities=[
+            PrioritizedOpportunity(
+                rank=1,
+                gap=PerformanceGap(
+                    gap_id="g1",
+                    metric="trx",
+                    segment="region",
+                    segment_value="Northeast",
+                    current_value=85.0,
+                    target_value=100.0,
+                    gap_size=15.0,
+                    gap_percentage=42.0,
+                    gap_type="vs_target",
+                ),
+                roi_estimate=ROIEstimate(
+                    gap_id="g1",
+                    estimated_revenue_impact=1_200_000.0,
+                    estimated_cost_to_close=300_000.0,
+                    expected_roi=3.2,
+                    risk_adjusted_roi=2.5,
+                    payback_period_months=6,
+                    attribution_level="partial",
+                    attribution_rate=0.65,
+                    confidence=0.8,
+                ),
+                recommended_action="Deploy field triggers to lapsed writers",
+                implementation_difficulty=ImplementationDifficulty.MEDIUM,
+                time_to_impact="3-6 months",
+            )
         ],
-    }
-    r = test_client.post("/api/insights/executive-brief", json=body)
+    )
+
+
+def test_executive_brief_insight_fallback_is_server_derived(test_client, monkeypatch):
+    # The endpoint derives the figures SERVER-SIDE from the gaps read path
+    # (codex PR-5 round 3): the request carries only the brand.
+    async def _stub(**kwargs):
+        assert kwargs.get("brand") == "Kisqali"
+        return _fake_opportunities_feed()
+
+    monkeypatch.setattr("src.api.routes.gaps.list_opportunities", _stub)
+    r = test_client.post("/api/insights/executive-brief", json={"brand": "Kisqali"})
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["is_fallback"] is True
@@ -190,15 +227,72 @@ def test_executive_brief_insight_fallback(test_client):
     assert "$5.0M" in data["insight"]
     assert "3 low-value opportunities were suppressed" in data["insight"]
     assert any(c["label"] == "Addressable value" for c in data["grounding"])
-    assert data["provenance"]
+    assert data["provenance"] == "Gap-analyzer ROI opportunities (server-derived)"
     assert data["generated_at"]
 
 
-def test_executive_brief_insight_no_signal_is_honest(test_client):
-    body = {"brand": "Fabhalta"}
+def test_executive_brief_ignores_caller_posted_figures(test_client, monkeypatch):
+    # An authenticated caller must NOT be able to mint a grounded-looking
+    # brief from arbitrary posted figures (codex PR-5 round 3): extra body
+    # fields are ignored and the grounding reflects the server's own feed.
+    async def _stub(**kwargs):
+        return _fake_opportunities_feed()
+
+    monkeypatch.setattr("src.api.routes.gaps.list_opportunities", _stub)
+    body = {
+        "brand": "Kisqali",
+        "total_addressable_value": 99_000_000.0,
+        "opportunities": [
+            {
+                "rank": 1,
+                "recommended_action": "Buy a superyacht",
+                "expected_roi": 99.0,
+                "revenue_impact": 99_000_000.0,
+            }
+        ],
+    }
     r = test_client.post("/api/insights/executive-brief", json=body)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "$99.0M" not in data["insight"]
+    assert "superyacht" not in data["insight"]
+    assert "$5.0M" in data["insight"]
+
+
+def test_executive_brief_insight_no_signal_is_honest(test_client, monkeypatch):
+    from src.api.routes.gaps import OpportunityListResponse
+
+    async def _stub(**kwargs):
+        return OpportunityListResponse(
+            total_count=0,
+            quick_wins_count=0,
+            steady_plays_count=0,
+            strategic_bets_count=0,
+            suppressed_count=0,
+            total_addressable_value=0.0,
+            opportunities=[],
+        )
+
+    monkeypatch.setattr("src.api.routes.gaps.list_opportunities", _stub)
+    r = test_client.post("/api/insights/executive-brief", json={"brand": "Fabhalta"})
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["is_fallback"] is True
     assert "run a gap analysis" in data["insight"].lower()
     assert data["key_takeaways"] == []
+
+
+def test_executive_brief_feed_outage_degrades_honestly(test_client, monkeypatch):
+    # A gaps read failure is a data-source outage, NOT "no signal": the
+    # response must say so and never 500 (codex PR-5 rounds 2-3).
+    async def _boom(**kwargs):
+        raise RuntimeError("gap store unreachable")
+
+    monkeypatch.setattr("src.api.routes.gaps.list_opportunities", _boom)
+    r = test_client.post("/api/insights/executive-brief", json={"brand": "Kisqali"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "data-source failure" in data["insight"]
+    assert "run a gap analysis" not in data["insight"].lower()
+    assert data["provenance"] == "Gap-analyzer ROI opportunities (unavailable)"

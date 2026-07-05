@@ -121,27 +121,13 @@ class ResourceInsightRequest(BaseModel):
     synthetic: bool = True
 
 
-class BriefOpportunity(BaseModel):
-    rank: int
-    recommended_action: str
-    expected_roi: float | None = None
-    revenue_impact: float | None = None
-    gap_metric: str = ""
-    gap_percentage: float | None = None
-    segment_value: str = ""
-    implementation_difficulty: str | None = None
-
-
 class ExecutiveBriefInsightRequest(BaseModel):
+    # Brand only: the figures are derived SERVER-SIDE from the latest completed
+    # gap analysis (same read path as GET /gaps/opportunities). Accepting
+    # caller-posted figures would let any authenticated caller mint a
+    # grounded-looking brief from arbitrary numbers under gap-analyzer
+    # provenance (codex PR-5 round 3).
     brand: str
-    total_addressable_value: float | None = None
-    quick_wins_count: int = 0
-    steady_plays_count: int = 0
-    strategic_bets_count: int = 0
-    # Opportunities hidden below break-even: real signal (the honest brief is
-    # "don't invest now"), so the count travels with the surfaced list.
-    suppressed_count: int = 0
-    opportunities: list[BriefOpportunity] = Field(default_factory=list)
 
 
 class TreatmentEffectInsightRequest(BaseModel):
@@ -340,15 +326,47 @@ async def predictive_cohort_insight(
 async def executive_brief_insight(
     req: ExecutiveBriefInsightRequest, user: dict[str, Any] = Depends(require_analyst)
 ) -> StrategicInsightResponse:
-    """Executive distillation (DSPy) of the brand's gap/ROI opportunity figures."""
+    """Executive distillation (DSPy) of the brand's latest gap-analysis figures (server-derived)."""
+    # Same read path the dashboard's opportunities feed uses — the trust
+    # boundary is the API, so the grounding must come from the server's own
+    # gap-analysis data, never from caller-posted figures.
+    from src.api.routes.gaps import list_opportunities
+
+    try:
+        feed = await list_opportunities(brand=req.brand, min_roi=None, difficulty=None, limit=5)
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("executive-brief opportunities feed unavailable: %s", e)
+        return _finalize(
+            {
+                "insight": f"The gap-analysis figures for {req.brand} are currently "
+                "unavailable, so no grounded executive brief can be produced — this "
+                "is a data-source failure, not an empty portfolio.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Gap-analyzer ROI opportunities (unavailable)",
+        )
     g = executive_brief.build_grounding(
         brand=req.brand,
-        total_addressable_value=req.total_addressable_value,
-        quick_wins_count=req.quick_wins_count,
-        steady_plays_count=req.steady_plays_count,
-        strategic_bets_count=req.strategic_bets_count,
-        suppressed_count=req.suppressed_count,
-        opportunities=[o.model_dump() for o in req.opportunities],
+        total_addressable_value=feed.total_addressable_value,
+        quick_wins_count=feed.quick_wins_count,
+        steady_plays_count=feed.steady_plays_count,
+        strategic_bets_count=feed.strategic_bets_count,
+        suppressed_count=feed.suppressed_count or 0,
+        opportunities=[
+            {
+                "rank": o.rank,
+                "recommended_action": o.recommended_action,
+                "expected_roi": o.roi_estimate.expected_roi,
+                "revenue_impact": o.roi_estimate.estimated_revenue_impact,
+                "gap_metric": o.gap.metric,
+                "gap_percentage": o.gap.gap_percentage,
+                "segment_value": o.gap.segment_value,
+                "implementation_difficulty": o.implementation_difficulty.value,
+            }
+            for o in feed.opportunities
+        ],
     )
     # Key on the derived grounding strings (scope + opportunities + caveats) so
     # two portfolios that differ in any figure never collide.
@@ -363,7 +381,7 @@ async def executive_brief_insight(
     else:
         payload = await asyncio.to_thread(executive_brief.generate_insight, g)
         await cache_set(key, payload)
-    return _finalize(payload, provenance="Gap-analyzer ROI opportunities (LLM distillation)")
+    return _finalize(payload, provenance="Gap-analyzer ROI opportunities (server-derived)")
 
 
 @router.post("/resource-optimization", response_model=StrategicInsightResponse)

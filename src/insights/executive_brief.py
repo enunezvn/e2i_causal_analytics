@@ -38,8 +38,9 @@ try:
         metric or segment, or when everything sits below break-even. When
         citing figures, cite ONLY figures given above and keep each sentence's
         figures to a SINGLE opportunity — never pair one opportunity's dollar
-        value with another's ROI, gap, or segment. ALWAYS close by stating
-        the caveat given in `caveats`."""
+        value with another's ROI, gap, or segment — and name a segment or gap
+        metric only in the sentence that cites that same opportunity's own
+        figures. ALWAYS close by stating the caveat given in `caveats`."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"
@@ -170,6 +171,24 @@ def build_grounding(
         # with another's ROI/gap can be detected (codex PR-5 round 2) — a flat
         # value set would accept any swapped combination.
         "sources": [scope, caveats, *opp_lines],
+        # Structured attribute tokens per unit (segment, gap metric): a numeric
+        # sentence must not name ANOTHER unit's segment/metric even when its
+        # figures all trace to one unit — "field triggers in South for $1.2M at
+        # 3.2x" is a false attribution with fully-grounded numbers (codex PR-5
+        # round 3). Actions are free prose and stay prompt-governed: matching
+        # them mechanically would be a false sense of safety.
+        "source_tokens": [set(), set()]
+        + [
+            {
+                t.lower()
+                for t in (
+                    str(o.get("segment_value", "")).strip(),
+                    str(o.get("gap_metric", "")).strip(),
+                )
+                if len(t) >= 3
+            }
+            for o in ranked
+        ],
     }
 
 
@@ -232,23 +251,38 @@ def _numeric_claims(text: str) -> set[tuple[str, float]]:
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+")
 
 
-def _is_grounded(candidate: str, sources: list[str]) -> bool:
-    """True iff every sentence's numeric claims come from a SINGLE source unit.
+def _is_grounded(
+    candidate: str,
+    sources: list[str],
+    source_tokens: list[set[str]] | None = None,
+) -> bool:
+    """True iff every numeric sentence binds to a SINGLE source unit.
 
     Global value-membership is not enough: an LM can pair opportunity A's
     dollar value with opportunity B's ROI/gap and every number still "appears
-    somewhere" (codex PR-5 round 2). Each sentence's claims must therefore be
-    a subset of ONE source unit's claims (scope, caveats, or one opportunity
-    line). Legitimate cross-opportunity prose that mixes figures inside a
-    single sentence falls back — fail-closed by design; the signature
-    instructs the LM to keep each sentence's figures to a single opportunity.
+    somewhere" (codex PR-5 round 2). Each sentence's numeric claims must
+    therefore be a subset of ONE source unit's claims (scope, caveats, or one
+    opportunity line) — AND, when ``source_tokens`` is given, that same unit
+    must own every segment/metric token the sentence names, so grounded
+    figures cannot be re-attributed to another opportunity's segment or
+    metric (codex PR-5 round 3). Legitimate prose that mixes units inside a
+    single numeric sentence falls back — fail-closed by design; the signature
+    instructs the LM to keep each sentence's figures and segment/metric
+    mentions to a single opportunity.
     """
     unit_claims = [_numeric_claims(s) for s in sources]
+    tokens = source_tokens if source_tokens is not None else [set() for _ in sources]
+    all_tokens: set[str] = set().union(*tokens) if tokens else set()
     for sentence in _SENTENCE_SPLIT_RE.split(candidate):
         claims = _numeric_claims(sentence)
         if not claims:
             continue
-        if not any(claims <= unit for unit in unit_claims):
+        mentioned = {
+            t for t in all_tokens if re.search(rf"\b{re.escape(t)}\b", sentence, re.IGNORECASE)
+        }
+        if not any(
+            claims <= unit_claims[i] and mentioned <= tokens[i] for i in range(len(sources))
+        ):
             return False
     return True
 
@@ -270,7 +304,10 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
         return _fallback(g)
     takeaways = normalize_list(getattr(pred, "key_takeaways", []))
     sources = g["sources"]
-    ungrounded = [t for t in [interpretation, *takeaways] if not _is_grounded(t, sources)]
+    source_tokens = g.get("source_tokens")
+    ungrounded = [
+        t for t in [interpretation, *takeaways] if not _is_grounded(t, sources, source_tokens)
+    ]
     if ungrounded:
         # Fail closed: a single invented figure poisons trust in the whole
         # brief, so the labelled deterministic fallback replaces it entirely.

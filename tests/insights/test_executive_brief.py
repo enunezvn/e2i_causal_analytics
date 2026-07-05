@@ -161,6 +161,42 @@ def test_generate_insight_rejects_llm_output_with_ungrounded_figures(monkeypatch
     assert "$9.9M" not in out["insight"]
 
 
+def test_build_grounding_binds_segment_and_metric_tokens_per_unit():
+    g = _grounding()
+    # scope + caveats own no attribute tokens; each opportunity owns its own.
+    assert g["source_tokens"][0] == set()
+    assert g["source_tokens"][1] == set()
+    assert g["source_tokens"][2] == {"northeast", "trx"}
+    assert g["source_tokens"][3] == {"south", "nbrx"}
+
+
+def test_is_grounded_rejects_another_units_segment_in_a_numeric_sentence():
+    sources = ["A — 3.2x ROI, $1.2M impact in Northeast.", "B — 2.1x ROI, $300K impact in South."]
+    tokens = [{"northeast", "trx"}, {"south", "nbrx"}]
+    # Figures from unit A re-attributed to unit B's segment: reject.
+    assert _is_grounded("Capture $1.2M at 3.2x in South.", sources, tokens) is False
+    # Same figures with their OWN segment: pass.
+    assert _is_grounded("Capture $1.2M at 3.2x in Northeast.", sources, tokens) is True
+    # Non-numeric prose may name any segment freely.
+    assert _is_grounded("Both Northeast and South matter strategically.", sources, tokens) is True
+
+
+def test_generate_insight_rejects_segment_swapped_attribution(monkeypatch):
+    # codex PR-5 round 3 HIGH: fully-grounded figures re-attributed to another
+    # opportunity's segment is the same false-recommendation class as swapped
+    # numbers. Must fall back.
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: SimpleNamespace(
+            interpretation="Deploy field triggers in South for $1.2M at 3.2x ROI.",
+            key_takeaways=[],
+        ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+
+
 def test_generate_insight_rejects_swapped_figure_pairing(monkeypatch):
     # codex PR-5 round 2 HIGH: attributing opportunity 2's $300K to
     # opportunity 1's action/ROI is a FALSE quantified recommendation even

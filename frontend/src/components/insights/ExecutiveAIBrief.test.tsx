@@ -7,10 +7,11 @@
  *   ($2.3M, 847 HCPs, beta=0.42, 12.3% MoM TRx) and spliced fake sections into
  *   every real answer with hardcoded confidence badges. None of that may return.
  * - The PR-5 rewire (review finding 1: the brief read as a description, not a
- *   strategic distillation): the card now posts the brand's REAL gap-analysis
- *   figures to `POST /api/insights/executive-brief` (DSPy distillation with an
- *   honestly-labelled deterministic fallback). No signal -> NO call: an LLM
- *   riff over zero figures is fabrication, so the honest empty state renders.
+ *   strategic distillation): the card posts ONLY the brand to
+ *   `POST /api/insights/executive-brief`; the grounding figures are derived
+ *   server-side from the gap-analysis feed (codex PR-5 round 3 — caller-posted
+ *   figures would let anyone mint a grounded-looking brief), and no-signal /
+ *   feed-outage states come back as honest labelled fallback text.
  *
  * Desired behavior: real crystallized insights, else the real grounded
  * distillation alone, else an honest empty state or a labeled error.
@@ -21,35 +22,21 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { ExecutiveAIBrief } from './ExecutiveAIBrief';
 import * as useExec from '@/hooks/api/use-executive-insights';
 import * as useIns from '@/hooks/api/use-insights';
-import { useOpportunities } from '@/hooks/api';
 import type { ExecutiveBriefInsightRequest } from '@/types/insights';
 
 vi.mock('@/hooks/api/use-executive-insights');
 vi.mock('@/hooks/api/use-insights');
-// The brief grounds its request in the brand's real opportunity figures.
-// Mock the opportunities feed so these unit tests stay hermetic.
-vi.mock('@/hooks/api', () => ({ useOpportunities: vi.fn() }));
 
 type BriefMutation = ReturnType<typeof useIns.useExecutiveBriefInsight>;
 type ExecQuery = ReturnType<typeof useExec.useExecutiveInsights>;
 type MockFn = ReturnType<typeof vi.fn>;
-
-/** Default the opportunities feed to a settled, empty (no-data) state. */
-function mockOpps(overrides: Record<string, unknown> = {}) {
-  (useOpportunities as MockFn).mockReturnValue({
-    data: undefined,
-    isLoading: false,
-    isError: false,
-    error: null,
-    ...overrides,
-  });
-}
 
 function mockBrief(overrides: Partial<BriefMutation> = {}) {
   vi.mocked(useIns.useExecutiveBriefInsight).mockReturnValue({
     mutate: vi.fn(),
     reset: vi.fn(),
     data: undefined,
+    variables: undefined,
     error: null,
     isPending: false,
     ...overrides,
@@ -74,42 +61,13 @@ const DISTILLATION = {
   grounding: [{ label: 'Brand', value: 'Kisqali' }],
   is_fallback: false,
   generated_at: '2026-07-05T00:00:00Z',
-  provenance: 'Gap-analyzer ROI opportunities (LLM distillation)',
-};
-
-const OPP_CONTEXT = {
-  total_count: 1,
-  quick_wins_count: 1,
-  steady_plays_count: 0,
-  strategic_bets_count: 0,
-  suppressed_count: 0,
-  total_addressable_value: 2_400_000,
-  opportunities: [
-    {
-      rank: 1,
-      gap: {
-        gap_id: 'g1', metric: 'trx', segment: 'region', segment_value: 'Northeast',
-        current_value: 85, target_value: 100, gap_size: 15, gap_percentage: 15,
-        gap_type: 'vs_target',
-      },
-      roi_estimate: {
-        gap_id: 'g1', estimated_revenue_impact: 2_400_000, estimated_cost_to_close: 300_000,
-        expected_roi: 4, risk_adjusted_roi: 3, payback_period_months: 6,
-        attribution_level: 'partial', attribution_rate: 0.65, confidence: 0.8,
-      },
-      recommended_action: 'Expand specialty coverage in the Northeast',
-      implementation_difficulty: 'medium',
-      time_to_impact: '3-6 months',
-      category: 'steady_play',
-    },
-  ],
+  provenance: 'Gap-analyzer ROI opportunities (server-derived)',
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockBrief();
   mockExec();
-  mockOpps();
 });
 
 describe('ExecutiveAIBrief — real crystallized insights', () => {
@@ -153,7 +111,6 @@ describe('ExecutiveAIBrief — real crystallized insights', () => {
       data: DISTILLATION,
       variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
     expect(screen.getByText('Detailing drives TRx')).toBeInTheDocument();
@@ -179,7 +136,6 @@ describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
       data: DISTILLATION,
       variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
 
@@ -203,7 +159,6 @@ describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
       data: DISTILLATION,
       variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
     // Formerly hardcoded "3 insights generated" regardless of content.
@@ -216,7 +171,6 @@ describe('ExecutiveAIBrief — no SAMPLE_BRIEF fabrication', () => {
       error: new Error('insights service unavailable'),
       variables: { brand: 'Remibrutinib' },
     } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Remibrutinib" />);
     expect(screen.getByText(/unable to generate brief/i)).toBeInTheDocument();
@@ -236,12 +190,11 @@ describe('ExecutiveAIBrief — honest fallback labeling (PR-5)', () => {
       },
       variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
 
     expect(screen.getByText('Strategic Brief')).toBeInTheDocument();
-    expect(screen.getByText('Factual summary (LLM unavailable)')).toBeInTheDocument();
+    expect(screen.getByText('Factual summary (no LLM distillation)')).toBeInTheDocument();
     expect(
       screen.queryByText('AI distillation of live gap-analysis figures')
     ).not.toBeInTheDocument();
@@ -252,7 +205,6 @@ describe('ExecutiveAIBrief — honest fallback labeling (PR-5)', () => {
       data: DISTILLATION,
       variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
 
@@ -262,102 +214,67 @@ describe('ExecutiveAIBrief — honest fallback labeling (PR-5)', () => {
     expect(screen.getByText(/Last updated:/)).toBeInTheDocument();
     expect(screen.queryByText(/Not yet generated/)).not.toBeInTheDocument();
   });
+
+  it('renders the server no-signal fallback text honestly (no client-side signal guessing)', () => {
+    // The SERVER decides no-signal (its feed read found nothing) and answers
+    // with honest fallback text — the card renders it verbatim as a labelled
+    // factual summary, never inventing an empty state that hides the answer.
+    mockBrief({
+      data: {
+        ...DISTILLATION,
+        insight:
+          'No gap-analysis signal is available for Fabhalta yet — run a gap analysis to generate an executive brief.',
+        key_takeaways: [],
+        is_fallback: true,
+        provenance: 'Gap-analyzer ROI opportunities (server-derived)',
+      },
+      variables: { brand: 'Fabhalta' },
+    } as unknown as Partial<BriefMutation>);
+
+    render(<ExecutiveAIBrief brand="Fabhalta" />);
+
+    expect(screen.getByText(/run a gap analysis/i)).toBeInTheDocument();
+    expect(screen.getByText('Factual summary (no LLM distillation)')).toBeInTheDocument();
+    expect(screen.queryByTestId('empty-state')).not.toBeInTheDocument();
+  });
+
+  it('renders the server feed-outage fallback distinctly from no-signal (codex PR-5 rounds 2-3)', () => {
+    mockBrief({
+      data: {
+        ...DISTILLATION,
+        insight:
+          'The gap-analysis figures for Kisqali are currently unavailable, so no grounded executive brief can be produced — this is a data-source failure, not an empty portfolio.',
+        key_takeaways: [],
+        is_fallback: true,
+        provenance: 'Gap-analyzer ROI opportunities (unavailable)',
+      },
+      variables: { brand: 'Kisqali' },
+    } as unknown as Partial<BriefMutation>);
+
+    render(<ExecutiveAIBrief brand="Kisqali" />);
+
+    expect(screen.getByText(/data-source failure/i)).toBeInTheDocument();
+    expect(screen.queryByText(/run a gap analysis/i)).not.toBeInTheDocument();
+  });
 });
 
-describe('ExecutiveAIBrief — request is grounded in real opportunity figures', () => {
+describe('ExecutiveAIBrief — server-derived request contract', () => {
   function lastRequest(mutate: MockFn): ExecutiveBriefInsightRequest | undefined {
     const calls = mutate.mock.calls;
     return calls[calls.length - 1]?.[0] as ExecutiveBriefInsightRequest | undefined;
   }
 
-  it('posts the real opportunity figures once the feed settles', async () => {
+  it('posts ONLY the brand — figures are never client-supplied', async () => {
     const mutate = vi.fn();
     mockBrief({ mutate } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     render(<ExecutiveAIBrief brand="Kisqali" />);
 
     await waitFor(() => expect(mutate).toHaveBeenCalled());
-    const r = lastRequest(mutate)!;
-    expect(r.brand).toBe('Kisqali');
-    expect(r.total_addressable_value).toBe(2_400_000);
-    expect(r.opportunities![0].recommended_action).toBe(
-      'Expand specialty coverage in the Northeast'
-    );
-    expect(r.opportunities![0].expected_roi).toBe(4);
+    expect(lastRequest(mutate)).toEqual({ brand: 'Kisqali' });
   });
 
-  it('waits for opportunities to settle before generating (no premature ungrounded call)', () => {
-    const mutate = vi.fn();
-    mockBrief({ mutate } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: undefined, isLoading: true });
-
-    render(<ExecutiveAIBrief brand="Kisqali" />);
-
-    expect(mutate).not.toHaveBeenCalled();
-  });
-
-  it('does NOT call the endpoint on a SUCCESSFUL zero-signal feed — honest empty, never an ungrounded riff', () => {
-    // PR-5 contract change: the old RAG path fired a context-free prompt when
-    // the feed was empty, producing exactly the generic "description" the
-    // review flagged. Now: no real figures -> no call -> honest empty.
-    const mutate = vi.fn();
-    mockBrief({ mutate } as unknown as Partial<BriefMutation>);
-    mockOpps({
-      data: {
-        ...OPP_CONTEXT,
-        opportunities: [],
-        total_count: 0,
-        quick_wins_count: 0,
-        total_addressable_value: 0,
-        suppressed_count: 0,
-      },
-    });
-
-    render(<ExecutiveAIBrief brand="Kisqali" />);
-
-    expect(mutate).not.toHaveBeenCalled();
-    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
-    expect(screen.getByText(/run a gap analysis/i)).toBeInTheDocument();
-  });
-
-  it('renders a labeled data-source error when the feed FAILS — never the no-signal empty state (codex PR-5 round 2)', () => {
-    // A 500/timeout on /gaps/opportunities is an outage, not "this brand has
-    // no signal". Claiming "run a gap analysis" would mislead the user.
-    const mutate = vi.fn();
-    mockBrief({ mutate } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: undefined, isError: true });
-
-    render(<ExecutiveAIBrief brand="Kisqali" />);
-
-    expect(mutate).not.toHaveBeenCalled();
-    expect(screen.getByText(/unable to generate brief/i)).toBeInTheDocument();
-    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
-    expect(screen.queryByTestId('empty-state')).not.toBeInTheDocument();
-    expect(screen.queryByText(/run a gap analysis/i)).not.toBeInTheDocument();
-  });
-
-  it('calls the endpoint on suppression-only signal (all below break-even is a real brief)', async () => {
-    const mutate = vi.fn();
-    mockBrief({ mutate } as unknown as Partial<BriefMutation>);
-    mockOpps({
-      data: {
-        ...OPP_CONTEXT,
-        opportunities: [],
-        total_count: 0,
-        quick_wins_count: 0,
-        total_addressable_value: 0,
-        suppressed_count: 2,
-      },
-    });
-
-    render(<ExecutiveAIBrief brand="Fabhalta" />);
-
-    await waitFor(() => expect(mutate).toHaveBeenCalled());
-    expect(lastRequest(mutate)!.suppressed_count).toBe(2);
-  });
-
-  it('clears the prior brand footer (last-updated + count) on a CACHED brand switch', () => {
+  it('clears the prior brand footer (last-updated + count) on a brand switch', () => {
     // Codex round-2 HIGH(b): the footer leaked brand A's "Last updated" + insight
     // count under brand B. Dynamic mock so reset() actually clears the data,
     // faithful to react-query.
@@ -371,14 +288,11 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
       error: null,
       isPending: false,
     } as unknown as BriefMutation));
-    mockOpps({ data: OPP_CONTEXT });
 
     const { rerender } = render(<ExecutiveAIBrief brand="Kisqali" />);
     expect(screen.getByText(/1 insight generated/)).toBeInTheDocument();
     expect(screen.getByText(/Last updated:/)).toBeInTheDocument();
 
-    // Switch brand; the new brand's opportunities are already cached (settled).
-    mockOpps({ data: OPP_CONTEXT });
     rerender(<ExecutiveAIBrief brand="Fabhalta" />);
 
     // The prior brand's footer state must not linger.
@@ -387,23 +301,16 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
     expect(screen.getByText(/0 insights generated/)).toBeInTheDocument();
   });
 
-  it('never shows the previous brand brief while the new brand opportunities load (no stale attribution)', () => {
-    // Codex round-1 HIGH: gating the fire on !oppLoading meant a brand switch
-    // held brand A's brief on screen until brand B's /gaps/opportunities
-    // resolved. While the new brand's feed is loading, the brief must show the
-    // busy state, never the previous brand's content.
+  it('never shows the previous brand brief on the switch frame (no stale attribution)', () => {
     mockBrief({
       mutate: vi.fn(),
       data: DISTILLATION,
       variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
-    mockOpps({ data: OPP_CONTEXT });
 
     const { rerender } = render(<ExecutiveAIBrief brand="Kisqali" />);
     expect(screen.getByText(/Prioritize the Northeast TRX gap/)).toBeInTheDocument();
 
-    // Brand switches; the new brand's opportunities are still loading.
-    mockOpps({ data: undefined, isLoading: true });
     rerender(<ExecutiveAIBrief brand="Fabhalta" />);
 
     expect(screen.queryByText(/Prioritize the Northeast TRX gap/)).not.toBeInTheDocument();
@@ -411,25 +318,15 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
 
   it('drops a LATE-resolving response from the previous brand (codex PR-5 round 1 HIGH)', () => {
     // reset() does not cancel an in-flight mutation. Model the race: brand A's
-    // request resolves AFTER the switch to brand B, and B never fires a new
-    // request (its feed has no signal) — so the hook still surfaces A's data.
-    // The attribution guard must refuse to render it under B.
+    // request resolves AFTER the switch to brand B (the hook still surfaces
+    // A's data with A's request variables). The attribution guard must refuse
+    // to render it under B — even on a fresh mount where brandChanged is
+    // false and no reset has run.
     mockBrief({
       mutate: vi.fn(),
       data: DISTILLATION,
       variables: { brand: 'Kisqali' },
     } as unknown as Partial<BriefMutation>);
-    // Brand B settled with NO signal: request is null, endpoint never fired.
-    mockOpps({
-      data: {
-        ...OPP_CONTEXT,
-        opportunities: [],
-        total_count: 0,
-        quick_wins_count: 0,
-        total_addressable_value: 0,
-        suppressed_count: 0,
-      },
-    });
 
     render(<ExecutiveAIBrief brand="Fabhalta" />);
 

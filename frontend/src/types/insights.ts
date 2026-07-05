@@ -81,25 +81,13 @@ export interface TreatmentEffectInsightRequest {
   estimator?: string | null;
 }
 
-/** One ranked gap-analysis opportunity, flattened for the executive brief. */
-export interface BriefOpportunityInput {
-  rank: number;
-  recommended_action: string;
-  expected_roi?: number | null;
-  revenue_impact?: number | null;
-  gap_metric?: string;
-  gap_percentage?: number | null;
-  segment_value?: string;
-  implementation_difficulty?: string | null;
-}
-
 export interface ExecutiveBriefInsightRequest {
+  /**
+   * Brand only: the grounding figures are derived SERVER-SIDE from the latest
+   * completed gap analysis (same read path as GET /gaps/opportunities).
+   * Caller-posted figures are not accepted — they would let any authenticated
+   * caller mint a grounded-looking brief from arbitrary numbers (codex PR-5
+   * round 3).
+   */
   brand: string;
-  total_addressable_value?: number | null;
-  quick_wins_count?: number;
-  steady_plays_count?: number;
-  strategic_bets_count?: number;
-  /** Opportunities hidden below break-even — real "don't invest now" signal. */
-  suppressed_count?: number;
-  opportunities?: BriefOpportunityInput[];
 }

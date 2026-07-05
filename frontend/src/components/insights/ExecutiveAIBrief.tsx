@@ -7,9 +7,13 @@
  * Data sources, in order of preference (real data only):
  * 1. Crystallized executive insights for the brand
  *    (`GET /api/executive-insights`, M5 REWIRE).
- * 2. The DSPy strategic distillation (`POST /api/insights/executive-brief`),
- *    grounded server-side in the brand's REAL gap-analysis figures — the same
- *    `/gaps/opportunities` feed the sibling Priority-Actions card renders.
+ * 2. The DSPy strategic distillation (`POST /api/insights/executive-brief`).
+ *    The request carries ONLY the brand: the grounding figures are derived
+ *    SERVER-SIDE from the latest completed gap analysis (same read path as
+ *    `GET /gaps/opportunities`), so the endpoint can never be fed arbitrary
+ *    caller figures, and no-signal / feed-outage states are answered honestly
+ *    by the server itself (distinct labelled fallbacks; codex PR-5 rounds
+ *    2-3).
  *
  * PR-5 rewire (review finding 1: the brief read as a *description*, not a
  * strategic distillation): the previous fallback posted a client-assembled
@@ -18,18 +22,17 @@
  * but this card now uses the dedicated insights endpoint, which structures the
  * output as a decision aid (highest-impact decision, quantified stakes, ranked
  * action sequence, actionability judgment, suppression caveat) with an honest
- * deterministic fallback when the LM is unavailable.
+ * deterministic fallback whenever the LM is unavailable or its output fails
+ * the server's numeric grounding guard.
  *
  * Honest-state contract: real sections, an explicit empty state, or a labeled
- * error. When the opportunities feed has NO real signal (nothing surfaced and
- * nothing suppressed) the endpoint is not called at all — an LLM riff over
- * zero figures would be fabrication. SAMPLE_BRIEF (fabricated $2.3M / 847-HCP
- * sections) was deleted long ago and must never return.
+ * error. SAMPLE_BRIEF (fabricated $2.3M / 847-HCP sections) was deleted long
+ * ago and must never return.
  *
  * @module components/insights/ExecutiveAIBrief
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Brain, RefreshCw, Sparkles, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -38,8 +41,6 @@ import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useExecutiveBriefInsight } from '@/hooks/api/use-insights';
 import { useExecutiveInsights } from '@/hooks/api/use-executive-insights';
-import { useOpportunities } from '@/hooks/api';
-import { buildExecutiveBriefRequest } from '@/lib/insights/brief-request';
 
 // =============================================================================
 // TYPES
@@ -67,7 +68,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Strategic distillation from the dedicated insights endpoint (real backend
-  // response; server-side grounding + honest deterministic fallback).
+  // response; server-derived grounding + honest labelled fallbacks).
   const {
     mutate: generateBrief,
     reset: resetBrief,
@@ -79,9 +80,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
 
   // Attribution guard (codex PR-5 round 1 HIGH): reset() does NOT cancel an
   // in-flight mutation. If brand A's request resolves after a switch to brand
-  // B — and B never fires a new request (e.g. no signal) — the hook still
-  // observes A's mutation and its late data/error would render under B. Only
-  // consume a result whose REQUEST brand matches the brand on screen.
+  // B, the hook can still observe A's mutation and its late data/error would
+  // render under B. Only consume a result whose REQUEST brand matches the
+  // brand on screen.
   const briefInsight =
     briefResponse && briefVariables?.brand === brand ? briefResponse : null;
   const briefError =
@@ -90,34 +91,6 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // Real crystallized insights for this brand (M5 REWIRE). When present,
   // these take precedence over the insights-endpoint path.
   const { data: crystallized } = useExecutiveInsights(brand);
-
-  // The brand's real gap-analysis figures (the same `/gaps/opportunities` feed
-  // the sibling Priority-Actions card uses) — the ONLY grounding the brief
-  // request carries; no fabrication. A feed FAILURE is carried separately: a
-  // 500/timeout is a data-source outage, not "this brand has no signal", and
-  // the two must render differently (codex PR-5 round 2).
-  const {
-    data: oppData,
-    isLoading: oppLoading,
-    isError: oppFailed,
-  } = useOpportunities({
-    brand,
-    limit: 5,
-  });
-
-  // The grounded request, or null when there is no real signal to distill —
-  // in which case the endpoint is never called and the honest empty state
-  // renders instead.
-  const briefRequest = useMemo(
-    () => buildExecutiveBriefRequest(brand, oppData),
-    [brand, oppData]
-  );
-  // Content-stable key so the generate effect fires exactly once per DISTINCT
-  // request (mirrors the previous string-query dependency semantics).
-  const briefRequestKey = useMemo(
-    () => (briefRequest ? JSON.stringify(briefRequest) : null),
-    [briefRequest]
-  );
 
   const crystallizedSections: BriefSection[] | null =
     crystallized && crystallized.length > 0
@@ -129,8 +102,9 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
       : null;
 
   // The insights endpoint reports degradation IN-BAND but HONESTLY: a 200
-  // always carries a real, grounded `insight` (LLM distillation or the
-  // labelled deterministic fallback) — never an error string dressed as
+  // always carries a real, grounded `insight` (LLM distillation, or a
+  // labelled deterministic fallback covering no-LM, guard-rejected output,
+  // no-signal, and feed-outage cases) — never an error string dressed as
   // content. `is_fallback` drives the source label so the user can tell them
   // apart at a glance.
   const briefSections: BriefSection[] | null = briefInsight?.insight
@@ -139,7 +113,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
           title: 'Strategic Brief',
           content: briefInsight.insight,
           sourceLabel: briefInsight.is_fallback
-            ? 'Factual summary (LLM unavailable)'
+            ? 'Factual summary (no LLM distillation)'
             : 'AI distillation of live gap-analysis figures',
           takeaways: briefInsight.key_takeaways,
         },
@@ -149,8 +123,8 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   const sections: BriefSection[] = crystallizedSections ?? briefSections ?? [];
 
   // Synchronous (render-time) detection of a brand switch. The reset below is a
-  // passive effect that runs AFTER paint, so on a CACHED-opportunities switch
-  // the prior brand's brief/footer would paint for one frame before it clears.
+  // passive effect that runs AFTER paint, so on a brand switch the prior
+  // brand's brief/footer would paint for one frame before it clears.
   // `brandChanged` folds into `isBusy` so that frame shows the busy state
   // instead of stale content (codex round-2 HIGH).
   const prevBrandRef = useRef(brand);
@@ -162,8 +136,7 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // On a brand CHANGE (not the initial mount — reset-on-mount is a no-op since
   // no brief has been generated yet), clear the previous brand's brief AND its
   // "last updated" stamp immediately so neither can be displayed under the new
-  // brand while it (re)generates (the grounded fire below is gated on the
-  // opportunities feed settling). Without this, brand A's brief + footer would
+  // brand while it (re)generates. Without this, brand A's brief + footer would
   // linger on screen — a stale-attribution honest-state violation
   // (codex round-1 HIGH for the body, round-2 HIGH for the footer).
   const didMountRef = useRef(false);
@@ -176,14 +149,12 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
     setLastUpdated(null);
   }, [brand, resetBrief]);
 
-  // Generate the brief once the opportunity context has SETTLED, so the
-  // request is grounded in real figures. Fires exactly once per distinct
-  // request (the key encodes every figure). No signal -> no call: the honest
-  // empty state below is the truthful answer, not an ungrounded LLM riff.
+  // Generate the brief once per brand. The server owns the grounding, so
+  // there is nothing to wait for client-side; no-signal and outage cases come
+  // back as honest labelled fallbacks rather than being decided here.
   useEffect(() => {
-    if (oppLoading || !briefRequestKey) return;
-    generateBrief(JSON.parse(briefRequestKey));
-  }, [briefRequestKey, oppLoading, generateBrief]);
+    generateBrief({ brand });
+  }, [brand, generateBrief]);
 
   // Track when a real response arrives. Depend on the response OBJECT (not a
   // derived boolean) so a SECOND refresh after an earlier answer still
@@ -195,26 +166,20 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   }, [briefInsight]);
 
   const handleRefresh = () => {
-    if (briefRequestKey) {
-      generateBrief(JSON.parse(briefRequestKey));
-    }
+    generateBrief({ brand });
   };
 
-  // "Busy" covers the insight call in flight, the opportunities feed still
-  // loading (grounded fire deferred), AND the single render after a brand
-  // switch before the reset effect clears the prior brief — in all three we
+  // "Busy" covers the insight call in flight AND the single render after a
+  // brand switch before the reset effect clears the prior brief — in both we
   // show the loading state, never stale content or a premature empty/error
   // state.
-  const isBusy = isGenerating || oppLoading || brandChanged;
+  const isBusy = isGenerating || brandChanged;
 
   // What the user actually sees. When busy, nothing real is shown yet, so the
   // body AND footer must not surface the prior brand's sections/count.
   const displaySections: BriefSection[] = isBusy ? [] : sections;
 
-  // A failed opportunities feed is an ERROR, never "no signal": the honest
-  // no-signal empty state below is only reachable after a SUCCESSFUL settled
-  // feed with zero surfaced and zero suppressed opportunities.
-  const hasAnyError = !!briefError || oppFailed;
+  const hasAnyError = !!briefError;
   const showError = !isBusy && displaySections.length === 0 && hasAnyError;
   const showEmpty = !isBusy && displaySections.length === 0 && !hasAnyError;
 
@@ -267,20 +232,16 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
             <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
             <div className="text-xs text-[var(--color-muted-foreground)]">
               <span className="font-medium text-rose-600">Unable to generate brief:</span>{' '}
-              {briefError?.message ??
-                (oppFailed
-                  ? 'the gap-analysis figures that ground this brief could not be loaded — data-source failure, not an empty portfolio.'
-                  : 'Insights service unavailable')}
+              {briefError?.message ?? 'Insights service unavailable'}
             </div>
           </div>
         )}
 
-        {/* Honest empty state — no crystallized insights and no gap-analysis
-            signal to distill (the endpoint is not called without signal). */}
+        {/* Honest empty state — nothing crystallized and no brief response yet. */}
         {showEmpty && (
           <EmptyState
             title="No executive brief available"
-            description={`No crystallized insights exist for ${brand} yet and there is no gap-analysis signal to distill — run a gap analysis to generate a brief.`}
+            description={`No crystallized insights exist for ${brand} yet and the strategic brief has not been generated. Use refresh to try again.`}
           />
         )}
 
