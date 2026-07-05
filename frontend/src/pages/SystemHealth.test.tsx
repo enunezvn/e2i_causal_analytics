@@ -300,6 +300,56 @@ describe('SystemHealth', () => {
     expect(screen.queryByText(/Health check:/)).not.toBeInTheDocument();
   });
 
+  it('suppresses untrusted issues/warnings/recommendations on the Alerts tab (codex PR-4 round 3)', async () => {
+    // An untrusted payload's issue and recommendation STRINGS are just as
+    // fabricated as its score — the backend's dev-offline mock emits
+    // placeholder warnings/recommendations, so gating only the headline
+    // number would still hand operators fake action items.
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        critical_issues: ['Placeholder critical issue - restart the composer'],
+        warnings: ['Placeholder warning - check adapter wiring'],
+        recommendations: ['Placeholder recommendation - scale workers'],
+        data_provenance: 'placeholder',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Alerts/i }));
+
+    expect(screen.queryByText(/restart the composer/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/check adapter wiring/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scale workers/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Critical Issues')).not.toBeInTheDocument();
+    expect(screen.queryByText('Recommendations')).not.toBeInTheDocument();
+  });
+
+  it('renders trusted issues/warnings/recommendations on the Alerts tab', async () => {
+    // Positive control for the trust gate: measured data must still surface —
+    // the gate suppresses fabricated actions, not real ones.
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        critical_issues: ['Redis connection pool exhausted'],
+        warnings: ['Model staleness above threshold'],
+        recommendations: ['Increase pool size to 50'],
+        data_provenance: 'measured',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Alerts/i }));
+
+    expect(screen.getByText(/Redis connection pool exhausted/)).toBeInTheDocument();
+    expect(screen.getByText(/Model staleness above threshold/)).toBeInTheDocument();
+    expect(screen.getByText(/Increase pool size to 50/)).toBeInTheDocument();
+  });
+
   // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest
