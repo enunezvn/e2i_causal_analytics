@@ -181,6 +181,12 @@ class TestGuard:
         assert hte._is_grounded("Patients 50 to 65 (the 50-65 band) respond.", g) is True
         assert hte._is_grounded("2 of 65 segments clear zero.", g) is False
 
+    def test_phrase_followed_by_unit_is_a_numeric_claim(self):
+        # An age-band range re-used as a quantity ("50 to 65 percent") must
+        # NOT be stripped as a name mention — its digits face the guard.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Share rises 50 to 65 percent in responders.", g) is False
+
 
 class TestGenerateInsight:
     def test_no_signal_returns_honest_empty_fallback(self):

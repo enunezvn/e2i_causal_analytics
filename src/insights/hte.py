@@ -133,11 +133,17 @@ def _phrase_variants(raw: Any) -> set[str]:
     return out
 
 
+# A vouched phrase immediately followed by a unit word is a numeric claim in
+# disguise ("50 to 65 percent" from the 50-65 age band), not a name mention —
+# leave it in place so its digits face the guard.
+_PHRASE_UNIT_LOOKAHEAD = r"(?!\s*(?:%|pp\b|percent\b|percentage\b|points?\b))"
+
+
 def _strip_phrases(text: str, phrases: list[str]) -> str:
     """Remove vouched phrases (longest first) so only bare numbers remain."""
     for p in phrases:
         if p:
-            text = re.sub(re.escape(p), " ", text, flags=re.IGNORECASE)
+            text = re.sub(re.escape(p) + _PHRASE_UNIT_LOOKAHEAD, " ", text, flags=re.IGNORECASE)
     return text
 
 
