@@ -282,7 +282,7 @@ _CLAIM_RE = re.compile(
     r"(?:"
     r"(?<![\w.\-])(?P<sym>[+\-−±∓]) ?"
     r"|\b(?P<word>negative|minus|positive|plus)[\s-]+(?=\d)"
-    r"|\b(?P<word2>negative|minus|positive)[\s,]+(?:[a-z][\w-]*[\s,]+){0,2}?"
+    r"|\b(?P<word2>negative|minus|positive)[\s,]+(?:[a-z][\w-]*[\s,]+){0,3}?"
     rf"(?=\d[\d,]*(?:\.\d+)?\s*{_UNIT_PATTERN})"
     r")?"
     r"(?P<num>\d[\d,]*(?:\.\d+)?)"
@@ -327,10 +327,13 @@ _SEG_COUNT_RE = re.compile(
 )
 
 
-# A postpositive sign adjective right after a unit-bearing figure ("an
-# 11.1pp negative effect", "11.1pp net negative") signs the claim. Bounded to
-# one bridging word and never across punctuation.
-_POSTPOSITIVE_SIGN_RE = re.compile(r" (?:[a-z][\w-]* )?(negative|positive)\b", re.IGNORECASE)
+# A postpositive sign adjective after a unit-bearing figure ("an 11.1pp
+# negative effect", "11.1pp, a negative result") signs the claim. Allows one
+# appositive comma, an article, and one bridging word — never a sentence
+# boundary.
+_POSTPOSITIVE_SIGN_RE = re.compile(
+    r",? (?:(?:a|an|the) )?(?:[a-z][\w-]* )?(negative|positive)\b", re.IGNORECASE
+)
 
 
 def _extract_claims(text: str) -> list[tuple[str, str, str]]:
@@ -382,10 +385,20 @@ def _claim_vouched(
 # leave decimals intact ("." splits only before whitespace/end).
 _WINDOW_BREAK_RE = re.compile(r"[;\n]|[.!?](?=\s|$)")
 _SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?=\s|$)|\n+")
-_LIFT_ANCHOR_RE = re.compile(r"\b(?:expected\s+)?(?:lift|uplift)\b", re.IGNORECASE)
+# The lift anchor also covers targeting-benefit paraphrase families ("the
+# incremental gain from differential targeting", "targeting offers ...") —
+# any figure claimed as the value of targeting IS a lift claim.
+_LIFT_ANCHOR_RE = re.compile(
+    r"\b(?:expected\s+)?(?:lift|uplift)\b"
+    r"|\b(?:gains?|improvements?|benefits?|value|advantage|upside|impact)\s+"
+    r"(?:from|of)\s+(?:[\w-]+\s+){0,2}?targeting\b"
+    r"|\btargeting\s+(?:offers?|yields?|delivers?|provides?|adds?|generates?|produces?)\b",
+    re.IGNORECASE,
+)
 _ATE_ANCHOR_RE = re.compile(
     r"\bATE\b|\baverage\s+treatment\s+effect\b"
-    r"|\boverall\W{0,3}(?:the\s+)?(?:treatment\s+)?effect\b"
+    r"|\b(?:overall|population-level|aggregate|average)\W{0,3}"
+    r"(?:the\s+)?(?:treatment\s+)?effect\b"
     r"|\btreatment\s+effect\s+overall\b",
     re.IGNORECASE,
 )
@@ -703,11 +716,16 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
             mention = "|".join(re.escape(v) for v in sorted(variants, key=len, reverse=True) if v)
         else:
             # Short common-word values ("high", "low") are segment mentions
-            # only next to segment context ("high severity", "band=high").
+            # next to segment context ("high severity", "band=high",
+            # "disease_severity_band, high") or when they head a response
+            # verb ("High responds at ...") — table-like prose after an
+            # explicit dimension mention.
             v_esc = re.escape(value)
             mention = (
-                rf"\b{v_esc}[=\s-]+(?:[\w-]+[\s-]+)?{ctx_pat}\b"
-                rf"|\b{ctx_pat}[\w-]*[=\s-]+(?:[\w-]+[\s-]+)?{v_esc}\b"
+                rf"\b{v_esc}[=,:\s-]+(?:[\w-]+[\s-]+)?{ctx_pat}\b"
+                rf"|\b{ctx_pat}[\w-]*[=,:\s-]+(?:[\w-]+[\s-]+)?{v_esc}\b"
+                rf"|\b{v_esc}\s+(?:responds?|shows?|leads?|gains?|performs?|lags?"
+                rf"|trails?|outperforms?|underperforms?|ranks?|sits?|clears?)\b"
             )
         segment_rows.append({"mention": mention, "numbers": row_numbers})
 

@@ -446,6 +446,66 @@ class TestGuard:
         )
         assert hte._is_grounded("The 50-65 band responds at +13.8pp with n=765.", g) is True
 
+    def test_metric_paraphrase_families_bound(self):
+        # codex round-8 HIGH: "population-level treatment effect" and
+        # targeting-benefit paraphrases ("incremental gain from targeting",
+        # "targeting offers ...") escaped the metric anchors.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The population-level treatment effect is +17.7pp.", g) is False
+        assert (
+            hte._is_grounded("The incremental gain from differential targeting is +17.7pp.", g)
+            is False
+        )
+        assert hte._is_grounded("Segment-based targeting offers a +17.7pp improvement.", g) is False
+        assert hte._is_grounded("The population-level treatment effect is +11.1pp.", g) is True
+        assert (
+            hte._is_grounded(
+                "Differential targeting offers no advantage; the expected lift is +0.0pp.", g
+            )
+            is True
+        )
+
+    def test_dimension_context_and_verb_headed_segment_mentions(self):
+        # codex round-8 HIGH: table-like prose ("Within disease_severity_band,
+        # high responds ...", "High responds at ...") escaped the mention
+        # detector's adjacency requirement.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded("Within disease_severity_band, high responds at +13.8pp (n=2,015).", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("For disease severity, high responds at +13.8pp (n=2,015).", g)
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "Disease severity separates the response. High responds at +13.8pp (n=2,015).", g
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "Disease severity separates the response. High responds at +17.7pp (n=1,385).", g
+            )
+            is True
+        )
+
+    def test_appositive_and_far_sign_words_bind(self):
+        # codex round-8 HIGH: appositive ("11.1pp, a negative effect") and
+        # far-prepositive ("a net negative treatment effect of 11.1pp") sign
+        # words went unbound.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The overall ATE was 11.1pp, a negative effect.", g) is False
+        assert (
+            hte._is_grounded("The overall ATE is a net negative treatment effect of 11.1pp.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("The high severity effect is 17.7pp, a negative result.", g) is False
+        )
+        assert hte._is_grounded("The overall ATE was 11.1pp, a positive effect.", g) is True
+
     def test_postpositive_sign_words_bind_to_unit_figures(self):
         # codex round-6 HIGH: "an 11.1pp negative effect" read as unsigned.
         g = hte.build_grounding(_record())
