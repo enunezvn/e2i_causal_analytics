@@ -859,6 +859,50 @@ class TestGuard:
         assert hte._is_grounded("2 segments cleared zero.", g) is True
         assert hte._is_grounded("3 segments cleared zero.", g) is False
 
+    def test_article_bearing_fractions_and_which_relatives_bind(self):
+        # codex round-17 HIGH x2: (1) an article before the fraction
+        # denominator ("3 of the 3", "3 out of the 3", "3 of these 3") left
+        # the numerator unbound; (2) the relative pronoun "which" was missing
+        # from the negation vocabulary ("CIs which did not exclude zero").
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("3 of the 3 segments are significant.", g) is False
+        assert hte._is_grounded("3 of the 3 segments have 95% CIs excluding zero.", g) is False
+        assert hte._is_grounded("3 out of the 3 segments are significant.", g) is False
+        assert hte._is_grounded("3 of these 3 segments are significant.", g) is False
+        assert (
+            hte._is_grounded("2 of the 3 segments did not have 95% CIs excluding zero.", g) is False
+        )
+        assert (
+            hte._is_grounded("2 of the 3 segments have 95% CIs that do not exclude zero.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 had 95% CIs which did not exclude zero.", g)
+            is False
+        )
+        assert hte._is_grounded("2 of the 3 segments are significant.", g) is True
+        assert hte._is_grounded("2 out of the 3 segments have 95% CIs excluding zero.", g) is True
+        assert (
+            hte._is_grounded("1 of the 3 segments did not have 95% CIs excluding zero.", g) is True
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 1 had 95% CIs which did not exclude zero.", g)
+            is True
+        )
+        # Affirmative relatives bind to the significant count — "that/which
+        # exclude(d) zero" is not a negation.
+        assert hte._is_grounded("Of the 3 segments, 2 had 95% CIs which excluded zero.", g) is True
+        assert hte._is_grounded("Of the 3 segments, 3 had 95% CIs which excluded zero.", g) is False
+        assert hte._is_grounded("2 segments have 95% CIs that exclude zero.", g) is True
+        assert hte._is_grounded("3 segments have 95% CIs that exclude zero.", g) is False
+        # A thousands-separated number is not a fraction denominator: the
+        # cohort n must not truncate to a bogus "of 3" claim.
+        assert (
+            hte._is_grounded("1,385 of the 3,883 patients are in the high-severity segment.", g)
+            is True
+        )
+        assert hte._is_grounded("1 of the 3,883 patients discontinued.", g) is True
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so

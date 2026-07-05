@@ -292,11 +292,14 @@ _CLAIM_RE = re.compile(
 # Count-fraction claims: "13/14", "13 of 14", "13 out of 14", "13-of-14",
 # "13 over 14", "13 in 14", any dash flavour ("3‑out‑of‑3"): digit-adjacent
 # dashes and slashes are normalized to "-" and "/", word-adjacent dashes are
-# matched here directly.
+# matched here directly. An article before the denominator ("3 of the 3",
+# "2 of these 3") does not unbind the numerator; a denominator may not be
+# the leading digits of a thousands-separated number ("1 of the 3,883
+# patients" is not a 1-of-3 claim).
 _FRACTION_RE = re.compile(
     rf"\b(?<![.,])(\d+)(?:\s*/\s*|[-{_DASH_CLASS}\s]+"
     rf"(?:out[-{_DASH_CLASS}\s]+of|of|over|in|per|among|amongst|from)"
-    rf"[-{_DASH_CLASS}\s]+)(\d+)\b",
+    rf"[-{_DASH_CLASS}\s]+(?:(?:the|these|those|all)[-{_DASH_CLASS}\s]+)?)(\d+)\b(?!,\d)",
     re.IGNORECASE,
 )
 # A number attributed to segments ("81 significant segments", "1,385
@@ -331,7 +334,8 @@ _SEG_COUNT_RE = re.compile(
 # "non-significant") does not make the clause a significance claim.
 _SIG_PREDICATE_RE = re.compile(
     r"(?<!not )(?<!non-)(?<!non )\bsignificant\b"
-    r"|CIs?\s+exclud\w*\s+zero|exclud(?:es|ed)?\s+zero|clear(?:s|ed)?\s+zero"
+    r"|CIs?\s+(?:(?:that|which)\s+)?exclud\w*\s+zero"
+    r"|exclud(?:es?|ed)?\s+zero|clear(?:s|ed)?\s+zero"
     r"|(?<!not )\b(?:reach|achiev)\w*\s+(?:statistical\s+)?significance\b",
     re.IGNORECASE,
 )
@@ -366,7 +370,8 @@ _SIG_ELIDED_RE = re.compile(
     r"\b(\d[\d,]*)\s+(?:"
     r"(?:are|is|were|was|remained?)(?P<span>(?:\s+(?:not|statistically))*)\s+significant\b"
     r"|(?:(?P<negdo>(?:do(?:es)?|did)\s+not)\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
-    r"(?:(?P<negthat>(?:that\s+(?:do(?:es)?|did)\s+not|not|without)\s+)?exclud\w*)\s+zero"
+    r"(?:(?:(?P<negthat>(?:(?:that|which)\s+(?:do(?:es)?|did)\s+not|not|without)\s+)"
+    r"|(?:that|which)\s+)?exclud\w*)\s+zero"
     r"|(?:(?P<negdo2>(?:do(?:es)?|did)\s+not)\s+)?clear(?:s|ed)?\s+zero"
     r"|(?P<fail>fail\w*)\s+to\s+(?:reach|clear|exclude)\b"
     r"|(?:(?:do(?:es)?|did|are|is|were|was)\s+)?(?P<negreach>not\s+)?"
@@ -382,7 +387,7 @@ _SIG_ELIDED_RE = re.compile(
 _FRACTION_NEGATION_RE = re.compile(
     r"\bnot\s+(?:statistically\s+)?significant\b|\bnon-?significant\b"
     r"|\b(?:do(?:es)?|did)\s+not\s+(?:have|clear|exclude|reach|achieve)\b"
-    r"|\bthat\s+(?:do(?:es)?|did)\s+not\s+exclud\w*\b"
+    r"|\b(?:that|which)\s+(?:do(?:es)?|did)\s+not\s+exclud\w*\b"
     r"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b"
     r"|\b(?:not|without)\s+(?:excluding|reaching|clearing|achieving)\b",
     re.IGNORECASE,
@@ -425,7 +430,8 @@ _SIG_COUNT_LABEL_RE = re.compile(
 # the total — each side must be true, not merely vouched.
 _FRACTION_SEG_CONTEXT_RE = re.compile(
     rf"\s*(?:[\w-]+\s+){{0,2}}(?:{_SEG_NOUNS}\b|(?<!not )\bsignificant\b"
-    rf"|CIs?\s+exclud\w*\s+zero|clear(?:s|ed)?\s+zero|exclud(?:es|ed)?\s+zero)",
+    rf"|CIs?\s+(?:(?:that|which)\s+)?exclud\w*\s+zero"
+    rf"|clear(?:s|ed)?\s+zero|exclud(?:es?|ed)?\s+zero)",
     re.IGNORECASE,
 )
 
