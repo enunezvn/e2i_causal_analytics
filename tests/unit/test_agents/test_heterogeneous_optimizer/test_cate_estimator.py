@@ -432,3 +432,147 @@ class TestCATEEstimatorEdgeCases:
         else:
             # Edge case where EconML may fail with many modifiers - check error exists
             assert result["errors"] is not None
+
+
+class TestSegmentMeanInference:
+    """Honest segment-mean CI regression tests (2026-07-05 "0/14 significant" incident).
+
+    The per-segment CI must be the residual-based GATE interval (shrinks
+    ~1/sqrt(n)), NOT the mean of the forest's per-individual interval bounds
+    (an individual-level prediction interval whose width is n-independent).
+    On the live Remibrutinib cohort the old computation reported ±17.7pp for
+    every segment regardless of n (1.4k–5.9k rows), so a real +11pp effect
+    could never test significant.
+    """
+
+    @staticmethod
+    def _make_frame_and_forest(n: int, theta_by_segment: dict, seed: int = 0):
+        """Frame + CausalForestDML stand-in with planted DML residuals.
+
+        The fake forest's per-point intervals are DELIBERATELY enormous
+        (±10.0): if the node consumed them for the segment CI, nothing would
+        ever be significant — proving the GATE path is the one in use.
+        """
+        import numpy as np
+        import pandas as pd
+
+        rng = np.random.default_rng(seed)
+        segments = rng.choice(list(theta_by_segment), size=n)
+        t_res = rng.choice([0.5, -0.5], size=n)  # centered binary residual
+        theta = np.array([theta_by_segment[s] for s in segments])
+        y_res = theta * t_res + rng.normal(0.0, 0.05, n)
+        df = pd.DataFrame({"segment": segments, "modifier": rng.normal(size=n)})
+
+        class _FakeForest:
+            residuals_ = (y_res, t_res.reshape(-1, 1), None, None)
+
+            def effect(self, X):
+                import numpy as np
+
+                return np.zeros(len(X))
+
+            def effect_interval(self, X, alpha):
+                import numpy as np
+
+                return (np.full(len(X), -10.0), np.full(len(X), 10.0))
+
+        return df, _FakeForest()
+
+    @pytest.mark.asyncio
+    async def test_gate_recovers_significance_and_ordering(self):
+        """A planted +0.11 mean effect at n≈4000/segment must be significant."""
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
+        df, cf = self._make_frame_and_forest(8000, {"high": 0.15, "low": 0.08})
+
+        result = await node._calculate_cate_by_segment(
+            df, cf, segment_vars=["segment"], effect_modifiers=["modifier"], alpha=0.05
+        )
+
+        rows = {r["segment_value"]: r for r in result["segment"]}
+        assert rows["high"]["statistical_significance"] is True
+        assert rows["low"]["statistical_significance"] is True
+        assert abs(rows["high"]["cate_estimate"] - 0.15) < 0.02
+        assert abs(rows["low"]["cate_estimate"] - 0.08) < 0.02
+        # CI is a mean-scale interval, nothing like the fake ±10 per-point bounds.
+        for r in rows.values():
+            assert (r["cate_ci_upper"] - r["cate_ci_lower"]) < 0.1
+
+    @pytest.mark.asyncio
+    async def test_gate_ci_shrinks_with_sample_size(self):
+        """The segment CI width must shrink ~1/sqrt(n) (16x n -> ~4x narrower)."""
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
+
+        widths = {}
+        for n in (500, 8000):
+            df, cf = self._make_frame_and_forest(n, {"only": 0.11}, seed=1)
+            result = await node._calculate_cate_by_segment(
+                df, cf, segment_vars=["segment"], effect_modifiers=["modifier"], alpha=0.05
+            )
+            row = result["segment"][0]
+            widths[n] = row["cate_ci_upper"] - row["cate_ci_lower"]
+
+        assert widths[500] > 2.5 * widths[8000]
+
+    @pytest.mark.asyncio
+    async def test_multi_column_treatment_residuals_fall_back(self):
+        """Multi-valued treatment residuals must fall back to per-point intervals."""
+        import numpy as np
+        import pandas as pd
+
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
+        n = 40
+        df = pd.DataFrame({"segment": ["a", "b"] * (n // 2), "modifier": np.zeros(n)})
+
+        class _MultiTreatmentForest:
+            # 2-column T residual: the single-theta GATE moment does not apply.
+            residuals_ = (np.zeros(n), np.zeros((n, 2)), None, None)
+
+            def effect(self, X):
+                return np.full(len(X), 0.3)
+
+            def effect_interval(self, X, alpha):
+                return (np.full(len(X), 0.1), np.full(len(X), 0.5))
+
+        result = await node._calculate_cate_by_segment(
+            df,
+            _MultiTreatmentForest(),
+            segment_vars=["segment"],
+            effect_modifiers=["modifier"],
+            alpha=0.05,
+        )
+
+        for row in result["segment"]:
+            assert row["cate_estimate"] == pytest.approx(0.3)
+            assert row["cate_ci_lower"] == pytest.approx(0.1)
+            assert row["cate_ci_upper"] == pytest.approx(0.5)
+
+    @pytest.mark.asyncio
+    async def test_residual_length_mismatch_falls_back(self):
+        """Misaligned residuals (defensive guard) must fall back, not misindex."""
+        import numpy as np
+        import pandas as pd
+
+        node = CATEEstimatorNode(data_connector=MockDataConnector())
+        n = 40
+        df = pd.DataFrame({"segment": ["a"] * n, "modifier": np.zeros(n)})
+
+        class _MisalignedForest:
+            residuals_ = (np.zeros(n + 7), np.zeros(n + 7), None, None)
+
+            def effect(self, X):
+                return np.full(len(X), 0.2)
+
+            def effect_interval(self, X, alpha):
+                return (np.full(len(X), -0.1), np.full(len(X), 0.5))
+
+        result = await node._calculate_cate_by_segment(
+            df,
+            _MisalignedForest(),
+            segment_vars=["segment"],
+            effect_modifiers=["modifier"],
+            alpha=0.05,
+        )
+
+        row = result["segment"][0]
+        assert row["cate_estimate"] == pytest.approx(0.2)
+        assert row["statistical_significance"] is False
