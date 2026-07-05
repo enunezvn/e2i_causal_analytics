@@ -384,7 +384,9 @@ _WINDOW_BREAK_RE = re.compile(r"[;\n]|[.!?](?=\s|$)")
 _SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?=\s|$)|\n+")
 _LIFT_ANCHOR_RE = re.compile(r"\b(?:expected\s+)?(?:lift|uplift)\b", re.IGNORECASE)
 _ATE_ANCHOR_RE = re.compile(
-    r"\bATE\b|\baverage\s+treatment\s+effect\b|\boverall\s+(?:treatment\s+)?effect\b",
+    r"\bATE\b|\baverage\s+treatment\s+effect\b"
+    r"|\boverall\W{0,3}(?:the\s+)?(?:treatment\s+)?effect\b"
+    r"|\btreatment\s+effect\s+overall\b",
     re.IGNORECASE,
 )
 _METRIC_ANCHORS = (_LIFT_ANCHOR_RE, _ATE_ANCHOR_RE)
@@ -406,14 +408,13 @@ def _metric_misattributed(
     """True iff a metric-shaped figure is tied to this metric's wording but
     is not the metric's rendered value ("expected lift is +17.7pp" when the
     true lift is +0.0pp). Fail-closed: if the metric was never rendered, any
-    figure attributed to it rejects. Windows trim to whole tokens so a cut
-    never fabricates a number, and the other metric's anchor takes its own
-    preceding territory with it ("... exceeds the +0.0pp lift")."""
+    figure attributed to it rejects. Binding follows the copula: the FIRST
+    figure after the anchor in the same clause is the metric's claimed value
+    ("expected lift ... , ... , is +17.7pp" rejects while "lift is +0.0pp
+    because high severity (+17.7pp) leads" stays legal); with no following
+    figure, the NEAREST preceding one binds ("a +17.7pp overall effect")."""
     for m in anchor_re.finditer(text):
-        end = m.end() + 60
-        after = text[m.end() : end]
-        if end < len(text) and not text[end].isspace():
-            after = after.rsplit(" ", 1)[0] if " " in after else after
+        after = text[m.end() :]
         cut = _WINDOW_BREAK_RE.search(after)
         if cut:
             after = after[: cut.start()]
@@ -421,17 +422,24 @@ def _metric_misattributed(
             if other is not anchor_re:
                 o = other.search(after)
                 if o:
-                    after = after[: max(0, o.start() - 25)]
-        start = max(0, m.start() - 25)
-        before = text[start : m.start()]
-        if start > 0 and not text[start - 1].isspace():
-            before = before.split(" ", 1)[-1] if " " in before else ""
-        breaks = list(_WINDOW_BREAK_RE.finditer(before))
-        if breaks:
-            before = before[breaks[-1].end() :]
-        for num in (*_metric_value_claims(before), *_metric_value_claims(after)):
-            if num != value_num and num not in allowed:
-                return True
+                    after = after[: o.start()]
+        after_claims = _metric_value_claims(after)
+        if after_claims:
+            bound = after_claims[0]
+        else:
+            start = max(0, m.start() - 40)
+            before = text[start : m.start()]
+            if start > 0 and not text[start - 1].isspace():
+                before = before.split(" ", 1)[-1] if " " in before else ""
+            breaks = list(_WINDOW_BREAK_RE.finditer(before))
+            if breaks:
+                before = before[breaks[-1].end() :]
+            before_claims = _metric_value_claims(before)
+            if not before_claims:
+                continue
+            bound = before_claims[-1]
+        if bound != value_num and bound not in allowed:
+            return True
     return False
 
 
@@ -450,7 +458,10 @@ def _segment_attribution_ok(norm_text: str, g: dict[str, Any]) -> bool:
         allowed: set[str] = mentioned[0]["numbers"] | g["global_numbers"]
         stripped = _strip_phrases(sentence, g["phrases"], g["ambiguous_phrases"])
         for _s, num, unit in _extract_claims(stripped):
-            governed = bool(unit) or "." in num or len(num) >= 4
+            # Governed: unit-bearing figures, decimals, n-sized integers, and
+            # any KNOWN sample size regardless of digit count (a 3-digit
+            # segment n can cross-attribute just as well as a 4-digit one).
+            governed = bool(unit) or "." in num or len(num) >= 4 or num in g["sample_numbers"]
             if governed and num not in allowed:
                 return False
     return True
@@ -628,8 +639,45 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
             global_numbers.add(g_num)
     if n_total:
         global_numbers.add(str(n_total))
+    sample_numbers = {str(int(r["sample_size"])) for r in rows if r.get("sample_size")}
+    if n_total:
+        sample_numbers.add(str(n_total))
 
-    seg_ctx_words = {"severity", "band", "segment", "group", "cohort", "subgroup", "tier"}
+    # Context nouns mirror the _SEG_NOUNS family: any noun the guard treats
+    # as segment-language ("the high category", "the low bucket") must also
+    # count as segment context here, or the attribution check silently skips.
+    seg_ctx_words = {
+        "severity",
+        "band",
+        "bands",
+        "segment",
+        "segments",
+        "subsegment",
+        "group",
+        "groups",
+        "subgroup",
+        "subgroups",
+        "cohort",
+        "cohorts",
+        "tier",
+        "tiers",
+        "bucket",
+        "buckets",
+        "category",
+        "categories",
+        "cluster",
+        "clusters",
+        "subpopulation",
+        "subpopulations",
+        "population",
+        "populations",
+        "stratum",
+        "strata",
+        "dimension",
+        "dimensions",
+        "responders",
+        "patients",
+    }
     for d in dims:
         seg_ctx_words.update(w for w in re.split(r"[_\W]+", str(d).lower()) if len(w) >= 3)
     ctx_pat = "(?:" + "|".join(sorted(seg_ctx_words)) + ")"
@@ -677,6 +725,7 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
         "total_count": total_count,
         "metric_nums": {"ate": _num_of(ate_pp), "lift": _num_of(lift_s), "het": _num_of(het_str)},
         "global_numbers": global_numbers,
+        "sample_numbers": sample_numbers,
         "segment_rows": segment_rows,
     }
 

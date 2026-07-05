@@ -390,6 +390,62 @@ class TestGuard:
         assert hte._is_grounded("The ATE of +11.1pp exceeds the +0.0pp lift.", g) is True
         assert hte._is_grounded("The overall effect is +11.1pp with heterogeneity 0.26.", g) is True
 
+    def test_metric_anchor_variants_and_long_clauses_bound(self):
+        # codex round-7 HIGH: "treatment effect overall" / "Overall, the
+        # treatment effect" missed the ATE anchor, and a long parenthetical
+        # clause escaped the fixed 60-char window. Binding now follows the
+        # copula: the first figure after the anchor in the clause.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The treatment effect overall is +17.7pp.", g) is False
+        assert hte._is_grounded("Overall, the treatment effect is +17.7pp.", g) is False
+        assert (
+            hte._is_grounded(
+                "The expected lift from differential targeting, after weighing the "
+                "no-opportunity verdict against the high-severity response, is +17.7pp.",
+                g,
+            )
+            is False
+        )
+        assert hte._is_grounded("Overall, the treatment effect is +11.1pp.", g) is True
+        assert (
+            hte._is_grounded(
+                "Expected lift is +0.0pp because high severity (+17.7pp) already leads.", g
+            )
+            is True
+        )
+        assert (
+            hte._is_grounded("High severity (+17.7pp) drives the overall effect of +11.1pp.", g)
+            is True
+        )
+
+    def test_segment_noun_synonyms_count_as_segment_context(self):
+        # codex round-7 HIGH: "the high category/bucket" was not recognized
+        # as a mention of the high segment, skipping attribution.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The high category responds at +13.8pp (n=2,015).", g) is False
+        assert hte._is_grounded("The high bucket responds at +13.8pp (n=2,015).", g) is False
+        assert hte._is_grounded("The low category responds at +17.7pp.", g) is False
+        assert hte._is_grounded("The high category responds at +17.7pp (n=1,385).", g) is True
+
+    def test_three_digit_sample_sizes_cannot_cross_attribute(self):
+        # codex round-7 HIGH: unitless integers were governed only at 4+
+        # digits, so records with 3-digit segment n could swap sample sizes.
+        record = _record()
+        record["cate_by_segment"]["disease_severity_band"][0]["sample_size"] = 815
+        record["cate_by_segment"]["disease_severity_band"][1]["sample_size"] = 985
+        record["cate_by_segment"]["age_band"][0]["sample_size"] = 765
+        g = hte.build_grounding(record)
+        assert (
+            hte._is_grounded("The low severity segment has n=815 and responds at +3.4pp.", g)
+            is False
+        )
+        assert hte._is_grounded("The 50-65 band responds at +13.8pp with n=985.", g) is False
+        assert (
+            hte._is_grounded("The low severity segment has n=985 and responds at +3.4pp.", g)
+            is True
+        )
+        assert hte._is_grounded("The 50-65 band responds at +13.8pp with n=765.", g) is True
+
     def test_postpositive_sign_words_bind_to_unit_figures(self):
         # codex round-6 HIGH: "an 11.1pp negative effect" read as unsigned.
         g = hte.build_grounding(_record())
