@@ -2,10 +2,12 @@
  * HeterogeneousTreatmentEffects Tests — real segment CATE wiring.
  *
  * The card runs POST /api/segments/analyze (Heterogeneous Optimizer / EconML
- * CausalForestDML over the live synthetic cohort) and renders real per-segment
- * CATE from `cate_by_segment`. Honest states only: empty -> run action,
- * completed -> real numbers, failed -> labeled error. No fabricated segments,
- * no invented p-values.
+ * CausalForestDML over the patient_journeys clinical substrate — the same
+ * contract as /segment-analysis) and renders real per-segment CATE from
+ * `cate_by_segment`. Honest states only: empty -> run action, completed ->
+ * real numbers, failed -> labeled error. No fabricated segments, no invented
+ * p-values. The segment set, effect modifiers, confounders, and data source
+ * are FIXED server-side; the card must send only the caller-selectable fields.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -28,34 +30,35 @@ function mockSegments(overrides: Partial<Mutation> = {}) {
   } as unknown as Mutation);
 }
 
-// Faithful to a real /api/segments/analyze completed response (the values match
-// the in-container verification: per-region CATE with tight CIs).
+// Faithful to a real /api/segments/analyze completed response on the clinical
+// patient_journeys contract: pp-scale binary-outcome effects (persistent_180d)
+// broken down by a server-fixed clinical dimension.
 const COMPLETED = {
   analysis_id: 'seg_test_1',
   status: 'completed',
   cate_by_segment: {
-    region: [
+    disease_severity: [
       {
-        segment_name: 'region',
-        segment_value: 'northeast',
-        cate_estimate: 0.287,
-        cate_ci_lower: 0.286,
-        cate_ci_upper: 0.288,
+        segment_name: 'disease_severity',
+        segment_value: 'severe',
+        cate_estimate: 0.017,
+        cate_ci_lower: 0.009,
+        cate_ci_upper: 0.025,
         sample_size: 4023,
         statistical_significance: true,
       },
       {
-        segment_name: 'region',
-        segment_value: 'midwest',
-        cate_estimate: 0.244,
-        cate_ci_lower: 0.242,
-        cate_ci_upper: 0.245,
+        segment_name: 'disease_severity',
+        segment_value: 'moderate',
+        cate_estimate: 0.012,
+        cate_ci_lower: 0.004,
+        cate_ci_upper: 0.02,
         sample_size: 3975,
         statistical_significance: true,
       },
     ],
   },
-  overall_ate: 0.268,
+  overall_ate: 0.014,
   heterogeneity_score: 0.067,
   high_responders: [],
   low_responders: [],
@@ -83,7 +86,7 @@ describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
     expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
   });
 
-  it('fires segment analysis over the cohort when run is clicked', async () => {
+  it('sends the clinical contract: allowlisted defaults, no server-fixed fields', async () => {
     const mutate = vi.fn();
     mockSegments({ mutate } as unknown as Partial<Mutation>);
     const user = userEvent.setup();
@@ -93,22 +96,53 @@ describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
 
     expect(mutate).toHaveBeenCalledTimes(1);
     const arg = mutate.mock.calls[0][0];
-    expect(arg.request.treatment_var).toBeTruthy();
-    expect(arg.request.outcome_var).toBeTruthy();
-    expect(arg.request.segment_vars.length).toBeGreaterThan(0);
-    expect(arg.request.data_source).toBe('business_metrics');
+    // patient_journeys allowlist defaults (the old business_metrics pair —
+    // engagement_score -> conversion_rate — 422s against the rebuilt route).
+    expect(arg.request.treatment_var).toBe('treatment_arm');
+    expect(arg.request.outcome_var).toBe('persistent_180d');
+    // Segment set / modifiers / data source are fixed server-side — the card
+    // must NOT send them (a stale data_source was the live failure mode).
+    expect(arg.request.segment_vars).toBeUndefined();
+    expect(arg.request.effect_modifiers).toBeUndefined();
+    expect(arg.request.data_source).toBeUndefined();
+    expect(arg.request.filters).toBeUndefined();
   });
 
-  it('renders real per-segment CATE from cate_by_segment', () => {
+  it('passes the brand row-filter through when provided', async () => {
+    const mutate = vi.fn();
+    mockSegments({ mutate } as unknown as Partial<Mutation>);
+    const user = userEvent.setup();
+    render(<HeterogeneousTreatmentEffects brand="Remibrutinib" />);
+
+    await user.click(screen.getByRole('button', { name: /run cate analysis/i }));
+
+    expect(mutate.mock.calls[0][0].request.brand).toBe('Remibrutinib');
+  });
+
+  it('renders real per-segment CATE in percentage points from cate_by_segment', () => {
     mockSegments({ data: COMPLETED } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
 
-    expect(screen.getByText('northeast')).toBeInTheDocument();
-    expect(screen.getByText('midwest')).toBeInTheDocument();
-    expect(screen.getByText(/\+28\.7%/)).toBeInTheDocument(); // northeast CATE
-    expect(screen.getByText(/\+24\.4%/)).toBeInTheDocument(); // midwest CATE
+    expect(screen.getByText('severe')).toBeInTheDocument();
+    expect(screen.getByText('moderate')).toBeInTheDocument();
+    // Binary outcome => percentage points, matching /segment-analysis.
+    expect(screen.getByText(/\+1\.7 pp/)).toBeInTheDocument(); // severe CATE
+    expect(screen.getByText(/\+1\.2 pp/)).toBeInTheDocument(); // moderate CATE
     expect(screen.getByText('2/2 significant')).toBeInTheDocument();
     expect(screen.queryByText('High-Volume Specialists')).not.toBeInTheDocument();
+  });
+
+  it('never labels a non-binary outcome in percentage points (raw effect instead)', () => {
+    mockSegments({ data: COMPLETED } as unknown as Partial<Mutation>);
+    // engagement_score is a continuous covariate the backend's union allowlist
+    // accepts as outcome_var — pp would be a lie, so the card must fall back
+    // to the raw effect scale.
+    render(<HeterogeneousTreatmentEffects outcomeVar="engagement_score" />);
+
+    expect(screen.queryByText(/\+1\.7 pp/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\+1\.4 pp/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\+0\.017/)).toBeInTheDocument(); // severe CATE, raw
+    expect(screen.getByText(/\+0\.014/)).toBeInTheDocument(); // overall ATE, raw
   });
 
   it('shows a loading state while the analysis is pending', () => {
@@ -121,7 +155,7 @@ describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
     mockSegments({ error: new Error('CATE estimation failed') } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
     expect(screen.getByText(/cate analysis failed/i)).toBeInTheDocument();
-    expect(screen.queryByText('northeast')).not.toBeInTheDocument();
+    expect(screen.queryByText('severe')).not.toBeInTheDocument();
   });
 
   it('treats a failed-status response as an error, never as real numbers', () => {
@@ -130,6 +164,6 @@ describe('HeterogeneousTreatmentEffects — real segment CATE', () => {
     } as unknown as Partial<Mutation>);
     render(<HeterogeneousTreatmentEffects />);
     expect(screen.getByText(/cate analysis failed/i)).toBeInTheDocument();
-    expect(screen.queryByText('northeast')).not.toBeInTheDocument();
+    expect(screen.queryByText('severe')).not.toBeInTheDocument();
   });
 });

@@ -4,9 +4,11 @@
  *
  * Displays segment-level Conditional Average Treatment Effects (CATE) sourced
  * from the real segment-analysis endpoint (`POST /api/segments/analyze`), which
- * runs the Heterogeneous Optimizer agent (EconML CausalForestDML) over the live
- * synthetic-cohort substrate (per-HCP rollup). Verified end-to-end on the real
- * cohort (12,028 rows -> per-region CATE with confidence intervals).
+ * runs the Heterogeneous Optimizer agent (EconML CausalForestDML) over the
+ * patient_journeys clinical substrate — the same contract as /segment-analysis.
+ * The backend fixes the clinical segment set, effect modifiers, and confounders
+ * server-side; only the treatment/outcome pair (curated allowlist) and an
+ * optional brand row-filter are caller-selectable.
  *
  * Honest-state contract (no fabricated data):
  * - Before any run: explicit empty state with a "Run CATE analysis" action. The
@@ -46,12 +48,12 @@ import type { CATEResult, RunSegmentAnalysisRequest } from '@/types/segments';
 
 interface HeterogeneousTreatmentEffectsProps {
   className?: string;
-  /** Treatment variable for the CATE analysis (synthetic-cohort default). */
+  /** Treatment variable (patient_journeys allowlist; backend default). */
   treatmentVar?: string;
-  /** Outcome variable for the CATE analysis (synthetic-cohort default). */
+  /** Outcome variable (patient_journeys allowlist; backend default). */
   outcomeVar?: string;
-  /** Segment dimension to break CATE down by (synthetic-cohort default). */
-  segmentVar?: string;
+  /** Optional brand row-filter (NOT a causal variable); undefined => all brands. */
+  brand?: string;
 }
 
 /** A single CATE row flattened out of the API's `cate_by_segment` map. */
@@ -63,10 +65,32 @@ interface FlatSegment extends CATEResult {
 // HELPERS
 // =============================================================================
 
-function fmtPct(value: number | undefined | null, digits = 1): string {
+/**
+ * Binary outcomes on the patient_journeys clinical contract — the backend's
+ * curated outcome list (src/api/routes/causal.py `_CAUSAL_DATASET_SPECS`).
+ * A CATE on these is a probability delta, displayed in percentage points (pp),
+ * the same headline unit /segment-analysis uses: 0.017 on persistent_180d is
+ * +1.7 pp of persistence probability — NOT "+1.7%".
+ */
+const BINARY_OUTCOMES = new Set([
+  'persistent_180d',
+  'discontinued_180d',
+  'treatment_initiated',
+  'adherent_180d',
+  'low_gap_180d',
+]);
+
+/**
+ * Format a treatment effect honestly for the outcome's scale: percentage
+ * points for binary outcomes, the raw effect size otherwise. The backend
+ * validator also accepts covariates (e.g. engagement_score) as outcome_var,
+ * so an effect on a non-binary outcome must never be labeled "pp".
+ */
+function fmtEffect(value: number | undefined | null, binaryOutcome: boolean, digits = 1): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return '—';
-  const pct = value * 100;
-  return `${pct >= 0 ? '+' : ''}${pct.toFixed(digits)}%`;
+  if (!binaryOutcome) return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
+  const pp = value * 100;
+  return `${pp >= 0 ? '+' : ''}${pp.toFixed(digits)} pp`;
 }
 
 /**
@@ -86,7 +110,13 @@ function flattenCATE(bySegment: Record<string, CATEResult[]> | undefined): FlatS
 // SUB-COMPONENTS
 // =============================================================================
 
-function SegmentCard({ segment }: { segment: FlatSegment }) {
+function SegmentCard({
+  segment,
+  binaryOutcome,
+}: {
+  segment: FlatSegment;
+  binaryOutcome: boolean;
+}) {
   const significant = segment.statistical_significance;
   const isPositive = (segment.cate_estimate ?? 0) >= 0;
 
@@ -135,13 +165,14 @@ function SegmentCard({ segment }: { segment: FlatSegment }) {
             ) : (
               <TrendingDown className="h-4 w-4" />
             )}
-            {fmtPct(segment.cate_estimate)}
+            {fmtEffect(segment.cate_estimate, binaryOutcome)}
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
           <div className="text-xs text-[var(--color-muted-foreground)]">CI</div>
           <div className="text-sm font-medium text-[var(--color-foreground)] pt-1">
-            [{fmtPct(segment.cate_ci_lower)}, {fmtPct(segment.cate_ci_upper)}]
+            [{fmtEffect(segment.cate_ci_lower, binaryOutcome)},{' '}
+            {fmtEffect(segment.cate_ci_upper, binaryOutcome)}]
           </div>
         </div>
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
@@ -161,9 +192,9 @@ function SegmentCard({ segment }: { segment: FlatSegment }) {
 
 export function HeterogeneousTreatmentEffects({
   className,
-  treatmentVar = 'engagement_score',
-  outcomeVar = 'conversion_rate',
-  segmentVar = 'region',
+  treatmentVar = 'treatment_arm',
+  outcomeVar = 'persistent_180d',
+  brand,
 }: HeterogeneousTreatmentEffectsProps) {
   const {
     mutate: runAnalysis,
@@ -173,24 +204,25 @@ export function HeterogeneousTreatmentEffects({
   } = useRunSegmentAnalysisAndWait();
 
   const handleRun = useCallback(() => {
+    // Segment set, effect modifiers, confounders, and data source are FIXED
+    // server-side for the clinical patient_journeys path — send only what the
+    // caller may choose (same contract as /segment-analysis).
     const request: RunSegmentAnalysisRequest = {
-      query: `Treatment effect heterogeneity of ${treatmentVar} on ${outcomeVar} by ${segmentVar}`,
+      query: `Treatment effect heterogeneity of ${treatmentVar} on ${outcomeVar} across clinical segments`,
       treatment_var: treatmentVar,
       outcome_var: outcomeVar,
-      segment_vars: [segmentVar],
-      effect_modifiers: ['market_share', 'total_rx_count'],
-      data_source: 'business_metrics',
-      filters: { metric_type: 'per_hcp_rollup' },
-      n_estimators: 100,
-      top_segments_count: 10,
+      brand,
     };
     runAnalysis({ request, pollIntervalMs: 3000, maxWaitMs: 300000 });
-  }, [runAnalysis, treatmentVar, outcomeVar, segmentVar]);
+  }, [runAnalysis, treatmentVar, outcomeVar, brand]);
 
   const failed = analysis?.status === 'failed';
   const segments: FlatSegment[] = failed ? [] : flattenCATE(analysis?.cate_by_segment);
   const hasResults = segments.length > 0;
   const significantCount = segments.filter((s) => s.statistical_significance).length;
+  // pp labeling is only honest for probability outcomes; a continuous outcome
+  // (allowed by the backend's union allowlist) renders the raw effect size.
+  const binaryOutcome = BINARY_OUTCOMES.has(outcomeVar);
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -205,7 +237,8 @@ export function HeterogeneousTreatmentEffects({
                 Heterogeneous Treatment Effects
               </CardTitle>
               <p className="text-xs text-[var(--color-muted-foreground)]">
-                Segment-level CATE — {treatmentVar} → {outcomeVar} by {segmentVar}
+                Segment-level CATE — {treatmentVar} → {outcomeVar} across clinical segments
+                {brand ? ` (${brand})` : ''}
               </p>
             </div>
           </div>
@@ -278,7 +311,7 @@ export function HeterogeneousTreatmentEffects({
                   <span className="text-xs text-[var(--color-muted-foreground)]">Overall ATE</span>
                 </div>
                 <div className="text-xl font-bold text-[var(--color-foreground)]">
-                  {fmtPct(analysis?.overall_ate)}
+                  {fmtEffect(analysis?.overall_ate, binaryOutcome)}
                 </div>
               </div>
               <div className="p-3 rounded-lg bg-[var(--color-muted)]/30 border border-[var(--color-border)]">
@@ -296,7 +329,11 @@ export function HeterogeneousTreatmentEffects({
 
             <div className="grid gap-3">
               {segments.map((segment) => (
-                <SegmentCard key={`${segment.dimension}:${segment.segment_value}`} segment={segment} />
+                <SegmentCard
+                  key={`${segment.dimension}:${segment.segment_value}`}
+                  segment={segment}
+                  binaryOutcome={binaryOutcome}
+                />
               ))}
             </div>
 

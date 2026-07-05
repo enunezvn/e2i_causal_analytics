@@ -189,11 +189,11 @@ class RunSegmentAnalysisRequest(BaseModel):
     data_source: str = Field(
         default="business_metrics",
         description=(
-            "Data source table identifier. Defaults to 'business_metrics' "
-            "(the live per-HCP rollup substrate the CATE engine reads); the "
-            "page also passes this explicitly so neither the default nor the "
-            "request silently targets a non-existent table. Must be a table in "
-            "HeterogeneousOptimizerDataConnector.SUPPORTED_TABLES."
+            "Data source table identifier. IGNORED by /segments/analyze: the "
+            "clinical HTE path is FIXED server-side to 'patient_journeys' "
+            "(with a server-prepared, banded gold-standard frame), and any "
+            "value supplied here is overridden. Retained for wire "
+            "compatibility with older callers only."
         ),
     )
     filters: Optional[Dict[str, Any]] = Field(default=None, description="Additional filters")
@@ -214,15 +214,13 @@ class RunSegmentAnalysisRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "query": ("Treatment effect heterogeneity of engagement on conversion by region"),
-                "treatment_var": "engagement_score",
-                "outcome_var": "conversion_rate",
-                "segment_vars": ["region"],
-                "effect_modifiers": ["market_share", "total_rx_count"],
-                "data_source": "business_metrics",
-                "filters": {"metric_type": "per_hcp_rollup"},
-                "n_estimators": 100,
-                "top_segments_count": 10,
+                "query": (
+                    "Treatment effect heterogeneity of treatment_arm on "
+                    "persistent_180d across clinical segments"
+                ),
+                "treatment_var": "treatment_arm",
+                "outcome_var": "persistent_180d",
+                "brand": "Remibrutinib",
             }
         }
     )
