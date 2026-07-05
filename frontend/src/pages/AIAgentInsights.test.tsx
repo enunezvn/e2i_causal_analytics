@@ -3,7 +3,9 @@
  * ==========================
  *
  * Tests for the AI Agent Insights composite page (issue #304):
- * - brand + modelId are driven from context / URL, NOT hard-coded
+ * - brand is driven from context / URL, NOT hard-coded
+ * - the agents badge shows the REAL health-score count, never an
+ *   invented one
  * - error boundary wraps each insight component (one failing insight
  *   does not blank the page)
  */
@@ -43,11 +45,15 @@ vi.mock('@/components/insights', () => ({
   ActiveCausalChains: () => <div data-testid="active-causal-chains" />,
   ExperimentRecommendations: () => <div data-testid="experiment-recommendations" />,
   HeterogeneousTreatmentEffects: () => <div data-testid="heterogeneous-treatment-effects" />,
-  SystemHealthScore: ({ modelId }: { modelId?: string }) => (
-    <div data-testid="system-health-score">modelId:{modelId ?? '__none__'}</div>
-  ),
 }));
 
+// The header badge shows REAL agent availability from the health-score
+// service; mock the hook so each test controls (or withholds) the data.
+vi.mock('@/hooks/api', () => ({
+  useAgentHealth: vi.fn(() => ({ data: undefined })),
+}));
+
+import { useAgentHealth } from '@/hooks/api';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { AIAgentInsights } from './AIAgentInsights';
 
@@ -78,6 +84,7 @@ describe('AIAgentInsights', () => {
     (useE2ICopilot as ReturnType<typeof vi.fn>).mockReturnValue({
       filters: { brand: 'Remibrutinib' },
     });
+    (useAgentHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
   });
 
   describe('Page rendering', () => {
@@ -86,7 +93,7 @@ describe('AIAgentInsights', () => {
       expect(screen.getByText('AI Agent Insights')).toBeInTheDocument();
     });
 
-    it('renders all seven insight components', () => {
+    it('renders all six insight components', () => {
       render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
       expect(screen.getByTestId('executive-ai-brief')).toBeInTheDocument();
       expect(screen.getByTestId('priority-actions-roi')).toBeInTheDocument();
@@ -94,7 +101,30 @@ describe('AIAgentInsights', () => {
       expect(screen.getByTestId('active-causal-chains')).toBeInTheDocument();
       expect(screen.getByTestId('experiment-recommendations')).toBeInTheDocument();
       expect(screen.getByTestId('heterogeneous-treatment-effects')).toBeInTheDocument();
-      expect(screen.getByTestId('system-health-score')).toBeInTheDocument();
+    });
+  });
+
+  describe('Agents badge (honest count)', () => {
+    it('renders the real available/total count when the health service reports it', () => {
+      (useAgentHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { available_count: 19, total_agents: 21, data_provenance: 'measured' },
+      });
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.getByText('19/21 Agents Active')).toBeInTheDocument();
+    });
+
+    it('omits the badge entirely when agent health has not loaded (no invented count)', () => {
+      (useAgentHealth as ReturnType<typeof vi.fn>).mockReturnValue({ data: undefined });
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.queryByText(/Agents Active/i)).not.toBeInTheDocument();
+    });
+
+    it('omits the badge for untrusted (placeholder) provenance — sample counts are not live counts (codex PR-4 round 4)', () => {
+      (useAgentHealth as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: { available_count: 19, total_agents: 21, data_provenance: 'placeholder' },
+      });
+      render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
+      expect(screen.queryByText(/Agents Active/i)).not.toBeInTheDocument();
     });
   });
 
@@ -127,35 +157,35 @@ describe('AIAgentInsights', () => {
     });
   });
 
-  describe('URL-driven modelId (AC: no hard-coded modelId)', () => {
-    it('passes modelId from ?modelId=... URL query', () => {
+  describe('Moved-capability bridge (codex PR-4 round 7)', () => {
+    it('points stale ?modelId= operator links at /monitoring instead of silently ignoring them', () => {
       render(<AIAgentInsights />, {
-        wrapper: createWrapperWithUrl('/ai-insights?modelId=churn_v3.0.0'),
+        wrapper: createWrapperWithUrl('/ai-insights?modelId=chatbot_v2'),
       });
-      expect(screen.getByTestId('system-health-score')).toHaveTextContent('modelId:churn_v3.0.0');
+      // The per-model health & drift card moved to /monitoring with this
+      // consolidation; a #304-era link must land the user one click from it.
+      const link = screen.getByRole('link', { name: /View chatbot_v2 in Monitoring/i });
+      expect(link).toHaveAttribute('href', '/monitoring?modelId=chatbot_v2');
     });
 
-    it('passes no modelId (falls through to component default) when neither URL nor env override is set', () => {
+    it('shows no bridge note when the URL carries no modelId', () => {
       render(<AIAgentInsights />, { wrapper: createWrapperWithUrl('/ai-insights') });
-      // Page-level fallback must NOT hard-code "propensity_v2.1.0" — when no
-      // override is set, the page should pass `undefined` so the leaf
-      // component's own default kicks in.
-      const node = screen.getByTestId('system-health-score');
-      expect(node.textContent).toBe('modelId:__none__');
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
     });
   });
 
   describe('Source-text forcing function (AC: no hard-coded literals in JSX)', () => {
-    it('does not contain the stale brand or modelId literals from issue #304', () => {
+    it('does not contain the stale brand/modelId literals or a hard-coded agent count', () => {
       const here = dirname(fileURLToPath(import.meta.url));
       const src = readFileSync(resolve(here, 'AIAgentInsights.tsx'), 'utf8');
       // Forbid the JSX-attribute forms called out in issue #304 ...
       expect(src).not.toMatch(/brand=["']Remibrutinib["']/);
-      expect(src).not.toMatch(/modelId=["']propensity_v2\.1\.0["']/);
-      // ... and forbid the modelId literal appearing anywhere in the page,
-      // since the only legitimate home for it is the leaf SystemHealthScore
-      // component's own default.
+      // ... and forbid the stale modelId literal anywhere in the page (the
+      // modelId-consuming card left with the consolidation; the only modelId
+      // read that remains is the bridge pointing stale links at /monitoring).
       expect(src).not.toMatch(/propensity_v2\.1\.0/);
+      // The agents badge must be data-driven, never the old invented count.
+      expect(src).not.toMatch(/21 Agents Active/);
     });
   });
 
@@ -174,7 +204,6 @@ describe('AIAgentInsights', () => {
           'active-causal-chains',
           'experiment-recommendations',
           'heterogeneous-treatment-effects',
-          'system-health-score',
         ],
       },
       {
@@ -185,7 +214,6 @@ describe('AIAgentInsights', () => {
           'active-causal-chains',
           'experiment-recommendations',
           'heterogeneous-treatment-effects',
-          'system-health-score',
         ],
       },
       {
@@ -196,7 +224,6 @@ describe('AIAgentInsights', () => {
           'active-causal-chains',
           'experiment-recommendations',
           'heterogeneous-treatment-effects',
-          'system-health-score',
         ],
       },
       {
@@ -207,7 +234,6 @@ describe('AIAgentInsights', () => {
           'predictive-alerts',
           'experiment-recommendations',
           'heterogeneous-treatment-effects',
-          'system-health-score',
         ],
       },
       {
@@ -218,7 +244,6 @@ describe('AIAgentInsights', () => {
           'predictive-alerts',
           'active-causal-chains',
           'heterogeneous-treatment-effects',
-          'system-health-score',
         ],
       },
       {
@@ -229,24 +254,12 @@ describe('AIAgentInsights', () => {
           'predictive-alerts',
           'active-causal-chains',
           'experiment-recommendations',
-          'system-health-score',
-        ],
-      },
-      {
-        throwing: 'SystemHealthScore',
-        survivors: [
-          'executive-ai-brief',
-          'priority-actions-roi',
-          'predictive-alerts',
-          'active-causal-chains',
-          'experiment-recommendations',
-          'heterogeneous-treatment-effects',
         ],
       },
     ];
 
     /**
-     * Build the seven insight mocks where exactly one throws. Each healthy
+     * Build the six insight mocks where exactly one throws. Each healthy
      * mock renders a data-testid we can later assert on.
      */
     function buildInsightMocks(throwName: string) {
@@ -257,7 +270,6 @@ describe('AIAgentInsights', () => {
         'ActiveCausalChains',
         'ExperimentRecommendations',
         'HeterogeneousTreatmentEffects',
-        'SystemHealthScore',
       ] as const;
       const NAME_TO_TESTID: Record<(typeof ALL_NAMES)[number], string> = {
         ExecutiveAIBrief: 'executive-ai-brief',
@@ -266,7 +278,6 @@ describe('AIAgentInsights', () => {
         ActiveCausalChains: 'active-causal-chains',
         ExperimentRecommendations: 'experiment-recommendations',
         HeterogeneousTreatmentEffects: 'heterogeneous-treatment-effects',
-        SystemHealthScore: 'system-health-score',
       };
       const out: Record<string, () => ReactElement> = {};
       for (const n of ALL_NAMES) {
@@ -283,7 +294,7 @@ describe('AIAgentInsights', () => {
     }
 
     for (const { throwing, survivors } of INSIGHTS) {
-      it(`isolates a render error in ${throwing} from the other six insights`, async () => {
+      it(`isolates a render error in ${throwing} from the other five insights`, async () => {
         const consoleErrorSpy = vi
           .spyOn(console, 'error')
           .mockImplementation(() => {});

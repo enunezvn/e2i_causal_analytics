@@ -952,6 +952,36 @@ describe('Wire Schemas (disputed sweep #4)', () => {
       );
     });
 
+    it('HealthScoreResponseWireSchema preserves data_provenance (faithful mirror of backend)', () => {
+      // Regression (codex PR-4 round 2): z.object() strips unknown keys, so a
+      // schema that omits data_provenance silently deletes the backend's
+      // fail-closed honesty tag — the dashboard's trust gate then treats a
+      // placeholder response as real.
+      const payload = {
+        check_id: 'hs_prov',
+        check_scope: 'full',
+        overall_health_score: 85.5,
+        health_grade: 'B',
+        component_health_score: 0.9,
+        model_health_score: 0.8,
+        pipeline_health_score: 0.85,
+        agent_health_score: 0.9,
+        component_statuses: null,
+        model_metrics: null,
+        pipeline_statuses: null,
+        agent_statuses: null,
+        critical_issues: [],
+        warnings: [],
+        recommendations: [],
+        health_summary: 'Dev placeholder.',
+        check_latency_ms: 5,
+        timestamp: new Date().toISOString(),
+        data_provenance: 'placeholder',
+      };
+      const parsed = HealthScoreResponseWireSchema.safeParse(payload);
+      expect(parsed.success && parsed.data.data_provenance).toBe('placeholder');
+    });
+
     it('HealthScoreResponseWireSchema accepts null per-dimension scores (backend: Optional, None = unmeasured)', () => {
       // HealthScoreResult (health_score/agent.py) declares every per-dimension
       // score Optional[float] — "None if unmeasured", designed so unmeasured

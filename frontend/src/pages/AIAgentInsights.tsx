@@ -5,17 +5,24 @@
  * Main page for AI-powered insights including executive briefs,
  * priority actions, predictive alerts, and more.
  *
- * Brand and model identifiers are sourced from the active dashboard
- * context (`E2ICopilotProvider`) with optional URL-query override.
+ * The brand is sourced from the active dashboard context
+ * (`E2ICopilotProvider`) with optional URL-query override.
  * Each insight is wrapped in an error boundary so a single failing
  * component does not blank the whole page (issue #304).
+ *
+ * System health lives on the dedicated /system-health page — the
+ * duplicate System Health Score card this page carried was consolidated
+ * there (same `useFullHealthCheck` source, one home). The card's
+ * `?modelId=` deep link (#304's URL-addressable per-model drift route)
+ * moved with it: `/monitoring?modelId=<id>` pre-selects that model's
+ * drift/health view.
  *
  * @module pages/AIAgentInsights
  */
 
 import { useState } from 'react';
 import { Brain, Sparkles } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   ExecutiveAIBrief,
   PriorityActionsROI,
@@ -23,7 +30,6 @@ import {
   ActiveCausalChains,
   ExperimentRecommendations,
   HeterogeneousTreatmentEffects,
-  SystemHealthScore,
 } from '@/components/insights';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -34,6 +40,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
+import { useAgentHealth } from '@/hooks/api';
+import { isTrustedProvenance } from '@/lib/provenance';
 import { useE2ICopilot } from '@/providers/E2ICopilotProvider';
 import { GOLDSTD_BRANDS } from '@/types/explain';
 
@@ -70,16 +78,20 @@ export function AIAgentInsights() {
     : ALL_BRANDS;
   const brand = selectedBrand === ALL_BRANDS ? undefined : selectedBrand;
 
-  // Model id: URL query takes precedence, then a deploy-time env override
-  // (`VITE_DEFAULT_MODEL_ID`). When neither is set we hand `undefined`
-  // to `SystemHealthScore` and let its own documented default kick in —
-  // no model identifier is hard-coded on this page (issue #304).
-  const modelIdFromUrl = searchParams.get('modelId')?.trim();
-  const modelIdFromEnv =
-    typeof import.meta !== 'undefined'
-      ? (import.meta.env?.VITE_DEFAULT_MODEL_ID as string | undefined)?.trim()
-      : undefined;
-  const modelId = modelIdFromUrl || modelIdFromEnv || undefined;
+  // Real agent availability for the header badge. When the health-score
+  // service hasn't answered — or answered with untrusted (placeholder/unknown)
+  // provenance, i.e. sample data rather than a live probe — the badge is
+  // simply absent: no invented count (codex PR-4 round 4).
+  const { data: agentHealth } = useAgentHealth();
+  const trustedAgentHealth =
+    agentHealth && isTrustedProvenance(agentHealth.data_provenance) ? agentHealth : null;
+
+  // Compatibility bridge for #304's `/ai-insights?modelId=` operator links:
+  // the per-model health & drift card those links targeted moved to
+  // /monitoring?modelId= with this consolidation. A stale link must not be
+  // silently ignored — point it at the capability's new home (codex PR-4
+  // round 7).
+  const movedModelId = searchParams.get('modelId')?.trim();
 
   return (
     <div className="space-y-6">
@@ -112,12 +124,29 @@ export function AIAgentInsights() {
               ))}
             </SelectContent>
           </Select>
-          <Badge variant="outline" className="text-sm">
-            <Sparkles className="h-4 w-4 mr-1" />
-            21 Agents Active
-          </Badge>
+          {trustedAgentHealth && (
+            <Badge variant="outline" className="text-sm">
+              <Sparkles className="h-4 w-4 mr-1" />
+              {trustedAgentHealth.available_count}/{trustedAgentHealth.total_agents} Agents Active
+            </Badge>
+          )}
         </div>
       </div>
+
+      {movedModelId && (
+        <div
+          role="note"
+          className="rounded-lg border border-[var(--color-border)] bg-[var(--color-muted)]/40 px-4 py-3 text-sm text-[var(--color-muted-foreground)]"
+        >
+          The per-model health &amp; drift view has moved to the Monitoring page.{' '}
+          <Link
+            to={`/monitoring?modelId=${encodeURIComponent(movedModelId)}`}
+            className="font-medium text-[var(--color-primary)] underline underline-offset-2"
+          >
+            View {movedModelId} in Monitoring
+          </Link>
+        </div>
+      )}
 
       {/* Main Grid Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -160,13 +189,6 @@ export function AIAgentInsights() {
         <div className="lg:col-span-1">
           <ErrorBoundary sectionName="Heterogeneous Treatment Effects">
             <HeterogeneousTreatmentEffects brand={brand} />
-          </ErrorBoundary>
-        </div>
-
-        {/* System Health Score - Full Width */}
-        <div className="lg:col-span-2">
-          <ErrorBoundary sectionName="System Health Score">
-            <SystemHealthScore modelId={modelId} />
           </ErrorBoundary>
         </div>
       </div>

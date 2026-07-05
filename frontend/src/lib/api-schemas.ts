@@ -1171,8 +1171,10 @@ export const RAGHealthResponseWireSchema = z.object({
 //   GET /health-score/agents            -> AgentHealthResponse
 //   GET /health-score/history           -> HealthHistoryResponse
 //   GET /health-score/status            -> HealthServiceStatus
-// `data_provenance` is a backend-optional field (default "measured") absent
-// from the FE types; included as optional so a present value validates.
+// `data_provenance` is tagged by the backend on every wrapper and defaults to
+// an UNTRUSTED value (placeholder / unknown) so untagged paths fail closed —
+// see health_score.py response models. Mirrored as optional here (an absent
+// field, e.g. an older backend, is treated as untrusted by the pages' gate).
 
 /** Faithful mirror of `ComponentHealth` (health_score.py ComponentHealth). */
 export const ComponentHealthWireSchema = z.object({
@@ -1246,6 +1248,10 @@ export const HealthScoreResponseWireSchema = z.object({
   health_summary: z.string(),
   check_latency_ms: z.number().int(),
   timestamp: z.string(),
+  // Fail-closed provenance (measured | partial | unknown | placeholder). MUST
+  // be mirrored here: z.object() strips unknown keys, so omitting it silently
+  // deletes the backend's honesty tag before the dashboard's trust gate runs.
+  data_provenance: z.string().optional(),
 });
 
 /** Faithful mirror of `ComponentHealthResponse` (health_score.py). */
@@ -1303,6 +1309,9 @@ export const HealthHistoryItemWireSchema = z.object({
   overall_health_score: z.number(),
   health_grade: z.string(),
   critical_issues_count: z.number().int().nonnegative(),
+  // Recorded-check provenance; must be mirrored here or z.object() strips it
+  // before the History tab's trust gate can read it (the round-2 lesson).
+  data_provenance: z.string().optional(),
 });
 
 /** Faithful mirror of `HealthHistoryResponse` (health_score.py HealthHistoryResponse). */

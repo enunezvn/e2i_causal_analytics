@@ -8,11 +8,11 @@
  * `fixtures/api-mocks.ts`) so this spec stays decoupled from the larger mock
  * graph (15+ other specs depend on the shared fixture).
  *
- * PR #312 live-wired this page through `ProtectedRoute` and three additional
- * data hooks (`useCognitiveRAG`, `useCausalChains`, `useAlerts`/`useModelHealth`/
- * `useMonitoringRuns`, `useBatchExplain`). Without auth seed every test redirects
- * to `/login`; without endpoint mocks the loading skeletons of `PredictiveAlerts`
- * and `SystemHealthScore` hide the landmarks the assertions look for. We seed
+ * PR #312 live-wired this page through `ProtectedRoute` and several data
+ * hooks (`useCognitiveRAG`, `useCausalChains`, `useAlerts`, `useBatchExplain`,
+ * and `useAgentHealth` for the header badge). Without auth seed every test
+ * redirects to `/login`; without endpoint mocks the loading skeletons of
+ * `PredictiveAlerts` hide the landmarks the assertions look for. We seed
  * both below in `beforeEach` so the page renders deterministically.
  *
  * Refs #332.
@@ -177,7 +177,7 @@ async function mockInsightsEndpoints(page: Page): Promise<void> {
     });
   });
 
-  // PredictiveAlerts + SystemHealthScore → GET /api/monitoring/alerts
+  // PredictiveAlerts → GET /api/monitoring/alerts
   // Empty `alerts` list trips the SAMPLE_ALERTS fallback in the component.
   await page.route('**/api/monitoring/alerts**', async (route: Route) => {
     await route.fulfill({
@@ -187,62 +187,24 @@ async function mockInsightsEndpoints(page: Page): Promise<void> {
     });
   });
 
-  // SystemHealthScore → GET /api/monitoring/health/<modelId>
-  await page.route('**/api/monitoring/health/**', async (route: Route) => {
+  // Header agents badge → GET /api/health-score/agents. Non-trivial counts so
+  // the badge assertion can prove the number is data-driven (the retired
+  // hard-coded badge always read "21 Agents Active"). The badge is behind the
+  // fail-closed provenance gate (isTrustedProvenance), so the stub must carry
+  // trusted provenance like every real backend payload does — without it the
+  // badge is (correctly) suppressed and the assertion fails (codex PR-4 R6).
+  await page.route('**/api/health-score/agents**', async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        model_id: 'propensity_v2.1.0',
-        overall_health: 'healthy',
-        last_check: new Date().toISOString(),
-        drift_score: 0.05,
-        active_alerts: 0,
-        performance_trend: 'stable',
-        recommendations: [],
-      }),
-    });
-  });
-
-  // SystemHealthScore → GET /api/monitoring/runs
-  await page.route('**/api/monitoring/runs**', async (route: Route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ total_runs: 0, runs: [] }),
-    });
-  });
-
-  // SystemHealthScore → GET /api/health-score/full (real Tier-3 health-score
-  // agent; HealthScoreResponse schema verified against the live OpenAPI spec).
-  // The widget renders Component/Model/Pipeline/Agent Health rows from these
-  // scores — '—' + "Not measured in this check" when a dimension is null.
-  await page.route('**/api/health-score/full**', async (route: Route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        check_id: 'e2e-health-check',
-        check_scope: 'full',
-        // overall is 0-100; per-dimension scores are 0-1 fractions
-        // (None = unmeasured) per the HealthScoreResult contract.
-        overall_health_score: 87.5,
-        health_grade: 'B',
-        component_health_score: 0.92,
-        model_health_score: 0.84,
-        pipeline_health_score: 0.885,
-        agent_health_score: 0.85,
-        // HealthScoreResponseWireSchema requires arrays here (nullable)
-        component_statuses: [],
-        model_metrics: [],
-        pipeline_statuses: [],
-        agent_statuses: [],
-        critical_issues: [],
-        warnings: [],
-        recommendations: [],
-        health_summary: 'All systems nominal',
-        check_latency_ms: 1240,
-        timestamp: new Date().toISOString(),
+        agent_health_score: 0.9,
+        total_agents: 21,
+        available_count: 19,
+        unavailable_count: 2,
+        agents: [],
+        by_tier: {},
+        check_latency_ms: 12,
         data_provenance: 'measured',
       }),
     });
@@ -316,8 +278,10 @@ test.describe('AI Agent Insights Page', () => {
       await expect(page.getByText(/GPT-powered executive summaries/i)).toBeVisible();
     });
 
-    test('should show active agents badge', async ({ page }) => {
-      await expect(page.getByText(/Agents Active/i)).toBeVisible();
+    test('should show the data-driven agents badge', async ({ page }) => {
+      // 19/21 comes from the /api/health-score/agents stub — asserting the
+      // exact figures proves the count is API-driven, not hard-coded.
+      await expect(page.getByText('19/21 Agents Active')).toBeVisible();
     });
   });
 
@@ -382,23 +346,8 @@ test.describe('AI Agent Insights Page', () => {
     });
   });
 
-  test.describe('System Health Score', () => {
-    test('should display System Health Score section', async ({ page }) => {
-      // CardTitle renders as div; use first() since the string appears in
-      // both the header and a `last check` aria-label internally.
-      await expect(page.getByText('System Health Score').first()).toBeVisible();
-    });
-
-    test('should display health metrics', async ({ page }) => {
-      // The widget renders REAL dimension rows from the stubbed
-      // /api/health-score/full response (SAMPLE_METRICS is gone) —
-      // assert the rows and one stubbed score so a regression back to
-      // fabricated values cannot pass.
-      await expect(page.getByText('Pipeline Health', { exact: true })).toBeVisible();
-      await expect(page.getByText('Model Health', { exact: true })).toBeVisible();
-      await expect(page.getByText('89%', { exact: true })).toBeVisible();
-    });
-  });
+  // The System Health Score card was consolidated into /system-health (its
+  // stubs and assertions moved with it) — system-health.spec.ts covers it.
 
   // ---------------------------------------------------------------------------
   // Falsifiability anchor — the assertions above intentionally exercise the

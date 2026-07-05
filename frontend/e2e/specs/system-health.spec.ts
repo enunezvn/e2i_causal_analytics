@@ -34,7 +34,10 @@ async function mockSystemHealthRoutes(page: Page): Promise<void> {
   })
 
   // Health-score endpoints (api-client baseURL is `/api`, so /health-score/*
-  // is served as /api/health-score/*).
+  // is served as /api/health-score/*). Every real backend payload now carries
+  // data_provenance and the page renders scores only for trusted provenance
+  // (isTrustedProvenance), so the stubs mirror that wire contract — an
+  // untrusted stub would exercise only the honest-empty path (codex PR-4 R6).
   await page.route('**/api/health-score/quick**', async (route: Route) => {
     await route.fulfill({
       status: 200,
@@ -50,6 +53,7 @@ async function mockSystemHealthRoutes(page: Page): Promise<void> {
         warnings: [],
         recommendations: [],
         timestamp: new Date().toISOString(),
+        data_provenance: 'measured',
       }),
     })
   })
@@ -58,7 +62,12 @@ async function mockSystemHealthRoutes(page: Page): Promise<void> {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ agents: [], available_count: 0, total_agents: 0 }),
+      body: JSON.stringify({
+        agents: [],
+        available_count: 0,
+        total_agents: 0,
+        data_provenance: 'measured',
+      }),
     })
   })
 
@@ -66,18 +75,22 @@ async function mockSystemHealthRoutes(page: Page): Promise<void> {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ pipelines: [] }),
+      body: JSON.stringify({ pipelines: [], data_provenance: 'measured' }),
     })
   })
 
+  // Faithful empty-history shape: the backend sends trend "unknown" and a
+  // null average when no checks are stored — a zero-row payload with real-
+  // looking aggregates is a shape it never emits, and the page's trust gate
+  // now suppresses such aggregates anyway (codex PR-4 round 7).
   await page.route('**/api/health-score/history**', async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         checks: [],
-        trend: 'stable',
-        avg_health_score: 89.5,
+        trend: 'unknown',
+        avg_health_score: null,
         total_checks: 0,
       }),
     })

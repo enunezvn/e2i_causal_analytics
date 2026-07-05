@@ -59,6 +59,7 @@ import type {
   ComponentHealth as ApiComponentHealth,
   ModelHealth as ApiModelHealth,
 } from '@/types/health-score';
+import { isTrustedProvenance } from '@/lib/provenance';
 import { AlertList } from '@/components/visualizations/dashboard/AlertCard';
 import { StatusBadge, StatusDot } from '@/components/visualizations/dashboard/StatusBadge';
 import { ProgressRing } from '@/components/visualizations/dashboard/ProgressRing';
@@ -137,13 +138,8 @@ function mapHealthToStatus(health: string): StatusType {
   }
 }
 
-// A response's items are surfaced as real data only when the backend tagged the
-// wrapper with a trusted provenance. "measured" = live probe; "partial" = some
-// sub-fields unmeasured but the measured signals are real. "placeholder" /
-// "unknown" / absent are NOT trustworthy and degrade to the honest empty state.
-function isTrustedProvenance(provenance: string | undefined): boolean {
-  return provenance === 'measured' || provenance === 'partial';
-}
+// The provenance trust rule lives in @/lib/provenance so every page consuming
+// health-score payloads applies the same decision (codex PR-4 round 4).
 
 // Map the backend ComponentStatus enum (healthy | degraded | unhealthy |
 // unknown) to the Service Status card's status vocabulary.
@@ -293,19 +289,69 @@ function SystemHealth() {
     }));
   }, [modelHealthData]);
 
-  // Use API data when present; otherwise render empty/neutral values. Dev-offline
-  // placeholder data (data_provenance="placeholder") is treated as no score, so
-  // the headline shows "Awaiting health check…" rather than a fabricated number.
-  const isHealthPlaceholder = fullHealthData?.data_provenance === 'placeholder';
-  const healthScore =
-    fullHealthData && !isHealthPlaceholder ? (fullHealthData.overall_health_score ?? null) : null;
-  const healthGrade =
-    fullHealthData && !isHealthPlaceholder ? (fullHealthData.health_grade ?? null) : null;
-  const agents = agentHealthData?.agents ?? [];
-  const pipelines = pipelineHealthData?.pipelines ?? [];
-  const healthHistory = healthHistoryData?.checks ?? [];
-  // null = no history -> rendered as "Unknown", not a fabricated "stable".
-  const healthTrend = healthHistoryData?.trend ?? null;
+  // Use API data when present; otherwise render empty/neutral values. The
+  // backend's provenance is fail-closed ("unknown" when a path forgets to set
+  // it), so only a check it explicitly tagged trustworthy (measured | partial)
+  // is surfaced as real — dev-offline "placeholder", fail-closed "unknown",
+  // and an absent field all degrade to "Awaiting health check…" rather than a
+  // fabricated number. Same trust rule as the Service Status / Model Health
+  // cards above.
+  const isHealthTrusted =
+    fullHealthData != null && isTrustedProvenance(fullHealthData.data_provenance);
+  // Every consumer of the full-health payload MUST read through this trusted
+  // view — an untrusted payload's issue/warning/recommendation strings are just
+  // as fabricated as its score, so gating only the headline number would still
+  // hand operators fake action items (codex PR-4 round 3).
+  const trustedFullHealthData = isHealthTrusted ? fullHealthData : null;
+  const healthScore = trustedFullHealthData?.overall_health_score ?? null;
+  const healthGrade = trustedFullHealthData?.health_grade ?? null;
+  // Ported from the retired /ai-insights System Health Score card: surface the
+  // composer's human-readable summary and flag a non-fully-measured check
+  // ("partial") instead of presenting it as indistinguishable from measured.
+  const healthSummary = trustedFullHealthData?.health_summary || null;
+  const healthProvenance = trustedFullHealthData?.data_provenance ?? null;
+  // When the backend composer actually ran its check — distinct from the page
+  // header's "Last updated", which is only the local UI refresh clock. The
+  // retired /ai-insights card surfaced this as "Last Check"; without it a
+  // stale health score is indistinguishable from a fresh one.
+  const healthCheckedAt = trustedFullHealthData?.timestamp || null;
+  // Same trust boundary for the agent/pipeline payloads: their backend
+  // wrappers also default provenance to "placeholder" (fail-closed), so raw
+  // arrays from an untrusted response are sample data, not live status
+  // (codex PR-4 round 4).
+  const agents =
+    agentHealthData && isTrustedProvenance(agentHealthData.data_provenance)
+      ? agentHealthData.agents
+      : [];
+  const pipelines =
+    pipelineHealthData && isTrustedProvenance(pipelineHealthData.data_provenance)
+      ? pipelineHealthData.pipelines
+      : [];
+  // History rows carry the same fail-closed provenance as live payloads. The
+  // backend now refuses to record untrusted full checks, but any row that still
+  // arrives untrusted (older in-memory history, a future writer that skips the
+  // gate) is the same fabricated score the Overall card suppresses — it must
+  // not be replotted as historical truth (codex PR-4 round 5).
+  const allHistoryChecks = healthHistoryData?.checks ?? [];
+  const healthHistory = allHistoryChecks.filter((c) => isTrustedProvenance(c.data_provenance));
+  // Wrapper-level aggregates (trend/average) are quotable only when at least
+  // one trusted row backs them AND no row was suppressed: the real backend
+  // sends trend "unknown" / average null for empty history, so a zero-row
+  // payload carrying non-null aggregates is a fabricated shape that must not
+  // fail open through a vacuously-true "all rows trusted" (codex PR-4 round 7).
+  const historyFullyTrusted =
+    healthHistory.length > 0 && healthHistory.length === allHistoryChecks.length;
+  // null = no quotable trend -> rendered as "Unknown", not a fabricated
+  // "stable". The backend computes trend over EVERY stored check, so it is
+  // only quotable when every stored check passed the trust gate.
+  const healthTrend = historyFullyTrusted ? (healthHistoryData?.trend ?? null) : null;
+  // Same rule for the average: recompute over the trusted rows whenever any
+  // row was suppressed (matches the backend value exactly when none were).
+  const healthAvgScore = historyFullyTrusted
+    ? (healthHistoryData?.avg_health_score ?? null)
+    : healthHistory.length > 0
+      ? healthHistory.reduce((sum, c) => sum + c.overall_health_score, 0) / healthHistory.length
+      : null;
 
   // Group agents by tier
   const agentsByTier = useMemo(() => {
@@ -328,23 +374,23 @@ function SystemHealth() {
 
   const componentScoreData = useMemo(() => {
     // No fabricated scores: show no bars until a real health check loads, and
-    // never chart dev-offline placeholder data (data_provenance="placeholder")
-    // as if it were measured.
-    if (!fullHealthData || fullHealthData.data_provenance === 'placeholder') {
+    // never chart untrusted data (placeholder, fail-closed "unknown", or an
+    // absent provenance) as if it were measured.
+    if (!trustedFullHealthData) {
       return [];
     }
     // Only chart dimensions a real backend MEASURED. A null dimension score is
     // unmeasured and is omitted (not rendered as a fabricated 0% bar).
     const dims: Array<{ name: string; score: number | null | undefined; fill: string }> = [
-      { name: 'Components', score: fullHealthData.component_health_score, fill: '#10b981' },
-      { name: 'Models', score: fullHealthData.model_health_score, fill: '#3b82f6' },
-      { name: 'Pipelines', score: fullHealthData.pipeline_health_score, fill: '#8b5cf6' },
-      { name: 'Agents', score: fullHealthData.agent_health_score, fill: '#f59e0b' },
+      { name: 'Components', score: trustedFullHealthData.component_health_score, fill: '#10b981' },
+      { name: 'Models', score: trustedFullHealthData.model_health_score, fill: '#3b82f6' },
+      { name: 'Pipelines', score: trustedFullHealthData.pipeline_health_score, fill: '#8b5cf6' },
+      { name: 'Agents', score: trustedFullHealthData.agent_health_score, fill: '#f59e0b' },
     ];
     return dims
       .filter((d) => d.score != null)
       .map((d) => ({ name: d.name, score: Math.round((d.score as number) * 100), fill: d.fill }));
-  }, [fullHealthData]);
+  }, [trustedFullHealthData]);
 
   // Convert API alerts to AlertCard format
   const alerts = useMemo(() => {
@@ -465,6 +511,27 @@ function SystemHealth() {
                   {healthTrend === 'stable' && <Minus className="h-4 w-4 text-slate-500" />}
                   {healthTrend ? healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1) : 'Unknown'}
                 </div>
+                {healthCheckedAt && (
+                  <div className="mt-1 text-xs text-[var(--color-muted-foreground)]">
+                    {`Health check: ${new Date(healthCheckedAt).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}`}
+                  </div>
+                )}
+                {healthProvenance && healthProvenance !== 'measured' && (
+                  <Badge
+                    variant="outline"
+                    className="mt-2 text-xs text-amber-600 border-amber-300"
+                  >
+                    provenance: {healthProvenance}
+                  </Badge>
+                )}
+                {healthSummary && (
+                  <p className="mt-2 text-xs text-[var(--color-muted-foreground)] whitespace-pre-line">
+                    {healthSummary}
+                  </p>
+                )}
               </>
             )}
           </CardContent>
@@ -734,6 +801,12 @@ function SystemHealth() {
               <CardDescription>21-agent tiered orchestration system status</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {agents.length === 0 && (
+                <EmptyState
+                  title="No agent health data"
+                  description="No trusted agent health was reported. Agent availability appears here once measured."
+                />
+              )}
               {Object.entries(agentsByTier).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).map(([tier, tierAgents]) => (
                 <div key={tier}>
                   <div className="flex items-center gap-2 mb-3">
@@ -791,6 +864,12 @@ function SystemHealth() {
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
+                {pipelines.length === 0 && (
+                  <EmptyState
+                    title="No pipeline health data"
+                    description="No trusted pipeline health was reported. Pipeline status appears here once measured."
+                  />
+                )}
                 {pipelines.map(pipeline => (
                   <div
                     key={pipeline.pipeline_name}
@@ -859,7 +938,7 @@ function SystemHealth() {
               <div className="mt-4 grid grid-cols-3 gap-4 text-center">
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Average</p>
-                  <p className="text-2xl font-bold">{healthHistoryData?.avg_health_score?.toFixed(1) ?? '—'}</p>
+                  <p className="text-2xl font-bold">{healthAvgScore?.toFixed(1) ?? '—'}</p>
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Trend</p>
@@ -872,7 +951,10 @@ function SystemHealth() {
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Total Checks</p>
-                  <p className="text-2xl font-bold">{healthHistoryData?.total_checks ?? healthHistory.length}</p>
+                  {/* Trusted-row count: the backend total equals checks.length,
+                      so counting the filtered rows stays exact when nothing was
+                      suppressed and honest when something was. */}
+                  <p className="text-2xl font-bold">{healthHistory.length}</p>
                 </div>
               </div>
             </CardContent>
@@ -900,17 +982,22 @@ function SystemHealth() {
             </CardContent>
           </Card>
 
-          {/* Issues and Recommendations from Health Check */}
-          {fullHealthData && (fullHealthData.critical_issues?.length > 0 || fullHealthData.warnings?.length > 0) && (
+          {/* Issues and Recommendations from Health Check. Read through the
+              trusted view: a placeholder/unknown payload's issue and
+              recommendation strings are fabricated operator actions, not just
+              a fake score (codex PR-4 round 3). */}
+          {trustedFullHealthData &&
+            (trustedFullHealthData.critical_issues?.length > 0 ||
+              trustedFullHealthData.warnings?.length > 0) && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {fullHealthData.critical_issues?.length > 0 && (
+              {trustedFullHealthData.critical_issues?.length > 0 && (
                 <Card className="border-rose-200">
                   <CardHeader>
                     <CardTitle className="text-rose-600">Critical Issues</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <ul className="space-y-2">
-                      {fullHealthData.critical_issues.map((issue, i) => (
+                      {trustedFullHealthData.critical_issues.map((issue, i) => (
                         <li key={i} className="flex items-start gap-2 text-sm">
                           <AlertCircle className="h-4 w-4 text-rose-500 mt-0.5 flex-shrink-0" />
                           {issue}
@@ -920,14 +1007,14 @@ function SystemHealth() {
                   </CardContent>
                 </Card>
               )}
-              {fullHealthData.warnings?.length > 0 && (
+              {trustedFullHealthData.warnings?.length > 0 && (
                 <Card className="border-amber-200">
                   <CardHeader>
                     <CardTitle className="text-amber-600">Warnings</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <ul className="space-y-2">
-                      {fullHealthData.warnings.map((warning, i) => (
+                      {trustedFullHealthData.warnings.map((warning, i) => (
                         <li key={i} className="flex items-start gap-2 text-sm">
                           <AlertCircle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
                           {warning}
@@ -940,7 +1027,7 @@ function SystemHealth() {
             </div>
           )}
 
-          {(fullHealthData?.recommendations?.length ?? 0) > 0 && (
+          {(trustedFullHealthData?.recommendations?.length ?? 0) > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -950,7 +1037,7 @@ function SystemHealth() {
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2">
-                  {fullHealthData?.recommendations?.map((rec, i) => (
+                  {trustedFullHealthData?.recommendations?.map((rec, i) => (
                     <li key={i} className="flex items-start gap-2 text-sm">
                       <CheckCircle2 className="h-4 w-4 text-emerald-500 mt-0.5 flex-shrink-0" />
                       {rec}

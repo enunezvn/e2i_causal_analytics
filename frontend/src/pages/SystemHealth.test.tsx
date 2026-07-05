@@ -216,6 +216,347 @@ describe('SystemHealth', () => {
   });
 
   // ===========================================================================
+  // OVERALL HEALTH CARD: consolidated home for the composer's summary +
+  // provenance flag (ported from the retired /ai-insights System Health Score
+  // card — /system-health is now the single system-health surface).
+  // ===========================================================================
+
+  const fullHealthBase = {
+    overall_health_score: 87.5,
+    health_grade: 'B',
+    critical_issues: [],
+    warnings: [],
+    recommendations: [],
+    check_latency_ms: 10,
+    timestamp: new Date().toISOString(),
+  };
+
+  it('renders the composer health_summary in the Overall Health card', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'All systems nominal\n4 of 4 dimensions measured',
+        data_provenance: 'measured',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/All systems nominal/)).toBeInTheDocument();
+    // A fully measured check needs no provenance caveat.
+    expect(screen.queryByText(/provenance:/)).not.toBeInTheDocument();
+    // The backend check time renders (label only — the HH:MM rendering is
+    // locale/timezone dependent, so the exact time is not asserted).
+    expect(screen.getByText(/Health check:/)).toBeInTheDocument();
+  });
+
+  it('flags a partial (non-fully-measured) check with a provenance badge', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'Component + model measured; pipeline/agent skipped',
+        data_provenance: 'partial',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('provenance: partial')).toBeInTheDocument();
+  });
+
+  it('does not surface a summary from placeholder-provenance data', () => {
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'Dev placeholder summary',
+        data_provenance: 'placeholder',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText(/Dev placeholder summary/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Awaiting health check/)).toBeInTheDocument();
+    // Placeholder data must not surface a backend check time either.
+    expect(screen.queryByText(/Health check:/)).not.toBeInTheDocument();
+  });
+
+  it('treats fail-closed "unknown" provenance as untrusted (codex PR-4 round 2)', () => {
+    // The backend defaults data_provenance to "unknown" precisely so paths
+    // that forget to tag it fail CLOSED. The page must honor that: unknown is
+    // untrusted, so no score, summary, or check time may render from it.
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'Composer forgot to tag provenance',
+        data_provenance: 'unknown',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/Awaiting health check/)).toBeInTheDocument();
+    expect(screen.queryByText(/Composer forgot/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Health check:/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses untrusted issues/warnings/recommendations on the Alerts tab (codex PR-4 round 3)', async () => {
+    // An untrusted payload's issue and recommendation STRINGS are just as
+    // fabricated as its score — the backend's dev-offline mock emits
+    // placeholder warnings/recommendations, so gating only the headline
+    // number would still hand operators fake action items.
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        critical_issues: ['Placeholder critical issue - restart the composer'],
+        warnings: ['Placeholder warning - check adapter wiring'],
+        recommendations: ['Placeholder recommendation - scale workers'],
+        data_provenance: 'placeholder',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Alerts/i }));
+
+    expect(screen.queryByText(/restart the composer/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/check adapter wiring/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/scale workers/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Critical Issues')).not.toBeInTheDocument();
+    expect(screen.queryByText('Recommendations')).not.toBeInTheDocument();
+  });
+
+  it('renders trusted issues/warnings/recommendations on the Alerts tab', async () => {
+    // Positive control for the trust gate: measured data must still surface —
+    // the gate suppresses fabricated actions, not real ones.
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        critical_issues: ['Redis connection pool exhausted'],
+        warnings: ['Model staleness above threshold'],
+        recommendations: ['Increase pool size to 50'],
+        data_provenance: 'measured',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Alerts/i }));
+
+    expect(screen.getByText(/Redis connection pool exhausted/)).toBeInTheDocument();
+    expect(screen.getByText(/Model staleness above threshold/)).toBeInTheDocument();
+    expect(screen.getByText(/Increase pool size to 50/)).toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // AGENT / PIPELINE PROVENANCE GATE (codex PR-4 round 4): the /agents and
+  // /pipelines wrappers also default provenance to "placeholder" fail-closed;
+  // their raw arrays are sample data unless the backend tagged them trusted.
+  // ===========================================================================
+
+  const placeholderAgent = {
+    agent_name: 'sample_orchestrator',
+    tier: 0,
+    available: true,
+    avg_latency_ms: 120,
+    success_rate: 0.99,
+    invocations_24h: 42,
+  };
+
+  const placeholderPipeline = {
+    pipeline_name: 'sample_etl_pipeline',
+    last_run: new Date().toISOString(),
+    last_success: new Date().toISOString(),
+    rows_processed: 10000,
+    freshness_hours: 0.5,
+    status: 'healthy',
+  };
+
+  it('suppresses untrusted (placeholder) agent health on the Agents tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useAgentHealth as MockFn).mockReturnValue({
+      data: {
+        agent_health_score: 1,
+        total_agents: 1,
+        available_count: 1,
+        unavailable_count: 0,
+        agents: [placeholderAgent],
+        by_tier: { '0': 1 },
+        check_latency_ms: 5,
+        data_provenance: 'placeholder',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Agents/i }));
+
+    expect(screen.queryByText('sample_orchestrator')).not.toBeInTheDocument();
+    expect(screen.getByText(/No agent health data/)).toBeInTheDocument();
+  });
+
+  it('renders trusted (partial) agent health on the Agents tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useAgentHealth as MockFn).mockReturnValue({
+      data: {
+        agent_health_score: 1,
+        total_agents: 1,
+        available_count: 1,
+        unavailable_count: 0,
+        agents: [placeholderAgent],
+        by_tier: { '0': 1 },
+        check_latency_ms: 5,
+        data_provenance: 'partial',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Agents/i }));
+
+    expect(screen.getByText('sample_orchestrator')).toBeInTheDocument();
+    expect(screen.queryByText(/No agent health data/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses untrusted (placeholder) pipeline health on the Pipelines tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (usePipelineHealth as MockFn).mockReturnValue({
+      data: {
+        pipeline_health_score: 1,
+        total_pipelines: 1,
+        healthy_count: 1,
+        stale_count: 0,
+        failed_count: 0,
+        pipelines: [placeholderPipeline],
+        check_latency_ms: 5,
+        data_provenance: 'placeholder',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Pipelines/i }));
+
+    expect(screen.queryByText('sample_etl_pipeline')).not.toBeInTheDocument();
+    expect(screen.getByText(/No pipeline health data/)).toBeInTheDocument();
+  });
+
+  it('renders trusted (measured) pipeline health on the Pipelines tab', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (usePipelineHealth as MockFn).mockReturnValue({
+      data: {
+        pipeline_health_score: 1,
+        total_pipelines: 1,
+        healthy_count: 1,
+        stale_count: 0,
+        failed_count: 0,
+        pipelines: [placeholderPipeline],
+        check_latency_ms: 5,
+        data_provenance: 'measured',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /Pipelines/i }));
+
+    expect(screen.getByText('sample_etl_pipeline')).toBeInTheDocument();
+    expect(screen.queryByText(/No pipeline health data/)).not.toBeInTheDocument();
+  });
+
+  // ===========================================================================
+  // HISTORY PROVENANCE GATE (codex PR-4 round 5): recorded checks carry the
+  // same fail-closed provenance as live payloads; an untrusted row is the same
+  // fabricated score the Overall card suppresses and must not be replotted as
+  // historical truth — nor leak into the backend trend/average it was part of.
+  // ===========================================================================
+
+  const historyRow = (overrides: Record<string, unknown>) => ({
+    check_id: 'h1',
+    timestamp: '2026-07-01T00:00:00Z',
+    overall_health_score: 90,
+    health_grade: 'A',
+    critical_issues_count: 0,
+    data_provenance: 'measured',
+    ...overrides,
+  });
+
+  it('suppresses untrusted history rows — trend hidden, average recomputed over trusted rows (codex PR-4 round 5)', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 2,
+        checks: [
+          historyRow({ check_id: 'h1', overall_health_score: 90 }),
+          historyRow({
+            check_id: 'h2',
+            overall_health_score: 70,
+            health_grade: 'C',
+            data_provenance: 'placeholder',
+          }),
+        ],
+        // Backend aggregates were computed over BOTH rows — quoting them would
+        // launder the placeholder score back into the page.
+        avg_health_score: 80.0,
+        trend: 'declining',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    // Average recomputed over the one trusted row, not the backend's mixed 80.0.
+    expect(screen.getByText('90.0')).toBeInTheDocument();
+    expect(screen.queryByText('80.0')).not.toBeInTheDocument();
+    // The backend trend included the untrusted row — honest "Unknown" instead.
+    expect(screen.queryByText('Declining')).not.toBeInTheDocument();
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+  });
+
+  it('renders fully trusted history — backend trend and average quoted as-is', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 2,
+        checks: [
+          historyRow({ check_id: 'h1', overall_health_score: 82 }),
+          historyRow({ check_id: 'h2', overall_health_score: 88, data_provenance: 'partial' }),
+        ],
+        avg_health_score: 85.0,
+        trend: 'improving',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    expect(screen.getByText('85.0')).toBeInTheDocument();
+    expect(screen.getByText('Improving')).toBeInTheDocument();
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
+  });
+
+  it('suppresses wrapper aggregates on a zero-row history — fabricated trend/average never fail open (codex PR-4 round 7)', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    // The real backend sends trend "unknown" / average null for empty history;
+    // this shape (zero checks with real-looking aggregates) can only come from
+    // a buggy or mocked source. A vacuously-true "all rows trusted" must not
+    // quote them.
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 0,
+        checks: [],
+        avg_health_score: 89.5,
+        trend: 'stable',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    expect(screen.queryByText('89.5')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stable')).not.toBeInTheDocument();
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+  });
+
+  // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest
   // empty states (never fabricated values) when data is absent or placeholder.

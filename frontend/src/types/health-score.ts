@@ -280,6 +280,8 @@ export interface PipelineHealthResponse {
   pipelines: PipelineHealth[];
   /** Check duration */
   check_latency_ms: number;
+  /** Provenance: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**
@@ -300,6 +302,8 @@ export interface AgentHealthResponse {
   by_tier: Record<string, number>;
   /** Check duration */
   check_latency_ms: number;
+  /** Provenance: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**
@@ -316,6 +320,8 @@ export interface HealthHistoryItem {
   health_grade: HealthGrade;
   /** Number of critical issues */
   critical_issues_count: number;
+  /** Provenance of the recorded score: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**

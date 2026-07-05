@@ -11,5 +11,4 @@ export { PredictiveAlerts } from './PredictiveAlerts';
 export { ActiveCausalChains } from './ActiveCausalChains';
 export { ExperimentRecommendations } from './ExperimentRecommendations';
 export { HeterogeneousTreatmentEffects } from './HeterogeneousTreatmentEffects';
-export { SystemHealthScore } from './SystemHealthScore';
 export { StrategicInsightCard } from './StrategicInsightCard';
