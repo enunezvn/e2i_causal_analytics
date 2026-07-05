@@ -288,6 +288,60 @@ class TestGuard:
         assert hte._is_grounded("Fully 3 over 3 segments are significant.", g) is False
         assert hte._is_grounded("2 over 3 segments are significant.", g) is True
 
+    def test_unicode_plus_and_bridged_sign_words_rejected(self):
+        # codex round-5 HIGH: fullwidth/emoji plus glyphs and "±" read as
+        # unsigned; sign words separated by a short bridge went unbound.
+        # "Plus," as a discourse marker and adjectival "positive in 2 of 3"
+        # (unitless) keep passing.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("The low band CI dips to ＋2.8pp.", g) is False
+        assert hte._is_grounded("The low band CI dips to ➕2.8pp.", g) is False
+        assert hte._is_grounded("The low band CI dips to ±2.8pp.", g) is False
+        assert hte._is_grounded("Overall ATE is negative net 11.1pp.", g) is False
+        assert hte._is_grounded("The low band CI dips to positive, 2.8pp.", g) is False
+        assert hte._is_grounded("Plus, 2 of 3 segments are significant.", g) is True
+        assert hte._is_grounded("The effect is positive in 2 of 3 segments.", g) is True
+
+    def test_punctuated_modifier_tokens_cannot_hide_segment_counts(self):
+        # codex round-5 HIGH: parens/brackets/slashes/attached hyphens inside
+        # the modifier run bypassed the segment-count rule; a parenthetical
+        # "(n=1,385)," must NOT be counted against later segment nouns.
+        g = hte.build_grounding(_record())
+        for wrong in (
+            "1,385 significant (clinically relevant) segments emerged.",
+            "1,385 significant [priority] segments emerged.",
+            "1,385 significant/priority segments emerged.",
+            "1,385-significant segments emerged.",
+            "1,385 patient(s) segments are significant.",
+        ):
+            assert hte._is_grounded(wrong, g) is False
+        assert (
+            hte._is_grounded(
+                "High severity responds strongest (n=1,385), while 2 of 3 segments clear zero.",
+                g,
+            )
+            is True
+        )
+
+    def test_phrase_matches_whole_tokens_only(self):
+        # codex round-5 HIGH: "50-65+" had its "50-65" substring stripped,
+        # re-attributing the effect to an ungrounded 65+-inclusive label.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("age_band=50-65+ leads at +13.8pp.", g) is False
+        assert hte._is_grounded("Patients aged 50-65+ respond at +13.8pp.", g) is False
+        assert hte._is_grounded("age_band = 50-65 leads at +13.8pp.", g) is True
+        assert hte._is_grounded("Patients 50 -65 respond at +13.8pp.", g) is True
+
+    def test_fullwidth_slash_and_word_fraction_separators_checked(self):
+        # codex round-5 HIGH: "3／3" (fullwidth slash) and in/per/among
+        # separator words bypassed the fraction rule.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("Fully 3／3 segments are significant.", g) is False
+        assert hte._is_grounded("Fully 3 in 3 segments are significant.", g) is False
+        assert hte._is_grounded("Fully 3 per 3 segments are significant.", g) is False
+        assert hte._is_grounded("Fully 3 among 3 segments are significant.", g) is False
+        assert hte._is_grounded("2 in 3 segments are significant.", g) is True
+
     def test_variable_name_digits_pass_only_in_context(self):
         # codex round-1 HIGH: "Treat 180 patients." re-used persistent_180d's
         # digits bare. In-context uses (the name itself, "180-day") stay fine.

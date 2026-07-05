@@ -133,6 +133,8 @@ def _phrase_variants(raw: Any) -> tuple[set[str], set[str]]:
             f"{a}–{b}",
             f"{a}—{b}",
             f"{a} - {b}",
+            f"{a} -{b}",
+            f"{a}- {b}",
             f"{a} – {b}",
             f"{a} to {b}",
         }
@@ -161,8 +163,10 @@ _BULLET_RE = re.compile(r"(?m)^[ \t]*[-–—•*]\s+")
 # so _FRACTION_RE keeps the class in its separators.
 _DASH_CLASS = "‐‑‒–—―−﹣－"
 _DASH_RE = re.compile(rf"[{_DASH_CLASS}](?=\d)|(?<=\d)[{_DASH_CLASS}]")
-# Fraction/division slashes ("3⁄3") become ASCII "/".
-_SLASH_RE = re.compile(r"[⁄∕]")
+# Fraction/division/fullwidth slashes ("3⁄3", "3／3") become ASCII "/".
+_SLASH_RE = re.compile(r"[⁄∕／]")
+# Unambiguous plus glyphs ("＋2.8", "➕2.8") become ASCII "+".
+_PLUS_RE = re.compile(r"[＋﹢➕]")
 # Whitespace runs collapse to one space (newlines kept for the bullet rule).
 _WS_RE = re.compile(r"[^\S\n]+")
 
@@ -172,6 +176,7 @@ def _normalize(text: str) -> str:
     text = _BULLET_RE.sub("", text)
     text = _DASH_RE.sub("-", text)
     text = _SLASH_RE.sub("/", text)
+    text = _PLUS_RE.sub("+", text)
     return _WS_RE.sub(" ", text)
 
 
@@ -210,18 +215,19 @@ _AMBIG_FWD_ANCHOR = (
     r"(?=\)?\s+(?:age[\s-])?(?:band|group|cohort|segment|sub-?group|range|bracket)\b"
     rf"(?!\s+{_SEG_NOUNS_PLURAL}\b))"
 )
-_AMBIG_EQ_ANCHOR = r"(?<==)"
 _AMBIG_COUNT_LOOKAHEAD = rf"(?!\)?[,;]?\s+{_SEG_MODIFIER_TOKENS}{_SEG_NOUNS_PLURAL}\b)"
 
 
 def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] = ()) -> str:
     """Normalize typography, then remove vouched phrases (longest first) so
-    only bare numbers remain."""
+    only bare numbers remain. A phrase matches only as a whole lexical token
+    — "50-65+" and "arm10" are DIFFERENT labels, not mentions of a grounded
+    "50-65" or "arm1", so their digits face the guard."""
     text = _normalize(text)
     for p in ambiguous:
         if not p:
             continue
-        esc = re.escape(p) + _PHRASE_UNIT_LOOKAHEAD
+        esc = r"(?<![\w+])" + re.escape(p) + r"(?![\w+])" + _PHRASE_UNIT_LOOKAHEAD
         # eq/back anchors precede the range, so the count reading survives to
         # its right — refuse to strip when a plural segment-count phrase
         # follows (fail-closed: a faithful anchored range followed later in
@@ -229,12 +235,17 @@ def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] =
         # laundering). The fwd anchor's own singular noun sits immediately
         # after the range, which defeats the count reading by itself.
         guarded = esc + _AMBIG_COUNT_LOOKAHEAD
-        text = re.sub(_AMBIG_EQ_ANCHOR + guarded, " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"=\s*" + guarded, "= ", text, flags=re.IGNORECASE)
         text = re.sub(_AMBIG_BACK_ANCHOR + guarded, r"\1 ", text, flags=re.IGNORECASE)
         text = re.sub(esc + _AMBIG_FWD_ANCHOR, " ", text, flags=re.IGNORECASE)
     for p in phrases:
         if p:
-            text = re.sub(re.escape(p) + _PHRASE_UNIT_LOOKAHEAD, " ", text, flags=re.IGNORECASE)
+            text = re.sub(
+                r"(?<![\w+])" + re.escape(p) + r"(?![\w+])" + _PHRASE_UNIT_LOOKAHEAD,
+                " ",
+                text,
+                flags=re.IGNORECASE,
+            )
     return text
 
 
@@ -244,28 +255,35 @@ def _strip_phrases(text: str, phrases: Sequence[str], ambiguous: Sequence[str] =
 
 # A numeric claim is (sign, number, unit): "+11.1pp" / "-2.8" / "95%". After
 # normalization (bullets removed, whitespace collapsed, digit-adjacent
-# dashes ASCII), a sign counts when attached or one space away from the
-# number ("is - 11.1pp", "ATE: + 2.8pp") or spelled out ("negative 11.1pp",
-# "minus-11.1pp") — while "top-2" keeps its hyphen inside the word.
-# Direction VERBS ("declined by 11.1pp") are semantic paraphrase a lexical
-# guard cannot adjudicate ("reduced non-persistence by 11.1pp" would be the
-# same lexical shape as a true claim) — accepted boundary, as are
+# dashes ASCII, plus glyphs ASCII), a sign counts when attached or one space
+# away from the number ("is - 11.1pp", "ATE: + 2.8pp"), spelled out
+# ("negative 11.1pp", "minus-11.1pp"), or spelled out with a short bridge
+# before a UNIT-BEARING figure ("negative net 11.1pp", "positive, 2.8pp") —
+# while "top-2" keeps its hyphen inside the word and "Plus, 2 of 3" stays a
+# discourse marker. "±" is a sign no grounding ever renders, so it never
+# vouches. Direction VERBS ("declined by 11.1pp") are semantic paraphrase a
+# lexical guard cannot adjudicate ("reduced non-persistence by 11.1pp" would
+# be the same lexical shape as a true claim) — accepted boundary, as are
 # spelled-out word numbers ("three of three").
+_UNIT_PATTERN = r"(?:pp\b|%|percentage[\s-]points?\b|percent\b)"
 _CLAIM_RE = re.compile(
     r"(?:"
-    r"(?<![\w.\-])(?P<sym>[+\-−]) ?"
-    r"|\b(?P<word>negative|minus|positive|plus)[\s-]+"
+    r"(?<![\w.\-])(?P<sym>[+\-−±∓]) ?"
+    r"|\b(?P<word>negative|minus|positive|plus)[\s-]+(?=\d)"
+    r"|\b(?P<word2>negative|minus|positive)[\s,]+(?:[a-z][\w-]*[\s,]+){0,2}?"
+    rf"(?=\d[\d,]*(?:\.\d+)?\s*{_UNIT_PATTERN})"
     r")?"
     r"(?P<num>\d[\d,]*(?:\.\d+)?)"
-    r"(?:\s*(?P<unit>pp\b|%|percentage[\s-]points?\b|percent\b))?",
+    rf"(?:\s*(?P<unit>{_UNIT_PATTERN}))?",
     re.IGNORECASE,
 )
 # Count-fraction claims: "13/14", "13 of 14", "13 out of 14", "13-of-14",
-# "13 over 14", any dash flavour ("3‑out‑of‑3"): digit-adjacent dashes and
-# fraction slashes are normalized to "-" and "/", word-adjacent dashes are
+# "13 over 14", "13 in 14", any dash flavour ("3‑out‑of‑3"): digit-adjacent
+# dashes and slashes are normalized to "-" and "/", word-adjacent dashes are
 # matched here directly.
 _FRACTION_RE = re.compile(
-    rf"\b(\d+)(?:\s*/\s*|[-{_DASH_CLASS}\s]+(?:out[-{_DASH_CLASS}\s]+of|of|over)"
+    rf"\b(\d+)(?:\s*/\s*|[-{_DASH_CLASS}\s]+"
+    rf"(?:out[-{_DASH_CLASS}\s]+of|of|over|in|per|among|amongst|from)"
     rf"[-{_DASH_CLASS}\s]+)(\d+)\b",
     re.IGNORECASE,
 )
@@ -282,9 +300,14 @@ _SEG_COUNT_EXEMPT = (
     r"(?:patients|hcps|physicians|prescribers|people|persons|individuals"
     r"|respondents|records|rows|days|weeks|months|years)"
 )
+# Token alphabet: anything but whitespace and sentence enders; a token may
+# not START with a digit (another number ends the claim) or ")" (a closing
+# paren directly after the number means it was parenthetical — "(n=1,385),"
+# is not counting what follows). The tail glued to the number itself
+# ("1,385-significant") tolerates punctuation but not ")".
 _SEG_COUNT_RE = re.compile(
-    rf"\b(\d(?:[\d,]*\d)?)[,;]?\s+"
-    rf"(?:(?!{_SEG_COUNT_EXEMPT}[,;]?\s)(?!\d)[\w-]+[,;]?\s+)*"
+    rf"\b(\d(?:[\d,]*\d)?)[^\s.!?)]*\s+"
+    rf"(?:(?!{_SEG_COUNT_EXEMPT}[^\w\s]*\s)(?![\d)])[^\s.!?]+\s+)*"
     rf"{_SEG_NOUNS}\b",
     re.IGNORECASE,
 )
@@ -294,11 +317,13 @@ def _extract_claims(text: str) -> list[tuple[str, str, str]]:
     """(sign, comma-stripped number, normalized unit) for every number."""
     claims: list[tuple[str, str, str]] = []
     for m in _CLAIM_RE.finditer(text):
-        raw_sign = (m.group("sym") or m.group("word") or "").strip().lower()
+        raw_sign = (m.group("sym") or m.group("word") or m.group("word2") or "").strip().lower()
         if raw_sign in ("-", "−", "negative", "minus"):
             sign = "-"
         elif raw_sign in ("+", "positive", "plus"):
             sign = "+"
+        elif raw_sign in ("±", "∓"):
+            sign = "±"  # never rendered by any grounding -> never vouches
         else:
             sign = ""
         unit_raw = (m.group("unit") or "").lower()
