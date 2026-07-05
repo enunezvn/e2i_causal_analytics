@@ -370,8 +370,9 @@ _SIG_ELIDED_RE = re.compile(
     r"\b(\d[\d,]*)\s+(?:"
     r"(?:are|is|were|was|remained?)(?P<span>(?:\s+(?:not|statistically))*)\s+significant\b"
     r"|(?:(?P<negdo>(?:do(?:es)?|did)\s+not)\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
-    r"(?:(?:(?P<negthat>(?:(?:that|which)\s+(?:do(?:es)?|did)\s+not|not|without)\s+)"
-    r"|(?:that|which)\s+)?exclud\w*)\s+zero"
+    r"(?:(?:(?P<negthat>(?:(?:that|which)\s+(?:(?:do(?:es)?|did)\s+not|fail\w*\s+to)"
+    r"|fail\w*\s+to|not|without)\s+)"
+    r"|(?:that|which)\s+)?(?:exclud|clear)\w*)\s+zero"
     r"|(?:(?P<negdo2>(?:do(?:es)?|did)\s+not)\s+)?clear(?:s|ed)?\s+zero"
     r"|(?P<fail>fail\w*)\s+to\s+(?:reach|clear|exclude)\b"
     r"|(?:(?:do(?:es)?|did|are|is|were|was)\s+)?(?P<negreach>not\s+)?"
@@ -602,10 +603,11 @@ def _metric_misattributed(
 
 
 # A significance status asserted of a named row (table-line ", significant"
-# or copular "is (not) (statistically) significant").
+# or copular "is (not) (statistically) significant"; "non-significant" and
+# "nonsignificant" are negative statuses too).
 _ROW_STATUS_RE = re.compile(
     r"(?:,\s*|\b(?:is|was|are|were|remains?)\s+(?:statistically\s+)?)"
-    r"(?P<neg>not\s+)?(?:statistically\s+)?significant\b",
+    r"(?P<neg>not\s+|non[\s-]?)?(?:statistically\s+)?significant\b",
     re.IGNORECASE,
 )
 
@@ -696,7 +698,15 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
             continue
         if num not in seg_counts:
             return False
-        has_sig = _SIG_PREDICATE_RE.search(clause)
+        # The affirmative predicate window mirrors the negation window: a
+        # significance predicate belonging to a different coordinated subject
+        # ("The analysis has 3 segments and reports 2 significant segments")
+        # must not capture this count.
+        pre = text[clause_start : seg.start()]
+        pre_breaks = list(_SEG_POST_TRUNC_RE.finditer(pre))
+        if pre_breaks:
+            pre = pre[pre_breaks[-1].end() :]
+        has_sig = _SIG_PREDICATE_RE.search(pre + seg.group(0) + post)
         if num != str(g["sig_count"]) and has_sig:
             return False
         # Totality wording forces the true total — unless a significance

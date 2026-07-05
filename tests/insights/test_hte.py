@@ -903,6 +903,66 @@ class TestGuard:
         )
         assert hte._is_grounded("1 of the 3,883 patients discontinued.", g) is True
 
+    def test_relative_fail_to_and_nonsignificant_row_status(self):
+        # codex round-18 HIGH x2: (1) "CIs which failed to exclude zero" and
+        # participial "CIs failing to exclude zero" escaped complement
+        # binding in the elided form; (2) "non-significant"/"nonsignificant"
+        # was not a negative row status, so a significant row could be
+        # mislabeled.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 had 95% CIs which failed to exclude zero.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 had 95% CIs failing to exclude zero.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 2 had 95% CIs that failed to clear zero.", g)
+            is False
+        )
+        assert (
+            hte._is_grounded("Of the 3 segments, 1 had 95% CIs which failed to exclude zero.", g)
+            is True
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=high: +17.7pp [CI +12.7pp to +22.8pp], "
+                "n=1,385, non-significant.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "age_band=50-65 is nonsignificant at +13.8pp [CI +8.0pp to +19.6pp] with n=2,015.",
+                g,
+            )
+            is False
+        )
+        assert (
+            hte._is_grounded(
+                "disease_severity_band=low: +3.4pp [CI -2.8pp to +9.6pp], "
+                "n=2,498, non-significant.",
+                g,
+            )
+            is True
+        )
+        # The affirmative significance predicate is windowed like the
+        # negation: a predicate on the other side of a coordination boundary
+        # belongs to the other subject.
+        assert (
+            hte._is_grounded("The analysis has 3 segments and reports 2 significant segments.", g)
+            is True
+        )
+        assert (
+            hte._is_grounded("2 segments are significant, and the analysis included 3 segments.", g)
+            is True
+        )
+        assert hte._is_grounded("Of the 3 segments, 2 had 95% CIs that clear zero.", g) is True
+        assert hte._is_grounded("Of the 3 segments, 3 had 95% CIs that clear zero.", g) is False
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so
