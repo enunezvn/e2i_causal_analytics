@@ -219,12 +219,17 @@ def _fallback(g: dict[str, Any]) -> dict[str, Any]:
 # ---- Numeric grounding guard ---------------------------------------------------
 # The signature TELLS the LM not to invent figures, but an executive brief is the
 # highest-stakes surface for plausible-wrong values, so the prompt is not the only
-# defense: every high-risk numeric claim in the LM output (currency, percentage,
-# ROI multiple) must literally appear in the grounding strings it was given, or
-# the whole response is discarded for the deterministic fallback. This is a
-# DETERMINISTIC check on unit-classed numbers only — semantic claims (segment
-# names, actions) cannot be validated mechanically without a false sense of
-# safety, so those remain covered by the prompt contract.
+# defense. Deterministic layers (each fails closed to the labelled fallback):
+#   1. money / percentage / ROI-multiple claims must appear in the grounding and
+#      bind per-SENTENCE to a single source unit (rounds 1-2);
+#   2. segment / gap-metric tokens named in a numeric sentence must belong to
+#      that same unit (round 3);
+#   3. labelled portfolio counts (quick wins / steady plays / strategic bets /
+#      suppressed) must match the grounded counts globally (round 4).
+# What stays prompt-governed — documented, not accidental: free-prose action
+# wording, spelled-out numbers ("two quick wins"), and count phrasings outside
+# the server-controlled vocabulary; matching those mechanically would be a
+# false sense of safety.
 
 _MONEY_RE = re.compile(r"\$\s?([\d,]+(?:\.\d+)?)\s*(k|m|b|thousand|million|billion)?\b", re.I)
 _PCT_RE = re.compile(r"([\d,]+(?:\.\d+)?)\s*%")
@@ -243,6 +248,42 @@ def _numeric_claims(text: str) -> set[tuple[str, float]]:
         claims.add(("pct", round(float(m.group(1).replace(",", "")), 2)))
     for m in _MULT_RE.finditer(text):
         claims.add(("mult", round(float(m.group(1).replace(",", "")), 2)))
+    return claims
+
+
+# Server-controlled portfolio-count vocabulary (codex PR-5 round 4): the
+# signature hands the LM the mix/suppression counts, so an invented "99 quick
+# wins" is a fabricated portfolio-breadth claim the money/pct/multiple guard
+# never saw. Counts are PORTFOLIO-level facts — there is exactly one set, so a
+# count claim has no cross-opportunity pairing risk and validates against the
+# whole grounding (unlike money/pct/mult, which stay unit-bound). Count
+# phrasings outside this vocabulary ("the top 3 plays") and spelled-out
+# numbers ("two quick wins") remain prompt-governed — the same documented
+# boundary as free-prose actions.
+_COUNT_KEYWORDS = {
+    "quick_win": r"quick[- ]wins?",
+    "steady_play": r"steady[- ]plays?",
+    "strategic_bet": r"strategic[- ]bets?",
+    "suppressed": r"suppress\w*",
+}
+# Number-first: up to three letter-words may sit between the number and its
+# label ("3 low-value opportunities were suppressed"); digits act as barriers
+# so one count can never borrow another count's label across a list.
+_COUNT_GAP = r"(?:\W+[A-Za-z()-]+){0,3}?\W+"
+
+
+def _count_claims(text: str) -> set[tuple[str, float]]:
+    """Extract (count:<label>, value) claims for the server-controlled labels."""
+    claims: set[tuple[str, float]] = set()
+    for kind, kw in _COUNT_KEYWORDS.items():
+        for m in re.finditer(rf"\b(\d+)\b{_COUNT_GAP}{kw}", text, re.I):
+            claims.add((f"count:{kind}", float(m.group(1))))
+        # Label-first allows only space/colon/equals/dash between label and
+        # number ("suppressed 42", "quick wins: 2") — list punctuation would
+        # mint spurious claims from prose like "2 quick wins, 1 steady play"
+        # (the comma would hand quick_win the NEXT item's count).
+        for m in re.finditer(rf"{kw}[ \t:=-]+(\d+)\b", text, re.I):
+            claims.add((f"count:{kind}", float(m.group(1))))
     return claims
 
 
@@ -269,11 +310,22 @@ def _is_grounded(
     single numeric sentence falls back — fail-closed by design; the signature
     instructs the LM to keep each sentence's figures and segment/metric
     mentions to a single opportunity.
+
+    Labelled portfolio COUNTS (quick wins / steady plays / strategic bets /
+    suppressed) are validated too, but globally: they are portfolio-level
+    facts with exactly one grounded set, so an invented "99 quick wins" is
+    rejected while a correct restatement passes regardless of which sentence
+    it shares with an opportunity's figures (codex PR-5 round 4).
     """
     unit_claims = [_numeric_claims(s) for s in sources]
+    grounded_counts: set[tuple[str, float]] = set()
+    for s in sources:
+        grounded_counts |= _count_claims(s)
     tokens = source_tokens if source_tokens is not None else [set() for _ in sources]
     all_tokens: set[str] = set().union(*tokens) if tokens else set()
     for sentence in _SENTENCE_SPLIT_RE.split(candidate):
+        if not _count_claims(sentence) <= grounded_counts:
+            return False
         claims = _numeric_claims(sentence)
         if not claims:
             continue

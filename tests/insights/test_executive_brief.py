@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from src.insights.executive_brief import (
+    _count_claims,
     _fallback,
     _is_grounded,
     _numeric_claims,
@@ -119,7 +120,40 @@ def test_numeric_claims_canonicalize_across_formats():
         ("pct", 42.0),
     }
     assert _numeric_claims("$5,000,000 and $5 million") == {("money", 5_000_000.0)}
+    # Plain counts are not money/pct/multiple claims — they are validated by
+    # the SEPARATE labelled-count extractor below (codex PR-5 round 4).
     assert _numeric_claims("plain counts like 2 quick wins carry no unit") == set()
+
+
+def test_count_claims_extract_labelled_portfolio_counts():
+    assert _count_claims("2 quick wins, 1 steady play, 1 strategic bet") == {
+        ("count:quick_win", 2.0),
+        ("count:steady_play", 1.0),
+        ("count:strategic_bet", 1.0),
+    }
+    # Words may sit between the number and its label, in either direction.
+    assert _count_claims("3 low-value opportunities were suppressed") == {("count:suppressed", 3.0)}
+    assert _count_claims("we suppressed 42 opportunities") == {("count:suppressed", 42.0)}
+    # Digits act as barriers: one count never borrows another's label.
+    assert ("count:steady_play", 2.0) not in _count_claims("2 quick win(s), 1 steady play(s)")
+    # Unlabelled counts stay outside the vocabulary (prompt-governed).
+    assert _count_claims("the top 3 opportunities") == set()
+
+
+def test_is_grounded_rejects_invented_portfolio_counts():
+    # codex PR-5 round 4 HIGH (its own repro): invented counts carried no
+    # money/pct/mult claim, so the guard skipped the sentence entirely.
+    sources = [
+        "Kisqali / $5.0M / mix: 2 quick win(s), 1 steady play(s), 1 strategic bet(s)",
+        "3 low-value opportunities were suppressed (below break-even).",
+    ]
+    assert (
+        _is_grounded("There are 99 quick wins and 42 suppressed opportunities.", sources) is False
+    )
+    # Correct restatements pass, even mixing scope-counts with the caveat
+    # count in one sentence (counts are one portfolio-level set, not
+    # per-opportunity pairings).
+    assert _is_grounded("The mix holds 2 quick wins with 3 suppressed.", sources) is True
 
 
 def test_is_grounded_accepts_reformatted_and_rejects_invented_figures():
@@ -179,6 +213,38 @@ def test_is_grounded_rejects_another_units_segment_in_a_numeric_sentence():
     assert _is_grounded("Capture $1.2M at 3.2x in Northeast.", sources, tokens) is True
     # Non-numeric prose may name any segment freely.
     assert _is_grounded("Both Northeast and South matter strategically.", sources, tokens) is True
+
+
+def test_generate_insight_rejects_fabricated_portfolio_counts(monkeypatch):
+    # codex PR-5 round 4 HIGH: fabricated breadth ("99 quick wins") must fall
+    # back even though it carries no money/pct/multiple claim.
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: SimpleNamespace(
+            interpretation="There are 99 quick wins and 42 suppressed opportunities.",
+            key_takeaways=[],
+        ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+    assert "99" not in out["insight"]
+
+
+def test_generate_insight_passes_correct_count_restatement(monkeypatch):
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: SimpleNamespace(
+            interpretation=(
+                "The portfolio holds 2 quick wins, 1 steady play, and 1 strategic "
+                "bet, with 3 opportunities suppressed below break-even."
+            ),
+            key_takeaways=[],
+        ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is False
 
 
 def test_generate_insight_rejects_segment_swapped_attribution(monkeypatch):
