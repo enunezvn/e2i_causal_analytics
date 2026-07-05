@@ -327,10 +327,11 @@ _SEG_COUNT_RE = re.compile(
 )
 # A segment count inside a clause asserting significance ("All 3 segments
 # have 95% CIs excluding zero") is a SIGNIFICANT-segment count — the true
-# total cannot vouch it. Negated significance ("not significant") does not
-# make the clause a significance claim.
+# total cannot vouch it. Negated significance ("not significant",
+# "non-significant") does not make the clause a significance claim.
 _SIG_PREDICATE_RE = re.compile(
-    r"(?<!not )\bsignificant\b|CIs?\s+exclud\w*\s+zero|excludes?\s+zero|clears?\s+zero",
+    r"(?<!not )(?<!non-)(?<!non )\bsignificant\b"
+    r"|CIs?\s+exclud\w*\s+zero|excludes?\s+zero|clears?\s+zero",
     re.IGNORECASE,
 )
 # ... but "2 of 3 segments have CIs excluding zero" is exempt: the fraction
@@ -365,6 +366,7 @@ _SIG_ELIDED_RE = re.compile(
     r"|(?:(?P<negdo>do(?:es)?\s+not)\s+)?(?:have|has|had)\s+(?:\d+%\s+)?CIs?\s+"
     r"(?:(?P<negthat>that\s+do(?:es)?\s+not\s+)?exclud\w*)\s+zero"
     r"|(?:(?P<negdo2>do(?:es)?\s+not)\s+)?clears?\s+zero"
+    r"|(?P<fail>fail\w*)\s+to\s+(?:reach|clear|exclude)\b"
     r")",
     re.IGNORECASE,
 )
@@ -377,6 +379,21 @@ _FRACTION_NEGATION_RE = re.compile(
     r"|\bfail\w*\s+to\s+(?:reach|clear|exclude)\b",
     re.IGNORECASE,
 )
+# Where a segment count's negated predicate may live: after the noun, up to
+# the next standalone number or contrast/coordination word — either hands
+# the predicate to a different subject ("2 segments are significant and 1
+# segment is not"). Numbers glued to "%" stay inside the predicate ("do not
+# have 95% CIs excluding zero").
+_SEG_POST_TRUNC_RE = re.compile(
+    r"\b(?:and|but|while|whereas|although|though)\b|\d(?![\d,]*\s*%)",
+    re.IGNORECASE,
+)
+# ... or as a modifier between the number and the noun ("1 non-significant
+# segment remains").
+_SEG_MODIFIER_NEG_RE = re.compile(
+    r"\bnon-?significant\b|\bnot[\s-]+(?:statistically[\s-]+)?significant\b",
+    re.IGNORECASE,
+)
 
 
 def _sig_elided_negated(m: re.Match[str]) -> bool:
@@ -386,6 +403,7 @@ def _sig_elided_negated(m: re.Match[str]) -> bool:
         or bool(m.group("negdo"))
         or bool(m.group("negthat"))
         or bool(m.group("negdo2"))
+        or bool(m.group("fail"))
     )
 
 
@@ -638,17 +656,31 @@ def _is_grounded(candidate: str, g: dict[str, Any]) -> bool:
     text = _strip_phrases(norm, g["phrases"], g["ambiguous_phrases"])
     vouched: dict[str, set[tuple[str, str]]] = g["vouched"]
     seg_counts = {str(g["sig_count"]), str(g["total_count"])}
+    nonsig_count = g["total_count"] - g["sig_count"]
     for seg in _SEG_COUNT_RE.finditer(text):
         num = seg.group(1).replace(",", "")
-        if num not in seg_counts:
-            return False
         clause_start = 0
         for b in _WINDOW_BREAK_RE.finditer(text, 0, seg.start()):
             clause_start = b.end()
         clause_end_m = _WINDOW_BREAK_RE.search(text, seg.end())
-        clause = text[clause_start : clause_end_m.start() if clause_end_m else len(text)]
+        clause_end = clause_end_m.start() if clause_end_m else len(text)
+        clause = text[clause_start:clause_end]
         if _FRACTION_PRECEDER_RE.search(text[: seg.start(1)]):
+            if num not in seg_counts:
+                return False
             continue
+        # Negated significance binds the count to the COMPLEMENT ("1 segment
+        # is not significant" is true exactly when total - significant == 1).
+        post = text[seg.end() : clause_end]
+        cut = _SEG_POST_TRUNC_RE.search(post)
+        if cut:
+            post = post[: cut.start()]
+        if _FRACTION_NEGATION_RE.search(post) or _SEG_MODIFIER_NEG_RE.search(seg.group(0)):
+            if num != str(nonsig_count):
+                return False
+            continue
+        if num not in seg_counts:
+            return False
         has_sig = _SIG_PREDICATE_RE.search(clause)
         if num != str(g["sig_count"]) and has_sig:
             return False

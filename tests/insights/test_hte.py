@@ -796,6 +796,38 @@ class TestGuard:
         )
         assert hte._is_grounded("The 50-65 band (+13.8pp) is statistically significant.", g) is True
 
+    def test_negated_segment_counts_bind_to_complement(self):
+        # codex round-15 HIGH: "2 segments are not significant" bound to the
+        # significant count (2 of 3) instead of the complement (1), while the
+        # faithful "1 segment is not significant" died at the sig/total
+        # membership check.
+        g = hte.build_grounding(_record())
+        assert hte._is_grounded("2 segments are not significant.", g) is False
+        assert hte._is_grounded("Only 2 segments are not significant.", g) is False
+        assert hte._is_grounded("2 segments are not statistically significant.", g) is False
+        assert hte._is_grounded("2 segments do not have 95% CIs excluding zero.", g) is False
+        assert hte._is_grounded("2 segments have 95% CIs that do not exclude zero.", g) is False
+        assert hte._is_grounded("2 segments fail to exclude zero.", g) is False
+        assert hte._is_grounded("2 non-significant segments remain.", g) is False
+        assert hte._is_grounded("Of the 3 segments, 2 fail to exclude zero.", g) is False
+        assert hte._is_grounded("1 segment is not significant.", g) is True
+        assert hte._is_grounded("Only 1 segment is not significant.", g) is True
+        assert hte._is_grounded("1 segment does not have 95% CIs excluding zero.", g) is True
+        assert hte._is_grounded("1 segment has 95% CIs that do not exclude zero.", g) is True
+        assert hte._is_grounded("1 segment fails to exclude zero.", g) is True
+        assert hte._is_grounded("1 non-significant segment remains.", g) is True
+        # Each count binds to its own predicate across coordination — the
+        # negation belonging to a later subject must not capture an earlier
+        # affirmative count, and vice versa.
+        assert (
+            hte._is_grounded("2 segments are significant and 1 segment is not significant.", g)
+            is True
+        )
+        assert (
+            hte._is_grounded("1 segment is significant and 2 segments are not significant.", g)
+            is False
+        )
+
     def test_copula_headed_segment_figures_bind(self):
         # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
         # mention grammar. The copula binds only when it heads a figure, so
