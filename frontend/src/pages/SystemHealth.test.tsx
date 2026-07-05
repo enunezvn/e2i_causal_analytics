@@ -281,6 +281,25 @@ describe('SystemHealth', () => {
     expect(screen.queryByText(/Health check:/)).not.toBeInTheDocument();
   });
 
+  it('treats fail-closed "unknown" provenance as untrusted (codex PR-4 round 2)', () => {
+    // The backend defaults data_provenance to "unknown" precisely so paths
+    // that forget to tag it fail CLOSED. The page must honor that: unknown is
+    // untrusted, so no score, summary, or check time may render from it.
+    (useFullHealthCheck as MockFn).mockReturnValue({
+      data: {
+        ...fullHealthBase,
+        health_summary: 'Composer forgot to tag provenance',
+        data_provenance: 'unknown',
+      },
+      refetch: vi.fn().mockResolvedValue({}),
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/Awaiting health check/)).toBeInTheDocument();
+    expect(screen.queryByText(/Composer forgot/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Health check:/)).not.toBeInTheDocument();
+  });
+
   // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest

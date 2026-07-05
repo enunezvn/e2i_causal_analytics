@@ -12,7 +12,10 @@
  *
  * System health lives on the dedicated /system-health page — the
  * duplicate System Health Score card this page carried was consolidated
- * there (same `useFullHealthCheck` source, one home).
+ * there (same `useFullHealthCheck` source, one home). The card's
+ * `?modelId=` deep link (#304's URL-addressable per-model drift route)
+ * moved with it: `/monitoring?modelId=<id>` pre-selects that model's
+ * drift/health view.
  *
  * @module pages/AIAgentInsights
  */

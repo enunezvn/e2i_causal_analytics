@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import Monitoring from './Monitoring';
 import { AlertStatus } from '@/types/monitoring';
 
@@ -41,15 +42,19 @@ import { useModelsStatus } from '@/hooks/api/use-predictions';
 const PRIMARY_MODEL = 'csu_treatment_initiation_lr_balanced_v1';
 
 // QueryClient wrapper for tests (required because the page uses TanStack
-// Query under the hood through these hooks).
-function createWrapper() {
+// Query under the hood through these hooks). Includes a MemoryRouter because
+// the page reads the ?modelId= deep-link param via useSearchParams; pass
+// initialEntries to simulate a deep link.
+function createWrapper(initialEntries: string[] = ['/monitoring']) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 0 },
     },
   });
   return ({ children }: { children: React.ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={initialEntries}>{children}</MemoryRouter>
+    </QueryClientProvider>
   );
 }
 
@@ -219,6 +224,23 @@ describe('Monitoring page — live-backend wiring (issue #297)', { timeout: 20_0
       model_id: PRIMARY_MODEL,
       days: 1,
     });
+  });
+
+  it('pre-selects the model from a ?modelId= deep link instead of the registry default', async () => {
+    // Regression (codex PR-4 round 2): /ai-insights?modelId= was #304's
+    // URL-addressable route to per-model health/drift. With the System Health
+    // Score card consolidated away, /monitoring?modelId= is its new home —
+    // the param must win over the default-to-first-registry-model effect.
+    render(<Monitoring />, {
+      wrapper: createWrapper(['/monitoring?modelId=deep_link_model_v9']),
+    });
+
+    await waitFor(() => {
+      const healthCalls = (useModelHealth as ReturnType<typeof vi.fn>).mock.calls;
+      const lastHealth = healthCalls[healthCalls.length - 1]?.[0];
+      expect(lastHealth).toBe('deep_link_model_v9');
+    });
+    expect(useModelHealth).not.toHaveBeenCalledWith(PRIMARY_MODEL);
   });
 
   it('"Total Runs" KPI reflects displayed runs.length (not unfiltered total_runs)', () => {

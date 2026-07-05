@@ -17,6 +17,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Activity,
   RefreshCw,
@@ -177,7 +178,15 @@ function getErrorLevelStyle(level: string): { bg: string; text: string } {
 
 function Monitoring() {
   const [timeRange, setTimeRange] = useState<string>('24h');
-  const [selectedModelId, setSelectedModelId] = useState<string>('');
+  // Deep-link support: `/monitoring?modelId=<id>` pre-selects that model. This
+  // is the ported home of #304's `/ai-insights?modelId=` operator route, which
+  // went away when the System Health Score card was consolidated into
+  // /system-health. An absent/blank param falls through to the registry
+  // default below.
+  const [searchParams] = useSearchParams();
+  const [selectedModelId, setSelectedModelId] = useState<string>(
+    () => searchParams.get('modelId')?.trim() ?? ''
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [errorLevelFilter, setErrorLevelFilter] = useState<string>('all');
 

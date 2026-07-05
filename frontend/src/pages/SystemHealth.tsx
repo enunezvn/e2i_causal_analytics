@@ -293,27 +293,32 @@ function SystemHealth() {
     }));
   }, [modelHealthData]);
 
-  // Use API data when present; otherwise render empty/neutral values. Dev-offline
-  // placeholder data (data_provenance="placeholder") is treated as no score, so
-  // the headline shows "Awaiting health check…" rather than a fabricated number.
-  const isHealthPlaceholder = fullHealthData?.data_provenance === 'placeholder';
+  // Use API data when present; otherwise render empty/neutral values. The
+  // backend's provenance is fail-closed ("unknown" when a path forgets to set
+  // it), so only a check it explicitly tagged trustworthy (measured | partial)
+  // is surfaced as real — dev-offline "placeholder", fail-closed "unknown",
+  // and an absent field all degrade to "Awaiting health check…" rather than a
+  // fabricated number. Same trust rule as the Service Status / Model Health
+  // cards above.
+  const isHealthTrusted =
+    fullHealthData != null && isTrustedProvenance(fullHealthData.data_provenance);
   const healthScore =
-    fullHealthData && !isHealthPlaceholder ? (fullHealthData.overall_health_score ?? null) : null;
+    fullHealthData && isHealthTrusted ? (fullHealthData.overall_health_score ?? null) : null;
   const healthGrade =
-    fullHealthData && !isHealthPlaceholder ? (fullHealthData.health_grade ?? null) : null;
+    fullHealthData && isHealthTrusted ? (fullHealthData.health_grade ?? null) : null;
   // Ported from the retired /ai-insights System Health Score card: surface the
   // composer's human-readable summary and flag a non-fully-measured check
   // ("partial") instead of presenting it as indistinguishable from measured.
   const healthSummary =
-    fullHealthData && !isHealthPlaceholder ? (fullHealthData.health_summary || null) : null;
+    fullHealthData && isHealthTrusted ? (fullHealthData.health_summary || null) : null;
   const healthProvenance =
-    fullHealthData && !isHealthPlaceholder ? (fullHealthData.data_provenance ?? null) : null;
+    fullHealthData && isHealthTrusted ? (fullHealthData.data_provenance ?? null) : null;
   // When the backend composer actually ran its check — distinct from the page
   // header's "Last updated", which is only the local UI refresh clock. The
   // retired /ai-insights card surfaced this as "Last Check"; without it a
   // stale health score is indistinguishable from a fresh one.
   const healthCheckedAt =
-    fullHealthData && !isHealthPlaceholder ? (fullHealthData.timestamp || null) : null;
+    fullHealthData && isHealthTrusted ? (fullHealthData.timestamp || null) : null;
   const agents = agentHealthData?.agents ?? [];
   const pipelines = pipelineHealthData?.pipelines ?? [];
   const healthHistory = healthHistoryData?.checks ?? [];
@@ -341,9 +346,9 @@ function SystemHealth() {
 
   const componentScoreData = useMemo(() => {
     // No fabricated scores: show no bars until a real health check loads, and
-    // never chart dev-offline placeholder data (data_provenance="placeholder")
-    // as if it were measured.
-    if (!fullHealthData || fullHealthData.data_provenance === 'placeholder') {
+    // never chart untrusted data (placeholder, fail-closed "unknown", or an
+    // absent provenance) as if it were measured.
+    if (!fullHealthData || !isTrustedProvenance(fullHealthData.data_provenance)) {
       return [];
     }
     // Only chart dimensions a real backend MEASURED. A null dimension score is

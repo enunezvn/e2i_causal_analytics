@@ -1246,6 +1246,10 @@ export const HealthScoreResponseWireSchema = z.object({
   health_summary: z.string(),
   check_latency_ms: z.number().int(),
   timestamp: z.string(),
+  // Fail-closed provenance (measured | partial | unknown | placeholder). MUST
+  // be mirrored here: z.object() strips unknown keys, so omitting it silently
+  // deletes the backend's honesty tag before the dashboard's trust gate runs.
+  data_provenance: z.string().optional(),
 });
 
 /** Faithful mirror of `ComponentHealthResponse` (health_score.py). */
