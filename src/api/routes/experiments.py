@@ -1313,21 +1313,33 @@ async def trigger_experiment_monitoring(
             )
         )
 
-        experiments = [
-            ExperimentHealthSummary(
-                experiment_id=exp.get("experiment_id", ""),
-                experiment_name=exp.get("name", ""),
-                health_status=HealthStatus(exp.get("health_status", "unknown")),
-                total_enrolled=exp.get("total_enrolled", 0),
-                enrollment_rate_per_day=float(exp.get("enrollment_rate_per_day", 0.0)),  # type: ignore[arg-type]
-                current_information_fraction=exp.get("current_information_fraction", 0.0),
-                has_srm=bool(exp.get("has_srm", False)),
-                active_alerts=int(exp.get("active_alerts", 0)),  # type: ignore[call-overload]
-                last_checked=datetime.now(timezone.utc),
-                is_synthetic=bool(exp.get("is_synthetic", False)),
+        # The agent's ExperimentSummary carries neither per-experiment alert
+        # counts nor SRM flags — those live only in result.alerts (SRM alerts
+        # have alert_type="srm"). Reading exp["active_alerts"] / exp["has_srm"]
+        # silently yielded 0/False for every experiment, and the rate is keyed
+        # "enrollment_rate" (already per-day: total_enrolled / days_running).
+        alerts_by_experiment: Dict[str, List[Dict[str, Any]]] = {}
+        for alert in result.alerts:
+            alerts_by_experiment.setdefault(alert.get("experiment_id", ""), []).append(alert)
+
+        experiments: List[ExperimentHealthSummary] = []
+        for exp in result.experiments:
+            exp_id = exp.get("experiment_id", "")
+            exp_alerts = alerts_by_experiment.get(exp_id, [])
+            experiments.append(
+                ExperimentHealthSummary(
+                    experiment_id=exp_id,
+                    experiment_name=exp.get("name", ""),
+                    health_status=HealthStatus(exp.get("health_status", "unknown")),
+                    total_enrolled=exp.get("total_enrolled", 0),
+                    enrollment_rate_per_day=float(exp.get("enrollment_rate", 0.0)),
+                    current_information_fraction=exp.get("current_information_fraction", 0.0),
+                    has_srm=any(a.get("alert_type") == "srm" for a in exp_alerts),
+                    active_alerts=len(exp_alerts),
+                    last_checked=datetime.now(timezone.utc),
+                    is_synthetic=bool(exp.get("is_synthetic", False)),
+                )
             )
-            for exp in result.experiments
-        ]
 
         alerts = [
             MonitorAlert(
@@ -1431,17 +1443,18 @@ async def get_experiment_health(
             raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found")
 
         exp = result.experiments[0]
+        # Same derivations as the /monitor sweep: the agent keys the per-day
+        # rate "enrollment_rate" and reports SRM only via alerts (type "srm").
+        exp_alerts = [a for a in result.alerts if a.get("experiment_id") == experiment_id]
         return ExperimentHealthSummary(
             experiment_id=exp.get("experiment_id", experiment_id),
             experiment_name=exp.get("name", ""),
             health_status=HealthStatus(exp.get("health_status", "unknown")),
             total_enrolled=exp.get("total_enrolled", 0),
-            enrollment_rate_per_day=float(exp.get("enrollment_rate_per_day", 0.0)),  # type: ignore[arg-type]
+            enrollment_rate_per_day=float(exp.get("enrollment_rate", 0.0)),
             current_information_fraction=exp.get("current_information_fraction", 0.0),
-            has_srm=bool(exp.get("has_srm", False)),
-            active_alerts=len(
-                [a for a in result.alerts if a.get("experiment_id") == experiment_id]
-            ),
+            has_srm=any(a.get("alert_type") == "srm" for a in exp_alerts),
+            active_alerts=len(exp_alerts),
             last_checked=datetime.now(timezone.utc),
             is_synthetic=bool(exp.get("is_synthetic", False)),
         )

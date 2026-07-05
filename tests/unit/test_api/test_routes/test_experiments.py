@@ -292,19 +292,23 @@ def mock_experiment_monitor_agent():
         mock_output.healthy_count = 4
         mock_output.warning_count = 1
         mock_output.critical_count = 0
+        # Agent-faithful summary shape (ExperimentSummary): the agent keys the
+        # per-day rate "enrollment_rate" and emits NO per-experiment has_srm /
+        # active_alerts — the route derives those from result.alerts. A fixture
+        # emitting route-schema keys here previously masked a route bug that
+        # read keys the agent never produces (always 0.0/False/0).
         mock_output.experiments = [
             {
                 "experiment_id": str(uuid4()),
                 "name": "Test Experiment",
                 "health_status": "healthy",
                 "total_enrolled": 100,
-                "enrollment_rate_per_day": 10.0,
+                "enrollment_rate": 10.0,
                 "current_information_fraction": 0.5,
-                "has_srm": False,
-                "active_alerts": 0,
             }
         ]
         mock_output.alerts = []
+        mock_output.errors = []
         mock_output.monitor_summary = "All experiments healthy"
         mock_output.recommended_actions = []
         mock_output.check_latency_ms = 150
@@ -830,6 +834,87 @@ async def test_trigger_experiment_monitoring_specific_experiments(mock_experimen
     )
 
     assert result.experiments_checked > 0
+
+
+@pytest.mark.asyncio
+async def test_monitor_derives_health_fields_from_agent_contract():
+    """The route derives rate/SRM/alert-count from what the agent ACTUALLY emits.
+
+    The agent's ExperimentSummary keys the per-day rate "enrollment_rate" and
+    carries no per-experiment has_srm/active_alerts — SRM surfaces only as
+    alerts with alert_type="srm". Pre-fix the route read agent-absent keys,
+    so every experiment reported rate 0.0, has_srm False, active_alerts 0.
+    """
+    from fastapi import BackgroundTasks
+
+    from src.api.routes.experiments import TriggerMonitorRequest, trigger_experiment_monitoring
+
+    exp_a, exp_b = str(uuid4()), str(uuid4())
+    ts = "2026-07-05T00:00:00+00:00"
+
+    def alert(alert_type, severity, experiment_id):
+        return {
+            "alert_id": str(uuid4()),
+            "alert_type": alert_type,
+            "severity": severity,
+            "experiment_id": experiment_id,
+            "experiment_name": "Exp A",
+            "message": f"{alert_type} issue",
+            "details": {},
+            "recommended_action": "investigate",
+            "timestamp": ts,
+        }
+
+    with patch("src.agents.experiment_monitor.ExperimentMonitorAgent") as mock_agent:
+        instance = AsyncMock()
+        mock_agent.return_value = instance
+        mock_output = MagicMock()
+        mock_output.experiments_checked = 2
+        mock_output.healthy_count = 1
+        mock_output.warning_count = 0
+        mock_output.critical_count = 1
+        mock_output.experiments = [
+            {
+                "experiment_id": exp_a,
+                "name": "Exp A",
+                "health_status": "critical",
+                "total_enrolled": 250,
+                "enrollment_rate": 12.5,
+                "current_information_fraction": 0.4,
+            },
+            {
+                "experiment_id": exp_b,
+                "name": "Exp B",
+                "health_status": "healthy",
+                "total_enrolled": 90,
+                "enrollment_rate": 4.5,
+                "current_information_fraction": 0.2,
+            },
+        ]
+        mock_output.alerts = [
+            alert("srm", "critical", exp_a),
+            alert("enrollment", "warning", exp_a),
+        ]
+        mock_output.errors = []
+        mock_output.monitor_summary = "1 critical"
+        mock_output.recommended_actions = []
+        mock_output.check_latency_ms = 10
+        instance.run_async.return_value = mock_output
+
+        result = await trigger_experiment_monitoring(
+            TriggerMonitorRequest(),
+            BackgroundTasks(),
+            async_mode=False,
+            user={"user_id": "test_user", "role": "auth"},
+        )
+
+    by_id = {e.experiment_id: e for e in result.experiments}
+    assert by_id[exp_a].enrollment_rate_per_day == 12.5
+    assert by_id[exp_a].has_srm is True
+    assert by_id[exp_a].active_alerts == 2
+    assert by_id[exp_b].enrollment_rate_per_day == 4.5
+    assert by_id[exp_b].has_srm is False
+    assert by_id[exp_b].active_alerts == 0
 
 
 @pytest.mark.asyncio
