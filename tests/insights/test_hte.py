@@ -571,6 +571,28 @@ class TestGuard:
             hte._is_grounded("The overall ATE is 11.1pp, indicating a positive effect.", g) is True
         )
 
+    def test_copula_headed_segment_figures_bind(self):
+        # codex round-10 HIGH (single finding): "High is +13.8pp" escaped the
+        # mention grammar. The copula binds only when it heads a figure, so
+        # predicate uses ("confidence is high") cannot false-fire.
+        g = hte.build_grounding(_record())
+        assert (
+            hte._is_grounded(
+                "Disease severity separates the response. High is +13.8pp (n=2,015).", g
+            )
+            is False
+        )
+        assert hte._is_grounded("High was +13.8pp in this analysis.", g) is False
+        assert hte._is_grounded("High: +13.8pp (n=2,015).", g) is False
+        assert (
+            hte._is_grounded(
+                "Disease severity separates the response. High is +17.7pp (n=1,385).", g
+            )
+            is True
+        )
+        assert hte._is_grounded("Confidence is high; 2 of 3 segments clear zero.", g) is True
+        assert hte._is_grounded("Heterogeneity is high at 0.26 on a 0-1 scale.", g) is True
+
     def test_explicit_metric_comparison_stays_legal(self):
         # round-9 over-rejection fix: "overall ATE: +17.7pp versus +11.1pp"
         # names both sides of a comparison — legal when the metric's true

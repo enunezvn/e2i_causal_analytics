@@ -769,6 +769,10 @@ def build_grounding(record: dict[str, Any]) -> dict[str, Any]:
                 rf"|trails?|outperforms?|underperforms?|ranks?|sits?|clears?"
                 rf"|has|have|had|delivers?|posts?|records?|achieves?|reaches?"
                 rf"|stands?|remains?)\b"
+                # Copula/table forms bind only when they head a figure
+                # ("High is +13.8pp", "High: +13.8pp") so ordinary predicate
+                # uses ("confidence is high") cannot false-fire.
+                rf"|\b{v_esc}(?:\s+(?:is|was|equals?)|\s*[=:—–-])\s*(?:at\s+)?(?=[+\-−±(]?\s?\d)"
             )
         segment_rows.append({"mention": mention, "numbers": row_numbers})
 
