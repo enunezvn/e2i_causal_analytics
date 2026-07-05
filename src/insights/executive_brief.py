@@ -35,8 +35,11 @@ try:
         SEQUENCE across the ranked opportunities — what to do first and why,
         trading ROI against implementation effort; (3) judge ACTIONABILITY
         honestly — flag when the portfolio is thin, concentrated in a single
-        metric or segment, or when everything sits below break-even. ALWAYS
-        close by stating the caveat given in `caveats`."""
+        metric or segment, or when everything sits below break-even. When
+        citing figures, cite ONLY figures given above and keep each sentence's
+        figures to a SINGLE opportunity — never pair one opportunity's dollar
+        value with another's ROI, gap, or segment. ALWAYS close by stating
+        the caveat given in `caveats`."""
 
         scope: str = dspy.InputField(
             desc="Brand, total addressable opportunity value, opportunity mix counts"
@@ -115,8 +118,9 @@ def build_grounding(
         f"{_money(total_addressable_value)} / mix: {mix}"
     )
     ranked = sorted(opportunities, key=lambda o: o.get("rank", 0))[:5]
+    opp_lines = [_opportunity_line(o) for o in ranked]
     if ranked:
-        opp_text = " ".join(_opportunity_line(o) for o in ranked)
+        opp_text = " ".join(opp_lines)
     elif suppressed_count > 0:
         # All-suppressed is REAL signal (mirrors the T6 gap-analyzer honest
         # narrative): the right brief is "don't invest now", not silence.
@@ -161,6 +165,11 @@ def build_grounding(
         "caveats": caveats,
         "grounding": grounding,
         "has_signal": bool(ranked) or suppressed_count > 0,
+        # Per-UNIT source strings for the grounding guard: each opportunity is
+        # its own unit so a sentence pairing one opportunity's dollar value
+        # with another's ROI/gap can be detected (codex PR-5 round 2) — a flat
+        # value set would accept any swapped combination.
+        "sources": [scope, caveats, *opp_lines],
     }
 
 
@@ -218,12 +227,30 @@ def _numeric_claims(text: str) -> set[tuple[str, float]]:
     return claims
 
 
+# Sentences (and semicolon clauses) are the pairing unit: a figure cited next
+# to another figure inside one sentence claims a RELATIONSHIP between them.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+")
+
+
 def _is_grounded(candidate: str, sources: list[str]) -> bool:
-    """True iff every numeric claim in ``candidate`` appears in the sources."""
-    grounded: set[tuple[str, float]] = set()
-    for s in sources:
-        grounded |= _numeric_claims(s)
-    return _numeric_claims(candidate) <= grounded
+    """True iff every sentence's numeric claims come from a SINGLE source unit.
+
+    Global value-membership is not enough: an LM can pair opportunity A's
+    dollar value with opportunity B's ROI/gap and every number still "appears
+    somewhere" (codex PR-5 round 2). Each sentence's claims must therefore be
+    a subset of ONE source unit's claims (scope, caveats, or one opportunity
+    line). Legitimate cross-opportunity prose that mixes figures inside a
+    single sentence falls back — fail-closed by design; the signature
+    instructs the LM to keep each sentence's figures to a single opportunity.
+    """
+    unit_claims = [_numeric_claims(s) for s in sources]
+    for sentence in _SENTENCE_SPLIT_RE.split(candidate):
+        claims = _numeric_claims(sentence)
+        if not claims:
+            continue
+        if not any(claims <= unit for unit in unit_claims):
+            return False
+    return True
 
 
 def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
@@ -242,7 +269,7 @@ def generate_insight(g: dict[str, Any]) -> dict[str, Any]:
     if not interpretation:
         return _fallback(g)
     takeaways = normalize_list(getattr(pred, "key_takeaways", []))
-    sources = [g["scope"], g["opportunities"], g["caveats"]]
+    sources = g["sources"]
     ungrounded = [t for t in [interpretation, *takeaways] if not _is_grounded(t, sources)]
     if ungrounded:
         # Fail closed: a single invented figure poisons trust in the whole

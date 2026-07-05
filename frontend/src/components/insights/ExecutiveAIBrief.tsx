@@ -93,8 +93,14 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
 
   // The brand's real gap-analysis figures (the same `/gaps/opportunities` feed
   // the sibling Priority-Actions card uses) — the ONLY grounding the brief
-  // request carries; no fabrication.
-  const { data: oppData, isLoading: oppLoading } = useOpportunities({
+  // request carries; no fabrication. A feed FAILURE is carried separately: a
+  // 500/timeout is a data-source outage, not "this brand has no signal", and
+  // the two must render differently (codex PR-5 round 2).
+  const {
+    data: oppData,
+    isLoading: oppLoading,
+    isError: oppFailed,
+  } = useOpportunities({
     brand,
     limit: 5,
   });
@@ -205,7 +211,10 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
   // body AND footer must not surface the prior brand's sections/count.
   const displaySections: BriefSection[] = isBusy ? [] : sections;
 
-  const hasAnyError = !!briefError;
+  // A failed opportunities feed is an ERROR, never "no signal": the honest
+  // no-signal empty state below is only reachable after a SUCCESSFUL settled
+  // feed with zero surfaced and zero suppressed opportunities.
+  const hasAnyError = !!briefError || oppFailed;
   const showError = !isBusy && displaySections.length === 0 && hasAnyError;
   const showEmpty = !isBusy && displaySections.length === 0 && !hasAnyError;
 
@@ -258,7 +267,10 @@ export function ExecutiveAIBrief({ className, brand = 'Remibrutinib' }: Executiv
             <AlertTriangle className="h-4 w-4 text-rose-500 mt-0.5" />
             <div className="text-xs text-[var(--color-muted-foreground)]">
               <span className="font-medium text-rose-600">Unable to generate brief:</span>{' '}
-              {briefError?.message ?? 'Insights service unavailable'}
+              {briefError?.message ??
+                (oppFailed
+                  ? 'the gap-analysis figures that ground this brief could not be loaded — data-source failure, not an empty portfolio.'
+                  : 'Insights service unavailable')}
             </div>
           </div>
         )}

@@ -297,10 +297,33 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
     expect(mutate).not.toHaveBeenCalled();
   });
 
-  it('does NOT call the endpoint when the feed has no signal — honest empty, never an ungrounded riff', () => {
+  it('does NOT call the endpoint on a SUCCESSFUL zero-signal feed — honest empty, never an ungrounded riff', () => {
     // PR-5 contract change: the old RAG path fired a context-free prompt when
-    // the feed failed/was empty, producing exactly the generic "description"
-    // the review flagged. Now: no real figures -> no call -> honest empty.
+    // the feed was empty, producing exactly the generic "description" the
+    // review flagged. Now: no real figures -> no call -> honest empty.
+    const mutate = vi.fn();
+    mockBrief({ mutate } as unknown as Partial<BriefMutation>);
+    mockOpps({
+      data: {
+        ...OPP_CONTEXT,
+        opportunities: [],
+        total_count: 0,
+        quick_wins_count: 0,
+        total_addressable_value: 0,
+        suppressed_count: 0,
+      },
+    });
+
+    render(<ExecutiveAIBrief brand="Kisqali" />);
+
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
+    expect(screen.getByText(/run a gap analysis/i)).toBeInTheDocument();
+  });
+
+  it('renders a labeled data-source error when the feed FAILS — never the no-signal empty state (codex PR-5 round 2)', () => {
+    // A 500/timeout on /gaps/opportunities is an outage, not "this brand has
+    // no signal". Claiming "run a gap analysis" would mislead the user.
     const mutate = vi.fn();
     mockBrief({ mutate } as unknown as Partial<BriefMutation>);
     mockOpps({ data: undefined, isError: true });
@@ -308,8 +331,10 @@ describe('ExecutiveAIBrief — request is grounded in real opportunity figures',
     render(<ExecutiveAIBrief brand="Kisqali" />);
 
     expect(mutate).not.toHaveBeenCalled();
-    expect(screen.getByTestId('empty-state')).toBeInTheDocument();
-    expect(screen.getByText(/run a gap analysis/i)).toBeInTheDocument();
+    expect(screen.getByText(/unable to generate brief/i)).toBeInTheDocument();
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('empty-state')).not.toBeInTheDocument();
+    expect(screen.queryByText(/run a gap analysis/i)).not.toBeInTheDocument();
   });
 
   it('calls the endpoint on suppression-only signal (all below break-even is a real brief)', async () => {
