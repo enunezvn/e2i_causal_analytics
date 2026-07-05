@@ -156,6 +156,30 @@ def test_is_grounded_rejects_invented_portfolio_counts():
     assert _is_grounded("The mix holds 2 quick wins with 3 suppressed.", sources) is True
 
 
+def test_is_grounded_fails_closed_on_unparseable_count_phrasings():
+    # codex PR-5 round 5 HIGH (its own repro): "quick wins count of 99" carries
+    # the guarded label but no extractable claim — the guard must fail closed
+    # on ANY digit sharing a sentence with a count label that no extractor
+    # vouches for, instead of enumerating phrasings.
+    sources = [
+        "Kisqali / $5.0M / mix: 2 quick win(s), 1 steady play(s), 1 strategic bet(s)",
+        "3 low-value opportunities were suppressed (below break-even).",
+    ]
+    assert _is_grounded("The portfolio has a quick wins count of 99.", sources) is False
+    assert _is_grounded("The suppressed count is 42.", sources) is False
+    # A label sharing a sentence with FULLY-VOUCHED digits still passes: counts
+    # are claimed as counts, money/multiples as money/multiples.
+    assert (
+        _is_grounded(
+            "Take the 2 quick wins first: a $5.0M portfolio awaits.",
+            sources,
+        )
+        is True
+    )
+    # Digit-free label prose stays free.
+    assert _is_grounded("Quick wins should lead the sequence.", sources) is True
+
+
 def test_is_grounded_accepts_reformatted_and_rejects_invented_figures():
     sources = ["Kisqali / total addressable opportunity value $5.0M", "3.2x ROI, 42% TRX gap"]
     # Reformatted values from ONE unit pass; sentences with no figures pass.
@@ -213,6 +237,22 @@ def test_is_grounded_rejects_another_units_segment_in_a_numeric_sentence():
     assert _is_grounded("Capture $1.2M at 3.2x in Northeast.", sources, tokens) is True
     # Non-numeric prose may name any segment freely.
     assert _is_grounded("Both Northeast and South matter strategically.", sources, tokens) is True
+
+
+def test_generate_insight_rejects_count_noun_phrasing(monkeypatch):
+    # codex PR-5 round 5 HIGH end-to-end: the count-noun phrasing must fall
+    # back even though no count claim is extractable from it.
+    g = _grounding()
+    monkeypatch.setattr(
+        "src.insights.executive_brief.run_signature",
+        lambda *a, **k: SimpleNamespace(
+            interpretation="The portfolio has a quick wins count of 99.",
+            key_takeaways=[],
+        ),
+    )
+    out = generate_insight(g)
+    assert out["is_fallback"] is True
+    assert "99" not in out["insight"]
 
 
 def test_generate_insight_rejects_fabricated_portfolio_counts(monkeypatch):

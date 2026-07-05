@@ -287,6 +287,41 @@ def _count_claims(text: str) -> set[tuple[str, float]]:
     return claims
 
 
+_DIGIT_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)*")
+_COUNT_LABEL_RE = re.compile("|".join(_COUNT_KEYWORDS.values()), re.I)
+
+
+def _claimed_digit_spans(text: str) -> list[tuple[int, int]]:
+    """Character spans of every digit group some extractor vouches for."""
+    spans: list[tuple[int, int]] = []
+    for pattern in (_MONEY_RE, _PCT_RE, _MULT_RE):
+        spans.extend(m.span(1) for m in pattern.finditer(text))
+    for kw in _COUNT_KEYWORDS.values():
+        spans.extend(m.span(1) for m in re.finditer(rf"\b(\d+)\b{_COUNT_GAP}{kw}", text, re.I))
+        spans.extend(m.span(1) for m in re.finditer(rf"{kw}[ \t:=-]+(\d+)\b", text, re.I))
+    return spans
+
+
+def _has_unvouched_count_context(sentence: str) -> bool:
+    """Fail closed on count phrasings the extractors cannot parse.
+
+    "The portfolio has a quick wins count of 99" carries a guarded label and a
+    fabricated number, but no extractor claims the 99 — so instead of
+    enumerating every count-noun phrasing, ANY digit sharing a sentence with a
+    guarded count label must be vouched for by SOME extractor (money, pct,
+    multiple, or count), else the sentence is an unparseable count claim and
+    the response falls back (codex PR-5 round 5).
+    """
+    if not _COUNT_LABEL_RE.search(sentence):
+        return False
+    spans = _claimed_digit_spans(sentence)
+    for m in _DIGIT_TOKEN_RE.finditer(sentence):
+        start, end = m.span()
+        if not any(cs <= start and end <= ce for cs, ce in spans):
+            return True
+    return False
+
+
 # Sentences (and semicolon clauses) are the pairing unit: a figure cited next
 # to another figure inside one sentence claims a RELATIONSHIP between them.
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+")
@@ -324,6 +359,8 @@ def _is_grounded(
     tokens = source_tokens if source_tokens is not None else [set() for _ in sources]
     all_tokens: set[str] = set().union(*tokens) if tokens else set()
     for sentence in _SENTENCE_SPLIT_RE.split(candidate):
+        if _has_unvouched_count_context(sentence):
+            return False
         if not _count_claims(sentence) <= grounded_counts:
             return False
         claims = _numeric_claims(sentence)
