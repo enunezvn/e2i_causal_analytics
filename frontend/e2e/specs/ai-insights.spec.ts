@@ -189,7 +189,10 @@ async function mockInsightsEndpoints(page: Page): Promise<void> {
 
   // Header agents badge → GET /api/health-score/agents. Non-trivial counts so
   // the badge assertion can prove the number is data-driven (the retired
-  // hard-coded badge always read "21 Agents Active").
+  // hard-coded badge always read "21 Agents Active"). The badge is behind the
+  // fail-closed provenance gate (isTrustedProvenance), so the stub must carry
+  // trusted provenance like every real backend payload does — without it the
+  // badge is (correctly) suppressed and the assertion fails (codex PR-4 R6).
   await page.route('**/api/health-score/agents**', async (route: Route) => {
     await route.fulfill({
       status: 200,
@@ -202,6 +205,7 @@ async function mockInsightsEndpoints(page: Page): Promise<void> {
         agents: [],
         by_tier: {},
         check_latency_ms: 12,
+        data_provenance: 'measured',
       }),
     });
   });
