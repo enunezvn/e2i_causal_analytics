@@ -15,6 +15,7 @@ from src.api.dependencies.auth import require_analyst
 from src.insights import (
     causal_discovery,
     executive_brief,
+    hte,
     knowledge_graph,
     model_performance,
     predictive_cohort,
@@ -128,6 +129,15 @@ class ExecutiveBriefInsightRequest(BaseModel):
     # grounded-looking brief from arbitrary numbers under gap-analyzer
     # provenance (codex PR-5 round 3).
     brand: str
+
+
+class HTEInsightRequest(BaseModel):
+    # analysis_id only: the figures are derived SERVER-SIDE from the persisted
+    # segment-analysis record. Accepting caller-posted figures would let any
+    # authenticated caller mint a grounded-looking insight from arbitrary
+    # numbers under segment-analysis provenance (same trust boundary as
+    # /insights/executive-brief).
+    analysis_id: str
 
 
 class TreatmentEffectInsightRequest(BaseModel):
@@ -382,6 +392,65 @@ async def executive_brief_insight(
         payload = await asyncio.to_thread(executive_brief.generate_insight, g)
         await cache_set(key, payload)
     return _finalize(payload, provenance="Gap-analyzer ROI opportunities (server-derived)")
+
+
+@router.post("/hte", response_model=StrategicInsightResponse)
+async def hte_insight(
+    req: HTEInsightRequest, user: dict[str, Any] = Depends(require_analyst)
+) -> StrategicInsightResponse:
+    """Strategic interpretation (DSPy) of a persisted segment-level CATE run (server-derived)."""
+    # The grounding comes from the server's own persisted analysis record —
+    # the caller supplies only the analysis_id (trust boundary is the API).
+    from src.api.routes.segments import get_persisted_analysis
+
+    try:
+        record = await get_persisted_analysis(req.analysis_id)
+    except Exception as e:  # noqa: BLE001 — degrade honestly, never 500
+        logger.warning("HTE insight: persisted-analysis read failed: %s", e)
+        record = None
+    if record is None:
+        return _finalize(
+            {
+                "insight": (
+                    "The referenced segment analysis was not found — persisted runs "
+                    "are kept for 7 days, so it may have expired. Re-run the "
+                    "heterogeneous-treatment-effects analysis to generate an insight."
+                ),
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Persisted segment-level CATE analysis (unavailable)",
+        )
+    if record.status.value != "completed":
+        return _finalize(
+            {
+                "insight": (
+                    f"The referenced segment analysis has status "
+                    f"'{record.status.value}', so its figures cannot ground a "
+                    "strategic interpretation. Re-run the analysis to completion."
+                ),
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Persisted segment-level CATE analysis (incomplete run)",
+        )
+    g = hte.build_grounding(record.model_dump())
+    # Key on the derived grounding strings so two runs differing in any figure
+    # never collide (the analysis_id alone would pin a stale re-run).
+    key = cache_key(
+        "hte",
+        req.analysis_id,
+        {"e": g["effect_summary"], "s": g["segments"], "t": g["targeting"]},
+    )
+    cached = await cache_get(key)
+    if cached is not None:
+        payload = cached
+    else:
+        payload = await asyncio.to_thread(hte.generate_insight, g)
+        await cache_set(key, payload)
+    return _finalize(payload, provenance="Segment-level CATE analysis (server-derived)")
 
 
 @router.post("/resource-optimization", response_model=StrategicInsightResponse)

@@ -23,7 +23,7 @@
  * @module components/insights/HeterogeneousTreatmentEffects
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   Users,
   TrendingUp,
@@ -40,6 +40,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useRunSegmentAnalysisAndWait } from '@/hooks/api/use-segments';
+import { useHTEInsight } from '@/hooks/api/use-insights';
+import { StrategicInsightCard } from './StrategicInsightCard';
 import type { CATEResult, RunSegmentAnalysisRequest } from '@/types/segments';
 
 // =============================================================================
@@ -216,6 +218,26 @@ export function HeterogeneousTreatmentEffects({
     runAnalysis({ request, pollIntervalMs: 3000, maxWaitMs: 300000 });
   }, [runAnalysis, treatmentVar, outcomeVar, brand]);
 
+  // Dedicated HTE strategic insight (user-requested): auto-generate once a
+  // completed run lands, keyed on analysis_id so it fires once per distinct
+  // run. The request carries ONLY the analysis_id — the endpoint derives every
+  // figure server-side from the persisted record.
+  const hteInsight = useHTEInsight();
+  const { mutate: generateHteInsight } = hteInsight;
+  const hteInsightKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const analysisId = analysis?.analysis_id;
+    if (!analysisId || analysis?.status !== 'completed') return;
+    if (hteInsightKeyRef.current === analysisId) return;
+    hteInsightKeyRef.current = analysisId;
+    generateHteInsight({ analysis_id: analysisId });
+  }, [analysis, generateHteInsight]);
+
+  // Attribution guard: only render insight output generated for THIS run —
+  // an in-flight mutation from a previous run can resolve late and must not
+  // render under the new run's results.
+  const insightIsForThisRun = hteInsight.variables?.analysis_id === analysis?.analysis_id;
+
   const failed = analysis?.status === 'failed';
   const segments: FlatSegment[] = failed ? [] : flattenCATE(analysis?.cate_by_segment);
   const hasResults = segments.length > 0;
@@ -345,6 +367,24 @@ export function HeterogeneousTreatmentEffects({
                 </div>
               </div>
             )}
+
+            {/* Agentic strategic read of THIS run (auto-generated when the
+                analysis completes; grounded server-side in the persisted record). */}
+            {analysis?.analysis_id && (
+              <StrategicInsightCard
+                title="HTE strategic insight"
+                description="Agentic interpretation of this segment-level CATE run — is the effect real, and does the heterogeneity justify differential targeting?"
+                isLoading={hteInsight.isPending}
+                error={insightIsForThisRun ? (hteInsight.error?.message ?? null) : null}
+                insight={insightIsForThisRun ? hteInsight.data?.insight : undefined}
+                keyTakeaways={insightIsForThisRun ? hteInsight.data?.key_takeaways : undefined}
+                grounding={insightIsForThisRun ? hteInsight.data?.grounding : undefined}
+                isFallback={insightIsForThisRun ? hteInsight.data?.is_fallback : undefined}
+                provenance={insightIsForThisRun ? hteInsight.data?.provenance : undefined}
+                generatedAt={insightIsForThisRun ? hteInsight.data?.generated_at : undefined}
+                onGenerate={() => generateHteInsight({ analysis_id: analysis.analysis_id })}
+              />
+            )}
           </>
         )}
 
@@ -354,8 +394,9 @@ export function HeterogeneousTreatmentEffects({
           <div className="text-xs text-[var(--color-muted-foreground)]">
             <span className="font-medium text-indigo-600">CATE Analysis:</span> Conditional Average
             Treatment Effects show how intervention impact varies across segments. A segment flagged
-            significant has a confidence interval that excludes zero — a reliable targeting
-            opportunity.
+            significant has a confidence interval that excludes zero — evidence the treatment works
+            there, not by itself a targeting mandate. Differential targeting is only warranted where
+            a segment credibly beats the overall ATE.
           </div>
         </div>
       </CardContent>

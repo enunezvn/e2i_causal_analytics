@@ -296,3 +296,102 @@ def test_executive_brief_feed_outage_degrades_honestly(test_client, monkeypatch)
     assert "data-source failure" in data["insight"]
     assert "run a gap analysis" not in data["insight"].lower()
     assert data["provenance"] == "Gap-analyzer ROI opportunities (unavailable)"
+
+
+# ---- /insights/hte --------------------------------------------------------------
+
+
+def _hte_record(status: str = "completed", **overrides):
+    from src.api.routes.segments import (
+        AnalysisStatus,
+        CATEResult,
+        SegmentAnalysisResponse,
+    )
+
+    base = {
+        "analysis_id": "seg_test123",
+        "status": AnalysisStatus(status),
+        "brand": "Remibrutinib",
+        "treatment_var": "treatment_arm",
+        "outcome_var": "persistent_180d",
+        "overall_ate": 0.1106,
+        "heterogeneity_score": 0.26,
+        "expected_lift_pp": 0.0,
+        "optimal_allocation_summary": "No reliable differential-targeting opportunity.",
+        "cate_by_segment": {
+            "disease_severity_band": [
+                CATEResult(
+                    segment_name="disease_severity_band",
+                    segment_value="high",
+                    cate_estimate=0.1772,
+                    cate_ci_lower=0.1267,
+                    cate_ci_upper=0.2277,
+                    sample_size=1385,
+                    statistical_significance=True,
+                ),
+                CATEResult(
+                    segment_name="disease_severity_band",
+                    segment_value="low",
+                    cate_estimate=0.0338,
+                    cate_ci_lower=-0.0280,
+                    cate_ci_upper=0.0955,
+                    sample_size=2498,
+                    statistical_significance=False,
+                ),
+            ]
+        },
+    }
+    base.update(overrides)
+    return SegmentAnalysisResponse(**base)
+
+
+def test_hte_insight_fallback_grounds_in_persisted_record(test_client, monkeypatch):
+    # The endpoint must read the SERVER-persisted record (analysis_id-only
+    # request) and render its real figures in the deterministic fallback.
+    record = _hte_record()
+
+    async def _get(analysis_id):
+        assert analysis_id == "seg_test123"
+        return record
+
+    monkeypatch.setattr("src.api.routes.segments.get_persisted_analysis", _get)
+    r = test_client.post("/api/insights/hte", json={"analysis_id": "seg_test123"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "+11.1pp" in data["insight"]
+    assert "1 of 2 segments" in data["insight"]
+    assert data["provenance"] == "Segment-level CATE analysis (server-derived)"
+    chips = {c["label"]: c["value"] for c in data["grounding"]}
+    assert chips["Significant segments"] == "1/2"
+
+
+def test_hte_insight_missing_record_degrades_honestly(test_client, monkeypatch):
+    # Expired/unknown analysis_id is an honest "re-run" degrade, never a 500
+    # and never a fabricated interpretation.
+    async def _get(analysis_id):
+        return None
+
+    monkeypatch.setattr("src.api.routes.segments.get_persisted_analysis", _get)
+    r = test_client.post("/api/insights/hte", json={"analysis_id": "seg_gone"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "not found" in data["insight"]
+    assert data["provenance"] == "Persisted segment-level CATE analysis (unavailable)"
+    assert data["grounding"] == []
+
+
+def test_hte_insight_incomplete_run_degrades_honestly(test_client, monkeypatch):
+    record = _hte_record(status="failed")
+
+    async def _get(analysis_id):
+        return record
+
+    monkeypatch.setattr("src.api.routes.segments.get_persisted_analysis", _get)
+    r = test_client.post("/api/insights/hte", json={"analysis_id": "seg_test123"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["is_fallback"] is True
+    assert "'failed'" in data["insight"]
+    assert data["provenance"] == "Persisted segment-level CATE analysis (incomplete run)"
