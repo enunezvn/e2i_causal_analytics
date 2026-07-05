@@ -31,6 +31,7 @@ import { useGraphStats } from '@/hooks/api/use-graph';
 import { useFullHealthCheck } from '@/hooks/api/use-health-score';
 import { getValidated } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { isTrustedProvenance } from '@/lib/provenance';
 
 // =============================================================================
 // TYPES
@@ -77,6 +78,11 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
   const { data: health, error: healthError } = useFullHealthCheck({
     refetchInterval: 60000,
   });
+  // Same fail-closed trust rule as /system-health (@/lib/provenance): an
+  // untrusted (placeholder/unknown/absent-provenance) payload is sample data —
+  // the quick stat and the status prose show the honest '—'/silence instead of
+  // quoting a fabricated score (codex PR-4 round 5).
+  const trustedHealth = health && isTrustedProvenance(health.data_provenance) ? health : null;
 
   // Real agent roster (same source as the Home Agent Status card).
   const { data: agentStatus, error: agentsError } = useQuery({
@@ -103,8 +109,8 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
     [agentStatus]
   );
   const healthScore =
-    health?.overall_health_score != null
-      ? Math.round(health.overall_health_score)
+    trustedHealth?.overall_health_score != null
+      ? Math.round(trustedHealth.overall_health_score)
       : null;
 
   // Quick stats — real values only; '—' when the source has no data.
@@ -151,7 +157,7 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
     if (healthScore != null) {
       clauses.push(
         `The platform health score is ${healthScore}%${
-          health?.health_grade ? ` (grade ${health.health_grade})` : ''
+          trustedHealth?.health_grade ? ` (grade ${trustedHealth.health_grade})` : ''
         }.`
       );
     }
@@ -177,7 +183,7 @@ export function ExecutiveSummary({ className }: ExecutiveSummaryProps) {
       }
     }
     return clauses;
-  }, [healthScore, health?.health_grade, activeAgents, totalAgents, graphStats]);
+  }, [healthScore, trustedHealth?.health_grade, activeAgents, totalAgents, graphStats]);
 
   if (graphLoading) {
     return (

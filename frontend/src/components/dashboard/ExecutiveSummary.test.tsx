@@ -117,6 +117,7 @@ describe('ExecutiveSummary', () => {
         model_health_score: 0.88,
         pipeline_health_score: 0.82,
         agent_health_score: 0.92,
+        data_provenance: 'measured',
       },
       isLoading: false,
       error: null,
@@ -142,6 +143,35 @@ describe('ExecutiveSummary', () => {
     // The invented $-impact (33 * 0.167 = $5.5M) must never come back.
     expect(screen.queryByText(/\$5\.5M/)).not.toBeInTheDocument();
     expect(screen.queryByText('Est. Impact')).not.toBeInTheDocument();
+  });
+
+  it('suppresses an untrusted (placeholder) health payload — quick stat shows — and prose stays silent (codex PR-4 round 5)', () => {
+    // The dev mock fallback tags data_provenance: "placeholder"; its 88 (B) is
+    // hardcoded sample data. Quoting it in the System Health stat or the
+    // status prose would launder a fabricated score into the executive view.
+    (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        check_id: 'c1',
+        check_scope: 'full',
+        overall_health_score: 88,
+        health_grade: 'B',
+        component_health_score: 0.9,
+        model_health_score: 0.85,
+        pipeline_health_score: 0.88,
+        agent_health_score: 0.95,
+        data_provenance: 'placeholder',
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<ExecutiveSummary />);
+
+    expect(screen.queryByText('88%')).not.toBeInTheDocument();
+    // Neither the status prose ("The platform health score is…") nor a
+    // degraded-source notice may mention the health score: untrusted data is
+    // honest absence ('—'), not an error and not a quotable number.
+    expect(screen.queryByText(/health score/i)).not.toBeInTheDocument();
   });
 
   it('does NOT render the three hardcoded "causal insight" cards', () => {

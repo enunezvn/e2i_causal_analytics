@@ -159,6 +159,7 @@ async def test_run_health_check_stores_history():
             health_grade=HealthGrade.B,
         )
         mock_result.check_latency_ms = 0
+        mock_result.data_provenance = "measured"
         mock_execute.return_value = mock_result
 
         await run_health_check(scope=CheckScope.FULL)
@@ -178,6 +179,7 @@ async def test_run_health_check_limits_history_to_100():
             health_grade=HealthGrade.B,
         )
         mock_result.check_latency_ms = 0
+        mock_result.data_provenance = "measured"
         mock_execute.return_value = mock_result
 
         # Add 105 entries
@@ -683,6 +685,28 @@ async def test_run_health_check_quick_scope_not_recorded_in_history():
     assert len(_health_history) == 0
 
 
+@pytest.mark.asyncio
+async def test_run_health_check_untrusted_provenance_not_recorded_in_history():
+    """A placeholder (dev mock fallback) or unknown (fail-closed default) full
+    check must NOT be stored: recording it would replot as historical truth the
+    very fabricated score the live dashboard refuses to render."""
+    with patch("src.api.routes.health_score._execute_health_check") as mock_execute:
+        for provenance in ("placeholder", "unknown"):
+            mock_result = MagicMock(
+                check_id="",
+                check_scope=CheckScope.FULL,
+                overall_health_score=87.6,
+                health_grade=HealthGrade.B,
+            )
+            mock_result.check_latency_ms = 0
+            mock_result.data_provenance = provenance
+            mock_execute.return_value = mock_result
+
+            await run_health_check(scope=CheckScope.FULL)
+
+    assert len(_health_history) == 0
+
+
 # =============================================================================
 # _fetch_component_health (direct SupabaseHealthClient probe — B)
 # =============================================================================
@@ -1112,6 +1136,7 @@ async def test_get_health_history_with_data():
         mock_result.check_latency_ms = 100
         mock_result.critical_issues = []
         mock_result.timestamp = datetime.now(timezone.utc).isoformat()
+        mock_result.data_provenance = "measured"
         mock_execute.return_value = mock_result
 
         await run_health_check(scope=CheckScope.FULL)
@@ -1122,6 +1147,30 @@ async def test_get_health_history_with_data():
     assert result.total_checks == 2
     assert len(result.checks) == 2
     assert result.avg_health_score == 85.0
+
+
+@pytest.mark.asyncio
+async def test_get_health_history_items_carry_provenance():
+    """History items must carry the recorded check's provenance on the wire so
+    the frontend can apply the same fail-closed trust rule to historical rows."""
+    with patch("src.api.routes.health_score._execute_health_check") as mock_execute:
+        mock_result = MagicMock(
+            check_id="",
+            check_scope=CheckScope.FULL,
+            overall_health_score=85.0,
+            health_grade=HealthGrade.B,
+        )
+        mock_result.check_latency_ms = 100
+        mock_result.critical_issues = []
+        mock_result.timestamp = datetime.now(timezone.utc).isoformat()
+        mock_result.data_provenance = "partial"
+        mock_execute.return_value = mock_result
+
+        await run_health_check(scope=CheckScope.FULL)
+
+    result = await get_health_history(limit=20)
+
+    assert result.checks[0].data_provenance == "partial"
 
 
 @pytest.mark.asyncio
@@ -1138,6 +1187,7 @@ async def test_get_health_history_respects_limit():
         mock_result.check_latency_ms = 100
         mock_result.critical_issues = []
         mock_result.timestamp = datetime.now(timezone.utc).isoformat()
+        mock_result.data_provenance = "measured"
         mock_execute.return_value = mock_result
 
         for _ in range(10):
@@ -1163,6 +1213,7 @@ async def test_get_health_history_trend_improving():
             mock_result.check_latency_ms = 100
             mock_result.critical_issues = []
             mock_result.timestamp = datetime.now(timezone.utc).isoformat()
+            mock_result.data_provenance = "measured"
             mock_execute.return_value = mock_result
             await run_health_check(scope=CheckScope.FULL)
 
@@ -1186,6 +1237,7 @@ async def test_get_health_history_trend_declining():
             mock_result.check_latency_ms = 100
             mock_result.critical_issues = []
             mock_result.timestamp = datetime.now(timezone.utc).isoformat()
+            mock_result.data_provenance = "measured"
             mock_execute.return_value = mock_result
             await run_health_check(scope=CheckScope.FULL)
 
@@ -1209,6 +1261,7 @@ async def test_get_health_history_trend_stable():
             mock_result.check_latency_ms = 100
             mock_result.critical_issues = []
             mock_result.timestamp = datetime.now(timezone.utc).isoformat()
+            mock_result.data_provenance = "measured"
             mock_execute.return_value = mock_result
             await run_health_check(scope=CheckScope.FULL)
 
@@ -1259,6 +1312,7 @@ async def test_get_service_status_with_history():
         mock_result.check_latency_ms = 100
         mock_result.critical_issues = []
         mock_result.timestamp = datetime.now(timezone.utc).isoformat()
+        mock_result.data_provenance = "measured"
         mock_execute.return_value = mock_result
 
         await run_health_check(scope=CheckScope.FULL)

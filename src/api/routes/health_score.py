@@ -349,6 +349,13 @@ class HealthHistoryItem(BaseModel):
     overall_health_score: float = Field(..., description="Score at time of check")
     health_grade: HealthGrade = Field(..., description="Grade at time of check")
     critical_issues_count: int = Field(..., description="Number of critical issues")
+    # Same fail-closed contract as the live payloads: a recorded score is only
+    # as trustworthy as the check that produced it, so the wire carries its
+    # provenance and defaults to "unknown" (untrusted) if a writer forgets it.
+    data_provenance: str = Field(
+        default="unknown",
+        description="Provenance of the recorded score: measured | partial | unknown | placeholder",
+    )
 
 
 class HealthHistoryResponse(BaseModel):
@@ -430,7 +437,14 @@ async def run_health_check(
         # reset on restart) — a durable health-history table + a scheduled full
         # check is a tracked follow-up; this guard at least keeps the recorded
         # trend honest (real full scores, not a fabricated flat 100).
-        if scope == CheckScope.FULL:
+        # Provenance guard: a full check whose score is placeholder (dev mock
+        # fallback) or unknown (fail-closed default) is a fabricated data point —
+        # recording it would replot as historical truth the very score the live
+        # dashboard refuses to render.
+        if scope == CheckScope.FULL and result.data_provenance in (
+            DataProvenance.MEASURED.value,
+            DataProvenance.PARTIAL.value,
+        ):
             _health_history.append(result)
             # Keep only last 100 checks
             while len(_health_history) > 100:
@@ -733,6 +747,7 @@ async def get_health_history(
             overall_health_score=h.overall_health_score,
             health_grade=h.health_grade,
             critical_issues_count=len(h.critical_issues),
+            data_provenance=h.data_provenance,
         )
         for h in history
     ]

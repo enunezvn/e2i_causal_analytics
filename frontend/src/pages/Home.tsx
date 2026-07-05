@@ -30,6 +30,7 @@ import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insight
 import { useOpportunities } from '@/hooks/api/use-gaps';
 import { getValidated } from '@/lib/api-client';
 import { AgentStatusResponseSchema } from '@/lib/api-schemas';
+import { isTrustedProvenance } from '@/lib/provenance';
 import { Progress } from '@/components/ui/progress';
 import {
   Activity,
@@ -474,6 +475,11 @@ function Home() {
     isLoading: healthLoading,
     error: healthError,
   } = useFullHealthCheck({ refetchInterval: 60000 });
+  // Same fail-closed trust rule as /system-health (@/lib/provenance): a payload
+  // whose provenance is placeholder/unknown/absent is sample data, so the card
+  // shows its honest "unavailable" state instead of a fabricated score
+  // (codex PR-4 round 5).
+  const trustedHealth = health && isTrustedProvenance(health.data_provenance) ? health : null;
 
   // Agent Status card: real agent roster.
   const { data: agentStatus, isLoading: agentsLoading } = useQuery({
@@ -1233,21 +1239,21 @@ function Home() {
             <CardContent>
               {healthLoading ? (
                 <p className="text-sm text-muted-foreground py-2">Checking system health…</p>
-              ) : healthError || !health ? (
+              ) : healthError || !trustedHealth ? (
                 <p className="text-sm text-muted-foreground py-2">Health check unavailable</p>
               ) : (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-sm">Overall</span>
                     <span className="font-semibold">
-                      {Math.round(health.overall_health_score)} ({health.health_grade})
+                      {Math.round(trustedHealth.overall_health_score)} ({trustedHealth.health_grade})
                     </span>
                   </div>
                   {([
-                    ['Components', health.component_health_score],
-                    ['Models', health.model_health_score],
-                    ['Pipelines', health.pipeline_health_score],
-                    ['Agents', health.agent_health_score],
+                    ['Components', trustedHealth.component_health_score],
+                    ['Models', trustedHealth.model_health_score],
+                    ['Pipelines', trustedHealth.pipeline_health_score],
+                    ['Agents', trustedHealth.agent_health_score],
                   ] as [string, number | null | undefined][])
                     // A null/undefined dimension is UNMEASURED — omit it rather
                     // than rendering Math.round(null*100) as a fabricated "0%".
@@ -1260,7 +1266,7 @@ function Home() {
                         </span>
                       </div>
                     ))}
-                  {health.warnings?.some((w) => w.toLowerCase().includes('mock data')) && (
+                  {trustedHealth.warnings?.some((w) => w.toLowerCase().includes('mock data')) && (
                     <p className="text-xs text-amber-600">Awaiting Health Score agent</p>
                   )}
                 </div>

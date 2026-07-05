@@ -463,6 +463,77 @@ describe('SystemHealth', () => {
   });
 
   // ===========================================================================
+  // HISTORY PROVENANCE GATE (codex PR-4 round 5): recorded checks carry the
+  // same fail-closed provenance as live payloads; an untrusted row is the same
+  // fabricated score the Overall card suppresses and must not be replotted as
+  // historical truth — nor leak into the backend trend/average it was part of.
+  // ===========================================================================
+
+  const historyRow = (overrides: Record<string, unknown>) => ({
+    check_id: 'h1',
+    timestamp: '2026-07-01T00:00:00Z',
+    overall_health_score: 90,
+    health_grade: 'A',
+    critical_issues_count: 0,
+    data_provenance: 'measured',
+    ...overrides,
+  });
+
+  it('suppresses untrusted history rows — trend hidden, average recomputed over trusted rows (codex PR-4 round 5)', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 2,
+        checks: [
+          historyRow({ check_id: 'h1', overall_health_score: 90 }),
+          historyRow({
+            check_id: 'h2',
+            overall_health_score: 70,
+            health_grade: 'C',
+            data_provenance: 'placeholder',
+          }),
+        ],
+        // Backend aggregates were computed over BOTH rows — quoting them would
+        // launder the placeholder score back into the page.
+        avg_health_score: 80.0,
+        trend: 'declining',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    // Average recomputed over the one trusted row, not the backend's mixed 80.0.
+    expect(screen.getByText('90.0')).toBeInTheDocument();
+    expect(screen.queryByText('80.0')).not.toBeInTheDocument();
+    // The backend trend included the untrusted row — honest "Unknown" instead.
+    expect(screen.queryByText('Declining')).not.toBeInTheDocument();
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+  });
+
+  it('renders fully trusted history — backend trend and average quoted as-is', async () => {
+    const user = (await import('@testing-library/user-event')).default.setup();
+    (useHealthHistory as MockFn).mockReturnValue({
+      data: {
+        total_checks: 2,
+        checks: [
+          historyRow({ check_id: 'h1', overall_health_score: 82 }),
+          historyRow({ check_id: 'h2', overall_health_score: 88, data_provenance: 'partial' }),
+        ],
+        avg_health_score: 85.0,
+        trend: 'improving',
+      },
+    });
+    render(<SystemHealth />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole('tab', { name: /History/i }));
+
+    expect(screen.getByText('85.0')).toBeInTheDocument();
+    expect(screen.getByText('Improving')).toBeInTheDocument();
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
+  });
+
+  // ===========================================================================
   // WIRING TESTS (this PR): the Service Status / Model Health cards must render
   // REAL data from useComponentHealth / useModelHealth, and degrade to honest
   // empty states (never fabricated values) when data is absent or placeholder.

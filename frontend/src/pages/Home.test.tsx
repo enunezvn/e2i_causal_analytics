@@ -677,6 +677,7 @@ describe('Home', () => {
           critical_issues: [],
           warnings: [],
           recommendations: [],
+          data_provenance: 'measured',
         },
         isLoading: false,
         error: null,
@@ -709,6 +710,7 @@ describe('Home', () => {
           critical_issues: [],
           warnings: [],
           recommendations: [],
+          data_provenance: 'partial',
         },
         isLoading: false,
         error: null,
@@ -720,6 +722,36 @@ describe('Home', () => {
       // fabricated "0%" appears anywhere in the System Health card.
       expect(screen.getByText('Components')).toBeInTheDocument();
       expect(screen.queryAllByText('0%')).toHaveLength(0);
+    });
+
+    it('suppresses an untrusted (placeholder) payload — sample scores are not system health (codex PR-4 round 5)', () => {
+      // The dev mock fallback tags data_provenance: "placeholder" and its
+      // scores are hardcoded sample data. The card must show its honest
+      // "unavailable" state, not a fabricated 88 (B).
+      (useFullHealthCheck as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          check_id: 'c1',
+          check_scope: 'full',
+          overall_health_score: 88,
+          health_grade: 'B',
+          component_health_score: 0.9,
+          model_health_score: 0.85,
+          pipeline_health_score: 0.88,
+          agent_health_score: 0.95,
+          critical_issues: [],
+          warnings: ['Using mock data - Health Score agent not available'],
+          recommendations: [],
+          data_provenance: 'placeholder',
+        },
+        isLoading: false,
+        error: null,
+      });
+
+      renderWithAllProviders(<Home />);
+
+      expect(screen.getByText('Health check unavailable')).toBeInTheDocument();
+      expect(screen.queryByText('88 (B)')).not.toBeInTheDocument();
+      expect(screen.queryByText('Components')).not.toBeInTheDocument();
     });
   });
 

@@ -320,6 +320,8 @@ export interface HealthHistoryItem {
   health_grade: HealthGrade;
   /** Number of critical issues */
   critical_issues_count: number;
+  /** Provenance of the recorded score: measured | partial | unknown | placeholder */
+  data_provenance?: string;
 }
 
 /**

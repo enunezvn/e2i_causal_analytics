@@ -1309,6 +1309,9 @@ export const HealthHistoryItemWireSchema = z.object({
   overall_health_score: z.number(),
   health_grade: z.string(),
   critical_issues_count: z.number().int().nonnegative(),
+  // Recorded-check provenance; must be mirrored here or z.object() strips it
+  // before the History tab's trust gate can read it (the round-2 lesson).
+  data_provenance: z.string().optional(),
 });
 
 /** Faithful mirror of `HealthHistoryResponse` (health_score.py HealthHistoryResponse). */

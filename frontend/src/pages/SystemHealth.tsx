@@ -327,9 +327,25 @@ function SystemHealth() {
     pipelineHealthData && isTrustedProvenance(pipelineHealthData.data_provenance)
       ? pipelineHealthData.pipelines
       : [];
-  const healthHistory = healthHistoryData?.checks ?? [];
-  // null = no history -> rendered as "Unknown", not a fabricated "stable".
-  const healthTrend = healthHistoryData?.trend ?? null;
+  // History rows carry the same fail-closed provenance as live payloads. The
+  // backend now refuses to record untrusted full checks, but any row that still
+  // arrives untrusted (older in-memory history, a future writer that skips the
+  // gate) is the same fabricated score the Overall card suppresses — it must
+  // not be replotted as historical truth (codex PR-4 round 5).
+  const allHistoryChecks = healthHistoryData?.checks ?? [];
+  const healthHistory = allHistoryChecks.filter((c) => isTrustedProvenance(c.data_provenance));
+  const historyFullyTrusted = healthHistory.length === allHistoryChecks.length;
+  // null = no history -> rendered as "Unknown", not a fabricated "stable". The
+  // backend computes trend over EVERY stored check, so it is only quotable
+  // when every stored check passed the trust gate.
+  const healthTrend = historyFullyTrusted ? (healthHistoryData?.trend ?? null) : null;
+  // Same rule for the average: recompute over the trusted rows whenever any
+  // row was suppressed (matches the backend value exactly when none were).
+  const healthAvgScore = historyFullyTrusted
+    ? (healthHistoryData?.avg_health_score ?? null)
+    : healthHistory.length > 0
+      ? healthHistory.reduce((sum, c) => sum + c.overall_health_score, 0) / healthHistory.length
+      : null;
 
   // Group agents by tier
   const agentsByTier = useMemo(() => {
@@ -916,7 +932,7 @@ function SystemHealth() {
               <div className="mt-4 grid grid-cols-3 gap-4 text-center">
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Average</p>
-                  <p className="text-2xl font-bold">{healthHistoryData?.avg_health_score?.toFixed(1) ?? '—'}</p>
+                  <p className="text-2xl font-bold">{healthAvgScore?.toFixed(1) ?? '—'}</p>
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Trend</p>
@@ -929,7 +945,10 @@ function SystemHealth() {
                 </div>
                 <div className="p-3 rounded-lg bg-[var(--color-muted)]/50">
                   <p className="text-sm text-[var(--color-muted-foreground)]">Total Checks</p>
-                  <p className="text-2xl font-bold">{healthHistoryData?.total_checks ?? healthHistory.length}</p>
+                  {/* Trusted-row count: the backend total equals checks.length,
+                      so counting the filtered rows stays exact when nothing was
+                      suppressed and honest when something was. */}
+                  <p className="text-2xl font-bold">{healthHistory.length}</p>
                 </div>
               </div>
             </CardContent>
