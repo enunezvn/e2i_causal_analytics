@@ -308,6 +308,12 @@ function SystemHealth() {
     fullHealthData && !isHealthPlaceholder ? (fullHealthData.health_summary || null) : null;
   const healthProvenance =
     fullHealthData && !isHealthPlaceholder ? (fullHealthData.data_provenance ?? null) : null;
+  // When the backend composer actually ran its check — distinct from the page
+  // header's "Last updated", which is only the local UI refresh clock. The
+  // retired /ai-insights card surfaced this as "Last Check"; without it a
+  // stale health score is indistinguishable from a fresh one.
+  const healthCheckedAt =
+    fullHealthData && !isHealthPlaceholder ? (fullHealthData.timestamp || null) : null;
   const agents = agentHealthData?.agents ?? [];
   const pipelines = pipelineHealthData?.pipelines ?? [];
   const healthHistory = healthHistoryData?.checks ?? [];
@@ -472,6 +478,14 @@ function SystemHealth() {
                   {healthTrend === 'stable' && <Minus className="h-4 w-4 text-slate-500" />}
                   {healthTrend ? healthTrend.charAt(0).toUpperCase() + healthTrend.slice(1) : 'Unknown'}
                 </div>
+                {healthCheckedAt && (
+                  <div className="mt-1 text-xs text-[var(--color-muted-foreground)]">
+                    {`Health check: ${new Date(healthCheckedAt).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}`}
+                  </div>
+                )}
                 {healthProvenance && healthProvenance !== 'measured' && (
                   <Badge
                     variant="outline"

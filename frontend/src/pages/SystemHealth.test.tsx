@@ -245,6 +245,9 @@ describe('SystemHealth', () => {
     expect(screen.getByText(/All systems nominal/)).toBeInTheDocument();
     // A fully measured check needs no provenance caveat.
     expect(screen.queryByText(/provenance:/)).not.toBeInTheDocument();
+    // The backend check time renders (label only — the HH:MM rendering is
+    // locale/timezone dependent, so the exact time is not asserted).
+    expect(screen.getByText(/Health check:/)).toBeInTheDocument();
   });
 
   it('flags a partial (non-fully-measured) check with a provenance badge', () => {
@@ -274,6 +277,8 @@ describe('SystemHealth', () => {
 
     expect(screen.queryByText(/Dev placeholder summary/)).not.toBeInTheDocument();
     expect(screen.getByText(/Awaiting health check/)).toBeInTheDocument();
+    // Placeholder data must not surface a backend check time either.
+    expect(screen.queryByText(/Health check:/)).not.toBeInTheDocument();
   });
 
   // ===========================================================================
